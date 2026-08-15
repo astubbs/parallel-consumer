@@ -184,6 +184,10 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 switch (result) {
                     case APPLIED_SUCCESS:
                     case APPLIED_FAILURE:
+                    case ACCEPTED_PRODUCING:
+                        // accepted, not discarded: the record is claimed, and its produce payload's acks are
+                        // awaited on the engine's own lane precisely so this callback - the session's single
+                        // serialized inbound lane, which also carries Heartbeat - is not held by a broker
                         break;
                     default:
                         // reply-with-protocol-error is U9's; until then the discard reason is at least visible

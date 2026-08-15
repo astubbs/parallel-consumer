@@ -9,12 +9,17 @@ import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import bz.stub.parallelconsumer.proxy.engine.ProxyProcessor.ReportResult;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
+import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
+import com.google.protobuf.ByteString;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.awaitility.Awaitility;
@@ -28,6 +33,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -65,15 +71,28 @@ class EngineFixture implements AutoCloseable {
 
     final LongPollingMockConsumer<byte[], byte[]> mockConsumer =
             new LongPollingMockConsumer<>(OffsetResetStrategy.EARLIEST);
-    final MockProducer<byte[], byte[]> mockProducer =
-            new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+    final MockProducer<byte[], byte[]> mockProducer;
 
     ProxyProcessor processor;
     private long nextOffset = 0;
 
     EngineFixture(String topic) {
+        this(topic, true);
+    }
+
+    /**
+     * @param autoCompleteProduceAcks false hands the acks to the scenario: {@code mockProducer.completeNext()}
+     *                                and {@code errorNext(..)} then decide when - and whether - a produce
+     *                                payload is acknowledged, which is the only way to test the ordering the
+     *                                at-least-once claim rests on, and the only way to hold an ack open long
+     *                                enough to see whether it holds the report lane with it
+     */
+    EngineFixture(String topic, boolean autoCompleteProduceAcks) {
         this.topic = topic;
         this.topicPartition = new TopicPartition(topic, 0);
+        this.mockProducer = autoCompleteProduceAcks
+                ? new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer())
+                : new ScenarioAckedMockProducer();
     }
 
     void start(ProcessingOrder ordering) {
@@ -143,6 +162,25 @@ class EngineFixture implements AutoCloseable {
         return result;
     }
 
+    /**
+     * A success report whose payload asks the proxy to produce {@code values.length} records - R6's worker
+     * output. With manual acks the engine's completion of this record is now in the scenario's hands.
+     */
+    ReportResult reportSuccessProducing(Token token, String... values) {
+        var success = Report.Success.newBuilder();
+        for (String value : values) {
+            success.addProduce(ProduceRecord.newBuilder()
+                    .setTopic(topic + "-output")
+                    .setValue(ByteString.copyFrom(value, StandardCharsets.UTF_8)));
+        }
+        var result = processor.report(Report.newBuilder().setToken(token).setSuccess(success).build());
+        if (result != ReportResult.UNKNOWN_TOKEN && result != ReportResult.SUPERSEDED_EPOCH
+                && result != ReportResult.MALFORMED && result != ReportResult.UNSUPPORTED_OUTCOME) {
+            sink.outstanding.decrementAndGet();
+        }
+        return result;
+    }
+
     ReportResult reportFailure(Token token, String reason) {
         var result = processor.report(Report.newBuilder()
                 .setToken(token)
@@ -196,6 +234,30 @@ class EngineFixture implements AutoCloseable {
         if (processor != null) {
             assertWithMessage("PC ended with a failure cause; the scenario did not expect one")
                     .that(processor.getFailureCause()).isNull();
+        }
+    }
+
+    /**
+     * A {@link MockProducer} whose acks the scenario supplies, with core's send callback deliberately
+     * withheld.
+     * <p>
+     * The mock runs that callback on whichever thread completes the send - the scenario's own thread - where
+     * a real producer runs it on its sender thread and guards it. Core's callback rethrows a failed send, and
+     * the mock releases the future's latch <b>after</b> calling the callback, so a throw there leaves the
+     * engine waiting on a future that can never complete: with the callback attached, "the broker rejected
+     * this record" is indistinguishable from "the broker never answered". Withholding it restores
+     * production's shape, where the engine learns the outcome from the future - the only channel it uses.
+     */
+    private static class ScenarioAckedMockProducer extends MockProducer<byte[], byte[]> {
+
+        ScenarioAckedMockProducer() {
+            super(false, new ByteArraySerializer(), new ByteArraySerializer());
+        }
+
+        @Override
+        public synchronized Future<RecordMetadata> send(ProducerRecord<byte[], byte[]> record,
+                                                        Callback callback) {
+            return super.send(record, null);
         }
     }
 

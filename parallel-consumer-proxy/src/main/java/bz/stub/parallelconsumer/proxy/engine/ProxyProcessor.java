@@ -22,8 +22,11 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -53,6 +56,17 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * A success report's produce payload is produced here with the engine's own producer (R6, landed by the
  * spike U29): the worker's only sanctioned Kafka output (KTD7), sent and acked before the input record's
  * offset may become eligible to commit.
+ * <p>
+ * <b>That ack wait runs on its own lane, never on the caller's</b> (the {@code produceCompletion} pool). The
+ * transport calls {@link #report} from gRPC's <em>single serialized inbound callback</em> for the session -
+ * the same lane that carries {@code Heartbeat} - so blocking there for a broker round trip does not merely
+ * serialize this session's reports: it starves the heartbeats that hold every in-flight record's lease, and a
+ * slow broker escalates into lease expiry, mass return-to-scheduling and a redelivery storm. So a success
+ * report carrying a produce payload is <em>claimed</em> on the caller's thread and completed on the lane; the
+ * caller gets {@link ReportResult#ACCEPTED_PRODUCING} back and returns immediately. The ordering that backs
+ * at-least-once is untouched, because it is an ordering <b>within</b> one record's completion, not between
+ * threads: produce, await the acks, then the success hook, then the mailbox add - so an input offset still
+ * cannot become eligible to commit ahead of its output existing.
  * <p>
  * <b>Every way a record can come back without a verdict funnels through one method</b>
  * ({@code returnToScheduling}): lease expiry, reconnect-window expiry, a manifest that does not name it, a
@@ -91,6 +105,12 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
     public enum ReportResult {
         /** The outcome was applied: the record completed and returns to core for commit accounting. */
         APPLIED_SUCCESS,
+        /**
+         * The outcome was accepted and the record claimed, but its produce payload is still being sent: the
+         * verdict is applied on the produce-completion lane once the acks land (or fail), never on the
+         * caller's thread. Not a discard - the record is resolved exactly once, just not yet.
+         */
+        ACCEPTED_PRODUCING,
         /** The outcome was applied: the failure entered core's retry scheduling, attempt count incremented. */
         APPLIED_FAILURE,
         /**
@@ -127,6 +147,18 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
     private final DispatchWaveAssembler waveAssembler;
     private final LivenessLease lease;
     private final ReconnectWindow reconnectWindow;
+
+    /**
+     * Where a success report's produce-and-complete step runs, so the caller's thread - gRPC's single
+     * serialized inbound callback for the session - never waits on a broker. See the class javadoc.
+     * <p>
+     * <b>Its ceiling is derived, not invented (KTD6):</b> a task exists only for a record that has been
+     * claimed out of the registry and not yet handed back to the mailbox, and the registry can hold no more
+     * than the engine's in-flight target, so {@code targetAmountOfRecordsInFlight} is the structural maximum
+     * of concurrent tasks. Threads are created on demand and retired when idle, so a session that produces
+     * nothing pays for nothing.
+     */
+    private final ThreadPoolExecutor produceCompletion;
 
     public ProxyProcessor(ParallelConsumerOptions<byte[], byte[]> options, DispatchSink sink) {
         this(options, sink, DEFAULT_COALESCING_WINDOW);
@@ -167,6 +199,37 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
         this.inFlight = new InFlightRegistry(wc -> wm.checkIfWorkIsStale(wc), hook);
         this.lease = new LivenessLease(livenessSettings);
         this.reconnectWindow = new ReconnectWindow(livenessSettings);
+        this.produceCompletion = newProduceCompletionLane(sizeCap);
+    }
+
+    /**
+     * The produce-completion lane: a cached pool with a hard ceiling. {@link SynchronousQueue} rather than a
+     * work queue, deliberately - a queued task is a record whose completion is waiting on <em>another</em>
+     * record's broker round trip, which is the serialization this lane exists to remove, so the pool grows a
+     * thread instead, up to the in-flight ceiling that bounds how many tasks can exist at all.
+     * <p>
+     * The rejection handler runs the task on the calling thread. Saturation is unreachable by the
+     * construction above, and a task rejected after {@code shutdown()} would be <em>discarded</em> by the JDK's
+     * own caller-runs policy - which would strand a claimed record outside the registry and outside the
+     * mailbox, the one drift {@link InFlightRegistry}'s leak discipline exists to prevent. Running it inline
+     * is slow; losing it is silent.
+     */
+    private ThreadPoolExecutor newProduceCompletionLane(int sizeCap) {
+        var threadCount = new AtomicLong();
+        var lane = new ThreadPoolExecutor(0, Math.max(sizeCap, 1), 60L, TimeUnit.SECONDS,
+                new SynchronousQueue<>(),
+                runnable -> {
+                    var thread = new Thread(runnable, "pc-proxy-produce-ack-" + threadCount.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                },
+                (task, executor) -> {
+                    log.warn("The produce-completion lane refused a task (shut down: {}, active: {}); running "
+                                    + "it on the calling thread so the claimed record still reaches the mailbox",
+                            executor.isShutdown(), executor.getActiveCount());
+                    task.run();
+                });
+        return lane;
     }
 
     /**
@@ -266,30 +329,49 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
 
         // the per-record vert.x hook pattern: verdict hook, then the mailbox add - unconditionally, because a
         // claimed entry that never reaches the mailbox is exactly the counter drift the leak check exists for
-        ReportResult result;
         if (report.getOutcomeCase() == Report.OutcomeCase.SUCCESS) {
-            try {
-                // R6: the produce payload is the worker's only sanctioned Kafka output (KTD7), and it is
-                // produced BEFORE the success hook, so the input offset cannot become eligible to commit
-                // ahead of the output existing - the at-least-once ordering
-                producePayload(report.getSuccess());
-                wc.onUserFunctionSuccess();
-                result = ReportResult.APPLIED_SUCCESS;
-            } catch (RuntimeException produceFailure) {
-                // the worker succeeded but its output did not: applied as a failure so the record returns to
-                // retry scheduling. The redelivered worker may produce duplicates - the at-least-once
-                // contract R6 states, not a defect
-                log.warn("Produce payload of a success report failed; applying the report as a failure so the "
-                        + "record is redelivered", produceFailure);
-                wc.onUserFunctionFailure(produceFailure);
-                result = ReportResult.APPLIED_FAILURE;
+            if (report.getSuccess().getProduceCount() > 0) {
+                // the only step here that can wait on a broker, and this thread is the session's whole
+                // inbound lane - heartbeats included. Hand it off; the record is claimed either way, and the
+                // lane applies the verdict exactly once
+                var success = report.getSuccess();
+                produceCompletion.execute(() -> produceThenComplete(entry, success));
+                return ReportResult.ACCEPTED_PRODUCING;
             }
-        } else {
-            wc.onUserFunctionFailure(RecordCodec.toFailureCause(report.getFailure()));
-            result = ReportResult.APPLIED_FAILURE;
+            wc.onUserFunctionSuccess();
+            addToMailbox(entry.context(), wc);
+            return ReportResult.APPLIED_SUCCESS;
         }
+        wc.onUserFunctionFailure(RecordCodec.toFailureCause(report.getFailure()));
         addToMailbox(entry.context(), wc);
-        return result;
+        return ReportResult.APPLIED_FAILURE;
+    }
+
+    /**
+     * The claimed record's completion, on the produce-completion lane: R6's produce payload is the worker's
+     * only sanctioned Kafka output (KTD7), and it is produced and <b>acked</b> before the success hook runs,
+     * so the input offset cannot become eligible to commit ahead of its output existing - the at-least-once
+     * ordering, unchanged by moving the wait off the caller's thread.
+     * <p>
+     * The mailbox add is in a {@code finally}: an entry claimed out of the registry that never reaches the
+     * mailbox drifts {@code numberRecordsOutForProcessing} and stalls the consumer with no exception, and
+     * that must not depend on which way the produce went.
+     */
+    private void produceThenComplete(InFlightRegistry.InFlight entry, Report.Success success) {
+        var wc = entry.wc();
+        try {
+            producePayload(success);
+            wc.onUserFunctionSuccess();
+        } catch (RuntimeException produceFailure) {
+            // the worker succeeded but its output did not: applied as a failure so the record returns to
+            // retry scheduling. The redelivered worker may produce duplicates - the at-least-once
+            // contract R6 states, not a defect
+            log.warn("Produce payload of a success report failed; applying the report as a failure so the "
+                    + "record is redelivered", produceFailure);
+            wc.onUserFunctionFailure(produceFailure);
+        } finally {
+            addToMailbox(entry.context(), wc);
+        }
     }
 
     /**
@@ -476,30 +558,39 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
     }
 
     /**
-     * Produces a success report's payload with the engine's own producer, blocking on the acks within the
-     * configured send timeout - mirroring core's own poll-and-produce flow, which waits for acks before the
-     * record may complete. Runs on the transport's report thread; the send itself is thread-safe, and no
-     * produce lock is needed outside the transactional commit mode, which the proxy refuses (KTD7).
+     * Produces a success report's payload with the engine's own producer, blocking on the acks - mirroring
+     * core's own poll-and-produce flow, which waits for acks before the record may complete. The send itself
+     * is thread-safe, and no produce lock is needed outside the transactional commit mode, which the proxy
+     * refuses (KTD7). Runs on the produce-completion lane, never on the caller's thread.
+     * <p>
+     * <b>{@code sendTimeout} bounds the payload, not each record in it.</b> One deadline is taken before the
+     * first send and every ack waits against what is left of it, so a payload's cost is what the client
+     * configured however many records it carries - a fresh timeout per future would multiply the bound by the
+     * payload size, and a report of seven records could outlast the default lease on its own.
      */
     private void producePayload(Report.Success success) {
-        if (success.getProduceCount() == 0) {
-            return;
-        }
         var producerManager = getProducerManager().orElseThrow(() -> new IllegalStateException(
                 "a success report carries a produce payload but the engine has no producer"));
         var outbound = new ArrayList<ProducerRecord<byte[], byte[]>>(success.getProduceCount());
         for (ProduceRecord produceRecord : success.getProduceList()) {
             outbound.add(RecordCodec.toProducerRecord(produceRecord));
         }
+        // nanoTime, not the liveness clock: this is an elapsed-time bound on a broker round trip, and it must
+        // not move when a test (or an operator) shifts the wall clock the leases are measured against
+        long deadline = System.nanoTime() + options.getSendTimeout().toNanos();
         var futures = producerManager.produceMessages(outbound);
         for (var future : futures) {
             try {
-                future.getRight().get(options.getSendTimeout().toMillis(), TimeUnit.MILLISECONDS);
+                future.getRight().get(Math.max(deadline - System.nanoTime(), 0L), TimeUnit.NANOSECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("interrupted awaiting a produce payload's ack", e);
-            } catch (ExecutionException | TimeoutException e) {
-                throw new IllegalStateException("a produce payload record was not acknowledged", e);
+            } catch (ExecutionException e) {
+                throw new IllegalStateException("a produce payload record was rejected by the broker", e);
+            } catch (TimeoutException e) {
+                throw new IllegalStateException(msg(
+                        "a produce payload record was not acknowledged within the payload's shared {} send "
+                                + "timeout", options.getSendTimeout()), e);
             }
         }
     }
@@ -529,13 +620,33 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
      * {@code (Duration, DrainingMode)} overload missed the no-arg route entirely. The teardown sits in a
      * {@code finally} because {@code super.close} sneaky-throws {@code TimeoutException} - and a close that
      * times out must still stop the wave-window timer thread, or it leaks.
+     * <p>
+     * The produce-completion lane is shut down <b>after</b> {@code super.close}, not before: its pending
+     * tasks are records core is still counting as out for processing, so stopping it first would leave a
+     * drain waiting for completions that can no longer arrive.
      */
     @Override
     public void close(DrainingMode drainMode) {
         try {
             super.close(drainMode);
         } finally {
+            closeProduceCompletionLane();
             waveAssembler.close();
+        }
+    }
+
+    private void closeProduceCompletionLane() {
+        produceCompletion.shutdown();
+        try {
+            // one send timeout is the longest a task in flight can still legitimately be waiting for
+            if (!produceCompletion.awaitTermination(options.getSendTimeout().toMillis(), TimeUnit.MILLISECONDS)) {
+                log.warn("The produce-completion lane still had work after {}; interrupting it",
+                        options.getSendTimeout());
+                produceCompletion.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            produceCompletion.shutdownNow();
         }
     }
 
