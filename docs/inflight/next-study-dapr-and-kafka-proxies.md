@@ -15,6 +15,35 @@ component consumes from a topic and delivers each message to the application's e
 **kafka-pixy** — a Kafka proxy exposing gRPC and REST, with consumer groups and explicit
 acknowledgement, so languages with poor Kafka clients can still use Kafka.
 
+**It is abandoned** (owner, 2026-08-15): no commits in about four years, with open requests to support
+Kafka versions from around 2019. That fact changes what it is for here, in two directions:
+
+- **Dropped as a requirement.** Owner's call: a compatibility surface speaking its protocol buys
+  access to no users, and §4g of [`next-http-strategy-ideas.md`](next-http-strategy-ideas.md) —
+  *patch their project rather than reimplement it* — has no upstream left to patch. Neither should be
+  carried as live options.
+- **Kept as a comparison point**, which is the more valuable half. It solved a closely adjacent
+  problem with the same materials, and abandonment does not invalidate its architecture or its build.
+
+**It is also the strongest evidence that this sidecar is not that sidecar.** The proxies existed for
+*reachability*, native clients solved reachability underneath them, and a proxy with no remaining
+reason to exist stops getting commits. Concurrency was never solved and cannot be solved by better
+native clients, because it is a consumer-model problem rather than a client-quality one. Read their
+adoption as a warning about *purpose*, not as a forecast for anything sharing their shape.
+
+### Questions to answer about it before this work merges
+
+Raised 2026-08-15, deferred deliberately, and scoped to the client fan-out rather than to the
+protocol:
+
+- **Did they ship a C++ client wrapping their gRPC protocol?** If so it is the only other worked
+  example of the problem this fork solved from scratch, and the one where the answer was least
+  obvious.
+- **How does their C++ build compare with ours** — toolchain, dependency acquisition, how the
+  generated stubs are produced and vendored, and what it costs a user to build?
+- **How does their client style compare** — the shape of the surface, the threading model, and where
+  they drew the line between generated code and hand-written controller?
+
 ## How they relate to this project
 
 **Architecturally, Dapr is the closest thing that exists**: sidecar, any language, local protocol,

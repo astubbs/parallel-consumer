@@ -24,6 +24,12 @@ everywhere), reports over **POST** carrying the echoed token.
 
 ## 2. Compatibility surfaces — speak their protocol, not ours
 
+> **kafka-pixy is abandoned** (owner, 2026-08-15) - about four years without commits. Both the
+> pixy compatibility surface below and the patch-upstream option in section 4g are **dropped as
+> requirements**; it is kept only as a comparison point.
+> [`next-study-dapr-and-kafka-proxies.md`](next-study-dapr-and-kafka-proxies.md) **owns that
+> finding**, and the C++ client questions deferred until before this work merges.
+
 **The cheapest adoption path is speaking someone else's protocol rather than asking them to adopt
 yours.** Two candidates, both cheap *if* the HTTP gateway exists anyway:
 
