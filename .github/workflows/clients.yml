@@ -86,6 +86,14 @@ jobs:
           #   cache-path  - the language's package cache ('' = no per-language cache)
           #   lockfile    - hashFiles() pattern keying that cache (empty hash until the
           #                 wave lands one; restore-keys covers the gap)
+          #   protoc      - 'true' on a row whose module runs protoc ON THE RUNNER during its
+          #                 build, which is a smaller set than "generates from the schema": Go,
+          #                 Ruby and TypeScript commit their stubs, .NET's Grpc.Tools NuGet ships
+          #                 its own protoc, and C++ and Swift generate inside their container
+          #                 images. Rust is the one row left - build.rs runs prost/tonic codegen
+          #                 on every `cargo build`, which is why all three of its steps failed
+          #                 identically before this field existed. Unset means the row needs
+          #                 nothing; the provisioning step below is skipped entirely.
           - language: go
             module: parallel-consumer-proxy-client-go
             toolchain: '1.25.0'
@@ -133,11 +141,16 @@ jobs:
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Package.resolved
           - language: rust
             module: parallel-consumer-proxy-client-rust
+            # ABOVE Cargo.toml's rust-version (the MSRV the surface needs), deliberately, and
+            # bin/check-client-toolchain-pins.sh is what keeps it that way round.
             toolchain: '1.88.0'
             scanner: clippy
             scanner-cmd: cargo clippy --all-targets -- -D warnings
             cache-path: ~/.cargo/registry
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/Cargo.lock
+            # build.rs generates from the frozen schema on every cargo invocation - see the field
+            # list above, and the provisioning step below for where protoc comes from.
+            protoc: 'true'
           - language: dotnet
             module: parallel-consumer-proxy-client-dotnet
             toolchain: '8.0.404'
@@ -359,6 +372,22 @@ jobs:
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'python'
         with:
           python-version: ${{ matrix.toolchain }}
+      # THE SWIFT ROW NEEDS A KEYRING BEFORE IT NEEDS A TOOLCHAIN. setup-swift installs Swiftly
+      # and gpg-verifies the download, but imports no keys itself, and a runner starts with an
+      # empty keyring - so the verification fails with "Can't check signature: No public key" and
+      # the action aborts before Swift is ever installed. Importing swift.org's published keyring
+      # is the fix that keeps the signature check doing its job; `skip-verify-signature: true`
+      # would also make the row green, by throwing away the property being checked.
+      #
+      # The fingerprint is asserted rather than trusted: it is the Swiftly release signing key the
+      # action's verify step names, so a rotation on swift.org fails HERE, loudly, instead of
+      # silently reverting the row to whatever the next keyring happens to contain.
+      - name: Import the Swift release signing keys (setup-swift verifies, but imports nothing)
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'swift'
+        run: |
+          curl -sSL --fail -o "$RUNNER_TEMP/swift-all-keys.asc" https://swift.org/keys/all-keys.asc
+          gpg --import "$RUNNER_TEMP/swift-all-keys.asc"
+          gpg --list-keys E813C892820A6FA13755B268F167DF1ACF9CE069
       - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3.0.0-beta.1 - the v2 line stops at Swift 5.x
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'swift'
         with:
@@ -386,6 +415,63 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq cppcheck
+
+      # ── protoc, for the rows that run it on the runner (matrix.protoc) ───────
+      # THE VERSION IS NOT PINNED HERE, AND THAT IS THE POINT: it is read out of the protocol
+      # module's own pom (<protobuf.version>), which is where the JVM side already pins the
+      # compiler that generates from the frozen schema. A version written here as well would be a
+      # second pin for one schema, free to drift from the first with nothing to notice - and the
+      # generated Rust would then come from a different protoc than the generated Java.
+      #
+      # BOTH ARTIFACTS COME FROM MAVEN CENTRAL, for the reason the detekt row states: a Central
+      # artifact is immutable once published, where a GitHub release asset can be replaced in
+      # place under the same URL. It also means this step downloads the exact bytes the protocol
+      # module's build already uses.
+      #
+      # THE WELL-KNOWN TYPES ARE A SEPARATE DOWNLOAD FROM THE BINARY. The Central protoc artifact
+      # is a bare executable with no include/ directory, and the frozen schema imports
+      # google/protobuf/duration.proto and timestamp.proto - which ship inside protobuf-java's jar.
+      # Unpacking them and pointing $PROTOC_INCLUDE at them is what the Rust build script's own
+      # resolution order asks for (see its well_known_types_include).
+      #
+      # `install -m 0755` is load-bearing rather than tidiness. Without $PROTOC set, the Rust build
+      # script falls back to the copy in ~/.m2, which Maven leaves NON-EXECUTABLE - so the clippy
+      # step failed with "Permission denied (os error 13)" even after a Maven build had downloaded
+      # protoc onto the runner. Owning an executable copy takes that fallback out of the picture.
+      - name: Provision protoc (${{ matrix.module }} generates from the frozen schema at build time)
+        if: steps.gate.outputs.deferred == 'false' && matrix.protoc == 'true'
+        run: |
+          version=$(python3 - <<'PYTHON'
+          import sys
+          import xml.etree.ElementTree as ElementTree
+
+          POM = "parallel-consumer-proxy-protocol/pom.xml"
+          NAMESPACE = {"m": "http://maven.apache.org/POM/4.0.0"}
+
+          version = ElementTree.parse(POM).getroot().findtext(
+              "m:properties/m:protobuf.version", namespaces=NAMESPACE)
+          if not version:
+              print(f"::error file={POM}::no <protobuf.version> property - this step reads the "
+                    "protoc version from there rather than pinning a second copy of it; restore "
+                    "the property or teach this step where the version moved to")
+              sys.exit(1)
+          print(version)
+          PYTHON
+          )
+          central=https://repo1.maven.org/maven2/com/google/protobuf
+          curl -sSL --fail -o "$RUNNER_TEMP/protoc.exe" \
+            "$central/protoc/$version/protoc-$version-linux-x86_64.exe"
+          curl -sSL --fail -o "$RUNNER_TEMP/protobuf-java.jar" \
+            "$central/protobuf-java/$version/protobuf-java-$version.jar"
+          install -D -m 0755 "$RUNNER_TEMP/protoc.exe" "$RUNNER_TEMP/protoc/bin/protoc"
+          unzip -q "$RUNNER_TEMP/protobuf-java.jar" 'google/protobuf/*.proto' \
+            -d "$RUNNER_TEMP/protoc/include"
+          test -f "$RUNNER_TEMP/protoc/include/google/protobuf/duration.proto"
+          "$RUNNER_TEMP/protoc/bin/protoc" --version
+          {
+            echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc"
+            echo "PROTOC_INCLUDE=$RUNNER_TEMP/protoc/include"
+          } >> "$GITHUB_ENV"
 
       # ── Per-language dependency cache (explicit restore/save, rotating key) ──
       - name: Restore ${{ matrix.language }} cache
