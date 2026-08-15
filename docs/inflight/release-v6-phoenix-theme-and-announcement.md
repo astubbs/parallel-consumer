@@ -54,6 +54,47 @@ hard parts - ordering, retries, offset encoding, commit decisions - live in one 
 tested for years, and the same shared conformance suite proves every client behaves identically at
 the boundary.
 
+## The positioning, worked out 2026-08-15 — the strongest material for the post
+
+**Lead with the architecture the reader already has, not with the feature.** The common shape is
+Kafka as the backbone, bridged into RabbitMQ, SQS or Celery whenever work needs per-key ordering,
+retries or real concurrency. That bridge costs a second system to operate, two sets of delivery
+semantics, and data leaving Kafka — forfeiting replay, retention and ordering — plus a bridge that
+can lose or duplicate. The claim, in its narrow and defensible form:
+
+> If you bridged Kafka into a queue broker to get concurrency, ordering and retries — you do not need
+> to.
+
+Keep it narrow. The wide version ("you don't need RabbitMQ") is false: no routing or exchanges, no
+priority queues, no arbitrary delayed delivery, no per-message time-to-live.
+
+**Why more concurrency is not just a bigger number.** Every other way to exceed partition-count
+concurrency means adding partitions, dropping ordering, or leaving Kafka. This gives all three at
+once — and now in any language. What makes it possible is not the sidecar or the protocol but the
+offset-map encoding that lets out-of-order completion commit safely; that is the years of work
+nothing on the wire reveals.
+
+**Address Dapr directly rather than hoping nobody asks.** Dapr is the architectural neighbour every
+informed reader will reach for: also a sidecar, also any language, also Kafka. The distinction is
+purpose — Dapr moves *messages* and exists for portability, its Kafka component being an ordinary
+consumer group bounded by partitions. This redistributes *work*. Same shape, different problem. See
+[`next-study-dapr-and-kafka-proxies.md`](next-study-dapr-and-kafka-proxies.md), and **do the study
+before publishing** rather than asserting the comparison from memory.
+
+**"Is it a broker?" is a good question to answer in the post**, because readers will ask it.
+Behaviourally it is broker-shaped: ordered dispatch, acknowledgements, redelivery with attempt
+counts, leases, worker liveness, a dead worker's records reclaimed. What keeps it from being one is
+durability — it owns only the in-flight view, Kafka stays the sole source of truth, and nothing is
+lost when the sidecar dies because nothing was acknowledged. The 2021 issue this all descends from
+already called it *"a server side queue implementation"*, which is a good line to quote against
+itself.
+
+**One caution about novelty.** Every ingredient exists separately — sidecars over Kafka (Dapr,
+kafka-pixy, Confluent REST Proxy), key-ordered concurrency (this project), queue semantics with acks
+and redelivery (every queue broker). The *combination* is what nobody seems to have. "Never seen
+before" is exactly the claim that attracts one embarrassing correction, so make the specific claim
+rather than the sweeping one, and let a survey back it.
+
 ## Two practical notes for whoever writes it
 
 - **The release notes are generated from the commit log** (`docs/releasing.md` owns how). That makes
