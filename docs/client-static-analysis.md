@@ -72,7 +72,7 @@ version. That is the likeliest cause by some distance, and it is invisible from 
 | **Ruby** | RuboCop (`Lint/`, `Security/`) | `bundle exec rubocop`, in the module | ran clean |
 | **C++** | cppcheck | `cppcheck --enable=warning,style,performance --error-exitcode=1 --inline-suppr src` | no — no local toolchain |
 | **Swift** | **nothing mature — none added** | (formatter only; see below) | n/a |
-| **Scala** | **compiler flags only — no row yet** | (see below) | n/a |
+| **Scala** | `scalac -Xlint -Wunused -Werror` | `parallel-consumer-proxy-client-scala/scripts/analyse.sh` | yes |
 
 The last column distinguishes two different things, because conflating them is how a check comes to
 be believed rather than known:
@@ -464,21 +464,27 @@ recommendation to that wave, and it is the whole answer for Swift; do not go loo
 [`docs/inflight/parked-containerised-toolchains-and-runtime.md`](inflight/parked-containerised-toolchains-and-runtime.md)
 — so nothing Swift-side can be verified locally today regardless.)
 
-## Scala — compiler flags, and no CI row yet
+## Scala — compiler flags
 
-The Scala module was seeded after the first fan-out wave and, unlike its siblings, **has no row in
-`clients.yml`**; its own pom says the Scala wave adds one. So this is a recommendation held for that
-wave rather than something wired now.
+**Wired, and the recommendation this section used to hold is what landed.** The Scala wave added the
+module's `clients.yml` row (the module was seeded after the other rows were written, so there was
+none to un-defer) and pointed it at `scripts/analyse.sh`.
 
 **The mature option is the compiler**: `-Xlint` with `-Wunused` and `-Werror` catches unused values,
 inferred `Any`, non-exhaustive matches, discarded non-`Unit` values and adapted argument lists — the
 Scala defect classes that actually bite. The third-party alternatives (`scapegoat`, `wartremover`)
-are neither as widely adopted nor as reliably maintained across Scala versions, so **the compiler
-flags are the recommendation and no third-party tool is proposed.**
+are neither as widely adopted nor as reliably maintained across Scala versions — both are *compiler
+plugins*, published per Scala patch version, so gating on one makes a Scala bump wait on somebody
+else's release — and **no third-party tool is used.**
 
-Since the module builds with `scala-maven-plugin` in the ordinary Maven reactor, those flags go in
-its pom and gate the normal build — no CI row is strictly required for the analysis, only for the
-module's build.
+The flags live in the module's pom, in `scala-maven-plugin`'s `<args>`, and `scripts/analyse.sh` runs
+the compile that applies them. That is the opposite arrangement from Kotlin's detekt invocation, and
+deliberately so: a compiler flag cannot be passed from a workflow without the build agreeing to it,
+so there is no local/CI skew here to guard against. Test sources keep the lint and drop `-Werror` and
+`-Wvalue-discard`, because a test that discards a value on purpose is not a defect.
+
+**Proven able to fail**: an unused private method and an unused import each turned the build red
+(`Unused import`, `private method ... is never used`), and removing them turned it green.
 
 ## Adding a language, or a tool
 

@@ -6,9 +6,37 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-scala
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the Scala client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the Scala client wave of the language-proxy plan.
+  - id: proxy-client-scala-alpha
+    artifact: parallel-consumer-proxy-client-scala
+    coverage: >-
+      Two end-to-end tests spawn the real test-mode sidecar as a child process and drive it over the
+      real gRPC wire - launch, port line, loopback connect, handshake, dispatch, the user's function,
+      the report with the delivery token echoed, then a clean client-initiated shutdown and reap. The
+      first runs the shared scenario a-processed-record-advances-the-committed-offset and asserts the
+      negotiated capability set came back as dispatch alone, the delivery state the specification
+      promises, and that the session's future completes on close. The second runs
+      a-failed-record-is-redelivered-with-its-failure-history and is the one that proves a report
+      actually reached the engine: the redelivery arrives with attempt 2 and the prescribed reason
+      byte for byte. Unit tests cover the single translation this module performs in both directions
+      - the options, the collapse of the two failure fields into one Option, absent key or value as
+      None, the outcome arms - the rule that a client never invents a verdict (a record handed out
+      after hand-out stopped, and a future that never completes, both reported as nothing, against
+      three controls that do reach a verdict), and the credential-hygiene rule that no options or
+      record rendering prints a payload or a property map. Static analysis is the Scala compiler with
+      -Xlint -Wunused -Werror, the flags the CI row runs, proven able to fail against an injected
+      unused private method and an unused import.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala/src/test/scala/bz/stub/parallelconsumer/client/scaladsl/OneRecordThroughTheSidecarTest.scala
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala/src/test/scala/bz/stub/parallelconsumer/client/scaladsl/NoVerdictIsInventedTest.scala
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala/src/test/scala/bz/stub/parallelconsumer/client/scaladsl/BridgeTest.scala
+    limitation: >-
+      First wave only. The suite exercises a handful of records against a mock-Kafka sidecar: there
+      is no broker test, no multi-record concurrency or FIFO hand-out test, no overflow negative
+      control, and nothing covering connection loss, lease expiry, worker death, terminal outcomes or
+      the Shutdown drain - because none of those paths is implemented here, and the ones that are
+      belong to the shared gRPC transport and are tested there. The cross-language conformance runner
+      exists at scripts/conformance-runner and was exercised by hand against the same test-mode
+      sidecar for all four behaviour tokens and all three exit statuses, but this client is NOT yet
+      registered in the shared suite's LanguageRunners registry, so no scenario has been proven red
+      by that suite. Until that entry lands, the CI row reports the gap in its job summary rather
+      than failing, and the conformance claim for this client is untested.

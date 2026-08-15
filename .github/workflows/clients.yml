@@ -188,6 +188,35 @@ jobs:
               && java -jar /tmp/detekt-cli.jar --input src --build-upon-default-config
             cache-path: ''
             lockfile: ''
+          - language: scala
+            module: parallel-consumer-proxy-client-scala
+            # JVM language: the shared Temurin 17 step below is its whole toolchain,
+            # and the Maven cache is its dependency cache. Scala 2.13 rather than 3.x -
+            # the module's pom carries the audience argument.
+            #
+            # THIS ROW IS THE ONE EXCEPTION TO THIS FILE'S "ALREADY RAN" HEADER, and it is
+            # the case that header did not cover: the Scala module was seeded AFTER these
+            # rows were written, so it had no row to un-defer. Adding it is the Scala
+            # wave's own task, named as such in docs/inflight/clients/scala.md and in the
+            # skeleton pom this wave replaced. Nothing else here changed.
+            toolchain: ''
+            # THE ANALYSER IS THE COMPILER, and that is a recorded result rather than a
+            # gap. Scala's standalone analysers - scapegoat, WartRemover - are compiler
+            # plugins that must be published for the exact Scala patch version in use, so
+            # gating on one makes a Scala bump wait on someone else's release; neither
+            # tracks releases reliably enough for the "only if mature" filter every other
+            # client applied. Scalafix is a rewriter whose useful rules here are mostly
+            # formatting. What is left is the compiler's own lint - maintained by
+            # definition - with -Werror turning it from advice into a gate.
+            #
+            # The flags live in the module's pom (scala-maven-plugin's <args>), so unlike
+            # the detekt row there is no local/CI skew to guard against: a compiler flag
+            # cannot be passed from here without the build agreeing to it. scripts/analyse.sh
+            # is the module's own recipe and runs exactly the compile that applies them.
+            scanner: scalac -Xlint -Wunused -Werror
+            scanner-cmd: scripts/analyse.sh
+            cache-path: ''
+            lockfile: ''
           - language: ruby
             module: parallel-consumer-proxy-client-ruby
             toolchain: '3.4.4'
