@@ -99,6 +99,36 @@ jobs:
       - name: One version per action
         run: bash bin/check-action-versions.sh
 
+  deferred-modules:
+    name: "clients: deferred modules"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads the working tree and asks git what is in it; no history needed, so shallow is fine.
+      - uses: actions/checkout@v6
+
+      # The check parses clients.yml and the maturity fragments structurally, the same way
+      # bin/check-docs-data.sh and clients.yml's own gate step do. Installed rather than assumed:
+      # the image ships PyYAML today, and a check that silently changed meaning when it stopped
+      # would be the failure this whole job exists to prevent.
+      - name: Install the YAML parser the check needs
+        run: python3 -m pip install --quiet pyyaml
+
+      # Self-test first, as everywhere else here. Its two control arms are what make the rest
+      # meaningful: the same source file with the deferral LIFTED passes, and the same source file
+      # in a module that was never deferred passes - so the check is failing on the pairing, not on
+      # the presence of source.
+      - name: Self-test the deferral guard
+        run: bash bin/test-check-deferred-modules.sh
+
+      # clients.yml skips a language row when that module's maturity fragment says `deferred:`,
+      # which is right for a seeded skeleton and has no counterpart in the other direction: a wave
+      # that writes a real client and forgets to lift the deferral gets a row that reports green
+      # while building, testing and linting nothing, indefinitely. `lifted_by:` is a note to a
+      # human. This is the check.
+      - name: A module with real source must not still be deferred
+        run: bash bin/check-deferred-modules.sh
+
   cve-exclusions:
     name: "deps: CVE exclusion expiry"
     runs-on: ubuntu-latest
