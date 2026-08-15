@@ -130,7 +130,8 @@ What the choice must preserve, whichever way it goes:
 - Launch the binary **directly, never through a shell** - a shell wrapper holds the stdin write end and
   defeats the proxy's parent-death signal, leaking a JVM that still holds group membership.
 - Keep the child's stdin pipe open and never write to it; read `port: <n>` from the first stdout line and
-  connect to `127.0.0.1:<n>` plaintext.
+  connect to `127.0.0.1:<n>` plaintext. **Everything the child writes after that line is still yours to
+  read** - §10 owns what happens to it, and not reading it hangs the sidecar.
 - Pass **no configuration** by argv, environment or file. Configuration is code: it travels in
   `Configure`, from the user's own language.
 
@@ -261,6 +262,9 @@ to that wave and lands in §9.
   travel the stream and nowhere else.
 - Demos inherit all of this for own-cluster mode inputs: prompt without echo where the platform allows,
   and never print what was entered.
+
+The rule is above; **§10.4 carries the part that is a client problem specifically** - the language mechanism
+by which a configuration object logs itself without anyone asking it to.
 
 ## 7. Conformance scenarios
 
@@ -412,3 +416,141 @@ other's work, which is why they are treated as specification defects rather than
 **Open, not settled here:** whether `poll(processor)` blocks (§1) - wave two answers it in five languages
 simultaneously and the resolver fills that section's placeholder from those answers. Recording it as open is
 the decision: settling it from one language's idiom is what the placeholder exists to prevent.
+
+**2026-08-15, the logging contract (§10)**, written after auditing all seven existing clients rather than
+from first principles:
+
+| Divergence | Settled as | Alternative rejected |
+|---|---|---|
+| The sidecar's stdout and stderr (§10.1) | Drained for the child's whole life, both of them; stderr reaches the application by default | Discarding stderr by default - the Go, Ruby and .NET clients each do, and a misconfigured broker then presents as an unexplained hang |
+| One logging mechanism for all languages (§10.2) | Each language's own convention, named per language | An injectable interface everywhere - it is the right answer only where the ecosystem has no facade, and imposing it on Java or .NET would be a worse client in those languages |
+| Whether the library may log unasked (§10.2) | Silent until the application configures a sink, by that language's mechanism for silence | Logging at a default level, which is how a library ends up writing to somebody else's stdout |
+| Payload in log lines (§10.5) | Never, at any level - keys and values are user data | Debug-only payload logging, which is the same leak with a level attached to it |
+
+## 10. Logging (binding on every client)
+
+Two channels, and confusing them is the mistake this section exists to prevent: **the sidecar's output**,
+which the client owns because the client spawned it (§2), and **the client library's own logging**, which
+belongs to the application that called it. The first is a liveness duty. The second is a politeness duty.
+Seven clients reached seven different answers before this was written down, which is why it is here.
+
+### 10.1 The sidecar's output is drained, always
+
+**The client spawns the sidecar, so the client owns its stdout and stderr - and a pipe nobody reads fills
+up and blocks the writer.** The sidecar then stops mid-log-line and never returns, which reaches the
+application as a stalled consumer with no error, no exception and nothing in any log: the worst failure
+shape available. It is not a slow leak either - an OS pipe buffer is 64 KiB on Linux, which a JVM at INFO
+reaches in seconds under load.
+
+- **Read both streams for the child's whole life, not just until the port line.** §2's `port: <n>` scan is
+  the *start* of the read, never the end of it. The test-mode harness makes this easy to get wrong in the
+  opposite direction - it logs *before* its port line, so the scan already tolerates chatter - but the
+  lines that matter for this rule are the ones after it, which no test currently forces anyone to consume.
+- **A stream you do not intend to read must not be a pipe.** Inheriting the parent's stderr, or pointing
+  the child at the null device, is safe because there is no buffer to fill; opening a pipe and ignoring it
+  is the bug. Closing the child's stderr descriptor outright is not a third option - the child then writes
+  to a closed descriptor, and that descriptor number is free to be reused by the next file it opens.
+- **stderr reaches the application by default.** Silencing a child process's diagnostics by default is how
+  a misconfigured broker becomes an unexplained hang; the application may redirect or discard it, but it
+  does not have to ask for it. Where the platform has a natural inherit (a parent stderr the child can
+  share), that is the default; otherwise drain the pipe and write it out.
+- **Keep a bounded tail for the diagnostic.** The last lines before a crash are the whole explanation, and
+  a spawn that fails without them costs an afternoon. Retain a fixed number of recent stderr lines (30-40
+  is what the clients that do this already keep) and put them in the error raised when the sidecar dies,
+  fails to announce a port, or exits mid-session. Bounded, because an unbounded buffer of a chatty child's
+  output is a leak of its own.
+- **Forwarding the sidecar's stdout into the application's logs is a per-client choice, and the default is
+  not to.** It is the proxy's own logging, already written to the proxy's own format; re-emitting it puts
+  text this library did not compose into the application's log stream, at levels this library cannot
+  interpret. Draining is mandatory; re-publishing is not.
+
+### 10.2 The library logs through its ecosystem's facade, and says nothing until asked
+
+**A library that writes to stdout or stderr unasked is badly behaved** - it corrupts programs whose stdout
+is data, and it appears in logs whose format it does not know. So a client logs through whatever its
+ecosystem's *applications* use to receive logs from libraries, and emits nothing until one is configured.
+
+There is no cross-language mechanism here and inventing one would make every client worse in its own
+language. The mechanism per language, with what it costs:
+
+| Language | Log through | Silent until configured, because | The application plugs in by | Dependency added |
+|---|---|---|---|---|
+| Java | SLF4J `org.slf4j:slf4j-api` (Lombok's `@Slf4j` for the field) | with no binding on the classpath SLF4J 2.x no-ops after one startup notice | putting a binding (Logback, Log4j 2) on its own classpath | `slf4j-api` only - **a library never ships a binding** |
+| Kotlin | the same `slf4j-api`, via `LoggerFactory.getLogger(...)` | as Java | as Java | as Java - **not** `kotlin-logging`, which is a second dependency for a wrapper this client does not need |
+| Python | stdlib `logging`, `getLogger(__name__)` per module, **plus `logging.NullHandler()` on the package's top-level logger** | only *with* that handler: without it Python's `lastResort` prints WARNING and above straight to `sys.stderr`, unformatted | ordinary `logging` configuration on the `parallel_consumer` logger | none - stdlib |
+| Go | stdlib `log/slog`: a `*slog.Logger` field on `Options` | the default is `slog.New(slog.DiscardHandler)`, whose `Enabled` is false at every level, so call sites cost nothing | setting `Options.Logger` | none - stdlib |
+| Rust | the `log` crate's macros (`log::debug!`, `log::warn!`) | by construction - with no logger installed the facade is a no-op | installing its own logger (`env_logger`, or `tracing-subscriber` plus `tracing-log`); **the library never calls `set_logger`** | `log` 0.4, which has no required transitive dependencies |
+| TypeScript | an injectable `Logger` interface on the options - **the ecosystem has no facade, and this is the answer, not a gap** | the field is absent by default and nothing is emitted | passing any object with the four methods: `pino`, `winston`, or bare `console` | none |
+| .NET | `Microsoft.Extensions.Logging.Abstractions` - an `ILoggerFactory` on `ClientOptions`, `[LoggerMessage]` source-generated call sites | the default is `NullLoggerFactory.Instance` | setting `ClientOptions.LoggerFactory` | one abstractions package, no implementation |
+| Ruby | stdlib `Logger`, duck-typed - anything answering `debug`/`info`/`warn`/`error` | the default is `Logger.new(IO::NULL)` | passing `logger:` | `logger` **must be declared in the gemspec**: it stops being a default gem in Ruby 3.5 |
+
+**Three of these have moved recently enough that recall is not evidence** - check before copying an older
+client:
+
+- **Go's answer is `log/slog`, not logrus or zap.** `slog` entered the standard library in Go 1.21, which
+  makes a third-party logging dependency in a thin client indefensible. `slog.DiscardHandler` needs Go
+  1.24; below that the discard idiom is `slog.New(slog.NewTextHandler(io.Discard, nil))`, which is worse
+  because its handler still evaluates. The Go client's `go.mod` already declares `go 1.25.0`.
+- **Rust's answer is `log`, not `tracing`.** `tracing` is the richer instrumentation story and the heavier
+  one; `log` is the direct SLF4J analogue, its own documentation tells libraries to link only against it,
+  and `tracing-log` lets a `tracing` application capture it anyway - so choosing `log` excludes nobody.
+- **Ruby's `logger` leaves the default gems in Ruby 3.5.** Requiring it without declaring it already warns
+  on 3.4 and breaks on 3.5. The Ruby client has no gemspec at all today, so this lands with one.
+
+### 10.3 Levels, and what is worth logging at all
+
+The test is whether a line helps someone diagnose a *session*, not whether it narrates the library.
+Per-record logging in a library processing at these rates is not diagnosis, it is a second workload.
+
+- **INFO** - once-per-session facts: the sidecar's port, the connection opening, what capability
+  negotiation actually granted (the effective `Configured` values, never what was asked for), and the
+  session ending with its reason. That is roughly four lines for a healthy run, which is the target.
+- **WARN** - the session is degraded but alive, or something was ignored: a sidecar that had to be killed
+  because it did not exit on its lifecycle pipe closing, a message this client does not implement being
+  dropped, a drain that timed out with work still unreported.
+- **ERROR** - the session is over and the application needs to act: a protocol violation (with its counts -
+  §3.2), a stream error, the sidecar exiting under a live session.
+- **DEBUG** - the per-record and per-message level. Reachable, off by default, and still bound by §10.4 and
+  §10.5: debug is not an exemption from either.
+- **Redelivery and queue overflow are worth a line each; a normal dispatch is not.** Redelivery means the
+  attempt count moved, which is the fact someone chasing a poison record needs. Overflow is a protocol
+  violation and already fatal to the session (§3.2).
+
+**A client that cannot yet tell its caller the session died must at minimum not be silent about it.** §1
+requires the caller to be able to observe the session's end without polling, and the Java reference client
+does not satisfy it - a stream error parks every executor with no listener. Until a client's surface can
+report that, the death is logged at ERROR with its cause. That is a floor, not a substitute: a log line the
+application must read to discover it has stopped consuming is a worse API than a listener, and §1's
+requirement stands.
+
+### 10.4 Credentials: §6 is the rule, this is how it gets broken
+
+**§6 owns the rule** - the property map, any entry of it, and any message embedding it are never logged, at
+any level. What is client-specific is *how the leak happens*: nobody writes `log.info(kafkaProperties)`.
+The leak is a **default renderer** on a configuration object, invoked by a log line that names the object
+and looks harmless.
+
+Every language has one, and they differ only in what they are called: a `record`'s compiler-generated
+`ToString`, a `@dataclass`'s `__repr__`, a `derive(Debug)`, a Lombok `@ToString`, a `Struct#inspect`, a
+`data class`'s `toString`. Each prints every field it has, including the credential-bearing map, into any
+line that interpolates the object.
+
+**So every client's options type carries an explicit, hand-written renderer that omits the property map**,
+and prints its size instead of its contents - a count is a useful diagnostic and discloses nothing. This is
+a rule about the type, not about the call sites: relying on call-site discipline means auditing every
+future log line, while an options type that cannot render its own credentials is safe by construction. The
+same applies to the generated `Configure` message, whose protobuf `toString` prints the map in full - it is
+never logged whole, and a client that wants to log the configuration logs the fields it chose.
+
+### 10.5 Beyond credentials: record keys and values are never logged
+
+**Record keys and values are user payload - somebody's customer data - and they appear in no log line at
+any level, including debug.** A client that logs payload at debug will eventually log someone's personal
+data, in a system whose whole point is processing a lot of it quickly, and the person who turned debug on
+to chase an unrelated problem will not know that is what they did.
+
+The mechanism is §10.4's: an `InboundRecord` or `OutboundRecord` whose default rendering includes its
+bytes will be logged by someone, so the record types carry hand-written renderers too. **Topic, partition,
+offset and attempt count identify a record completely** for every diagnostic purpose, and none of them is
+user data - that is the identity to log. A failure reason is worker-supplied text and may be logged, but
+its length is the safe rendering when the reason is being echoed rather than reported.
