@@ -6,9 +6,62 @@
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-swift
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the Swift client wave records this module's evidence here when its wave starts.
-      lifted_by: >-
-        astubbs#242 - the Swift client wave of the language-proxy plan.
+  - id: proxy-client-swift
+    artifact: parallel-consumer-proxy-client-swift
+    coverage: >-
+      All four conformance scenarios the harness serves today, run end to end over real gRPC against
+      the test-mode sidecar through the shared cross-language suite: the processed record advancing
+      the committed offset, the unreported record holding the commit back, the failure redelivered
+      with attempt=2 and the reason verbatim, and a held record admitting a concurrent delivery on
+      another key. In each, the sidecar is spawned as a child process directly rather than through a
+      shell, its stdout drained for the child's whole life and scanned for the port line, the
+      fresh-session handshake completed, a dispatch wave queued and handed to a child task of a task
+      group, the user function run, the outcome reported with the token echoed verbatim, and - except
+      in the negative control - the session closed by half-close and the lifecycle pipe.
+      EACH OF THE FOUR WAS PROVEN ABLE TO FAIL, by sabotaging the runner and watching the suite go
+      red for the right reason: reporting a failure where success was prescribed left the offset
+      uncommitted; reporting success where silence was prescribed advanced an offset the assertion
+      forbids advancing; changing the prescribed failure reason broke the verbatim-echo assertion
+      with the observed transcript naming both texts; and a real mutual exclusion around the whole
+      processor - the only sabotage that works on the ordering scenario, since the engine dispatches
+      both shards in one wave regardless - left the runner having observed 1 of 3 dispatches, over
+      its 60s budget, exiting 1.
+      THE FIRST ATTEMPT AT THAT LAST SABOTAGE PASSED, AND WHY IT DID IS WORTH MORE THAN THE SABOTAGE:
+      an actor whose method merely awaits the body serialises nothing, because Swift actors are
+      REENTRANT across a suspension - the moment the body awaits, the actor admits the next caller.
+      Excluding took a flag held across the suspension with its own waiter queue. An author reaching
+      for an actor as a mutex in this fan-out should read that as the warning it is.
+      ONE INHERITED CLAIM DID NOT REPRODUCE HERE, and it is recorded rather than repeated: the
+      contract's three-second `report-nothing` hold is what makes that negative control a control in
+      Go, whose runner exits fast enough to kill its own report in flight. Removing the hold from
+      this runner and reporting success anyway still went RED, because the report reaches the wire
+      before the process exits. The hold stays - it is contract, and this is a timing accident rather
+      than a property of the language - but no evidence from this module supports the claim that it
+      is load-bearing, and a later wave should not cite this one for it.
+      Beside that, and not replacing it, twenty of the module's own tests run under `swift test`
+      inside the build image, covering what a live session cannot reach: the in-flight ceiling
+      counted as unresolved records (queued plus executing) including the authoring guide's own
+      worked example, that only a verdict frees a slot, FIFO hand-out within a wave, that a waiting
+      executor is woken by an admission, the overflow protocol violation naming both counts and the
+      token, that discarding at shutdown settles what it drops while leaving executing records
+      counted, that stopping hand-out is not a verdict, that nothing is admitted before Configured,
+      credential redaction in the options rendering, payload redaction in both record renderings, the
+      declared capability set being exactly ["dispatch"], what Configure carries, option validation,
+      a Configured missing its ceiling or executor count, and the port-line scan against a transcript
+      whose port line is not first. The image also runs `swift format lint --strict` over Sources.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Sources/pc-swift-conformance-runner/ConformanceRunner.swift
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Tests/ParallelConsumerProxyClientTests/DispatchRecordQueueTests.swift
+    limitation: >-
+      Four scenarios of eleven, and the harness negotiates only the dispatch capability, so every
+      liveness, reconnect, worker-death, terminal and drain duty is untested because it is
+      un-negotiated rather than because it passed. Subscription is not a live variable either: the
+      mock harness seeds its records regardless of the topic a client subscribes to, so a wrong-topic
+      run still passes and cannot be used as a control - what is asserted instead is the echo in
+      Configured. The overflow path is covered only by unit tests over the queue, never over a live
+      session, because a correct proxy never produces it. There is no test of the sidecar's stdout
+      drain under a chatty child, which is the failure mode section 10.1 of the authoring guide
+      exists to prevent, and none of the portability claim beyond bin/build-client.sh running the
+      extracted static artifact and its dynamic control on this one host. The Swift 6 language mode's
+      strict concurrency checking is compile-time evidence rather than test evidence: it proves the
+      isolation boundaries are sound, not that the session logic above them is.

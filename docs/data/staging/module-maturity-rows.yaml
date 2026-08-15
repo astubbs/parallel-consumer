@@ -41,13 +41,3 @@ staged_rows:
     evidence_id: connect-alpha
     tracking: astubbs#240
     use_this_if: You want to evaluate running supported Kafka Connect sink tasks in-process.
-  - artifact: parallel-consumer-proxy-client-swift
-    deferred:
-      reason: >-
-        Seeded skeleton with a proven container toolchain and no client written, so the module is
-        commented out of the reactor rather than built empty; its row is held here until the Swift
-        wave starts, because a maturity row naming a module the reactor does not build is exactly
-        what the reverse check rejects.
-      lifted_by: >-
-        astubbs#242 - the Swift client wave uncomments the module and moves this row back into
-        docs/data/module-maturity.d/ in the same change.

@@ -110,29 +110,27 @@ jobs:
             scanner-cmd: make lint
             cache-path: ~/.cache/pip
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/pyproject.toml
-          # SWIFT'S ROW IS COMMENTED OUT WHILE ITS MODULE IS OUT OF THE REACTOR.
-          # The module is intact on disk and bin/build-client.sh swift still builds and tests its
-          # container toolchain - there is simply no client to run a row against, and the row's
-          # gate step hard-errors on a missing maturity fragment, which is correct behaviour for a
-          # module that should be there and is not. Restore this row in the same change that
-          # uncomments the module in parallel-consumer-proxy-clients/pom.xml and moves its row back
-          # out of docs/data/staging/module-maturity-rows.yaml.
-          # - language: swift
-          # module: parallel-consumer-proxy-client-swift
-          # toolchain: '6.1'
-          # # swift-format ships inside the Swift 6 toolchain - no extra install to pin.
-          # #
-          # # NOT UPGRADED TO A BUG-FINDER, and that is a recorded result rather than an omission:
-          # # Swift has no mature standalone analyser in the SpotBugs/staticcheck class. SwiftLint
-          # # is a style linter, and the real defect detection lives in the compiler - Swift 6
-          # # language mode's strict concurrency checking, with -warnings-as-errors. That belongs
-          # # in Package.swift, which this row may not write and the Swift wave owns. Reasoning in
-          # # docs/client-static-analysis.md; this row stays a formatter check until then, and is
-          # # labelled so nobody reads it as one.
-          # scanner: swift-format (formatting only - no mature Swift bug-finder)
-          # scanner-cmd: swift format lint --strict --recursive Sources
-          # cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/.build
-          # lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Package.resolved
+          - language: swift
+            module: parallel-consumer-proxy-client-swift
+            toolchain: '6.1'
+            # swift-format ships inside the Swift 6 toolchain - no extra install to pin.
+            #
+            # NOT UPGRADED TO A BUG-FINDER, and that is a recorded result rather than an omission:
+            # Swift has no mature standalone analyser in the SpotBugs/staticcheck class. SwiftLint
+            # is a style linter, and the real defect detection lives in the compiler - Swift 6
+            # language mode's strict concurrency checking, which the module's Package.swift turns on
+            # by declaring swift-tools-version 6.0 and which makes a data race a compile ERROR rather
+            # than a finding; its hand-written targets add -warnings-as-errors on top. Reasoning in
+            # docs/client-static-analysis.md; this row stays a formatter check, and is labelled so
+            # nobody reads it as more.
+            #
+            # The module builds in a container, so this row's toolchain is what runs the formatter,
+            # not what builds the client: the Maven step below routes to bin/build-client.sh swift,
+            # which drives BuildKit and runs the same `swift format lint` inside the image.
+            scanner: swift-format (formatting only - no mature Swift bug-finder)
+            scanner-cmd: swift format lint --strict --recursive Sources
+            cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/.build
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Package.resolved
           - language: rust
             module: parallel-consumer-proxy-client-rust
             toolchain: '1.88.0'

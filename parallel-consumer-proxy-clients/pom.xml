@@ -35,17 +35,7 @@
         <module>parallel-consumer-proxy-client-java</module>
         <module>parallel-consumer-proxy-client-python</module>
         <module>parallel-consumer-proxy-client-go</module>
-        <!--
-            SWIFT IS OUT OF THE REACTOR UNTIL THERE IS SOMETHING TO BUILD. The module is intact on
-            disk - a seeded skeleton plus a proven container toolchain (bin/build-client.sh swift
-            still builds and tests it) - but no client is written, so carrying it here means every
-            reactor build walks a module that compiles nothing. Uncomment when the Swift wave
-            starts; its maturity row is held in docs/data/staging/module-maturity-rows.yaml
-            meanwhile, and its CI row is commented out in .github/workflows/clients.yml. All three
-            move together: the docs-data gate rejects a maturity row naming a module the reactor
-            does not build, and the CI row hard-errors on a missing fragment.
-        -->
-        <!-- <module>parallel-consumer-proxy-client-swift</module> -->
+        <module>parallel-consumer-proxy-client-swift</module>
         <module>parallel-consumer-proxy-client-rust</module>
         <module>parallel-consumer-proxy-client-dotnet</module>
         <module>parallel-consumer-proxy-client-typescript</module>
