@@ -34,6 +34,57 @@ Perl, R, older runtimes — then a small C shim over the protocol becomes the re
 FFI argument is the right one. That is a decision about serving a long tail, and it should be taken
 on evidence that the tail exists rather than on symmetry with librdkafka.
 
+## The other C proposal: embed the engine, do not wrap the protocol
+
+Raised 2026-08-15, and it is **not the client this note parked** - it inverts it. Rather than a C
+client speaking gRPC to a sidecar, compile Parallel Consumer itself with GraalVM `native-image
+--shared` into `libparallelconsumer.so`, expose `@CEntryPoint` functions, and let every FFI-capable
+language link it directly.
+
+**Same programming model as the existing clients** (owner's framing, and it is the load-bearing
+part): register a worker, receive dispatched work, report verdicts. Nothing about the semantics
+changes. So this is **a third binding rather than a new product** - and in the transport-seam terms of
+[`parked-http-dialect-and-generated-clients.md`](parked-http-dialect-and-generated-clients.md) it is
+not a third transport either. It *collapses* the transport: the wire becomes a function call. It is
+what `java-direct` already is for the JVM, offered to everyone else.
+
+**It contradicts this document's central claim, deliberately.** Above, the boundary is argued to
+belong at the **process** edge rather than the **FFI** edge. This proposal moves it to the FFI edge.
+That is the disagreement to settle, not a detail.
+
+**Where it genuinely wins:**
+
+- **Fast records.** `STRATEGY.md` already makes this argument in the other direction - for a base
+  client the per-record hop is proportionally large. Slow work makes the hop noise; fast work makes it
+  the cost. In-process is the right answer for the fast end, and no amount of protocol tuning gets a
+  sidecar there.
+- **No process to operate**, which is the single biggest adoption objection to the sidecar. It
+  restores the property `STRATEGY.md` names as the reason this project works at all: invisible to the
+  cluster, needing nobody's permission to deploy.
+- Edge and embedded targets, where a second process is not merely inconvenient but unavailable.
+- Fast startup and low memory against a JVM sidecar.
+
+**Four costs, and the first two are the ones that decide it:**
+
+- **It recreates librdkafka's distribution problem** - the exact thing this fork's currency argument
+  rests on avoiding. One binary per platform and architecture, vendored or downloaded by every
+  language package. Today a Kafka version bump is a dependency bump; under this it is a release matrix.
+- **The callback concurrency model collides, differently in every language.** PC's value is running
+  many callbacks at once, and calling *out* of native-image Java into a host runtime is where that
+  gets hard: CPython's global interpreter lock, cgo's scheduler interaction and callback overhead,
+  Node requiring thread-safe functions marshalled onto the event loop. I/O-bound work releases the
+  lock in some of these, which is the case PC is for - but it must be established per language rather
+  than assumed, and a language where it fails gets no concurrency at all.
+- **Native-image reachability metadata for `kafka-clients`**, which uses reflection for serialisers and
+  config. Solved territory (Quarkus does it) but real work.
+- **Crash isolation is lost** - a segfault or OOM in the native image takes the host process with it,
+  where the sidecar's process boundary contains it.
+
+**What makes it cheap to evaluate**: the conformance suite keys bindings on *(language, dialect)*, so
+a native binding is more rows and no new scenarios. **Prove it in one language before believing any of
+the above** - and pick one where the callback question is hardest, not easiest, since that is what the
+proposal actually turns on.
+
 ## What to do instead, for now
 
 **Let demand decide.** The clients' root README should say that if someone wants a language that is
