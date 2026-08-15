@@ -87,6 +87,31 @@ then the binary's sibling `../include`, then the mise install tree, then `/usr/l
 and `/usr/include`. Every language whose codegen shells out to `protoc` will meet this on a machine
 using a version manager, and there is still nothing in the guide to copy.
 
+## Fixed after wave one: the in-flight ceiling counted the wrong thing
+
+The cross-client divergence review (`docs/inflight/branch-client-divergence-review.md`, finding 2)
+found this by reading, and it held: **the ceiling bounds UNRESOLVED records - queued plus executing -
+and this client bounded only the queued ones.** Admission was the bounded channel's own capacity
+(`try_send` returning `Full`), so a record leaving the channel for an executor freed a slot. Replay
+the guide's worked example - ceiling 3, A B C queued, two executors take A and B, D arrives - and
+`try_send` succeeded: **the overflow the guide names as the conformance suite's negative control
+could not fire.** Go and Ruby had the same defect; TypeScript (`DispatchQueue.inFlight`) and Python
+(`_outstanding`) already counted correctly, and this fix converges on their semantics rather than
+inventing a third shape.
+
+- **`Shared::unresolved`, an `AtomicUsize`, is the admission control now**, checked in `enqueue`
+  against `ceiling(max_concurrency)`; the bounded channel stays as the structural statement of the
+  same invariant and can no longer be the thing that fires.
+- **Only a verdict frees a slot**: `Shared::settle` is called after the report is sent in `run_one`,
+  and for each record discarded by `shutdown`. Taking a record off the queue does not.
+- **Read-then-add, not add-then-check**, because `enqueue` has one caller - the transport task - so
+  admission is single-producer, and a concurrent `settle` can only free capacity. It also leaves the
+  count honest on the violation path.
+- **The old test could not have caught it**: it overflowed with a *wave* larger than the ceiling,
+  which the channel bound alone already rejected. The two new tests use the guide's shape - records
+  out with executors - and both were watched fail against the old admission check before the fix
+  went in.
+
 ## Divergences from the guide this wave took deliberately
 
 - **Queued records are dropped at shutdown, not `Released`.** The guide's §5 says to release them;

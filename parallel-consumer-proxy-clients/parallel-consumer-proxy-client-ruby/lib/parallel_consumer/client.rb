@@ -252,6 +252,11 @@ module ParallelConsumer
       # The token is echoed VERBATIM: the very message the proxy sent. It is opaque - nothing here
       # reads record_id or compares epochs.
       emit(V1::ClientMessage.new(report: report_for(dispatched.token, outcome)))
+    ensure
+      # REPORTED, SO NO LONGER UNRESOLVED. Taking the record off the queue never freed its slot
+      # against the proxy's ceiling - only this does. In an +ensure+ so that an executor dying
+      # mid-record cannot leave the ceiling permanently short of a slot.
+      @queue.settle
     end
 
     # Runs the user's block, translating a raised exception into a failure outcome - once, in one

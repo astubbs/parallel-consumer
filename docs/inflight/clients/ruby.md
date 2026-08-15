@@ -76,6 +76,26 @@ confirmations rather than findings, and the third language agreeing is the usefu
   sends `Released` only when `shutdown` is negotiated and otherwise discards the queue for the
   proxy to reclaim.
 
+## Fixed after wave one: the in-flight ceiling counted the wrong thing
+
+The cross-client divergence review (`docs/inflight/branch-client-divergence-review.md`, finding 2)
+found this by reading, and it held: **the ceiling bounds UNRESOLVED records - queued plus executing -
+and `DispatchQueue#offer` bounded only the array (`@items.size >= @depth`).** A record handed to an
+executor left the array, so hand-out made room. Replay the guide's worked example - ceiling 3, A B C
+queued, two executors take A and B, D arrives - and `offer` accepted D: **the overflow the guide
+names as the conformance suite's negative control could not fire.** Go and Rust had the same defect;
+TypeScript (`DispatchQueue.inFlight`) and Python (`_outstanding`) already counted correctly, and
+this fix converges on their semantics rather than inventing a third shape.
+
+- **`@unresolved` is the admission control now**, and `DispatchQueue#unresolved` exposes it beside
+  `#size`, which keeps its old meaning: queued only.
+- **Only a verdict frees a slot**: `DispatchQueue#settle`, called from `Client#run_one`'s `ensure`
+  so an executor dying mid-record cannot leave the ceiling permanently short. `#stop_handout`
+  settles what it hands back, since a released-or-discarded record never gets a report.
+- **`spec/dispatch_queue_spec.rb` is this module's first unit spec** - the end-to-end spec dispatches
+  one record, so FIFO past the executor count and the overflow control were unreachable there. The
+  two overflow examples were watched fail against the old array-depth check before the fix went in.
+
 ## What Ruby hit that no other language will
 
 - **`Thread::SizedQueue` is the wrong answer to the dispatch queue**, and it is the obvious one. Its

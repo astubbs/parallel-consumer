@@ -3,7 +3,7 @@
 //! The session: one sidecar process, one gRPC stream, one dispatch queue, `executor_count`
 //! executors.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -46,6 +46,12 @@ struct Shared {
     /// The dispatch queue. Its depth is the proxy's own in-flight ceiling, so in a correct system
     /// it cannot overflow; an overflow is a protocol violation, not load.
     queue: Receiver<DispatchRecord>,
+    /// Records dispatched and not yet reported - QUEUED PLUS EXECUTING. This, and not the
+    /// channel's occupancy, is what `max_concurrency` bounds: the guide's worked example overflows
+    /// on a fourth record while three are unresolved, two of them already out with executors. A
+    /// count of queued records alone would let a record leaving the queue make room, so the
+    /// overflow the guide describes could never be detected.
+    unresolved: AtomicUsize,
     /// Every message this client sends. One channel, so the executors never contend for the
     /// stream, and closing it *is* the half-close.
     outbound: Sender<ClientMessage>,
@@ -130,8 +136,10 @@ impl ParallelConsumerClient {
         outbound: Sender<ClientMessage>,
     ) -> Self {
         // THE QUEUE'S DEPTH IS THE PROXY'S DECLARED CEILING. Any other depth turns a protocol
-        // violation into either a silent buffer or a lost record.
-        let depth = usize::try_from(session.max_concurrency).unwrap_or(1).max(1);
+        // violation into either a silent buffer or a lost record. Admission is decided by the
+        // unresolved count in `enqueue`, so this bound can never be the thing that fires - it is
+        // the structural statement of the same invariant.
+        let depth = ceiling(session.max_concurrency);
         let (queue_tx, queue) = async_channel::bounded::<DispatchRecord>(depth);
         let (ended, _) = watch::channel(false);
         let (stop_handout, _) = watch::channel(false);
@@ -139,6 +147,7 @@ impl ParallelConsumerClient {
         let shared = Arc::new(Shared {
             session,
             queue,
+            unresolved: AtomicUsize::new(0),
             outbound,
             ended,
             failure: Mutex::new(None),
@@ -246,7 +255,11 @@ impl ParallelConsumerClient {
         // shutdown drain sends `Released` here, under a `session.negotiated(capability::SHUTDOWN)`
         // test.
         self.shared.queue.close();
-        while self.shared.queue.try_recv().is_ok() {}
+        while self.shared.queue.try_recv().is_ok() {
+            // Discarded, so no longer unresolved - the same accounting a report does, for records
+            // that will never get one.
+            self.shared.settle();
+        }
 
         // Half-close: no more sends, ever. Everything run has been reported.
         self.shared.outbound.close();
@@ -310,24 +323,59 @@ impl Shared {
 
     /// Queues one wave in record order. Hand-out is FIFO - by arrival, and within a wave by the
     /// wave's own order - which a bounded MPMC queue gives directly.
+    ///
+    /// ADMISSION IS DECIDED BY THE UNRESOLVED COUNT, not by whether the channel has a free slot: a
+    /// record handed to an executor has left the channel but is still in flight against the
+    /// proxy's ceiling, and only its report frees the slot ([`Shared::settle`]).
     fn enqueue(&self, records: Vec<DispatchRecord>, queue: &Sender<DispatchRecord>) -> Result<(), ClientError> {
         for record in records {
+            // Read then add, rather than add then check: `enqueue` has exactly one caller, the
+            // transport task, so this is single-producer, and a concurrent `settle` can only free
+            // capacity - never take it. It also leaves the count honest on the violation path.
+            let already = self.unresolved.load(Ordering::SeqCst);
+            if already >= ceiling(self.session.max_concurrency) {
+                return Err(self.overflow(already));
+            }
+            self.unresolved.fetch_add(1, Ordering::SeqCst);
             match queue.try_send(record) {
                 Ok(()) => {}
                 // The receiving end is gone: the session is shutting down, not misbehaving.
-                Err(TrySendError::Closed(_)) => return Ok(()),
+                Err(TrySendError::Closed(_)) => {
+                    self.settle();
+                    return Ok(());
+                }
+                // Unreachable while the count above is right - queued records are a subset of the
+                // unresolved ones, so the channel fills only once the ceiling is already reached.
+                // Kept as the structural backstop, answering exactly as the counted check does.
                 Err(TrySendError::Full(_)) => {
-                    return Err(ClientError::Protocol(format!(
-                        "a Dispatch wave overflowed the client's queue at the max_concurrency of \
-                         {} that the proxy itself declared, so the proxy exceeded its own \
-                         in-flight ceiling; the call is cancelled rather than answered with \
-                         FAILED_PRECONDITION, because a gRPC client cannot set a status",
-                        self.session.max_concurrency
-                    )));
+                    self.settle();
+                    return Err(self.overflow(already));
                 }
             }
         }
         Ok(())
+    }
+
+    /// The counted protocol violation: the proxy exceeded the in-flight ceiling it declared itself.
+    fn overflow(&self, already_unresolved: usize) -> ClientError {
+        ClientError::Protocol(format!(
+            "the proxy dispatched a record while {} were already unresolved - queued plus \
+             executing - past the max_concurrency of {} it declared itself, so this is a protocol \
+             violation and not load; the call is cancelled rather than answered with \
+             FAILED_PRECONDITION, because a gRPC client cannot set a status",
+            already_unresolved, self.session.max_concurrency
+        ))
+    }
+
+    /// One record reached a verdict and was reported, released or discarded: it no longer counts
+    /// against the ceiling. Saturating, so a double settle can never wrap the count into a ceiling
+    /// nothing can overflow.
+    fn settle(&self) {
+        self.unresolved
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |unresolved| {
+                Some(unresolved.saturating_sub(1))
+            })
+            .ok();
     }
 
     async fn run_one<P: RecordProcessor>(&self, processor: &Arc<P>, dispatched: DispatchRecord) {
@@ -356,6 +404,10 @@ impl Shared {
                 })),
             })
             .await;
+
+        // Reported: the record stops counting against the proxy's in-flight ceiling. This is the
+        // only place a record executing frees its slot - leaving the queue never did.
+        self.settle();
     }
 }
 
@@ -455,6 +507,13 @@ pub(crate) fn panic_reason(join: JoinError) -> String {
     }
 }
 
+/// The in-flight ceiling as a count of records: `Configured.max_concurrency`, which is both the
+/// queue's depth and the number of UNRESOLVED records this client will admit. One function so the
+/// two can never be computed differently.
+fn ceiling(max_concurrency: i32) -> usize {
+    usize::try_from(max_concurrency).unwrap_or(1).max(1)
+}
+
 /// Whether a stream error is the ordinary end of a session rather than a fault: the call being
 /// cancelled by this client's own shutdown, or the peer going away once it has drained.
 fn is_session_end(status: &Status) -> bool {
@@ -479,8 +538,7 @@ mod tests {
     use crate::proto::{Dispatch, Token};
 
     fn shared_with_ceiling(max_concurrency: i32) -> (Arc<Shared>, Sender<DispatchRecord>, Receiver<DispatchRecord>) {
-        let depth = usize::try_from(max_concurrency).unwrap_or(1).max(1);
-        let (queue_tx, queue) = async_channel::bounded::<DispatchRecord>(depth);
+        let (queue_tx, queue) = async_channel::bounded::<DispatchRecord>(ceiling(max_concurrency));
         let (outbound, _outbound_rx) = async_channel::unbounded::<ClientMessage>();
         let (ended, _) = watch::channel(false);
         let shared = Arc::new(Shared {
@@ -492,6 +550,7 @@ mod tests {
             })
             .unwrap(),
             queue: queue.clone(),
+            unresolved: AtomicUsize::new(0),
             outbound,
             ended,
             failure: Mutex::new(None),
@@ -540,6 +599,49 @@ mod tests {
         let message = violation.to_string();
         assert!(message.contains("max_concurrency of 2"), "{message}");
         assert!(message.contains("cancelled"), "{message}");
+    }
+
+    /// THE GUIDE'S OWN WORKED EXAMPLE, which the wave-sized test above cannot reach: ceiling 3,
+    /// two executors holding A and B, C still queued, and a fourth record arriving. Counting
+    /// queued records alone, D fits - the channel has two free slots - and the overflow the guide
+    /// describes at length is undetectable.
+    #[test]
+    fn a_record_out_with_an_executor_still_occupies_the_ceiling() {
+        let (shared, queue_tx, queue) = shared_with_ceiling(3);
+        shared.enqueue(dispatch_of(3).records, &queue_tx).unwrap();
+
+        queue.try_recv().expect("executor-1 takes A");
+        queue.try_recv().expect("executor-2 takes B");
+        assert_eq!(
+            shared.unresolved.load(Ordering::SeqCst),
+            3,
+            "leaving the queue for an executor does not resolve a record"
+        );
+
+        let violation = shared
+            .enqueue(dispatch_of(1).records, &queue_tx)
+            .expect_err("a fourth record while three are unresolved overflows the ceiling");
+
+        let message = violation.to_string();
+        assert!(message.contains("3 were already unresolved"), "{message}");
+        assert!(message.contains("max_concurrency of 3"), "{message}");
+    }
+
+    /// The other half of the same rule: only a verdict frees a slot.
+    #[test]
+    fn reporting_a_record_is_what_makes_room_for_the_next() {
+        let (shared, queue_tx, queue) = shared_with_ceiling(1);
+        shared.enqueue(dispatch_of(1).records, &queue_tx).unwrap();
+        queue.try_recv().expect("the only executor takes it");
+
+        shared
+            .enqueue(dispatch_of(1).records, &queue_tx)
+            .expect_err("the record is executing, so the ceiling is still full");
+
+        shared.settle();
+        shared
+            .enqueue(dispatch_of(1).records, &queue_tx)
+            .expect("the report freed the slot");
     }
 
     #[tokio::test]

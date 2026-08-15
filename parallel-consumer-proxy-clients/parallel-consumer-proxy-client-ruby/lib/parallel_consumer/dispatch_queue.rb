@@ -16,6 +16,12 @@ module ParallelConsumer
   # declared in-flight ceiling. A full queue means the proxy exceeded its own ceiling, so overflow
   # is a protocol violation and never a load condition. Never drop a record, never grow the queue.
   #
+  # WHAT THE CEILING COUNTS IS *UNRESOLVED* RECORDS - queued PLUS executing - not the depth of the
+  # array. A record handed to an executor has left the array but is still in flight against the
+  # proxy's ceiling, and only its report frees the slot ({#settle}). Counting the array alone would
+  # let hand-out make room, so the guide's own worked example - a fourth record arriving while
+  # three are unresolved, two of them executing - could never be detected here.
+  #
   # Hand-out is FIFO: by arrival, and within one dispatch wave by the wave's record order. FIFO is
   # not an ordering guarantee - shard ordering is the engine's - it is the one order every
   # language expresses identically, which keeps the clients comparable.
@@ -25,20 +31,29 @@ module ParallelConsumer
     def initialize(depth)
       @depth = depth
       @items = []
+      @unresolved = 0
       @stopped = false
       @mutex = Mutex.new
       @available = ConditionVariable.new
     end
 
-    # Queues one record. NEVER BLOCKS: raises {ProtocolViolation} when the queue is already at the
-    # proxy's declared ceiling.
+    # Queues one record. NEVER BLOCKS: raises {ProtocolViolation} when the proxy already has its
+    # declared ceiling of records unresolved.
     def offer(item)
       @mutex.synchronize do
-        raise ProtocolViolation, overflow_message if @items.size >= @depth
+        raise ProtocolViolation, overflow_message(@unresolved) if @unresolved >= @depth
 
+        @unresolved += 1
         @items.push(item)
         @available.signal
       end
+    end
+
+    # One record reached a verdict and was reported: it stops counting against the ceiling. This is
+    # the ONLY thing that frees a slot for an executing record - {#take} never did.
+    def settle
+      @mutex.synchronize { @unresolved -= 1 if @unresolved.positive? }
+      nil
     end
 
     # Takes the next record, waiting for one. Returns +nil+ once hand-out has stopped, which is
@@ -62,20 +77,30 @@ module ParallelConsumer
         @stopped = true
         undelivered = @items
         @items = []
+        # Released or discarded, these records get no report, so nothing else will ever settle
+        # them. Executing records are untouched: they keep running and report normally.
+        @unresolved -= undelivered.size
         @available.broadcast
         undelivered
       end
     end
 
+    # Queued but not yet handed to an executor.
     def size
       @mutex.synchronize { @items.size }
     end
 
+    # Dispatched and not yet reported - queued plus executing. THIS is what the ceiling bounds.
+    def unresolved
+      @mutex.synchronize { @unresolved }
+    end
+
     private
 
-    def overflow_message
-      "a dispatch wave overflowed the client queue at its max_concurrency of #{@depth}: the proxy " \
-        "exceeded its own declared in-flight ceiling, which is a protocol violation, not load"
+    def overflow_message(unresolved)
+      "the proxy dispatched a record while #{unresolved} were already unresolved - queued plus " \
+        "executing - past the max_concurrency of #{@depth} it declared itself: the proxy exceeded " \
+        "its own in-flight ceiling, which is a protocol violation, not load"
     end
   end
 end
