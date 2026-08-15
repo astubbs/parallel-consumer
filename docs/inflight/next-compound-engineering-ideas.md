@@ -140,7 +140,40 @@ drift, which decisions are settled and must not be re-litigated. Cheap to add to
 changes what comes back — the same reviewers then report on the shape of the work rather than only
 its contents.
 
-**14. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
+**14. A test named for a property, that cannot detect that property, is worse than no test.** It
+stops anyone looking. Three instances in one session: Rust shipped an overflow test that passed
+against the very defect it was named for, because it overflowed with one oversized wave — which the
+wrong bound also rejects. Two conformance scenarios stayed green while deliberately sabotaged: one
+because the runner exited so fast it killed its own bad report in flight, the other because the
+engine dispatched both shards in a single wave regardless, making the sabotage invisible. None was
+found by reading; all three were found by *doing* the red-then-green step (idea 6). The compounding
+move is to treat "prove it red" as the moment you discover what your test actually asserts, not as
+paperwork after writing it.
+
+**15. Mirror the shape the existing API already chose, not the shape the first caller needed.** The
+clients modelled one-record-in-one-outcome-out, because that is what the first client wanted. Core's
+own API is batch-shaped — it hands the user a context of records, and a batch size of one yields a
+context of one — so single-record was always the degenerate case of an API that already existed. The
+cost of getting this backwards is paid N times: adding batching now changes the user-facing signature
+in every language. Before fanning out an interface, check whether the thing being wrapped already
+generalised it.
+
+**16. A whole-tree gate blocks every agent, and that is a feature.** The shared pre-commit hook
+validates the entire tree, so while any agent left work half-done every other agent was blocked. The
+tempting reading is that this is a hazard of parallelism; the owner's correction was better — it is a
+signal that real work is missing, and the response is to fix your own violations and retry, never to
+bypass and never to fix someone else's files to get past it. Convergence then happens on its own,
+usually within minutes. What makes this work is that the failures name their owner, so "mine or
+theirs" is a cheap question.
+
+**17. Externalise decisions into the repo before the context that holds them is gone.** Most of a
+long session's value is in decisions that were never code: why a shape was chosen, what was rejected,
+what a gate is really protecting. Written into notes *as they are made*, a fresh agent inherits them
+by reading; carried in a context window, they die with it. The test is whether the next step could be
+executed by someone who was not here — and if not, the missing piece gets written down before
+anything else. It also makes handoff timing a non-question, which is the real payoff.
+
+**18. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
 interrogate the shared surface: no-exception languages test whether outcomes are really values,
 single-threaded runtimes test whether the concurrency model is really the engine's, forked-process
 runtimes test whether the client is really stateless. Questions the reference language cannot ask
