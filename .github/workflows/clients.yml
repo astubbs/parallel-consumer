@@ -120,7 +120,19 @@ jobs:
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/pyproject.toml
           - language: swift
             module: parallel-consumer-proxy-client-swift
-            toolchain: '6.1'
+            # NO HOST TOOLCHAIN, AND NO SETUP ACTION - the module's Dockerfile (FROM swift:6.1) is
+            # this row's toolchain pin, and the Maven step below drives it through
+            # bin/build-client.sh swift. The host Swift was only ever powering the duplicate
+            # formatter run in the static-analysis step, which the image already runs.
+            #
+            # It is also unobtainable. swift-actions/setup-swift's newest RELEASE (v2.4.0) stops at
+            # Swift 5.x, and its v3.0.0-beta.1 - the version this row used to pin by SHA - installs
+            # Swiftly and gpg-verifies the download without importing any key, so on a runner's
+            # empty keyring it aborts with "Can't check signature: No public key" before Swift is
+            # ever installed. Supplying the keyring, or passing skip-verify-signature, would both
+            # have been ways to keep a beta action that fails at its own signature check; the
+            # container the module already builds in needs neither.
+            toolchain: ''
             # swift-format ships inside the Swift 6 toolchain - no extra install to pin.
             #
             # NOT UPGRADED TO A BUG-FINDER, and that is a recorded result rather than an omission:
@@ -132,13 +144,17 @@ jobs:
             # docs/client-static-analysis.md; this row stays a formatter check, and is labelled so
             # nobody reads it as more.
             #
-            # The module builds in a container, so this row's toolchain is what runs the formatter,
-            # not what builds the client: the Maven step below routes to bin/build-client.sh swift,
-            # which drives BuildKit and runs the same `swift format lint` inside the image.
-            scanner: swift-format (formatting only - no mature Swift bug-finder)
-            scanner-cmd: swift format lint --strict --recursive Sources
-            cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/.build
-            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Package.resolved
+            # THE FORMATTER RUNS IN THE BUILD STEP, INSIDE THE IMAGE, so this row has no separate
+            # static-analysis command: the Dockerfile's `swift format lint --strict --recursive
+            # Sources` is on the path to the artifact stage, and a formatting failure therefore
+            # fails the build step itself. Running it a second time on the host was the older
+            # arrangement - the one that needed a host toolchain - and it is exactly the
+            # command-written-twice this file's header warns about.
+            scanner: swift-format, inside the module's container (formatting only - no mature Swift bug-finder)
+            scanner-cmd: ''
+            # Nothing on the host to cache: the build happens in BuildKit, whose cache is its own.
+            cache-path: ''
+            lockfile: ''
           - language: rust
             module: parallel-consumer-proxy-client-rust
             # ABOVE Cargo.toml's rust-version (the MSRV the surface needs), deliberately, and
@@ -360,9 +376,10 @@ jobs:
 
       # ── Per-language toolchain setup, exact-pinned via matrix.toolchain ──────
       # `uses:` cannot be parameterised by the matrix, so each setup action gets a
-      # language-guarded step; everything after them is matrix-driven. Kotlin needs
-      # no step here (the shared JDK is its toolchain), and C++ compiles with the
-      # runner image's compilers.
+      # language-guarded step; everything after them is matrix-driven. Three rows
+      # have no step here, and their matrix entries say why: Kotlin and Scala use
+      # the shared JDK, C++ compiles with the runner image's compilers, and Swift
+      # builds and lints entirely inside its module's own container.
       - uses: actions/setup-go@v7
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'go'
         with:
@@ -372,26 +389,6 @@ jobs:
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'python'
         with:
           python-version: ${{ matrix.toolchain }}
-      # THE SWIFT ROW NEEDS A KEYRING BEFORE IT NEEDS A TOOLCHAIN. setup-swift installs Swiftly
-      # and gpg-verifies the download, but imports no keys itself, and a runner starts with an
-      # empty keyring - so the verification fails with "Can't check signature: No public key" and
-      # the action aborts before Swift is ever installed. Importing swift.org's published keyring
-      # is the fix that keeps the signature check doing its job; `skip-verify-signature: true`
-      # would also make the row green, by throwing away the property being checked.
-      #
-      # The fingerprint is asserted rather than trusted: it is the Swiftly release signing key the
-      # action's verify step names, so a rotation on swift.org fails HERE, loudly, instead of
-      # silently reverting the row to whatever the next keyring happens to contain.
-      - name: Import the Swift release signing keys (setup-swift verifies, but imports nothing)
-        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'swift'
-        run: |
-          curl -sSL --fail -o "$RUNNER_TEMP/swift-all-keys.asc" https://swift.org/keys/all-keys.asc
-          gpg --import "$RUNNER_TEMP/swift-all-keys.asc"
-          gpg --list-keys E813C892820A6FA13755B268F167DF1ACF9CE069
-      - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3.0.0-beta.1 - the v2 line stops at Swift 5.x
-        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'swift'
-        with:
-          swift-version: ${{ matrix.toolchain }}
       - name: Set up Rust toolchain (rustup, preinstalled on the runner image)
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'rust'
         run: |
@@ -589,8 +586,13 @@ jobs:
       # `!cancelled()` rather than the default: a row that failed its tests should still report its
       # lint findings in the same run. One problem learned per run is the thing this file is being
       # steered away from - the same argument as --fail-at-end on the reactor lanes.
+      #
+      # An EMPTY scanner-cmd is a row whose analysis runs inside its own build rather than beside
+      # it (Swift's container lints on the way to the artifact stage) - the field's documentation
+      # in the matrix says which, and the row's `scanner` still names the tool so the summary does
+      # not read as "no analysis".
       - name: Static analysis (${{ matrix.scanner }})
-        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' && matrix.scanner-cmd != '' }}
         working-directory: parallel-consumer-proxy-clients/${{ matrix.module }}
         run: ${{ matrix.scanner-cmd }}
 
