@@ -106,6 +106,57 @@ SSE and WebSocket shapes are mostly not. That is an argument for the resource mo
 *compatibility* surface and the streaming one being native — the generator gets the boring half,
 which is exactly the half compatibility needs.
 
+## 4e. Why choose one entry point at all?
+
+The question that dissolves most of the choices above: **one engine can host several entry points
+simultaneously.** gRPC, the native HTTP dialect, a compatibility surface, and the dashboard are all
+just adapters onto the same engine seam — there is no reason a sidecar serves only one.
+
+That changes the framing from "which dialect do we pick" to "which adapters ship enabled", and each
+becomes an independent, individually deferrable decision rather than a fork in the road. It also
+means a single deployment can serve a Rust worker over gRPC, a legacy client over a REST-Proxy-shaped
+surface, and an operator's browser, at once.
+
+**What it costs, and must be settled deliberately**: several listeners (or one multiplexed port), a
+security posture per surface rather than one for the process, and an admission model that currently
+assumes **a single connection owns the session**. Multiple entry points make "which client owns this
+session?" a real question rather than a tautology — that is the design work, and it is more
+interesting than any individual dialect.
+
+## 4f. The dashboard is another entry point, and it knows things the others do not
+
+The embedded web GUI ([`parked-sidecar-embeds-web-gui.md`](parked-sidecar-embeds-web-gui.md)) has
+always been justified by the sidecar being otherwise a black box to its operator. Seen as an *entry
+point* rather than a feature, more follows:
+
+- **It shares the HTTP listener** the native dialect needs, so building one serves both. One listener,
+  two purposes — decide that before either is built, not after.
+- **It knows which client is connected**, because the handshake tells it: the language, the negotiated
+  capabilities, the executor count, the effective options. So it can show a *language-aware* view —
+  the same engine state, described in the terms of whoever is attached, and diagnostics that name the
+  right client's behaviour rather than generic engine internals.
+- **It is the only surface that can explain the thing this product is hardest to believe about**:
+  concurrency beyond partition count with ordering intact. Seeing in-flight work per key, per shard,
+  live, is worth more than any amount of prose — for an operator debugging, and for a sceptic
+  evaluating.
+
+## 4g. Patch their project rather than reimplement it — the Kafka Streams precedent
+
+There is already a precedent in this repository for **adapting someone else's runtime to fit
+Parallel Consumer rather than cloning it**: the Kafka Streams work. The same move applies to
+kafka-pixy.
+
+Instead of implementing a pixy-compatible surface here, **patch pixy so it can use this engine**, and
+**post the change upstream**. If it lands, their users get concurrency beyond partitions without
+adopting anything of ours, and the maintenance sits with the project whose API it is — which directly
+answers the surface-area risk below.
+
+**Why it might not fit**: pixy is Go, so "use this engine" means calling the sidecar, and its consume
+semantics are pull-shaped and partition-assigned. If its API cannot express handing out several
+records from one partition concurrently, the patch delivers nothing. **Read their consume path before
+proposing anything** — and prefer an upstream conversation to a fork, since a fork is the expensive
+outcome dressed as the easy one.
+
 ## 4c. Is this worth it, or is it reinventing the wheel?
 
 The honest question, asked 2026-08-15, and it deserves recording rather than enthusiasm.

@@ -54,6 +54,22 @@ hard parts - ordering, retries, offset encoding, commit decisions - live in one 
 tested for years, and the same shared conformance suite proves every client behaves identically at
 the boundary.
 
+## The rule that governs all of it: claim nothing while it is experimental
+
+Owner's call, 2026-08-15, and it binds this document: **no claim is made publicly until the code it
+describes is out of experimental status.** Everything below is material for when that is true, not a
+licence to say it sooner.
+
+The positioning is strong enough that the temptation will be to lead with it while the clients still
+carry an experimental warning on every README, nothing is published to any registry, and no client
+has carried production traffic. Saying it early spends the credibility the evidence is supposed to
+buy — and this project's whole argument is that its claims are testable. A claim that outruns its
+code is the one thing that would undermine it.
+
+So: write the post, keep it ready, and publish the claims **as each part earns them**. The
+conformance suite makes "has it earned it" a test result rather than a judgement, which is exactly
+the discipline to lean on here.
+
 ## The positioning, worked out 2026-08-15 — the strongest material for the post
 
 **Lead with the architecture the reader already has, not with the feature.** The common shape is
