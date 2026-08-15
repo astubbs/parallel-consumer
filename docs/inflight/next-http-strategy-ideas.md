@@ -203,10 +203,26 @@ Kafka from Python, that is solved, and has been for years.
 That combination is the product, and the bridge-into-a-queue-broker pattern it removes is common and
 expensive. The ingredients are all old; the combination appears to be new.
 
-**But the real risk is neither** — it is **surface area against a single maintainer.** Eleven client
-libraries, two dialects, several package registries, per-ecosystem vulnerability exposure, issue
-queues and user expectations in languages nobody here writes daily. That is what kills projects of
-this shape, far more often than lack of value.
+**The risk is neither** — and the obvious candidate, *surface area against a single maintainer*, is
+no longer the right answer. It was the right answer a year ago; agentic development has moved it.
+This session produced eleven client libraries, a frozen protocol and a thirteen-binding conformance
+suite in a day, and support scales the same way: triage, reproduction, first response and
+cross-language competence that no individual has.
+
+**What the constraint moved to**, and these are the ones to design around:
+
+- **Decisions per hour, not hours of typing.** The work scaled; the judgement calls scaled with it,
+  and they all route to one person. Several of this session's dispatch decisions were wrong and were
+  caught only because a human read the reports. Decision throughput is now the scarce resource.
+- **Accountability does not delegate.** A user with a production incident needs someone answerable.
+  An agent can diagnose it and still not be responsible for it.
+- **Support gains a marginal cost per user.** Traditional open-source support costs time; agentic
+  support costs tokens — a real operating expense that scales with adoption, where a library's did
+  not.
+
+So the discipline below still stands, but for a different reason: not because there are too few
+hands, but because every dialect, adapter and surface adds decisions and answerability rather than
+merely code.
 
 What is already mitigating it, and should stay non-negotiable: the clients are **facades** with
 almost no logic; the shared conformance suite means one definition of correct rather than eleven; and
