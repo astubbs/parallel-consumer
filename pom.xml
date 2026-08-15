@@ -689,6 +689,26 @@
                              exclusion). -->
                         <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
 
+                        <!-- com.google.code.gson:gson (via grpc-java, into parallel-consumer-proxy
+                             and parallel-consumer-proxy-client-java-grpc). Misattributed, and the
+                             CVE record says so itself: CVE-2025-53864 is assigned to Connect2id
+                             Nimbus JOSE + JWT (10.0.x before 10.0.2, 9.37.x before 9.37.4), and its
+                             own description ends "NOTE: this is independent of the Gson 2.11.0
+                             issue because the Connect2id product could have checked the JSON object
+                             nesting depth, regardless of what limits (if any) were imposed by
+                             Gson." Nimbus JOSE + JWT is not in this tree at any scope.
+
+                             OSV returns NO advisory for com.google.code.gson:gson at 2.11.0, so
+                             GHSA does not consider gson affected either and no Dependabot alert
+                             exists to chase. Sonatype is again the only source, as with
+                             netty-codec-http above. Not bumped instead: OSS Index's affected range
+                             for gson cannot be read without credentials, so a version bump would be
+                             a guess at clearing the finding rather than a fix, and gson is a
+                             transitive of grpc-java that no pom here declares.
+                             RETIRE WHEN: OSS Index corrects the attribution, or the proxy modules
+                             stop resolving gson through grpc-java. -->
+                        <excludeVulnerabilityId>CVE-2025-53864</excludeVulnerabilityId>
+
                         <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
 
                              The date is machine-read by bin/check-cve-exclusions.sh, which fails the
