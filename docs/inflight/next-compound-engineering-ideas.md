@@ -90,7 +90,43 @@ Three fixes, in ascending order of how much they actually fix:
   running N agents in one worktree buys coordination and *pays for it in shared mutable state*: one
   index, one `target/`, one HEAD. Know which you are choosing.
 
-**11. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
+**11. In a fan-out, simplify by dimension — and the target is divergence, not duplication.** The
+obvious structure for a cleanup pass is one agent per module, and it is the wrong one: a per-module
+agent cannot see that its port-line scanner is the seventh copy, because seeing that requires reading
+the other six. But handing one agent all N implementations is expensive and beyond what a single
+context holds well. **Parallelise by question instead of by module** — one agent per dimension (how
+each client spawns the sidecar, how each declares capabilities, how each implements the queue rules,
+what each does on close), reading a narrow slice across all N. Cross-cutting by design, still
+parallel, still cheap.
+
+The reframe underneath it: N implementations of the same thing is *expected* in a fan-out, so
+duplication is the wrong thing to hunt. **Divergence is** — N clients doing one thing N different
+ways, where only one way is right. Most of it cannot be deduplicated anyway, since the languages
+differ; what is being harvested is consistency of design, naming and semantics.
+
+Two consequences: **order the cross-cutting pass first**, because per-module cleanups otherwise
+optimise toward N local shapes and drift further apart, so the divergence is paid for twice; and note
+that any sub-family sharing a runtime (here the JVM clients) is the exception where real code sharing
+is possible, which is worth checking explicitly rather than assuming the languages are all equally
+separate.
+
+**12. Make a checker's coverage exhaustive, so an unknown case fails instead of being skipped.** The
+copyright checker read `.java` and silently ignored everything else, so seven new languages, every
+workflow, and eleven upstream-derived files modified without their attribution notice were all
+"passing". The rewrite classifies **every tracked file** into enforced-types or exempt-paths, and
+**anything matching neither is a violation** naming the file and both tables. The difference matters
+most at exactly the moment a project grows: an extension list rots the instant someone adds a
+language quietly, while an exhaustive classifier fails the build until a human decides which set the
+new thing belongs to. Pairs with a self-test that **generates** its red and green case per entry by
+reading the checker's own table — a hand-maintained list of cases drifts in the one direction nobody
+notices, toward fewer cases than the checker has branches.
+
+Corollary found the same day: **a check can be present, run, and still be testing the wrong thing.**
+The old header check asked whether a window of text contained a word, so two files that *explained
+the copyright policy in prose* read as claiming that copyright. Wrong-shaped checks are harder to
+find than absent ones, because their green is indistinguishable.
+
+**13. A fan-out doubles as a design review of the API it mirrors.** Each language's idioms
 interrogate the shared surface: no-exception languages test whether outcomes are really values,
 single-threaded runtimes test whether the concurrency model is really the engine's, forked-process
 runtimes test whether the client is really stateless. Questions the reference language cannot ask
