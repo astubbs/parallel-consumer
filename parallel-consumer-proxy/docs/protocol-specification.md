@@ -516,7 +516,7 @@ is off by reading the echo, which is the general rule: assert what came back, ne
 | `max_concurrency` | optional int32 | The effective in-flight ceiling - also the client's dispatch-queue depth |
 | `executor_count` | optional int32 | How many executors the client runs. Sent once, never revised |
 | `capabilities` | repeated string | The negotiated intersection |
-| `ordering`, `commit_mode`, all Durations, `max_failure_history`, `invalid_offset_metadata_policy`, `terminal_topic`, `lease_duration`, `heartbeat_interval`, `reconnect_window`, `message_buffer_size`, `initial_load_factor`, `maximum_load_factor`, `pc_instance_tag` | as Configure | The effective value of each |
+| `ordering`, `commit_mode`, `commit_interval`, `default_message_retry_delay`, `send_timeout`, `offset_commit_timeout`, `shutdown_timeout`, `drain_timeout`, `threshold_for_time_spend_in_queue_warning`, `sasl_authentication_retry_timeout`, `sasl_authentication_exception_retry_backoff`, `max_failure_history`, `invalid_offset_metadata_policy`, `terminal_topic`, `lease_duration`, `heartbeat_interval`, `reconnect_window`, `message_buffer_size`, `initial_load_factor`, `maximum_load_factor`, `pc_instance_tag` | as Configure | The effective value of each |
 
 ### `Token`
 

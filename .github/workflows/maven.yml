@@ -255,6 +255,13 @@ jobs:
           setup_only: true
       - name: Lint the schema (buf lint)
         run: bin/check-proto-lint.sh
+      # Self-test first, the same order as the docs-data and copyright scanners: this gate's
+      # ability to say no was demonstrated once, by hand, and never since - so the cases that pin
+      # it (a deletion, a renumber, a rename, and a renamed module that must not re-enter the
+      # "nothing frozen yet" branch) run here, where a regression is visible. It mutates the schema
+      # one way at a time and restores it, so the gate below still sees an untouched tree.
+      - name: Self-test the gate (prove it can still say no)
+        run: bash bin/test-check-proto-breaking.sh
       - name: Enforce the frozen schema (additions only)
         run: bin/check-proto-breaking.sh
 

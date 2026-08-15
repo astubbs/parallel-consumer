@@ -1,9 +1,14 @@
 # Parked: findings from the spike+freeze review, deliberately not applied
 
 A code review of the spike and freeze cluster (`2b53104e3..6a2309c28`) returned eight actionable
-findings. **They are parked by an explicit call to stop review-and-fix cycles and spend the
-remaining budget on the language fan-out instead** (astubbs#242, 2026-08-14). Nothing here is
-fixed; nothing here is refuted. Apply them when the fan-out's first wave is in.
+findings. **They were parked by an explicit call to stop review-and-fix cycles and spend the
+remaining budget on the language fan-out instead** (astubbs#242, 2026-08-14). Apply the rest when
+the fan-out's first wave is in.
+
+Four are done and deleted from this file: the produce-ack wait that serialized the report lane, its
+missing failure-branch test, and both halves of the freeze guards' green-without-having-run
+(`SpecificationCoverageTest`'s unanchored match, and the breaking-change gate's absent self-test and
+silent disarm). What remains below is unfixed and unrefuted.
 
 Ordered by what bites soonest, not by severity.
 
@@ -33,26 +38,6 @@ the false claim propagates as the pattern if it stays.
   closing. Queued records are dropped with no report at all, logged at debug. Both contradict the
   frozen shutdown contract, and the direct transport does the opposite (core's close lets in-flight
   work finish) — a transport divergence, which the one-API decision defines as a bug.
-- **The produce-ack wait serializes the session's entire report lane** (P1). `producePayload` blocks
-  the single serialized inbound stream callback for up to `sendTimeout` *per produce record*, so one
-  slow broker interaction collapses the client's whole configured concurrency to serial. It becomes
-  sharper when heartbeats land on that same lane: a produce stall could starve them into lease
-  expiry for every in-flight record. Either hand the ack wait off a thread, or record the
-  constraint where the lease unit will see it.
-- **Three freeze guards can stay green while what they pin is violated.** (1)
-  `SpecificationCoverageTest` matches field names as unanchored substrings of the spec prose, so an
-  undocumented future field called `deadline`, `reason` or `window` passes — all three words are
-  already in the document. (2) `bin/check-proto-breaking.sh` has no committed self-test, which the
-  freeze unit's own text required ("verify the failure case so the gate is proven able to say no");
-  the demonstration was manual. (3) That gate arms on the proto existing at one hardcoded path on
-  master, so a post-freeze PR that renames the module, updates the constants *and* deletes a frozen
-  field re-enters the grace branch and passes green. This is the repo's documented
-  green-without-having-run class, seven prior instances — see
-  `docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`.
-- **The produce-failure branch has no test.** The produce-before-success-hook ordering is what backs
-  the at-least-once claim, and its failure half — produce throws, record applied as failure and
-  redelivered — is driven by nothing: every `MockProducer` in the tree is `autoComplete=true` and
-  `errorNext` is never called.
 
 ## Worth settling at merge time, not now
 
