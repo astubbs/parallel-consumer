@@ -145,19 +145,54 @@ decision ten authors would otherwise each invent. Conformance scenario:
 1. **The admin always reads the stream. It never applies backpressure by not reading.** The stream also
    carries `Drop`, `Shutdown` and reconnect traffic; an admin that stops reading to slow the proxy down
    head-of-line-blocks its own control plane. Read continuously; buffer.
-2. **The queue's depth is `Configured.max_concurrency`** - the proxy's own in-flight ceiling, so in a
-   correct system it can never overflow. Overflow is therefore a **protocol violation, not a load
-   condition**: never drop records to make room, never grow unbounded. What a client may *do* about it is
-   constrained by gRPC - **only the server side of a call sets a status, so a client cannot fail the stream
-   with `FAILED_PRECONDITION`**, which is what this rule said until the Go and Python waves each hit it
-   independently and resolved it the same way. The implementable form, which every client now follows:
-   **cancel the call** (your language's cancel/abort on the streaming call - the proxy observes `CANCELLED`),
-   and **raise a local protocol-violation error naming the count** - the depth, the negotiated
-   `max_concurrency`, and the overflowing record's token - through whatever surface you chose for a dead
-   session (§1). Name that error in your README. The count reaches nobody but the application: v1 has no
-   client→proxy diagnostic message, so the proxy learns only that the stream was cancelled and takes its
-   ordinary connection-loss path (specification, "Errors the proxy returns"). A diagnostic message would be an
-   additive change with its own capability token, not something to improvise.
+2. **`Configured.max_concurrency` bounds the records this client has been dispatched and has not yet
+   reported - queued *plus* executing - and never the queue structure's own length.** Handing a record to
+   an executor moves it; it does not free its slot. Count unresolved records in one place, as a number
+   the queue owns (`DispatchQueue.inFlight` in TypeScript, `_outstanding` in Python, `Shared::unresolved`
+   in Rust, `@unresolved` in Ruby); a bounded channel or fixed array may stay as a second, structural
+   statement of the same bound, but it must not be the thing that fires.
+
+   **This is the rule of this section most often implemented wrongly, and the wording was the cause.** It
+   read "the queue's depth is `Configured.max_concurrency`", with the counting basis stated only inside
+   the worked example below - and three of the first five clients (Go, Rust, Ruby) bounded the queue.
+   A client that bounds the queue **cannot detect overflow at all**, whatever its comments say: a record
+   leaving the queue always makes room, so the condition the rest of this rule describes never arises.
+   Implement from the sentence above; the worked example illustrates it and does not carry it.
+
+   **Only a verdict frees a slot, and there are exactly four.** Every client has had to rediscover this
+   list, so it is written down: a **report** is sent (success, failure or terminal - decrement after the
+   send, not when the executor picks the record up); a record is reported **`Released`** at shutdown on a
+   session that negotiated `shutdown` (§3.5); a record is **discarded** - queued records dropped at
+   shutdown without `shutdown` (§3.5), the queue discarded on connection loss (§3.6), and a `Drop` for a
+   record this client still holds (§4), for which it will report nothing and so nothing else will ever
+   free it; or a worker's death is reported by **`WorkerDied`** (§4), which returns its records to
+   scheduling without a report from this client. Put the decrement where an executor dying mid-record
+   cannot skip it - your language's `finally`/`ensure`/`defer` - or the ceiling shrinks permanently, one
+   slot per crash, and the client eventually declares a protocol violation against a correct proxy.
+
+   **Overflow is therefore a protocol violation, not a load condition**: it is the proxy exceeding its own
+   declared ceiling, so never drop records to make room and never grow unbounded. What a client may *do*
+   about it is constrained by gRPC - **only the server side of a call sets a status, so a client cannot
+   fail the stream with `FAILED_PRECONDITION`**, which is what this rule said until the Go and Python
+   waves each hit it independently and resolved it the same way. The implementable form, which every
+   client now follows: **cancel the call** (your language's cancel/abort on the streaming call - the proxy
+   observes `CANCELLED`), and **raise a local protocol-violation error naming the counts** - the
+   unresolved count, the negotiated `max_concurrency`, and the overflowing record's token - through
+   whatever surface you chose for a dead session (§1). Name that error in your README. The counts reach
+   nobody but the application: v1 has no client→proxy diagnostic message, so the proxy learns only that
+   the stream was cancelled and takes its ordinary connection-loss path (specification, "Errors the proxy
+   returns"). A diagnostic message would be an additive change with its own capability token, not
+   something to improvise.
+
+   **Rendering that token is not a breach of its opacity, and the specification requires it.** Opacity
+   forbids *deriving* - parsing `record_id`, comparing epochs, branching on either (specification, "The
+   epoch echo rule"); it says nothing about printing. So print the token's two fields **as they arrived**,
+   the generated message's own rendering being the simplest correct answer - a `Token` carries no
+   credentials, unlike the `Configure` message that §10.4 forbids rendering whole - and never assemble the
+   message out of parts you interpreted. It is engine-generated identity, not user payload, so §10.5 does
+   not reach it either. **No client does this yet**: all five render the counts and omit the token, which
+   makes it the one part of this rule with zero implementations rather than a settled convention. Add it
+   when you next touch that error's message.
 3. **Hand-out is FIFO** - by arrival, and within one `Dispatch` by record order. FIFO is not an ordering
    guarantee (shard ordering is the engine's); it is the one order every language expresses identically,
    which keeps ten clients comparable.
@@ -186,9 +221,11 @@ decision ten authors would otherwise each invent. Conformance scenario:
 `max_concurrency = 3`, `executor_count = 2`, one wave of records A, B, C:
 
 ```
-← Dispatch{[A, B, C]}          admin queues A, B, C (depth 3 = max_concurrency: fits exactly)
+← Dispatch{[A, B, C]}          admin admits A, B, C (3 unresolved = max_concurrency: fits exactly)
   executor-1 takes A (FIFO)    executor-2 takes B     C waits, leased, heartbeats covering it
+                               ^ the queue now holds ONE record and the ceiling is still full
 → Report{B, success}           executor-2 takes C     (out-of-order completion is normal)
+                               ^ B's report is what frees the first slot (§3.2)
 ← Shutdown{}                   nothing queued now, but suppose C were still queued:
 → Report{C, released}          - released, not run, not dropped
 → Report{A, success}           executing work finishes and reports normally
@@ -199,9 +236,30 @@ The `Shutdown` message only arrives on a session that negotiated `shutdown`, so 
 legal by construction; the harness's `["dispatch"]`-only session reaches close the other way, by the
 application closing the client, and drops what it has queued (§3.5, §5).
 
-A fourth record arriving while A, B, C are all unresolved would overflow the queue - and is exactly the
+A fourth record D arriving while A, B and C are all **unresolved** would overflow - and is exactly the
 proxy exceeding its own declared ceiling: cancel the call and raise the counted protocol violation (§3.2).
-That is the conformance suite's negative control on this section.
+Read the trace again for *which* three are unresolved at that moment: A and B are executing and only C is
+queued, so a client bounding its queue has two free slots and admits D without a murmur.
+
+### The negative control, and the test shape that looks like it but is not
+
+**The overflow control must fill the ceiling with records EXECUTING, not merely queued.** One `Dispatch` of
+four records against a ceiling of three trips *any* bound (a bound on the queue's own length included), so
+that test passes identically against a client carrying the defect rule 2 describes, and proves only that
+some limit exists somewhere. **Rust shipped exactly that test, and it passed against the defect it was
+named for**; the divergence was found later by reading five clients side by side, not by any suite.
+
+The shape that discriminates is the worked example's:
+
+1. dispatch records up to `max_concurrency` and let the executors take them, so the queue is short (or
+   empty) while the ceiling is full;
+2. report nothing - no success, no failure, no release;
+3. dispatch one more record.
+
+A client counting queued records accepts it and stays silent; a client counting unresolved records cancels
+the call and raises. **Watch the test fail against a queue-length bound before you trust it** - both waves
+that fixed this defect did, and it is the only evidence that the control controls anything. The
+conformance scenario `the-client-queue-hands-out-fifo-and-releases-on-shutdown` (§7) carries this shape.
 
 ## 4. Liveness duties
 
@@ -321,7 +379,7 @@ scenario names; they activate as the harness grows):
 
 | Scenario | Asserts |
 |---|---|
-| `the-client-queue-hands-out-fifo-and-releases-on-shutdown` | §3 rule for rule, including the overflow negative control |
+| `the-client-queue-hands-out-fifo-and-releases-on-shutdown` | §3 rule for rule, including the overflow negative control - which overflows with records **executing**, not with one oversized wave (§3, "The negative control") |
 | `a-lost-connection-reconciles-by-manifest` | Keep-current / drop-superseded / return-unmanifested, attempt counts unchanged |
 | `a-dead-workers-records-return-before-any-timeout` | `WorkerDied` reclaims immediately |
 | `heartbeats-keep-a-slow-record-alive-and-their-absence-returns-it` | Lease extension and expiry, attempt count unchanged |
@@ -426,6 +484,18 @@ from first principles:
 | One logging mechanism for all languages (§10.2) | Each language's own convention, named per language | An injectable interface everywhere - it is the right answer only where the ecosystem has no facade, and imposing it on Java or .NET would be a worse client in those languages |
 | Whether the library may log unasked (§10.2) | Silent until the application configures a sink, by that language's mechanism for silence | Logging at a default level, which is how a library ends up writing to somebody else's stdout |
 | Payload in log lines (§10.5) | Never, at any level - keys and values are user data | Debug-only payload logging, which is the same leak with a level attached to it |
+
+**2026-08-15, the in-flight ceiling (§3.2)**, from the cross-client divergence review
+(`docs/inflight/branch-client-divergence-review.md`, finding 2), which read all five non-JVM clients side
+by side. **Three of five authors implemented this rule wrongly from the same text, so the text was the
+defect** - the rule said "queue", the worked example said "unresolved", and the rule is what gets built:
+
+| Divergence | Settled as | Alternative rejected |
+|---|---|---|
+| What `max_concurrency` counts (§3.2) | Records dispatched and not yet reported - queued plus executing - with the basis stated in the rule, not only in the example | Bounding the queue structure's length, as Go, Rust and Ruby each built: it cannot detect overflow at all, since hand-out makes room |
+| What frees a slot (§3.2) | A verdict, and only a verdict: report, `Released`, discard, `WorkerDied` - named in the rule so no client works the list out again | Leaving it implied, which is how the decrement ends up on the executor's take in the next language |
+| The token in the overflow error (§3.2) | Kept, and stated: render the token's fields as they arrived: opacity forbids deriving, not printing, and the specification's overflow contract requires the token | Dropping the requirement as a breach of opacity - it would put this guide at odds with a frozen specification over a misreading |
+| The overflow negative control (§3, §7) | Fill the ceiling with records **executing**, report nothing, dispatch one more | One `Dispatch` larger than the ceiling - Rust shipped it, and it passed against the defect it was named for |
 
 ## 10. Logging (binding on every client)
 
