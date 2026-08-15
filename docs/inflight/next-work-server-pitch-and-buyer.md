@@ -246,16 +246,46 @@ Candidates, unranked and none started:
   dispatched, so a token bucket per shard is an extension rather than a new subsystem, it is what
   every webhook and API-fan-out system builds by hand, and it **composes with retry**, which a
   bolt-on limiter cannot.
-- **Generalised scheduled delivery.** Retry backoff is already "run this record no earlier than T".
-  Generalising it gives arbitrary delayed delivery — one of the four capabilities
-  [`next-study-dapr-and-kafka-proxies.md`](next-study-dapr-and-kafka-proxies.md) names as genuinely
-  missing against a queue broker, which makes it the highest-value gap to close on that comparison.
-- **Batch dispatch per key.** Hand N same-key records to a worker at once. Cheap given the sharding
-  already groups them, and it is the difference between viable and hopeless for
-  per-record-expensive sinks.
-- **A durable-execution layer.** PC supplies ordered, retried, at-least-once dispatch; adding durable
-  state per key approaches what the durable-execution platforms sell, on Kafka. Large, speculative,
-  and depends on exactly-once through the proxy landing first (§4h of the strategy doc).
+- **Generalised scheduled delivery — refuted in the narrow form, 2026-08-15, and demoted.** It was
+  written here as the highest-value gap against a queue broker, on the grounds that retry backoff is
+  already "run this no earlier than T". **The owner's objection kills it and the objection is
+  semantic, not a memory-tuning problem**: PC commits to the *frontier*, the lowest incomplete
+  offset, so a record scheduled for next Tuesday pins the commit point until Tuesday. Everything
+  completing behind it becomes a gap in the offset map, which is encoded into Kafka commit metadata
+  with a hard size ceiling, and the encoded gap grows with throughput for as long as the wait lasts.
+  Topic retention bites independently — an eight-day delay on a seven-day topic loses the record.
+
+  So **the cheap half already exists** (short delays, where the frontier moves again soon) and **the
+  valuable half requires leaving the frontier model**: commit the record, persist it in a scheduler
+  topic or store, re-inject later — at which point it is a durable timer service and the record is no
+  longer PC's in-flight work. This is why SQS caps delayed delivery at fifteen minutes and why
+  RabbitMQ's delayed messages are a plugin with its own store rather than a queue feature. Keep the
+  gap recorded against the queue-broker comparison; drop the claim that PC closes it cheaply.
+- **Batch dispatch per key — cheaper than first written.** Core already batches (`batchSize` hands a
+  batch to the user function), so the work is **exposing it across the proxy protocol** to the other
+  languages rather than inventing it. Verify the core surface before planning it; on that reading it
+  is the cheapest item here.
+- **A durable-execution layer — and the route runs through Kafka Streams, not through core.** PC
+  supplies ordered, retried, at-least-once dispatch; the durable-execution products (Temporal,
+  Restate, Inngest, Durable Functions) sell a programming model where workflow code is *replayed*
+  from an append-only history after a crash. **That substrate is Kafka already** — append-only log,
+  replay, per-key ordering, with the key as the workflow identity — which is the thing Temporal had
+  to build on Cassandra and this would not.
+
+  **Kafka Streams supplies three of the four primitives today**: changelog-backed durable state,
+  exactly-once as an atomic commit of state, output and consumed offset, and replay from the
+  changelog. What it does not supply is the **programming model** — *side-effect memoisation* (Streams
+  replay re-runs the processor, so an external HTTP call fires again; only Kafka-side effects are
+  covered by the transaction) and *suspension* (a workflow waiting three days for approval has to be
+  hand-rolled as a state machine across records, which is exactly the pain the products remove). PC
+  adds the fourth thing Streams lacks — concurrency — and astubbs/parallel-consumer#271 already puts
+  it inside Streams, so the state store is already where it would be needed.
+
+  **Correction to an earlier claim here**: this was recorded as gated on exactly-once through the
+  proxy. That gates the **polyglot** version only, because `ExternalEngine` throws on transactional
+  commit mode. The **JVM version is unblocked today**. Still large and still speculative — but nearer
+  than the vendors' framing suggests, because the gap is a programming model rather than a storage
+  engine.
 - **A first-class dead-letter and retry-topic policy**, owned once rather than reimplemented per
   application.
 

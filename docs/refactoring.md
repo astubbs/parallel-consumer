@@ -680,3 +680,25 @@ ThreadPoolExecutor), [confluentinc#172](https://github.com/confluentinc/parallel
 _Seeded 2026-07-28 from a code scan (TODO/FIXME + large-class signals) and a
 branch/issue/prior-PR sweep. Keep it pruned: delete items when done, and promote to
 a branch/PR only when you actually start one._
+
+## Every module must have a README - ten do not
+
+Owner's rule, stated 2026-08-15: **all modules must have a README.** The two new proxy modules were
+missing one and got theirs in astubbs/parallel-consumer#293
+(`parallel-consumer-proxy`, `parallel-consumer-proxy-protocol`). The rest predate that branch and are
+listed here rather than fixed there, because a docs sweep across unrelated modules does not belong in
+the language-proxy PR:
+
+- `parallel-consumer-core`
+- `parallel-consumer-vertx`
+- `parallel-consumer-reactor`
+- `parallel-consumer-mutiny`
+- `parallel-consumer-examples`, and each of its five example modules
+
+Nothing enforces this. The check is one line and worth adding with the sweep:
+
+```bash
+for d in $(find . -name pom.xml -not -path '*/target/*' | xargs -n1 dirname | grep -v '^\.$'); do
+  ls "$d"/README* >/dev/null 2>&1 || echo "MISSING: $d"
+done
+```
