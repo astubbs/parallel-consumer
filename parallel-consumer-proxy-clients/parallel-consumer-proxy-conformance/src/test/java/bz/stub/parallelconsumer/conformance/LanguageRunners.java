@@ -136,9 +136,30 @@ public final class LanguageRunners {
                 module.resolve("scripts").resolve("conformance-runner"));
     }
 
+    /**
+     * Swift: the other container language, and registered the same way C++ is - through
+     * {@code bin/build-client.sh}, because there is no Swift toolchain on this machine to run.
+     * <p>
+     * Swift.org publishes Linux toolchains for Ubuntu, Amazon Linux and RHEL only, and this box is
+     * Debian 13, so the module carries a multi-stage Dockerfile and BuildKit compiles the runner inside
+     * the image and exports it - a STATICALLY LINKED binary, which is what lets the suite then execute
+     * it on this host like any other entry. The script also runs the module's own tests and its
+     * formatter in there, so a red one fails this build rather than surfacing later.
+     * <p>
+     * <b>It needs Docker, and it says so by failing.</b> A missing daemon exits 2 out of that script,
+     * which fails the build and reaches the reader as {@link RunnerUnavailableException} naming the
+     * command - never as a skip, which is the rule this whole registry exists to keep.
+     */
+    public static LanguageRunner swift() {
+        var module = module("swift");
+        return new LanguageRunner("swift", module,
+                List.of(RepoLayout.workingTreeRoot().resolve("bin").resolve("build-client.sh").toString(), "swift"),
+                module.resolve("target").resolve("container").resolve("pc-swift-conformance-runner"));
+    }
+
     /** Every language with a runner today, whether or not this run selected it. */
     public static List<LanguageRunner> all() {
-        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet(), kotlin(), scala(), cpp());
+        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet(), kotlin(), scala(), cpp(), swift());
     }
 
     /**
