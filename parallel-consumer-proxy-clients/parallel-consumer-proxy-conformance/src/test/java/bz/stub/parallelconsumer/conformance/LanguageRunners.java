@@ -119,9 +119,26 @@ public final class LanguageRunners {
                 module.resolve("target").resolve("container").resolve("pc-cpp-conformance-runner"));
     }
 
+    /**
+     * Scala: a JVM client like Kotlin, so its "binary" is a wrapper over {@code java} and a classpath the
+     * build already wrote, and its build command is empty for the same reason - a nested {@code mvn} would
+     * rewrite the class directories of the JVM running this suite while it ran. The wrapper fails loudly
+     * when that classpath file is absent, so a module nobody built does not read as one that passed.
+     * <p>
+     * It wraps the same gRPC transport {@code java-grpc} exposes, so what this entry proves is the Scala
+     * surface over a session that is already covered - which is the point of wrapping rather than
+     * reimplementing, and why the wave that wrote it could inherit the queue, the ceiling and the session
+     * end rather than writing them again.
+     */
+    public static LanguageRunner scala() {
+        var module = module("scala");
+        return new LanguageRunner("scala", module, List.of(),
+                module.resolve("scripts").resolve("conformance-runner"));
+    }
+
     /** Every language with a runner today, whether or not this run selected it. */
     public static List<LanguageRunner> all() {
-        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet(), kotlin(), cpp());
+        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet(), kotlin(), scala(), cpp());
     }
 
     /**

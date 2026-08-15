@@ -139,6 +139,18 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!--
+            Scala, here for exactly the reason Kotlin is: a JVM client whose toolchain IS the Maven
+            build already running, so it earns its place in this reactor rather than a build command
+            that would start a nested one. Its registry entry is correspondingly empty-commanded.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-scala</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>
