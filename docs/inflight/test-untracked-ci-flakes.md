@@ -14,7 +14,7 @@ product behaviour and the assertion was wrong, so no product change was needed.
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
-| `PCMetricsTest.metricsRegisterBinding` | 3 seen | Third sighting 2026-08-15. **NOT actually quarantined** - the registry does not hold it; that quarantine sits on astubbs#265's unmerged branch, so this gates every PR today. And the third sighting's signature is the *inverse* of the one diagnosed below - see the correction after that section |
+| `PCMetricsTest.metricsRegisterBinding` | 4 seen | Released by astubbs#265, failed twice consecutively on one head, **re-quarantined unowned** in astubbs#116. Mechanism only half-known: the fix closed the metric-ahead direction, the failures are metric-behind-and-never-converging - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -104,24 +104,53 @@ generalises - **do not compare two moving values; await a quiescent state, then 
 
 Rate is now 2 sightings rather than the 1/45 that could be dismissed.
 
-#### Correction, 2026-08-15: the third sighting points the other way
+#### Sightings 3 and 4 (2026-08-14, astubbs#116) - released too early, and failing the other way
 
-The first uncontended verification of `feats/proxy-requirements` reproduced this once in 11 full-suite
-runs, and the signature does **not** match the diagnosis above.
+`astubbs#265` released this test from quarantine on a **causal** fix, explicitly not a run count, and
+said so: *"if it flakes on master, re-quarantining is the inverse of that commit."* It has, so it is
+re-quarantined here. The release was reasoned, not careless - but the fix closed one direction of a
+two-directional defect.
 
-- Documented above: the gauge running **ahead** of a stale counter snapshot, at `:115`.
-- Observed: the gauge **behind** and never converging - `:108`, `expected: 1212.0 but was: 1209.0
-  within 2 minutes` - at a point where the test's own comment says the counters are frozen.
+The fix addressed the metric being **more current** than the expectation: the `Thread.sleep(1000)`
+became `await().untilAsserted(...)` on the trailing meters, which is right if the metric merely lags
+and then catches up. Both new sightings are the metric **behind and never catching up** - the await
+burns its full 120s:
 
-If that comment is right, a gauge that stays 3 short for two minutes is a **committed-offset
-shortfall**, not a sampling race, and this row's "mechanism known" claim does not cover it. Nothing in
-`docs/solutions/test-flakiness/` describes this direction. Treat it as an unverified lead rather than
-a second instance of the same thing - and note it needs the 32-fork self-contention of a full suite to
-appear at all: `PCMetricsTest` alone passed 10/10 in 13.1s.
+```
+PCMetricsTest.metricsRegisterBinding:108   (PARTITION_LAST_COMMITTED_OFFSET, partition 1)
+  attempt 1: expected: 1213.0  but was: 1209.0     (4 short)
+  attempt 2: expected: 1207.0  but was: 1195.0    (12 short)
+```
 
-**It is master's, not the branch's.** A control arm alternated run-for-run: this branch failed 1 of 11
-full core suites, `cae88c7aa` master failed 3 of 5, with the identical stack and assertion. Evidence
-in [`branch-clean-verification-2026-08-15.md`](branch-clean-verification-2026-08-15.md).
+**Both on the same head, back to back** - the second is a rerun of the first, so this is no longer a
+flapper you can rerun past. And the shortfall is not a fixed off-by-N: 4 then 12. No amount of
+waiting closes a gap that varies, which is what distinguishes this from the lag the await was
+written for.
+
+Two things worth ruling in or out before anyone "fixes" it again:
+
+1. **It is the shape the sibling doc already named.** `assert-the-commit-frontier-not-the-tick-path.md`
+   (written 2026-08-13, one day earlier, for `processInKeyOrder`) lists the symptom *"the await burns
+   its full 30s: once the tick has landed, the condition is permanently false"*, and its
+   `applies_when` covers any assertion over a PC commit history in a core unit test. This test asserts
+   `PARTITION_LAST_COMMITTED_OFFSET == counterP1 + p1StartingOffset` - an exact commit position, not a
+   frontier.
+2. **It rhymes with the undiagnosed entry next door.**
+   `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
+   is recorded as *"the committed high-water mark never reaches `expectedHighestSeen` (139), with a
+   different actual each run (136 and 132 seen)"*. Same sentence shape as ours. Two tests whose
+   committed offset stalls short of expectation by a varying amount may be one phenomenon, and that
+   entry is the most frequent tracked flake in the repo. Worth testing as one hypothesis rather than
+   two coincidences.
+
+**Do not assume this is a test defect.** The open question is whether the un-committed tail is a wrong
+assumption in the test or real commit behaviour under a paused/blocked partition; the file's own
+standing rule is to classify before touching, and two of the load-tightness family turned out to be
+product bugs.
+
+The integration failure alongside it on the same run was unrelated infrastructure -
+`ContainerLaunchException: Container startup failed for image confluentinc/cp-kafka:7.9.0` - and
+passed on rerun. Worth separating: one rerun cleared the container flake and did **not** clear this.
 
 ### The rerun failed somewhere else - which is weaker evidence than it first looks
 

@@ -38,6 +38,24 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
 
     @Test
     @SneakyThrows
+    @Quarantined(
+            reason = "Re-quarantined: astubbs#265 released it on a causal fix that addressed the opposite "
+                    + "direction of the failure. Its diagnosis was that the metric could be MORE current than "
+                    + "the expectation (seen as PARTITION_HIGHEST_COMPLETED_OFFSET expected 203.0 but was 207.0 "
+                    + "- four records completed in the gap), so the Thread.sleep(1000) became an "
+                    + "await().untilAsserted(...) waiting for the trailing meters to agree. What now fails is "
+                    + "the metric BEHIND and never converging: PARTITION_LAST_COMMITTED_OFFSET for partition 1 "
+                    + "sits short of counterP1 + p1StartingOffset for the full 120s budget. Seen twice "
+                    + "consecutively on one head (astubbs#116, 2026-08-14): expected 1213.0 but was 1209.0, then "
+                    + "expected 1207.0 but was 1195.0 - so the shortfall is not a fixed off-by-N and the await "
+                    + "cannot close it. Asserting a committed offset EQUALS a processed counter is the exact "
+                    + "shape docs/solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md warns "
+                    + "against, and it matches the undiagnosed OffsetEncodingBackPressureTest entry, whose "
+                    + "committed high-water mark also never reaches its expectation with a different actual each "
+                    + "run. Whether the un-committed tail is a test assumption or real commit behaviour is the "
+                    + "open question - do not assume the former.",
+            tracking = "docs/inflight/test-untracked-ci-flakes.md",
+            flapping = true)
     void metricsRegisterBinding() {
         final int quantityP0 = 1000;
         final int quantityP1 = 500;
