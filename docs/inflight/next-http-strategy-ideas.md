@@ -157,6 +157,41 @@ records from one partition concurrently, the patch delivers nothing. **Read thei
 proposing anything** — and prefer an upstream conversation to a fork, since a fork is the expensive
 outcome dressed as the easy one.
 
+## 4h. The larger vision, and the fork inside it: sidecar or server?
+
+Raised 2026-08-15: serve pixy, Dapr and a work-queue protocol at once, with durable persistence in
+Kafka — "a higher-performance, more flexible Kafka, extended by Streams and Connect". Coherent, and
+worth writing down. But it contains a fork that must not blur, because the two destinations have
+almost nothing in common operationally.
+
+**Session ownership is settled either way**: PC owns the connection. Whatever front-ends exist, the
+engine decides what is dispatched and to whom.
+
+**The sidecar's constraints are load-bearing, not incidental.** Everything built so far depends on
+them:
+
+- loopback-only, therefore **no authentication needed**;
+- one application per sidecar, therefore **no multi-tenancy**;
+- the connection *is* the session, therefore admission is trivial;
+- credentials may travel the wire because **only the spawning process can reach it**.
+
+**A shared work-queue server discards all four simultaneously** and inherits what any multi-tenant
+service must have: authentication and authorisation, tenant isolation, quotas and noisy-neighbour
+control, high availability, upgrade and compatibility paths, and an operational surface someone must
+run. That is not a larger sidecar. It is a different product built on the same engine, and it should
+be decided as one rather than arrived at by accretion.
+
+**One concrete dependency for the "transactions" half**: exactly-once is *unreachable through the
+proxy today* — `ExternalEngine` throws on transactional commit mode, which is why the interaction
+model kept produce on the engine side. It is recorded as post-v6 with core changes sanctioned. Any
+durable-work-queue story rests on that landing first.
+
+**What is genuinely attractive here**, and survives either choice: Kafka as the durable substrate
+(replay, retention, ordering, one source of truth) with work-queue semantics layered on top, reachable
+by anything. That is the product story either a sidecar or a server would tell. The difference is who
+operates it — and the sidecar answer is "the application team, invisibly", which is a large part of
+why it is adoptable at all.
+
 ## 4c. Is this worth it, or is it reinventing the wheel?
 
 The honest question, asked 2026-08-15, and it deserves recording rather than enthusiasm.
