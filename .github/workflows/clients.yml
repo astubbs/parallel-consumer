@@ -492,9 +492,17 @@ jobs:
       # --fail-at-end for the same reason the reactor lanes carry it (bin/ci-build.sh and friends):
       # every independent branch of this row's slice reports in one run, rather than one problem
       # per push. It preserves Maven's exit code, so a failure is still a red row.
+      #
+      # `package`, NOT `test`, AND THAT ONE WORD IS HALF A BUG FIX. Several clients' suites spawn
+      # the engine as a real sidecar and look for parallel-consumer-proxy's jar FILES to put on its
+      # classpath - and `test` stops one phase short of producing them, so those rows failed with
+      # "parallel-consumer-proxy/target is not built" no matter what their poms declared. The other
+      # half is the declaration itself: a module whose tests spawn the sidecar names the proxy as a
+      # test-scoped dependency inside its own foreign-clients profile, which is what puts it in
+      # front of us in the reactor at all. Neither half works alone.
       - name: Build and test (${{ matrix.module }})
         if: steps.gate.outputs.deferred == 'false'
-        run: ./mvnw --batch-mode -Pci --fail-at-end test -pl :${{ matrix.module }} -am -Dpc.foreignClients
+        run: ./mvnw --batch-mode -Pci --fail-at-end package -pl :${{ matrix.module }} -am -Dpc.foreignClients
 
       # ── The shared conformance suite, this row's language only ───────────────
       # One Java test module drives every language's client through the SAME scenarios and asserts

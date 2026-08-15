@@ -33,10 +33,12 @@
         fails the Maven build. Proven to fail rather than assumed: see
         docs/inflight/clients/rust.md (astubbs#242).
 
-        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND MAVEN CANNOT ORDER THAT FOR US. `cargo
-        test` here spawns the conformance harness (TestModeMain, in parallel-consumer-proxy's test
-        jar), but this module deliberately has NO Maven dependency on the proxy - no client depends
-        on the engine - so `-am` does not pull it into the reactor ahead of us. Build it first:
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND THE PROFILE BELOW IS HOW MAVEN ORDERS IT.
+        `cargo test` here spawns the conformance harness (TestModeMain, in parallel-consumer-proxy's
+        test jar). An earlier note in this place said Maven could not order that for us and told the
+        reader to build the proxy by hand first; it can, the same way the Go, Python and TypeScript
+        modules already do it, and the clients matrix row - which cannot run a hand command - was
+        red on exactly this. Locally the hand command still works and is still the fastest way:
 
             bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
 
@@ -60,6 +62,49 @@
         <pc.foreign.test.executable>cargo</pc.foreign.test.executable>
         <pc.foreign.test.args>test</pc.foreign.test.args>
     </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            tests/harness spawns the real test-mode sidecar over the real wire, which needs the
+            proxy module's test jar (TestModeMain and the harness) and its main jar. Declaring them
+            here is what makes the CI row's own command build the proxy before this module's test
+            phase; the row runs `package` rather than `test` for the other half of it, because the
+            harness looks for jar FILES and `test` stops one phase short of producing them.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all, so a
+            scoped build still runs no Rust toolchain and never reaches the engine. Modelled on the
+            go-e2e-harness profile, which was written when the Go row failed this same way.
+
+            The crate obtains the protocol the way every non-JVM client does, by generating from
+            the .proto by path in build.rs, with no Maven dependency.
+        -->
+        <profile>
+            <id>rust-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>
