@@ -162,7 +162,21 @@ A scenario is one Java value with three halves, in `ConformanceScenarios.java`:
 The runner receives (2) on its command line and nothing else. It cannot see (1) or (3), which is the point:
 the prescription is complete enough to run, and too narrow to game.
 
-Wired today, all four passing for Go:
+**One definition, many bindings.** Those three halves are written once and executed once per *binding*: the
+engine driven by a plain Java function (`CoreBinding`), then each foreign runner. The same assertion executing
+many times is the goal; the same assertion being *written* many times is what `ConformanceBinding` exists to
+prevent.
+
+**Core is the control arm, and it is why it runs in every selection.** Every other binding puts a client, a
+protocol and a language runtime between the scenario and the engine, so a red run has three suspects and the
+client is always the first one looked at. A scenario red against a plain Java function is a **wrong scenario**
+- there is nothing else left for it to be. It earned its place on the day it was written: the redelivery
+scenario went red against core because the binding read the failure reason off the Throwable core recorded,
+which is the wrapper's message rather than the user's - the same unwrap the engine's own `RecordCodec` does
+before it puts the reason on the wire. That was a bug in the *binding*, found in seconds, that would have read
+as "the client mangles the reason" in any language it appeared in.
+
+Wired today, all four passing for every binding:
 
 | Scenario | Behaviour | Deliveries | Asserted |
 |---|---|---|---|
@@ -237,11 +251,18 @@ and a runner that is there and exits non-zero. Both must fail with a message nam
 The one sanctioned way to run fewer languages is explicit and visible on the command line:
 
 ```bash
-./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.languages=go
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=go
 ```
 
 A name that is not registered fails rather than selecting nothing, because a typo that ran nothing would read
-as a pass.
+as a pass. **The property is singular and its name is fixed** - the `clients` workflow's per-language matrix
+rows are written against it, and the earlier plural spelling is rejected outright rather than ignored, since
+ignoring it would select every binding and fail in a row that installed one toolchain.
+
+**The core binding is in every selection** and cannot be selected away. Naming a language runs that language
+*and* the engine beside it, because "is this scenario wrong?" is an answer worth having in the same job as
+the client that went red rather than hours later in another one. `-Dpc.conformance.language=core` is the way
+to run the control arm alone - no toolchain, a few seconds.
 
 ## 6. Adding the next language
 
@@ -250,9 +271,11 @@ as a pass.
    §3 exactly: the five flags, the three exit statuses, the observation line, all four behaviour tokens, and
    the fixed literals - including the `report-nothing` hold.
 2. **Add one registry entry** in `LanguageRunners.java`: the language's name, its module directory, the
-   command that builds the runner, and where the binary lands. The four still to come are already sketched
-   there as comments.
-3. **Run it**: `./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.languages=<lang>`.
+   command that builds the runner, and where the binary lands. Six are registered today, one per wave-one
+   language; copy whichever is closest in shape. The registry checks a path is *executable*, so an interpreted
+   language keeps a two-line wrapper (`scripts/conformance-runner`) beside its runner rather than a registry
+   entry that names an interpreter.
+3. **Run it**: `./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=<lang>`.
 4. **Prove each scenario can fail.** Make the runner do the wrong thing - report success where silence was
    prescribed, change the failure reason, stop holding - watch the suite go red with a message that names
    what was wrong, and revert. A scenario that cannot fail is worthless, and this repository has seven
@@ -266,11 +289,14 @@ the only thing the driver knows about Go is a path in a registry entry.
 ## 7. Running it
 
 ```bash
-# the suite, all registered languages, all wired scenarios
+# the suite, every binding, all wired scenarios
 ./mvnw test -pl :parallel-consumer-proxy-conformance -am
 
-# one language
-./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.languages=go
+# one language, plus the core control arm that always runs beside it
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=go
+
+# the control arm alone: the engine, a plain Java function, no toolchain, seconds
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=core
 ```
 
 `-am` is required: the module's parents must be in the reactor, and the engine and harness are built from

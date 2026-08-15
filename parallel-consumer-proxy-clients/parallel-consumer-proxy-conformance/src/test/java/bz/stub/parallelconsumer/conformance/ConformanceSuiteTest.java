@@ -12,12 +12,16 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.util.stream.Stream;
 
 /**
- * THE SUITE: every registered language, through every wired scenario, asserted identically.
+ * THE SUITE: every selected binding, through every wired scenario, asserted identically.
  * <p>
  * One test method, parameterised over the whole matrix, because the alternative - a method per language -
  * is how ten clients end up with ten slightly different definitions of the same scenario. A language
  * appears here by being registered in {@link LanguageRunners}; nothing else about this file changes when
- * the next four arrive.
+ * the next one arrives.
+ * <p>
+ * <b>The engine itself is one of the rows</b> ({@link CoreBinding}), and it is the control arm: a scenario
+ * red against a plain Java function is a wrong scenario rather than a broken client. Which rows a given run
+ * drives is {@link ConformanceBindings}', including the failure when a selector matches nothing.
  * <p>
  * <b>This is not a replacement for a client's own tests.</b> It answers "does every client behave
  * identically on the protocol"; a client's own suite answers "does this client's idiom betray it" - a
@@ -30,14 +34,14 @@ import java.util.stream.Stream;
 class ConformanceSuiteTest {
 
     static Stream<Arguments> matrix() {
-        return LanguageRunners.registered().stream()
-                .flatMap(runner -> ConformanceScenarios.all().stream()
-                        .map(scenario -> Arguments.of(runner, scenario.name(), scenario)));
+        return ConformanceBindings.selected().stream()
+                .flatMap(binding -> ConformanceScenarios.all().stream()
+                        .map(scenario -> Arguments.of(binding, scenario.name(), scenario)));
     }
 
     @ParameterizedTest(name = "{0}: {1}")
     @MethodSource("matrix")
-    void conforms(LanguageRunner runner, String scenarioName, ConformanceScenario scenario) {
-        ConformanceDriver.drive(runner, scenario);
+    void conforms(ConformanceBinding binding, String scenarioName, ConformanceScenario scenario) {
+        ConformanceDriver.drive(binding, scenario);
     }
 }

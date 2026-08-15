@@ -58,33 +58,60 @@ public final class ConformanceDriver {
     }
 
     /**
-     * The whole of one conformance run. Owns the harness's lifecycle so a scenario's failure still tears the
-     * engine down.
+     * The whole of one conformance run, for any binding. Owns the harness's lifecycle so a scenario's
+     * failure still tears the engine down.
+     * <p>
+     * <b>The assertions are made while the binding's run is still open.</b> A binding may be holding a
+     * record deliberately - {@code report-nothing} prescribes it - and "the offset never advanced" means
+     * nothing once the client that was holding it has gone.
      *
-     * @return the runner's transcript, after the scenario's own assertions have passed
+     * @return the binding's transcript, after the scenario's own assertions have passed
      */
-    public static RunnerTranscript drive(LanguageRunner runner, ConformanceScenario scenario) {
-        runner.ensureBuilt();
+    public static RunnerTranscript drive(ConformanceBinding binding, ConformanceScenario scenario) {
+        binding.ensureAvailable();
 
-        try (var harness = new ProxyHarness(scenario.harnessScenario())) {
-            int port = harness.startEngine();
-            // The PORT is in the name, not just the language and scenario. Two tests may drive the same
-            // language through the same scenario at the same moment - the parallelism proof does exactly
-            // that - and a shared filename made the second run overwrite the first's shim, pointing both
-            // clients at one engine; the loser failed its handshake with the single-connection guard's
-            // RESOURCE_EXHAUSTED. The port is unique per engine, so it is the right discriminator.
-            var name = runner.language() + "-" + scenario.name() + "-" + port;
-            var sidecar = SidecarShim.write(RepoLayout.scratch(), name, port);
-            var transcript = spawn(runner, scenario, sidecar);
+        try (var harness = new ProxyHarness(scenario.harnessScenario());
+             var run = binding.execute(harness, scenario)) {
+            var transcript = run.transcript();
 
-            assertWithMessage("the %s runner's exit status IS the verdict: %s means it could not do what the "
-                            + "scenario prescribed%s", runner.language(),
+            assertWithMessage("the %s binding's exit status IS the verdict: %s means it could not do what the "
+                            + "scenario prescribed%s", binding.name(),
                     RunnerContract.EXIT_BEHAVIOUR_FAILED, transcript.diagnostics())
                     .that(transcript.exitCode()).isEqualTo(RunnerContract.EXIT_OK);
 
             scenario.assertion().check(harness, transcript);
             return transcript;
         }
+    }
+
+    /**
+     * The foreign half of {@link #drive}: boot the engine's gRPC transport, write the shim that announces
+     * where it is, and spawn the language's runner at it. Called by {@link LanguageRunner#execute}.
+     */
+    static ConformanceBinding.Run spawnAgainst(LanguageRunner runner, ProxyHarness harness,
+                                               ConformanceScenario scenario) {
+        int port = harness.startEngine();
+        // The PORT is in the name, not just the language and scenario. Two tests may drive the same
+        // language through the same scenario at the same moment - the parallelism proof does exactly
+        // that - and a shared filename made the second run overwrite the first's shim, pointing both
+        // clients at one engine; the loser failed its handshake with the single-connection guard's
+        // RESOURCE_EXHAUSTED. The port is unique per engine, so it is the right discriminator.
+        var name = runner.language() + "-" + scenario.name() + "-" + port;
+        var sidecar = SidecarShim.write(RepoLayout.scratch(), name, port);
+        var transcript = spawn(runner, scenario, sidecar);
+        // The process is already gone, so there is nothing to hold open: a report-nothing runner bought the
+        // observation window with the contract's fixed hold before it exited.
+        return new ConformanceBinding.Run() {
+            @Override
+            public RunnerTranscript transcript() {
+                return transcript;
+            }
+
+            @Override
+            public void close() {
+                // nothing to release: the runner's own process ended before its transcript existed
+            }
+        };
     }
 
     private static RunnerTranscript spawn(LanguageRunner runner, ConformanceScenario scenario, Path sidecar) {

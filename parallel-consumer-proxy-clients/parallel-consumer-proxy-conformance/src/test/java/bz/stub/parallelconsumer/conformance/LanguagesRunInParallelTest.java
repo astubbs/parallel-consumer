@@ -27,6 +27,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <p>
  * The second language is a deliberately broken runner rather than a real client, because the interesting
  * half of the claim is the DISAGREEMENT: green beside red, at the same moment, correctly attributed.
+ * <p>
+ * The green half is whichever binding this run selected first - a foreign runner when the selector named
+ * one, the core control arm when it did not. A row that selected only the control arm must still run this
+ * proof: "no language was selected" is not a licence to quietly skip a test.
  *
  * @author Antony Stubbs
  */
@@ -39,14 +43,14 @@ class LanguagesRunInParallelTest {
     @Test
     void twoLanguagesRunAtOnceAndAreJudgedSeparately() throws Exception {
         var scenario = ConformanceScenarios.PROCESSED_RECORD_ADVANCES_THE_COMMITTED_OFFSET;
-        var real = LanguageRunners.registered().get(0);
+        var real = ConformanceBindings.aSelectedBinding();
         var broken = LanguageRunners.deliberatelyFailing(
                 AbsentAndBrokenRunnersFailTest.writeCrashingRunner("parallel-broken-runner",
                         BROKEN_RUNNER_DAWDLE_SECONDS));
 
-        // Built before the clock starts: a first Go build is minutes of toolchain work and would swamp the
-        // overlap measurement with something that is not the thing being measured.
-        real.ensureBuilt();
+        // Built before the clock starts: a first cold build of a foreign runner is minutes of toolchain
+        // work and would swamp the overlap measurement with something that is not the thing being measured.
+        real.ensureAvailable();
 
         var realStart = new AtomicLong();
         var realEnd = new AtomicLong();
@@ -70,7 +74,7 @@ class LanguagesRunInParallelTest {
             assertWithMessage("the broken runner's failure names itself")
                     .that(brokenOutcome.getMessage()).contains("deliberately-failing");
             assertWithMessage("and does not name the language that passed")
-                    .that(brokenOutcome.getMessage()).doesNotContain(real.language() + " runner's exit status");
+                    .that(brokenOutcome.getMessage()).doesNotContain(real.name() + " binding's exit status");
 
             // The overlap itself, from this test's own clock rather than a shared high-water mark - a
             // global peak could have been set by some other test and would read as a pass here vacuously.

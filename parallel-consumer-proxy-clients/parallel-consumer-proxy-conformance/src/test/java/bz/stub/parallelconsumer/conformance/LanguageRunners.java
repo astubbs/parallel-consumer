@@ -4,67 +4,83 @@ package bz.stub.parallelconsumer.conformance;
  */
 
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * The registry: every language whose runner this suite drives.
  * <p>
  * <b>Registering the next language is one entry.</b> It names where the runner is built, the command that
  * builds it, and where the binary lands - nothing else, because everything else about a runner is the
- * contract in {@link RunnerContract}, which is identical in every language. The four still to come are
- * commented below with the entry each of them needs, so the work is visible rather than remembered.
+ * contract in {@link RunnerContract}, which is identical in every language.
+ * <p>
+ * <b>Every entry's executable is a committed wrapper or a compiled binary</b>, never an interpreter plus a
+ * script: {@link LanguageRunner#ensureBuilt()} checks a path is executable, and "python3 my_runner.py" is
+ * not a path. The interpreted languages therefore keep a two-line wrapper in their own module, beside the
+ * runner it launches, so the registry entry stays the same shape in every language.
+ * <p>
+ * Which languages this run actually drives is {@link ConformanceBindings}' - the selector lives there,
+ * with the core control arm.
  *
  * @author Antony Stubbs
  * @see LanguageRunner
  */
 public final class LanguageRunners {
 
-    /**
-     * The deliberate, visible way to run fewer languages: {@code -Dpc.conformance.languages=go}. Absence of
-     * a toolchain is NOT a way - that fails, loudly, per {@link LanguageRunner#ensureBuilt()}.
-     */
-    public static final String LANGUAGES_PROPERTY = "pc.conformance.languages";
-
     /** Go: the first language through the harness, and the thinnest-tested before it. */
     public static LanguageRunner go() {
-        var module = RepoLayout.clientsRoot().resolve("parallel-consumer-proxy-client-go");
+        var module = module("go");
         return new LanguageRunner("go", module,
                 List.of("go", "build", "-o", "target/conformance-runner", "./cmd/conformance-runner"),
                 module.resolve("target").resolve("conformance-runner"));
     }
 
-    // The remaining four wave-one languages. Each needs (1) a cmd/conformance-runner equivalent implementing
-    // RunnerContract in its own idiom, (2) the build command that produces one binary, (3) an entry here:
-    //
-    //   python     - .../parallel-consumer-proxy-client-python, a console script or a `python -m` shim;
-    //                the "executable" is whatever the venv build drops, and the build command creates it
-    //   typescript - .../parallel-consumer-proxy-client-typescript, `npm run build` then a node entry point
-    //   rust       - .../parallel-consumer-proxy-client-rust, `cargo build --bin conformance-runner`
-    //   ruby       - .../parallel-consumer-proxy-client-ruby, an executable script; the build command may be
-    //                `bundle install` or empty
-    //
-    // Adding one changes nothing else in this module: the scenarios, the assertions and the driver are
-    // already language-blind.
+    /**
+     * Python. {@code make build} is the module's own recipe for its venv, so the suite installs the client
+     * exactly as a developer and the CI row do rather than inventing a third way to get grpcio in place.
+     */
+    public static LanguageRunner python() {
+        var module = module("python");
+        return new LanguageRunner("python", module, List.of("make", "build"),
+                module.resolve("scripts").resolve("conformance-runner"));
+    }
 
-    /** Every registered language, filtered by {@link #LANGUAGES_PROPERTY} when it is set. */
-    public static List<LanguageRunner> registered() {
-        var all = List.of(go());
-        var requested = System.getProperty(LANGUAGES_PROPERTY);
-        if (requested == null || requested.isBlank()) {
-            return all;
-        }
-        var wanted = Arrays.stream(requested.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
-        var selected = all.stream().filter(runner -> wanted.contains(runner.language())).collect(Collectors.toList());
-        var known = all.stream().map(LanguageRunner::language).toList();
-        var unknown = wanted.stream().filter(name -> !known.contains(name)).toList();
-        if (!unknown.isEmpty()) {
-            throw new IllegalArgumentException("-D" + LANGUAGES_PROPERTY + " names languages this suite does not "
-                    + "register: " + unknown + " (registered: " + known + "). A typo here would otherwise run "
-                    + "nothing and read as a pass.");
-        }
-        return selected;
+    /** TypeScript: {@code npm run build} installs and compiles; the wrapper runs the emitted JavaScript. */
+    public static LanguageRunner typescript() {
+        var module = module("typescript");
+        return new LanguageRunner("typescript", module, List.of("npm", "run", "--silent", "build"),
+                module.resolve("scripts").resolve("conformance-runner"));
+    }
+
+    /** Rust: an ordinary cargo binary target, so the runner is the compiled artefact itself. */
+    public static LanguageRunner rust() {
+        var module = module("rust");
+        return new LanguageRunner("rust", module, List.of("cargo", "build", "--bin", "conformance-runner"),
+                module.resolve("target").resolve("debug").resolve("conformance-runner"));
+    }
+
+    /** Ruby: {@code bundle install} puts the gems in place; the runner is an executable Ruby script. */
+    public static LanguageRunner ruby() {
+        var module = module("ruby");
+        return new LanguageRunner("ruby", module, List.of("bundle", "install", "--quiet"),
+                module.resolve("scripts").resolve("conformance-runner"));
+    }
+
+    /**
+     * .NET: a console project in the module's own solution, so an ordinary {@code dotnet build} keeps it
+     * compiling. The apphost the SDK emits beside the assembly is the executable.
+     */
+    public static LanguageRunner dotnet() {
+        var module = module("dotnet");
+        return new LanguageRunner("dotnet", module,
+                List.of("dotnet", "build", "tests/ConformanceRunner/ConformanceRunner.csproj",
+                        "--configuration", "Release", "--nologo"),
+                module.resolve("tests").resolve("ConformanceRunner").resolve("bin").resolve("Release")
+                        .resolve("net8.0").resolve("conformance-runner"));
+    }
+
+    /** Every language with a runner today, whether or not this run selected it. */
+    public static List<LanguageRunner> all() {
+        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet());
     }
 
     /**
@@ -83,6 +99,10 @@ public final class LanguageRunners {
      */
     public static LanguageRunner deliberatelyFailing(Path executable) {
         return new LanguageRunner("deliberately-failing", RepoLayout.scratch(), List.of(), executable);
+    }
+
+    private static Path module(String language) {
+        return RepoLayout.clientsRoot().resolve("parallel-consumer-proxy-client-" + language);
     }
 
     private LanguageRunners() {

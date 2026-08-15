@@ -3,6 +3,7 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
 import com.github.bsideup.jabel.Desugar;
 import lombok.extern.slf4j.Slf4j;
 
@@ -24,7 +25,7 @@ import java.util.concurrent.TimeUnit;
  * likely to survive all the way to a release with ten libraries in it.
  * <p>
  * The one sanctioned way to run fewer languages is the explicit, visible
- * {@code -Dpc.conformance.languages=<comma list>} - an act, recorded on the command line, rather than a
+ * {@code -Dpc.conformance.language=<comma list>} - an act, recorded on the command line, rather than a
  * condition of the machine.
  *
  * @author Antony Stubbs
@@ -32,7 +33,31 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-public record LanguageRunner(String language, Path workingDirectory, List<String> buildCommand, Path executable) {
+public record LanguageRunner(String language, Path workingDirectory, List<String> buildCommand, Path executable)
+        implements ConformanceBinding {
+
+    /** A foreign runner is named by its language, in the matrix and on the selector's command line. */
+    @Override
+    public String name() {
+        return language;
+    }
+
+    @Override
+    public void ensureAvailable() {
+        ensureBuilt();
+    }
+
+    /**
+     * Spawns this language's runner at an engine the harness is already hosting, and waits for its verdict.
+     * <p>
+     * The run needs no observation window of its own: by the time the process has exited, a
+     * {@code report-nothing} runner has already held its session open for the contract's fixed hold, which
+     * is what the window is for.
+     */
+    @Override
+    public Run execute(ProxyHarness harness, ConformanceScenario scenario) {
+        return ConformanceDriver.spawnAgainst(this, harness, scenario);
+    }
 
     /** How long a runner's build may take before the suite calls it stuck. Cold Go and Rust builds are slow. */
     private static final long BUILD_TIMEOUT_MINUTES = 10;
@@ -87,7 +112,7 @@ public record LanguageRunner(String language, Path workingDirectory, List<String
         } catch (IOException e) {
             throw new RunnerUnavailableException("cannot run '" + String.join(" ", buildCommand) + "' for the "
                     + language + " conformance runner - is the " + language + " toolchain installed? To run a "
-                    + "narrower set deliberately, pass -Dpc.conformance.languages=<comma list>; there is no "
+                    + "narrower set deliberately, pass -Dpc.conformance.language=<comma list>; there is no "
                     + "silent skip.", e);
         }
         String output;
