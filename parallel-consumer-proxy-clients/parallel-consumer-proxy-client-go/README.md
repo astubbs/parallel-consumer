@@ -63,6 +63,14 @@ Three things worth knowing before reading the API:
   security-relevant. It is launched directly and never through a shell, because a shell wrapper
   would hold the lifecycle pipe open and defeat the proxy's parent-death signal.
 
+**The one error the protocol can raise at you** is the in-flight overflow: the proxy dispatching a
+record while `MaxConcurrency` of them are already unresolved - queued plus executing - which is the
+proxy exceeding the ceiling it declared itself. The library cancels the call and ends the session
+with an error whose text starts `parallelconsumer: the proxy dispatched a record while N were
+already unresolved`, naming the count, the declared `max_concurrency` and the offending record's
+token. You read it from `Err()` after `Done()` fires. It is a protocol violation and never a load
+condition, so the library never drops a record or grows the queue to absorb it.
+
 `KafkaProperties` carries credentials. The library never logs the map, never echoes an entry of it
 in an error, and never writes it to argv, an environment variable or a temp file - it travels the
 stream and nowhere else. Hold your own code to the same rule.

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	proxyv1 "github.com/astubbs/parallel-consumer/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/gen/parallelconsumer/proxy/v1"
@@ -60,9 +61,16 @@ type Client struct {
 	// executor reports on this one stream.
 	sendMu sync.Mutex
 
-	// queue is the client-side dispatch queue. Its depth is the proxy's own in-flight ceiling, so
-	// in a correct system it cannot overflow; an overflow is a protocol violation, not load.
+	// queue is the client-side dispatch queue. Its capacity is the proxy's own in-flight ceiling,
+	// as the STRUCTURAL statement of the bound - but it is not what admits a record, and it can
+	// never be the thing that fires. unresolved is.
 	queue chan *proxyv1.DispatchRecord
+
+	// unresolved counts the records this client has been dispatched and has not yet reported -
+	// QUEUED PLUS EXECUTING. That, and never the queue's own occupancy, is what max_concurrency
+	// bounds: handing a record to an executor MOVES it and does not free its slot, so a client
+	// counting queued records alone has room exactly when it should be raising a violation.
+	unresolved atomic.Int64
 
 	stopHandout chan struct{}
 	executors   sync.WaitGroup
@@ -289,19 +297,83 @@ func (c *Client) receive() {
 
 // enqueue queues a wave in record order. Hand-out is FIFO, by arrival and then by the wave's own
 // order, which a buffered channel gives directly.
+//
+// ADMISSION IS THE UNRESOLVED COUNT, never the channel's free space. The proxy's worked example is
+// the case that separates them: at a ceiling of three with A, B and C dispatched and two of them
+// already out with executors, the channel has two free slots and the ceiling has none.
 func (c *Client) enqueue(d *proxyv1.Dispatch) error {
 	for _, rec := range d.GetRecords() {
+		// Read then add, rather than add then check: enqueue has exactly one caller, the receive
+		// loop, so admission is single-producer, and a concurrent settle can only free capacity -
+		// never take it. It also leaves the count honest in the violation's own message.
+		already := c.unresolved.Load()
+		if already >= int64(c.session.MaxConcurrency) {
+			return c.overflow(already, rec)
+		}
+		c.unresolved.Add(1)
 		select {
 		case c.queue <- rec:
 		default:
-			// The queue's depth IS the proxy's declared ceiling, so a full queue means the proxy
-			// exceeded it. That is a protocol violation, never a load condition: never drop a
-			// record, never grow the queue.
-			return fmt.Errorf("parallelconsumer: dispatch overflowed the client queue at its "+
-				"max_concurrency of %d - protocol violation (%s)", c.session.MaxConcurrency, codes.FailedPrecondition)
+			// Unreachable while the count above is right - queued records are a subset of the
+			// unresolved ones, so the channel fills only once the ceiling is already reached. Kept
+			// as the structural backstop, answering exactly as the counted check does.
+			c.settle()
+			return c.overflow(already, rec)
 		}
 	}
 	return nil
+}
+
+// overflow is the counted protocol violation: the proxy dispatched past the in-flight ceiling it
+// declared itself. Never a load condition, so never drop a record and never grow the queue.
+//
+// The token is rendered AS IT ARRIVED. Opacity forbids deriving from a token - parsing its
+// record_id, comparing epochs, branching on either - and says nothing about printing one; a Token
+// carries engine-generated identity and no credentials, unlike the Configure message.
+func (c *Client) overflow(alreadyUnresolved int64, rec *proxyv1.DispatchRecord) error {
+	return fmt.Errorf("parallelconsumer: the proxy dispatched a record while %d were already "+
+		"unresolved - queued plus executing - past the max_concurrency of %d it declared itself, so "+
+		"this is a protocol violation and not load; the call is cancelled rather than failed with %s, "+
+		"because a gRPC client cannot set a status. The overflowing record's token, as it arrived: %v",
+		alreadyUnresolved, c.session.MaxConcurrency, codes.FailedPrecondition, rec.GetToken())
+}
+
+// settle records that one record reached a verdict and no longer counts against the ceiling.
+//
+// ONLY A VERDICT FREES A SLOT. There are two this client can reach today: a report was sent, and a
+// queued record was discarded at shutdown. Taking a record off the queue is not one of them. The
+// rest - a Released at shutdown, a Drop for a record this client still holds, and WorkerDied - are
+// gated by capabilities this client does not declare, and whoever implements them owes a settle at
+// each.
+//
+// Saturating, so that a double settle can never wrap the count into a ceiling nothing could
+// overflow, which is the defect this counter exists to remove.
+func (c *Client) settle() {
+	for {
+		unresolved := c.unresolved.Load()
+		if unresolved == 0 {
+			return
+		}
+		if c.unresolved.CompareAndSwap(unresolved, unresolved-1) {
+			return
+		}
+	}
+}
+
+// discardQueue drops every queued record and settles it.
+//
+// This session negotiated only dispatch, so a queued record may be neither run nor Released at
+// shutdown - it is discarded, its offset never commits, and the proxy returns it to scheduling on
+// its own. Nothing will ever report it, so this is the only thing that can free its slot.
+func (c *Client) discardQueue() {
+	for {
+		select {
+		case <-c.queue:
+			c.settle()
+		default:
+			return
+		}
+	}
 }
 
 // execute is one executor goroutine: take a record, run the function, report the outcome.
@@ -318,6 +390,13 @@ func (c *Client) execute(ctx context.Context, processor Processor) {
 }
 
 func (c *Client) runOne(ctx context.Context, processor Processor, rec *proxyv1.DispatchRecord) {
+	// The record stops counting against the in-flight ceiling once it has been REPORTED, which is
+	// where this deferred call runs - never when the executor picked it up. It is a defer rather
+	// than a line after the send so that an executor dying mid-record cannot skip it; a skipped
+	// decrement shrinks the ceiling permanently, one slot per crash, until this client declares a
+	// protocol violation against a proxy doing nothing wrong.
+	defer c.settle()
+
 	outcome, err := invoke(ctx, processor, inboundOf(rec))
 
 	// The token is echoed VERBATIM - the same message the proxy sent, never one this client
@@ -383,6 +462,11 @@ func (c *Client) shutdown() error {
 	c.stopHandingOut() // stop hand-out; executing records keep running
 
 	c.executors.Wait() // executing records finish and report normally
+
+	// Whatever is still queued is dropped - never run, never given a verdict this client did not
+	// reach. Discarding it here rather than leaving it to the garbage collector is what keeps the
+	// unresolved count honest, since these records will never be reported.
+	c.discardQueue()
 
 	// Half-close: no more sends. Nothing left to say - everything run has been reported.
 	if err := c.stream.CloseSend(); err != nil && !isSessionEnd(err) {

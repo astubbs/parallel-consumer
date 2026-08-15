@@ -59,8 +59,9 @@ type Options struct {
 	Topics       []string
 	TopicPattern string
 
-	// MaxConcurrency is the proxy's in-flight ceiling, and therefore this client's dispatch-queue
-	// depth. Zero means the proxy's default. There is no "unlimited".
+	// MaxConcurrency is the proxy's in-flight ceiling: the records it may have dispatched to this
+	// client and not had reported back - queued plus executing, never the queue's own depth. Zero
+	// means the proxy's default. There is no "unlimited".
 	MaxConcurrency int32
 
 	// KafkaProperties carries credentials. This library never logs it, never echoes an entry of it

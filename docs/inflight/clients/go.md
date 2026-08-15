@@ -136,6 +136,37 @@ where that was still true; the Java reference had the identical defect and answe
   each twice. The real fix is the once-guards, the single end path, and the removal of `Close`'s
   wait on a channel that no longer means what it did.
 
+## Fixed after wave one: the in-flight ceiling counted the wrong thing
+
+Finding 2 of the same review, and the same defect Rust and Ruby were fixed for in `0f0c77491`:
+**`max_concurrency` bounds UNRESOLVED records - queued plus executing - and this client bounded only
+the queued ones.** Admission was the buffered channel's free space (`select` with a `default:`), so a
+record leaving the queue for an executor freed a slot. Replay the guide's worked example - ceiling 3,
+A B C queued, two executors take A and B, D arrives - and the channel had two free slots, so D was
+admitted in silence: **the overflow this client documents at length could not fire in the case the
+documentation describes.**
+
+- **`unresolved`, an `atomic.Int64`, is the admission control now**, checked in `enqueue` against
+  `session.MaxConcurrency`. The channel keeps its capacity as the structural statement of the same
+  bound and can no longer be the thing that fires; its `default:` branch is unreachable while the
+  count is right, and answers identically.
+- **Only a verdict frees a slot.** `settle` is called by a `defer` in `runOne`, which runs after the
+  report has been sent, and for each queued record `shutdown` discards - the records that will never
+  get a report, so nothing else could ever free them. The `defer` is the point: a decrement written
+  straight-line after the send is skipped by an executor that dies mid-record, and the ceiling then
+  shrinks one slot per crash until a correct proxy is declared in violation.
+- **Read-then-add, not add-then-check**, as Rust does and for the same reason: `enqueue` has one
+  caller, the receive loop, so admission is single-producer, and a concurrent `settle` can only free
+  capacity. It also leaves the count honest in the violation message.
+- **The violation message names the unresolved count, the declared `max_concurrency` and the
+  overflowing record's token**, rendered as it arrived. The guide asks for all three and records that
+  no client had yet printed the token; this is the first that does. Printing is not a breach of
+  opacity - deriving is - and a `Token` carries no credentials.
+- **The two decrement points Go still does not have are the two it cannot**: a `Drop` for a record
+  this client holds and `WorkerDied` are gated by capabilities this client does not declare, and the
+  connection-loss discard (§3.6) arrives with the manifest reconnect. Whoever writes those waves owes
+  a `settle` at each.
+
 ## Harness divergences the guide does not list
 
 The guide names three ways the harness diverges from the lifecycle contract. There is a fourth, and
