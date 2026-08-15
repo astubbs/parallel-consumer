@@ -11,8 +11,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -24,12 +22,23 @@ import java.util.concurrent.TimeUnit;
  * unbuildable client would report a clean run for a client nobody had tested, and that is the failure most
  * likely to survive all the way to a release with ten libraries in it.
  * <p>
+ * <b>A scenario never builds anything.</b> {@link ConformanceRunnerPrebuild} builds every selected runner
+ * once, before any test class is loaded, and what happens here is only the check that the binary is where
+ * the registry said - which is the shape Kotlin and Scala have always had, extended to the languages whose
+ * toolchain the suite has to shell out to. Building on first use raced: a build command is a write into one
+ * output directory, and the suite runs at
+ * {@code junit.jupiter.execution.parallel.config.fixed.parallelism=4} inside a {@code surefire.forkCount=1C}
+ * lane, so the same {@code dotnet build} started in two JVMs at once and lost the file it was writing
+ * ({@code MSB4018 ... conformance-runner.runtimeconfig.json ... being used by another process}).
+ * Memoising per JVM cannot fix that, because the second builder is a different JVM.
+ * <p>
  * The one sanctioned way to run fewer languages is the explicit, visible
  * {@code -Dpc.conformance.language=<comma list>} - an act, recorded on the command line, rather than a
  * condition of the machine.
  *
  * @author Antony Stubbs
  * @see LanguageRunners
+ * @see ConformanceRunnerPrebuild
  */
 @Slf4j
 @Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
@@ -42,9 +51,29 @@ public record LanguageRunner(String language, Path workingDirectory, List<String
         return language;
     }
 
+    /**
+     * Checks the runner the prebuild was supposed to leave behind is really there. It does not build one:
+     * a scenario that built its own runner is a scenario racing every other scenario for that language.
+     */
     @Override
     public void ensureAvailable() {
-        ensureBuilt();
+        if (!Files.isExecutable(executable)) {
+            throw new RunnerUnavailableException("the " + language + " conformance runner is not at "
+                    + executable + ". A missing runner FAILS rather than skipping: a language nobody could "
+                    + "build is not a language that passed. " + howItIsBuilt());
+        }
+    }
+
+    /** Where the binary was supposed to come from, so a failure names the thing that did not happen. */
+    private String howItIsBuilt() {
+        if (buildCommand.isEmpty()) {
+            return "Nothing shells out for this one - the Maven reactor builds its module, so run the suite "
+                    + "through Maven: ./mvnw test -pl :parallel-consumer-proxy-conformance -am";
+        }
+        return "It is built once per run by " + ConformanceRunnerPrebuild.class.getSimpleName() + ", on this "
+                + "module's process-test-classes phase, with '" + String.join(" ", buildCommand) + "' in "
+                + workingDirectory + " - so run the suite through Maven (./mvnw test -pl "
+                + ":parallel-consumer-proxy-conformance -am) rather than straight from an IDE.";
     }
 
     /**
@@ -62,12 +91,6 @@ public record LanguageRunner(String language, Path workingDirectory, List<String
     /** How long a runner's build may take before the suite calls it stuck. Cold Go and Rust builds are slow. */
     private static final long BUILD_TIMEOUT_MINUTES = 10;
 
-    /**
-     * Built at most once per JVM per language, however many scenarios run concurrently. Memoised outside
-     * the record because a record is a value and this is a fact about the machine.
-     */
-    private static final Map<String, Object> BUILT = new ConcurrentHashMap<>();
-
     /** Signals a runner that could not be built or found - kept distinct so the negative controls can name it. */
     public static class RunnerUnavailableException extends RuntimeException {
         public RunnerUnavailableException(String message) {
@@ -80,24 +103,16 @@ public record LanguageRunner(String language, Path workingDirectory, List<String
     }
 
     /**
-     * Builds the runner if it has not been built in this JVM, then checks the binary is really there.
+     * Runs this language's build command, once, and fails naming its output.
+     * <p>
+     * <b>Package-private and single-caller on purpose</b>: {@link ConformanceRunnerPrebuild} is the only
+     * thing that may call it, before the matrix fans out. A second caller during the run - a scenario, a
+     * lifecycle hook, a lazily-memoised first use - is the race this method was moved out of the test path
+     * to remove.
      *
-     * @throws RunnerUnavailableException naming the toolchain, the command and the expected path
+     * @throws RunnerUnavailableException naming the toolchain, the command and the build's own output
      */
-    public void ensureBuilt() {
-        BUILT.computeIfAbsent(language, key -> {
-            build();
-            return Boolean.TRUE;
-        });
-        if (!Files.isExecutable(executable)) {
-            throw new RunnerUnavailableException("the " + language + " conformance runner is not at "
-                    + executable + " after running " + String.join(" ", buildCommand) + " in " + workingDirectory
-                    + ". A missing runner FAILS rather than skipping: a language nobody could build is not a "
-                    + "language that passed.");
-        }
-    }
-
-    private void build() {
+    void build() {
         if (buildCommand.isEmpty()) {
             return;
         }

@@ -48,8 +48,10 @@ class LanguagesRunInParallelTest {
                 AbsentAndBrokenRunnersFailTest.writeCrashingRunner("parallel-broken-runner",
                         BROKEN_RUNNER_DAWDLE_SECONDS));
 
-        // Built before the clock starts: a first cold build of a foreign runner is minutes of toolchain
-        // work and would swamp the overlap measurement with something that is not the thing being measured.
+        // Checked before the clock starts, and it is only a check: ConformanceRunnerPrebuild built this
+        // runner before any test class loaded, so no toolchain work can land inside the measurement. When
+        // that was a lazy build instead, this call was minutes of cold compilation - and, worse, the same
+        // compilation another JVM's test class could be running into the same directory at that moment.
         real.ensureAvailable();
 
         var realStart = new AtomicLong();
