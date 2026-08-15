@@ -42,6 +42,26 @@ grpc-swift and swift-protobuf, is extracted to the host and **runs there**.
   swift-protobuf 1.38.1, grpc-swift-2 2.4.2, grpc-swift-protobuf 2.4.1, grpc-swift-nio-transport
   2.9.1. grpc-swift-protobuf 2.4.1 requires grpc-swift-2 >= 2.3.0.
 
+## Inherited from the C++ wave, which finished first
+
+The two container languages share a build route, so the other one's findings arrive here rather than
+being rediscovered. Full detail in [`cpp.md`](cpp.md).
+
+- **`bin/build-client.sh --test` now keys off the PAIRING, not a filename.** Every extracted
+  executable `X` with a sibling `X-dynamic` is a portability claim with its own control; an artifact
+  with no sibling is skipped rather than run with no arguments, and at least one pair must exist or
+  the run fails rather than reading as a pass. `toolchain-smoke/` here is unaffected and still
+  checked - but when this wave deletes it, whatever replaces it must ship the same pair.
+- **Two guide divergences are settled and this wave inherits them.** The overflow protocol violation
+  now renders the fencing token (opacity forbids deriving, not printing) - C++ was the first client
+  to do it, so the guide's "no client does this yet" is stale. And the guide's logging table (§10.2)
+  still has no Swift row; unlike C++, Swift *does* have an ecosystem facade in `swift-log`, so the
+  row to add is almost certainly `Logger` from `swift-log` with no handler configured, not an
+  injectable closure.
+- **Do not `--output type=local` a non-scratch stage to read the generated code.** It exports that
+  stage's whole filesystem - the entire Swift image - rather than the artifacts. Build the stage as
+  an image and run it, or add a scratch stage that copies only what you want to look at.
+
 ## What will bite this wave
 
 - **The v2 package identity is `grpc-swift-2.git`, not `grpc-swift.git`.** Every other grpc-swift
