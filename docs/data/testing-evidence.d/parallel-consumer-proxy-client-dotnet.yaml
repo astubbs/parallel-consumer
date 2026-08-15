@@ -21,7 +21,16 @@ module_evidence:
       local build; that it can fail was established the same way, by deliberately introducing a
       possibly-null dereference (CS8602) and a culture-dependent string comparison (CA1310) and
       watching the build go red.
+      Beside that, and not replacing it, .NET is wired into the shared cross-language conformance
+      suite: a conformance runner at tests/ConformanceRunner implements the contract every language
+      implements, and the suite drives it through all four scenarios the harness serves - the
+      processed record, the unreported record, the failure-and-redelivery history, and a held record
+      admitting a concurrent delivery on another key - asserting engine state this client cannot
+      see. Each of the four was proven able to fail by sabotaging the runner, including the one
+      sabotage that works on the ordering scenario: a semaphore around the whole processor, which
+      deadlocks and exits 1.
     inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/tests/ConformanceRunner/Program.cs
       - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/tests/Bz.Stub.ParallelConsumer.Proxy.Client.Tests/SessionTests.cs
       - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/Directory.Build.props
     limitation: >-
@@ -29,7 +38,7 @@ module_evidence:
       liveness, reconnect, worker-death, terminal and drain duty is untested because it is
       un-negotiated rather than because it passed. Subscription is not a live variable either: the
       mock harness seeds its records regardless of the topic a client subscribes to, so a
-      wrong-topic run still passes and cannot be used as a control. The client-side dispatch queue
-      is exercised only at a depth of one record - FIFO hand-out across several executors, and the
-      overflow protocol violation, have no test because the harness dispatches no wave large enough
-      to reach them.
+      wrong-topic run still passes and cannot be used as a control. This module's own tests exercise the queue at a
+      depth of one record; the shared conformance suite reaches three with one held, but FIFO
+      hand-out with FEWER executors than records and the overflow protocol violation still have no
+      test, because every conformance scenario sizes the ceiling to its own shape.

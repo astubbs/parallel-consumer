@@ -1,0 +1,48 @@
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    .NET's half of the shared cross-language conformance suite (astubbs#242, confluentinc#154): a
+    console application the Java suite spawns, driving this module's client library exactly as an
+    application would.
+
+    UNDER tests/ RATHER THAN src/ because it is not part of the shipped surface - it is a driver for
+    somebody else's test suite. It is in the solution anyway, so an ordinary `dotnet build` (which is
+    what the CI row and the Maven wrapper run) keeps it compiling: a runner that stopped building
+    would otherwise only be discovered by the Java module, in another job.
+
+    THE ASSEMBLY NAME IS THE REGISTRY'S PATH. The SDK emits an apphost beside the assembly, named
+    after AssemblyName, and that executable is what the suite's registry points at - so this name and
+    the entry in LanguageRunners.java are one fact in two places, and renaming it here breaks the
+    suite's build check rather than something subtle.
+
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>conformance-runner</AssemblyName>
+    <RootNamespace>Bz.Stub.ParallelConsumer.Proxy.Client.Conformance</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Nothing consumes this as a library, so XML docs would be documentation for nobody. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!--
+        RUN ON WHATEVER RUNTIME IS PRESENT, and the reason is not convenience. `dotnet test` applies
+        roll-forward itself, so the test project runs on this repo's development boxes - which carry
+        .NET 10 from mise - while a DIRECTLY LAUNCHED net8.0 app on the same box dies with "You must
+        install or update .NET". The conformance runner is the only artefact here that is launched
+        directly, by the Java suite, so it is the only one that meets that difference. Without this,
+        the .NET row of a shared suite would be red on every machine whose SDK is newer than the
+        target - and a language that cannot run is indistinguishable from a language that failed.
+        The target framework stays net8.0: what the client SUPPORTS is a separate decision from what
+        this driver happens to be executed on.
+    -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Bz.Stub.ParallelConsumer.Proxy.Client/Bz.Stub.ParallelConsumer.Proxy.Client.csproj" />
+  </ItemGroup>
+
+</Project>

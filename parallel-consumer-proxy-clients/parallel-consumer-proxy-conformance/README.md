@@ -151,6 +151,16 @@ flight by the process exit. The suite then sees an unadvanced offset either way,
 passes for a broken client. Measured, not reasoned about: reporting success from this behaviour left the suite
 **green** until the hold existed. Any new language must implement it.
 
+**"Without a clean close" is about the RECORD, not about the shutdown**, and the five-language wave is what
+forced the distinction. Go abandons its session because its workers are goroutines that die with the process;
+Python's workers are separate *processes*, and a runner that abandoned them left a blocked interpreter behind
+for every negative control it ran - holding the stdout the suite was still reading, so the transcript came back
+empty from a runner that had printed perfectly well. Python therefore shuts its session down instead, with a
+drain short enough that the held record is never reported. **What the contract requires is that no outcome for
+that record ever reaches the engine, and that the session stays alive for the hold first.** How a language then
+disposes of its own workers is its own business - and one that leaks a worker has failed a rule of its own, not
+this one.
+
 ## 4. How a scenario prescribes behaviour
 
 A scenario is one Java value with three halves, in `ConformanceScenarios.java`:

@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The .NET conformance runner, as one executable path.
+#
+# WHY NOT THE APPHOST. `dotnet build` does emit an executable beside the assembly, and pointing the
+# suite's registry at it is the obvious thing - but that apphost finds the runtime by looking in the
+# machine's install locations, so on a box where the SDK arrives through a version manager (mise,
+# asdf) it dies with "You must install .NET to run this application" while `dotnet --version`
+# answers perfectly well two directories away. `dotnet <assembly>.dll` resolves the runtime through
+# the same `dotnet` the build used, so this works wherever the build did.
+#
+# exec, not a subshell: the suite reaps this process, and a shell left in the middle would hold the
+# runner's stdout open after it exited.
+
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+exec dotnet "$here/../tests/ConformanceRunner/bin/Release/net8.0/conformance-runner.dll" "$@"

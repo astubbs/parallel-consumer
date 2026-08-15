@@ -67,15 +67,16 @@ public final class LanguageRunners {
 
     /**
      * .NET: a console project in the module's own solution, so an ordinary {@code dotnet build} keeps it
-     * compiling. The apphost the SDK emits beside the assembly is the executable.
+     * compiling. The wrapper launches the assembly through {@code dotnet} rather than through the apphost
+     * the SDK emits beside it - the apphost finds the runtime in the machine's install locations and fails
+     * on a box whose SDK came from a version manager, which its own header records.
      */
     public static LanguageRunner dotnet() {
         var module = module("dotnet");
         return new LanguageRunner("dotnet", module,
                 List.of("dotnet", "build", "tests/ConformanceRunner/ConformanceRunner.csproj",
                         "--configuration", "Release", "--nologo"),
-                module.resolve("tests").resolve("ConformanceRunner").resolve("bin").resolve("Release")
-                        .resolve("net8.0").resolve("conformance-runner"));
+                module.resolve("scripts").resolve("conformance-runner"));
     }
 
     /** Every language with a runner today, whether or not this run selected it. */

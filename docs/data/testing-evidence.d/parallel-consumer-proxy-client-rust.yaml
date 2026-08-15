@@ -21,13 +21,24 @@ module_evidence:
       assertion that the end-to-end test can fail was established by a negative control - returning
       Err from the user function instead of succeeding produced two redeliveries with the attempt
       count incremented and the failure reason verbatim, and the test went red.
+      Beside that, and not replacing it, Rust is wired into the shared cross-language conformance
+      suite: a conformance runner at src/bin/conformance-runner.rs implements the contract every
+      language implements, and the suite drives it through all four scenarios the harness serves -
+      the processed record, the unreported record, the failure-and-redelivery history, and a held
+      record admitting a concurrent delivery on another key - asserting engine state this crate
+      cannot see. It runs on a CURRENT-THREAD tokio runtime, which makes the ordering scenario a
+      real test of this client's stated hazard: a processor that blocked instead of awaiting would
+      deadlock rather than being rescued by a spare core. Each of the four was proven able to fail
+      by sabotaging the runner.
     inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/src/bin/conformance-runner.rs
       - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/tests/session.rs
     limitation: >-
       One scenario of eleven, and the harness negotiates only the dispatch capability, so every
       liveness, reconnect, worker-death, terminal and drain duty is untested because it is
       un-negotiated rather than because it passed. Subscription is not a live variable either: the
       mock harness seeds its records regardless of the topic a client subscribes to, so a
-      wrong-topic run still passes and cannot be used as a control. Nothing exercises more than one
-      record, so FIFO hand-out across several executors and out-of-order reporting are covered only
-      by unit tests over the queue itself.
+      wrong-topic run still passes and cannot be used as a control. The crate's own tests exercise one record; three
+      records with a held one arrive only through the shared conformance suite, and FIFO hand-out
+      with FEWER executors than records is still covered only by unit tests over the queue itself,
+      because every conformance scenario sizes the ceiling to its own shape.

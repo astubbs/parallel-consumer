@@ -1,0 +1,284 @@
+#!/usr/bin/env ruby
+# Copyright (C) 2026 Antony Stubbs and contributors
+# frozen_string_literal: true
+
+# Ruby's half of the shared cross-language conformance suite (astubbs#242, confluentinc#154).
+#
+# IT ASSERTS NOTHING, DELIBERATELY. The suite that knows what correct looks like - offset frontiers,
+# ordering, redelivery, attempt counts - is the Java module
+# parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance, and it keeps owning that
+# knowledge for every language. This program's whole job is to DO WHAT THE SCENARIO SAYS and then
+# exit; if it were free to decide what "correct" means, ten languages would each decide it slightly
+# differently and the agreement between them would prove nothing.
+#
+# Its contract - flags, exit codes, the stdout line, the behaviour tokens - is documented once, in
+# that module's README.md, and is identical in every language.
+#
+# THIS DOES NOT REPLACE THE GEM'S OWN SPECS. The shared suite proves every client behaves
+# identically on the protocol; spec/ catches what is invisible from outside the process - a
+# SizedQueue that blocks the transport thread, a thread that outlives its session. Both layers are
+# load-bearing.
+#
+# IT IS THE EXECUTABLE THE REGISTRY NAMES, rather than a script an interpreter is pointed at: the
+# suite checks that a runner is an executable file, and `bundler/setup` below is what puts the
+# pinned gems on the load path without a `bundle exec` wrapper in between.
+
+require "bundler/setup"
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
+require "parallel_consumer"
+
+# Exit statuses ARE the verdict channel. There is no results file and no report message: a scenario
+# passed if this process exited 0 and the Java suite's own assertions about engine state held.
+EXIT_OK = 0
+EXIT_BEHAVIOUR_FAILED = 1
+EXIT_USAGE = 2
+
+BEHAVIOURS = %w[succeed report-nothing fail-then-succeed hold-first-until-second].freeze
+
+# The exact text a fail-then-succeed run reports. The Java suite asserts the redelivery carries it
+# back VERBATIM, so it is a fixed literal of the contract in every language, never composed here.
+PRESCRIBED_FAILURE_REASON = "conformance-prescribed-failure"
+
+# Fixed session tunables, contract rather than this runner's judgement: they exist only so scenarios
+# converge at unit-test speed against the engine's production defaults (a 5s commit interval, a 1s
+# retry delay). Every language sets the same two values, and this client's are seconds.
+COMMIT_INTERVAL = 0.1
+RETRY_DELAY = 0.05
+
+# How long a report-nothing run keeps its session OPEN after its last observation.
+#
+# IT IS WHAT MAKES THE NEGATIVE CONTROL A CONTROL. Without it the runner exits the instant the
+# record arrives, and a sabotaged runner that DID report success has its report killed in flight by
+# the process exit - so the suite sees an unadvanced offset either way and the scenario passes for a
+# broken client. Measured in the Go wave, not reasoned about: reporting success from this behaviour
+# left the suite green until the hold existed.
+REPORT_NOTHING_HOLD = 3
+
+# Counts deliveries and outcomes, and prints the observation line. It holds no per-record state -
+# only counts - because the client library holds none either, and this runner must not become the
+# place where a client's missing bookkeeping is quietly supplied.
+class Tracker
+  attr_reader :observed, :completed
+
+  def initialize(expected)
+    @expected = expected
+    @observed = 0
+    @completed = 0
+    @mutex = Mutex.new
+    @progress = ConditionVariable.new
+    @second_arrived = Thread::Queue.new
+  end
+
+  # Prints the delivery and returns its 1-based ordinal in arrival order.
+  def observe(record)
+    ordinal = nil
+    @mutex.synchronize do
+      @observed += 1
+      ordinal = @observed
+      # Printed at the moment of delivery, before the behaviour acts on it, and under the same lock
+      # as the ordinal so the transcript's ORDER is the arrival order: executors are threads here
+      # and two of them share one stdout.
+      key = record.key.nil? ? "" : record.key.dup.force_encoding(Encoding::UTF_8)
+      $stdout.puts("dispatch key=#{key} offset=#{record.offset} attempt=#{record.attempt} " \
+                   "reason=#{record.last_failure_reason || ''}")
+      $stdout.flush
+      @progress.broadcast
+    end
+    @second_arrived.close if ordinal >= 2
+    ordinal
+  end
+
+  def complete
+    @mutex.synchronize do
+      @completed += 1
+      @progress.broadcast
+    end
+  end
+
+  # Blocks until a second delivery has been observed - the instrument the ordering scenario is.
+  # Closing the queue is the wake-up: every waiter returns nil rather than one of them taking a
+  # token the others then wait forever for.
+  def second_arrived?(timeout)
+    @second_arrived.pop(timeout: timeout)
+    @second_arrived.closed?
+  end
+
+  # Whether the prescription finished inside the budget.
+  def await_prescribed_behaviour(at_observation, budget)
+    deadline = monotonic + budget
+    @mutex.synchronize do
+      loop do
+        return true if (at_observation ? @observed : @completed) >= @expected
+
+        remaining = deadline - monotonic
+        return false if remaining <= 0
+
+        @progress.wait(@mutex, remaining)
+      end
+    end
+  end
+
+  private
+
+  def monotonic
+    Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  end
+end
+
+REQUIRED_FLAGS = %w[--scenario --behaviour --sidecar --expect-dispatches --timeout-seconds].freeze
+
+# The five flags, spelled identically in every language - including the British --behaviour.
+def parse(argv)
+  values = collect(argv)
+  return values if values.is_a?(Integer)
+
+  problem = complaint_about(values)
+  return usage(problem) if problem
+
+  { scenario: values["--scenario"], behaviour: values["--behaviour"], sidecar: values["--sidecar"],
+    expect: Integer(values["--expect-dispatches"]), budget: Integer(values["--timeout-seconds"]) }
+end
+
+def collect(argv)
+  values = {}
+  argv.each_slice(2) do |flag, value|
+    return usage("expected --flag value pairs, got #{flag}") if value.nil? || !flag.start_with?("--")
+
+    values[flag] = value
+  end
+  values
+end
+
+# The first thing wrong with what was asked for, or nil.
+def complaint_about(values)
+  missing = REQUIRED_FLAGS.find { |flag| values[flag].nil? || values[flag].empty? }
+  return "#{missing} is required" if missing
+  return "unknown behaviour #{values['--behaviour'].inspect}" unless BEHAVIOURS.include?(values["--behaviour"])
+  return "--sidecar must be absolute, got #{values['--sidecar'].inspect}" unless values["--sidecar"].start_with?("/")
+
+  positive_or_complaint(values, "--expect-dispatches") || positive_or_complaint(values, "--timeout-seconds")
+end
+
+def positive_or_complaint(values, flag)
+  number = Integer(values[flag], exception: false)
+  "#{flag} must be at least 1" if number.nil? || number < 1
+end
+
+def usage(problem)
+  warn("conformance-runner: #{problem}")
+  EXIT_USAGE
+end
+
+def processor_for(behaviour, tracker, budget)
+  lambda do |record|
+    ordinal = tracker.observe(record)
+
+    case behaviour
+    when "succeed" then tracker.complete
+    when "report-nothing"
+      # Never report. Blocking here is how a Ruby worker says "this record's function has not
+      # returned"; the process exits with the record still in flight.
+      sleep
+    when "fail-then-succeed" then fail_then_succeed(tracker, record)
+    when "hold-first-until-second" then hold_first_until_second(tracker, ordinal, budget)
+    else
+      # unreachable: parse rejects an unknown behaviour before the session opens
+      raise "conformance: unknown behaviour #{behaviour.inspect}"
+    end
+    nil
+  end
+end
+
+def fail_then_succeed(tracker, record)
+  tracker.complete
+  # A raise IS Ruby's failure idiom, and the message travels as the reason verbatim.
+  raise PRESCRIBED_FAILURE_REASON if record.attempt == 1
+end
+
+# Hold the first record until a SECOND is dispatched. Whether one arrives at all, and which key it
+# carries, is the whole of what the scenario is asking - and it is the Java suite that decides what
+# the answer means.
+def hold_first_until_second(tracker, ordinal, budget)
+  if ordinal == 1 && !tracker.second_arrived?(budget)
+    raise "conformance: no second dispatch arrived while the first was held"
+  end
+
+  tracker.complete
+end
+
+def options_for(arguments)
+  ParallelConsumer::ClientOptions.new(
+    # THE SCENARIO NAME IS ALSO THE TOPIC NAME.
+    topics: [arguments[:scenario]],
+    # Enough executors for every dispatch the scenario prescribes, so a scenario that holds a record
+    # cannot deadlock on an executor count smaller than its own shape.
+    max_concurrency: arguments[:expect],
+    commit_interval: COMMIT_INTERVAL,
+    default_message_retry_delay: RETRY_DELAY,
+    # The mock lane builds mock Kafka clients and reads no properties. Real credentials never belong
+    # in a conformance test.
+    kafka_properties: {},
+    instance_tag: "conformance-runner-ruby"
+  )
+end
+
+def run(arguments)
+  tracker = Tracker.new(arguments[:expect])
+
+  begin
+    client = ParallelConsumer::Client.open(options_for(arguments), sidecar: arguments[:sidecar])
+  rescue StandardError => e
+    warn("conformance-runner: opening the session: #{e.class}: #{e.message}")
+    return EXIT_BEHAVIOUR_FAILED
+  end
+
+  client.poll(&processor_for(arguments[:behaviour], tracker, arguments[:budget]))
+
+  # report-nothing completes at OBSERVATION, because by prescription its records are never reported
+  # and so can never complete. Every other behaviour completes when the last record it was handed
+  # has had its outcome decided.
+  report_nothing = arguments[:behaviour] == "report-nothing"
+  unless tracker.await_prescribed_behaviour(report_nothing, arguments[:budget])
+    report_incomplete(arguments, tracker)
+    close_quietly(client)
+    return EXIT_BEHAVIOUR_FAILED
+  end
+
+  if report_nothing
+    # Hold the session open, reporting nothing, so the suite is watching a LIVE client rather than
+    # the wreckage of one - see REPORT_NOTHING_HOLD.
+    sleep(REPORT_NOTHING_HOLD)
+    # PRESCRIBED: the record is never reported and the session is abandoned rather than drained - a
+    # worker that vanished mid-record is exactly what this scenario models. Exiting closes the
+    # sidecar's lifecycle pipe, which reaps it, so nothing is leaked by not closing. Ruby's
+    # executors are threads, so the exit takes the held one with it.
+    exit!(EXIT_OK)
+  end
+
+  begin
+    client.close
+  rescue StandardError => e
+    warn("conformance-runner: closing the session: #{e.class}: #{e.message}")
+    return EXIT_BEHAVIOUR_FAILED
+  end
+  EXIT_OK
+end
+
+def report_incomplete(arguments, tracker)
+  warn("conformance-runner: scenario #{arguments[:scenario].inspect} behaviour " \
+       "#{arguments[:behaviour].inspect} did not complete within #{arguments[:budget]}s - " \
+       "observed #{tracker.observed} of #{arguments[:expect]}, completed #{tracker.completed}")
+end
+
+# Shuts down when the verdict is already decided: a close error must not rewrite it.
+def close_quietly(client)
+  client.close
+rescue StandardError => e
+  warn("conformance-runner: while shutting down: #{e.class}: #{e.message}")
+end
+
+arguments = parse(ARGV)
+exit(arguments) if arguments.is_a?(Integer)
+exit(run(arguments))

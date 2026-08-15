@@ -141,10 +141,25 @@ lifted. Two facts the row's owner may want:
   those three jars through the single `parallel-consumer-proxy-client-java-harness` dependency.
 - The detekt version and hash above match the row exactly; a bump has to move both copies.
 
-## Not done, and owed to whoever picks the module up
+## No conformance runner yet, and that is a decision rather than an oversight
 
-- `src/docs/development/upstream-map.yaml` has no entry for this work - outside the wave's file
-  scope.
+The shared cross-language suite now drives six bindings - the engine itself, Go, Python, TypeScript,
+Rust, Ruby and .NET - and **Kotlin is not one of them**. The wave that wired the five foreign runners
+scoped itself to the non-JVM clients, so this was left rather than missed: the CI row already reports
+the gap in its job summary instead of failing, and Kotlin's own end-to-end test still covers the one
+scenario it always did.
+
+Whoever picks it up should find it cheap, and cheaper than the four scenarios suggest, because
+**Kotlin wraps `java-grpc`**: the runner is a `main()` over the same client the JVM bindings already
+use, not a fresh session implementation. Two things are worth knowing before starting:
+
+- **The registry wants an executable path, not a classpath.** Every interpreted language solved this
+  with a two-line `scripts/conformance-runner` wrapper; a JVM client needs the same wrapper plus a
+  resolved classpath, which is what `dependency:build-classpath` already writes for the harness lane
+  in this module's pom. Model it on that rather than inventing a shaded jar.
+- **The same argument applies to Scala, `java-direct` and `java-grpc`**, which are also real clients
+  with no runner. Doing one of them well makes the other three mechanical - and `java-direct` is the
+  interesting one, because it is the only client whose "wire" is a function call.
 - The demo, its container, and the `PLACE SERDE SETUP IN YOUR LANGUAGE HERE` extension point exist
   only as a comment in the README's example; wave (g) owns the real one.
 - The sidecar spawn (`Sidecar.kt`) is still this module's own. It belongs in the Java lifecycle unit,

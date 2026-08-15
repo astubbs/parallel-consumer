@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The Python conformance runner, as one executable path.
+#
+# The shared suite's registry checks that a runner is an EXECUTABLE FILE, because a registry entry
+# free to name an interpreter plus a script is a registry entry free to name the wrong interpreter -
+# and the venv this client installs itself into is the only one that has grpcio. So the entry names
+# this, and this names the venv's python. `make build` (the module's own recipe, which the CI row
+# and a developer both run) is what puts that interpreter there.
+#
+# exec, not a subshell: the suite reaps this process, and a shell left in the middle would hold the
+# runner's stdout open after it exited.
+
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+exec "$here/../.venv/bin/python" "$here/conformance_runner.py" "$@"
