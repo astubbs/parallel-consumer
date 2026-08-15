@@ -19,6 +19,15 @@ CLAUDE.md
 !/CLAUDE.md
 !/bin/CLAUDE.md
 !/docs/inflight/CLAUDE.md
+#
+# The test-tree bridges are the one family that is SCOPED rather than enumerated, and the reasoning
+# above is why. There is one per module test tree, they are generated from a single shape, and they
+# all import the same file - so enumeration would mean a new module's bridge is silently dropped,
+# which is precisely the "everything looked wired up locally" failure this section exists to prevent,
+# and it would arrive exactly when someone is adding a module rather than thinking about harnesses.
+# This pattern can only ever match `<module>/src/test/CLAUDE.md`, so it is not the blanket negation
+# the note above rejects; anything else stays ignored by default.
+!**/src/test/CLAUDE.md
 
 # Local per-worktree ownership markers (see AGENTS.md "Worktree ownership")
 .worktree-owner
