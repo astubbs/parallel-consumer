@@ -1,0 +1,18 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the cross-language conformance work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-conformance-suite
+    artifact: parallel-consumer-proxy-conformance
+    coverage: >-
+      The shared cross-language conformance suite itself, and its own negative controls. It drives a language's conformance runner - a small program with an identical command-line contract in every language - against an engine hosted in the suite's own JVM over mock Kafka clients, with no broker and no Docker, and asserts engine-side truth the client cannot see. Four scenarios are wired and pass for Go: a processed record advances the committed offset; an unreported record holds the commit back; a failed record is redelivered with attempt 2 and the previous reason verbatim; and a held record admits a concurrent dispatch on another key while fencing its own. Every one was proven able to fail, by making the runner do the wrong thing and watching the suite name it. The suite's own machinery carries three controls: a runner that is absent fails rather than skipping, a runner that crashes fails with its exit status and output, and two languages driven at once are judged separately with their overlap measured rather than assumed.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/README.md
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/ConformanceScenarios.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/cmd/conformance-runner/main.go
+    limitation: >-
+      ONE LANGUAGE OF ELEVEN. Only Go has a runner today, so the suite proves the mechanism rather than agreement between clients - and agreement is the whole claim it exists to support. Four scenarios of the eleven named in the client-authoring guide, because the harness serves only those four: the liveness lease, the manifest reconnect, worker death, terminal outcomes and the shutdown drain are un-negotiated rather than passing. The mock lane only: committed offsets are read from a mock consumer's commit history, not from a broker through the Admin API. And the suite is deliberately bounded to the client/sidecar contract - it does not re-test engine internals, which are covered far more cheaply from inside the JVM.

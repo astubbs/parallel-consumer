@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the cross-language conformance work ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-conformance
+    deferred:
+      reason: >-
+        A test module, not a product one: it holds the scenarios and assertions that every language's client is driven through, has no main sources, and publishes no artifact. There is no maturity, API or support claim to make about a suite - what it proves belongs to the clients it drives, and is recorded on their rows.
+      lifted_by: >-
+        Nothing is expected to lift it. If the suite ever ships as something a client author outside this repository consumes, that change records its first real row here.

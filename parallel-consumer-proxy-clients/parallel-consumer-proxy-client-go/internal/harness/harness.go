@@ -102,13 +102,33 @@ func javaBinary() (string, error) {
 	return filepath.Abs(found)
 }
 
-// classpath assembles the proxy module's test classpath: its test jar (which carries the harness),
-// its main jar, and its test-scope dependencies.
+// sidecarClasspathFile is written by the go-e2e-harness profile in this module's pom (see
+// pom.xml, the `sidecar-classpath` execution). It is the WHOLE harness classpath - the engine, the
+// proxy's test jar carrying TestModeMain, core's test jar and every test-scope dependency - already
+// resolved by Maven, which is the only thing that reliably knows where they are.
+const sidecarClasspathFile = "sidecar-classpath.txt"
+
+// classpath assembles the harness classpath.
 //
-// The dependency list comes from Maven and is cached beside the build output, because resolving it
-// costs seconds and the answer only changes when the proxy module's poms do. There is no committed
-// classpath file: it is machine-specific, being a list of absolute paths into a local repository.
+// TWO ROUTES, IN THIS ORDER, AND THE FIRST IS THE ONE CI TAKES. Under
+// `./mvnw test -pl :parallel-consumer-proxy-client-go -am -Dpc.foreignClients` the profile has
+// already declared the engine as a test dependency - which is what pulls it into the reactor ahead
+// of this module - and written the resolved classpath to target/sidecar-classpath.txt. Reading that
+// is exact, needs no jars on disk, and works before the `package` phase, where reactor artifacts are
+// output DIRECTORIES rather than jars.
+//
+// The second route is the standalone developer running `go test ./...` by hand after building the
+// proxy: hunt the jars and resolve the dependency list once, cached beside the build output because
+// resolving costs seconds and the answer only changes when the proxy module's poms do. There is no
+// committed classpath file either way: it is machine-specific, being absolute paths into a local
+// repository.
 func classpath(root string) (string, error) {
+	goTarget := filepath.Join(root, "parallel-consumer-proxy-clients",
+		"parallel-consumer-proxy-client-go", "target")
+	if fromMaven, err := os.ReadFile(filepath.Join(goTarget, sidecarClasspathFile)); err == nil {
+		return strings.TrimSpace(string(fromMaven)), nil
+	}
+
 	proxyTarget := filepath.Join(root, "parallel-consumer-proxy", "target")
 	testsJar, err := singleJar(proxyTarget, "-tests.jar")
 	if err != nil {
@@ -119,7 +139,7 @@ func classpath(root string) (string, error) {
 		return "", err
 	}
 
-	cacheDir := filepath.Join(root, "parallel-consumer-proxy-clients", "parallel-consumer-proxy-client-go", "target")
+	cacheDir := goTarget
 	cache := filepath.Join(cacheDir, "proxy-test-classpath.txt")
 	deps, err := os.ReadFile(cache)
 	if err != nil {

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Cross-Language Conformance</name>
+    <artifactId>parallel-consumer-proxy-conformance</artifactId>
+
+    <!--
+        THE SHARED CONFORMANCE SUITE: one Java test module that drives every language's client
+        through the same scenarios, in parallel, and asserts the same things about each
+        (astubbs#242, confluentinc#154). The runner contract every language implements is in this
+        module's README.md.
+
+        NO MAIN SOURCES, DELIBERATELY. Everything here is a test: the scenarios, the assertions and
+        the process plumbing that spawns a foreign runner. Nothing downstream may depend on it,
+        which is what keeps the engine edge below contained.
+
+        IT DEPENDS ON THE ENGINE, AND THAT IS WHY IT IS A LEAF. A test-scope dependency is not
+        transitive on the classpath but IS an edge in the Maven reactor, so `-pl <x> -am` on
+        anything that depended on this module would drag parallel-consumer-proxy into an ordinary
+        build - and bin/build.sh opens with `clean`, so that build would delete the very sidecar
+        jars other languages' tests spawn. The JVM clients' equivalent leaf is
+        parallel-consumer-proxy-client-java-harness, which records the same hazard from its side.
+        The measurement, not an assertion:
+
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        must not print parallel-consumer-proxy. Rerun it before adding any dependency here.
+    -->
+
+    <properties>
+        <!-- The engine and its gRPC transport both require it; see parallel-consumer-proxy's pom. -->
+        <release.target>17</release.target>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <!--
+                The matrix is one parameterised method over (language x scenario) - a method per
+                language is how ten clients end up with ten slightly different definitions of the
+                same scenario. Declared here because the root pom's global test dependencies stop
+                at junit-jupiter-api/engine; core, reactor and mutiny each declare this the same way.
+            -->
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            The engine and the fixture that drives it from mock Kafka clients: ProxyHarness (the
+            in-process engine lane, which binds a real gRPC server on an ephemeral loopback port)
+            and the HarnessScenario names that are this suite's shared vocabulary.
+
+            Test scope, not compile: nothing here is published, and compile scope would make the
+            engine a transitive dependency of a module that must remain a leaf.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- LongPollingMockConsumer and friends, which the harness stands on -->
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!--
+                Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+                commons-lang3, and test scope is not transitive, so relying on core to supply it
+                would break the moment core stopped using it.
+            -->
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

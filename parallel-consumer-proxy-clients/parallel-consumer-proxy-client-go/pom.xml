@@ -22,14 +22,16 @@
         for why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this
         skeleton and runs no Go toolchain at all.
 
-        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND MAVEN CANNOT ORDER THAT FOR US. `go test`
-        here spawns the conformance harness (TestModeMain, in parallel-consumer-proxy's test jar),
-        but this module deliberately has NO Maven dependency on the proxy - no client depends on
-        the engine - so `-am` does not pull it into the reactor ahead of us. Build it first:
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, and the go-e2e-harness profile below is what
+        gets it. `go test` here spawns the conformance harness (TestModeMain, in
+        parallel-consumer-proxy's test jar), and with no Maven dependency at all `-am` did not pull
+        the proxy into the reactor - so the CI row's own command,
+        `./mvnw test -pl :parallel-consumer-proxy-client-go -am -Dpc.foreignClients`, ran the Go
+        test against an unbuilt `parallel-consumer-proxy/target` and failed there. The profile
+        declares that dependency in the opt-in lane only, exactly as the Python and TypeScript
+        modules do, and writes the resolved classpath where the test reads it.
 
-            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
-
-        The Go test fails with that command in its message rather than skipping, because a test
+        The Go test still fails rather than skipping when the harness is absent, because a test
         that quietly does not run is not a passing test. Recorded as a wave finding in
         docs/inflight/clients/go.md (astubbs#242).
     -->
@@ -40,6 +42,85 @@
         <pc.foreign.test.executable>go</pc.foreign.test.executable>
         <pc.foreign.test.args>test ./...</pc.foreign.test.args>
     </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            The Go suite's end-to-end test spawns the real test-mode sidecar over the real wire -
+            which needs the proxy module's test jar (TestModeMain and the harness), its main jar,
+            and core's test jar underneath. Declaring them here is what makes the CI matrix row's
+            exact command build those modules first and resolve them; build-classpath below writes
+            the resulting classpath to target/sidecar-classpath.txt, where internal/harness reads
+            it.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all, so
+            an ordinary scoped build still runs no Go toolchain and never reaches the engine. The
+            edge exists only in the opt-in lane that runs the foreign test suite. The Go client
+            itself obtains the protocol the way every non-JVM client does, by generating from the
+            .proto by path, with no Maven dependency. Modelled on the python-e2e-harness profile.
+
+            NOT NEEDED BY THE CONFORMANCE RUNNER. cmd/conformance-runner is driven by the shared
+            suite (parallel-consumer-proxy-conformance), which hosts the engine in its OWN JVM and
+            hands the runner a sidecar to spawn - so that lane needs nothing from here.
+        -->
+        <profile>
+            <id>go-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above are resolvable, before the test
+                                     phase where the Go suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>

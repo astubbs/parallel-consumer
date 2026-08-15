@@ -43,6 +43,14 @@
         <module>parallel-consumer-proxy-client-ruby</module>
         <module>parallel-consumer-proxy-client-cpp</module>
         <module>parallel-consumer-proxy-client-scala</module>
+        <!--
+            NOT A CLIENT: the shared cross-language conformance suite, which drives every client
+            module's runner through one scenario set and asserts the same things about each
+            (astubbs#242). It is a leaf - nothing depends on it - which is what lets it depend on
+            the engine's test jar without dragging the engine into any client's ordinary build. Its
+            own pom carries that reasoning and the reactor measurement that checks it.
+        -->
+        <module>parallel-consumer-proxy-conformance</module>
     </modules>
 
     <!--
