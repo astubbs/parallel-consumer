@@ -62,29 +62,51 @@ task parallelism is bounded by partitions too, which is a third reason to over-p
 metadata, longer and more disruptive rebalances, producer-side batching memory — and, on managed
 platforms, partitions are a directly billed unit.
 
-**Three limits, all of which must survive contact with a customer:**
+**All three demands are addressable, and two of them by work already on the fork.** Written down
+2026-08-15 as a correction: an earlier draft here recorded "does not fix Streams" and "only helps
+Connect if the connector is replaced" as permanent limits. Both describe *stock* Streams and Connect,
+and both are contradicted by open work:
+
+- **Kafka Streams — astubbs/parallel-consumer#271** (`feats/ks-on-pc-spike`, tracking astubbs#255)
+  replaces the point where `StreamTask` selects the next record with PC's `WorkManager`, so a
+  topology gets per-key concurrency *inside* a partition. Stock Streams serialises there with no
+  semantic justification when records carry different keys. Its own control arm is the thing to quote:
+  **57x on the quickest record, 8x median, and 0.69x when every record shares one key** — the last
+  figure being what makes the first believable.
+- **Connect sinks — astubbs/parallel-consumer#269** (`feats/connect-on-pc-spike`, tracking astubbs#240,
+  upstream confluentinc#119) patches `WorkerSinkTask` rather than reimplementing it, precisely so
+  single-message transforms, dead-letter queues, `ConfigProvider` and plugin isolation are inherited
+  instead of deferred. **The connector is not replaced**, which is what the earlier draft got wrong.
+  Its own review killed the reimplementation direction for the reason that matters here: one
+  `SinkTask` per partition caps concurrency at the partition count — the same ceiling being argued
+  against.
+
+So the honest shape is that partition count is set by the largest of *broker storage and replication
+spread*, *Streams task parallelism*, *Connect sink task parallelism* and *consumer concurrency* — and
+PC has an answer to the last three, leaving only the first, which is the number a broker actually
+needs. **That is the mechanism behind 5000→50**, and it is a roadmap claim rather than a shipped one.
+
+**What is genuinely still limiting, stated so the claim does not outrun the evidence:**
 
 - **Partitions cannot be reduced in place.** Kafka increases only. Deflating an existing topic means
-  a new topic, a migration, and a changed key→partition mapping — a project with a payback
-  calculation, not a config change. **The durable, easy win is not inflating the next one**; a
-  greenfield topic gets sized to the broker count instead of to the desired concurrency.
-- **It does not fix Kafka Streams' own parallelism.** Streams task parallelism *is* partition-bound.
-  If Streams throughput is the reason for 100 partitions, this changes nothing. The win is the common
-  case where the source was over-partitioned for *consumers* and Streams merely inherited the number —
-  there the saving multiplies across every internal topic, which is where the dramatic figures come
-  from.
-- **Connect is only helped if the connector is replaced** by a Parallel Consumer-based sink. That is a
-  real option and a real deflation, but it is a rewrite, not a setting.
+  a new topic, a migration, and a changed key→partition mapping. **The durable, easy win is not
+  inflating the next one** — each new system is sized to the broker count rather than to the desired
+  concurrency, so the saving arrives as a falling budget over time rather than as a migration project.
+- **The evidence behind two of the three is thin.** astubbs#271 is an alpha proven on one partition,
+  one task, one instance, with windowing, joins, suppression, exactly-once and stream-time punctuation
+  out of scope; astubbs#269 is U1 of a feasibility spike — a shadowing proof that is deliberately
+  inert. The architecture is proven; the product is not. Do not publish the collapsed-partition-count
+  number as a present-tense capability.
 
 **Fewer clients, less broker load, fewer moving parts** is the same argument from the operational
-side, and it has a specific mechanism rather than being a vibe: higher per-instance throughput means
-**fewer application instances**, which means fewer consumer clients — fewer connections, fetch
-requests, heartbeats and metadata refreshes, fewer group members, and therefore faster and rarer
-rebalances. It holds in the sidecar shape and compounds in the shared-server shape, where many
-workers share one engine's connections. The "fewer moving parts" half is about **variety, not count**:
-one Kafka client implementation instead of librdkafka plus a per-language wrapper zoo, each with its
-own version skew and configuration surface. Be honest that the sidecar itself is a new moving part —
-the trade is one well-understood process against a fleet of heterogeneous clients.
+side and compounds with the above, because the two effects multiply rather than merely coexist:
+higher per-instance throughput means **fewer application instances**, therefore fewer consumer clients
+— fewer connections, fetch requests, heartbeats and metadata refreshes, fewer group members, and so
+faster and rarer rebalances. Fewer partitions then means less broker CPU, memory, file-handle and
+replication-fan-out work per byte carried. **Both sides of the broker's ledger fall at once**: fewer
+things connecting to it, and less structure inside it for them to connect to. The sidecar shape holds
+this; the shared-server shape compounds it further, since many workers then share one engine's
+connections rather than one each.
 
 ## 2c. The smallest pitch, and the one everybody recognises
 
@@ -203,6 +225,38 @@ list:
 - **A build or test distributor** where the work queue is a Kafka topic and workers are ephemeral.
 - **Browser-side work dispatch** — the far end of the reachability argument, and the one that would
   make people look.
+
+## 6b. What else could be layered on the engine
+
+Asked directly 2026-08-15. The pattern behind every item already in flight is the same: **PC owns a
+dispatch decision, so anything that wants to influence *which record runs next, where, and how fast*
+can be expressed at that seam** without touching the thing above it.
+
+Already in flight, and the proof the pattern generalises: Kafka Streams (astubbs#271), Connect sinks
+(astubbs#269), the language proxy (astubbs#242).
+
+Candidates, unranked and none started:
+
+- **Per-key or per-destination rate limiting.** The strongest of these. PC already decides when a
+  record is dispatched, so a token bucket per shard is a natural extension rather than a new
+  subsystem — and rate limiting against a third-party API is exactly what every webhook and
+  API-fan-out system has to build by hand. It also composes with retry, which a separate limiter
+  cannot.
+- **Generalised scheduled delivery.** Retry backoff is already "run this record no earlier than T".
+  Generalising it gives arbitrary delayed delivery — one of the four capabilities
+  [`next-study-dapr-and-kafka-proxies.md`](next-study-dapr-and-kafka-proxies.md) names as genuinely
+  missing against a queue broker, which makes it the highest-value gap to close on that comparison.
+- **Batch dispatch per key.** Hand N same-key records to a worker at once. Cheap given the sharding
+  already groups them, and it is the difference between viable and hopeless for
+  per-record-expensive sinks.
+- **A durable-execution layer.** PC supplies ordered, retried, at-least-once dispatch; adding durable
+  state per key approaches what the durable-execution platforms sell, on Kafka. Large, speculative,
+  and depends on exactly-once through the proxy landing first (§4h of the strategy doc).
+- **A first-class dead-letter and retry-topic policy**, owned once rather than reimplemented per
+  application.
+
+The filter is unchanged and applies to every one of them: §4c's rule that **demand decides**, and
+§4d's that breadth is itself a risk.
 
 ## 7. What this synthesis does not settle
 

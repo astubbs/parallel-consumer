@@ -75,6 +75,26 @@ than rivals.
   it costs a broker migration. If the "the combination appears to be new" claim is ever published,
   this is the counter-example a reader will raise, so establish exactly how its guarantees differ
   before making the claim.
+
+  **The hypothesis to test first, because the whole comparison turns on it: the unit of parallelism
+  differs.** `Key_Shared` routes a hash range of keys to a *consumer*, so N consumers give N-way
+  parallelism and the application must still serialise per key inside each one — the intra-consumer
+  head-of-line problem appears untouched. PC's unit is the *key*, so one process can hold as many
+  records in flight as its pool allows. If that holds, the difference is orders of magnitude of
+  concurrency per process, not a feature checkbox — and it is the single most important thing to
+  verify in this whole document.
+
+  Two things to check in the other direction, since they look like real Pulsar advantages: the broker
+  tracks **individual acknowledgements natively**, which is precisely the capability Kafka lacks and
+  that PC's offset-map encoding exists to synthesise client-side; and consequently Pulsar has no
+  analogue of PC's commit-metadata size ceiling. Also establish how `Key_Shared` behaves when one
+  consumer is slow, and what `allowOutOfOrderDelivery` concedes.
+
+  **"Is PC on Kafka faster than Pulsar?" is the wrong question and should be refused rather than
+  answered.** As posed it collapses into Kafka-versus-Pulsar throughput, which is contested vendor
+  benchmark territory and unwinnable. The answerable question is **how much concurrency is achievable
+  per unit of infrastructure at a given ordering guarantee** — and nobody here has measured it against
+  Pulsar. Say unmeasured until it is measured.
 - **Durable-execution platforms** — Temporal, Restate, Inngest. A different axis again (workflow
   orchestration and state, not stream consumption), and already partly covered above.
 
