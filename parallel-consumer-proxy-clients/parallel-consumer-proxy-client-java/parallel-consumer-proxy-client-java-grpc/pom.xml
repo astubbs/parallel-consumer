@@ -19,10 +19,21 @@
         The gRPC transport: the shared API implemented over the RPC hop to the sidecar
         (astubbs#242, docs/plans/2026-08-14-001-feat-language-proxy-plan.md - U29's spike; U25
         makes it the reference implementation). It depends on the api module and the protocol
-        module (KTD34: engine and clients are both consumers of the protocol, which owns itself);
-        its tests run the api test-jar's transport-parameterised conformance suite against the
-        proxy test-jar's harness engine lane - a real gRPC server over mock Kafka clients, so the
-        whole suite stays in the surefire lane.
+        module (KTD34: engine and clients are both consumers of the protocol, which owns itself).
+
+        IT DEPENDS ON THE ENGINE IN NO SCOPE, AND THAT IS LOAD-BEARING RATHER THAN TIDY. A
+        test-scope dependency is still a reactor edge, so while the harness-backed conformance run
+        lived here, `-pl <any module wrapping this one> -am` built parallel-consumer-proxy - and
+        `bin/build.sh` opens with `clean`, so the routine build of a wrapper deleted the sidecar
+        jar every other language's conformance test spawns. That is why the Kotlin client reached
+        for the protocol module and reimplemented the session rather than wrapping this one. The
+        harness-backed conformance run now lives in the sibling harness module, which holds the
+        engine dependency for the whole JVM side; what is left here is the transport plus the
+        tests that need no engine. Before adding any dependency to this pom, check what it does to
+
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        which must not print parallel-consumer-proxy.
     -->
 
     <properties>
@@ -57,29 +68,12 @@
             <artifactId>grpc-netty-shaded</artifactId>
             <version>${grpc.version}</version>
         </dependency>
-        <!-- the shared conformance suite - the same test classes the direct sibling runs (KTD20) -->
-        <dependency>
-            <groupId>bz.stub.parallelconsumer</groupId>
-            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
-            <version>${project.version}</version>
-            <classifier>tests</classifier>
-            <scope>test</scope>
-        </dependency>
-        <!-- the harness engine lane: ProxyHarness in the proxy test-jar, plus the proxy classes it drives -->
-        <dependency>
-            <groupId>bz.stub.parallelconsumer</groupId>
-            <artifactId>parallel-consumer-proxy</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>bz.stub.parallelconsumer</groupId>
-            <artifactId>parallel-consumer-proxy</artifactId>
-            <version>${project.version}</version>
-            <classifier>tests</classifier>
-            <scope>test</scope>
-        </dependency>
-        <!-- LongPollingMockConsumer and friends, which the harness stands on; test scope is not transitive -->
+        <!--
+            TestConventionRules, the shared ArchUnit rule library. Core's test-jar is the only
+            engine-side artifact this module touches, and it is not the hazardous one: core is
+            already in the reactor of anything that reaches the protocol module, whereas
+            parallel-consumer-proxy is not.
+        -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>

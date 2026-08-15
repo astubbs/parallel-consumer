@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.client.direct;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.RecordContext;
+import bz.stub.parallelconsumer.client.AsyncRecordProcessor;
 import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.InboundRecord;
 import bz.stub.parallelconsumer.client.Outcome;
@@ -32,6 +33,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * The direct transport: the client wrapper bound straight to {@code parallel-consumer-core}, in-process - the
@@ -77,6 +79,37 @@ public class DirectParallelConsumerClient implements ParallelConsumerClient, Con
 
     @Override
     public void poll(RecordProcessor recordProcessor) {
+        start(record -> Outcomes.applyProcessor(recordProcessor, record));
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * <b>Here the asynchronous form buys nothing, and says so rather than pretending otherwise.</b> Core's
+     * user function is synchronous - it signals success by returning and failure by throwing, on its own
+     * worker thread - so there is no engine underneath to hand an unfinished stage to, and this waits for the
+     * stage on that worker. The processor's own work is still off-thread if it was going to be; what is not
+     * saved is the core thread that would otherwise have been free.
+     * <p>
+     * That is a property of the degenerate transport, not of the form. The gRPC transport, where the engine is
+     * a separate process and the only thing between them is a stream, holds no thread at all while a stage is
+     * outstanding - which is the case the form exists for, and the case every wrapping language builds on.
+     * <p>
+     * One consequence follows and is worth knowing before relying on it: the contract's "a stage that never
+     * completes reports nothing" holds a core worker here rather than costing nothing. In-process there is no
+     * lease to expire and no session to reclaim the record from, so the shutdown-drain use that motivates it
+     * has no meaning under this transport anyway.
+     */
+    @Override
+    public void pollAsync(AsyncRecordProcessor recordProcessor) {
+        start(record -> Outcomes.applyProcessorAsync(recordProcessor, record)
+                .toCompletableFuture()
+                // applyProcessorAsync has already turned every exceptional completion into a failure
+                // Outcome, so this join cannot throw a user exception - only an interruption of core's worker
+                .join());
+    }
+
+    private void start(Function<InboundRecord, Outcome> outcomeOf) {
         synchronized (this) {
             if (processor != null) {
                 throw new IllegalStateException("poll may be called at most once per client");
@@ -88,7 +121,7 @@ public class DirectParallelConsumerClient implements ParallelConsumerClient, Con
         // the records core produces before the input offset may commit, and a failure outcome becomes a throw
         // into core's retry scheduling
         processor.pollAndProduceMany(context -> {
-            var outcome = Outcomes.applyProcessor(recordProcessor, toInboundRecord(context.getSingleRecord()));
+            var outcome = outcomeOf.apply(toInboundRecord(context.getSingleRecord()));
             if (!outcome.isSuccess()) {
                 throw new ProcessingFailedException(outcome.failureReason().orElse(""));
             }

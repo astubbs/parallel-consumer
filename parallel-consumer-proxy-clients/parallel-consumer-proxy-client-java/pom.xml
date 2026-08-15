@@ -24,11 +24,16 @@
         pom); grpc speaks to the sidecar over the RPC hop. Seeded complete like the clients
         aggregator above it - the Java implementation work adds files inside these three modules,
         not entries here.
+
+        The fourth module, harness, is the one addition to that seed and it is a BUILD-GRAPH
+        module rather than a product one: it holds the engine dependency, so no module a client
+        wraps carries one. Its pom explains what that bought and how to measure it.
     -->
     <modules>
         <module>parallel-consumer-proxy-client-java-api</module>
         <module>parallel-consumer-proxy-client-java-direct</module>
         <module>parallel-consumer-proxy-client-java-grpc</module>
+        <module>parallel-consumer-proxy-client-java-harness</module>
     </modules>
 
     <build>

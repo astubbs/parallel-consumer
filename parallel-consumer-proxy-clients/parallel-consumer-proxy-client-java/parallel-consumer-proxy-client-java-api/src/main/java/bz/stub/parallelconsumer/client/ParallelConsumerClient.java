@@ -32,9 +32,31 @@ public interface ParallelConsumerClient extends AutoCloseable {
      * the given processor, honouring the configured concurrency and ordering. Non-blocking - it returns once
      * consumption is running, mirroring core's own poll-with-a-function shape.
      * <p>
-     * May be called at most once per client instance.
+     * May be called at most once per client instance, and never together with {@link #pollAsync}.
      */
     void poll(RecordProcessor processor);
+
+    /**
+     * The same as {@link #poll}, with the processor's verdict arriving through a {@link java.util.concurrent
+     * .CompletionStage} instead of a return - for a processor whose work is a remote call, a reactive
+     * pipeline, or a coroutine, where the synchronous form would park a wrapper-owned thread that has nothing
+     * to do.
+     * <p>
+     * <b>It is on this interface, and not only on a transport, because it is what makes a thin client in
+     * another language possible.</b> A wrapper over a Java transport can bridge a {@code CompletionStage} to
+     * its own idiom - {@code suspend}, {@code Future}, {@code IO} - without a thread parked per record; over
+     * the synchronous form it cannot, and the language then reimplements the whole session to avoid the cost.
+     * Three JVM session implementations mean fixing every session defect three times, so the shape that
+     * removes the reason to write the second one belongs here rather than in one transport's corner.
+     * <p>
+     * The two forms are the same session with the same conformance contract - see
+     * {@link AsyncRecordProcessor} for the two places their behaviour genuinely differs, both consequences of
+     * nothing blocking: concurrency is bounded by the engine's in-flight ceiling rather than by the executor
+     * count, and a stage that never completes is how a client says it has no verdict to give.
+     * <p>
+     * May be called at most once per client instance, and never together with {@link #poll}.
+     */
+    void pollAsync(AsyncRecordProcessor processor);
 
     /** Stops consumption and releases the transport's resources. Idempotent. */
     @Override

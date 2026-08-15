@@ -3,6 +3,7 @@ package bz.stub.parallelconsumer.client.direct;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.client.AsyncRecordProcessor;
 import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.RecordProcessor;
 import bz.stub.parallelconsumer.client.conformance.SpikeConformanceTest;
@@ -62,13 +63,26 @@ class DirectSpikeConformanceTest extends SpikeConformanceTest {
 
         @Override
         public void start(ClientOptions options, RecordProcessor processor) {
+            build(options).poll(processor);
+            arrangeEngineSide();
+        }
+
+        @Override
+        public void startAsync(ClientOptions options, AsyncRecordProcessor processor) {
+            build(options).pollAsync(processor);
+            arrangeEngineSide();
+        }
+
+        private DirectParallelConsumerClient build(ClientOptions options) {
             client = DirectParallelConsumerClient.builder()
                     .options(options)
                     .consumer(mockConsumer)
                     .producer(mockProducer)
                     .build();
-            client.poll(processor);
+            return client;
+        }
 
+        private void arrangeEngineSide() {
             // the manual rebalance dance a MockConsumer needs, as the engine-side harness documents:
             // MockConsumer#rebalance assigns the partition but fires no listener, so the client (a rebalance
             // listener by delegation to core) is told separately - and seeding must follow assignment

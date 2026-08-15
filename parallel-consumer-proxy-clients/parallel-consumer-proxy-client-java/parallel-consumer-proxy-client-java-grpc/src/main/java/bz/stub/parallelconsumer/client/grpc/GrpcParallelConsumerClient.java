@@ -3,6 +3,7 @@ package bz.stub.parallelconsumer.client.grpc;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.client.AsyncRecordProcessor;
 import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.Outcomes;
 import bz.stub.parallelconsumer.client.ParallelConsumerClient;
@@ -23,6 +24,7 @@ import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -46,6 +48,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the executor's stack and is echoed verbatim - there is no request map, no dedupe cache, no completion state.
  * A stateless client cannot have a state bug, and every other language mirrors that statelessness.
  * <p>
+ * <b>Connecting and polling are separate steps</b> ({@link #connect()}, then {@link #poll} or
+ * {@link #pollAsync}), because a wrapper in another language needs the negotiated session before it starts
+ * handing records to anything: what the engine chose - the executor count, the in-flight ceiling, the
+ * capability set - is only knowable after the handshake and is what the wrapper reports to its own user.
+ * Calling poll without connecting first still works and connects on the way, so the shape a Java caller
+ * already had is unchanged.
+ * <p>
  * v1 posture: the sidecar binds loopback, so the client connects to {@code 127.0.0.1} plaintext - matching the
  * proxy's KTD11 surface. Spawning the sidecar process is the lifecycle unit's job; this client connects to a
  * port it is given.
@@ -68,9 +77,9 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
 
     /**
      * Volatile because {@code close()} reads it from a DIFFERENT thread than the one that assigned it in
-     * {@code poll()}. The {@code synchronized (this)} block there gives at-most-once mutual exclusion,
+     * {@code connect()}. The {@code synchronized (this)} block there gives at-most-once mutual exclusion,
      * which is a different guarantee from visibility: without volatile there is no happens-before edge to the
-     * closing thread, so {@code close()} may read {@code null} after {@code poll()} has built the channel -
+     * closing thread, so {@code close()} may read {@code null} after {@code connect()} has built the channel -
      * and then never shut it down, leaking the connection and the sidecar's group membership.
      * Found by SpotBugs (IS2_INCONSISTENT_SYNC, "locked 66% of time"); every other cross-thread mutable field
      * on this class was already volatile, so this was the one that was missed rather than a decision.
@@ -79,7 +88,7 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
 
     /**
      * Volatile for the same reason, found by looking for other instances of the same defect rather than by the
-     * analyser: it is assigned on the polling thread outside {@code transmitLock} and read by the executor
+     * analyser: it is assigned on the connecting thread outside {@code transmitLock} and read by the executor
      * threads inside it.
      */
     private volatile StreamObserver<ClientMessage> requests;
@@ -96,6 +105,9 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
     private volatile ExecutorService executors;
     private volatile boolean running = false;
 
+    /** Guarded by {@code synchronized (this)}: at-most-once for the pair of poll methods together. */
+    private boolean polled = false;
+
     private GrpcParallelConsumerClient(Builder builder) {
         this.port = builder.port;
         this.options = builder.options;
@@ -105,22 +117,49 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
         return new Builder();
     }
 
+    /**
+     * Opens the session and completes the handshake: builds the channel, sends {@code Configure} as the
+     * stream's first message (R39/KTD5), and completes with what the proxy replied it is running.
+     * <p>
+     * Idempotent - a second call returns a stage for the same handshake rather than opening a second session,
+     * so {@link #poll} may call it without a caller having to know whether one already did. Nothing is
+     * dispatched to a processor until a poll method is called; the handshake alone tells the proxy the session
+     * exists and what it is configured as.
+     *
+     * @return the effective, negotiated session; the stage completes exceptionally if the proxy refuses the
+     * {@code Configure} or breaks the contract in its reply
+     */
+    public CompletionStage<NegotiatedSession> connect() {
+        synchronized (this) {
+            if (channel == null) {
+                channel = ManagedChannelBuilder.forAddress(LOOPBACK_HOST, port).usePlaintext().build();
+                requests = ProxyServiceGrpc.newStub(channel).session(new SessionObserver());
+                // connect-time configuration is the first message on the stream, and the only configuration
+                // channel there is (R39/KTD5)
+                transmit(ClientMessage.newBuilder().setConfigure(WireMapping.toConfigure(options)).build());
+            }
+        }
+        return configured.thenApply(WireMapping::toNegotiatedSession);
+    }
+
     @Override
     public void poll(RecordProcessor processor) {
+        // the synchronous form IS the asynchronous one with a stage that is already complete: the user
+        // function still runs on the executor thread that took the record, and that thread still moves on
+        // only when the function returns. One loop, so a session bug has one place to live (Outcomes.asAsync)
+        pollAsync(Outcomes.asAsync(processor));
+    }
+
+    @Override
+    public void pollAsync(AsyncRecordProcessor processor) {
         synchronized (this) {
-            if (channel != null) {
+            if (polled) {
                 throw new IllegalStateException("poll may be called at most once per client");
             }
-            channel = ManagedChannelBuilder.forAddress(LOOPBACK_HOST, port).usePlaintext().build();
+            polled = true;
         }
-        requests = ProxyServiceGrpc.newStub(channel).session(new SessionObserver());
-
-        // connect-time configuration is the first message on the stream, and the only configuration
-        // channel there is (R39/KTD5)
-        transmit(ClientMessage.newBuilder().setConfigure(WireMapping.toConfigure(options)).build());
-
-        Configured effective = awaitConfigured();
-        int executorCount = Math.max(1, effective.getExecutorCount());
+        NegotiatedSession session = awaitConnected();
+        int executorCount = Math.max(1, session.executorCount());
 
         running = true;
         var threadNumber = new AtomicInteger(1);
@@ -133,16 +172,19 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
             executors.execute(() -> executorLoop(processor));
         }
         log.info("Connected and configured: {} executor(s), dispatch queue depth {}",
-                executorCount, effective.getMaxConcurrency());
+                executorCount, session.maxConcurrency());
     }
 
-    private Configured awaitConfigured() {
+    private NegotiatedSession awaitConnected() {
         try {
-            return configured.get(CONNECT_BUDGET.toMillis(), TimeUnit.MILLISECONDS);
+            return connect().toCompletableFuture().get(CONNECT_BUDGET.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("interrupted awaiting the Configured handshake", e);
         } catch (ExecutionException e) {
+            if (e.getCause() instanceof ProxyProtocolViolation) {
+                throw (ProxyProtocolViolation) e.getCause();
+            }
             throw new IllegalStateException("the proxy refused the session's Configure", e.getCause());
         } catch (TimeoutException e) {
             throw new IllegalStateException(
@@ -152,11 +194,19 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
     }
 
     /**
-     * One executor's life: take the next dispatch FIFO, run the processor, report the outcome with the token
-     * echoed verbatim. A queued record is already leased and connection-level heartbeats cover it (KTD39 rule
-     * 4), so nothing here is time-pressured by queue depth.
+     * One executor's life: take the next dispatch FIFO, start the processor, report the outcome with the token
+     * echoed verbatim when it arrives. A queued record is already leased and connection-level heartbeats cover
+     * it (KTD39 rule 4), so nothing here is time-pressured by queue depth.
+     * <p>
+     * <b>KTD8 survives the asynchronous form intact:</b> the token travels dispatch to report on this frame
+     * when the processor answers inline, and captured in this one completion callback when it does not.
+     * Either way it is echoed verbatim and the client holds no map, no dedupe cache and no completion state.
+     * <p>
+     * Nothing here waits on the stage, deliberately - waiting is what the asynchronous form exists to avoid.
+     * A stage that never completes therefore never reports, which is {@link AsyncRecordProcessor}'s way of
+     * saying this client has no verdict for that record.
      */
-    private void executorLoop(RecordProcessor processor) {
+    private void executorLoop(AsyncRecordProcessor processor) {
         while (running) {
             DispatchRecord dispatch;
             try {
@@ -165,11 +215,11 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
                 Thread.currentThread().interrupt();
                 return;
             }
-            // KTD8: the token travels dispatch -> report on this stack frame; the client stores nothing
-            var outcome = Outcomes.applyProcessor(processor, WireMapping.toInboundRecord(dispatch));
-            transmit(ClientMessage.newBuilder()
-                    .setReport(WireMapping.toReport(dispatch.getToken(), outcome))
-                    .build());
+            var token = dispatch.getToken();
+            Outcomes.applyProcessorAsync(processor, WireMapping.toInboundRecord(dispatch))
+                    .thenAccept(outcome -> transmit(ClientMessage.newBuilder()
+                            .setReport(WireMapping.toReport(token, outcome))
+                            .build()));
         }
     }
 

@@ -17,6 +17,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -146,6 +147,56 @@ public abstract class SpikeConformanceTest {
 
             assertWithMessage("hand-out is FIFO: dispatch order, each record exactly once (KTD39)")
                     .that(invocations).containsExactly("first", "second").inOrder();
+
+            awaitNoRecordsOutForProcessing(fixture);
+        }
+    }
+
+    /**
+     * The same vertical path with the outcome arriving as a {@link java.util.concurrent.CompletionStage}
+     * rather than a return - the form every wrapping language builds its client on, so it is held to the
+     * identical contract rather than to a lighter one of its own.
+     * <p>
+     * <b>The stage is deliberately completed on a different thread</b> from the one the transport called the
+     * processor on. That is the property under test: the transport must report a verdict it did not compute
+     * itself, arriving after it moved on, with the record's token still matched to it. A stage completed
+     * inline would pass while proving only what the synchronous form already proves.
+     */
+    @Test
+    void anAsynchronousProcessorTravelsTheSamePathAndItsResponseIsProduced() {
+        var topic = "spike-async-one-record-full-path";
+        var invocations = new CopyOnWriteArrayList<String>();
+        var answeringThreads = new CopyOnWriteArrayList<String>();
+        try (var fixture = fixture(topic, Collections.singletonList(new SpikeFixture.Seed("lone-key", "hello")))) {
+
+            fixture.startAsync(options(topic), record -> {
+                var callingThread = Thread.currentThread().getName();
+                var payload = new String(record.value(), StandardCharsets.UTF_8);
+                return CompletableFuture.supplyAsync(() -> {
+                    invocations.add(payload);
+                    answeringThreads.add(callingThread + " -> " + Thread.currentThread().getName());
+                    return Outcome.success(Collections.singletonList(OutboundRecord.of(topic + "-responses",
+                            record.key(), "world".getBytes(StandardCharsets.UTF_8))));
+                });
+            });
+
+            awaitCommittedOffset(fixture, 1);
+
+            assertWithMessage("the user function ran exactly once")
+                    .that(invocations).containsExactly("hello");
+
+            assertWithMessage("the outcome was produced on a thread the transport does not own")
+                    .that(answeringThreads).hasSize(1);
+            var handoff = answeringThreads.get(0).split(" -> ");
+            assertWithMessage("the answering thread differs from the calling one: " + answeringThreads.get(0))
+                    .that(handoff[1]).isNotEqualTo(handoff[0]);
+
+            assertWithMessage("the success outcome's produce payload reached the engine's producer")
+                    .that(fixture.produced()).hasSize(1);
+            var produced = fixture.produced().get(0);
+            assertThat(produced.topic()).isEqualTo(topic + "-responses");
+            assertThat(produced.key()).isEqualTo("lone-key");
+            assertThat(produced.value()).isEqualTo("world");
 
             awaitNoRecordsOutForProcessing(fixture);
         }

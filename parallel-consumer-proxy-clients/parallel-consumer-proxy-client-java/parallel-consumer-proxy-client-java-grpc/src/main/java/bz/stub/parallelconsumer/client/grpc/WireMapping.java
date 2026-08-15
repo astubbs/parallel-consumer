@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.client.InboundRecord;
 import bz.stub.parallelconsumer.client.Outcome;
 import bz.stub.parallelconsumer.client.OutboundRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProcessingOrder;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
@@ -16,6 +17,7 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import com.google.protobuf.ByteString;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
 
 /**
  * The wire boundary of the gRPC transport: API types in, protocol messages out, and back. Everything
@@ -58,6 +60,25 @@ final class WireMapping {
         options.defaultMessageRetryDelay().ifPresent(delay ->
                 configure.setDefaultMessageRetryDelay(toWireDuration(delay)));
         return configure.build();
+    }
+
+    /**
+     * The handshake reply as the effective session this client will obey.
+     * <p>
+     * <b>An absent ceiling or executor count is a violation, never an "unlimited".</b> Both are always set by
+     * a conforming proxy, so absence carries no meaning to fall back on - and the fallback that reads best,
+     * "one", is the one that silently serialises a client that asked for concurrency. The Kotlin client found
+     * this while writing its own session; every language wrapping this transport now inherits the check
+     * instead of rediscovering it.
+     */
+    static NegotiatedSession toNegotiatedSession(Configured configured) {
+        if (!configured.hasMaxConcurrency() || !configured.hasExecutorCount()) {
+            throw new ProxyProtocolViolation(
+                    "the proxy's Configured omitted max_concurrency or executor_count; both are always set, "
+                            + "and absence never means unlimited");
+        }
+        return new NegotiatedSession(configured.getExecutorCount(), configured.getMaxConcurrency(),
+                new LinkedHashSet<>(configured.getCapabilitiesList()));
     }
 
     /**

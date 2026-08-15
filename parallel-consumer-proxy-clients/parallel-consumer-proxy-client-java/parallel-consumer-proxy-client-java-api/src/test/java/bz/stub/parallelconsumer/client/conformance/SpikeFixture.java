@@ -3,6 +3,7 @@ package bz.stub.parallelconsumer.client.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.client.AsyncRecordProcessor;
 import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.ParallelConsumerClient;
 import bz.stub.parallelconsumer.client.RecordProcessor;
@@ -34,6 +35,17 @@ public interface SpikeFixture extends AutoCloseable {
      * returns, the fixture's seeded records are on their way to the processor.
      */
     void start(ClientOptions options, RecordProcessor processor);
+
+    /**
+     * The same, driving {@link ParallelConsumerClient#pollAsync} instead. Everything the suite asserts
+     * afterwards is identical, which is the point: the asynchronous processor is a different way for the user
+     * to answer, not a different session.
+     * <p>
+     * It is a second seam rather than a replacement for {@link #start} because both forms are API and a form
+     * no test drives is a form nothing holds to the contract - this one especially, since it is what every
+     * wrapping language builds on.
+     */
+    void startAsync(ClientOptions options, AsyncRecordProcessor processor);
 
     /**
      * The engine's most recently committed offset for the fixture's single topic-partition - the next offset

@@ -55,6 +55,46 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
+      # go-offline resolves declared dependencies and plugin JARs, but NOT the platform protoc /
+      # protoc-gen-grpc-java EXECUTABLES that protobuf-maven-plugin resolves for itself at generate
+      # time. Left cold, every downstream job fetches them from Central and inherits the Azure West
+      # US CDN route lottery in docs/solutions/build-errors/ ("Maven Central download timeouts") -
+      # a 240s hang, then a hard NullPointerException out of Aether rather than a retry. Measured on
+      # astubbs/parallel-consumer#293: in one run "Unit Tests" fetched protoc in 272ms while
+      # "Integration Tests" hung the full 240s on the identical URL, and it failed 2 of 6
+      # consecutive runs. The classifier is linux-x86_64 because this job declares ubuntu-latest.
+      - name: Warm plugin-resolved protoc binaries
+        run: |
+          set -euo pipefail
+          evaluate() {
+            ./mvnw -q --batch-mode -pl parallel-consumer-proxy-protocol \
+              -Dexpression="$1" -DforceStdout \
+              org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate 2>/dev/null | tail -1
+          }
+          # A renamed property makes help:evaluate print "null object or invalid expression", which
+          # dependency:get would happily turn into a warm of the wrong coordinate - warming nothing
+          # is indistinguishable from a cache hit until it fails four jobs downstream, so require a
+          # version-shaped answer rather than merely a non-empty one.
+          require_version() {
+            case "$2" in
+              [0-9]*) : ;;
+              *) echo "::error::$1 did not resolve to a version from parallel-consumer-proxy-protocol/pom.xml (got '$2') - the protoc cache warm would be a silent no-op"; exit 1 ;;
+            esac
+          }
+          protoc_version=$(evaluate proxy.protoc)
+          grpc_version=$(evaluate grpc.version)
+          require_version proxy.protoc "$protoc_version"
+          require_version grpc.version "$grpc_version"
+          get() {
+            ./mvnw --batch-mode -ntp \
+              org.apache.maven.plugins:maven-dependency-plugin:3.11.0:get -Dartifact="$1"
+          }
+          get "com.google.protobuf:protoc:${protoc_version}:exe:linux-x86_64"
+          get "io.grpc:protoc-gen-grpc-java:${grpc_version}:exe:linux-x86_64"
+          # Assert the binaries are on disk: the exit code says the goal ran, only the file says the
+          # cache this job exists to populate actually got populated.
+          test -s ~/.m2/repository/com/google/protobuf/protoc/"${protoc_version}"/protoc-"${protoc_version}"-linux-x86_64.exe
+          test -s ~/.m2/repository/io/grpc/protoc-gen-grpc-java/"${grpc_version}"/protoc-gen-grpc-java-"${grpc_version}"-linux-x86_64.exe
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
@@ -269,14 +309,14 @@ jobs:
       - uses: astubbs/duplicate-code-cross-check@d3140ef6e9a4adf68c9f729a789e8b7ec8d058f7 # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          # The three Java proxy-client modules are listed DELIBERATELY, and the nine non-JVM
+          # The four Java proxy-client modules are listed DELIBERATELY, and the nine non-JVM
           # client modules are omitted DELIBERATELY: this is an include list (there is no
           # exclusion parameter), and ten clients implementing one architecture in one shape is
           # the intended outcome, not accidental duplication - listing them would fail the build
           # for doing exactly what was asked. The Java clients are different: they are Java, in
           # the reactor, and structurally deduplicated through the shared api module, so two
           # near-identical Java transport implementations SHOULD fail this gate. (astubbs#242)
-          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src parallel-consumer-proxy/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-api/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src'
+          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src parallel-consumer-proxy/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-api/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-harness/src'
           cpd-max-duplication: '5'
           # Absolute cap set to 5% (matching PMD CPD). The repo baseline is already ~4.2% jscpd,
           # so a 4% cap fails on every PR (including the base branch itself) regardless of the change.
@@ -296,10 +336,10 @@ jobs:
       - uses: astubbs/duplicate-code-detection-tool@74adf74b65b6a288b21ba957d7d7bef43831ee65 # master: base-vs-PR comparison + ce-review fixes
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Same include-list reasoning as duplicate-detection above: the three Java proxy-client
+          # Same include-list reasoning as duplicate-detection above: the four Java proxy-client
           # modules are in scope on purpose, the nine non-JVM clients are out of scope on purpose.
           # Note the separator differs - comma here, space above. (astubbs#242)
-          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src,parallel-consumer-proxy/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-api/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src'
+          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src,parallel-consumer-proxy/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-api/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src,parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-harness/src'
           file_extensions: 'java'
           ignore_below: 30
           fail_above: 80
