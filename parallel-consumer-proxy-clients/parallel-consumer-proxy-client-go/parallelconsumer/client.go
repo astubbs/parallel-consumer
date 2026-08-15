@@ -71,11 +71,21 @@ type Client struct {
 	polled    bool
 	pollMu    sync.Mutex
 	closeOnce sync.Once
-	closed    chan struct{}
 	closeErr  error
 
-	failOnce sync.Once
-	failure  error
+	// closed is THE SESSION'S END, not Close's. It is closed by endSession, from whichever path
+	// reaches the end first, and stopOnce/endOnce are what let more than one path reach it: a
+	// stream that faulted is followed by an application calling Close, and closing either channel
+	// twice would panic.
+	stopOnce sync.Once
+	endOnce  sync.Once
+	closed   chan struct{}
+
+	// failMu guards failure. Err is read from the application's goroutine and written from the
+	// receive loop and from shutdown, so the read needs the same lock the write takes - the channel
+	// close alone orders only the goroutine that did the closing.
+	failMu  sync.Mutex
+	failure error
 }
 
 // Open spawns the sidecar, connects to it and completes the fresh-session handshake. It returns
@@ -224,11 +234,23 @@ func (c *Client) Poll(ctx context.Context, processor Processor) error {
 	return nil
 }
 
-// Done is closed when the session has finished shutting down. Err reports why.
+// Done is closed when the session has ENDED, by any route: the application closing the client, the
+// proxy completing the stream, the sidecar going away, or the stream faulting mid-session. Err
+// reports why.
+//
+// It deliberately does not require a Close to fire. A surface where the session can die while the
+// application still believes it is consuming is the worst failure this API could have, so the
+// session's end is observable on its own.
 func (c *Client) Done() <-chan struct{} { return c.closed }
 
-// Err reports the session's first fatal error, if any. It is meaningful once Done is closed.
-func (c *Client) Err() error { return c.failure }
+// Err reports the session's first fatal error, if any - nil when the session ended cleanly. It is
+// meaningful once Done is closed: the cause is written before the close, so anything that observed
+// Done observes the cause.
+func (c *Client) Err() error {
+	c.failMu.Lock()
+	defer c.failMu.Unlock()
+	return c.failure
+}
 
 // receive is the admin loop. IT ALWAYS READS. Backpressure is never applied by not reading: the
 // stream also carries the control plane, so an admin that stops reading head-of-line-blocks
@@ -238,15 +260,21 @@ func (c *Client) receive() {
 	for {
 		msg, err := c.stream.Recv()
 		if err != nil {
-			if !isSessionEnd(err) {
-				c.fail(fmt.Errorf("parallelconsumer: session stream: %w", err))
+			// THE STREAM ENDING IS THE SESSION ENDING, and ending it here is what makes Done fire
+			// and Err meaningful without the application having to Close the client to find out.
+			// A drain that completed and a stream that faulted are both ends; only the second has
+			// a cause.
+			if isSessionEnd(err) {
+				c.endSession(nil)
+			} else {
+				c.endSession(fmt.Errorf("parallelconsumer: session stream: %w", err))
 			}
 			return
 		}
 		switch m := msg.GetMessage().(type) {
 		case *proxyv1.ProxyMessage_Dispatch:
 			if err := c.enqueue(m.Dispatch); err != nil {
-				c.fail(err)
+				c.endSession(err)
 				c.cancel() // the client fails the stream; there is no way back from an overflow
 				return
 			}
@@ -337,18 +365,22 @@ func (c *Client) send(msg *proxyv1.ClientMessage) error {
 // finish and report, then half-close the stream. The half-close IS the shutdown signal - there is
 // no shutdown-request message. Then the sidecar is reaped by closing its lifecycle pipe.
 //
-// Calling Close more than once is safe; later calls wait for the first and return its result.
+// Calling Close more than once is safe; later calls wait for the first and return its result. So
+// is calling it on a session that has already ended by itself - which is the ordinary way to reap
+// the sidecar after Done fires.
 func (c *Client) Close() error {
+	// sync.Once.Do returns only once the function has completed, for every caller, so a second
+	// Close waits for the first and sees its result without needing a channel of its own. It must
+	// not wait on `closed`: that now fires at the session's end, which can be long before - or
+	// entirely without - a Close.
 	c.closeOnce.Do(func() {
 		c.closeErr = c.shutdown()
-		close(c.closed)
 	})
-	<-c.closed
 	return c.closeErr
 }
 
 func (c *Client) shutdown() error {
-	close(c.stopHandout) // stop hand-out; executing records keep running
+	c.stopHandingOut() // stop hand-out; executing records keep running
 
 	c.executors.Wait() // executing records finish and report normally
 
@@ -374,11 +406,44 @@ func (c *Client) shutdown() error {
 	if err := c.side.stop(defaultReapGrace); err != nil {
 		c.fail(err)
 	}
-	return c.failure
+
+	// The session has ended by the application's own hand. Done fires here rather than in Close, so
+	// that every route to the end goes through one place.
+	c.endSession(nil)
+	return c.Err()
 }
 
+// endSession ends the session exactly once, from whichever path gets there first: the stream
+// faulting, the stream completing, an overflow this client refused, or Close finishing its
+// shutdown. It is the ONLY place `closed` is closed.
+//
+// Both halves of the client-authoring guide's §1 rule are delivered here - THAT the session ended,
+// and WHY - and the order matters: the cause is recorded before the close, so a caller that saw
+// Done sees the cause too.
+func (c *Client) endSession(cause error) {
+	if cause != nil {
+		c.fail(cause)
+	}
+	// Hand-out stops first. Executors park in a select on stopHandout, and closing it is what
+	// releases them; without it they wait for a record no live receive loop will ever queue.
+	c.stopHandingOut()
+	c.endOnce.Do(func() { close(c.closed) })
+}
+
+// stopHandingOut releases every executor waiting for a record. Idempotent, because both Close and
+// the session's own end reach it, in either order.
+func (c *Client) stopHandingOut() {
+	c.stopOnce.Do(func() { close(c.stopHandout) })
+}
+
+// fail records the session's first fatal error. The first one wins: later errors are usually its
+// consequences, and the cause explains them.
 func (c *Client) fail(err error) {
-	c.failOnce.Do(func() { c.failure = err })
+	c.failMu.Lock()
+	defer c.failMu.Unlock()
+	if c.failure == nil {
+		c.failure = err
+	}
 }
 
 // noteUnnegotiated records a message whose capability this session did not negotiate. It is never

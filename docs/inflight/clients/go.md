@@ -106,6 +106,36 @@ exit and a genuine transient loss as the *same* `Recv` error shape - `io.EOF`, `
 against a dead port for the whole reconnect window. The guide should name the observable that
 separates them before any wave implements §4's reconnect.
 
+## Fixed after wave one: the session could die and nobody could tell
+
+The cross-client divergence review (`docs/inflight/branch-client-divergence-review.md`, finding 1)
+found this by reading, and it held: **`closed` was closed in exactly one place, inside `closeOnce`
+in `Close`.** `receive` on a stream error called `fail` and returned without touching it, so `Done()`
+never fired, `Err()` - documented as "meaningful once Done is closed" - never became meaningful, and
+every executor parked in a `select` on `stopHandout`/`queue` where neither case could ever be ready.
+The only escape was an application that independently decided to `Close`. Go was the last client
+where that was still true; the Java reference had the identical defect and answered it in
+`061324e20` with `sessionEnd()`.
+
+- **`endSession(cause)` is now the only place `closed` is closed**, reached from four paths: the
+  stream faulting, the stream completing, an overflow this client refused, and `Close` finishing its
+  shutdown. `stopOnce`/`endOnce` make it safe from more than one, which is the ordinary sequence -
+  the stream faults, the application sees `Done`, then calls `Close` to reap the sidecar.
+- **A completed drain ends the session too, with no cause.** `Err()` is `nil` for a clean end, so
+  the two halves the guide's §1 asks for - *that* it ended and *why* - come from the one surface.
+- **The cause is recorded before the close**, so anything that observed `Done` observes it. `failure`
+  moved behind `failMu` for the same reason: `Err()` is read from the application's goroutine and
+  written from the receive loop, and the channel close alone orders only the closing goroutine. The
+  first cause wins; later errors are its consequences.
+- **`Close` no longer waits on `closed`.** It cannot: `closed` now fires at the session's end, which
+  can be long before, or entirely without, a `Close`. `sync.Once.Do` already blocks a second caller
+  until the first completes, so nothing was needed in its place.
+- **The estimate was wrong.** The review called it "a two-line fix - closing `c.closed` and
+  `c.stopHandout` at the top of `receive()`'s error path". Those two lines *panic*: `Close` closes
+  both channels too, and a session that faults and is then closed - the normal sequence - closes
+  each twice. The real fix is the once-guards, the single end path, and the removal of `Close`'s
+  wait on a channel that no longer means what it did.
+
 ## Harness divergences the guide does not list
 
 The guide names three ways the harness diverges from the lifecycle contract. There is a fourth, and

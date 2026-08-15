@@ -52,8 +52,12 @@ Three things worth knowing before reading the API:
   its text rides the redelivery as the previous failure's reason. A panic is recovered and reported
   as a failure too, so one bad record cannot tear the stream down.
 - **`Poll` returns immediately.** It starts the executors and the admin loop; `Done` is closed when
-  the session finishes and `Err` says why. `Close` performs the client-initiated shutdown: stop
-  handing records out, let executing records report, half-close the stream, reap the sidecar.
+  the session **ends by any route** - you closed the client, the proxy completed the stream, the
+  sidecar went away, or the stream faulted mid-session - and `Err` then says why, `nil` for a clean
+  end. Observing the end never requires ending the client, so `select { case <-client.Done(): }` is
+  the whole idiom. `Close` performs the client-initiated shutdown: stop handing records out, let
+  executing records report, half-close the stream, reap the sidecar; call it after `Done` fires too,
+  since that is what reaps the sidecar.
 - **`SidecarPath` must be absolute.** The library never resolves the sidecar through `PATH` or a
   relative lookup: this process hands that binary your Kafka credentials, so which binary runs is
   security-relevant. It is launched directly and never through a shell, because a shell wrapper
