@@ -31,6 +31,29 @@ A funnel, in three pieces:
 3. **The release notes** — wherever they end up published. The blog links to them rather than
    restating them.
 
+## One paragraph the blog post should carry, close to verbatim
+
+Singled out by the owner as the clearest statement of what these libraries are, and why they are not
+ten reimplementations:
+
+> The one thing the client deliberately doesn't mirror is ordering. All shard selection, retry
+> scheduling and offset tracking stay in the engine. The client gets records and gives back verdicts -
+> which is what keeps it a facade rather than a second implementation of Parallel Consumer in every
+> language.
+
+The frame it sits in, if the post has room: **each client is a miniature of Parallel Consumer's own
+controller.** The transport thread mirrors the broker poller, the dispatch queue mirrors the work
+manager's in-flight set, the executors mirror the worker pool, and the queue's depth mirrors the
+in-flight ceiling. Both ends share one invariant - **the thread that moves work must never be the
+thread that waits on work** - which is why core separates the poller from the control loop, and why a
+client whose processor blocks instead of awaiting deadlocks its entire session.
+
+That symmetry is the honest answer to the question the announcement will provoke: *how can ten
+libraries written this quickly be trustworthy?* Because nine of them implement almost nothing. The
+hard parts - ordering, retries, offset encoding, commit decisions - live in one place that has been
+tested for years, and the same shared conformance suite proves every client behaves identically at
+the boundary.
+
 ## Two practical notes for whoever writes it
 
 - **The release notes are generated from the commit log** (`docs/releasing.md` owns how). That makes
