@@ -78,16 +78,34 @@ FROM codegen AS build
 # --static-swift-stdlib is the portability claim: without it the artifact needs the image's Swift
 # runtime shared objects, which no host outside this image has. glibc stays dynamic - see the note
 # in the C++ Dockerfile; the same reasoning applies.
+#
+# EACH LINK MODE GETS ITS OWN SCRATCH PATH, AND THAT IS THE EDIT LOOP'S WHOLE COST. SwiftPM keeps
+# one build database per scratch directory and does not partition it by link mode, so two builds
+# that differ only in --static-swift-stdlib invalidate each other's ENTIRE dependency graph - all of
+# SwiftNIO and grpc-swift - every time they alternate (swiftlang/swift-package-manager#5926, closed
+# as not planned, so this is the workaround rather than a bug to wait out). Measured on this module,
+# 32 cores, one shared scratch path: an edit to one source file cost 164s, of which 151s was the two
+# builds recompiling the graph for each other. Separated, the same edit costs 54s and recompiles no
+# dependency at all.
+#
+# The measurement that pins the cause rather than merely correlating with it: with the flag held
+# CONSTANT the same edit rebuilt in 7s and recompiled nothing of NIOHTTP2, in the same container and
+# across the same layer boundary - so this is the flag alternating, not container mtimes, not the
+# cache mount, and not the COPY above.
+#
+# The paths are outside the package directory deliberately: .build inside it would be re-materialized
+# by the COPY of the sources, and its name would then mean two different things in two stages.
 RUN --mount=type=cache,target=/root/.cache/org.swift.swiftpm,sharing=locked \
-    --mount=type=cache,target=/work/toolchain-smoke/.build,sharing=locked \
+    --mount=type=cache,id=pc-swift-scratch-static,target=/scratch/static,sharing=locked \
+    --mount=type=cache,id=pc-swift-scratch-dynamic,target=/scratch/dynamic,sharing=locked \
     mkdir -p /out \
-    && swift build --package-path /work/toolchain-smoke -c release --static-swift-stdlib \
-        --product pc-swift-toolchain-smoke \
-    && cp "$(swift build --package-path /work/toolchain-smoke -c release --static-swift-stdlib --show-bin-path)/pc-swift-toolchain-smoke" \
+    && swift build --package-path /work/toolchain-smoke --scratch-path /scratch/static \
+        -c release --static-swift-stdlib --product pc-swift-toolchain-smoke \
+    && cp "$(swift build --package-path /work/toolchain-smoke --scratch-path /scratch/static -c release --static-swift-stdlib --show-bin-path)/pc-swift-toolchain-smoke" \
         /out/pc-swift-toolchain-smoke \
-    && swift build --package-path /work/toolchain-smoke -c release \
-        --product pc-swift-toolchain-smoke \
-    && cp "$(swift build --package-path /work/toolchain-smoke -c release --show-bin-path)/pc-swift-toolchain-smoke" \
+    && swift build --package-path /work/toolchain-smoke --scratch-path /scratch/dynamic \
+        -c release --product pc-swift-toolchain-smoke \
+    && cp "$(swift build --package-path /work/toolchain-smoke --scratch-path /scratch/dynamic -c release --show-bin-path)/pc-swift-toolchain-smoke" \
         /out/pc-swift-toolchain-smoke-dynamic
 
 # Extracted with the binaries: what the static artifact still depends on, and what the dynamic

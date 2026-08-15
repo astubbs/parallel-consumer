@@ -33,10 +33,15 @@ grpc-swift and swift-protobuf, is extracted to the host and **runs there**.
   `docker buildx build --target artifact --build-context proto=parallel-consumer-proxy-protocol/src/main/proto --output type=local,dest=<module>/target/container <module>`.
   The ordinary build context is the module, so no other agent's `target/` is ever uploaded, and
   `proxy.proto` reaches the build as a **named context** instead of being copied into this module.
-- **Measured** (32-core box): cold image build **5m27s**, of which ~80s is compiling the two protoc
-  plugins and the rest is grpc-swift plus SwiftNIO; a rebuild with nothing changed is seconds, or
-  **48s** through Maven (two 245 MB exports). Static artifact **158 MB** (81 MB stripped); the
-  dynamic control is **86 MB**.
+- **Measured** (32-core box), and **the number that governs the loop is the EDIT rebuild, which the
+  first measurement never took**: a no-op rebuild is **1s** through `bin/build-client.sh` (48s
+  through Maven is Maven's own startup plus two 245 MB exports, not the image build), while touching
+  one source file cost **164s** - so "warm 48s" described a build that did nothing, and the earlier
+  wave read it as the cycle cost. With the scratch paths separated (see the Dockerfile's `build`
+  stage) the same edit costs **22-43s** and recompiles no dependency at all. Cold is **215s** with
+  `swift:6.1` already pulled, unchanged by the fix; the recorded **5m27s** includes the one-time
+  3.4 GB base-image pull, which is paid once per machine and never again. Static artifact **158 MB**
+  (81 MB stripped); the dynamic control is **86 MB**.
 - **Pins, and they move together:** `protoc-gen-swift` 1.38.1, `protoc-gen-grpc-swift-2` 2.4.1
   (built from source - no Linux release binaries), and in `toolchain-smoke/Package.swift`
   swift-protobuf 1.38.1, grpc-swift-2 2.4.2, grpc-swift-protobuf 2.4.1, grpc-swift-nio-transport
