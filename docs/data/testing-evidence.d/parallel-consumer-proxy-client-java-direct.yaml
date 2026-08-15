@@ -1,14 +1,34 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 
 # One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
-# testing-evidence corpus, and only the Java reference implementation work ever edits it.
+# testing-evidence corpus, and only the Java client wave ever edits it.
 
 schema_version: 1
 kind: testing-evidence
 module_evidence:
-  - artifact: parallel-consumer-proxy-client-java-direct
-    deferred:
-      reason: >-
-        No test evidence is claimed for an empty skeleton; the Java reference implementation wave records this module's evidence here.
-      lifted_by: >-
-        astubbs#242 - the Java reference implementation wave of the language-proxy plan.
+  - id: proxy-client-java-direct
+    artifact: parallel-consumer-proxy-client-java-direct
+    coverage: >-
+      All four shared conformance scenarios, run as an in-JVM binding rather than a spawned
+      subprocess, because this transport's wire IS a function call: the suite holds the exact
+      object an application holds, with no process boundary and no sidecar between the assertion
+      and the code. That makes it the control arm for the shared API surface itself - the only
+      binding whose failure has no transport among its suspects, so a red here means the API or
+      the scenario is wrong rather than a client.
+      Beside that, and not replacing it, DirectSpikeConformanceTest covers what the shared
+      scenarios do not: the produce payload, FIFO hand-out through a single executor, the async
+      processor answering off-thread, the session-end stage, and the records-out-for-processing
+      leak check.
+      Each scenario was established able to fail by sabotage rather than assumed: four mutations,
+      each turning exactly its own scenario red across every binding while the other rows stayed
+      green.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/JvmClientBindings.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src/test/java/bz/stub/parallelconsumer/client/direct/DirectSpikeConformanceTest.java
+    limitation: >-
+      Four scenarios, and the harness negotiates only the dispatch capability, so every liveness,
+      reconnect, worker-death, terminal and drain duty is untested because it is un-negotiated
+      rather than because it passed. This transport never speaks the protocol at all, so nothing
+      here exercises the wire, the token echo or the queue rules - those are proven by the
+      transports that do. The mock harness also seeds its records regardless of the subscribed
+      topic, so subscription cannot be used as a control.
