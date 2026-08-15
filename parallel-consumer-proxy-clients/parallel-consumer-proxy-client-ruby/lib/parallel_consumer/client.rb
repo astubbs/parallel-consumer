@@ -261,10 +261,20 @@ module ParallelConsumer
 
     # Runs the user's block, translating a raised exception into a failure outcome - once, in one
     # place. A block that blows up must produce a failure report, not tear the stream down.
+    #
+    # THE REASON IS THE EXCEPTION'S MESSAGE, AND NOTHING ELSE. It used to be prefixed with the
+    # class - +"RuntimeError: no stock"+ - which this module's own README already contradicted
+    # ("raise and it failed, with the exception's text riding back to you"), and which no sibling
+    # client does: Go reports +err.Error()+, Python +str(exception)+, TypeScript +error.message+.
+    # The cross-language conformance suite is what caught it (astubbs#242): its redelivery scenario
+    # asserts the reason comes back VERBATIM, and Ruby was the only language returning something
+    # the user had not written. The class name survives only as the fallback for an exception whose
+    # message is empty, where the alternative is a blank reason - the same fallback Python and
+    # TypeScript make.
     def invoke(processor, record)
       Outcome.coerce(processor.call(record))
     rescue StandardError => e
-      Outcome.failure("#{e.class}: #{e.message}")
+      Outcome.failure(e.message.to_s.empty? ? e.class.to_s : e.message)
     end
 
     def report_for(token, outcome)
