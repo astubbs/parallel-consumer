@@ -283,9 +283,34 @@ Candidates, unranked and none started:
 
   **Correction to an earlier claim here**: this was recorded as gated on exactly-once through the
   proxy. That gates the **polyglot** version only, because `ExternalEngine` throws on transactional
-  commit mode. The **JVM version is unblocked today**. Still large and still speculative — but nearer
-  than the vendors' framing suggests, because the gap is a programming model rather than a storage
-  engine.
+  commit mode. The JVM version's real gate is **Streams-side exactly-once**, which
+  astubbs/parallel-consumer#271 puts out of scope.
+
+  **Do not build this. Owner's instinct, 2026-08-15, and it is right** — Temporal is a company, not a
+  feature, and reimplementing it is not available to this project. Recorded as considered-and-not-
+  taken so the idea is not rediscovered as novel. Three findings are worth keeping from the
+  consideration:
+
+  - **Temporal does not use Kafka.** Its persistence is Cassandra, MySQL or PostgreSQL, with
+    Elasticsearch for visibility. So a team whose events are already in Kafka must *bridge* — consume
+    Kafka, start a workflow — which is a second system, a second set of delivery semantics, and a
+    join that can lose or double-start.
+  - **That bridge is the one structural advantage, and it is the only one worth defending.** On
+    Streams the event *is* the workflow start, atomically: the offset commit and the first state
+    write are one transaction, so a start cannot be lost or duplicated. Everything else — no new
+    datastore, workflow history and event history being the same log — is real but merely convenient.
+    Against it sits everything Temporal has that this would not: the UI, visibility and search,
+    workflow versioning, signals and queries, child workflows, and SDK maturity across languages.
+  - **The smallest useful thing is much smaller than a workflow engine, and should be judged on its
+    own**: **memoised steps, and nothing else.** A `ctx.once("charge-customer", () -> …)` backed by a
+    state store keyed by record key plus step name, covered by the existing transaction. No
+    suspension, no timers, no continuations, no versioning. **PC already retries records, and a retry
+    re-runs the whole function including the side effects that already succeeded** — which is the
+    commonest practical complaint about at-least-once processing and is hand-rolled per project
+    today. Framed honestly it is not durable execution at all: it is **retry that does not redo the
+    parts that worked**, it helps every existing user rather than only workflow users, it competes
+    with nobody, and it is the foundation the larger idea would need anyway. If anything here is ever
+    built, it is this, and only on demand.
 - **A first-class dead-letter and retry-topic policy**, owned once rather than reimplemented per
   application.
 
