@@ -106,6 +106,24 @@ ship-the-vertical rule applied to an abstraction.
 so `java-http` is a row rather than a project, and the suite is what proves a shared controller
 behaves identically under both transports rather than merely appearing to.
 
+### The first transport the seam should pay for: a Unix domain socket
+
+Owner's call, 2026-08-15, to track this. It is the cheapest transport the composition would enable and
+the only one that *improves the security posture* rather than merely extending reach:
+
+- **gRPC supports Unix domain sockets directly**, so this is a target address rather than a new
+  protocol — the smallest possible proof that the seam works, since the codec and the controller do
+  not change at all.
+- **It skips the TCP stack entirely**, which is pure win for a sidecar that is loopback-only by design.
+- **The good part: filesystem permissions become the authorisation model.** Socket ownership and mode
+  decide who may connect, enforced by the kernel. That is a **better answer than
+  `AuthorityAllowlistInterceptor` for the same-host case**, because it does not depend on the client
+  telling the truth about who it is — and same-host is the case the sidecar was designed for.
+
+Worth building for that last reason alone, independently of whether the HTTP dialect is ever written.
+It also makes a good first extraction target for the transport seam precisely because so little else
+varies: if a UDS transport cannot be swapped in cleanly, the seam is wrong and it is cheap to find out.
+
 ## Related
 
 The sidecar is already parked to embed the web dashboard post-v6
