@@ -205,8 +205,17 @@ jobs:
             # pin, which is the loosest in the matrix - the C++ wave tightens it if the
             # image's drift ever bites.
             toolchain: ''
+            # The MODULE'S OWN recipe, per this file's header, now that the module has one. It was a
+            # spelled-out invocation while the module was an empty skeleton; the C++ wave replaced it
+            # with scripts/analyse.sh, which the image build runs too, so there is one command rather
+            # than two that drift.
+            #
+            # That script adds --check-level=exhaustive, and not for taste: --error-exitcode=1 fires
+            # on an `information` message as readily as on a finding, and the default level emits
+            # `information: Limiting analysis of branches` on several of these files - so the line
+            # this replaces would have failed the row on a clean codebase.
             scanner: cppcheck
-            scanner-cmd: cppcheck --enable=warning,style,performance --error-exitcode=1 --inline-suppr src
+            scanner-cmd: scripts/analyse.sh
             cache-path: ''
             lockfile: ''
     steps:

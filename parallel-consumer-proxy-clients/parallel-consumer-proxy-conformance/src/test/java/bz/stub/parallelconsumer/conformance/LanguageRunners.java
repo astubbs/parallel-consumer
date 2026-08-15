@@ -96,9 +96,32 @@ public final class LanguageRunners {
                 module.resolve("scripts").resolve("conformance-runner"));
     }
 
+    /**
+     * C++: the one entry whose build command is not its language's own tool, because there is no C++
+     * toolchain on this machine to run.
+     * <p>
+     * gRPC and protobuf arrive as system DEV PACKAGES rather than as a versioned toolchain, which is why
+     * C++ is one of the two languages mise cannot serve here and why its module builds in a container. So
+     * the command is {@code bin/build-client.sh cpp}, the same one a developer runs and the same one the
+     * Maven module runs: BuildKit compiles the runner inside the image and exports it - a STATICALLY LINKED
+     * binary, which is what lets the suite then execute it on this host like any other entry. The script
+     * also runs the module's own tests and its static analysis in there, so a red one fails this build
+     * rather than surfacing later.
+     * <p>
+     * <b>It needs Docker, and it says so by failing.</b> A missing daemon exits 2 out of that script,
+     * which fails the build and reaches the reader as {@link RunnerUnavailableException} naming the
+     * command - never as a skip, which is the rule this whole registry exists to keep.
+     */
+    public static LanguageRunner cpp() {
+        var module = module("cpp");
+        return new LanguageRunner("cpp", module,
+                List.of(RepoLayout.workingTreeRoot().resolve("bin").resolve("build-client.sh").toString(), "cpp"),
+                module.resolve("target").resolve("container").resolve("pc-cpp-conformance-runner"));
+    }
+
     /** Every language with a runner today, whether or not this run selected it. */
     public static List<LanguageRunner> all() {
-        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet(), kotlin());
+        return List.of(go(), python(), typescript(), rust(), ruby(), dotnet(), kotlin(), cpp());
     }
 
     /**

@@ -106,24 +106,39 @@ build_in_container() {
     ls -l "$out_dir"
 }
 
-test_in_container() { # runs the EXTRACTED artifacts on the host
+# Runs the EXTRACTED artifacts on the host.
+#
+# THE PAIRING IS THE CONTRACT, not any particular filename. Every extracted executable X that has a
+# sibling X-dynamic is a portability claim with its own control: X must run here, X-dynamic must
+# NOT. A language names those binaries whatever suits it - a module whose wave has not started ships
+# a toolchain smoke, one that has started ships a self-test built from its real client library - and
+# an artifact with no -dynamic sibling (a conformance runner, say) is not a portability claim and is
+# skipped rather than run with no arguments.
+#
+# At least one pair must exist: an extraction that produced no claim at all must never read as a
+# pass, which is the same rule as "a missing toolchain is exit 2, not a pass".
+test_in_container() {
     local module_dir="$CLIENTS_DIR/$MODULE_PREFIX$LANGUAGE"
     local out_dir="$module_dir/target/container"
-    local static_binary="$out_dir/pc-$LANGUAGE-toolchain-smoke"
-    local dynamic_binary="$static_binary-dynamic"
+    local pairs=0 static_binary dynamic_binary
 
-    [ -x "$static_binary" ] || die 1 "$LANGUAGE: no extracted artifact at $static_binary - build first"
+    for dynamic_binary in "$out_dir"/*-dynamic; do
+        [ -x "$dynamic_binary" ] || continue
+        static_binary="${dynamic_binary%-dynamic}"
+        [ -x "$static_binary" ] || die 1 "$LANGUAGE: $dynamic_binary was extracted without its statically linked counterpart $static_binary"
+        pairs=$((pairs + 1))
 
-    printf '==> %s: running the extracted artifact ON THE HOST\n' "$LANGUAGE"
-    "$static_binary" || die 1 "$LANGUAGE: the statically linked artifact failed on the host - the extracted build is not portable"
+        printf '==> %s: running %s ON THE HOST\n' "$LANGUAGE" "$(basename "$static_binary")"
+        "$static_binary" || die 1 "$LANGUAGE: the statically linked artifact failed on the host - the extracted build is not portable"
 
-    if [ -x "$dynamic_binary" ]; then
-        printf '==> %s: control - the dynamically linked build is expected to FAIL here\n' "$LANGUAGE"
+        printf '==> %s: control - %s is expected to FAIL here\n' "$LANGUAGE" "$(basename "$dynamic_binary")"
         if "$dynamic_binary" >/dev/null 2>&1; then
             die 1 "$LANGUAGE: the dynamic control RAN on this host, so this run is no evidence that static linking is what makes the artifact portable. Check whether the image's runtime libraries are installed here."
         fi
         printf '==> %s: control failed as expected\n' "$LANGUAGE"
-    fi
+    done
+
+    [ "$pairs" -gt 0 ] || die 1 "$LANGUAGE: nothing in $out_dir is a statically linked artifact with a -dynamic control, so this run proves no portability claim - it is NOT a pass. Build first, and check the Dockerfile's artifact stage."
 }
 
 # Native languages re-enter Maven rather than restating their build command here. -pl names the
