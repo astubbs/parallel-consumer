@@ -15,17 +15,71 @@ One divergence to be deliberate about: the issue's phrasing is that clients *req
 is a **pull** model — and the plan rejected pull (the credit-ledger design) in favour of the engine
 pushing when it decides. An HTTP dialect must not quietly reintroduce pull. SSE keeps the push.
 
-## Why it earns its place: reachability, not novelty
+## Why it earns its place — the arguments, ranked by how well each survives scrutiny
+
+This section was rewritten 2026-08-15 to be **fair rather than persuasive**: the original led with
+corporate proxies, which is the weakest of the arguments below. Every argument it made is retained;
+what changed is the ordering and the honesty about each one's size.
+
+**Read the whole section before quoting any part of it.** The strongest case and the strongest
+objection are both here, and either one alone misrepresents the position.
+
+### 1. The categorical one: browsers cannot speak gRPC
+
+Not "poorly", not "with effort" — **not at all**. `grpc-web` requires a translating proxy in front of
+the server, so a browser client is not a gRPC client. If browser-side work dispatch is ever wanted
+(one of the architecture shapes in
+[`next-http-strategy-ideas.md`](next-http-strategy-ideas.md), §4b), HTTP with server-sent events is
+not a fallback — it is the only door.
+
+This argument does not shrink with time, does not depend on anyone's network, and is not a percentage.
+It also reframes the dialect: **its real justification may be a different product rather than a
+compatibility hedge**, and that is a different decision to weigh.
+
+### 2. The real but shrinking one: networks that cannot carry HTTP/2
 
 **A gRPC client is unusable where the client can only reach the sidecar over HTTP** — corporate
-proxies that mangle HTTP/2, restricted networks, some hosted platforms. That is a real deployment
-constraint rather than a preference, and no amount of client-side polish works around it.
+forward proxies that terminate, mangle or downgrade HTTP/2, restricted networks, ingress and load
+balancers still on HTTP/1.1, and hosted platforms without inbound HTTP/2 or streaming. That is a
+deployment constraint rather than a preference, and no amount of client-side polish works around it.
 
-Secondary, and still real: the long tail of runtimes with poor or absent gRPC support — embedded
-targets, Lua, Perl, R, older runtimes — and anyone who wants to try the thing with `curl` before
-adopting a dependency. This is a better answer to that tail than the C shim considered in
+**Stated fairly, it is weaker than it was.** HTTP/2 is long-established and broadly supported; this
+argued much better in 2019 than it does now, and every year it argues slightly worse.
+
+### 3. The long tail, unchanged
+
+Runtimes with poor or absent gRPC support — embedded targets, Lua, Perl, R, older runtimes — and
+anyone who wants to try the thing with `curl` before taking a dependency. This is a better answer to
+that tail than the C shim considered in
 [`parked-a-c-client-and-the-ffi-question.md`](parked-a-c-client-and-the-ffi-question.md), because
-there is nothing to compile; **that note is partly superseded by this one.**
+there is nothing to compile; **that note is partly superseded by this one.** Note the tension: those
+runtimes are also the least likely to be running Kafka work in the first place.
+
+### The objections, stated as strongly as the arguments
+
+- **Today the sidecar is loopback-only, so none of §2 applies at all.** Nothing traverses anything,
+  and the reachability case is entirely conditional on the sidecar moving across a network — the
+  node-local-daemon or shared-server shapes in
+  [`next-work-server-pitch-and-buyer.md`](next-work-server-pitch-and-buyer.md), §3c.
+- **Nobody has asked for it.** Under the demand-decides rule this project imposes on itself, that is
+  the number that counts, and it currently reads zero.
+- **gRPC is measurably better everywhere it can go** (table below), so §2 and §3 buy reach at a real
+  cost, where §1 buys something otherwise unreachable.
+
+### What the second dialect actually costs, transport by transport
+
+| | gRPC | HTTP + server-sent events |
+|---|---|---|
+| Payload | binary protobuf | UTF-8 text, so **binary keys and values need base64 — about 33% overhead**, and binary payloads are the normal case here |
+| Reports | a framed message on the existing stream | **one HTTP request each** |
+| Flow control | per-stream, from HTTP/2 | none; the in-flight ceiling is already doing application-level backpressure, so this is survivable rather than free |
+| Client ergonomics | generated typed stubs, streaming idioms, deadlines, cancellation, status codes, interceptors | **excellent in a browser** (`EventSource` does the work), often poor outside one — many languages have no good client, so line parsing, reconnection and `Last-Event-ID` are hand-rolled |
+| Session lifecycle | one connection carries both directions | dispatch and reports are separate, so the two halves can disagree about liveness — see the transport-seam section below |
+
+**The symmetry worth remembering: server-sent events are better exactly where gRPC cannot go, and
+worse everywhere else.** That is an argument for building the dialect *for the browser* rather than as
+a general-purpose alternative — and it is why the HTTP client would be thinner than the gRPC one only
+in a browser.
 
 ## The shape: one semantics, two dialects
 
