@@ -37,6 +37,28 @@ standard Java client** - the baseline the existing performance tests already mea
   That is both the honest disclosure a user needs and, if the answer is good, the most persuasive
   thing the release can say.
 
+## Read the Kafka Streams branch's benchmark work before designing any of this
+
+The hard thinking about *what shape a performance test should take* has already been done on
+`feats/ks-streams-seam-on-upstream-gate`, and it arrived at the two-shapes design this note needs:
+
+- [`next-benchmark-a-realistic-case-we-expect-to-lose.md`](https://github.com/astubbs/parallel-consumer/blob/feats/ks-streams-seam-on-upstream-gate/docs/inflight/next-benchmark-a-realistic-case-we-expect-to-lose.md) -
+  a scenario shaped like the workloads this project is *for*, including the discipline of publishing
+  a case we expect to lose. That is what makes the favourable numbers credible rather than selected.
+- [`next-benchmark-plain-dsl-without-artificial-delay.md`](https://github.com/astubbs/parallel-consumer/blob/feats/ks-streams-seam-on-upstream-gate/docs/inflight/next-benchmark-plain-dsl-without-artificial-delay.md) -
+  the plain, unarguable application and data model with no artificial delay, run purely to see what
+  happens. The comparison nobody can accuse of being rigged.
+- [`next-questions-the-benchmark-raised.md`](https://github.com/astubbs/parallel-consumer/blob/feats/ks-streams-seam-on-upstream-gate/docs/inflight/next-questions-the-benchmark-raised.md) -
+  what the first run left unsettled.
+- [`test-benchmark-figures-that-are-single-run.md`](https://github.com/astubbs/parallel-consumer/blob/feats/ks-streams-seam-on-upstream-gate/docs/inflight/test-benchmark-figures-that-are-single-run.md) -
+  the reproducibility caveat, already recorded there: figures from a single run are not yet evidence.
+  Inherit that rule rather than rediscovering it after publishing.
+
+**Analyse that work first and reuse its design.** Both shapes apply unchanged to the clients: run each
+language through the favourable scenario *and* the plain one, against the standard Java client. The
+only new variable this note adds is the language, which is exactly how it should stay - a benchmark
+that changes two things at once measures neither.
+
 ## Why this is not just marketing
 
 The suite is what makes ten independently-written clients defensible at all. It is also the thing

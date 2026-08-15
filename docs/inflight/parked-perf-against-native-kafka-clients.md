@@ -27,7 +27,15 @@ it has no sidecar hop, no gRPC, no protocol - and that result says nothing about
 exists for. The comparison only means something if the workload is one where a user genuinely needs
 ordering guarantees the native client can only get by adding partitions.
 
-So the design work is the hard part, not the running:
+**The design work is largely already done elsewhere**: `feats/ks-streams-seam-on-upstream-gate`
+worked out the two-shapes approach - a realistic scenario shaped like what this project is for
+(including publishing a case we expect to lose) alongside a plain, unarguable model run just to see
+what happens - plus the caveat that single-run figures are not yet evidence. Its notes are cited in
+full in [`parked-testing-as-a-feature-for-the-clients.md`](parked-testing-as-a-feature-for-the-clients.md);
+read them before designing anything here, since this comparison needs the same two shapes and the
+same honesty about the unfavourable case.
+
+The rest of the design work is the hard part, not the running:
 
 - Define the workload where the comparison is fair, and state plainly the workloads where it is not.
 - Report the sidecar's cost honestly as part of the result rather than engineering it out of the
