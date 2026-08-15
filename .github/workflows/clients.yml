@@ -16,7 +16,16 @@
 # writes the fragment's stated reason into the job summary, and skips everything else -
 # green-as-skipped, never red, so a red row during the fan-out always means a real
 # failure in a STARTED module. fail-fast is off so one language's breakage cannot
-# hide another's.
+# hide another's. The reverse - a module with real source whose fragment still says
+# `deferred:`, which would be skipped indefinitely while looking green - is enforced by
+# bin/check-deferred-modules.sh in the Repo Hygiene workflow, because nothing in a
+# skipped row can notice its own skip.
+#
+# One run, as much breakage as it can find: within a row the later steps carry
+# `!cancelled()` rather than the implicit "only if everything before me passed", so a
+# failing test suite still reports its lint findings and its conformance result; and
+# every Maven invocation here carries --fail-at-end. Both are the same argument as
+# --fail-at-end on the reactor lanes in bin/ci-*.sh.
 #
 # Caching strategy: same discipline as maven.yml - explicit cache/restore + cache/save
 # with a rotating (run_id-suffixed) save key, restore-keys as fallback. Do NOT switch a
@@ -353,13 +362,106 @@ jobs:
       # present here, which is what lets it default OFF everywhere else. A failing
       # native build exits non-zero and fails the row; Kotlin builds as ordinary
       # Maven and the flag is a no-op for it.
+      #
+      # --fail-at-end for the same reason the reactor lanes carry it (bin/ci-build.sh and friends):
+      # every independent branch of this row's slice reports in one run, rather than one problem
+      # per push. It preserves Maven's exit code, so a failure is still a red row.
       - name: Build and test (${{ matrix.module }})
         if: steps.gate.outputs.deferred == 'false'
-        run: ./mvnw --batch-mode -Pci test -pl :${{ matrix.module }} -am -Dpc.foreignClients
+        run: ./mvnw --batch-mode -Pci --fail-at-end test -pl :${{ matrix.module }} -am -Dpc.foreignClients
+
+      # ── The shared conformance suite, this row's language only ───────────────
+      # One Java test module drives every language's client through the SAME scenarios and asserts
+      # the same things about each (its README.md is the runner contract). CI's parallelism is
+      # these rows, not threads inside one job: a single Java job would install six toolchains
+      # before it could start, and bury any one failure among the others. So each row runs the
+      # suite for itself.
+      #
+      # THE SELECTOR'S NAME IS A CONTRACT, fixed on the other side in ConformanceBindings
+      # (LANGUAGE_PROPERTY). Absent, the suite runs every binding - which in a row that installed
+      # one toolchain fails a long way from the cause - so the row always names its own language,
+      # and an unregistered name fails rather than selecting nothing. The core binding comes along
+      # regardless: it is the control arm that answers "is the scenario wrong?" in the same run
+      # that a client went red.
+      #
+      # THE ENGINE THE RUNNER TALKS TO IS BUILT BY `-am`. The suite hosts the engine in its own
+      # JVM and hands the runner a shim to spawn, so what a row must build first is the proxy and
+      # its test jar - which the conformance module declares, and `-am` therefore builds. Same
+      # lesson as the go-e2e-harness profile, from the other end: the Go row failed against an
+      # unbuilt parallel-consumer-proxy/target until the dependency was declared where `-am` could
+      # see it. The language's own runner binary is built by the suite, with the toolchain this
+      # row installed above.
+      - name: Does the conformance suite register this language?
+        id: conformance
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
+        run: |
+          python3 - "${{ matrix.language }}" <<'PYTHON'
+          import os
+          import re
+          import sys
+
+          # Derived from the registry itself, never a second list kept by hand here: a language
+          # gains a runner in ONE place, and this row starts driving it the same commit. A
+          # `conformance: yes/no` matrix field would be that second list, and the day it disagreed
+          # with the registry nothing would say so.
+          REGISTRY = ("parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/"
+                      "bz/stub/parallelconsumer/conformance/LanguageRunners.java")
+
+          language = sys.argv[1]
+
+
+          def broken(message):
+              print(f"::error file={REGISTRY}::{message}")
+              sys.exit(1)
+
+
+          if not os.path.exists(REGISTRY):
+              broken("the conformance registry is not where this row looks for it - a row that "
+                     "cannot read it must not conclude 'no runner' and skip the suite; fix the "
+                     "path here in the same commit that moved the file")
+          with open(REGISTRY, encoding="utf-8") as handle:
+              registered = set(re.findall(r'new LanguageRunner\("([a-z0-9-]+)"', handle.read()))
+          # The registry also constructs two deliberate non-languages for its negative controls
+          # (absent-language, deliberately-failing). They can never match a matrix language, but an
+          # empty or control-only read means the regex has stopped matching the file it is reading,
+          # and every row would then quietly stop running the suite.
+          if not registered - {"absent-language", "deliberately-failing"}:
+              broken("the conformance registry parsed to no languages at all - the shape this row "
+                     "reads it by has changed; every row would otherwise silently stop running the "
+                     "suite while reporting green")
+
+          runs = language in registered
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"registered={str(runs).lower()}\n")
+          if not runs:
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(
+                      f"## clients: {language} - conformance suite NOT RUN\n"
+                      "\n"
+                      f"`{REGISTRY}` registers no conformance runner for **{language}**, so there is "
+                      "nothing for this row to drive. This is a gap in that language's client, not a "
+                      "property of this workflow.\n"
+                      "\n"
+                      f"To close it: write `cmd/conformance-runner` (or its idiom) in the {language} "
+                      "module against the contract in the conformance module's README, add one entry "
+                      "to the registry, and this row starts driving it with no edit here.\n"
+                  )
+              print(f"No conformance runner registered for {language} - see the job summary")
+          PYTHON
+
+      - name: Conformance suite (${{ matrix.language }})
+        if: ${{ !cancelled() && steps.conformance.outputs.registered == 'true' }}
+        run: >-
+          ./mvnw --batch-mode -Pci --fail-at-end test
+          -pl :parallel-consumer-proxy-conformance -am
+          -Dpc.conformance.language=${{ matrix.language }}
 
       # ── Language-native static analysis ──────────────────────────────────────
+      # `!cancelled()` rather than the default: a row that failed its tests should still report its
+      # lint findings in the same run. One problem learned per run is the thing this file is being
+      # steered away from - the same argument as --fail-at-end on the reactor lanes.
       - name: Static analysis (${{ matrix.scanner }})
-        if: steps.gate.outputs.deferred == 'false'
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
         working-directory: parallel-consumer-proxy-clients/${{ matrix.module }}
         run: ${{ matrix.scanner-cmd }}
 
