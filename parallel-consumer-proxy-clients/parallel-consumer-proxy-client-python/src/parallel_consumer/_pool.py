@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import multiprocessing
 import pickle
+import time
 from multiprocessing.context import ForkContext, SpawnContext
 from typing import Any
 
@@ -42,6 +43,23 @@ log = logging.getLogger(__name__)
 
 _STOP = None
 """Queue sentinel: a worker that receives it has no more records coming."""
+
+_TERMINATE_GRACE = 5.0
+"""How long the launcher waits for a worker it has just signalled to actually die."""
+
+_LAUNCHER_REAP_GRACE = 5.0
+"""How much longer the parent waits for the launcher than the launcher waits for its workers.
+
+**Strictly more, and the strictness is the whole point.** Both waits used to be the same number, so
+the parent's patience ran out at the same instant the launcher's did - and the parent's answer to a
+launcher that had not finished is to terminate it, which kills the process that was about to reap
+the workers. Any worker still executing was then orphaned to init, holding every descriptor it
+inherited: on a shared stdout, that is a pipe whose reader never sees EOF.
+
+Found by the cross-language conformance suite (astubbs#242), which prescribes a worker that never
+returns as its negative control: the Java side read an empty transcript from a runner that had
+printed, exited and been reaped, because a stray interpreter still held the write end.
+"""
 
 
 def _context() -> ForkContext | SpawnContext:
@@ -90,10 +108,18 @@ def _launcher_main(processor: RecordProcessor, control_queue: Any, work_queue: A
         elif command == "stop":
             for _ in workers:
                 work_queue.put(_STOP)
+            # ONE DEADLINE FOR ALL OF THEM, not one each. Per-worker timeouts made the launcher's
+            # own worst case `argument * len(workers)`, which is longer than the parent is willing
+            # to wait for the launcher - and a launcher killed mid-reap orphans the very workers it
+            # was reaping. Every worker was told to stop before this loop began, so they drain
+            # concurrently and the whole stop costs one drain, whatever the executor count.
+            deadline = time.monotonic() + argument
             for worker in workers:
-                worker.join(timeout=argument)
+                worker.join(timeout=max(0.0, deadline - time.monotonic()))
+            for worker in workers:
                 if worker.is_alive():
                     worker.terminate()
+                    worker.join(timeout=_TERMINATE_GRACE)
             return
 
 
@@ -158,7 +184,9 @@ class WorkerPool:
         self._closed = True
         if self._launcher.is_alive():
             self._control_queue.put(("stop", timeout))
-            self._launcher.join(timeout=timeout)
+            # The launcher gets the workers' drain PLUS a grace, so it is never killed in the middle
+            # of reaping them - see _LAUNCHER_REAP_GRACE, which is where the orphan came from.
+            self._launcher.join(timeout=timeout + _LAUNCHER_REAP_GRACE)
             if self._launcher.is_alive():
                 self._launcher.terminate()
         for queue in (self.work_queue, self.outcome_queue, self._control_queue):

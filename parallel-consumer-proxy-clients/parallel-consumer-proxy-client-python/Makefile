@@ -19,7 +19,7 @@ help:
 	@echo "test        run the suite (spawns the test-mode sidecar for the end-to-end test)"
 	@echo "lint        ruff + mypy - the whole static analysis, and exactly what the CI row runs"
 	@echo "ruff        the linter alone (pyflakes, bugbear, bandit)"
-	@echo "typecheck   mypy alone: --strict over src, --check-untyped-defs over tests and tools"
+	@echo "typecheck   mypy alone: --strict over src, --check-untyped-defs over tests, tools and scripts"
 	@echo "proto       regenerate the committed stubs from the frozen proxy.proto"
 	@echo "proto-check regenerate and fail if the committed stubs have drifted"
 	@echo "clean       remove the venv, the build tree and the cached sidecar classpath"
@@ -45,10 +45,12 @@ ruff: build
 
 # TWO PASSES, DIFFERENT STRICTNESS, and the split is the point - see the [tool.mypy] comment in
 # pyproject.toml. src/ is the shipped surface and carries full annotations; tests get their bodies
-# checked without every test function having to declare a signature.
+# checked without every test function having to declare a signature. scripts/ joins them because the
+# conformance runner lives there: it is the shared cross-language suite's only view of this client,
+# so a runner that stopped compiling must redden this lane rather than the Java module's.
 typecheck: build
 	$(BIN)/mypy --strict src
-	$(BIN)/mypy --check-untyped-defs tests tools
+	$(BIN)/mypy --check-untyped-defs tests tools scripts
 
 proto: build
 	$(BIN)/python tools/generate_proto.py
