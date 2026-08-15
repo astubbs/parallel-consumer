@@ -42,12 +42,46 @@ preserved; and where PC deliberately differs rather than accidentally.
 
 ## The second half: competitive positioning
 
-Two landscapes, and PC sits differently in each:
+Three landscapes, and PC sits differently in each:
 
 - **Kafka clients generally** — key-based ordering with concurrency beyond partition count, breadth
   of client languages, latency, retry and offset semantics.
 - **Message-processing systems generally** — output modelling, batching, delivery guarantees, and
   what a user has to give up to get each.
+- **The "faster / cheaper / more flexible Kafka" vendors** — added 2026-08-15 in answer to a direct
+  question: *is somebody already selling what this is becoming?* Provisional answer below; it is the
+  axis most likely to be out of date, so **verify before publishing anything that depends on it**.
+
+### Is anyone already selling this? — provisional map, needs verification
+
+The question arose while writing
+[`next-work-server-pitch-and-buyer.md`](next-work-server-pitch-and-buyer.md), whose partition-cost
+argument would be undercut if a vendor already made it. The provisional finding is that **the
+"faster Kafka" vendors compete on storage and operational economics and leave the consumption model
+untouched** — which is why none of them scores what this does, and why they are complements rather
+than rivals.
+
+- **Kafka-protocol reimplementations and re-engines** — Redpanda, WarpStream, AutoMQ, Bufstream,
+  Confluent's own newer engine work. They compete on cost per byte, cross-AZ traffic, object-store
+  backing, no-ZooKeeper operation, per-core efficiency. **None of them changes the consumer group
+  model**: a topic still delivers partition-bounded ordered consumption, so the partition↔concurrency
+  coupling survives every one of them. PC runs on top of any of them, and their per-partition
+  efficiency claims reduce the *cost* of over-partitioning without removing the *reason* for it.
+- **Kafka Share Groups (KIP-932)** — the genuinely overlapping feature, and the one that concedes
+  ordering. `STRATEGY.md` owns this comparison; do not restate it here.
+- **Pulsar's `Key_Shared` subscription** — the closest thing to prior art for the actual combination:
+  per-key ordering with more consumers than partitions, shipped and used. It is worth treating as
+  **validation that the demand is real rather than as evidence this is redundant**, because obtaining
+  it costs a broker migration. If the "the combination appears to be new" claim is ever published,
+  this is the counter-example a reader will raise, so establish exactly how its guarantees differ
+  before making the claim.
+- **Durable-execution platforms** — Temporal, Restate, Inngest. A different axis again (workflow
+  orchestration and state, not stream consumption), and already partly covered above.
+
+**Freshness caveat, and it is the point of writing this down rather than asserting it in a post:**
+this space moves faster than any other on the list, the above is from memory, and
+`docs/solutions/documentation-gaps/competitor-comparison-docs-must-cite-the-primary-spec.md` already
+records what happens when a comparison is written without citing the primary source.
 
 ## Not started
 

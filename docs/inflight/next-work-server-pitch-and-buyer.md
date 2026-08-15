@@ -45,6 +45,62 @@ Ranked by how much it is actually costing someone today, not by how impressive i
    effect rather than as its purpose — which is exactly why it answers it differently from the
    neighbours, who stop at partition-bounded delivery because reaching Kafka *was* their goal.
 
+## 2b. Partition economics — the deflation argument, and its honest limits
+
+The strongest *money* version of the pitch, and it needs stating carefully because the enthusiastic
+version overreaches.
+
+**The mechanism.** Partition count is normally sized by the largest of three demands: broker
+parallelism, Kafka Streams' task parallelism, and **consumer concurrency**. Only the third is a
+Parallel Consumer problem, but it is very often the one setting the number — and once the source
+topic is inflated, everything downstream inherits it. Kafka Streams' repartition and changelog topics
+mirror the source count, multiplied by topology stages, so a source sized for consumer throughput
+becomes thousands of partitions across internal topics that nobody chose deliberately. Connect sink
+task parallelism is bounded by partitions too, which is a third reason to over-provision.
+
+**What that costs**: broker memory and open file handles, replication fetch fan-out, controller
+metadata, longer and more disruptive rebalances, producer-side batching memory — and, on managed
+platforms, partitions are a directly billed unit.
+
+**Three limits, all of which must survive contact with a customer:**
+
+- **Partitions cannot be reduced in place.** Kafka increases only. Deflating an existing topic means
+  a new topic, a migration, and a changed key→partition mapping — a project with a payback
+  calculation, not a config change. **The durable, easy win is not inflating the next one**; a
+  greenfield topic gets sized to the broker count instead of to the desired concurrency.
+- **It does not fix Kafka Streams' own parallelism.** Streams task parallelism *is* partition-bound.
+  If Streams throughput is the reason for 100 partitions, this changes nothing. The win is the common
+  case where the source was over-partitioned for *consumers* and Streams merely inherited the number —
+  there the saving multiplies across every internal topic, which is where the dramatic figures come
+  from.
+- **Connect is only helped if the connector is replaced** by a Parallel Consumer-based sink. That is a
+  real option and a real deflation, but it is a rewrite, not a setting.
+
+**Fewer clients, less broker load, fewer moving parts** is the same argument from the operational
+side, and it has a specific mechanism rather than being a vibe: higher per-instance throughput means
+**fewer application instances**, which means fewer consumer clients — fewer connections, fetch
+requests, heartbeats and metadata refreshes, fewer group members, and therefore faster and rarer
+rebalances. It holds in the sidecar shape and compounds in the shared-server shape, where many
+workers share one engine's connections. The "fewer moving parts" half is about **variety, not count**:
+one Kafka client implementation instead of librdkafka plus a per-language wrapper zoo, each with its
+own version skew and configuration surface. Be honest that the sidecar itself is a new moving part —
+the trade is one well-understood process against a fleet of heterogeneous clients.
+
+## 2c. The smallest pitch, and the one everybody recognises
+
+Below the platform pitch and the application-team pitch there is a third altitude, and it is the one
+that gets nods in a room:
+
+> **"You just polled 40 records. How do you process them concurrently, with no head-of-line blocking,
+> and still persist offsets correctly when three of them fail?"**
+
+Everyone who has written a consumer has written a half-answer to this, and left throughput on the
+table doing it. This is the *recognition* pitch — it needs no architecture diagram, sells nothing by
+itself, and is the fastest way to establish that the problem is real before any larger claim is made.
+Naming it as a distinct altitude matters because §4d of
+[`next-http-strategy-ideas.md`](next-http-strategy-ideas.md) still binds: **lead with one story.**
+This is a way in, not a second front-page message.
+
 ## 3. What it enables that nothing replaces
 
 Replacement is the sale; these are the reason it is interesting.
@@ -154,6 +210,12 @@ Stated plainly so it is not mistaken for a decision:
 
 - **Whether anyone buys it.** This is a customer-discovery question and no amount of architecture
   answers it. §4c's rule stands: **demand decides** — build the thing somebody asked for.
+- **Whether somebody already sells it.** Asked directly, and the provisional answer — that the
+  "faster Kafka" vendors compete on storage economics and leave the consumption model alone — is
+  recorded in
+  [`next-architecture-landscape-comparison.md`](next-architecture-landscape-comparison.md), which
+  **owns that survey**. It is from memory and unverified; §2b's cost argument depends on it, so it
+  needs establishing before either is used publicly.
 - **Sidecar or server** (§4h). §4 above pushes toward server; the adoptability argument pushes back.
 - **Exactly-once through the proxy**, which any durable-work-queue story depends on, and which is
   post-v6 with core changes sanctioned (§4h).
