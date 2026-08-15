@@ -79,10 +79,12 @@ def trace(monkeypatch):
 
     original_launch = WorkerPool.launch
 
-    @classmethod
+    # A classmethod defined outside a class body, then monkeypatched onto one - legal at runtime,
+    # and the only way to keep launch()'s binding while counting calls. mypy has no shape for it.
+    @classmethod  # type: ignore[misc]
     def traced_launch(cls, processor):
         events.append("pool-created")
-        return original_launch.__func__(cls, processor)
+        return original_launch.__func__(cls, processor)  # type: ignore[attr-defined]
 
     monkeypatch.setattr(client_module._sidecar, "Sidecar", FakeSidecar)
     monkeypatch.setattr(session_module.grpc, "insecure_channel", fake_channel)
@@ -114,6 +116,7 @@ def test_the_executor_count_comes_from_the_handshake(trace):
     try:
         client.poll(_noop)
         # Sized by what Configured said, not by anything this client chose or computed.
+        assert client._pool is not None and client._session is not None
         assert client._pool.size == 2
         assert client._session.max_concurrency == 4
     finally:

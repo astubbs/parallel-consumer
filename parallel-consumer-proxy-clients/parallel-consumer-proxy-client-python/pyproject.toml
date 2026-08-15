@@ -31,7 +31,19 @@ classifiers = [
 dependencies = ["grpcio>=1.60", "protobuf>=4.25"]
 
 [project.optional-dependencies]
-dev = ["grpcio-tools==1.73.0", "pytest>=8.0", "ruff>=0.9"]
+# Static analysis lives here, not in a CI-only install step: `make lint` and the clients workflow's
+# Python row run the SAME binaries out of this venv, so the two cannot pin different versions and
+# drift (docs/client-static-analysis.md). Both analysers carry an upper bound - an unbounded linter
+# reddens the lane on a release day for reasons unrelated to the diff, which is how a real finding
+# learns to look like noise. types-grpcio is typeshed's grpc stubs: without them mypy sees the whole
+# channel API as Any and the strict pass has nothing to check.
+dev = [
+    "grpcio-tools==1.73.0",
+    "pytest>=8.0",
+    "ruff>=0.9,<0.17",
+    "mypy>=1.15,<3",
+    "types-grpcio>=1.60",
+]
 
 [project.urls]
 Homepage = "https://github.com/astubbs/parallel-consumer"
@@ -39,6 +51,13 @@ Issues = "https://github.com/astubbs/parallel-consumer/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# PEP 561 marker. Without it a type checker ignores this package's annotations entirely - including
+# in this repo's own test suite, which is how the gap was found - so the strict pass over src/ would
+# be checking code nobody downstream can benefit from. Shipping the marker is what makes the
+# annotations part of the API rather than internal decoration.
+[tool.setuptools.package-data]
+parallel_consumer = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -54,4 +73,50 @@ line-length = 100
 extend-exclude = ["src/parallel_consumer/_generated", "poc", ".venv"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B", "UP", "SIM", "RUF"]
+# Bug-finding sets, not cosmetics: F is pyflakes (undefined names, unused imports, shadowing), B is
+# bugbear (mutable default args, loop-variable capture, except-without-raise-from), S is flake8-
+# bandit - the SAME checks the `bandit` tool runs, in-process, which is why bandit itself is not a
+# separate dependency here. E/W/UP/SIM/RUF are kept from the module's first wave.
+select = ["E", "F", "W", "B", "UP", "SIM", "RUF", "S"]
+
+# Bandit's three findings on this tree, exempted where each is the file's declared job rather than a
+# risk. Narrow on purpose: an exemption wide enough to cover a future mistake is not an exemption.
+[tool.ruff.lint.per-file-ignores]
+# pytest's assertion rewriting IS the assert statement; S101 would ban the test suite's only verb.
+"tests/**" = ["S101"]
+# The generator drives protoc and git by name, from a fixed argv this file builds itself - there is
+# no untrusted input to reach either.
+"tools/**" = ["S603", "S607"]
+# Spawning the JVM sidecar from an argv this module builds is the module's entire purpose, and its
+# three asserts narrow an Optional immediately before the same attribute is used - stripped under
+# -O they buy an AttributeError one line later, which is what S101 exists to prevent elsewhere. Any
+# OTHER file that reaches for assert as a validation guard still fails.
+"src/parallel_consumer/sidecar.py" = ["S603", "S101"]
+
+# TYPE CHECKING. mypy runs in two passes with different strictness, and the split is deliberate:
+#   src   --strict            the shipped surface, fully annotated, no implicit Any anywhere
+#   tests --check-untyped-defs bodies are checked without demanding annotations on every test
+#                             function - the value there is catching an attribute that cannot
+#                             exist, not decorating 40 test signatures
+# Both are `make typecheck`; docs/client-static-analysis.md states the policy and the exact commands.
+[tool.mypy]
+python_version = "3.10"
+# poc/ is the preserved specification probe, kept as evidence and never maintained.
+exclude = ["^poc/", "^\\.venv/", "^build/"]
+# A stale `# type: ignore` is itself an error, so the inline suppressions below cannot outlive the
+# mypy or typeshed release that made them unnecessary.
+warn_unused_ignores = true
+
+# protoc's output, checked by nobody: it is regenerated wholesale by `make proto` and any finding in
+# it is a bug report for protobuf, not for this module. `follow_imports = skip` also stops mypy
+# inferring a shape for the generated classes that the next codegen could invalidate.
+[[tool.mypy.overrides]]
+module = ["parallel_consumer._generated.*"]
+ignore_errors = true
+follow_imports = "skip"
+
+# grpcio-tools is a build-time generator with no stubs published; the file that drives it is checked,
+# the library it drives is not.
+[[tool.mypy.overrides]]
+module = ["grpc_tools.*"]
+ignore_missing_imports = true

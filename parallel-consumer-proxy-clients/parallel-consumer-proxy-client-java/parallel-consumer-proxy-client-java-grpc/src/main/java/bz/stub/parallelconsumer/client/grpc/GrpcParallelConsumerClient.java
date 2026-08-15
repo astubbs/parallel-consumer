@@ -66,8 +66,23 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
     private final Object transmitLock = new Object();
     private final CompletableFuture<Configured> configured = new CompletableFuture<>();
 
-    private ManagedChannel channel;
-    private StreamObserver<ClientMessage> requests;
+    /**
+     * Volatile because {@code close()} reads it from a DIFFERENT thread than the one that assigned it in
+     * {@code poll()}. The {@code synchronized (this)} block there gives at-most-once mutual exclusion,
+     * which is a different guarantee from visibility: without volatile there is no happens-before edge to the
+     * closing thread, so {@code close()} may read {@code null} after {@code poll()} has built the channel -
+     * and then never shut it down, leaking the connection and the sidecar's group membership.
+     * Found by SpotBugs (IS2_INCONSISTENT_SYNC, "locked 66% of time"); every other cross-thread mutable field
+     * on this class was already volatile, so this was the one that was missed rather than a decision.
+     */
+    private volatile ManagedChannel channel;
+
+    /**
+     * Volatile for the same reason, found by looking for other instances of the same defect rather than by the
+     * analyser: it is assigned on the polling thread outside {@code transmitLock} and read by the executor
+     * threads inside it.
+     */
+    private volatile StreamObserver<ClientMessage> requests;
 
     /** Guarded by {@link #transmitLock}: once true, nothing more is written to the stream. */
     private boolean streamClosed = false;

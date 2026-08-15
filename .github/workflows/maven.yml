@@ -192,6 +192,14 @@ jobs:
   # renames the compatibility promise forbids - compares the PR's schema against the frozen one on
   # origin/master. bin/check-proto-breaking.sh passes with a notice while master has no frozen
   # schema yet, so the job arms itself the moment the freeze lands.
+  #
+  # It also carries the schema's STATIC ANALYSIS - `buf lint`, via bin/check-proto-lint.sh - because
+  # the two share a toolchain install and a checkout, and splitting them would buy a second job for
+  # one binary. The job's NAME is deliberately unchanged: it is a required check, and renaming a
+  # required check silently un-gates every open PR. The lint runs FIRST: a schema that does not lint
+  # is a schema whose breaking-change comparison is answering a question nobody asked yet. The
+  # protocol earns its own analysis because it is the artifact all eleven clients are generated
+  # from - one defect there arrives in every language at once (docs/client-static-analysis.md).
   proto-breaking:
     if: github.event_name == 'pull_request'
     name: "proto: breaking"
@@ -205,6 +213,8 @@ jobs:
         uses: bufbuild/buf-action@v1
         with:
           setup_only: true
+      - name: Lint the schema (buf lint)
+        run: bin/check-proto-lint.sh
       - name: Enforce the frozen schema (additions only)
         run: bin/check-proto-breaking.sh
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import multiprocessing
 import pickle
-from multiprocessing.context import BaseContext
+from multiprocessing.context import ForkContext, SpawnContext
 from typing import Any
 
 from .outcomes import RecordProcessor, resolve_outcome
@@ -44,8 +44,14 @@ _STOP = None
 """Queue sentinel: a worker that receives it has no more records coming."""
 
 
-def _context() -> BaseContext:
-    """``fork`` where the platform has it - it is what lets the user's function be a closure."""
+def _context() -> ForkContext | SpawnContext:
+    """``fork`` where the platform has it - it is what lets the user's function be a closure.
+
+    The return type names the two concrete contexts rather than their ``BaseContext`` supertype,
+    which is not cosmetic: ``BaseContext`` does not declare ``Process``, so the wider annotation
+    made every ``context.Process(...)`` below unverifiable (mypy: ``"BaseContext" has no attribute
+    "Process"``). Narrowing it is what lets the strict pass check those calls at all.
+    """
     if "fork" in multiprocessing.get_all_start_methods():
         return multiprocessing.get_context("fork")
     return multiprocessing.get_context("spawn")

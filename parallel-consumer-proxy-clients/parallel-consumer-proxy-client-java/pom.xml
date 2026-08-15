@@ -31,4 +31,60 @@
         <module>parallel-consumer-proxy-client-java-grpc</module>
     </modules>
 
+    <build>
+        <plugins>
+            <!--
+                STATIC ANALYSIS FOR THE JAVA CLIENT, AND IT FAILS THE BUILD (astubbs#242; the policy
+                and the per-language equivalents are in docs/client-static-analysis.md).
+
+                Declared once here so every module beneath it inherits it - including any added
+                later, which is the point of putting it here rather than in each child. The root pom already
+                pluginManages this plugin - version, effort=Max, threshold=Medium - so nothing is
+                repeated; what is added is the binding and the fact that it GATES.
+
+                WHY process-classes AND NOT verify, which is the plugin's own default phase: the
+                gating PR lane runs `bin/ci-unit-test.sh`, which stops at `test`. A verify-bound
+                check would run only in the push-to-master full build - after review, on the wrong
+                side of the merge - and would read as covered the whole time. process-classes is the
+                first phase after compile, so `test`, `package` and `verify` all reach it, and so
+                does `bin/build.sh -pl :<module> -am` on a laptop.
+
+                WHY `check` AND NOT `spotbugs`: the `spotbugs` goal writes a report and exits 0.
+                `check` reads that report and fails, which is the difference between analysis
+                nobody reads and a gate. It runs the analysis itself (@Execute), so there is no
+                second execution to keep in step.
+
+                THIS IS A HARDER GATE THAN THE REPO-WIDE LANE, deliberately. maven.yml's
+                `static: spotbugs` job is core-scoped, baseline-excluded and non-blocking - it
+                reports what is NEW against master and never reddens. That design suits a codebase
+                with 30 pre-existing findings (docs/inflight/static-spotbugs-latent-findings.md);
+                these modules have none, and starting a new module at zero is the one moment a
+                clean-slate gate is free.
+
+                DISMISSING A FINDING: the shape that keeps the reason next to the code is
+                @SuppressFBWarnings at the site, and it is unavailable here - the annotation needs
+                com.github.spotbugs:spotbugs-annotations on the classpath, and the api module is
+                dependency-free by design. So a dismissal goes in that module's own
+                spotbugs-exclude.xml, named class by class and pattern by pattern with the reason
+                written beside it. A module-wide or pattern-wide exclusion is the thing to refuse:
+                it silences the finding for code nobody has written yet. Only the api module needs
+                one today; every other module here is clean with no filter at all.
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <!-- version and configuration come from the root pom's pluginManagement -->
+                <executions>
+                    <execution>
+                        <id>spotbugs-gate</id>
+                        <phase>process-classes</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

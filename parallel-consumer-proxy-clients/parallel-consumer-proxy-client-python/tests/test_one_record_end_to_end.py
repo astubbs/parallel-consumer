@@ -32,7 +32,7 @@ QUIET_PERIOD = 3.0
 
 @pytest.mark.sidecar
 def test_one_record_goes_through_and_is_not_redelivered(sidecar_for):
-    deliveries = multiprocessing.Queue()
+    deliveries: multiprocessing.Queue[tuple[str, int, int, int]] = multiprocessing.Queue()
 
     # A closure, over a queue this process created - which is the whole point of forking the
     # worker pool before any channel exists. The user's function is never an importable name.
@@ -55,4 +55,5 @@ def test_one_record_goes_through_and_is_not_redelivered(sidecar_for):
 
     # Leaving the context drains the session, stops the workers and reaps the sidecar. A client
     # that leaked the JVM would leave a process still holding Kafka group membership.
+    assert client._sidecar is not None, "the client never spawned a sidecar"
     assert client._sidecar.returncode is not None, "the sidecar outlived its parent"

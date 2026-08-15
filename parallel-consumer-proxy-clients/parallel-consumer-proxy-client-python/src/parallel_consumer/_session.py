@@ -79,7 +79,12 @@ class Session:
         self._channel = grpc.insecure_channel(f"127.0.0.1:{port}")
         self._sends.put(pb.ClientMessage(
             configure=_wire.configure_message(options, CAPABILITIES)))
-        self._call = pb_grpc.ProxyServiceStub(self._channel).Session(self._requests())
+        # protoc's gRPC output carries no annotations, so the strict pass sees an untyped call here.
+        # Suppressed at the site rather than by relaxing the module: this is the ONE crossing into
+        # generated code, and pyproject's warn_unused_ignores deletes this line for us the day
+        # protoc starts emitting stubs.
+        self._call = pb_grpc.ProxyServiceStub(  # type: ignore[no-untyped-call]
+            self._channel).Session(self._requests())
 
         configured = self._handshake()
         self.max_concurrency: int = configured.max_concurrency
@@ -164,7 +169,9 @@ class Session:
         log.debug("configured: max_concurrency=%d executor_count=%d capabilities=%s",
                   configured.max_concurrency, configured.executor_count,
                   sorted(configured.capabilities))
-        return configured
+        # Same crossing as the stub call above: the generated message class is untyped, so its
+        # fields read as Any. The declared return type is the assertion; the ignore is the receipt.
+        return configured  # type: ignore[no-any-return]
 
     def _read(self) -> None:
         """The reader. Appends and returns to the stream; it never waits for a worker."""

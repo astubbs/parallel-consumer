@@ -63,29 +63,55 @@ jobs:
           #   module      - Maven artifactId, and the maturity fragment's filename stem
           #   toolchain   - exact toolchain version the language's setup step installs
           #   scanner     - the language-native static-analysis tool (step title)
-          #   scanner-cmd - how to run it, from the module directory
+          #   scanner-cmd - how to run it, from the module directory. PREFER THE MODULE'S OWN
+          #                 RECIPE (scripts/analyse.sh, `make lint`, `npm run check`) over an
+          #                 invocation spelled out here: a command written twice is a command that
+          #                 drifts, and the version a developer runs then differs from the version
+          #                 that gates. Where a row does spell the tool out, the module's config
+          #                 file is still the authority, and a row/module mismatch is the first
+          #                 thing to check when a row fails on a diff that looks unrelated.
+          #                 docs/client-static-analysis.md owns the per-language policy: which tool,
+          #                 what it catches, the local command, and what fails versus warns.
           #   cache-path  - the language's package cache ('' = no per-language cache)
           #   lockfile    - hashFiles() pattern keying that cache (empty hash until the
           #                 wave lands one; restore-keys covers the gap)
           - language: go
             module: parallel-consumer-proxy-client-go
             toolchain: '1.25.0'
-            scanner: go vet
-            scanner-cmd: go vet ./...
+            # go vet catches misuse the compiler accepts (format args, copied locks, lost struct
+            # tags); staticcheck adds the classes vet does not look for (dead stores, unused
+            # unexported code, nil-deref, misused stdlib). It is pinned as a `tool` directive in
+            # go.mod, so `go tool staticcheck` builds THAT version and nothing is installed
+            # globally - which also makes 1.25.0 above staticcheck's floor, not an arbitrary pin.
+            scanner: go vet + staticcheck
+            scanner-cmd: scripts/analyse.sh
             cache-path: ~/go/pkg/mod
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/go.sum
           - language: python
             module: parallel-consumer-proxy-client-python
             toolchain: '3.13.5'
-            scanner: ruff
-            scanner-cmd: python -m pip install --quiet ruff==0.9.2 && ruff check .
+            # `make lint` is ruff (pyflakes + bugbear + bandit) and mypy (strict over src,
+            # check-untyped-defs over tests). Both come out of the module's own venv, pinned in
+            # pyproject.toml's dev extra - the row no longer pip-installs a second, separately
+            # pinned ruff, which was a version this file could hold at a value the module had
+            # moved past with nothing to notice.
+            scanner: ruff + mypy
+            scanner-cmd: make lint
             cache-path: ~/.cache/pip
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/pyproject.toml
           - language: swift
             module: parallel-consumer-proxy-client-swift
             toolchain: '6.1'
             # swift-format ships inside the Swift 6 toolchain - no extra install to pin.
-            scanner: swift-format
+            #
+            # NOT UPGRADED TO A BUG-FINDER, and that is a recorded result rather than an omission:
+            # Swift has no mature standalone analyser in the SpotBugs/staticcheck class. SwiftLint
+            # is a style linter, and the real defect detection lives in the compiler - Swift 6
+            # language mode's strict concurrency checking, with -warnings-as-errors. That belongs
+            # in Package.swift, which this row may not write and the Swift wave owns. Reasoning in
+            # docs/client-static-analysis.md; this row stays a formatter check until then, and is
+            # labelled so nobody reads it as one.
+            scanner: swift-format (formatting only - no mature Swift bug-finder)
             scanner-cmd: swift format lint --strict --recursive Sources
             cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/.build
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/Package.resolved
@@ -99,18 +125,28 @@ jobs:
           - language: dotnet
             module: parallel-consumer-proxy-client-dotnet
             toolchain: '8.0.404'
-            # Roslyn analyzers, driven by the SDK's own format tool - nothing external.
-            scanner: dotnet format analyzers
-            scanner-cmd: dotnet format analyzers --verify-no-changes
+            # Roslyn analyzers, which run INSIDE the compiler - nothing external to install.
+            # The build is therefore the gate, given the csproj's AnalysisLevel=latest-recommended
+            # and TreatWarningsAsErrors (the .NET wave owns both). This used to be `dotnet format
+            # analyzers --verify-no-changes`, which only verifies the analyzer diagnostics that
+            # happen to ship a code FIX - a genuine null-dereference warning has none, so it passed
+            # clean through the check that was supposed to catch it.
+            scanner: Roslyn analyzers (warnings as errors)
+            scanner-cmd: dotnet build --configuration Release --no-incremental -warnaserror
             cache-path: ~/.nuget/packages
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/**/*.csproj
           - language: typescript
             module: parallel-consumer-proxy-client-typescript
             toolchain: '22.17.0'
-            # --no-install: eslint and its config come from the module's own pinned
-            # devDependencies (the wave owns package-lock.json), never an ambient npx fetch.
-            scanner: eslint
-            scanner-cmd: npx --no-install eslint .
+            # `npm run check` is the module's own script: `tsc --build` then `eslint .`, both from
+            # its pinned devDependencies (the wave owns package.json and package-lock.json), never
+            # an ambient npx fetch. Running the script rather than the tools keeps one recipe -
+            # and the TYPE CHECK is the half that matters: bare eslint without type information
+            # cannot see a misused Promise or an impossible narrowing, which is most of what a
+            # TypeScript bug looks like. typescript-eslint's recommended-type-checked config and
+            # tsc's strict flags are the module's to set, in tsconfig.json and eslint.config.js.
+            scanner: tsc + typescript-eslint (type-checked)
+            scanner-cmd: npm run --silent check
             cache-path: ~/.npm
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript/package-lock.json
           - language: kotlin
@@ -126,6 +162,14 @@ jobs:
             # names the exact bytes reviewed (byte-identical to the v1.23.7 GitHub
             # release asset when pinned, 2026-08-14). A version bump recomputes it:
             # sha256sum on the freshly fetched jar.
+            #
+            # NO --config, AND THAT IS THE KOTLIN WAVE'S DECISION, NOT AN OMISSION: detekt does not
+            # auto-discover a config file, so passing one here and not there (or the reverse) is the
+            # one skew that matters - green locally, red in CI. The module therefore keeps NO
+            # detekt.yml at all and satisfies the default ruleset, suppressing an individual rule
+            # with an @Suppress in the code, where the reason is reviewable. Do not add --config
+            # without changing the module's detekt.sh in the same commit; the two are two copies of
+            # one invocation on purpose, because a workflow cannot source a variable from a script.
             scanner-cmd: >-
               curl -sSL --fail -o /tmp/detekt-cli.jar
               https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/1.23.7/detekt-cli-1.23.7-all.jar
@@ -136,8 +180,12 @@ jobs:
           - language: ruby
             module: parallel-consumer-proxy-client-ruby
             toolchain: '3.4.4'
-            scanner: rubocop
-            scanner-cmd: gem install --quiet rubocop -v 1.69.2 && rubocop
+            # `bundle exec`, not `gem install`: the Ruby wave pins rubocop in the module's Gemfile,
+            # and a version pinned in two places is a version that drifts in one of them. The
+            # module's .rubocop.yml is what weights it towards Lint/ and Security/ cops over style
+            # arbitration - rubocop discovers that file itself, so unlike detekt no flag is needed.
+            scanner: rubocop (Lint + Security)
+            scanner-cmd: bundle exec rubocop
             cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/vendor/bundle
             lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/Gemfile.lock
           - language: cpp

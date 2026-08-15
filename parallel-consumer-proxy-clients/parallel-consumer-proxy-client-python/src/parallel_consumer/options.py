@@ -16,7 +16,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 from datetime import timedelta
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 __all__ = ["ClientOptions", "ProcessingOrder"]
 
@@ -57,7 +57,13 @@ class ClientOptions:
     :param kafka_properties: the Kafka client configuration. Credential-bearing.
     """
 
-    topics: tuple[str, ...] = ()
+    # Sequence, not tuple: __post_init__ below promises to accept any iterable and hold a tuple, and
+    # the narrower annotation contradicted that promise - a caller passing the obvious `["topic"]`
+    # was a type error against the very contract the docstring states. Found by the strict mypy pass
+    # the moment the package shipped its PEP 561 marker (astubbs#242, see
+    # docs/client-static-analysis.md); a tuple is itself a Sequence, so the post-init
+    # normalisation still satisfies this type.
+    topics: Sequence[str] = ()
     topic_pattern: str | None = None
     max_concurrency: int | None = None
     ordering: ProcessingOrder | None = None

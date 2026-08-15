@@ -68,7 +68,10 @@ def test_raising_is_a_failure_carrying_the_message():
 
 
 def test_returning_something_that_is_not_an_outcome_fails_the_record_not_the_client():
-    outcome = resolve_outcome(lambda record: "done", RECORD)
+    # The whole point of the test is a processor whose return type is wrong, so the type error
+    # here is the fixture, not a defect - it is suppressed at the one line that needs it.
+    outcome = resolve_outcome(lambda record: "done", RECORD)  # type: ignore[arg-type,return-value]
 
     assert not outcome.succeeded
+    assert outcome.reason is not None
     assert "return an Outcome" in outcome.reason

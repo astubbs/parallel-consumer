@@ -10,14 +10,16 @@ BIN := $(VENV)/bin
 REPO_ROOT := ../..
 CLASSPATH_FILE := target/sidecar-classpath.txt
 
-.PHONY: all build test lint proto proto-check install clean help
+.PHONY: all build test lint ruff typecheck proto proto-check install clean help
 
 all: build test
 
 help:
 	@echo "build       install the package and its dev tools into $(VENV)"
 	@echo "test        run the suite (spawns the test-mode sidecar for the end-to-end test)"
-	@echo "lint        ruff, the same check the CI row runs"
+	@echo "lint        ruff + mypy - the whole static analysis, and exactly what the CI row runs"
+	@echo "ruff        the linter alone (pyflakes, bugbear, bandit)"
+	@echo "typecheck   mypy alone: --strict over src, --check-untyped-defs over tests and tools"
 	@echo "proto       regenerate the committed stubs from the frozen proxy.proto"
 	@echo "proto-check regenerate and fail if the committed stubs have drifted"
 	@echo "clean       remove the venv, the build tree and the cached sidecar classpath"
@@ -32,8 +34,21 @@ install build: $(BIN)/python
 test: build $(CLASSPATH_FILE)
 	$(BIN)/python -m pytest -q
 
-lint: build
+# STATIC ANALYSIS, and it is one target on purpose: the `clients` workflow's Python row runs
+# `make lint` and nothing else, so a tool added here is a tool CI runs, with no second list to keep
+# in step. Severity policy: everything below fails: there is no warn-only tier (astubbs#242,
+# docs/client-static-analysis.md).
+lint: ruff typecheck
+
+ruff: build
 	$(BIN)/ruff check .
+
+# TWO PASSES, DIFFERENT STRICTNESS, and the split is the point - see the [tool.mypy] comment in
+# pyproject.toml. src/ is the shipped surface and carries full annotations; tests get their bodies
+# checked without every test function having to declare a signature.
+typecheck: build
+	$(BIN)/mypy --strict src
+	$(BIN)/mypy --check-untyped-defs tests tools
 
 proto: build
 	$(BIN)/python tools/generate_proto.py
