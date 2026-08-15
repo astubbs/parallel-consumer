@@ -129,6 +129,34 @@ jobs:
       - name: A module with real source must not still be deferred
         run: bash bin/check-deferred-modules.sh
 
+  client-scanners:
+    name: "clients: static analysis coverage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads the workflow and the modules as files; no history needed, so shallow is fine.
+      - uses: actions/checkout@v6
+
+      # Same reasoning as the job above: the check parses clients.yml structurally, and PyYAML is
+      # installed rather than assumed so it cannot quietly stop meaning what it means.
+      - name: Install the YAML parser the check needs
+        run: python3 -m pip install --quiet pyyaml
+
+      # Self-test first, as everywhere else here. Its control arm is what makes the rest
+      # meaningful: an empty scanner-cmd passes on the language that DECLARES it delegates and
+      # fails on every other, so the check is failing on the emptiness being undeclared rather
+      # than on emptiness itself.
+      - name: Self-test the scanner-coverage guard
+        run: bash bin/test-check-client-scanners.sh
+
+      # clients.yml skips the static-analysis step when a row's scanner-cmd is empty - which is
+      # right for the Swift row, whose container already lints on the way to its artifact, and
+      # invisible for everyone else: the row would report green having linted nothing. This is the
+      # check, and for a delegating row it also verifies the file it delegates to still runs the
+      # analyser.
+      - name: Every client row must analyse its module somewhere
+        run: bash bin/check-client-scanners.sh
+
   cve-exclusions:
     name: "deps: CVE exclusion expiry"
     runs-on: ubuntu-latest

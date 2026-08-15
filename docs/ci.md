@@ -108,6 +108,16 @@ document. This section is the detail behind it.
     there also means "an aggregator or test module with no maturity claim to make", which skips
     nothing. **`clients: deferred modules` is a new job name and is NOT yet a required status
     check.**
+  - `client-scanners` runs `bin/check-client-scanners.sh`, which guards the other way a client row
+    can report green having checked nothing. `clients.yml` skips a row's static-analysis step when
+    its `scanner-cmd` is empty, which the Swift row needs - its module builds in a container that
+    already lints on the way to the artifact stage, so a host step would be the same command
+    written twice. Emptiness is therefore legal only for a language listed in the script's
+    `DELEGATED` table, and the entry is a claim the check tests: the named file must exist and must
+    still run the named analyser, so taking the lint out of that Dockerfile fails here rather than
+    silently. It also asks that every row name its `scanner`, and that a `scanner-cmd` pointing at
+    a module script (`scripts/analyse.sh`) points at one that is there. **`clients: static analysis
+    coverage` is a new job name and is NOT yet a required status check.**
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
