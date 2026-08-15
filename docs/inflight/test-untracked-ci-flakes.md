@@ -14,7 +14,7 @@ product behaviour and the assertion was wrong, so no product change was needed.
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
-| `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined (owner astubbs#265) - see below |
+| `PCMetricsTest.metricsRegisterBinding` | 3 seen | Third sighting 2026-08-15. **NOT actually quarantined** - the registry does not hold it; that quarantine sits on astubbs#265's unmerged branch, so this gates every PR today. And the third sighting's signature is the *inverse* of the one diagnosed below - see the correction after that section |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -103,6 +103,25 @@ other way round: there the counter led the metric, here a stale counter snapshot
 generalises - **do not compare two moving values; await a quiescent state, then read both.**
 
 Rate is now 2 sightings rather than the 1/45 that could be dismissed.
+
+#### Correction, 2026-08-15: the third sighting points the other way
+
+The first uncontended verification of `feats/proxy-requirements` reproduced this once in 11 full-suite
+runs, and the signature does **not** match the diagnosis above.
+
+- Documented above: the gauge running **ahead** of a stale counter snapshot, at `:115`.
+- Observed: the gauge **behind** and never converging - `:108`, `expected: 1212.0 but was: 1209.0
+  within 2 minutes` - at a point where the test's own comment says the counters are frozen.
+
+If that comment is right, a gauge that stays 3 short for two minutes is a **committed-offset
+shortfall**, not a sampling race, and this row's "mechanism known" claim does not cover it. Nothing in
+`docs/solutions/test-flakiness/` describes this direction. Treat it as an unverified lead rather than
+a second instance of the same thing - and note it needs the 32-fork self-contention of a full suite to
+appear at all: `PCMetricsTest` alone passed 10/10 in 13.1s.
+
+**It is master's, not the branch's.** A control arm alternated run-for-run: this branch failed 1 of 11
+full core suites, `cae88c7aa` master failed 3 of 5, with the identical stack and assertion. Evidence
+in [`branch-clean-verification-2026-08-15.md`](branch-clean-verification-2026-08-15.md).
 
 ### The rerun failed somewhere else - which is weaker evidence than it first looks
 
