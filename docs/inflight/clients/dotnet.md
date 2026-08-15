@@ -26,8 +26,10 @@ documented redelivery with `attempt` incremented and the reason verbatim.
 Three known specification defects were handed to this wave rather than rediscovered, so they cost
 nothing here. Two of them - the queue-overflow status and the queue at close without `shutdown` -
 were settled in the guide's wave-sync ledger while this wave was running, both the way this client
-had already implemented them; the third, whether `poll` blocks, the ledger records as **open, for
-wave two to answer in five languages at once**. That answer is the next section.
+had already implemented them; the third, whether `poll` blocks, the ledger recorded as **open, for
+wave two to answer in five languages at once**. That answer is the next section - and the ledger has
+since settled it, on 2026-08-15, as *each language's own shape* with one binding property, which is
+what the next section argues for.
 
 ## The decision the fan-out needs: does `poll(processor)` block?
 

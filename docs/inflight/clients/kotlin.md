@@ -87,13 +87,13 @@ All of wave one's calls survive the rework; two of them are now *enforced* rathe
 - **The dispatcher is injected** (defaulted to `Dispatchers.IO`), so the library's work lands on the
   application's own dispatcher rather than one it never mentioned.
 
-## What it now inherits, including the parked P0
+## What it now inherits, including the P0 that was parked
 
 This is the compounding argument working as designed, so it is recorded rather than worked around:
 
 - **A mid-session stream error used to park every executor with no way for a caller to learn the
-  session died** - the P0 that was in `docs/inflight/parked-proxy-review-findings.md`. The transport
-  half is fixed: `java-grpc` now stops hand-out on a stream error and reports the end, with its
+  session died** - the P0 the spike+freeze review parked. The transport half is fixed by `061324e20`:
+  `java-grpc` now stops hand-out on a stream error and reports the end, with its
   cause, through `ParallelConsumerClient.sessionEnd()`. **The Kotlin half is open**: `poll` still
   returns on `close` or cancellation only, because it awaits its own `ended` and nothing joins that
   to the transport's `sessionEnd()`. Wiring the two together is this client's remaining work, and it

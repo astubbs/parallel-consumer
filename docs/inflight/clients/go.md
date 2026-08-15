@@ -145,11 +145,11 @@ it cost a negative control:
   default" - which is the wire's own convention, so the two agree without a translation table.
 - **Only implemented capabilities are declared.** An empty list means the v1 baseline, and a partial
   client declaring it would entitle the proxy to send messages the client ignores. Wave one declares
-  `["dispatch"]` and the wave that implements a duty adds its token. This is deliberately the
-  *opposite* of the Java reference client, which declares nothing at all - the first finding in
-  [`docs/inflight/parked-proxy-review-findings.md`](../parked-proxy-review-findings.md), which
-  predicts the lease-expiry redelivery loop that arms the moment `heartbeat` is granted. Go's
-  surface makes the safe answer the structural one: the declared set is a constant naming what is
-  implemented, so it cannot fall out of step by omission.
+  `["dispatch"]` and the wave that implements a duty adds its token. This was deliberately the
+  *opposite* of the Java reference client, which declared nothing at all until `e955e3acd` adopted
+  the same answer (`DISPATCH_CAPABILITY` in `WireMapping.toConfigure`) - the empty list reads on the
+  wire as the whole v1 baseline, arming a lease-expiry redelivery loop the moment `heartbeat` is
+  granted. Go's surface makes the safe answer the structural one: the declared set is a constant
+  naming what is implemented, so it cannot fall out of step by omission.
 - **The token is echoed as the received message**, never rebuilt from parsed fields, so "opaque" is
   structural rather than a rule someone has to remember.

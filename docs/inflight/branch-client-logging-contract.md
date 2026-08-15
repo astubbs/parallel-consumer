@@ -118,7 +118,7 @@ Ordered so the implementation wave can work down the column. None of it is a fix
 | **TypeScript** | (1) injectable `Logger` interface on the options, absent by default - **no dependency**, the ecosystem has no facade and inventing one for a thin client would be the wrong call. (2) a retained stderr tail: with `"inherit"` the lines reach the terminal but the client cannot put them in a thrown error. |
 | **Rust** | (1) `log` 0.4 (not `tracing`) - no required transitive deps, and the crate's own guidance is that libraries link only against it. (2) a retained stderr tail, as TypeScript. Everything else is already the reference implementation. |
 | **Kotlin** | Closest to done. (1) keep `slf4j-api` and do **not** add `kotlin-logging`. (2) declare `slf4j-api` explicitly if the client is ever published standalone. (3) `log.info("Connected: {}", session)` - confirm `Session.toString()` cannot grow a property map as the type gains fields. |
-| **Java** | (1) as Kotlin for the dependency. (2) the §10.3 floor is the parked P0: a stream error parks every executor with no listener, so until the surface can report the death, ERROR-log it with its cause. §1 already names this defect and tells other clients not to mirror it. |
+| **Java** | (1) as Kotlin for the dependency. (2) the §10.3 floor no longer applies here: `061324e20` ended the parked P0, so a stream error now stops hand-out and completes `sessionEnd()` with its cause instead of parking every executor silently. What is left is the log line beside that surface - ERROR with the cause when the session dies - since §10.3 makes the floor a complement to an observable end, not a substitute for one. |
 
 ## Two things this audit did not settle
 

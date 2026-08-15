@@ -93,32 +93,35 @@ pass an idiomatic review in its own language's terms (errors-as-values in Go, `R
 
 Keys and values are **bytes** on this surface; deserialization belongs to the user's code.
 
-### Does `poll(processor)` block? A per-language choice, with one thing it must preserve
+### Does `poll(processor)` block? The shape is yours; the property is not
 
-**Unsettled across languages, deliberately, and not settleable by one wave.** Whether `poll` returns as soon
-as the session is open or blocks for the session's life decides whether a language needs a `Done`/`Err`/await
-surface at all, so the Go wave named it the sharpest hole in this guide - it chose *returns immediately*, with
-`Done()` and `Err()`, because a blocking call interruptible only from another goroutine is not how Go
-expresses a background service. That reasoning is idiomatic, not protocol: a language whose users expect
-`await consumer.run()` should say so instead.
+**Settled, by seven clients answering and not converging: the shape is each language's own, and no wave will
+promote one to a rule.** Go returns immediately with `Done()`/`Err()`, because a blocking call interruptible
+only from another goroutine is not how Go expresses a background service; TypeScript answers with `done()`,
+Rust with `closed()`, Python and Ruby with `wait()`; C# returns a `Task` that *is* the session, so awaiting it
+is the blocking reading and holding it is the background one, chosen per call site; Kotlin's `poll` suspends
+for the session's life. Each is right in its own language and would read as foreign in the others, so pick the
+idiom your users expect and document it. What follows is what every one of those answers has in common, and it
+is normative.
 
-What the choice must preserve, whichever way it goes:
-
-- **The caller can learn the session died, and why, without polling for it.** This is the real content of the
-  question. A mid-session stream error, a cancelled call (§3.2), a sidecar exit and a completed drain all end
-  the session; a surface where `poll` has already returned and nothing reports the end leaves the application
-  believing it is still consuming. That exact defect is open on the Java reference client - a stream error
-  parks every executor with no listener to tell the caller - so **the reference surface is not the authority
-  here; do not mirror its silence.**
+- **The caller can learn the session ended, and why, without ending the client to find out.** This is the real
+  content of the question. A mid-session stream error, a cancelled call (§3.2), a sidecar exit and a completed
+  drain all end the session; a surface where `poll` has already returned and nothing reports the end leaves the
+  application believing it is still consuming, which is the worst failure this surface can have. Both halves
+  bind: *that* it ended, and *why*, from the same call. TypeScript's `done()` rejects with the cause and Ruby's
+  `wait` raises it; Python and Rust deliver the *that* reliably but make you close or consume the client to
+  learn the *why*, which is the half to improve, not to copy.
+- **The JVM's answer is `CompletionStage<Void> sessionEnd()`** on `ParallelConsumerClient` - C#'s `Task` in
+  Java's vocabulary - completing normally when the session ended cleanly (the application closed the client, or
+  the engine completed the stream) and exceptionally with the cause when it did not. It is an accessor rather
+  than `poll`'s return value because a session can die before or without a poll: a client that only connected
+  still has an end to observe. Both Java transports implement it, including the in-process `java-direct` one,
+  and the shared conformance suite has a case for it, so a transport that merely declares the method cannot
+  pass. Mirror the property, not the `CompletionStage`.
 - **Nothing per-record changes.** The session's end is admin-level; executors still report per record with the
   token echoed, and the queue rules of §3 are unaffected by which shape you pick.
 - **The client documents its own answer in its README**, in one sentence naming the shape (blocking, handle,
-  future, channel, callback) and how a caller observes the end.
-
-> **PLACEHOLDER - the settled cross-language shape.** Wave two answers this in five languages at once; the
-> resolver fills this block from those answers (and, if they converge, promotes it from "per-language choice"
-> to a rule). Until then a client picks its idiom and documents it - it is **not** free to leave the caller
-> with no way to observe the session ending.
+  future, channel, callback) and how a caller observes the end - including the cause.
 
 ## 2. Spawning and finding the sidecar
 
@@ -471,9 +474,12 @@ other's work, which is why they are treated as specification defects rather than
 | Generated-code placement (§0) | Read from the `.proto`'s own options, one authority for all languages | Per-language `protoc` overrides, nine command lines that `buf breaking` would later pin anyway |
 | Sourcing `protoc` and the well-known types (§0) | mise (`protoc@latest`, which ships `include/`) | Assuming a system `protoc`; the Maven-plus-unzip route survives as the no-mise fallback |
 
-**Open, not settled here:** whether `poll(processor)` blocks (§1) - wave two answers it in five languages
-simultaneously and the resolver fills that section's placeholder from those answers. Recording it as open is
-the decision: settling it from one language's idiom is what the placeholder exists to prevent.
+**Settled 2026-08-15, once seven clients had answered:** whether `poll(processor)` blocks (§1) is **each
+language's own shape**, and that is the settlement rather than a deferral - the seven answers did not
+converge, and each is idiomatic where it was written. What binds every language is the property §1 states:
+the caller can learn the session ended, and why, without ending the client to find out. *Alternative
+rejected:* promoting one shape to the rule - Go's return-immediately, or C#'s `Task` that is the session -
+which would read as foreign in half the fan-out for no gain the property does not already deliver.
 
 **2026-08-15, the logging contract (§10)**, written after auditing all seven existing clients rather than
 from first principles:
@@ -587,11 +593,11 @@ Per-record logging in a library processing at these rates is not diagnosis, it i
   violation and already fatal to the session (§3.2).
 
 **A client that cannot yet tell its caller the session died must at minimum not be silent about it.** §1
-requires the caller to be able to observe the session's end without polling, and the Java reference client
-does not satisfy it - a stream error parks every executor with no listener. Until a client's surface can
-report that, the death is logged at ERROR with its cause. That is a floor, not a substitute: a log line the
-application must read to discover it has stopped consuming is a worse API than a listener, and §1's
-requirement stands.
+requires the caller to be able to observe the session's end, and its cause, without ending the client - the
+Java reference satisfies it through `sessionEnd()`, and Go does not yet (`Done()` never fires on a stream
+error). Until a client's surface can report the death, it is logged at ERROR with its cause. That is a floor,
+not a substitute: a log line the application must read to discover it has stopped consuming is a worse API
+than an observable end, and §1's requirement stands.
 
 ### 10.4 Credentials: §6 is the rule, this is how it gets broken
 

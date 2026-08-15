@@ -21,7 +21,8 @@ than fragmenting. Verified in all five, by reading the code and not the comments
    explaining why an empty list would be worse than a subset - `implementedCapabilities` (Go),
    `CAPABILITIES` (Python `_session.py`, Ruby `options.rb`), `DECLARED_CAPABILITIES` (TypeScript),
    `IMPLEMENTED_CAPABILITIES` (Rust). Five independent authors reached the same answer, and it is the
-   one the Java reference gets wrong (`parked-proxy-review-findings.md`).
+   one the Java reference got wrong when this review was written - since fixed in `e955e3acd`,
+   `DISPATCH_CAPABILITY` in `WireMapping.toConfigure`.
 2. **The token is opaque and echoed verbatim.** No client parses `record_id`, compares epochs, or
    rebuilds the token from parsed parts; none holds a request map, dedupe cache or completion
    registry. Stateless per record, five for five.
@@ -49,9 +50,10 @@ than fragmenting. Verified in all five, by reading the code and not the comments
 
 ## 1. Session death
 
-The sharpest dimension. `client-authoring-guide.md` §1 makes it normative -
-*"The caller can learn the session died, and why, without polling for it"* - and names the Java
-reference's silence as the thing not to mirror.
+The sharpest dimension. `client-authoring-guide.md` §1 makes it normative - *"The caller can learn
+the session ended, and why, without ending the client to find out"*. It named the Java reference's
+silence as the thing not to mirror when this review was written; the reference has since answered it
+with `sessionEnd()` (`061324e20`), so §1 now records that answer as the JVM's rather than a warning.
 
 | | Go | Python | TypeScript | Rust | Ruby |
 |---|---|---|---|---|---|
@@ -252,11 +254,15 @@ difference that can silently misconfigure a cluster: `commit_interval: 5` is fiv
 Ranked by how much each would confuse a user or hide a bug. Every one is accidental unless the row
 says otherwise.
 
-1. **Go cannot report session death** - `Done()` never fires and `Err()` never becomes meaningful on
-   a mid-session stream error, and the executors park. This is the parked Java P0 reproduced in a
-   client that had the guide's warning in front of it. **Right answer: Go closes `stopHandout` and
-   `closed` on `receive()`'s error path**, which is what the other four already do. Highest priority
-   because it is silent, it is the documented idiom, and the guide makes it normative.
+1. **Go cannot report session death, and is now the only client where that is still true** -
+   `Done()` never fires and `Err()` never becomes meaningful on a mid-session stream error, and the
+   executors park. The Java reference had the identical defect when this review was written; it was
+   fixed in `061324e20`, which ends the session in one place on the stream's error path - hand-out
+   stops, the executor pool is shut down without interrupting anything, and the caller's
+   `sessionEnd()` stage completes with the cause. So the shape to copy now exists in the reference
+   as well as in the other four clients. **Right answer: Go closes `stopHandout` and `closed` on
+   `receive()`'s error path**, a two-line fix. Highest priority because it is silent, it is the
+   documented idiom, and the guide makes it normative.
 2. **The in-flight ceiling counts the wrong thing in Go, Rust and Ruby** - queued only, where the
    guide's worked example bounds queued plus executing. The overflow detector every client writes
    forty lines of comment about cannot fire in the case the guide gives. **Right answer:
@@ -279,8 +285,8 @@ says otherwise.
    write the capability test now, even though the branch is dead code, because the wave that grants
    the capability will not go looking in three languages.
 7. **The session-end surface has five names and three shapes** - `Done()`/`Err()`, `done()`,
-   `closed()`, `wait()`, `wait()`. The guide's §1 placeholder says wave two settles this, so it is
-   *expected* divergence rather than accidental - but the *why* half is not: TypeScript and Ruby
+   `closed()`, `wait()`, `wait()`. §1 has since settled that the *shape* is each language's own, so
+   this is *expected* divergence rather than accidental - but the *why* half is not: TypeScript and Ruby
    deliver the cause from the same call; Python and Rust make you end the client to learn it. Right
    answer: the end-of-session call carries the reason.
 8. **Sidecar stderr defaults split three ways** - discarded (Go, Ruby), inherited (TypeScript, Rust),
@@ -346,8 +352,10 @@ So nobody mistakes an unread path for an agreeing one.
   surface only. The `pom.xml`, `Makefile`, `Rakefile`, `package.json` and `Cargo.toml` per-client
   build shims were not reviewed.
 - **The JVM clients were not read**, so where a non-JVM client mirrors or diverges from the Java
-  reference I relied on `parked-proxy-review-findings.md`'s description of it rather than the Java
+  reference I relied on the then-parked review findings' description of it rather than the Java
   source. Three other agents were live in this worktree, and the Java client was under active edit.
+  Two of those descriptions have since been overtaken by fixes to the reference (`e955e3acd`,
+  `061324e20`) and are corrected in place above; the rest of the comparison is as it was read.
 - **`docs/inflight/clients/<lang>.md` was searched for prior claims** on each divergence above:
   nothing in those five notes records the sidecar-path guards, the stderr defaults, the ceiling's
   counting basis, or the un-negotiated-message handling as a deliberate choice. Absence of a note is
