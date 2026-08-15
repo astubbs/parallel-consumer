@@ -17,19 +17,36 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over CMake (CMakeLists.txt beside this file). The commands below run
-        ONLY under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator
-        for why opt-in is load-bearing. The build step configures into target/native (kept under
-        target/ so `mvn clean` cleans it); the C++ wave of the language-proxy plan (astubbs#242)
-        owns everything in this directory, including extending these commands to compile and run
-        real tests.
+        Thin Maven wrapper over bin/build-client.sh, which builds this module IN A CONTAINER: C++ is
+        one of the two languages mise cannot serve here, because gRPC and protobuf arrive as system
+        dev packages rather than as a versioned toolchain (astubbs#242,
+        docs/inflight/parked-containerised-toolchains-and-runtime.md). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing - so an ordinary scoped build of this module starts no container at
+        all.
+
+        It calls the script rather than `cmake` directly because a host cmake would need
+        libgrpc++-dev, libprotobuf-dev and protobuf-compiler-grpc installed, which is the problem the
+        image solves. The script owns which route a language takes; this pom only names the language.
+        Artifacts are extracted to target/container, so `mvn clean` removes them. The test-phase
+        invocation runs the EXTRACTED artifact on the host, which is what asserts the static link -
+        see the script's header. (Its flag cannot be written in an XML comment: two consecutive
+        hyphens end one.)
+
+        The path is relative to this module rather than ${maven.multiModuleProjectDirectory}: that
+        property is set by the mvn launcher and is empty when the build is driven by an IDE or an
+        embedder, which would silently invoke "/bin/build-client.sh".
+
+        Skeleton until the C++ wave of the language-proxy plan starts; that wave owns everything in
+        this directory except the build environment (Dockerfile, toolchain-smoke/), and may replace
+        the smoke target once it has one of its own.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>cmake</pc.foreign.build.executable>
-        <pc.foreign.build.args>-S . -B target/native</pc.foreign.build.args>
-        <pc.foreign.test.executable>ctest</pc.foreign.test.executable>
-        <pc.foreign.test.args>--test-dir target/native</pc.foreign.test.args>
+        <pc.foreign.build.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.build.executable>
+        <pc.foreign.build.args>cpp</pc.foreign.build.args>
+        <pc.foreign.test.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.test.executable>
+        <pc.foreign.test.args>cpp --test</pc.foreign.test.args>
     </properties>
 
     <build>

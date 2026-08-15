@@ -17,18 +17,34 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over Swift Package Manager (Package.swift beside this file). The
-        commands below run ONLY under -Dpc.foreignClients - see the foreign-clients profile in the
-        clients aggregator for why opt-in is load-bearing. Skeleton until the Swift wave of the
-        language-proxy plan (astubbs#242) starts; that wave owns everything in this directory,
-        including refining these commands.
+        Thin Maven wrapper over bin/build-client.sh, which builds this module IN A CONTAINER: Swift
+        is one of the two languages mise cannot serve here, because Swift.org publishes no Debian 13
+        toolchain (astubbs#242,
+        docs/inflight/parked-containerised-toolchains-and-runtime.md). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing - so an ordinary scoped build of this module starts no container at
+        all.
+
+        It calls the script rather than `swift` directly for the obvious reason: there is no swift on
+        the host, and there will not be. The script owns which route a language takes; this pom only
+        names the language. The test-phase invocation runs the EXTRACTED artifact on the host, which
+        is what asserts the static link - see the script's header. (Its flag cannot be written in an
+        XML comment: two consecutive hyphens end one.)
+
+        The path is relative to this module rather than ${maven.multiModuleProjectDirectory}: that
+        property is set by the mvn launcher and is empty when the build is driven by an IDE or an
+        embedder, which would silently invoke "/bin/build-client.sh".
+
+        Skeleton until the Swift wave of the language-proxy plan starts; that wave owns everything in
+        this directory except the build environment (Dockerfile, toolchain-smoke/), and may replace
+        the smoke target once it has one of its own.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>swift</pc.foreign.build.executable>
-        <pc.foreign.build.args>build</pc.foreign.build.args>
-        <pc.foreign.test.executable>swift</pc.foreign.test.executable>
-        <pc.foreign.test.args>test</pc.foreign.test.args>
+        <pc.foreign.build.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.build.executable>
+        <pc.foreign.build.args>swift</pc.foreign.build.args>
+        <pc.foreign.test.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.test.executable>
+        <pc.foreign.test.args>swift --test</pc.foreign.test.args>
     </properties>
 
     <build>
