@@ -28,16 +28,6 @@ import static com.google.common.truth.Truth.assertThat;
  */
 class Java8StreamUtilsTest {
 
-    @Test
-    void drainsWhatIsAlreadyQueuedThenEndsOnceTheSourceIsFinished() {
-        BlockingQueue<String> queue = new LinkedBlockingQueue<>(UniLists.of("a", "b"));
-
-        List<String> collected = Java8StreamUtils.setupStreamFromQueue(queue, () -> true)
-                .collect(Collectors.toList());
-
-        assertThat(collected).containsExactly("a", "b").inOrder();
-    }
-
     /**
      * The regression. An empty queue is not the end of the stream while the source is still running - the old
      * bridge returned false here and the caller's terminal operation finished on the spot.
@@ -73,7 +63,7 @@ class Java8StreamUtilsTest {
      */
     @Timeout(30)
     @Test
-    void resultsQueuedBeforeTheSourceFinishedAreStillDelivered() {
+    void drainsWhatIsAlreadyQueuedThenEndsOnceTheSourceIsFinished() {
         BlockingQueue<String> queue = new LinkedBlockingQueue<>(UniLists.of("one", "two", "three"));
 
         List<String> collected = Java8StreamUtils.setupStreamFromQueue(queue, () -> true)

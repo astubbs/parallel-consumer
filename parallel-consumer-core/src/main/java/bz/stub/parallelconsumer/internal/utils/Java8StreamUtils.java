@@ -27,6 +27,14 @@ public class Java8StreamUtils {
      */
     private static final Duration FINISHED_CHECK_INTERVAL = Duration.ofMillis(100);
 
+    /*
+     * Why a timed poll rather than a sentinel enqueued at close, which would let this block indefinitely on
+     * take() and wake the instant the producer finished: a sentinel can only be enqueued by whoever performs
+     * the close, and a processor can also finish by its control thread closing itself on an unhandled error.
+     * Nothing enqueues a sentinel on that path, so a consumer would wait forever rather than the bounded
+     * interval below. Asking the source whether it has finished covers both.
+     */
+
     /**
      * Bridges a queue that another thread is filling to a {@link Stream} the caller consumes, ending the
      * stream when {@code sourceFinished} reports no more elements can arrive.

@@ -131,10 +131,8 @@ class VertxTest extends VertxBaseUnitTest {
         // Read this before closing: it is about the running processor, and closing drains the retries away.
         long workRemainingWhileRunning = vertxAsync.workRemaining();
 
-        // The result stream is live - it waits for results rather than ending on an empty queue - so close
-        // to end it before collecting. Not drain-first: the queued work here is a deliberately failing
-        // request that would be retried. These assertions used to pass only because the stream quit at the
-        // first momentary gap, which is the defect confluentinc#912 reported.
+        // The result stream is live, so close to end it before collecting. Not drain-first: the queued
+        // work here is a deliberately failing request that would be retried.
         vertxAsync.closeDontDrainFirst();
         var collect = futureStream.map(JStreamVertxParallelEoSStreamProcessor.VertxCPResult::getAsr).collect(Collectors.toList());
         assertThat(collect).hasSize(1);
@@ -280,9 +278,7 @@ class VertxTest extends VertxBaseUnitTest {
 
     private List<AsyncResult<HttpResponse<Buffer>>> getResults(
             Stream<JStreamVertxParallelEoSStreamProcessor.VertxCPResult<String, String>> futureStream) {
-        // The result stream is live - it waits for results rather than ending on an empty queue - so
-        // close to end it before collecting. These assertions used to pass only because the stream quit
-        // at the first momentary gap, which is the defect confluentinc#912 reported.
+        // The result stream is live, so close to end it before collecting.
         vertxAsync.closeDrainFirst();
         var collect = futureStream.map(JStreamVertxParallelEoSStreamProcessor.VertxCPResult::getAsr).collect(Collectors.toList());
         return blockingGetResults(collect);

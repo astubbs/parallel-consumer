@@ -59,9 +59,7 @@ class JStreamParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         verify(myRecordProcessingAction, times(1)).apply(any());
 
-        // The stream is live - it waits for results rather than ending on an empty queue - so close to
-        // end it, then collect what was delivered. Before confluentinc#912 was fixed these assertions
-        // passed only because the stream quit at the first momentary gap, which is the defect itself.
+        // The stream is live, so close to end it before collecting.
         streaming.closeDrainFirst();
 
         assertThat(streamedResults).hasSize(1);
@@ -96,9 +94,7 @@ class JStreamParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
             }
         });
 
-        // The stream is live - it waits for results rather than ending on an empty queue - so close to
-        // end it, then collect what was delivered. Before confluentinc#912 was fixed these assertions
-        // passed only because the stream quit at the first momentary gap, which is the defect itself.
+        // The stream is live, so close to end it before collecting.
         streaming.closeDrainFirst();
 
         assertThat(myResultStream).hasSize(1);
@@ -125,9 +121,7 @@ class JStreamParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         verify(myRecordProcessingAction, times(2)).apply(any());
 
-        // The stream is live - it waits for results rather than ending on an empty queue - so close to
-        // end it, then collect what was delivered. Before confluentinc#912 was fixed these assertions
-        // passed only because the stream quit at the first momentary gap, which is the defect itself.
+        // The stream is live, so close to end it before collecting.
         streaming.closeDrainFirst();
 
         assertThat(myResultStream).hasSize(2);
