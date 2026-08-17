@@ -15,6 +15,7 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.Drop;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Manifest;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +28,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
  * The proxy's session service: connect-time configuration, reconnect reconciliation, and the
@@ -170,58 +170,61 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 handleOpeningMessage(message);
                 return;
             }
-            if (message.hasConfigure()) {
-                // deliberately content-free: a Configure can carry credentials, so not even the refusal
-                // log may embed it
-                log.warn("Refusing a second Configure on a configured stream: configuration is connect-time "
-                        + "and the subscription is fixed for the process lifetime (R36, R39). Re-sending the "
-                        + "unchanged effective configuration");
-                transmit(ProxyMessage.newBuilder().setConfigured(effectiveConfiguration).build());
-                return;
+            switch (message.getMessageCase()) {
+                case CONFIGURE:
+                    // deliberately content-free: a Configure can carry credentials, so not even the refusal
+                    // log may embed it
+                    log.warn("Refusing a second Configure on a configured stream: configuration is connect-time "
+                            + "and the subscription is fixed for the process lifetime (R36, R39). Re-sending "
+                            + "the unchanged effective configuration");
+                    transmit(ProxyMessage.newBuilder().setConfigured(effectiveConfiguration).build());
+                    return;
+                case REPORT:
+                    onReport(message.getReport());
+                    return;
+                case HEARTBEAT:
+                    if (negotiated(CAPABILITY_HEARTBEAT)) {
+                        engine.heartbeat();
+                    } else {
+                        logUnnegotiated(message);
+                    }
+                    return;
+                case WORKER_DIED:
+                    if (negotiated(CAPABILITY_WORKER_DEATH)) {
+                        engine.onWorkerDied(message.getWorkerDied().getTokensList());
+                    } else {
+                        logUnnegotiated(message);
+                    }
+                    return;
+                case MANIFEST:
+                    // a manifest opens a reconnect stream and nothing else: mid-session it names a set of held
+                    // tokens that the live stream has never stopped reporting on, so acting on it could return
+                    // records a worker is running right now
+                    log.warn("Ignoring a Manifest on an established stream: it is a reconnect stream's opening "
+                            + "message only (R43)");
+                    return;
+                default:
+                    // a truly unknown case is a newer client than this proxy; ignored rather than fatal, per
+                    // the specification's forward-compatibility rule
+                    log.warn("Ignoring client message this proxy does not implement: {}",
+                            message.getMessageCase());
             }
-            if (message.hasReport()) {
-                var result = engine.report(message.getReport());
-                switch (result) {
-                    case APPLIED_SUCCESS:
-                    case APPLIED_FAILURE:
-                    case ACCEPTED_PRODUCING:
-                        // accepted, not discarded: the record is claimed, and its produce payload's acks are
-                        // awaited on the engine's own lane precisely so this callback - the session's single
-                        // serialized inbound lane, which also carries Heartbeat - is not held by a broker
-                        break;
-                    default:
-                        // reply-with-protocol-error is U9's; until then the discard reason is at least visible
-                        log.debug("Report discarded by the engine: {}", result);
-                }
-                return;
+        }
+
+        private void onReport(Report report) {
+            var result = engine.report(report);
+            switch (result) {
+                case APPLIED_SUCCESS:
+                case APPLIED_FAILURE:
+                case ACCEPTED_PRODUCING:
+                    // accepted, not discarded: the record is claimed, and its produce payload's acks are
+                    // awaited on the engine's own lane precisely so this callback - the session's single
+                    // serialized inbound lane, which also carries Heartbeat - is not held by a broker
+                    break;
+                default:
+                    // reply-with-protocol-error is U9's; until then the discard reason is at least visible
+                    log.debug("Report discarded by the engine: {}", result);
             }
-            if (message.hasHeartbeat()) {
-                if (negotiated(CAPABILITY_HEARTBEAT)) {
-                    engine.heartbeat();
-                } else {
-                    logUnnegotiated(message);
-                }
-                return;
-            }
-            if (message.hasWorkerDied()) {
-                if (negotiated(CAPABILITY_WORKER_DEATH)) {
-                    engine.onWorkerDied(message.getWorkerDied().getTokensList());
-                } else {
-                    logUnnegotiated(message);
-                }
-                return;
-            }
-            if (message.hasManifest()) {
-                // a manifest opens a reconnect stream and nothing else: mid-session it names a set of held
-                // tokens that the live stream has never stopped reporting on, so acting on it could return
-                // records a worker is running right now
-                log.warn("Ignoring a Manifest on an established stream: it is a reconnect stream's opening "
-                        + "message only (R43)");
-                return;
-            }
-            // a truly unknown case is a newer client than this proxy; ignored rather than fatal, per the
-            // specification's forward-compatibility rule
-            log.warn("Ignoring client message this proxy does not implement: {}", message.getMessageCase());
         }
 
         /**
@@ -291,7 +294,7 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 builtEngine = new ProxyProcessor(options, router, ProxyProcessor.DEFAULT_COALESCING_WINDOW,
                         liveness);
                 if (subscription.isPattern()) {
-                    builtEngine.subscribe(Pattern.compile(subscription.pattern()));
+                    builtEngine.subscribe(subscription.compiledPattern());
                 } else {
                     builtEngine.subscribe(subscription.topics());
                 }
@@ -312,11 +315,10 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                                 + "values, and kafka_properties may carry credentials - R48)"));
                 return;
             }
-            var startedEngine = builtEngine;
             negotiatedCapabilities = capabilities;
             effectiveConfiguration =
                     OptionsMapper.effectiveConfiguration(options, subscription, capabilities, liveness);
-            engine = startedEngine;
+            engine = builtEngine;
 
             // bind before the reply: the client may report the moment Configured arrives, and a wave
             // dispatched in that instant must have somewhere to go
@@ -331,7 +333,7 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                     options.getMaxConcurrency(), OptionsMapper.executorCountFor(options), capabilities);
 
             if (engineStartedListener != null) {
-                engineStartedListener.engineStarted(startedEngine, subscription);
+                engineStartedListener.engineStarted(builtEngine, subscription);
             }
         }
 
@@ -371,28 +373,28 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
         private void releaseHalfBuilt(ProxyProcessor builtEngine,
                                       Consumer<byte[], byte[]> consumer,
                                       Producer<byte[], byte[]> producer) {
-            if (builtEngine != null) {
-                try {
-                    // never started, so core's close transitions UNUSED -> CLOSED immediately; the close
-                    // funnel's finally tears down the wave-window timer either way
-                    builtEngine.close();
-                } catch (Exception e) { // Exception, not RuntimeException: core's close sneaky-throws checked ones
-                    log.warn("Half-built engine refused to close: {}", e.getClass().getName());
-                }
+            // the engine was never started, so core's close transitions UNUSED -> CLOSED immediately; the
+            // close funnel's finally tears down the wave-window timer either way
+            releaseQuietly("Half-built engine", builtEngine);
+            releaseQuietly("Consumer built by a failed configure", consumer);
+            releaseQuietly("Producer built by a failed configure", producer);
+        }
+
+        /**
+         * One release: absent is nothing to do, and a refusal is logged by class name only rather than
+         * propagated, so the releases after it still run.
+         *
+         * @param resource {@code AutoCloseable} rather than a narrower type because core's close sneaky-throws
+         *                 checked exceptions, which is also why the catch is {@code Exception}
+         */
+        private void releaseQuietly(String what, AutoCloseable resource) {
+            if (resource == null) {
+                return;
             }
-            if (consumer != null) {
-                try {
-                    consumer.close();
-                } catch (Exception e) {
-                    log.warn("Consumer built by a failed configure refused to close: {}", e.getClass().getName());
-                }
-            }
-            if (producer != null) {
-                try {
-                    producer.close();
-                } catch (Exception e) {
-                    log.warn("Producer built by a failed configure refused to close: {}", e.getClass().getName());
-                }
+            try {
+                resource.close();
+            } catch (Exception e) {
+                log.warn("{} refused to close: {}", what, e.getClass().getName());
             }
         }
 
