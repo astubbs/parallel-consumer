@@ -70,6 +70,35 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     @Getter
     private ReentrantReadWriteLock producerTransactionLock;
 
+    /**
+     * Installed on every send. Built once, because whether this manager uses transactions is already decided before
+     * it exists: {@link ProducerWrapper#isConfiguredForTransactions()} reads a {@code final} field the wrapper
+     * resolves in its own constructor, so the value cannot change afterwards - the mode decision does not belong in a
+     * branch evaluated per completion. ({@link #initProducer()} only enforces that the flag agrees with the
+     * configured {@link ParallelConsumerOptions.CommitMode}; it does not determine it.)
+     * <p>
+     * Throwing from a producer callback is only safe when NOT using transactions. The comment here used to say exactly
+     * that, while installing a throwing callback unconditionally, transactional mode included.
+     * <p>
+     * {@code KafkaProducer#doSend} invokes this callback from inside its own {@code catch (ApiException)} handler, and
+     * only <em>afterwards</em> calls {@code transactionManager.maybeTransitionToErrorState(e)}. A throw escapes before
+     * that runs, so a terminally failed send never moves the transaction into an abortable state. The records already
+     * accepted stay in it, the next commit succeeds, and a {@code read_committed} consumer sees a PARTIAL result set
+     * for one source offset - exactly what the all-or-none guarantee denies. Observed as "poison-key-0 has 2 of 5" by
+     * {@code TransactionalPartialResultSetIT}.
+     * <p>
+     * Not throwing costs nothing that was load-bearing: the failure still reaches the work container either way,
+     * because {@code processAndProduceResults} waits on each returned {@link Future} and an exceptionally-completed
+     * send fails the record for retry. Note the throw was only ever observable on that synchronous pre-accumulator
+     * path in the first place - when a send fails asynchronously, Kafka's own {@code ProducerBatch} catches and logs
+     * whatever a callback throws, so it was already inert there in both modes.
+     */
+    // TODO(refactor): InternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
+    //  The whole summary must stay on the TODO line itself: bin/todo-index.sh indexes only that physical
+    //  line, so anything wrapped onto a continuation is dropped from docs/todo-index.md.
+    //  Detail, including why the subclass alone is not enough: docs/refactoring.md, internal/ProducerManager.java.
+    private final Callback sendCallback;
+
     public ProducerManager(ProducerWrapper<K, V> newProducer,
                            ConsumerManager<K, V> newConsumer,
                            WorkManager<K, V> wm,
@@ -77,6 +106,16 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         super(newConsumer, wm);
         this.producerWrapper = newProducer;
         this.options = options;
+
+        boolean usingTransactions = producerWrapper.isConfiguredForTransactions();
+        this.sendCallback = (RecordMetadata metadata, Exception exception) -> {
+            if (exception != null) {
+                log.error("Error producing result message", exception);
+                if (!usingTransactions) {
+                    throw new InternalRuntimeException("Error producing result message", exception);
+                }
+            }
+        };
 
         initProducer();
     }
@@ -122,18 +161,10 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         ensureProduceStarted();
         lazyMaybeBeginTransaction();
 
-        // only needed if not using tx
-        Callback callback = (RecordMetadata metadata, Exception exception) -> {
-            if (exception != null) {
-                log.error("Error producing result message", exception);
-                throw new InternalRuntimeException("Error producing result message", exception);
-            }
-        };
-
         List<ParallelConsumer.Tuple<ProducerRecord<K, V>, Future<RecordMetadata>>> futures = new ArrayList<>(outMsgs.size());
         for (ProducerRecord<K, V> rec : outMsgs) {
             log.trace("Producing {}", rec);
-            var future = producerWrapper.send(rec, callback);
+            var future = producerWrapper.send(rec, sendCallback);
             futures.add(ParallelConsumer.Tuple.pairOf(rec, future));
         }
         return futures;

@@ -1,7 +1,9 @@
 # Self-Hosted Runner Setup (Proxmox Linux VM)
 
 Self-hosted runners give the heavy suites real hardware **and** let them run
-concurrently. This document walks through the one-time setup on a Linux VM.
+concurrently. This doc owns setting up and operating them: the one-time setup on a Linux VM, the
+labels, and the service. AGENTS.md carries only the pointer; which lanes are pinned to the
+`highcpu` label, and why, belongs to [`ci.md`](ci.md).
 
 Workflows that use them:
 [`pr-highcpu-fast-feedback.yml`](../.github/workflows/pr-highcpu-fast-feedback.yml)
@@ -43,10 +45,15 @@ mechanism:
   forked mode avoids the contention without masking anything.)
 
 - **Performance: in-JVM thread parallelism** (`-Dparallel-tests=true`). JUnit is
-  configured to run these concurrently by default (see
-  `junit.jupiter.execution.parallel.*` in
-  `parallel-consumer-core/src/test/resources/junit-platform.properties`); the
-  performance leg re-enables that on real cores.
+  configured to run these concurrently by default (see the
+  `junit.jupiter.execution.parallel.*` surefire/failsafe
+  `configurationParameters` in `parallel-consumer-core/pom.xml`); the
+  performance leg re-enables that on real cores. Note this is **core-only**:
+  those parameters are build configuration in core's own pom, so
+  `-Dparallel-tests` affects that module and no other. It used to live in
+  `parallel-consumer-core/src/test/resources/junit-platform.properties`, which
+  was packaged into the core tests jar and silently configured every module
+  that depends on it.
 
 Measure it (see [below](#measuring-the-speedup)); if a suite doesn't speed up
 that tells you the bottleneck is elsewhere (Docker throughput, a genuinely
@@ -384,7 +391,8 @@ then returns to Proxmox on the following boot. No keyboard, no boot-menu key.
 - Confirm the runner user is in the `docker` group: `groups`
 
 **Tests are flaky under parallelism:**
-- Lower `dynamic.factor` in `junit-platform.properties`, or give the VM more RAM
+- Lower `dynamic.factor` in the surefire/failsafe `configurationParameters` in
+  `parallel-consumer-core/pom.xml`, or give the VM more RAM
 - A genuinely order-dependent test is a bug - fix the test, don't disable
   parallelism globally
 

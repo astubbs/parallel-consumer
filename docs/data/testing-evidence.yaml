@@ -199,17 +199,48 @@ quality_system:
     posture: Merge-gated audit; quarantined execution remains visible in its separate non-gating lane.
     inspect: .github/workflows/maven.yml
   - id: static-analysis
-    detects: Static bug patterns, duplicate code and dependency vulnerabilities in the PR path.
+    detects: Static bug patterns and duplicate code in the PR path, and advisories against the dependencies a PR itself adds or changes.
     posture: PR analysis with its workflow-specific gate status; do not infer a clean bill of health beyond the tool's scope.
     inspect: .github/workflows/maven.yml
+  - id: whole-tree-cve-scan
+    detects: Published advisories against any component in the resolved dependency tree, including transitive ones no PR touches and ones a standing tree acquires while nothing changes.
+    posture: >-
+      Runs on every in-repo PR and weekly on a schedule, and a finding fails it - but the job is not
+      yet a required status check, and fork PRs are skipped because they receive no credentials. Its
+      first duty is to prove it scanned at all: the plugin reports BUILD SUCCESS when the scanner is
+      unreachable, so a scan that cannot be shown to have happened fails with exit 1 where a real
+      finding fails with exit 2, and green means the audit ran rather than that Maven did. Known
+      findings are suppressed by id with a stated retirement condition and the suppression count is
+      printed on every run, green ones included: that list is a maintained artifact, not evidence
+      that nothing is there.
+    inspect: bin/check-ossindex-audit.sh, run by .github/workflows/dependency-audit.yml
+  - id: cve-exclusion-expiry
+    detects: A CVE suppression marked temporary that has outlived its 90-day window, and any whose marker is missing, unparseable or dated in the future.
+    posture: >-
+      Runs in the no-network hygiene lane rather than beside the scan whose escape hatch it polices,
+      so a credential expiry or a fork PR cannot leave the list unwatched; not yet a required status
+      check. Anything it cannot date fails rather than reading as not-expired-yet, and exit 3 is kept
+      distinct from the scan's two reds because neither the tree nor the lane is at fault - the
+      bookkeeping has rotted. What expires is the classification, never a claim about an upstream
+      release being late, so the red is always clearable by retiring the entry or re-arguing it.
+      Dates and structure only; green means every entry is classified and in date, not that any
+      exclusion deserves to be there - whether a stated reason is any good stays a review question.
+    inspect: bin/check-cve-exclusions.sh, run by .github/workflows/repo-hygiene.yml
   - id: mutation-analysis
     detects: Assertions that survive relevant mutations in changed offset code.
     posture: Advisory PR-scoped signal; full sweep is separately invoked.
     inspect: bin/ci-mutation-test.sh
   - id: review-delivery
-    detects: A missing automated-review result rather than claiming a review happened because a job was green.
-    posture: The workflow's final gate verifies a review comment was posted for that run.
-    inspect: .github/workflows/claude-code-review.yml
+    detects: A review that never happened or never finished, rather than claiming a review because a job was green.
+    posture: >-
+      Split in two: the review is requested on demand, and a cheap always-on gate requires that a finished
+      review already exists on the PR. Deliberately not per-commit - that coverage comes from an auto-reviewer
+      on every push, and enforcing it here cost a contested timestamp comparison and the reviewed-SHA plumbing;
+      trigger to restore it are parked in docs/inflight/parked-strict-review-gate-freshness.md. There is no
+      skip word, and a fork head is refused outright, so a red gate on an unreviewed PR is the expected state,
+      not a fault. Comment metadata only; it cannot judge whether the review was any good, nor tell a review
+      from any other answer the bot gave.
+    inspect: bin/check-review-posted.sh, gated by .github/workflows/claude-code-review.yml and dispatched by .github/workflows/claude-code-review-dispatch.yml
 investigation_records:
   - defect: Drain-path zombie and busy-spin under contention.
     proof: A real drain-path defect was isolated while investigating a flaky integration test; no timeout was loosened.

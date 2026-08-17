@@ -1,31 +1,62 @@
-# Three flakes CI was hiding, none of them tracked anywhere
+# Flakes CI was hiding, none of them tracked when found
 
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
 
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
-which also has the scan method. What is open is the three tests themselves.
+which also has the scan method. What is open is the tests themselves - two of the scan's three, plus
+one met later. The scan's third,
+`ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+(3/45), is fixed and gone from this ledger: astubbs#260 established the extra commit was correct
+product behaviour and the assertion was wrong, so no product change was needed.
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
-| `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
-| `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` | 3/45 | **A regression** - see below |
-| `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined on astubbs#286 - see below |
-
-**Start with the regression.** astubbs#101 fixed this exact test as "the shutdown-commit flake that
-was aborting PIT", and it is back. It has the best starting position of the three: a known prior fix
-to diff against, and a documented consequence -
-`docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md` §1 records that instability in
-this test made the PIT mutation lane report *suite stability* rather than mutation coverage. While it
-flakes, a green PIT lane means less than it appears to.
-
-Failures surface as `AbstractParallelEoSStreamProcessorTestBase.assertCommits`, so the assertion
-helper is where the message comes from, not necessarily where the cause is.
+| `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
+| `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined (owner astubbs#265) - see below |
+| `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
+
+Seen 2026-08-12 on astubbs#287, a PR whose diff contained **no Java at all** - which is what settles
+rule 2 (master-state, not PR-state) without needing a rate: nothing in the change could have caused
+it.
+
+```
+ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect:367
+  value of: getElapsed()  expected to be at least PT20S  but was PT19.998S
+```
+
+**Two milliseconds short on a twenty-second bound**, which is the shape of a measurement error rather
+than a behavioural one - the code under test either blocks for the full delay or it does not, and it
+does not miss by 0.01%.
+
+**The defect is in the shared helper, not in this test.** `BlockedThreadAsserter#assertUnblocksAfter`
+arms the unblocking task with `scheduledExecutorService.schedule(...)` and only *then* starts the
+clock it later compares against `unblocksAfter`. The scheduler begins counting its delay from inside
+that `schedule()` call, so the measured window starts **after** the delay does, and is short by
+however long arming plus lambda setup takes. Under load that gap widens past a millisecond and
+`isAtLeast` fails a correct implementation. Any test using this helper can show the same signature,
+which is why it is filed against the helper.
+
+**Owned: astubbs#262** stamps `armedAtNanos` immediately before `schedule()` and asserts against that
+instead. Its own comment is honest about the residual: the window measured is now slightly *longer*
+than the true one, so the error is sub-millisecond and in the safe direction - a genuinely early
+return is still caught unless it is early by less than the arming cost.
+
+**Note astubbs#265 touches the same line differently**, deleting the assertion along with the sleeps
+it removes. Whichever of the two lands second will conflict here, and the conflict is a real
+decision - measure it correctly, or stop measuring it - not a mechanical merge.
+
+**Why it was not in this ledger already.** The 2026-08-07 scan read surefire `Flakes:` markers, which
+only appear when the retry re-ran a test and it then passed. This one failed the run outright, so it
+left no marker and no scan would have found it. Flakes now get quarantined as they are met, rather
+than waiting for a sweep.
 
 ### `PCMetricsTest.metricsRegisterBinding` - second sighting, and it is a test defect
 
@@ -92,7 +123,7 @@ producing red from more than one already-tracked test. The load-bearing evidence
 `PCMetricsTest` diagnosis is the source-level read above - the counter snapshot and the gauge are
 read at different instants - not the rerun.
 
-### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - do not quarantine it
+### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - quarantined anyway, by explicit exception
 
 It was quarantined on astubbs#286 and **removed again in the same PR**, because the diagnosis was
 wrong. Recorded here so the mistake is not repeated.
@@ -106,12 +137,34 @@ the narrative and found it does not fit:
   `waitAtMost(defaultTimeout).untilAsserted(...)` block asserting the committed offset metadata -
   specifically `Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen)`.
   The `value of: optional.get()` in the failure text is that `Optional`.
+  (Citation repair: "the commit CI ran" is never named, so that 211 cannot be resolved by a reader,
+  and on master today it lands on a *different* `waitAtMost` block - the one asserting
+  `isBlocked()` - which is close enough to the description to be believed. The durable anchor is the
+  assertion already quoted: grep `hasValue(expectedHighestSeen)` in
+  `OffsetEncodingBackPressureTest`, exactly one hit. The number is left in place because it is what
+  the failure report said, not a pointer this note chose.)
 - That block runs **before** the retry section astubbs#265 rewrites. A change downstream of a failing
   assertion cannot fix it.
 
-So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen` (136 of
-an expected 139), and nothing currently explains why. Under rule 1 - no quarantine without diagnosis -
-it stays in the gating lane and stays red until someone works out why three records never arrive.
+So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen`
+(actuals vary run to run - 136 and 132 have both been seen against an expected 139), and nothing
+currently explains why. Rule 1 - no quarantine without diagnosis - would keep it in the gating lane,
+but it fails often enough (4/45, the most frequent tracked flake) that leaving it red blocked every
+PR. **The repository owner decided to quarantine it anyway as an explicit rule-1 exception**: the
+registry entry carries no Owner (unowned, flagged advisory by the audit), `flapping = true`, and the
+diagnosis below remains the open task. The exception is a pressure-release, not a resolution - this
+entry stays open until the test is understood and fixed.
+
+**The open lead - an UNVERIFIED hypothesis, test it before acting on it.** The test computes
+`expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1`, and
+the extra records exist precisely to push the offset encoding past the size threshold that makes the
+partition block and stop taking records. If back-pressure engages before the last extra record is
+polled, the expectation is **unreachable rather than late** - matching the varying shortfall and the
+fact that a 30-second wait never rescues it. Falsification: if the actual value tracks the encoding
+block point, the hypothesis holds; if the high-water mark eventually reaches 139 given long enough,
+it is dead and this is a slowness problem. Compare
+`vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` (same area, different test,
+`root_cause: test_design_bug`) - rule it in or out, don't assume.
 
 The general lesson is the one that produced the error: the fix PR was matched to the failure by
 **subject-matter resemblance** (both concern this test, both concern waiting) rather than by checking

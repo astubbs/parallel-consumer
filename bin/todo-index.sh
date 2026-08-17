@@ -74,8 +74,8 @@ MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
 # leading "<lineno>:" prefix - anchoring on ^[[:space:]] alone silently never matches.
 #   references TO a marker elsewhere, e.g. "the run-length optimisation TODO on {@link X}"
 #   compound names    todo-index.sh, todo-index.md   (a filename, not a marker - this one is live:
-#                                                     .github/workflows/claude-code-review.yml names
-#                                                     the script in a comment)
+#                                                     the review workflows name the script in a
+#                                                     comment)
 NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO|[Tt][Oo][Dd][Oo][-_][A-Za-z])'
 
 emit_body() {
@@ -124,17 +124,13 @@ count_markers() {
 }
 
 generate() {
-    local count
-    count=$(count_markers)
-
     cat <<EOF
 # TODO index
 
 **Generated file - do not edit by hand.** Regenerate with \`bin/todo-index.sh\`
 (\`bin/todo-index.sh --check\` fails if this file is stale).
 
-Every \`TODO\` / \`FIXME\` / \`XXX\` marker in the tracked tree, grouped by module. **$count marker(s)** at
-the time of generation.
+Every \`TODO\` / \`FIXME\` / \`XXX\` marker in the tracked tree, grouped by module.
 
 ## Prioritised? See the refactoring backlog
 
@@ -157,6 +153,11 @@ grep -rn "check legacy is recursive"
 
 A line number would be wrong within a day and would drag this file into every unrelated diff. The
 marker's own text is stable until someone edits the marker.
+
+For the same reason this file carries no marker **count**: it would be a second, drifting statement
+of something the list below already says exactly, and the two would disagree the moment either moved.
+Count the entries if you need a number. \`bin/todo-index.sh\` prints one to the console when it runs,
+where it cannot go stale.
 
 ## How to use this
 

@@ -13,7 +13,9 @@
 #       quarantined                                       -> re-enable is OVERDUE (delete annotation + entry)
 #
 #   ADVISORY (informational only):
-#     - entry has no owner                                -> diagnosed-but-unowned, find it an owner
+#     - entry has no owner                                -> advisory: diagnosed-but-unowned (find it an
+#                                                            owner), or UNDIAGNOSED when the entry records
+#                                                            a rule-1 exception (complete the diagnosis)
 #     - gh unavailable after retries (rate limit / 5xx / auth) -> transient infra weather must NOT
 #       red the audit ("red here is real" guarantee); skipped with a note
 #     - owner open, quarantine not yet on its base        -> preview check n/a, re-check later
@@ -66,7 +68,15 @@ for t in $entries; do
     pr=$(echo "$block" | grep -oE 'Owner: PR (astubbs/parallel-consumer|astubbs)?#[0-9]+' | grep -oE '#[0-9]+' | tr -d '#' | head -1 || true)
 
     if [ -z "$pr" ]; then
-        echo "ADVISORY: $t has no owning PR - diagnosed-but-unowned, find it an owner."
+        # An unowned entry is legal in two distinct states, and the advisory must not report the
+        # wrong one: a diagnosed entry needs an owner found for its fix, while a recorded rule-1
+        # exception is UNDIAGNOSED and needs the diagnosis itself completed - telling a maintainer
+        # to "find an owner" for a failure nobody understands points them at the wrong task.
+        if grep -qi 'rule-1 exception' <<<"$block"; then
+            echo "ADVISORY: $t has no owning PR - UNDIAGNOSED (recorded rule-1 exception); completing the diagnosis is the open task."
+        else
+            echo "ADVISORY: $t has no owning PR - diagnosed-but-unowned, find it an owner."
+        fi
         continue
     fi
 

@@ -24,7 +24,8 @@ import java.lang.annotation.Target;
  * <ol>
  *     <li><b>No quarantine without diagnosis.</b> A test is only tagged after its failure signature is
  *     understood and rostered ({@link #reason()}, {@link #tracking()}). Undiagnosed red stays red and
- *     blocks, on purpose.</li>
+ *     blocks, on purpose - unless the repository owner grants an explicit exception, which the
+ *     {@link #reason()} must declare as such while still carrying the failure signature.</li>
  *     <li><b>Quarantine is master-state, not PR-state.</b> Only tests failing on master (or on every PR
  *     regardless of content) qualify. A test red on only one PR is that PR's problem.</li>
  *     <li><b>Re-enabling = deleting this annotation AND its entry in {@code docs/quarantined-tests.md}</b>
@@ -46,7 +47,7 @@ public @interface Quarantined {
     String reason();
 
     /**
-     * Where the diagnosis is rostered - typically a {@code docs/inflight.md} entry or a
+     * Where the diagnosis is rostered - typically a note under {@code docs/inflight/} or a
      * {@code docs/solutions/} write-up.
      */
     String tracking();

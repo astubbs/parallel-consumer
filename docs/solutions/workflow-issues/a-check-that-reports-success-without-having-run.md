@@ -53,7 +53,7 @@ the prompt to add a working one.
 
 | Check | What it did when it could not run | Where it stands |
 |---|---|---|
-| `ossindex-maven-plugin` on `validate` | HTTP 401 on every module - the API stopped serving anonymous component-report requests - logged as `[WARNING]`, build green, scan never happened | External guard, `bin/check-ossindex-audit.sh` (unmerged, see below) |
+| `ossindex-maven-plugin` on `validate` | HTTP 401 on every module - the API stopped serving anonymous component-report requests - logged as `[WARNING]`, build green, scan never happened | External guard, `bin/check-ossindex-audit.sh` (see below) |
 | The same plugin with `fail=true` | Still green. `fail` covers *"vulnerable components were found"*, not *"the request failed"* | No plugin setting exists; the external guard is the only answer |
 | `claude-code-action` posting no review | Ran green for months without posting a single review, because the plugin stops before commenting unless `--comment` is passed | Gated by `bin/check-review-posted.sh` |
 | `claude-code-action` workflow-validation skip | Refuses to run when the workflow file differs from the default-branch copy; logged *"Exiting due to workflow validation skip"*, exited 0, PR sat mergeable with a green check and no review (astubbs/parallel-consumer#124) | Same gate - and it deliberately fails such PRs |
@@ -107,25 +107,40 @@ itself, evidence that it ran.
 
 ### 2. When the tool cannot fail, put the decision outside the tool
 
-Both guards here are the same move - one merged and running, one written and reviewed on a branch that
-has not landed yet: a small script, run after the tool, that answers *did this actually happen* using
-evidence the tool leaves behind.
+Both guards here are the same move: a small script, run after the tool, that answers *did this
+actually happen* using evidence the tool leaves behind.
 
 - `bin/check-review-posted.sh` matches **this run's** id in a posted comment's `[View job]` link, so a
   comment citing this run is proof this run posted something. It states its own limit: it proves a
   comment exists, not that its contents are a good review.
-- `bin/check-ossindex-audit.sh` (on branch `ci/ossindex-audit-job`, astubbs/parallel-consumer#279, not
-  yet merged) reads the Maven log and the exported reports, with a split the plugin cannot express:
+- `bin/check-ossindex-audit.sh` (added by astubbs/parallel-consumer#279) reads the Maven log and the
+  exported reports, with a split the plugin cannot express:
 
 ```
-scan did not run           -> exit 1   (red: the check itself is broken, and that IS actionable)
+scan did not run           -> exit 1   (red: the CHECK is broken - nothing was learned about the tree)
 scan ran, found nothing    -> exit 0
-scan ran, found problems   -> exit 0, findings rendered   (reporting only, deliberately)
+scan ran, found problems   -> exit 2   (red: the TREE has an advisory nobody has looked at)
 ```
 
-Note which state is red. Findings are not fatal, because the tree carries a standing backlog of them
-and a job that goes red on every PR for known debt is ignored inside a week. Red is reserved for
-*"this check stopped working"*, which is rare and therefore still means something.
+**Two different reds, and holding them apart is the point.** They demand opposite responses - exit 1
+sends you to the token or the lane and tells you nothing about the dependencies; exit 2 says the lane
+worked and there is something to triage. Collapsed into one undifferentiated red, the reader can no
+longer tell whether the scanner had anything to say. When both are true at once, exit 1 wins: findings
+from a scan that cannot be proven to have happened are not evidence, in either direction.
+
+**Findings were NOT fatal in the first version, and why that changed is the more useful half.** They
+were rendered and exited 0, because the tree carried a standing backlog and a job that goes red on
+every PR for known debt is ignored inside a week - which would have cost the exit-1 leg its audience
+too. astubbs/parallel-consumer#281 retired that backlog: every item is now either fixed or an explicit
+`excludeVulnerabilityIds` entry in the root pom carrying a stated retirement condition. That inverts
+the argument rather than overruling it. On a tree whose known debt is already excluded *with reasons*,
+a finding is by construction something nobody has looked at, so there is no standing red left for
+people to learn to ignore. The general rule survives intact - **a red that fires on known debt means
+nothing** - and what changed is the tree, not the rule.
+
+The escape hatch for a false positive, and this scanner produces them, is that same exclusion list.
+`bin/check-cve-exclusions.sh` polices it so a suppression added in a hurry cannot quietly become
+permanent: it is the identical move applied one level up, to the audit's own escape hatch.
 
 ### 3. Prefer structural evidence from the artifact over string evidence from the log
 
@@ -153,7 +168,7 @@ string" - it is **never let a log string be the only leg.**
 
 ### 4. Test the guard's silent case explicitly
 
-`bin/test-check-ossindex-audit.sh` (alongside the guard, same unmerged branch) includes a case
+`bin/test-check-ossindex-audit.sh` (alongside the guard) includes a case
 asserting that empty reports fail **with no failure line in the log at all**. That test is what makes
 leg 2 load-bearing: remove leg 2 and only that case goes green, and that case is precisely the shape
 the vendor's next reword will produce.
@@ -278,9 +293,11 @@ A guard for this class has to say *which* kind of red it is.
 - [`../build-errors/maven-multi-module-plugin-and-resolution-traps.md`](../build-errors/maven-multi-module-plugin-and-resolution-traps.md)
   - the Maven mechanics behind two rows of the table: the profile-scoped plugin version that only
   warns, and the `validate`-builds-nothing trap that breaks the managed dependency submission.
-- `docs/inflight/ci-ossindex-audit-dead.md`, and `docs/inflight/ci-ossindex-lane-reassessment.md` on
-  branch `ci/ossindex-audit-job` - why the audit ships off-and-visibly-off, and whether the lane still
-  earns its keep.
-- astubbs/parallel-consumer#259 (merged) - `requirePluginVersions`, and the audit turned
-  off-and-visible rather than on-and-hoping.
-- astubbs/parallel-consumer#279 (open) - the CI job and `bin/check-ossindex-audit.sh`.
+- `docs/inflight/ci-ossindex-lane-reassessment.md` - whether the lane still earns its keep now that
+  GitHub can submit Maven transitive dependencies itself.
+- astubbs/parallel-consumer#259 - `requirePluginVersions`, and the audit turned off-and-visible rather
+  than on-and-hoping.
+- astubbs/parallel-consumer#279 - the CI job, `bin/check-ossindex-audit.sh`, and the exclusion-expiry
+  guard beside it.
+- astubbs/parallel-consumer#281 - retiring the standing backlog, which is what let findings become
+  fatal.
