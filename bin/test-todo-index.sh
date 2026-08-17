@@ -114,6 +114,9 @@ for yml in "$CLAUDE_YML" "$DISPATCH_YML"; do
     # deliberately. A grant line is one carrying the allowlist's `Bash(gh pr view:*)` neighbour.
     grants="$(grep 'Bash(gh pr view:\*)' <<<"$contents")"
 
+    # Every `Bash(...)` rule on the grant line, one per line, body only.
+    rules="$(grep -o 'Bash([^)]*)' <<<"$grants" | sed 's/^Bash(//; s/)$//')"
+
     for spelling in 'bin/todo-index.sh' './bin/todo-index.sh'; do
         exact=absent
         if grep -qF "Bash($spelling --check)" <<<"$grants"; then
@@ -121,15 +124,31 @@ for yml in "$CLAUDE_YML" "$DISPATCH_YML"; do
         fi
         assert "$name grants the exact '$spelling --check' command" present "$exact"
 
-        # Guards against `--check:*` and a reverted bare `<spelling>:*`, for this spelling only.
-        # Only the dots need escaping; the literal `Bash(` prefix is what keeps the bare
-        # spelling from also matching the dot-prefixed one.
-        escaped="$(sed 's/[.]/\\./g' <<<"$spelling")"
-        wildcard=absent
-        if grep -q "Bash($escaped[^)]*:\*)" <<<"$grants"; then
-            wildcard=present
-        fi
-        assert "$name has no wildcard '$spelling' grant" absent "$wildcard"
+        # THE REAL INVARIANT: no rule anywhere in the allowlist may permit the BARE rewriting
+        # command. Asking only whether a `<spelling>:*` rule exists was too narrow - a broader
+        # neighbour such as `Bash(bin/*.sh:*)` or `Bash(*:*)` re-covers the bare script while
+        # every literal-spelling assertion still reports absent. The dispatch workflow's own
+        # comment names `Bash(bin/*.sh:*)` as exactly that hazard, so it is tested rather than
+        # trusted. Raised in review on astubbs/parallel-consumer#286.
+        permitted_by=""
+        while IFS= read -r rule; do
+            [ -n "$rule" ] || continue
+            if [[ "$rule" == *':*' ]]; then
+                # Trailing-wildcard: a prefix grant. Rules glob with `*` at any position, so the
+                # pattern is deliberately left unquoted on the right of `==`.
+                prefix="${rule%:\*}"
+                # shellcheck disable=SC2053
+                if [[ "$spelling" == $prefix || "$spelling" == $prefix* ]]; then
+                    permitted_by="$rule"; break
+                fi
+            else
+                # shellcheck disable=SC2053
+                if [[ "$spelling" == $rule ]]; then
+                    permitted_by="$rule"; break
+                fi
+            fi
+        done <<< "$rules"
+        assert "$name permits no rule matching the bare '$spelling'" "" "$permitted_by"
     done
 done
 
