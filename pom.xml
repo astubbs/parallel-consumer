@@ -123,6 +123,26 @@
         <kafka.version>3.9.2</kafka.version>
         <version.unij>0.1.3</version.unij>
 
+        <!-- language proxy (astubbs#242) -->
+        <!-- ONE PIN FOR THREE MODULES, AND IT HAS TO BE ONE. The generated stubs
+             (parallel-consumer-proxy-protocol), the server transport (parallel-consumer-proxy) and
+             the Java client channel (parallel-consumer-proxy-client-java-grpc) all speak the same
+             gRPC runtime, so a version they disagree on is a runtime failure in a downstream
+             consumer rather than a build failure here.
+
+             It was declared separately in all three, each with a comment saying "must match the
+             protocol module's pin" - three places to bump, and a bump that updated two of them
+             looked green. That is not hypothetical: a CVE fix on this branch had to find and edit
+             all three by hand. Inheriting one property from this pom is what the three comments
+             were asking for; Maven properties do not flow between siblings, but they do flow down.
+
+             NOT protobuf.version, which stays in parallel-consumer-proxy-protocol/pom.xml: it is
+             declared exactly once, it pairs with the protoc binary that module downloads
+             (proxy.protoc), and .github/workflows/clients.yml reads `<protobuf.version>` out of
+             that pom BY PATH to provision protoc for the Rust row. Moving it would be a rename with
+             a reader that hard-errors, for no drift being fixed. -->
+        <grpc.version>1.73.0</grpc.version>
+
         <!-- tests -->
         <parallel-tests>true</parallel-tests>
         <!-- Unit-test (surefire) JVM forks = process-level parallelism. Default 1 (no forking); the `ci`

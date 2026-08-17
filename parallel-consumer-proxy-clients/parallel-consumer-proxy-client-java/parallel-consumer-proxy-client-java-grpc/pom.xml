@@ -45,10 +45,9 @@
         -->
         <release.target>17</release.target>
 
-        <!-- Must match the protocol module's pin (parallel-consumer-proxy-protocol/pom.xml): the
-             generated stubs and the channel runtime must agree on one gRPC version. Repeated
-             rather than shared because Maven properties do not flow between sibling modules. -->
-        <grpc.version>1.73.0</grpc.version>
+        <!-- ${grpc.version} is NOT declared here. The generated stubs and this module's channel
+             runtime must agree on one gRPC version, and the root pom owns that single property for
+             every module that speaks the protocol. -->
     </properties>
 
     <dependencies>

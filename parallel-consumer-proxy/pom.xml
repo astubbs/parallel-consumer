@@ -35,11 +35,10 @@
         -->
         <release.target>17</release.target>
 
-        <!-- Must match the protocol module's pin (parallel-consumer-proxy-protocol/pom.xml): the
-             generated stubs this module serves and the transport runtime must agree on one gRPC
-             version. The pin is repeated rather than shared because Maven properties do not flow
-             between sibling modules, so a mismatch here is possible and this comment is the guard. -->
-        <grpc.version>1.73.0</grpc.version>
+        <!-- ${grpc.version} is NOT declared here. The generated stubs this module serves and the
+             transport runtime must agree on one gRPC version, and the root pom owns that single
+             property for every module that speaks the protocol - a comment asking three poms to
+             stay equal is not a guard. -->
     </properties>
 
     <dependencies>
