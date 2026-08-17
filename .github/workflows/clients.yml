@@ -96,12 +96,21 @@ jobs:
           #                 nothing; the provisioning step below is skipped entirely.
           - language: go
             module: parallel-consumer-proxy-client-go
-            toolchain: '1.25.0'
+            # THE PATCH LEVEL IS LOAD-BEARING NOW, not cosmetic: govulncheck (the dependency audit
+            # step below) reports advisories against the TOOLCHAIN'S OWN STDLIB as well as against
+            # the module's dependencies, so this pin decides whether that step is green. Measured
+            # on 2026-08-17: 1.25.13 -> zero findings of any kind; a toolchain behind on security
+            # patches -> a red row naming the stdlib advisories, two of them symbol-reachable from
+            # this module. That is the freshness signal a pin chosen at the start of a long branch
+            # otherwise never gets, and the fix is this one line. Bump to the newest patch of THIS
+            # minor line - a minor bump is the Go wave's call, not the auditor's.
+            toolchain: '1.25.13'
             # go vet catches misuse the compiler accepts (format args, copied locks, lost struct
             # tags); staticcheck adds the classes vet does not look for (dead stores, unused
             # unexported code, nil-deref, misused stdlib). It is pinned as a `tool` directive in
             # go.mod, so `go tool staticcheck` builds THAT version and nothing is installed
-            # globally - which also makes 1.25.0 above staticcheck's floor, not an arbitrary pin.
+            # globally. The 1.25 LINE above is staticcheck v0.7.0's floor rather than an arbitrary
+            # choice; which patch of it is a separate question, answered by the audit note above.
             scanner: go vet + staticcheck
             scanner-cmd: scripts/analyse.sh
             cache-path: ~/go/pkg/mod
@@ -603,6 +612,60 @@ jobs:
         if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' && matrix.scanner-cmd != '' }}
         working-directory: parallel-consumer-proxy-clients/${{ matrix.module }}
         run: ${{ matrix.scanner-cmd }}
+
+      # ── Dependency vulnerability audit, in each language's own ecosystem ─────
+      # WHAT THIS COVERS THAT NOTHING ELSE DOES. The Maven side has had a CVE scan for a while
+      # (dependency-audit.yml, OSS Index); Go, Rust, npm, Ruby, Python and .NET dependencies were
+      # scanned by nothing at all, which is how a stale gRPC pin with a published CVE shipped on
+      # this branch. Dependabot does not close that gap even now that .github/dependabot.yml
+      # declares those ecosystems: Dependabot reads the DEFAULT BRANCH, and a pin chosen at the
+      # start of a long-lived branch goes stale DURING the branch. Only a check that runs on the
+      # branch can see it, which is this one.
+      #
+      # ONE SCRIPT, NOT ONE `run:` PER ROW, and the reason is measured rather than stylistic:
+      # `govulncheck -format json` and `dotnet list package --vulnerable` both print findings and
+      # EXIT 0, while `npm audit` and `bundler-audit` use exit 1 for "found something" AND for
+      # "could not find a lockfile". Any of them wired in bare would have been instance ten of
+      # docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md.
+      # bin/client-audit.sh classifies each language structurally, from its report - see its header
+      # for the per-language evidence, and for the exit-code split it shares with
+      # bin/check-ossindex-audit.sh (1 = the lane is broken, 2 = the tree has a finding).
+      #
+      # NO MATRIX FIELD NAMING THE AUDITOR, deliberately: that would be a second list beside the
+      # script's own, free to disagree with it. The row passes its language and the script decides
+      # - including for Swift and C++, which have no auditor and say so on every run, and for a
+      # language nobody has decided about, which fails rather than skipping.
+      #
+      # The auditors are pinned where the module already pins its tools (go.mod's `tool` directive,
+      # the Gemfile, pyproject's dev extra) and npm and the .NET SDK ship theirs. Rust is the one
+      # exception - cargo-audit has no manifest home - so its row installs it explicitly, below.
+      - name: Install cargo-audit (Rust has no manifest slot for a dev tool)
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' && matrix.language == 'rust' }}
+        # Pinned, and --locked so cargo-audit's own dependency resolution cannot drift under us.
+        # `cargo install` compiles from source (~2-3 min); that cost buys a pinned auditor rather
+        # than a third-party action pinned by SHA, which is what the alternatives all reduce to.
+        #
+        # 0.22.2 DECLARES rust-version 1.88, exactly this row's toolchain pin - so lowering that pin
+        # breaks this install, and the break is loud (cargo refuses, the step goes red) rather than
+        # silent. 0.22.1 is the fallback if that pin ever has to come down: its MSRV is 1.85.
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      # Self-test before the guard, the sequencing this repo uses everywhere. It is hermetic -
+      # every auditor is replaced by a shim on PATH replaying REAL recorded output - so it costs
+      # seconds and needs no toolchain, and it is the only evidence that the two exit-0-with-
+      # findings cases actually go red.
+      - name: Self-test the dependency-audit guard
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
+        run: bash bin/test-client-audit.sh
+
+      # `!cancelled()` for the reason the static-analysis step above carries it. Note the one
+      # consequence: if the build step failed, this module's dependencies may not be installed, and
+      # the audit then exits 1 saying so - a second red pointing at the first, not a new problem.
+      - name: Dependency vulnerability audit (${{ matrix.language }})
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
+        run: |
+          set -o pipefail
+          bash bin/client-audit.sh ${{ matrix.language }} | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Save ${{ matrix.language }} cache (rotating key)
         if: success() && steps.gate.outputs.deferred == 'false' && matrix.cache-path != ''

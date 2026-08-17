@@ -266,8 +266,9 @@ stdlib APIs. That is a measured claim, not a brochure one — see the proof belo
 **Pinned as a `tool` directive in `go.mod`**, exactly as the module already pins its protobuf
 generators, so `go tool staticcheck` builds *that* version. Nothing is installed globally, and the
 version a developer runs cannot differ from the version that gates. Adding it moved the module's
-`go` directive to 1.25.0 — staticcheck v0.7.0's floor, and the toolchain `clients.yml` already pins
-for this row. (`staticcheck` is also in the mise registry if you want it on `PATH` for editor use;
+`go` directive to 1.25.0 — staticcheck v0.7.0's floor, and within the 1.25 line `clients.yml` pins
+for this row. (That row pins a *patch* of it, currently 1.25.13, because `govulncheck` reports the
+toolchain's own stdlib advisories — see [`ci.md`](ci.md), `clients.yml`.) (`staticcheck` is also in the mise registry if you want it on `PATH` for editor use;
 the build does not use that copy.)
 
 **Local:** `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/scripts/analyse.sh` —

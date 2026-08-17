@@ -43,6 +43,12 @@ dev = [
     "ruff>=0.9,<0.17",
     "mypy>=1.15,<3",
     "types-grpcio>=1.60",
+    # The DEPENDENCY auditor, as opposed to ruff and mypy's source auditing: pip-audit checks what
+    # is INSTALLED IN THIS VENV against PyPI's advisory database (astubbs#242). It lives here rather
+    # than in a CI-only install for the reason stated above - bin/client-audit.sh runs THIS VENV's
+    # copy, so a developer and the clients workflow's Python row audit with the same version, and
+    # neither needs a global install. The upper bound is there for the reason the linters carry one.
+    "pip-audit>=2.10,<3",
 ]
 
 [project.urls]
