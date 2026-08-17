@@ -119,6 +119,90 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
+            <!--
+                WHAT `mvn clean` REMOVES FOR THIS MODULE, AND WHAT IT DELIBERATELY LEAVES.
+
+                Every path below was observed appearing on a tree that had none of it: `make build`
+                leaves src/parallel_consumer.egg-info, `make test` leaves .pytest_cache and a
+                __pycache__ beside every package it imported, `make lint` leaves .ruff_cache and
+                .mypy_cache, and an sdist or wheel build leaves build/ and dist/. Nothing here is
+                guessed from what a Python project usually emits.
+
+                .venv IS NOT LISTED, AND THAT IS THE POINT. It holds fetched dependencies, which
+                makes it this language's local repository, not build output; `mvn clean` deletes
+                target/ and does not empty ~/.m2. Listing it would turn a sub-second clean into a
+                multi-minute refetch of grpcio, mypy and their wheels. `make distclean` is the
+                developer's opt-in for that, and Maven deliberately does not call it.
+
+                THE __pycache__ FILESETS NEED BOTH PATTERNS. maven-clean-plugin deletes a directory
+                only once it is empty, so an include that selects the directory alone selects none
+                of the .pyc files inside it and removes nothing. They are also rooted at the four
+                source directories rather than at the module, because a module-wide `**/__pycache__`
+                would descend into .venv and start deleting inside the dependency directory.
+
+                NOT IN A PROFILE, matching the rest of this tree: deleting a directory needs no
+                toolchain, so `./mvnw clean` must work on a box with no Python venv built. Gating it
+                behind -Dpc.foreignClients would make cleaning require the very toolchain the
+                profile exists to keep optional.
+
+                The Makefile's `clean` target is the developer-facing equivalent and removes the
+                same paths. Two lists that must agree: change one, change the other.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/build</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/dist</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/src/parallel_consumer.egg-info</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/.pytest_cache</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/.ruff_cache</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/.mypy_cache</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/src</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/tests</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/tools</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/scripts</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

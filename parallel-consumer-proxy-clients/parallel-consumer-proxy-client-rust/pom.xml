@@ -158,6 +158,32 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
+            <!--
+                NO maven-clean-plugin FILESET HERE, AND THAT IS A MEASURED RESULT RATHER THAN AN
+                OMISSION - the note exists because "nothing to clean" and "nobody wired the clean"
+                look identical in a pom (astubbs#242).
+
+                CARGO ALREADY WRITES WHERE MAVEN ALREADY CLEANS. This crate declares no workspace and
+                no build.target-dir, so cargo's output directory is target/ beside Cargo.toml - the
+                same path as ${project.build.directory}, which the default clean removes whole. The
+                header above records the same collision from the other side, as the reason a `mvn
+                clean` costs the next foreign build about a minute of recompilation. Proven both
+                ways rather than reasoned about: target/debug/conformance-runner - the artefact the
+                shared conformance suite prebuilds by asking cargo to build that one binary target
+                (grep `conformance-runner` in the conformance module's LanguageRunners for the exact
+                argument list, which an XML comment may not repeat: it contains two consecutive
+                dashes) - is present after a build and gone after `mvn clean`.
+
+                THE FETCHED CRATES ARE NOT OUTPUT and stay: the registry and its sources live in
+                ~/.cargo, which is this language's ~/.m2, and `mvn clean` does not empty ~/.m2.
+                `cargo clean` is not used either - it needs the toolchain present to delete files,
+                and the whole premise of the foreign-clients profile is that the toolchain is absent
+                on an ordinary machine. Cargo.lock is committed source, not output.
+
+                So if a future change here moves cargo's output - a .cargo/config.toml setting
+                target-dir, a workspace root above this crate - the clean silently stops working,
+                and a fileset must be added below.
+            -->
         </plugins>
     </build>
 

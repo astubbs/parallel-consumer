@@ -121,6 +121,42 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
+            <!--
+                WHAT `mvn clean` REMOVES FOR THIS MODULE, AND WHAT IT DELIBERATELY LEAVES.
+
+                `dist/` is the whole of tsc's output: every emitted .js, .d.ts, .js.map and
+                .d.ts.map, plus the incremental build state, which lands at dist/tsconfig.tsbuildinfo
+                because outDir is dist and the project is composite. So one directory is the
+                complete answer, and a plain directory rather than an include pattern avoids the
+                glob subtlety that a pattern selecting a directory does not select the files under
+                it. Measured: after `npm run build`, dist/src/index.js and dist/tsconfig.tsbuildinfo
+                exist and nothing outside dist/ is new.
+
+                node_modules IS NOT LISTED, AND THAT IS THE POINT. It holds fetched dependencies,
+                which makes it this language's local repository, not build output; `mvn clean`
+                deletes target/ and does not empty ~/.m2. Listing it would turn a sub-second clean
+                into a 128-package reinstall.
+
+                NOT IN A PROFILE, matching the rest of this tree: deleting a directory needs no
+                toolchain, so `./mvnw clean` must work on a box with no Node installed. Gating it
+                behind -Dpc.foreignClients would make cleaning require the very toolchain the
+                profile exists to keep optional.
+
+                `npm run clean` in package.json is the developer-facing equivalent and removes the
+                same directory. Two lists that must agree: change one, change the other.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/dist</directory>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

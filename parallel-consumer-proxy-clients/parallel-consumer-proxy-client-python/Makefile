@@ -10,7 +10,7 @@ BIN := $(VENV)/bin
 REPO_ROOT := ../..
 CLASSPATH_FILE := target/sidecar-classpath.txt
 
-.PHONY: all build test lint ruff typecheck proto proto-check install clean help
+.PHONY: all build test lint ruff typecheck proto proto-check install clean distclean help
 
 all: build test
 
@@ -22,7 +22,8 @@ help:
 	@echo "typecheck   mypy alone: --strict over src, --check-untyped-defs over tests, tools and scripts"
 	@echo "proto       regenerate the committed stubs from the frozen proxy.proto"
 	@echo "proto-check regenerate and fail if the committed stubs have drifted"
-	@echo "clean       remove the venv, the build tree and the cached sidecar classpath"
+	@echo "clean       remove the build tree, the caches and the cached sidecar classpath - NOT $(VENV)"
+	@echo "distclean   clean, and remove $(VENV) too - a fresh 'make build' then refetches every wheel"
 
 $(BIN)/python:
 	$(PYTHON) -m venv $(VENV)
@@ -70,6 +71,25 @@ $(CLASSPATH_FILE):
 	cd $(REPO_ROOT) && ./mvnw -q -pl :parallel-consumer-proxy-client-python -am \
 		-Dpc.foreignClients -DskipTests test-compile
 
+# WHAT `clean` MAY DELETE, AND WHY $(VENV) IS NOT ON THE LIST. Clean means: remove this module's
+# build OUTPUT, leave its fetched dependencies alone. `mvn clean` deletes target/; it does not empty
+# ~/.m2, and $(VENV) is this language's ~/.m2. Deleting it turns a sub-second clean into a
+# multi-minute refetch of grpcio and mypy, which is `distclean` below and is a thing to ask for
+# rather than a thing to get. Everything listed here was observed appearing from `make build`,
+# `make test` and `make lint` on a tree with none of it present.
+#
+# NO TOOLCHAIN IS INVOKED. `rm` and `find` only, so this works on a checkout that has never built -
+# where $(BIN)/python does not exist yet and any recipe reaching for it would exit non-zero.
+#
+# `mvn clean` REMOVES THE SAME PATHS BY A DIFFERENT ROUTE: pom.xml beside this file configures
+# maven-clean-plugin with one fileset per path, because binding an exec of this target to the clean
+# phase would make cleaning require a resolvable dependency tree. Two lists that must agree: change
+# one, change the other.
 clean:
-	rm -rf $(VENV) target build dist src/*.egg-info .pytest_cache
-	find src tests tools -name '__pycache__' -type d -exec rm -rf {} +
+	rm -rf target build dist src/*.egg-info .pytest_cache .ruff_cache .mypy_cache
+	find src tests tools scripts -type d -name '__pycache__' -prune -exec rm -rf {} +
+
+# The deeper clean, kept because the old `clean` did it and it is genuinely wanted when a
+# dependency pin changes under an existing venv. Not what Maven runs.
+distclean: clean
+	rm -rf $(VENV)

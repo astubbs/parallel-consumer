@@ -143,6 +143,52 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
+            <!--
+                `mvn clean` MUST REMOVE WHAT `mvn compile -Dpc.foreignClients` BUILT, and for .NET
+                that is not under target/. MSBuild writes bin/ (the assemblies) and obj/ (the
+                intermediate output, which here also holds the protobuf and gRPC stubs Grpc.Tools
+                generates on every build) beside each .csproj - three of them, src/ plus the two
+                under tests/. Nothing else in the reactor would ever delete those, so without this
+                block a clean tree still carries a full Release build of the conformance runner.
+
+                DELETED BY DIRECTORY PATTERN RATHER THAN BY PATH, to match this module's own
+                .gitignore (`bin/`, `obj/`, `target/`) - that file is the module's existing
+                statement of what is output, and a fourth project added to the solution would
+                otherwise be missed here in silence.
+
+                BOTH PATTERNS PER DIRECTORY ARE REQUIRED, and the shorter one alone is the trap:
+                maven-clean-plugin removes a directory only once it is empty, so `**/bin` selects
+                bin/ but nothing inside it and deletes NOTHING. Measured in a control before this
+                was written (astubbs#242): `**/bin` alone left bin/Debug/net8.0/*.dll standing;
+                adding `**/bin/**` removed the tree.
+
+                WHAT IS DELIBERATELY NOT HERE: ~/.nuget/packages. The restored packages are this
+                language's ~/.m2 - fetched dependencies, not build output - and `mvn clean` does not
+                empty ~/.m2. `dotnet clean` is not used either: it needs the SDK present to delete
+                files, and the whole premise of the foreign-clients profile is that the toolchain is
+                absent on an ordinary machine. The clients aggregator's pom carries the full
+                argument, including why no exec-driven clean can work at all.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}</directory>
+                            <includes>
+                                <include>**/bin</include>
+                                <include>**/bin/**</include>
+                                <include>**/obj</include>
+                                <include>**/obj/**</include>
+                                <include>**/TestResults</include>
+                                <include>**/TestResults/**</include>
+                            </includes>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

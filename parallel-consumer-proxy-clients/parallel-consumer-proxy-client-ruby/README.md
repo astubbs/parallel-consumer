@@ -75,6 +75,13 @@ bundle exec rubocop           # the bug finder alone
 bundle exec rspec             # the specs alone
 ```
 
+There is no clean command, because there is nothing to clean. Ruby compiles to nothing here, the
+stubs under `lib/parallelconsumer/` are committed source, and the only thing a build leaves behind
+is `vendor/bundle` - the installed bundle, which is this language's `~/.m2` and which `mvn clean`
+has no more business deleting than it has emptying `~/.m2`. So `./mvnw clean` removes this module's
+`target/` and nothing else, and `pom.xml` configures no clean filesets on purpose - the reasoning
+is written out there, because an empty configuration and an unconsidered one look identical.
+
 `bundle exec rake` is what the Maven wrapper runs too, so `-Dpc.foreignClients` and a developer's
 box run the same thing:
 

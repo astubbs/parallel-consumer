@@ -2,7 +2,7 @@
   "name": "@parallel-consumer/proxy-client",
   "version": "0.6.0-0",
   "private": true,
-  "description": "Parallel Consumer for TypeScript - ordered concurrent Kafka consumption without the event loop as the ceiling. JSON allows no comments, so: the pom.xml beside this file is a thin Maven wrapper that drives THIS under -Dpc.foreignClients, and an ordinary Maven build starts no Node at all. Copyright (C) 2026 Antony Stubbs and contributors.",
+  "description": "Parallel Consumer for TypeScript - ordered concurrent Kafka consumption without the event loop as the ceiling. JSON allows no comments, so: the pom.xml beside this file is a thin Maven wrapper that drives THIS under -Dpc.foreignClients, and an ordinary Maven build starts no Node at all. The `clean` script is plain rm, not `tsc --build --clean`, because Maven's clean lifecycle drives it and a clean that needs node_modules to already exist exits 127 on a fresh checkout; every emitted file, tsbuildinfo included, lands under dist. It leaves node_modules alone deliberately - that is this language's ~/.m2, not build output. Copyright (C) 2026 Antony Stubbs and contributors.",
   "license": "Apache-2.0",
   "author": "Antony Stubbs and contributors",
   "homepage": "https://github.com/astubbs/parallel-consumer",
@@ -28,7 +28,7 @@
     "lint": "eslint .",
     "proto": "node scripts/generate-proto.mjs",
     "proto:check": "node scripts/generate-proto.mjs --check",
-    "clean": "tsc --build --clean && rm -rf dist"
+    "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.10.2",

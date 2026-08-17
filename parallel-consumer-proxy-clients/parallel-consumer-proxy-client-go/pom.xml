@@ -128,6 +128,36 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
+            <!--
+                NO maven-clean-plugin FILESET HERE, AND THAT IS A MEASURED RESULT RATHER THAN AN
+                OMISSION - the note exists because "nothing to clean" and "nobody wired the clean"
+                look identical in a pom (astubbs#242).
+
+                GO WRITES NOTHING INTO THIS DIRECTORY. `go build ./...` matches several packages, and
+                for that form the toolchain compiles as a check and DISCARDS the objects - verified
+                by running it in a pristine tree and finding not one new file, tracked or ignored.
+                What it produces instead goes to the build cache, GOCACHE (~/.cache/go-build), with
+                the modules in GOMODCACHE (~/go/pkg/mod). Both are outside the module, both are
+                shared with every other checkout and agent on the machine, and both are this
+                language's ~/.m2 - so `go clean -cache` or `-modcache` is exactly the deletion this
+                repo forbids, not the one it wants. `go vet` and `go tool staticcheck` are the same
+                story.
+
+                THE ONE BUILT ARTEFACT IS ALREADY COVERED. The shared conformance suite prebuilds
+                `go build -o target/conformance-runner ./cmd/conformance-runner` - grep
+                `target/conformance-runner` in the conformance module's LanguageRunners - and Maven's
+                default clean takes target/ whole, no configuration needed. Proven both ways: the
+                binary is there after the suite's prebuild and gone after `mvn clean`.
+
+                gen/ IS SOURCE, NOT OUTPUT. The protobuf stubs under gen/ are committed on purpose,
+                because Go has no codegen step at `go get` time - scripts/generate-proto.sh says so
+                in its header. Deleting them would break a consumer of this module, and the
+                regeneration check is `git status` staying clean, not a clean removing them.
+
+                So if a future change here starts emitting into the module - a `go build -o` landing
+                outside target/, a `go test -c` binary - it needs a fileset added below, and this
+                paragraph is the reason nobody had to write one before.
+            -->
         </plugins>
     </build>
 
