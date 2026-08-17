@@ -144,3 +144,186 @@ updates:
       # three reference immutable release tags, at which point they should be watched like
       # any other action. See astubbs#212 for the per-fork state and what "done" looks like.
       - dependency-name: "astubbs/*"
+
+  # ══ The proxy clients' seven foreign ecosystems (astubbs#242) ═════════════════════════
+  #
+  # Until these blocks existed, `maven` and `github-actions` were the ONLY two ecosystems
+  # declared, while the language-proxy clients had brought seven more into the tree. Nothing
+  # updated any of them and nothing said so - the gap surfaced when a gRPC CVE was found by a
+  # CI scan rather than by a bot, on a version pinned when the branch started.
+  #
+  # THESE ENTRIES DO NOTHING UNTIL THE CLIENT MODULES ARE ON `master`, AND THAT IS NOT A
+  # DEFECT - it is the thing to know before concluding they are broken. Dependabot reads the
+  # DEFAULT BRANCH: the manifests below live only on the proxy branch today, and GitHub's
+  # dependency graph for master currently holds maven and actions packages and nothing else
+  # (`gh api repos/astubbs/parallel-consumer/dependency-graph/sbom`). Both channels start the
+  # day astubbs/parallel-consumer#293 merges. It also means Dependabot could not have caught
+  # the stale gRPC pin, then or now - only a check that runs on the BRANCH can, which is what
+  # the per-language audit steps in .github/workflows/clients.yml are for.
+  #
+  # NO `target-branch` ANYWHERE BELOW, deliberately. Pointing these at the proxy branch would
+  # make them work sooner and cost the more valuable half: security updates always target the
+  # default branch, so an ecosystem scoped with `target-branch` gets version updates only.
+  # Waiting is the cheaper mistake.
+  #
+  # DAILY AND GROUPED, per the maintainer's call, with the frequency to come down if it is
+  # noisy. THE NOISE OBJECTION IS WEAKER THAN THE MODULE COUNT SUGGESTS, and it was measured
+  # rather than assumed - each client is a thin facade over generated stubs, so the DIRECT
+  # dependency counts per manifest are:
+  #
+  #     go.mod            2   (+11 indirect, incl. the pinned generator/analyser tools)
+  #     Cargo.toml        9   (7 runtime, 1 dev, 1 build)
+  #     package.json      8   (2 runtime, 6 dev)
+  #     pyproject.toml    7   (2 runtime, 5 dev)
+  #     Gemfile           6   (2 runtime, 4 dev)
+  #     *.csproj          6   (across three projects; versions centralised in
+  #                            Directory.Build.props)
+  #     Package.swift     5   (22 pins resolved, transitives included)
+  #
+  # 43 direct dependencies across all seven. Grouped, the steady state is at most one PR per
+  # ecosystem per run and usually none - the maven block alone watches more than this.
+  # No `open-pull-requests-limit` for the same reason the actions block gives: the default cap
+  # exists to stop a swarm, and a limit that withheld a bump here would be silently costing
+  # coverage on the ecosystems that have just acquired it.
+  #
+  # GROUPED FOLLOWS THE MAVEN TRADE, NOT THE ACTIONS ONE. An action has repo-wide reach, which
+  # is why those arrive one PR at a time and stay independently revertable; a foreign client's
+  # dependency reaches exactly one module, whose whole build, test, conformance and lint suite
+  # is one CI row. A broken bump reddens that row and nothing else, so the isolation a
+  # per-dependency PR buys is worth less here than the review attention grouping saves.
+  # Minor and patch group; MAJORS ARRIVE SINGLY AND UNGROUPED - the maven shape, for the same
+  # reason: a major is a migration and wants its own PR, but must never be silently ignored.
+  #
+  # NO IGNORES ON ANY OF THESE, AND THAT IS A DECISION. Nothing here is hand-managed yet, and
+  # this file's own rule says an ignore is invisible - nothing reports the PR that was never
+  # opened - so one written on speculation is worse than the bump it pre-empts. What a reviewer
+  # does need to know is the one real coupling, which is a REVIEW note rather than a
+  # suppression: every client commits its generated stubs, so a bump to a code generator or to
+  # the protobuf/gRPC runtime it generated against (go.mod's `tool` directives,
+  # `grpc-tools`/`google-protobuf` in the Gemfile, `grpcio-tools` in the dev extra,
+  # `Grpc.Tools`) means regenerating those stubs in the same PR. Grouping helps here: the
+  # runtime and its generator move together in one PR rather than in two that pass separately.
+  #
+  # C++ IS NOT COVERED BY ANYTHING, and is listed here so it does not read as an oversight.
+  # parallel-consumer-proxy-client-cpp has no package manager to point an updater at - its
+  # CMakeLists.txt resolves everything through find_package/PkgConfig against system packages
+  # from the runner image, so there is no manifest, no lockfile, and no version for a bot to
+  # bump. Dependabot supports no C++ ecosystem, and neither does anything else we would adopt.
+  # Its dependencies move when the image does.
+  #
+  # The three JVM clients (Java, Kotlin, Scala) need no entry: they are Maven modules, so the
+  # `maven` block at the top of this file and the whole-tree OSS Index lane already cover them.
+
+  - package-ecosystem: "gomod"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go"
+    schedule:
+      interval: "daily"
+    groups:
+      go-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "cargo"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust"
+    schedule:
+      interval: "daily"
+    # READ A `minor` HERE AS A MAJOR WHEN REVIEWING. Every crate this module depends on is
+    # pre-1.0 (tonic 0.14, prost 0.14), and Cargo's compatibility rule for 0.x makes 0.14 -> 0.15
+    # a BREAKING change - while Dependabot still classifies it semver-minor and so groups it.
+    # Deliberately not split into its own ungrouped entry: the module's four tonic/prost crates
+    # have to move together or the generated code stops compiling, so a grouped PR is the shape
+    # that can actually be merged. What it costs is that "non-major" is not a safety claim on
+    # this row, and the CI row is what establishes safety instead.
+    groups:
+      cargo-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript"
+    schedule:
+      interval: "daily"
+    groups:
+      npm-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "bundler"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby"
+    schedule:
+      interval: "daily"
+    groups:
+      bundler-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # pyproject.toml, PEP 621 style with a setuptools backend. Dependabot reads `[project]`
+  # dependencies and `[project.optional-dependencies]` - so both the two runtime pins and the
+  # five-entry `dev` extra (ruff, mypy, pytest, grpcio-tools, types-grpcio) are watched.
+  # `[build-system] requires` is NOT: `setuptools>=68` is outside every updater here, and the
+  # only thing that moves it is a human. Named because an unwatched line inside a watched file
+  # is exactly the shape that reads as covered.
+  - package-ecosystem: "pip"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python"
+    schedule:
+      interval: "daily"
+    groups:
+      pip-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The directory holds Bz.Stub.ParallelConsumer.Proxy.Client.sln, which is what lets one entry
+  # reach all three projects (src/ plus the two under tests/) rather than needing a directory
+  # each. Their versions are centralised in Directory.Build.props - $(GrpcVersion),
+  # $(ProtobufVersion) - which is the .NET side of the fix the root pom's grpc.version got.
+  - package-ecosystem: "nuget"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet"
+    schedule:
+      interval: "daily"
+    groups:
+      nuget-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Swift Package Manager. Dependabot matches Package.swift against Package.resolved and skips
+  # any dependency whose URL differs between the two, silently - both files are in this
+  # directory and the URLs agree today, so if a swift-side bump ever stops arriving, check that
+  # first (dependabot/dependabot-core#10296). Nothing else watches this module: Swift has no
+  # dependency auditor to put in the CI lane either, which is recorded in clients.yml's audit
+  # step, so this entry is its ONLY coverage.
+  - package-ecosystem: "swift"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift"
+    schedule:
+      interval: "daily"
+    groups:
+      swift-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

@@ -28,4 +28,15 @@ group :development, :test do
   # Bug-finding, not style arbitration - see .rubocop.yml, which turns the style departments off
   # and leaves Lint/ and Security/ at full strength.
   gem "rubocop", "1.89.0"
+
+  # The DEPENDENCY auditor, as opposed to rubocop's source auditing: it reads Gemfile.lock against
+  # the ruby-advisory-db and reports gems with published advisories (astubbs#242). Pinned here for
+  # the same reason as everything else in this file - bin/client-audit.sh runs `bundle exec
+  # bundler-audit`, so the version a developer runs and the version the clients workflow's Ruby row
+  # runs cannot drift, and nothing is installed globally.
+  #
+  # Its exit code alone is not a verdict: bundler-audit exits 1 both when it finds an advisory and
+  # when it cannot find Gemfile.lock at all. bin/client-audit.sh reads its JSON report and tells
+  # those apart - see that script's header.
+  gem "bundler-audit", "0.9.3"
 end

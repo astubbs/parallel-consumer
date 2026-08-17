@@ -43,14 +43,15 @@
         -->
         <release.target>17</release.target>
 
-        <!-- gRPC 1.75.0 pairs with protobuf-java 3.25.x; the generated code and the runtime must
-             agree, so both versions live here and nowhere else in the module.
+        <!--
+            protobuf-java 3.25.5 pairs with the gRPC version, and the generated code and the runtime
+            must agree. ${grpc.version} is inherited from the root pom, which owns it for all three
+            modules that speak the protocol - see its comment for why it is not declared here.
 
-             1.75.0 is the floor, not a preference: it is the first release GHSA-prj3-ccx8-p6x4
-             (MadeYouReset HTTP/2 DDoS, high) names as patched, and 1.73.0 shipped the affected
-             shaded Netty. Every line from 1.75.0 to 1.83.x still declares protobuf-java 3.25.x,
-             so moving further is a free choice rather than a forced one - and is left as one. -->
-        <grpc.version>1.75.0</grpc.version>
+            protobuf.version stays here, and deliberately: this module is its only consumer, it
+            selects the protoc binary below, and .github/workflows/clients.yml reads it out of THIS
+            pom by path to provision protoc for the Rust row. Bump the pair together.
+        -->
         <protobuf.version>3.25.5</protobuf.version>
 
         <!--
