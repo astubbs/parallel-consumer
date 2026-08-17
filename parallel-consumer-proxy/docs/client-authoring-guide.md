@@ -354,8 +354,13 @@ no arguments for its usage text, which is authoritative for its flags. The conve
   still implements the specification's first-line contract); it serves sessions **until stdin EOF** - it
   does not exit after a client-initiated drain, so reap it by closing its stdin, never by waiting; it
   currently negotiates only `["dispatch"]`, so the liveness, manifest, terminal and shutdown duties are
-  off by negotiation (their `Configured` fields absent) until the engine units land and their tokens are
-  granted - which is the same statement as the "named now" table below; and **the mock ignores the
+  off by negotiation (their `Configured` fields absent) - which is the same statement as the "named now"
+  table below. **Which side is holding each one back differs, and the difference decides what unblocks
+  it**: the proxy already grants `dispatch, heartbeat, manifest, worker-death` (`ConfigureHandler`'s
+  `PROXY_CAPABILITIES`), so liveness and manifest are un-negotiated because *no client declares or
+  implements them yet* - not because the engine cannot answer; terminal and shutdown are the ones still
+  waiting on their engine units. A scenario turning on a lease therefore needs client work, in every
+  language, not an engine unit; and **the mock ignores the
   subscription entirely**, seeding the scenario's records unconditionally on a mock consumer, from a record
   whose `topic` is the scenario name. Subscribing to the wrong topic - or to nothing at all - still passes
   every scenario, so **the subscription cannot be used as a negative control**, and a client that never
