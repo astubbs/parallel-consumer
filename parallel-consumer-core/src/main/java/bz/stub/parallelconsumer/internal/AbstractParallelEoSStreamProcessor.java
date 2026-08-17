@@ -857,15 +857,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     if (Thread.interrupted()) { //clear interrupted flag
                         log.debug("Thread interrupted flag cleared in control loop error handling");
                     }
-                    // describeWithRootCause never throws, so nothing here needs guarding beyond that. The logger
-                    // renders the same user-supplied throwable and could in principle throw - but that is true of
-                    // every log call taking a throwable in this codebase, including doClose's own a few lines into
-                    // the shutdown this handler is about to start. Guarding only here would not reduce that risk, it
-                    // would just make one call site look like it knows something the rest do not.
+                    // Arm the failure, then log, then close - and close in a finally, because shutting down is the
+                    // part that must happen. describeWithRootCause never throws, but the logger renders the same
+                    // user-supplied throwable and its binding is the user's; if that throws, the consumer would
+                    // otherwise be left running with an already-failed control future, which is the state this
+                    // handler exists to avoid.
                     var described = describeWithRootCause(e);
-                    log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e);
                     failureReason = new RuntimeException("Error from poll control thread: " + described, e);
-                    doClose(shutdownTimeout); // attempt to close
+                    try {
+                        log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e);
+                    } finally {
+                        doClose(shutdownTimeout); // attempt to close
+                    }
                     throw failureReason;
                 }
             }

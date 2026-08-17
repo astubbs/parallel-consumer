@@ -17,6 +17,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.reactivestreams.Publisher;
 import pl.tlinkowski.unij.api.UniLists;
 import reactor.core.Disposable;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
@@ -120,7 +121,9 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        if (PCRetriableException.isPresentIn(throwable)) {
+        // Reactor repackages what it propagates, and core cannot name reactor's wrapper types - so unwrap with
+        // reactor's own helper first, then ask whether the failure underneath is one the user marked expected
+        if (PCRetriableException.isPresentIn(Exceptions.unwrap(throwable))) {
             log.debug("Reactor fail signal", throwable);
         } else {
             log.error("Reactor fail signal", throwable);

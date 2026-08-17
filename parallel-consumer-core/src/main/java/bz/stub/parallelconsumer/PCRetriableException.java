@@ -42,16 +42,23 @@ public class PCRetriableException extends RuntimeException {
      * Whether this failure is one the user marked as expected - the question every engine asks before deciding
      * whether to log at debug or at error.
      * <p>
-     * Here rather than at each engine because it is a policy, not a mechanism: "expected means retriable anywhere in
-     * the chain" is one decision about what this type means, and re-deriving it per engine is how the engines came to
-     * disagree. Three of them tested only the outermost throwable, so an instance that arrived wrapped - which is
+     * Here rather than at each engine because it is a policy, not a mechanism, and re-deriving it per engine is how
+     * the engines came to disagree. Three tested only the outermost throwable, so an instance that arrived wrapped -
      * routine, since the reactive engines repackage what they propagate - was logged as an error; a fourth never
      * asked at all.
+     * <p>
+     * <b>Expected means this failure IS retriable, not that a retriable is somewhere beneath it.</b> PC's own
+     * pass-through wrappers are peeled first, then the failure underneath is tested. A genuinely different exception
+     * that merely happens to carry a {@code PCRetriableException} further down its chain is NOT expected, and stays
+     * at error - the alternative silences a real fault because of something buried under it.
+     * <p>
+     * A framework that repackages exceptions on the way out is the caller's to unwrap first, with that framework's
+     * own helper, since core cannot name those types. {@code ReactorProcessor} does this.
      *
      * @param t the failure to classify; null is not expected
      */
     public static boolean isPresentIn(Throwable t) {
-        return ThrowableUtils.hasCauseOfType(t, PCRetriableException.class);
+        return ThrowableUtils.unwrapTransparentWrappers(t) instanceof PCRetriableException;
     }
 
 }

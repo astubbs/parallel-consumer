@@ -4,6 +4,8 @@ package bz.stub.parallelconsumer.internal.utils;
  * Copyright (C) 2020-2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
+import bz.stub.parallelconsumer.internal.InternalRuntimeException;
 import lombok.experimental.UtilityClass;
 
 import java.util.Collections;
@@ -102,22 +104,15 @@ public class ThrowableUtils {
     /**
      * Whether the throwable, or anything in its cause chain, is of the given type.
      * <p>
-     * The chain, not the top - because whether an exception arrives wrapped is decided by whatever passed it on, not
-     * by what it means. A {@code PCRetriableException} says "expected, retry me" whether user code threw it directly,
-     * a wrapper caught and re-threw it, or a reactive framework repackaged it on the way out. Testing only the
-     * outermost object makes the answer depend on the plumbing, which is how an expected failure ends up logged as an
-     * error.
+     * Presence anywhere in the chain - useful for "did this happen at all", not for "what is this failure".
      * <p>
      * <b>Never throws</b>, for the same reason as {@link #describeWithRootCause}: callers use this on the failure
      * path. An unreadable chain answers {@code false} rather than replacing one failure with another.
      * <p>
-     * <b>The assumption this rests on, for whoever adds the next caller.</b> Searching the whole chain means a match
-     * anywhere decides the answer for the entire failure - so if an unrelated exception of this type were ever
-     * chained beneath a genuinely fatal one, the fatal one would be classified by the buried match. That is safe for
-     * the current retriable-logging callers because nothing chains one failure onto another:
-     * {@code WorkContainer.onUserFunctionFailure} replaces the stored cause per attempt rather than appending, and
-     * the reactive engines pass on only what their framework hands back. A change that starts aggregating failures
-     * into one chain would invalidate that, and the symptom would be quiet: a real error logged at debug.
+     * <b>A match anywhere decides the answer for the whole failure</b>, so this is the wrong question when the caller
+     * means "what IS this failure" - a genuinely different exception carrying this type further down would be
+     * classified by the buried match. Callers wanting identity rather than presence use
+     * {@link #unwrapTransparentWrappers} instead; {@code PCRetriableException.isPresentIn} does.
      *
      * @param t    the throwable to search; null answers false
      * @param type the type to look for
@@ -133,6 +128,40 @@ public class ThrowableUtils {
         } catch (Throwable searchingItFailed) {
             return false;
         }
+    }
+
+    /**
+     * Peels the wrappers PC itself adds, and stops at the first thing that is not one.
+     * <p>
+     * Not a search of the whole chain: the question a caller asks of the result is "what IS this failure", and a
+     * wrapper answers that only for wrappers that add nothing but a name. Peeling further would let an unrelated
+     * exception buried under a genuinely different failure speak for the whole thing.
+     * <p>
+     * Only PC's own pass-through wrappers are peeled here, because those are the only ones core can name. A
+     * framework that repackages exceptions on the way out - Reactor does - is the caller's to unwrap first, using
+     * that framework's own helper; core cannot see those types.
+     */
+    public static Throwable unwrapTransparentWrappers(Throwable t) {
+        try {
+            var current = t;
+            for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && isTransparentWrapper(current); depth++) {
+                Throwable cause = current.getCause();
+                if (cause == null || cause == current) {
+                    break;
+                }
+                current = cause;
+            }
+            return current;
+        } catch (Throwable unwrappingItFailed) {
+            return t;
+        }
+    }
+
+    /**
+     * A wrapper that means "something below this threw", and nothing else - so the failure it carries is the failure.
+     */
+    private static boolean isTransparentWrapper(Throwable t) {
+        return t instanceof ExceptionInUserFunctionException || t instanceof InternalRuntimeException;
     }
 
     /**

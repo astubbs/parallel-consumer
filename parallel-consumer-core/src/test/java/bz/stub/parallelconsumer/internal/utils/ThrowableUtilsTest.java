@@ -71,12 +71,49 @@ class ThrowableUtilsTest {
      */
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void aCyclicCauseChainTerminates() {
-        var head = new RuntimeException("head");
-        var tail = new RuntimeException("tail", head);
-        head.initCause(tail);
+    void aCyclicCauseChainStopsAtTheRepeatNotAtTheDepthCap() {
+        var cycle = CountingCycle.pair();
+        CountingCycle.hops.set(0);
 
-        assertThat(describeWithRootCause(head)).isNotNull();
+        assertThat(describeWithRootCause(cycle)).isNotNull();
+
+        // the point of the assertion: with the identity guard the walk stops as soon as it sees a link twice, so it
+        // takes a couple of hops. Without it the walk still terminates - MAX_CAUSE_DEPTH catches it - but only after
+        // 100. Asserting termination alone therefore proves nothing about the guard, which is what the previous
+        // version of this test did.
+        assertThat(CountingCycle.hops.get())
+                .as("hops taken over a two-node cycle")
+                .isLessThan(10);
+    }
+
+    /**
+     * Two nodes pointing at each other, counting how many times the walk asks for a cause.
+     * <p>
+     * A plain {@code initCause} cycle would do for termination, but not for distinguishing WHICH guard terminated it.
+     */
+    private static class CountingCycle extends RuntimeException {
+
+        static final AtomicInteger hops = new AtomicInteger();
+
+        private CountingCycle other;
+
+        private CountingCycle(String message) {
+            super(message);
+        }
+
+        static CountingCycle pair() {
+            var head = new CountingCycle("head");
+            var tail = new CountingCycle("tail");
+            head.other = tail;
+            tail.other = head;
+            return head;
+        }
+
+        @Override
+        public synchronized Throwable getCause() {
+            hops.incrementAndGet();
+            return other;
+        }
     }
 
     @Test
