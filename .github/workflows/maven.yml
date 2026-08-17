@@ -111,7 +111,12 @@ jobs:
       - name: Warm scala-maven-plugin's compiler and zinc bridge
         run: |
           set -euo pipefail
-          ./mvnw --batch-mode -ntp -Pci -pl :parallel-consumer-proxy-client-scala -am -DskipTests compile
+          # `package`, not `compile`: the scala module's -am chain includes
+          # parallel-consumer-proxy-protocol, which depends on parallel-consumer-core's TEST-JAR, and
+          # that artifact does not exist until core is packaged - a compile-only run resolves it
+          # against Central and 404s. The root pom's maven-release-plugin comment records the same
+          # trap for the same reason.
+          ./mvnw --batch-mode -ntp -Pci -pl :parallel-consumer-proxy-client-scala -am -DskipTests package
           # Assert by glob, not by version, for the same reason the compile is version-free: the
           # point is that the cache got populated, and a run that resolved nothing must go red here
           # rather than four minutes into a downstream lane.
