@@ -603,9 +603,12 @@ Redis-backed plug is ever built.</p>
     <a href="https://github.com/astubbs/parallel-consumer/issues/227">astubbs#227</a>
     (mirror of <a href="https://github.com/confluentinc/parallel-consumer/issues/21">confluentinc#21</a>,
     "Dynamic concurrency control with flow control or tcp congestion control theory"). Instead of
-    the user pre-selecting <code>maxConcurrency</code> — a number that is hard to choose, goes
-    stale as integrated systems evolve, and when set too <em>low</em> silently leaves throughput
-    on the table — one adaptive controller owns the dispatch budget, fed by three signals:
+    the user pre-selecting <code>maxConcurrency</code> — a number that is wrong in both
+    directions: too <em>low</em> silently leaves throughput on the table (nobody files an issue
+    for wasted headroom), too <em>high</em> floods the downstream (the
+    <a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a>
+    case), and no static value stays right as conditions shift — one adaptive controller owns
+    the dispatch budget, fed by three signals:
     <strong>latency gradient</strong> (step concurrency up until job time degrades, then
     contract), <strong>failures</strong>, and <strong>structured rate-limit feedback</strong> —
     the user function throws an engine-recognised exception (e.g.
