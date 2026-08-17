@@ -32,15 +32,9 @@ import static java.util.stream.Collectors.toMap;
  * per-partition frozen-committed detail ("zombie member blocked rebalance 40s" vs "partition 12
  * committed frozen lag=2100" vs "probe clean - nothing in group progress explains this").
  * <p>
- * <b>A clean probe is not a verdict on the test.</b> The detectors can only speak about a consumer
- * group that existed: an environment failure - a broker container that never started, Docker or
- * network trouble, anything throwing before the clients open - produces the same clean autopsy as a
- * genuine test fault, because there was nothing to sample either way. Seen for real as
- * {@code ContainerLaunchException: Container startup failed for image confluentinc/cp-kafka} on
- * astubbs#116, where the autopsy read clean and the cause was Docker. The autopsy therefore prints
- * the failure first and qualifies the clean line; read them in that order, and see
- * {@code docs/testing.md} on why "probe clean" is only informative when the detectors could have
- * fired at all.
+ * <b>A clean probe is not a verdict on the test</b> - an environment failure leaves the detectors
+ * nothing to sample and reads identically to a genuine fault, which is why the autopsy prints the
+ * failure first. {@code docs/testing.md} owns that rule and the worked case.
  * <p>
  * Observer semantics: this extension NEVER fails a test. Violations use the chaos-calibrated
  * thresholds but only ever gate inside the chaos suite, which constructs its own gating probe.
@@ -193,13 +187,13 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         boolean nothingObserved = violations.isEmpty() && frozen.isEmpty()
                 && probe.getPeakRebalanceDwellMs() == 0 && probe.getPeakLagStagnationMs() == 0;
         if (nothingObserved) {
+            // TODO(refactor): distinguish "never sampled a group" from "sampled and saw nothing" rather
+            // than qualifying one line for both - ProgressProbe already knows, via the adminIfOpen() checks
+            // its samplers make, and already promotes persistent sample failure to PROBE_DEGRADED.
             sb.append("probe clean - no rebalance dwell, no lag stagnation, no frozen partitions observed: ")
-                    .append("nothing in consumer-group progress explains this failure\n")
-                    .append("  NB read the failure line above before reading this one as a verdict on the test. ")
-                    .append("A group that never formed - a container that failed to start, Docker or network ")
-                    .append("trouble, anything failing before the clients opened - leaves the detectors nothing ")
-                    .append("to sample, and prints this same line. 'Probe clean' is only informative where a ")
-                    .append("group existed long enough for the bounds to be reachable.\n");
+                    .append("nothing in consumer-group progress explains this failure.\n")
+                    .append("  NB this reads the same when no group ever formed (container/Docker/network), ")
+                    .append("so weigh it against the failure line above - see docs/testing.md.\n");
         } else {
             sb.append("violations (").append(violations.size()).append("):\n");
             if (violations.isEmpty()) {

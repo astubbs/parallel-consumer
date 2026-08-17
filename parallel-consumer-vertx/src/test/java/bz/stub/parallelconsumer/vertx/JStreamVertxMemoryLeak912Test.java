@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.vertx;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.DrainingCloseable.DrainingMode;
 import bz.stub.parallelconsumer.internal.utils.WireMockUtils;
 import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
 import com.github.tomakehurst.wiremock.WireMockServer;
@@ -16,7 +15,6 @@ import org.junit.jupiter.api.parallel.Isolated;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.lang.reflect.Field;
-import java.time.Duration;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -48,23 +46,6 @@ class JStreamVertxMemoryLeak912Test extends VertxBaseUnitTest {
     @AfterEach
     void closeWireMock() {
         stubServer.stop();
-    }
-
-    /**
-     * Releases the Vert.x engine and web client, which the shutdown under test does <b>not</b>.
-     * <p>
-     * {@code webClient.close()} and {@code vertx.close()} live only in
-     * {@link VertxParallelEoSStreamProcessor#close(Duration, DrainingMode)}, so the no-argument paths these
-     * tests exercise never reach them - and the shared {@code @AfterEach} in the core test base skips its own
-     * close once the processor reports closed, which by then it does. Without this, each test would strand a
-     * web client and an event-loop group for the rest of the suite.
-     * <p>
-     * Calling the {@link Duration}-taking close a second time is safe: the shutdown short-circuits on the
-     * already-{@code CLOSED} state and the Vert.x teardown after it still runs.
-     */
-    @AfterEach
-    void closeVertxResources() {
-        vertxAsync.close(Duration.ofSeconds(10), DrainingMode.DONT_DRAIN);
     }
 
     /**

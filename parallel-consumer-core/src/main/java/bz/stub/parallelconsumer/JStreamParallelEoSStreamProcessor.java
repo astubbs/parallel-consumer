@@ -61,11 +61,8 @@ public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamPr
      * The clear happens <b>after</b> the shutdown completes, not before: a {@link DrainingMode#DRAIN} close
      * keeps processing in-flight work, and that work enqueues more results.
      * <p>
-     * It runs in a {@code finally} because a close that fails - a drain that times out, an exception off the
-     * control thread - is exactly when the backlog is largest, and releasing it does not depend on the
-     * shutdown having succeeded. On that failed path the release is <b>best-effort</b>: workers that outlive
-     * a timed-out shutdown can enqueue again afterwards. A close that completes normally has no such window,
-     * and an instance whose close failed is not one to keep using.
+     * It runs in a {@code finally} because a close that fails is exactly when the backlog is largest;
+     * {@link JStreamResultDeques#clearOnClose} states what that buys and where it stops.
      *
      * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>

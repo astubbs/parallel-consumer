@@ -153,6 +153,10 @@ that line, leave it in the code - it will show up here.
 - todo make private
 - todo make private
 
+**`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java`**
+
+- TODO(refactor): distinguish "never sampled a group" from "sampled and saw nothing" rather
+
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java`**
 
 - todo need to customise this for this test

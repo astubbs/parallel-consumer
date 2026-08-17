@@ -162,7 +162,7 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
      * Overrides the {@link DrainingMode}-taking close, which is the single method every other entry point
      * funnels through - see the sibling override in {@code JStreamParallelEoSStreamProcessor}. The clear
      * happens after shutdown, since a draining close keeps enqueueing results while it finishes, and in a
-     * {@code finally} so a failed close still releases the backlog.
+     * {@code finally} - see {@link JStreamResultDeques#clearOnClose} for what that buys and where it stops.
      * <p>
      * On the {@link java.time.Duration}-taking paths the clear lands after the core shutdown but before
      * {@code VertxParallelEoSStreamProcessor} closes the web client and Vert.x instance, because that class
