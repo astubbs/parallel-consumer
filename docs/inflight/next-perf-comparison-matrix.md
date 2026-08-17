@@ -39,6 +39,13 @@ fragment should be the same record at different aggregation levels. Jointly open
 stats-line field list; and the receipts transport must be switchable off (or costed in the
 attribution ladder) so the demo's transport cannot distort the numbers it displays.
 
+That track's "bring-your-own-topic what-if machine" (its idea 3, added 2026-08-18) consumes this
+track's scenario definitions with **user-supplied knobs** - processing delay, ordering mode,
+failure percentage, max concurrency. Constraint on this track's workload schema: parameterize the
+processing delay (and those siblings) rather than hardcoding the 0-5 ms slow stage, so both tracks
+run one definition. It also reuses this track's plain-KafkaConsumer arm as its live comparison arm,
+under the recorded constraints (fingerprinted config, ratio framing, no absolute-number claims).
+
 **Next step.** Brainstorm idea 1 (the harness architecture - everything else attaches to it) or
 idea 6 (the live loop) into requirements, then implement as a stacked PR off
 `feats/proxy-requirements`.
