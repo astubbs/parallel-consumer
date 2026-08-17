@@ -5,55 +5,81 @@ package bz.stub.parallelconsumer.internal.utils;
  */
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
 
 /**
- * The stream handed back by the deprecated {@code JStream*} processors declares itself
- * {@link java.util.Spliterator#NONNULL}, so it must never emit a {@code null} - not even when the deque
- * behind it empties underneath the consumer, which the clear-on-close those processors perform can do.
+ * The queue-to-{@link java.util.stream.Stream} bridge waits for results instead of ending on an empty queue.
  *
  * @author Antony Stubbs
  * @see Java8StreamUtils
- * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
 class Java8StreamUtilsTest {
 
     @Test
-    void streamsEntriesAndEndsWhenTheDequeEmpties() {
-        var deque = new ConcurrentLinkedDeque<>(UniLists.of("a", "b"));
+    void drainsWhatIsAlreadyQueuedThenEndsOnceTheSourceIsFinished() {
+        BlockingQueue<String> queue = new LinkedBlockingQueue<>(UniLists.of("a", "b"));
 
-        List<String> collected = Java8StreamUtils.setupStreamFromDeque(deque).collect(Collectors.toList());
+        List<String> collected = Java8StreamUtils.setupStreamFromQueue(queue, () -> true)
+                .collect(Collectors.toList());
 
         assertThat(collected).containsExactly("a", "b").inOrder();
-        assertThat(deque).isEmpty();
     }
 
     /**
-     * Models the window the old {@code isEmpty()}-then-{@code poll()} pair left open: a deque that answers
-     * "not empty" and then hands back nothing, because someone else took the last entry - or cleared the
-     * whole deque on close - in between. Taking with a single {@code poll()} cannot observe that state, so
-     * the stream ends instead of pushing a {@code null} into the caller's terminal operation.
+     * The regression. An empty queue is not the end of the stream while the source is still running - the old
+     * bridge returned false here and the caller's terminal operation finished on the spot.
      */
+    @Timeout(30)
     @Test
-    void neverEmitsNullWhenTheDequeEmptiesBetweenTheCheckAndTheTake() {
-        var emptiedUnderneath = new ConcurrentLinkedDeque<String>() {
-            @Override
-            public String poll() {
-                return null; // the entry below is gone by the time we take it
-            }
-        };
-        emptiedUnderneath.add("lost to a concurrent close");
+    void anEmptyQueueDoesNotEndTheStreamWhileTheSourceIsRunning() throws Exception {
+        BlockingQueue<String> queue = new LinkedBlockingQueue<>();
+        var finished = new AtomicBoolean(false);
+        List<String> collected = new CopyOnWriteArrayList<>();
+        var done = new CountDownLatch(1);
 
-        var stream = Java8StreamUtils.setupStreamFromDeque(emptiedUnderneath);
+        var consumer = new Thread(() -> {
+            Java8StreamUtils.setupStreamFromQueue(queue, finished::get).forEach(collected::add);
+            done.countDown();
+        }, "test-consumer");
+        consumer.start();
 
-        // map dereferences every element, so a null reaches the test as an NPE rather than as a quiet pass
-        assertThat(stream.map(String::length).collect(Collectors.toList())).isEmpty();
+        // nothing to take yet: the consumer must wait rather than finish
+        Thread.sleep(300);
+        assertThat(done.getCount()).isEqualTo(1);
+
+        queue.add("late");
+        finished.set(true);
+
+        assertThat(done.await(20, TimeUnit.SECONDS)).isTrue();
+        assertThat(collected).containsExactly("late");
+    }
+
+    /**
+     * Anything queued before the source finished belongs to the caller, so it is delivered rather than
+     * dropped when the stream ends.
+     */
+    @Timeout(30)
+    @Test
+    void resultsQueuedBeforeTheSourceFinishedAreStillDelivered() {
+        BlockingQueue<String> queue = new LinkedBlockingQueue<>(UniLists.of("one", "two", "three"));
+
+        List<String> collected = Java8StreamUtils.setupStreamFromQueue(queue, () -> true)
+                .collect(Collectors.toList());
+
+        assertThat(collected).containsExactly("one", "two", "three").inOrder();
+        assertThat(queue).isEmpty();
     }
 }

@@ -35,7 +35,7 @@ opt_in:
   isolated_from_stable_modules: false
 boundaries:
   - The callback and the stream both fire after Kafka acknowledges the produced record, which is not the same event as the source offset being committed; see commit-modes.yaml and bulk-kafka-transactions.yaml.
-  - Both JStream processors and the factory-facing interfaces callers hold are marked @Deprecated by astubbs#116, on the grounds that the API cannot bound its own memory; that PR is open. Closing a processor now also discards any results the caller never consumed from the stream. Prefer the callback-based produce flows for new code. The memory defect itself is astubbs#122, which is open.
+  - The streamed result flow hands back a LIVE stream: it yields results as they are produced, waits in between, and ends when the processor closes after delivering what was already queued. Consuming it is what keeps the result queue drained, so consume it on its own thread. astubbs#116 fixes the bridge that previously ended the stream at the first momentary gap, which left results accumulating behind a finished consumer - the memory defect astubbs#122 (mirrors confluentinc#912).
   - The input side of the callback, including batch access, is PollContext; see poll-context.yaml.
 references:
   - label: Produce-flow API

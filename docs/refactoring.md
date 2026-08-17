@@ -71,8 +71,8 @@ so a major-release prep can action them in one pass.
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **Remove the JStream API** - the deprecate-first half landed in astubbs#116, so what remains here is
-  the removal itself. Design ref `origin/refactor/deprecate-jstream` @8a8f6508.
+- **Remove the JStream API** (deprecate first) - design ref
+  `origin/refactor/deprecate-jstream` @8a8f6508.
 - **Rename the enum to the standard pattern** (public enum rename) -
   `origin/refactor/minor-changes` @193bbf80.
 - **Evaluate for breakage at the bump:** adopt `@ParametersAreNonnullByDefault`

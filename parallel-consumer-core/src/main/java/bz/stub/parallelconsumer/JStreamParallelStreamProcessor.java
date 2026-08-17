@@ -14,19 +14,17 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 /**
- * @deprecated Being removed. The deque behind {@link #pollProduceAndStream} is unbounded and drains only as
- * the caller consumes the returned stream, so a slow or absent consumer grows it until the JVM runs out of
- * memory. Take results through {@link ParallelStreamProcessor#pollAndProduceMany} and its callback instead.
+ * Streaming counterpart to {@link ParallelStreamProcessor}: results are handed back through a
+ * {@link Stream} instead of a callback.
  * <p>
- * Closing <b>discards the backlog</b>: every {@code close} entry point empties the deque once shutdown
- * finishes, so anything the caller never read is dropped rather than delivered. {@code closeDrainFirst()}
- * does <b>not</b> rescue it - draining finishes the queued <i>processing</i>, which enqueues further results,
- * and the clear still follows. Consuming the stream before, or concurrently with, shutdown is the only way
- * to keep results.
+ * The stream is <b>live</b>. It yields each result as it is produced and blocks in between, so consuming it
+ * is what keeps the backing queue drained; it ends when this processor closes, after the results already
+ * queued have been delivered. Consume it on a thread that can stay with it - a consumer that walks away
+ * early leaves the producer with nobody draining, which is
+ * <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>.
+ *
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
- * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
-@Deprecated
 public interface JStreamParallelStreamProcessor<K, V> extends DrainingCloseable {
 
     static <K, V> JStreamParallelStreamProcessor<K, V> createJStreamEosStreamProcessor(ParallelConsumerOptions<K, V> options) {

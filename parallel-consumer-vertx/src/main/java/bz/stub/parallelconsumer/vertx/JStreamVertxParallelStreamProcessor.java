@@ -20,18 +20,13 @@ import java.util.stream.Stream;
 
 /**
  * Result streaming version of {@link VertxParallelEoSStreamProcessor}.
- *
- * @deprecated Being removed, for the reason the core JStream API is. Every dispatched result is buffered
- * until something reads the stream back, which nothing bounds. Prefer
- * {@link VertxParallelStreamProcessor#vertxHttpReqInfo}, which hands each response to a callback as it
- * completes.
  * <p>
- * Shutdown drops any response left unread, as described on
- * {@link bz.stub.parallelconsumer.JStreamParallelStreamProcessor}.
+ * The stream is live and ends when this processor closes - see
+ * {@link bz.stub.parallelconsumer.JStreamParallelStreamProcessor} for what that means for the consumer.
+ *
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
  */
-@Deprecated
 public interface JStreamVertxParallelStreamProcessor<K, V> extends ParallelConsumer<K, V> {
 
     static <KK, VV> JStreamVertxParallelStreamProcessor<KK, VV> createEosStreamProcessor(ParallelConsumerOptions<KK, VV> options) {

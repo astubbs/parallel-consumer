@@ -19,10 +19,9 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Optional;
-import bz.stub.parallelconsumer.internal.DrainingCloseable.DrainingMode;
-import bz.stub.parallelconsumer.internal.JStreamResultDeques;
 
-import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -30,33 +29,20 @@ import java.util.stream.Stream;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 
-/**
- * @deprecated Being removed, for the reason given on
- * {@link bz.stub.parallelconsumer.JStreamParallelEoSStreamProcessor} - the result deque is unbounded and
- * drains only as the caller consumes the stream. Use the callback-based API instead.
- * See <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a> (mirrors <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>).
- */
 @Slf4j
-@Deprecated
 public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelEoSStreamProcessor<K, V>
         implements JStreamVertxParallelStreamProcessor<K, V> {
 
     /**
-     * The stream of results, constructed from the Queue {@link #userProcessResultsStream}.
-     * <p>
-     * <b>WARNING:</b> This stream MUST be actively consumed in a separate thread, or results
-     * will accumulate in memory indefinitely. If you don't need the result stream, use the
-     * callback-based API instead.
-     *
-     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
-     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
+     * The stream of results, drained from {@link #userProcessResultsStream} as they arrive and ending when
+     * this processor closes.
      */
     private final Stream<VertxCPResult<K, V>> stream;
 
     /**
-     * The Queue of results. Unbounded — will grow indefinitely if the stream is not consumed.
+     * The queue of results, filled by the worker threads and drained by whoever consumes the stream.
      */
-    private final ConcurrentLinkedDeque<VertxCPResult<K, V>> userProcessResultsStream;
+    private final BlockingQueue<VertxCPResult<K, V>> userProcessResultsStream;
 
     /**
      * Provide your own instances of the Vertx engine and it's webclient.
@@ -68,9 +54,9 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
                                                   ParallelConsumerOptions<K, V> options) {
         super(vertx, webClient, options);
 
-        this.userProcessResultsStream = new ConcurrentLinkedDeque<>();
+        this.userProcessResultsStream = new LinkedBlockingQueue<>();
 
-        this.stream = Java8StreamUtils.setupStreamFromDeque(this.userProcessResultsStream);
+        this.stream = Java8StreamUtils.setupStreamFromQueue(this.userProcessResultsStream, this::isClosedOrFailed);
     }
 
     /**
@@ -155,30 +141,6 @@ public class JStreamVertxParallelEoSStreamProcessor<K, V> extends VertxParallelE
         super.vertxHttpWebClient(wrappedFunc, onSendCallBack);
 
         return stream;
-    }
-
-    /**
-     * Clears any unconsumed results from the deque once shutdown completes.
-     * <p>
-     * Overrides the {@link DrainingMode}-taking close, which is the single method every other entry point
-     * funnels through - see the sibling override in {@code JStreamParallelEoSStreamProcessor}. The clear
-     * happens after shutdown, since a draining close keeps enqueueing results while it finishes, and in a
-     * {@code finally} - see {@link JStreamResultDeques#clearOnClose} for what that buys and where it stops.
-     * <p>
-     * On the {@link java.time.Duration}-taking paths the clear lands after the core shutdown but before
-     * {@code VertxParallelEoSStreamProcessor} closes the web client and Vert.x instance, because that class
-     * does its own teardown after delegating to {@code super}.
-     *
-     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a>
-     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>
-     */
-    @Override
-    public void close(DrainingMode drainMode) {
-        try {
-            super.close(drainMode);
-        } finally {
-            JStreamResultDeques.clearOnClose(userProcessResultsStream);
-        }
     }
 
     /**

@@ -7,7 +7,8 @@ package bz.stub.parallelconsumer.examples.vertx;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
-import bz.stub.parallelconsumer.vertx.VertxParallelStreamProcessor;
+import bz.stub.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -34,7 +35,9 @@ public class VertxApp {
         return new KafkaProducer<>(new Properties());
     }
 
-    VertxParallelStreamProcessor<String, String> parallelConsumer;
+    JStreamVertxParallelStreamProcessor<String, String> parallelConsumer;
+
+    Thread resultConsumer;
 
 
     void run() {
@@ -46,7 +49,7 @@ public class VertxApp {
                 .producer(kafkaProducer)
                 .build();
 
-        this.parallelConsumer = VertxParallelStreamProcessor.createEosStreamProcessor(options);
+        this.parallelConsumer = JStreamVertxParallelStreamProcessor.createEosStreamProcessor(options);
         parallelConsumer.subscribe(of(inputTopic));
 
         postSetup();
@@ -54,20 +57,17 @@ public class VertxApp {
         int port = getPort();
 
         // tag::example[]
-        parallelConsumer.vertxHttpReqInfo(context -> {
+        var resultStream = parallelConsumer.vertxHttpReqInfoStream(context -> {
             var consumerRecord = context.getSingleConsumerRecord();
             log.info("Concurrently constructing and returning RequestInfo from record: {}", consumerRecord);
             Map<String, String> params = UniMaps.of("recordKey", consumerRecord.key(), "payload", consumerRecord.value());
             return new RequestInfo("localhost", port, "/api", params); // <1>
-        }, onSend -> {
-            // <2>
-        }, onComplete -> { // <3>
-            if (onComplete.succeeded()) {
-                log.info("Response from the HTTP request: {}", onComplete.result());
-            } else {
-                log.error("HTTP request failed", onComplete.cause());
-            }
         });
+
+        resultConsumer = new Thread(() -> // <2>
+                resultStream.forEach(result -> log.info("From result stream: {}", result)),
+                "vertx-result-stream-consumer");
+        resultConsumer.start();
         // end::example[]
 
     }
@@ -76,8 +76,10 @@ public class VertxApp {
         return 8080;
     }
 
+    @SneakyThrows
     void close() {
         this.parallelConsumer.closeDrainFirst();
+        resultConsumer.join(); // the stream ends when the consumer closes, so this returns
     }
 
     protected void postSetup() {
