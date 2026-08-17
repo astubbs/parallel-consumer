@@ -111,22 +111,83 @@ broken runner fails rather than skipping.
 ## Building
 
 ```bash
-./mvnw test -pl :parallel-consumer-proxy-client-go -am -Dpc.foreignClients   # one client, its own toolchain
-bin/build-client.sh --list                                                   # every language this script knows
-bin/build-client.sh cpp --test                                               # the container route
+./mvnw test -P foreign-clients                      # everything, including the eight foreign clients
+./mvnw test                                         # JVM only - the eight are not in the reactor at all
+bin/build-client.sh --list                          # every language that script knows
+bin/build-client.sh cpp --test                      # the container route
 ```
 
-**`-Dpc.foreignClients` is the switch**, and its absence is not a silent skip of a client's tests -
-it is the reason an ordinary reactor build works on a machine with no Go, Node, Ruby, Rust, Python
-or .NET at all. Without it, the non-JVM modules build their pom and start no foreign toolchain.
+**One profile id is the switch**, and every way of turning it on turns all of it on:
 
-The JVM clients (`java-*`, `kotlin`, `scala`) need no foreign toolchain, and Maven builds them
-directly; the same flag still activates Kotlin's and Scala's harness profile, which is what supplies
-the classpath their sidecar tests spawn. The two container languages (`cpp`, `swift`) need Docker,
-and say so by exiting `2` rather than passing.
+- `-P foreign-clients`
+- `-Dpc.foreignClients` (the profile's own activation)
+- a `<activeProfiles>` entry in `~/.m2/settings.xml`, for a machine that always wants them
 
-Nothing in this tree is installed or deployed: `maven.install.skip` and `maven.deploy.skip` are true
-for the whole aggregator.
+Without it the eight foreign modules are **excluded from the reactor entirely** - not present-and-idle.
+That is deliberate: an ordinary Java build must not require Go, Node, Ruby, Rust, Python, .NET or
+Docker, and a module that appears in the reactor while doing nothing reports `SUCCESS` for work that
+never ran. The root pom prints one notice naming what is missing and how to include it.
+
+The JVM clients (`java-*`, `kotlin`, `scala`) are always in the build - Maven compiles them directly
+and they need no foreign toolchain. The two container languages (`cpp`, `swift`) need Docker, and say
+so by exiting `2` rather than passing.
+
+Nothing here is installed or deployed: `maven.install.skip` and `maven.deploy.skip` are true for the
+whole aggregator.
+
+### What a Maven lifecycle phase means in each language
+
+The thing most likely to surprise someone arriving from Java: **`compile` does not mean "produce a
+jar-shaped artifact" here.** It means "whatever that toolchain does to establish the sources are
+valid", and the answer differs by language. Each module's pom names its own command in
+`pc.foreign.build.args`; each module's README owns the detail.
+
+| Language | `compile` runs | Where output lands |
+|---|---|---|
+| java, kotlin, scala | javac / kotlinc / scalac | `target/classes` |
+| go | `go build ./...` | **nowhere in the module** - a shared content-addressed cache |
+| rust | `cargo clippy --all-targets` | `target/` |
+| python | editable install, then `python -m compileall` | `.venv/` plus caches |
+| ruby | `bundle install`, then `ruby -c` per file | `vendor/` |
+| typescript | `npm run build` (`tsc`) | `dist/` |
+| dotnet | `dotnet build` | `bin/`, `obj/` |
+| cpp, swift | a container build via `bin/build-client.sh` | `target/container/` |
+
+**All eight fail `compile` on a syntax error.** Python and Ruby did not until their parse checks were
+added - their "build" installs dependencies, which proves nothing about the source, and a phase that
+reports success without having checked anything is the failure class
+[`docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](../docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md)
+exists for.
+
+### What `clean` removes, and what it must not
+
+**Build output, never fetched dependencies.** `mvn clean` empties `target/`; it does not empty
+`~/.m2`. The same line holds per language, and it is the mistake most easily made here: `node_modules`,
+`.venv`, `vendor/bundle` and the cargo registry are that language's local repository.
+
+**It is `maven-clean-plugin` filesets in each module's own pom, outside any profile.** Not a shell-out
+to `go clean` or `npm run clean`, because **no shell-out can be bound to the `clean` phase**: both
+`exec-maven-plugin:exec` and `maven-antrun-plugin:run` declare `requiresDependencyResolution=test`,
+so binding either makes *cleaning* demand a resolvable dependency tree. That was measured, not assumed.
+
+Four modules need no fileset, and each pom says why at length, because "nothing to clean" and "nobody
+wired it" are indistinguishable otherwise:
+
+- **cpp, swift** - export exactly one host path, `target/container`, which the default clean already
+  removes. The container image and BuildKit layer cache are **shared with every worktree and agent on
+  the machine** and must never be touched.
+- **ruby** - emits nothing at all.
+- **go** - its compiled output lives in a shared content-addressed cache outside the repo, so `clean`
+  does **not** return Go to a from-scratch state. That is a real asymmetry with Java and it costs
+  nothing:
+  [`docs/inflight/bug-mvn-clean-does-not-clean-go-output.md`](../docs/inflight/bug-mvn-clean-does-not-clean-go-output.md)
+  **owns the reasoning**, including why closing it is not worth the shared-cache cost.
+
+### Scoping a build to one module
+
+`-pl` alone fails on enforcer's `ReactorModuleConvergence`, because it builds a module without its
+parents. Add `-am`, or `-Denforcer.skip=true`. The message names the parents rather than the fix -
+[`docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md`](../docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md).
 
 ## Depth
 
