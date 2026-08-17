@@ -139,6 +139,47 @@
             profile inactive the declared plugin has no executions and does nothing. A foreign
             build that fails exits non-zero and fails the Maven build - exec-maven-plugin
             propagates the exit code - so a red row means a real failure.
+
+            CLEAN IS NOT WIRED THROUGH exec, AND CANNOT BE. `compile` and `test` run a foreign
+            command; `clean` deletes directories with maven-clean-plugin's filesets, configured by
+            each module in its OWN pom. The asymmetry is forced, and both halves of the reason
+            matter (astubbs#242):
+
+            1. EVERY SHELL-OUT MOJO DEMANDS TEST-SCOPE RESOLUTION, AND NOTHING IS BUILT AT CLEAN
+               TIME. Read from the plugin descriptors, not assumed:
+               exec-maven-plugin's `exec` and maven-antrun-plugin's `run` both declare
+               <requiresDependencyResolution>test</requiresDependencyResolution>, so Maven resolves
+               the whole test tree BEFORE the mojo's own skip check is even consulted - and binding
+               either one to `clean` therefore fails every module in this tree, including the ones
+               that supply no foreign command at all, because the plugin declaration the root pom
+               contributes carries these managed executions into every child's effective model.
+               Measured failure: `./mvnw clean -Dpc.foreignClients` died on
+               parallel-consumer-proxy-client-kotlin unable to resolve
+               parallel-consumer-proxy-client-java-harness:jar. The go/rust/dotnet modules survived
+               it only because a stale 0.6.0.0-SNAPSHOT happened to be installed in that machine's
+               ~/.m2 - the "declared is not resolvable" trap, in full, in
+               docs/solutions/build-errors/maven-multi-module-plugin-and-resolution-traps.md.
+               maven-clean-plugin's `clean` declares no resolution requirement at all, so it is
+               immune by construction rather than by luck.
+
+            2. DELETING A DIRECTORY NEEDS NO TOOLCHAIN, so cleaning must not be gated on one. The
+               whole point of this profile is that go, cargo, dotnet, node, ruby, swift and cmake
+               are absent from the normal machine. A command-driven clean would mean that a
+               developer who built once, then changed machines or uninstalled a toolchain, can no
+               longer delete the output - and that `bin/build.sh`, which is `clean package` with no
+               flag, leaves eight languages' output standing. So the filesets are NOT inside this
+               profile: plain `./mvnw clean` removes foreign build output too, which is what clean
+               means. Rust already behaved this way by accident, cargo and Maven sharing target/.
+
+            WHAT A MODULE MAY LIST: build OUTPUT, inside the module, by directory relative to
+            ${project.basedir}; a directory that does not exist is skipped silently, so the config
+            is idempotent and costs nothing on a tree that was never built. Do NOT list target/ -
+            the default clean already takes it. Do NOT list fetched dependencies (node_modules,
+            .venv, vendor, ~/.cargo, ~/.nuget): those are that language's ~/.m2, and `mvn clean`
+            does not empty ~/.m2. Do NOT reach outside the module for container images or BuildKit
+            cache - bin/build-client.sh's `build_natively` records why, and it binds harder here,
+            because several agents and worktrees share this machine and would lose output nobody
+            asked to rebuild.
         -->
         <profile>
             <id>foreign-clients-off</id>
@@ -173,6 +214,10 @@
                                         <workingDirectory>${project.basedir}</workingDirectory>
                                     </configuration>
                                 </execution>
+                                <!--
+                                    THERE IS DELIBERATELY NO foreign-clean EXECUTION HERE, AND IT IS
+                                    NOT AN OVERSIGHT - see "CLEAN IS NOT WIRED THROUGH exec" below.
+                                -->
                                 <execution>
                                     <id>foreign-test</id>
                                     <phase>test</phase>
