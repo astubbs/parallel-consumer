@@ -690,9 +690,15 @@ mode.</p>
     A free parameter space invites unfair configurations — the UI should show, not hide, what the dials do
     to fairness (e.g. label the 0&nbsp;ms/no-ordering corner as the plain consumer's home turf). Reading real
     topics needs a visible "consumes only, writes nothing, own group ids" promise, and the receipts channel
-    must respect the receipts-off constraint when any arm is being measured. Whether this is a mode of the
-    demo binary or a separate app is a design decision for brainstorm — the KTD40 identical-UX contract
-    across eleven languages caps how much per-language control-surface divergence is tolerable.</p>
+    must respect the receipts-off constraint when any arm is being measured. <strong>Coordinated-omission
+    constraint (from the perf track, accepted as shared):</strong> at user-chosen delays the workload must
+    still be driven open-loop at a fixed arrival rate with latency measured from <em>intended</em> send
+    time — a closed-loop driver understates latency exactly when the user dials the delay up, which is the
+    case they came to see. The scenario definitions are shared with the perf-comparison matrix, which now
+    parameterises delay, ordering mode, failure percentage and max concurrency so both tracks run one
+    definition. Whether this is a mode of the demo binary or a separate app is a design decision for
+    brainstorm — the KTD40 identical-UX contract across eleven languages caps how much per-language
+    control-surface divergence is tolerable.</p>
   </div>
 </article>
 
