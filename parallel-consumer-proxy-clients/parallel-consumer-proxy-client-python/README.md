@@ -100,7 +100,17 @@ make test         # the suite, including the end-to-end test against the real si
 make lint         # ruff - the same check CI runs
 make proto        # regenerate the stubs from the frozen proxy.proto
 make proto-check  # regenerate and fail if the committed stubs have drifted
+make clean        # remove the build output and the caches
+make distclean    # ...and remove .venv too, so the next build refetches every wheel
 ```
+
+`make clean` leaves `.venv` standing on purpose: `mvn clean` deletes `target/` without emptying
+`~/.m2`, and `.venv` is this language's `~/.m2`. `make distclean` is the one that removes it, when
+a changed pin needs a venv rebuilt from scratch.
+
+`./mvnw clean` removes the same paths, and does it without running `make` - `pom.xml` lists them as
+`maven-clean-plugin` filesets, so cleaning needs no Python on the box. The two lists must agree:
+change one, change the other.
 
 The generated stubs under `src/parallel_consumer/_generated/` are **committed deliberately**, so a
 user installing this package needs neither `protoc` nor the schema file. `make proto-check` is what

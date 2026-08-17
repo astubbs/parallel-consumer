@@ -135,6 +135,34 @@
         </profile>
     </profiles>
 
+    <!--
+        NO maven-clean-plugin FILESETS HERE, AND THAT IS A MEASUREMENT RATHER THAN AN OVERSIGHT.
+
+        Ruby compiles to nothing, and this module emits nothing of its own for `mvn clean` to
+        remove. Measured against a tree carrying none of it: `bundle install` produced vendor/
+        and nothing else, and `bundle exec rubocop` and `bundle exec rspec` produced nothing at
+        all. A `git status` run afterwards, with the ignored files included, listed exactly one
+        entry: vendor/. (An XML comment may not contain two consecutive dashes, which is why that
+        command is described rather than quoted; it has broken a pom in this tree before.)
+
+        Each of the four candidates, and why it is not a clean target:
+
+        - vendor/bundle is the INSTALLED BUNDLE. That makes it this language's local repository,
+          not build output; `mvn clean` deletes target/ and does not empty ~/.m2. Deleting it would
+          cost a full reinstall of 27 gems, two of them with native extensions.
+        - lib/parallelconsumer/ is protoc's output but it is COMMITTED (see .gitignore, which says
+          why: a consumer of this library must find the stubs already there). Committed generated
+          code is source here, and clean does not delete source.
+        - RuboCop's cache is ~/.cache/rubocop_cache - outside the module, shared with every other
+          checkout on the box, and out of bounds for that reason alone.
+        - target/proxy-test-classpath.txt, written by the profile above, is under target/, which
+          the default clean execution already removes. Everything else the specs write goes to
+          Dir.mktmpdir, under the system temp directory.
+
+        So the correct configuration for this module is none, and the answer is recorded here
+        rather than left as an absence, because an empty configuration and an unconsidered one
+        look identical.
+    -->
     <build>
         <plugins>
             <plugin>

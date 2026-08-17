@@ -79,7 +79,18 @@ npm run check         # THE LOCAL GATE: tsc --build (strict) then type-aware esl
 npm test              # the suite; the end-to-end test needs the sidecar classpath below
 npm run proto         # regenerate src/generated/ from the frozen proxy.proto
 npm run proto:check   # ...and fail if the committed stubs have drifted
+npm run clean         # remove dist/ - every emitted file
 ```
+
+`npm run clean` leaves `node_modules` standing on purpose: `mvn clean` deletes `target/` without
+emptying `~/.m2`, and `node_modules` is this language's `~/.m2`. A clean that refetched 128
+packages afterwards would not be one. Removing `dist/` is complete - the `.tsbuildinfo` lives
+inside it - so the script is plain `rm` and needs no compiler, which is what lets it clean a
+checkout that has never installed anything.
+
+`./mvnw clean` removes the same directory, and does it without running `npm` - `pom.xml` lists it
+as a `maven-clean-plugin` fileset, so cleaning needs no Node on the box. The two must agree: change
+one, change the other.
 
 `npm run check` is the bug-finding pass, and it is two halves that catch different things: `tsc`
 under `strict` plus `noUnusedLocals`/`noImplicitReturns`, and ESLint's **type-aware** rules
