@@ -81,6 +81,51 @@ only when something is dirty.
 The asymmetry is load-bearing: a partition whose records are all failing is never dirty, so no commit
 is attempted for it, and anything waiting on a commit-time behaviour will wait indefinitely.
 
+## Offset metadata encoding
+
+**Offset map**
+The record of which offsets above the commit frontier have already succeeded, carried in the string
+metadata field of an offset commit so a restart resumes from the frontier without reprocessing them.
+It must fit the broker's per-commit metadata size cap, which is why it is stored in the densest
+encoding available rather than as a plain list.
+
+**Offset encoding**
+One of the named wire formats an offset map can be written in, identified by a magic byte at the
+front of the payload. Writers are free to pick whichever format is smallest for the input, but
+readers must keep decoding every format ever shipped — an encoding, once released, is forever.
+
+**Outer codec**
+The text layer that turns the winning encoding's bytes into the string the broker stores: Base64 or
+the denser Z85, whichever is shorter for the payload. Below a small-payload floor Base64 is always
+kept, so the payloads a healthy consumer writes in steady state stay readable by older releases; a
+sentinel character distinguishes the two on read, and readers accept both forever.
+
+**Simultaneous encoding**
+Every registered encoder encodes the same incompletes input on every commit, and the smallest
+resulting payload is what gets written. Formats compete per commit rather than being selected by
+configuration, which is what lets a new encoding ship without a migration: it simply starts winning
+wherever it is denser, and stops being written wherever it is not.
+
+**Compressed twin**
+The compressed variant of an encoder's output, registered alongside the raw form so both enter the
+size competition. A twin can only be chosen by being smaller than everything else, so registering
+more twins can never make the winning payload larger — which is why each twin is gated only on its
+own encoder's payload being worth compressing, never on any global property of the round.
+
+**Metadata back-pressure**
+When a partition's encoded offset map grows past a configured fraction of the broker's metadata
+cap, the partition stops accepting new records so the map can shrink as in-flight work completes;
+the payload is still written. Past the cap itself the map cannot be committed at all — it is
+dropped from the commit, with replay risk on rebalance. The fraction, not the cap, is where density
+improvements buy real operating headroom.
+
+**Invalid offset metadata policy**
+The configured verdict for commit metadata the consumer positively recognises as Kafka Streams' —
+the reused-consumer-group-id scenario: fail the instance (the default) or log, ignore, and resume
+from the committed offset. The policy's scope is load-bearing: metadata that cannot be decoded at
+all — foreign, corrupt, or from operator tooling — is never fatal under either setting; it is
+logged, the offset map is dropped, and consumption resumes from the committed offset.
+
 ## Test reliability
 
 **Load-tightness flake**
