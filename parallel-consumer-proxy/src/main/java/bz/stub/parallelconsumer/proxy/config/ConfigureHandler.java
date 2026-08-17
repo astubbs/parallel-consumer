@@ -15,6 +15,7 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.Drop;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Manifest;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
@@ -169,58 +170,61 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 handleOpeningMessage(message);
                 return;
             }
-            if (message.hasConfigure()) {
-                // deliberately content-free: a Configure can carry credentials, so not even the refusal
-                // log may embed it
-                log.warn("Refusing a second Configure on a configured stream: configuration is connect-time "
-                        + "and the subscription is fixed for the process lifetime (R36, R39). Re-sending the "
-                        + "unchanged effective configuration");
-                transmit(ProxyMessage.newBuilder().setConfigured(effectiveConfiguration).build());
-                return;
+            switch (message.getMessageCase()) {
+                case CONFIGURE:
+                    // deliberately content-free: a Configure can carry credentials, so not even the refusal
+                    // log may embed it
+                    log.warn("Refusing a second Configure on a configured stream: configuration is connect-time "
+                            + "and the subscription is fixed for the process lifetime (R36, R39). Re-sending "
+                            + "the unchanged effective configuration");
+                    transmit(ProxyMessage.newBuilder().setConfigured(effectiveConfiguration).build());
+                    return;
+                case REPORT:
+                    onReport(message.getReport());
+                    return;
+                case HEARTBEAT:
+                    if (negotiated(CAPABILITY_HEARTBEAT)) {
+                        engine.heartbeat();
+                    } else {
+                        logUnnegotiated(message);
+                    }
+                    return;
+                case WORKER_DIED:
+                    if (negotiated(CAPABILITY_WORKER_DEATH)) {
+                        engine.onWorkerDied(message.getWorkerDied().getTokensList());
+                    } else {
+                        logUnnegotiated(message);
+                    }
+                    return;
+                case MANIFEST:
+                    // a manifest opens a reconnect stream and nothing else: mid-session it names a set of held
+                    // tokens that the live stream has never stopped reporting on, so acting on it could return
+                    // records a worker is running right now
+                    log.warn("Ignoring a Manifest on an established stream: it is a reconnect stream's opening "
+                            + "message only (R43)");
+                    return;
+                default:
+                    // a truly unknown case is a newer client than this proxy; ignored rather than fatal, per
+                    // the specification's forward-compatibility rule
+                    log.warn("Ignoring client message this proxy does not implement: {}",
+                            message.getMessageCase());
             }
-            if (message.hasReport()) {
-                var result = engine.report(message.getReport());
-                switch (result) {
-                    case APPLIED_SUCCESS:
-                    case APPLIED_FAILURE:
-                    case ACCEPTED_PRODUCING:
-                        // accepted, not discarded: the record is claimed, and its produce payload's acks are
-                        // awaited on the engine's own lane precisely so this callback - the session's single
-                        // serialized inbound lane, which also carries Heartbeat - is not held by a broker
-                        break;
-                    default:
-                        // reply-with-protocol-error is U9's; until then the discard reason is at least visible
-                        log.debug("Report discarded by the engine: {}", result);
-                }
-                return;
+        }
+
+        private void onReport(Report report) {
+            var result = engine.report(report);
+            switch (result) {
+                case APPLIED_SUCCESS:
+                case APPLIED_FAILURE:
+                case ACCEPTED_PRODUCING:
+                    // accepted, not discarded: the record is claimed, and its produce payload's acks are
+                    // awaited on the engine's own lane precisely so this callback - the session's single
+                    // serialized inbound lane, which also carries Heartbeat - is not held by a broker
+                    break;
+                default:
+                    // reply-with-protocol-error is U9's; until then the discard reason is at least visible
+                    log.debug("Report discarded by the engine: {}", result);
             }
-            if (message.hasHeartbeat()) {
-                if (negotiated(CAPABILITY_HEARTBEAT)) {
-                    engine.heartbeat();
-                } else {
-                    logUnnegotiated(message);
-                }
-                return;
-            }
-            if (message.hasWorkerDied()) {
-                if (negotiated(CAPABILITY_WORKER_DEATH)) {
-                    engine.onWorkerDied(message.getWorkerDied().getTokensList());
-                } else {
-                    logUnnegotiated(message);
-                }
-                return;
-            }
-            if (message.hasManifest()) {
-                // a manifest opens a reconnect stream and nothing else: mid-session it names a set of held
-                // tokens that the live stream has never stopped reporting on, so acting on it could return
-                // records a worker is running right now
-                log.warn("Ignoring a Manifest on an established stream: it is a reconnect stream's opening "
-                        + "message only (R43)");
-                return;
-            }
-            // a truly unknown case is a newer client than this proxy; ignored rather than fatal, per the
-            // specification's forward-compatibility rule
-            log.warn("Ignoring client message this proxy does not implement: {}", message.getMessageCase());
         }
 
         /**
