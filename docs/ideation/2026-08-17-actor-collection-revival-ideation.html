@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Reviving the Micro Actor Branch Collection</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --surface: #ffffff;
+    --ink: #1f2430;
+    --muted: #5c6370;
+    --border: #e3e0da;
+    --accent: #8a4d17;
+    --accent-soft: #f6ead9;
+    --accent-text: #6e3c0e;
+    --good: #2c6e49;
+    --good-soft: #e6f2ea;
+    --warn: #a4611d;
+    --warn-soft: #fbf0dd;
+    --bad: #9e3a38;
+    --bad-soft: #f9e8e7;
+    --info: #2b5f8a;
+    --info-soft: #e7f0f7;
+    --code-bg: #f1efeb;
+    --mono: "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .page { max-width: 920px; margin-inline: auto; padding: 2.5rem 1.5rem 4rem; }
+  header.doc-head { border-bottom: 2px solid var(--ink); padding-bottom: 1.2rem; margin-bottom: 1.6rem; }
+  .eyebrow { font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--accent-text); font-weight: 700; }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: .3rem 0 .8rem; }
+  .meta { display: flex; flex-wrap: wrap; gap: .4rem 1.6rem; font-size: .82rem; color: var(--muted); }
+  .meta b { color: var(--ink); font-weight: 600; }
+  h2 { font-size: 1.25rem; margin: 2.4rem 0 .8rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .4rem; }
+  p, li { max-width: 72ch; }
+  code { font-family: var(--mono); font-size: .84em; background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  a { color: var(--info); }
+  table { border-collapse: collapse; width: 100%; font-size: .86rem; margin: .8rem 0; }
+  th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+  .stats { display: flex; flex-wrap: wrap; gap: .8rem; margin: 1.4rem 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: .6rem 1rem; min-width: 120px; }
+  .stat .n { font-size: 1.3rem; font-weight: 700; }
+  .stat .l { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .jump { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1.2rem; margin: 1rem 0 1.6rem; }
+  .jump ol { margin: .3rem 0 0; padding-left: 1.4rem; }
+  .jump li { margin: .18rem 0; }
+  article.idea {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.3rem 1.5rem; margin: 1.3rem 0;
+  }
+  .idea-head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; margin-bottom: .4rem; }
+  .rank-chip {
+    font-family: var(--mono); font-weight: 700; font-size: .8rem;
+    background: var(--accent-soft); color: var(--accent-text);
+    border-radius: 999px; padding: .15rem .65rem;
+  }
+  .idea-head h3 { margin: 0; font-size: 1.12rem; }
+  .chips { display: flex; gap: .45rem; flex-wrap: wrap; margin: .35rem 0 .9rem; }
+  .chip { font-size: .72rem; font-weight: 600; border-radius: 999px; padding: .14rem .6rem; letter-spacing: .02em; }
+  .chip.axis { background: var(--info-soft); color: var(--info); }
+  .chip.conf-high { background: var(--good-soft); color: var(--good); }
+  .chip.conf-med { background: var(--warn-soft); color: var(--warn); }
+  .chip.cx { background: var(--code-bg); color: var(--muted); }
+  .field { margin: .55rem 0; }
+  .field .fl { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); display: block; margin-bottom: .1rem; }
+  blockquote { margin: .4rem 0 .4rem .2rem; padding: .3rem .9rem; border-left: 3px solid var(--border); color: var(--muted); font-size: .92em; }
+  figure { margin: 1rem 0; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  figcaption { font-size: .78rem; color: var(--muted); margin-top: .3rem; }
+  .callout { border-radius: 10px; padding: .8rem 1.1rem; margin: 1rem 0; background: var(--warn-soft); }
+  .callout .eyebrow { color: var(--warn); }
+  footer.composition-signal { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: .78rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="doc-head">
+  <div class="eyebrow">Ideation &middot; repo-grounded</div>
+  <h1>Reviving the Micro Actor Branch Collection</h1>
+  <div class="meta">
+    <span><b>Date:</b> 2026-08-17</span>
+    <span><b>Topic:</b> actor-collection-revival</span>
+    <span><b>Focus:</b> "look at the upstream map and lets talk about reviving my micro actor collection of branches"</span>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="n">~55</div><div class="l">raw ideas</div></div>
+  <div class="stat"><div class="n">6</div><div class="l">survivors</div></div>
+  <div class="stat"><div class="n">5</div><div class="l">frames run</div></div>
+  <div class="stat"><div class="n">1</div><div class="l">basis refuted</div></div>
+  <div class="stat"><div class="n">5/5</div><div class="l">axes covered</div></div>
+</div>
+
+<section id="grounding-context">
+<h2>Grounding Context</h2>
+<p><b>Codebase context.</b> The fork carries five abandoned 2022 branches implementing a "Micro Actor framework for structured, ordered, simple IPC" (the author's own javadoc): <code>improvements/lambda-actor-bus</code>, <code>commit-command-actor</code>, <code>poller-bus-actor</code>, <code>async-process-send-results-using-actor</code>, <code>actor-scheduled</code> — plus three dependent branches (<code>transactions-dont-block</code>, <code>scheduled-commit</code>, <code>remove-commit-queue</code>). Tips date Jul&ndash;Dec 2022; master has since been fully package-renamed (<code>io.confluent.*</code> &rarr; <code>bz.stub.*</code>). The framework proper is <b>537 lines in 4 files in its own package</b>, coupled to PC by a single 16-line marker interface. The God class (<code>AbstractParallelEoSStreamProcessor</code>) is 1534 lines and has moved by one line since the refactor index was written; master core carries 10 <code>synchronized</code>, 11 <code>AtomicBoolean</code>, 0 <code>ReentrantLock</code>.</p>
+<p><b>Recorded verdicts under test.</b> (1) <code>docs/refactoring.md:151</code>: the actor work is "Only meaningful as part of the confluentinc#200 rework." (2) <code>upstream-pr-analysis.adoc</code> Group C: "keep ideas, not code &mdash; branches are far too stale to apply directly." Both were written before the rename tooling, chaos harness maturity, and the map itself existed &mdash; and the fork's own tables already contradict them once (async-produce is ranked Group B, "throughput-critical").</p>
+<p><b>Tracking gaps found during grounding.</b> The actor family has <b>no</b> <code>upstream-map.yaml</code> entry, no fork issue, and no fork PR; the one adjacent map entry (<code>sweep-2023-async-produce</code>) records a wrong branch name and a stale SHA. Live adjacent work: bug-857 (poll/control <code>synchronized(commitCommand)</code> deadlock) is still open in draft PR #29 with recorded chaos replay seeds; the blocking <code>futureSend.get(sendTimeout)</code> that #356 was written to remove is verified still in master source today.</p>
+</section>
+
+<section id="topic-axes">
+<h2>Topic Axes</h2>
+<ul>
+  <li><b>A1 Framework</b> — the <code>csid.actors</code> package as a standalone, testable, shippable artifact</li>
+  <li><b>A2 Call-site conversion</b> — which coordination point converts to actors, in what order, how far</li>
+  <li><b>A3 Salvage mechanics</b> — moving 2022 code across 3.5 years of drift plus a full package rename</li>
+  <li><b>A4 Proof</b> — demonstrating a conversion fixed something real and broke nothing</li>
+  <li><b>A5 Framing</b> — tracking, verdict revision, sequencing against #142/#200 and the God-class work</li>
+</ul>
+</section>
+
+<section id="ranked-ideas">
+<h2>Ranked Ideas</h2>
+
+<div class="jump">
+  <div class="eyebrow">Jump to</div>
+  <ol>
+    <li><a href="#i1">The one-day falsification pipeline</a></li>
+    <li><a href="#i2">Un-bundle the family: async-produce jumps the queue</a></li>
+    <li><a href="#i3">The controlled experiment on bug-857</a></li>
+    <li><a href="#i4">Accession &amp; graded register</a></li>
+    <li><a href="#i5">Skeleton-first strangler</a></li>
+    <li><a href="#i6">Concurrency mass budget (ArchUnit ratchet)</a></li>
+  </ol>
+</div>
+
+<article class="idea" id="i1">
+  <div class="idea-head"><span class="rank-chip">1</span><h3>The one-day falsification pipeline</h3></div>
+  <div class="chips"><span class="chip axis">A1 Framework + A3 Salvage + A4 Proof</span><span class="chip conf-high">Confidence 85%</span><span class="chip cx">Complexity Low&ndash;Medium</span></div>
+
+  <div class="field"><span class="fl">Description</span>
+  Run <code>bin/rename-packages.sh</code> over just the four framework files from <code>lambda-actor-bus</code> (<code>Actor</code>, <code>ActorImpl</code>, <code>FunctionWithException</code>, <code>Interruptible</code> — the "datum shift"), compile them standalone against current master in <code>bz.stub.*</code>, run their 2022 unit tests, then add a javadoc-derived conformance suite — starting with the explicitly documented FILO ordering among <code>tellImmediately</code> messages — and a PIT mutation score using the repo's existing mutation lane. No call site converts; nothing else on the branch comes along.</div>
+
+  <figure>
+  <svg viewBox="0 0 860 150" role="img" aria-label="Pipeline: 2022 branch files through rename script, standalone compile, 2022 tests plus conformance suite, producing a measured verdict">
+    <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5c6370"/></marker></defs>
+    <rect x="10" y="45" width="150" height="60" rx="8" fill="#f1efeb" stroke="#c9c4bb"/>
+    <text x="85" y="70" text-anchor="middle" font-size="13" fill="#1f2430">4 files, 537 lines</text>
+    <text x="85" y="88" text-anchor="middle" font-size="11" fill="#5c6370">io.confluent.csid.actors</text>
+    <line x1="160" y1="75" x2="205" y2="75" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr)"/>
+    <rect x="210" y="45" width="150" height="60" rx="8" fill="#e7f0f7" stroke="#a9c4d8"/>
+    <text x="285" y="70" text-anchor="middle" font-size="13" fill="#1f2430">rename script</text>
+    <text x="285" y="88" text-anchor="middle" font-size="11" fill="#2b5f8a">datum shift &rarr; bz.stub.*</text>
+    <line x1="360" y1="75" x2="405" y2="75" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr)"/>
+    <rect x="410" y="45" width="150" height="60" rx="8" fill="#e7f0f7" stroke="#a9c4d8"/>
+    <text x="485" y="70" text-anchor="middle" font-size="13" fill="#1f2430">compile standalone</text>
+    <text x="485" y="88" text-anchor="middle" font-size="11" fill="#2b5f8a">germination test</text>
+    <line x1="560" y1="75" x2="605" y2="75" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr)"/>
+    <rect x="610" y="10" width="160" height="55" rx="8" fill="#e6f2ea" stroke="#a8cdb6"/>
+    <text x="690" y="32" text-anchor="middle" font-size="12" fill="#1f2430">2022 tests +</text>
+    <text x="690" y="48" text-anchor="middle" font-size="12" fill="#1f2430">FILO conformance</text>
+    <rect x="610" y="85" width="160" height="55" rx="8" fill="#e6f2ea" stroke="#a8cdb6"/>
+    <text x="690" y="107" text-anchor="middle" font-size="12" fill="#1f2430">PIT mutation score</text>
+    <text x="690" y="123" text-anchor="middle" font-size="11" fill="#2c6e49">existing lane</text>
+  </svg>
+  <figcaption>Both standing verdicts become measurements: the residue after the datum shift is the honest staleness number, and a green suite falsifies "far too stale to apply directly" for the framework proper.</figcaption>
+  </figure>
+
+  <div class="field"><span class="fl">Basis</span>
+  <code>direct:</code> The framework's "only dependency on PC code is <code>import io.confluent.parallelconsumer.internal.MultithreadingAPI</code> — a 16-line marker interface" (verified against the branch tree; interface signature <code>Actor&lt;T&gt; extends Interruptible, MultithreadingAPI</code> independently confirmed by the verifier). <code>bin/rename-packages.sh</code> exists with its "BRINGING AN OPEN BRANCH ACROSS" section, which <code>docs/inflight/branch-package-rename-sweep.md:8</code> calls "authoritative" — the salvage procedure is scripted and was rehearsed at 38-branch scale. The FILO invariant is quoted from the <code>Actor</code> javadoc: "a subsequent immediate message will be in front of previous ones." None of the branch's new interfaces exist on master to conflict with (verified by tree listing).</div>
+
+  <div class="field"><span class="fl">Rationale</span>
+  Both recorded verdicts were formed by reading diffs of 69&ndash;72-file branches; neither has ever been tested against the one part of the collection that is structurally separable. Staleness is a property of the coupling, not the calendar — and here the coupling is 16 lines. A day of work converts "keep ideas, not code" from an opinion into a number, before any architectural decision is asked of anyone. Base-unification note: the verifier diffed the two 2022 actor bases directly and found <code>lambda-actor-bus</code>'s interface is a <b>strict superset</b> of <code>poller-bus-actor</code>'s — so the "needs unifying of the two actor classes" TODO from commit <code>d391398f1</code> most likely collapses to "pick lambda-actor-bus."</div>
+
+  <div class="field"><span class="fl">Downsides</span>
+  A green compile-and-test proves the framework is portable, not that it is <i>wanted</i> — value still depends on a call site adopting it (ideas 2, 3, 5). Landing unused code on master invites "dead code" objections; mitigate by pairing it with the register entry (idea 4) that names its intended consumers.</div>
+</article>
+
+<article class="idea" id="i2">
+  <div class="idea-head"><span class="rank-chip">2</span><h3>Un-bundle the family: async-produce jumps the queue</h3></div>
+  <div class="chips"><span class="chip axis">A2 Conversion + A5 Framing</span><span class="chip conf-high">Confidence 80%</span><span class="chip cx">Complexity Medium</span></div>
+
+  <div class="field"><span class="fl">Description</span>
+  Stop treating the collection as one project. It coordinates three unrelated things — the commit path, the poller thread, and async produce — and only the poller one is genuinely subordinate to the shared-nothing (#200) rework. Split <code>docs/refactoring.md:151</code>'s blanket verdict into gated vs ungated claims, and promote <code>async-process-send-results-using-actor</code> (upstream draft #356) to its own track: it is the one branch the fork's own analysis ranks Group&nbsp;B "throughput-critical," its target defect is verified still in master today, and fork issue #230 already exists to hang it on.</div>
+
+  <figure>
+  <svg viewBox="0 0 860 205" role="img" aria-label="One label, three projects: commit path, poller thread, async produce, each with a different gate">
+    <defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5c6370"/></marker></defs>
+    <rect x="10" y="70" width="200" height="64" rx="8" fill="#f6ead9" stroke="#d9b98e"/>
+    <text x="110" y="97" text-anchor="middle" font-size="13" fill="#6e3c0e">"the actor collection"</text>
+    <text x="110" y="115" text-anchor="middle" font-size="11" fill="#8a4d17">one verdict, five branches</text>
+    <line x1="210" y1="85" x2="300" y2="35" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="210" y1="102" x2="300" y2="102" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="210" y1="119" x2="300" y2="169" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <rect x="305" y="10" width="250" height="52" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
+    <text x="430" y="31" text-anchor="middle" font-size="12.5" fill="#1f2430">async produce (#356, issue #230)</text>
+    <text x="430" y="48" text-anchor="middle" font-size="11" fill="#5c6370">futureSend.get() still in master</text>
+    <rect x="305" y="76" width="250" height="52" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
+    <text x="430" y="97" text-anchor="middle" font-size="12.5" fill="#1f2430">commit path (#524 lineage)</text>
+    <text x="430" y="114" text-anchor="middle" font-size="11" fill="#5c6370">bug-857 site, PR #29 still open</text>
+    <rect x="305" y="142" width="250" height="52" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
+    <text x="430" y="163" text-anchor="middle" font-size="12.5" fill="#1f2430">poller thread (poller-bus-actor)</text>
+    <text x="430" y="180" text-anchor="middle" font-size="11" fill="#5c6370">the one genuinely #200-shaped piece</text>
+    <rect x="590" y="10" width="260" height="52" rx="8" fill="#e6f2ea" stroke="#a8cdb6"/>
+    <text x="720" y="31" text-anchor="middle" font-size="12" fill="#2c6e49">UNGATED — Group B</text>
+    <text x="720" y="48" text-anchor="middle" font-size="11" fill="#2c6e49">"throughput-critical"</text>
+    <rect x="590" y="76" width="260" height="52" rx="8" fill="#fbf0dd" stroke="#dcc296"/>
+    <text x="720" y="97" text-anchor="middle" font-size="12" fill="#a4611d">GATE = the experiment (idea 3)</text>
+    <text x="720" y="114" text-anchor="middle" font-size="11" fill="#a4611d">not #200</text>
+    <rect x="590" y="142" width="260" height="52" rx="8" fill="#f9e8e7" stroke="#dcaead"/>
+    <text x="720" y="163" text-anchor="middle" font-size="12" fill="#9e3a38">GATED on #200 / #142</text>
+    <text x="720" y="180" text-anchor="middle" font-size="11" fill="#9e3a38">verdict stays, but only here</text>
+    <line x1="555" y1="36" x2="585" y2="36" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="555" y1="102" x2="585" y2="102" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="555" y1="168" x2="585" y2="168" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
+  </svg>
+  <figcaption>Three projects wearing one name. The blanket "#200 gate" verdict only fits one of them.</figcaption>
+  </figure>
+
+  <div class="field"><span class="fl">Basis</span>
+  <code>direct:</code> Verified by the fresh-context verifier on master today: <code>ParallelEoSStreamProcessor.java:122</code> reads "// wait for all acks to complete, see PR confluentinc#356 for a fully async version which doesn't need to block here", with <code>futureSend.get(options.getSendTimeout()&hellip;)</code> at line 130. <code>upstream-pr-analysis.adoc:196</code> ranks it "B3 #356 &hellip; throughput-critical" while the Group C header ("keep ideas, not code") sits at line 204&ndash;206 — the two verdicts already disagree about the same branch. The map's <code>sweep-2023-async-produce</code> entry adds the design constraints: "Needs work-unit limbo state + back pressure so producer timeouts do not feed themselves."</div>
+
+  <div class="field"><span class="fl">Rationale</span>
+  A verdict that bundles a 10-file branch and a 72-file branch, a Group-B item and Group-C items, under one gate is the reason nothing has moved in 3.5 years. Un-bundling is the actual unblocking move — cheaper and higher-leverage than any single code change, and it aligns the fork's two editorial records, which currently contradict each other.</div>
+
+  <div class="field"><span class="fl">Downsides</span>
+  The async-produce conversion itself is real work with real hazards (interacts with the produce lock in <code>PERIODIC_TRANSACTIONAL_PRODUCER</code>; changes when a commit cycle may safely begin). Promoting it means committing to design the limbo/back-pressure story, not just cherry-picking a 2022 diff.</div>
+</article>
+
+<article class="idea" id="i3">
+  <div class="idea-head"><span class="rank-chip">3</span><h3>The controlled experiment on bug-857: mailbox vs lock, same seeds</h3></div>
+  <div class="chips"><span class="chip axis">A2 Conversion + A4 Proof</span><span class="chip conf-med">Confidence 65%</span><span class="chip cx">Complexity High</span></div>
+
+  <div class="field"><span class="fl">Description</span>
+  The <code>synchronized(commitCommand)</code> poll-vs-control deadlock is still open (draft PR #29 mitigates with <code>ReentrantLock.tryLock()</code>, chaos pass rate ~20%&rarr;~80%, fourth sighting 2026-08-12), and the map records the open question verbatim: "User still weighing a larger poll+control single-thread refactor to kill the whole bug class." <code>commit-command-actor</code> is the second design for that exact defect. Convert the commit path to a mailbox in a worktree, replay the two recorded chaos seeds (<code>4734674029169027864</code> CLASS2_STALL, <code>7731567379755737438</code> ZOMBIE_MEMBER), and compare against #29's lock arm in the same pass-rate currency. Acceptance rule inverted: a conversion that moves no number is rejected as unproven, not accepted as safe. Decision rider: no dual-path/feature-flag — a flagged concurrency transport doubles the chaos state space for users who don't exist. Escalation option: a seeded-interleaving deterministic scheduler over the mailboxes (FoundationDB/TigerBeetle style — <code>process()</code> drains on the calling thread, so a mailbox-based controller is drivable single-threaded), which upgrades the comparison from statistical to replayable; its deterministic frontier honestly stops at <code>ConsumerManager</code>.</div>
+
+  <figure>
+  <svg viewBox="0 0 860 190" role="img" aria-label="Two arms, one defect, one instrument: lock arm and mailbox arm both judged by the same replay seeds">
+    <defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5c6370"/></marker></defs>
+    <rect x="10" y="65" width="220" height="60" rx="8" fill="#f9e8e7" stroke="#dcaead"/>
+    <text x="120" y="90" text-anchor="middle" font-size="13" fill="#9e3a38">synchronized(commitCommand)</text>
+    <text x="120" y="108" text-anchor="middle" font-size="11" fill="#9e3a38">poll vs control deadlock — OPEN</text>
+    <line x1="230" y1="80" x2="320" y2="45" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <line x1="230" y1="110" x2="320" y2="145" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <rect x="325" y="18" width="230" height="55" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
+    <text x="440" y="40" text-anchor="middle" font-size="12.5" fill="#1f2430">Arm A: ReentrantLock (PR #29)</text>
+    <text x="440" y="58" text-anchor="middle" font-size="11" fill="#5c6370">measured: ~20% &rarr; ~80%</text>
+    <rect x="325" y="118" width="230" height="55" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
+    <text x="440" y="140" text-anchor="middle" font-size="12.5" fill="#1f2430">Arm B: mailbox (commit-command-actor)</text>
+    <text x="440" y="158" text-anchor="middle" font-size="11" fill="#5c6370">never measured — 3.5 years of opinion</text>
+    <line x1="555" y1="45" x2="640" y2="80" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <line x1="555" y1="145" x2="640" y2="110" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr3)"/>
+    <rect x="645" y="65" width="205" height="60" rx="8" fill="#e7f0f7" stroke="#a9c4d8"/>
+    <text x="747" y="88" text-anchor="middle" font-size="12.5" fill="#2b5f8a">same replay seeds,</text>
+    <text x="747" y="106" text-anchor="middle" font-size="12.5" fill="#2b5f8a">same ProgressProbe verdict</text>
+  </svg>
+  <figcaption>The map's own open question — lock around the bug class, or kill it — gets an answer in the currency the repo already uses.</figcaption>
+  </figure>
+
+  <div class="field"><span class="fl">Basis</span>
+  <code>direct:</code> Both replay seeds and the exact <code>mvnw</code> chaos invocations verified present at <code>docs/inflight/bug-857-family.md:33,110</code>; the "fourth sighting, 2026-08-12" ZOMBIE_MEMBER entry verified at line 94. PR #29's pass-rate framing and the "user still weighing" line are in <code>upstream-map.yaml</code>'s <code>bug-857-stall-after-rebalance</code> entry. <code>external:</code> FoundationDB simulation-first testing / TigerBeetle VOPR for the deterministic escalation. One unverified assumption flagged by the verifier: that <code>ConsumerOffsetCommitter</code> is convertible without touching the God class — check before scoping.</div>
+
+  <div class="field"><span class="fl">Rationale</span>
+  This is the one call site where reviving the actor work is not speculative architecture: it is a second candidate fix for a still-reproducing defect, with a recorded control arm and a recorded instrument. It directly answers the largest open architectural question in the fork's own tracking, and 80% is not a fix — it is a smaller haystack.</div>
+
+  <div class="field"><span class="fl">Downsides</span>
+  Largest effort on this list; touches the God class's hottest coordination. If #29 lands first and holds at ~100%, the experiment's payoff drops to "confirms the cheaper fix sufficed" — worth knowing, but run the sequencing deliberately. Chaos pass rates are statistical; without the deterministic escalation, a small delta may not settle the argument.</div>
+</article>
+
+<article class="idea" id="i4">
+  <div class="idea-head"><span class="rank-chip">4</span><h3>Accession &amp; graded register: make the family visible to the fork's own machinery</h3></div>
+  <div class="chips"><span class="chip axis">A5 Framing</span><span class="chip conf-high">Confidence 90%</span><span class="chip cx">Complexity Low</span></div>
+
+  <div class="field"><span class="fl">Description</span>
+  One administrative pass, museum-accession style: (a) add a dedicated <code>upstream-map.yaml</code> entry naming all five actor branches plus the three dependents, with per-branch readiness grades instead of one binary verdict; (b) open one fork issue to hang decisions on; (c) annotated tags on the five tips so branch cleanup can never lose them; (d) fix the live data-integrity bug — <code>sweep-2023-async-produce</code> records branch <code>async-process-send-results</code> (actual: <code>&hellip;-using-actor</code>) and SHA <code>a89f0bce2</code> (actual tip: <code>00f350166</code>); (e) add <code>poller-bus-actor</code> to <code>refactoring.md</code>'s Actor/IPC list, where it is currently missing despite carrying the second actor base; (f) write the short ideas-doc that finally executes "keep ideas, not code" — which has been recorded for years while the ideas lived exclusively in unmerged branch tips; (g) skim <code>upstream/refactor/actor-base-fixes</code>'s ~121-line review diff for still-applicable feedback.</div>
+
+  <div class="field"><span class="fl">Basis</span>
+  <code>direct:</code> "upstream-map.yaml has NO dedicated entry for the actor family&hellip; PRs #325 and #524 appear exactly once in the whole file: inside the bulk prs list of sweep-2023-admin-closure" — and the map's own schema warns a mis-listed ref "would be hidden from every future audit." The wrong branch name/SHA and the missing <code>poller-bus-actor</code> cross-reference were both independently re-verified by the verifier. The map is the declared SOURCE OF TRUTH; the family is currently marked accounted-for while being invisible.</div>
+
+  <div class="field"><span class="fl">Rationale</span>
+  Cheapest item on the list and a prerequisite for every other one: decisions made in this conversation are worthless if the next audit, sweep, or session cannot find where they landed. Grading per-branch (the family is already graded inconsistently — B vs C) is what makes the un-bundling in idea 2 durable rather than a one-off argument.</div>
+
+  <div class="field"><span class="fl">Downsides</span>
+  Pure process value — moves no code, fixes no defect. The readiness-grade scheme adds a small convention that must be kept honest or it becomes noise.</div>
+</article>
+
+<article class="idea" id="i5">
+  <div class="idea-head"><span class="rank-chip">5</span><h3>Skeleton-first strangler: land the seams, defer the transport</h3></div>
+  <div class="chips"><span class="chip axis">A2 Conversion</span><span class="chip conf-med">Confidence 60%</span><span class="chip cx">Complexity High</span></div>
+
+  <div class="field"><span class="fl">Description</span>
+  The 2022 branches' hardest payload is arguably not the mailbox — it is the six interfaces (<code>BrokerPollerAPI</code>, <code>ControllerInternalAPI</code>, <code>WorkManagerIPCAPI</code>, <code>Supervisable</code>, <code>MultithreadingAPI</code>, <code>ThreadSafe</code>) that partition the God class's surface by <i>who may call what from which thread</i>. Land those first as a pure refactor with today's synchronous implementations behind them; the actor swap then becomes a reversible, per-seam decision behind a stable boundary. Pair with the event-loop reframing: <code>processBlocking(Duration)</code> is a libuv-style loop and <code>Interruptible</code> is its async-wakeup handle; unified with Kafka's <code>Consumer.wakeup()</code>, this is the concrete <b>Java-8-safe</b> mechanism behind "eliminate the separate poller thread" — the framing under which the confluentinc#857 deadlock class disappears rather than gets locked around. Track progress by a CI-checkable number, not merged branches: God class currently 1534 lines with 7 <code>synchronized</code>; the file has moved one line in 3.5 years, which is the clearest evidence that branch-shaped goals don't move it. Alternative seam: actorise <code>ProcessingShard</code> (the domain's natural single-writer boundary, Seastar-style) instead of the controller.</div>
+
+  <figure>
+  <svg viewBox="0 0 860 200" role="img" aria-label="Strangler seam: God class callers go through six thread-ownership interfaces; behind them the transport is swappable between today's synchronous implementation and a mailbox">
+    <defs><marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5c6370"/></marker></defs>
+    <rect x="10" y="70" width="170" height="60" rx="8" fill="#f1efeb" stroke="#c9c4bb"/>
+    <text x="95" y="95" text-anchor="middle" font-size="13" fill="#1f2430">callers</text>
+    <text x="95" y="113" text-anchor="middle" font-size="11" fill="#5c6370">poll thread &middot; control &middot; workers</text>
+    <line x1="180" y1="100" x2="235" y2="100" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr5)"/>
+    <rect x="240" y="25" width="230" height="150" rx="8" fill="#e7f0f7" stroke="#a9c4d8"/>
+    <text x="355" y="50" text-anchor="middle" font-size="13" fill="#2b5f8a">6 seam interfaces</text>
+    <text x="355" y="72" text-anchor="middle" font-size="11" fill="#2b5f8a">BrokerPollerAPI &middot; ControllerInternalAPI</text>
+    <text x="355" y="89" text-anchor="middle" font-size="11" fill="#2b5f8a">WorkManagerIPCAPI &middot; Supervisable</text>
+    <text x="355" y="106" text-anchor="middle" font-size="11" fill="#2b5f8a">MultithreadingAPI &middot; ThreadSafe</text>
+    <text x="355" y="140" text-anchor="middle" font-size="11.5" fill="#1f2430">who may call what,</text>
+    <text x="355" y="157" text-anchor="middle" font-size="11.5" fill="#1f2430">from which thread — land this first</text>
+    <line x1="470" y1="65" x2="545" y2="52" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr5)"/>
+    <line x1="470" y1="135" x2="545" y2="148" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr5)"/>
+    <rect x="550" y="25" width="290" height="55" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
+    <text x="695" y="47" text-anchor="middle" font-size="12.5" fill="#1f2430">today: synchronous impl (unchanged)</text>
+    <text x="695" y="65" text-anchor="middle" font-size="11" fill="#5c6370">pure refactor, no semantics at risk</text>
+    <rect x="550" y="120" width="290" height="55" rx="8" fill="#e6f2ea" stroke="#a8cdb6"/>
+    <text x="695" y="142" text-anchor="middle" font-size="12.5" fill="#2c6e49">later, per seam: mailbox / event loop</text>
+    <text x="695" y="160" text-anchor="middle" font-size="11" fill="#2c6e49">reversible, or never — no big bang</text>
+  </svg>
+  <figcaption>The strangler seam: interface segregation lands as a reviewable refactor; the transport underneath becomes a swap, not a bet.</figcaption>
+  </figure>
+
+  <div class="field"><span class="fl">Basis</span>
+  <code>direct:</code> All six interfaces verified as named on the branch and all verified absent from master (no conflicts). The <code>Interruptible</code> wakeup-handle reading is quoted from the source itself ("push an effectively NO-OP message, which would wake it up if it were blocked&hellip; without needed to <code>Thread#interrupt</code> it"), which also carries the author's note "todo removable after actors fully merged?" — verified verbatim. <code>refactoring.md:120-133</code>: eliminating the poller thread "would also kill the confluentinc#857 deadlock class." <code>external:</code> strangler-fig migration; libuv/Win32 message pump; Seastar/Redis single-writer ownership for the shard-seam variant. Delivers the C1/#488 God-class decomposition as a side effect.</div>
+
+  <div class="field"><span class="fl">Rationale</span>
+  This is the only shape under which the "MASSIVE, UNDECIDED" thread-model rework becomes incremental: each seam converts (or doesn't) on its own evidence, and the delete-only number keeps the goal falsifiable and mechanism-neutral. It also reframes the review question from "adopt an actor framework" to "adopt one event loop," which is decidable on merit.</div>
+
+  <div class="field"><span class="fl">Downsides</span>
+  Interface extraction across a 1534-line class with 7 <code>synchronized</code> blocks is delicate even as a "pure" refactor — thread-ownership boundaries are exactly where hidden assumptions live. Risk of landing seams that the eventual design doesn't want (the 2022 partitioning may not survive contact with the shared-nothing decision).</div>
+</article>
+
+<article class="idea" id="i6">
+  <div class="idea-head"><span class="rank-chip">6</span><h3>Concurrency mass budget: an ArchUnit ratchet every conversion must spend down</h3></div>
+  <div class="chips"><span class="chip axis">A4 Proof</span><span class="chip conf-med">Confidence 65%</span><span class="chip cx">Complexity Low</span></div>
+
+  <div class="field"><span class="fl">Description</span>
+  Aerospace-style mass budget for concurrency primitives. Encode the current census as a per-package ArchUnit rule that fails when counts rise: <code>synchronized</code> 10 (7 in the God class), <code>AtomicBoolean</code> 11, <code>BlockingQueue</code> 4, <code>volatile</code> 4. Every actor conversion is then graded on primitives <i>removed</i>, and no conversion can quietly add a lock to make itself work. The 11 pre-existing SpotBugs <code>AT_*</code> thread-visibility findings become budget line items the rework is obliged to absorb — resolving the standing "fix piecemeal or wait for the rework?" stalemate recorded in <code>refactoring.md</code>. Needs a reviewed exemption list, since one mailbox legitimately replacing seven <code>synchronized</code> blocks is a win a naive count misreads.</div>
+
+  <div class="field"><span class="fl">Basis</span>
+  <code>direct:</code> Census measured on master during grounding (counts above; verifier treated exact numbers as trusted-but-unverified). ArchUnit lane verified live: <code>TestConventionsArchTest</code> exists in core, and commit <code>af88b6d13</code> is a real, recent ArchUnit-rule commit. <code>refactoring.md:167-184</code> records the SpotBugs findings and the exact stalemate this resolves ("Fixing piecemeal now may conflict"). <code>external:</code> mass-properties control (NASA-HDBK-1002 lineage); performance budgets in web engineering.</div>
+
+  <div class="field"><span class="fl">Rationale</span>
+  Gives the whole revival a definition of done a reviewer can check in CI, in whatever order ideas 2, 3, and 5 proceed. It is the cheapest item that would have prevented the last three years of the piecemeal-vs-rework question staying undecided.</div>
+
+  <div class="field"><span class="fl">Downsides</span>
+  Counting primitives is a proxy metric; gaming it (e.g. swapping <code>synchronized</code> for equally shared mutable state that the rule doesn't count) is possible. The exemption list needs genuine review discipline or the ratchet decays into ceremony.</div>
+</article>
+
+</section>
+
+<section id="rejection-summary">
+<h2>Rejection Summary</h2>
+<p>~55 raw ideas from five frames were merged into 8 clusters + 14 singles + 4 syntheses; a fresh-context verifier spot-checked load-bearing quotes against the repo and branches. Cuts:</p>
+<table>
+  <thead><tr><th>#</th><th>Idea</th><th>Reason rejected</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>"Critical edition" reconciliation of the two actor bases</td><td><b>Basis refuted by verification:</b> the cited method distribution ("askImmediately/isEmpty only on the older base; process/processBlocking only on the newer") is factually backwards — the verifier diffed both bases and all four methods exist on both, and <code>lambda-actor-bus</code>'s interface is a strict superset. The real unification need survives, folded into idea 1 as "pick lambda-actor-bus."</td></tr>
+    <tr><td>2</td><td>Merge <code>actor-scheduled</code> first (smallest branch)</td><td><b>Overstated evidence:</b> "removes 152 lines from the God class" is diffstat churn (58+/94&minus;); net reduction is ~36 lines — a 4&times; overstatement. Also carries build landmines (TG 0.1.1-SNAPSHOT dep, OSSIndex exclusion).</td></tr>
+    <tr><td>3</td><td>Design the package for deletion on Java 21 (virtual threads)</td><td><b>Premise conflict:</b> the documented baseline plan targets Java 11 for 0.7, not 21; virtual threads require 21. The disposable-transport instinct survives inside idea 5's seam framing.</td></tr>
+    <tr><td>4</td><td>Shard-per-core: actorise <code>ProcessingShard</code> standalone</td><td>Folded into idea 5 as the alternative seam — as a standalone project it contradicts the branches' own design without a defect driving it.</td></tr>
+    <tr><td>5</td><td>Mailbox as pure observability shim for the confluentinc#200 decision</td><td>Duplicates cheaper routes to the same data (idea 3's experiment and idea 5's seams both produce the traffic profile).</td></tr>
+    <tr><td>6</td><td>Rebuild the 2022 toolchain; capture golden traces</td><td>Too expensive relative to value — idea 1's falsification pipeline gets most of the same evidence for a fraction of the cost.</td></tr>
+    <tr><td>7</td><td>No-dual-path decision; ideas-doc; cross-reference fix; actor-base-fixes mining</td><td>Not rejected — folded as riders into ideas 3 and 4 respectively (each too small to stand alone against the meeting-test).</td></tr>
+  </tbody>
+</table>
+<p>Axis coverage: all five axes have survivors; no deliberate gaps.</p>
+</section>
+
+<section id="sources">
+<h2>Sources &amp; References</h2>
+<ul>
+  <li><a href="https://github.com/astubbs/parallel-consumer/blob/master/src/docs/development/upstream-map.yaml"><code>src/docs/development/upstream-map.yaml</code></a> — fork&harr;upstream source of truth (entries: <code>bug-857-stall-after-rebalance</code>, <code>sweep-2023-async-produce</code>, <code>sweep-2023-admin-closure</code>)</li>
+  <li><a href="https://github.com/astubbs/parallel-consumer/blob/master/docs/refactoring.md"><code>docs/refactoring.md</code></a> — refactor index; Actor/IPC section (lines 141&ndash;151), thread-model section (120&ndash;133), SpotBugs findings (167&ndash;184)</li>
+  <li><a href="https://github.com/astubbs/parallel-consumer/blob/master/src/docs/development/upstream-pr-analysis.adoc"><code>src/docs/development/upstream-pr-analysis.adoc</code></a> — Group B/C rankings</li>
+  <li><a href="https://github.com/astubbs/parallel-consumer/blob/master/docs/inflight/bug-857-family.md"><code>docs/inflight/bug-857-family.md</code></a> — chaos seeds, replay invocations, sightings</li>
+  <li><a href="https://github.com/astubbs/parallel-consumer/blob/master/bin/rename-packages.sh"><code>bin/rename-packages.sh</code></a> — the datum-shift script ("BRINGING AN OPEN BRANCH ACROSS")</li>
+  <li>Branches: <code>origin/improvements/lambda-actor-bus</code> @da7dc92c1 &middot; <code>commit-command-actor</code> @1c50225e5 &middot; <code>poller-bus-actor</code> @b1598f219 &middot; <code>async-process-send-results-using-actor</code> @00f350166 &middot; <code>actor-scheduled</code> @4db0da0fd &middot; <code>upstream/refactor/actor-base-fixes</code> @09a13d070</li>
+  <li>Fork PRs/issues: <a href="https://github.com/astubbs/parallel-consumer/pull/29">PR #29</a> (lock arm) &middot; <a href="https://github.com/astubbs/parallel-consumer/issues/230">issue #230</a> (async produce) &middot; <a href="https://github.com/astubbs/parallel-consumer/issues/142">issue #142</a> (shared-nothing mirror)</li>
+</ul>
+</section>
+
+<footer class="composition-signal">Composed 2026-08-17T21:21 by ce-ideate from the session focus "reviving my micro actor collection of branches" (evidence dossier: <code>/tmp/compound-engineering-501/ce-ideate/a7f3c091/evidence-actor-collection.md</code>)</footer>
+
+</div>
+</body>
+</html>
