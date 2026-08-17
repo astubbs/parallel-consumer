@@ -157,38 +157,47 @@
     <profiles>
 
         <!--
-            THE BUILD NOTICE'S TWO STATES. Activated on the same property that gates the foreign
-            client modules, so the message and the behaviour cannot disagree.
-            parallel-consumer-proxy-clients/pom.xml OWNS the exclusion; these profiles only decide
-            what the root module says about it. Adding a language means editing the text here.
+            SAY WHAT IS MISSING, AND ONLY WHEN SOMETHING IS. There is one notice, not a pair: a
+            build that includes the foreign clients needs no announcement that it did, so this
+            profile fires only when they are absent and is silent otherwise.
+
+            parallel-consumer-proxy-clients/pom.xml OWNS the exclusion; this only decides what the
+            root module says about it. Adding a language means editing the text here.
         -->
         <profile>
-            <id>foreign-clients-notice-off</id>
+            <id>foreign-clients-absent-notice</id>
             <activation>
                 <property>
                     <name>!pc.foreignClients</name>
                 </property>
             </activation>
-            <properties>
-                <pc.foreign.notice.1>Parallel Consumer - JVM modules only.</pc.foreign.notice.1>
-                <pc.foreign.notice.2>  - NOT in this build: the 8 foreign-language clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</pc.foreign.notice.2>
-                <pc.foreign.notice.3>  - Add -Dpc.foreignClients to build and test them.</pc.foreign.notice.3>
-                <pc.foreign.notice.4>  - That needs go, node, cargo, dotnet and ruby on PATH, plus Docker for cpp and swift.</pc.foreign.notice.4>
-            </properties>
-        </profile>
-        <profile>
-            <id>foreign-clients-notice-on</id>
-            <activation>
-                <property>
-                    <name>pc.foreignClients</name>
-                </property>
-            </activation>
-            <properties>
-                <pc.foreign.notice.1>Parallel Consumer - JVM modules AND the 8 foreign-language clients.</pc.foreign.notice.1>
-                <pc.foreign.notice.2>  - Building: go, python, typescript, rust, dotnet, ruby, cpp, swift.</pc.foreign.notice.2>
-                <pc.foreign.notice.3>  - Needs on PATH: go, node, cargo, dotnet, ruby.</pc.foreign.notice.3>
-                <pc.foreign.notice.4>  - Needs Docker: cpp, swift.</pc.foreign.notice.4>
-            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>com.soebes.maven.plugins</groupId>
+                        <artifactId>echo-maven-plugin</artifactId>
+                        <version>0.5.0</version>
+                        <inherited>false</inherited>
+                        <executions>
+                            <execution>
+                                <id>foreign-clients-absent-notice</id>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>echo</goal>
+                                </goals>
+                                <configuration>
+                                    <echos>
+                                        <echo>Parallel Consumer - JVM modules only.</echo>
+                                        <echo>- NOT in this build: the 8 foreign-language clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</echo>
+                                        <echo>- Add -Dpc.foreignClients to build and test them.</echo>
+                                        <echo>- That needs go, node, cargo, dotnet and ruby on PATH, plus Docker for cpp and swift.</echo>
+                                    </echos>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
 
         <profile>
@@ -789,43 +798,6 @@
                         <goals>
                             <goal>audit</goal>
                         </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>com.soebes.maven.plugins</groupId>
-                <artifactId>echo-maven-plugin</artifactId>
-                <version>0.5.0</version>
-                <!--
-                    SAY WHAT THIS BUILD DOES AND DOES NOT INCLUDE, ONCE, AT THE TOP.
-
-                    The eight foreign-language client modules are excluded unless
-                    -Dpc.foreignClients is set, because an ordinary Java build must not require
-                    go, cargo, dotnet, node, ruby and Docker. Excluding them is honest - the
-                    reactor then contains only what it builds - but it is also silent, and a
-                    developer has no way to learn the other eight exist. This is the one line
-                    that buys that back. ${pc.foreign.notice} is set by the profile pair below;
-                    parallel-consumer-proxy-clients/pom.xml owns the exclusion itself.
-
-                    <inherited>false</inherited> so it prints once from the root rather than
-                    thirty times - the mistake the deleted active-profiles execution made.
-                -->
-                <inherited>false</inherited>
-                <executions>
-                    <execution>
-                        <id>foreign-clients-notice</id>
-                        <phase>validate</phase>
-                        <goals>
-                            <goal>echo</goal>
-                        </goals>
-                        <configuration>
-                            <echos>
-                                <echo>${pc.foreign.notice.1}</echo>
-                                <echo>${pc.foreign.notice.2}</echo>
-                                <echo>${pc.foreign.notice.3}</echo>
-                                <echo>${pc.foreign.notice.4}</echo>
-                            </echos>
-                        </configuration>
                     </execution>
                 </executions>
             </plugin>
