@@ -318,68 +318,11 @@ jobs:
           # quarantine-lane-report.sh) - those execute suites, are slow, and test execution is
           # already covered by the ci-*-test.sh wrappers above.
           #
-          # `bin/todo-index.sh` CARRIES ITS ARGUMENT INTO THE GRANT, and is the ONE ENTRY HERE WITH
-          # NO `:*`. That is deliberate: it is an exact-command grant, not a prefix.
-          #
-          # Bare, the script REGENERATES `docs/todo-index.md` (`generate > "$OUT"` at the end of its
-          # main path), so the older `Bash(bin/todo-index.sh:*)` let the reviewer modify the tree it
-          # was inspecting, and any diff it then reported was partly its own work - the
-          # false-confidence class this allowlist exists to prevent, arriving through the allowlist.
-          #
-          # Narrowing it to `Bash(bin/todo-index.sh --check:*)` was NOT enough. `:*` is a PREFIX
-          # grant, so `bin/todo-index.sh --check=false` still matched, and the script's old
-          # `[[ "$1" == "--check" ]]` test did not equal `--check=false`, so it took the REWRITE
-          # path and exited 0. Reproduced on astubbs/parallel-consumer#286. Hence both halves:
-          # the exact grant here, and `bin/todo-index.sh` now rejecting unknown arguments so the
-          # guarantee holds however it is invoked.
-          #
-          # SO DO NOT "TIDY" THIS BY ADDING `:*` FOR CONSISTENCY WITH ITS NEIGHBOURS. The wildcard
-          # is exactly the defect. `--check` is the read-only mode the script documents and the only
-          # one a reviewer wants: it answers "is the committed index stale?", the claim a PR makes.
-          #
-          # THOSE TWO FAMILIES ARE GRANTED AS PATTERNS ON PURPOSE. DO NOT RE-ENUMERATE THEM.
-          #
-          # A grant a pull request adds can never apply to that pull request, on any route: the
-          # action runs the DEFAULT BRANCH's copy of the workflow (docs/ci.md, "Editing the
-          # reviewer"). So a per-script grant has to land in an EARLIER pull request than the
-          # script it grants - a discipline nobody keeps, and demonstrably so. Four check scripts
-          # arrived with astubbs/parallel-consumer#279, all four were granted in that same pull
-          # request, and its own reviewer could run none of them; the failure was then written up
-          # as a mystery approval layer before anyone noticed the copy in force was master's.
-          # A pattern makes the grant arrive with the CONVENTION instead, once, ahead of every
-          # script that will ever follow it.
-          #
-          # Bash rules glob with `*` at any position and `:*` is the trailing-wildcard form, so
-          # `Bash(bin/check-*.sh:*)` matches `bin/check-foo.sh` bare and with arguments.
-          #
-          # WHAT THE PATTERN FORM DELIBERATELY ACCEPTS: a pull request can add
-          # `bin/check-<anything>.sh` and have this reviewer run it. That is not a new capability
-          # on this route. The checkout below IS `refs/pull/<n>/head`, so every grant here already
-          # executes the PULL REQUEST's copy - `bin/check-copyright-headers.sh` has been granted
-          # for months and is whatever the branch says it is, the ci-*-test.sh wrappers run the
-          # branch's Java, and `./mvnw` runs the branch's pom. The bound is unchanged and is not
-          # the shape of the list: fork heads are refused outright, and dispatching requires write
-          # access. (The comment route is the same in this respect, not narrower: the action
-          # checks the PR's head out there too, so the pattern matches the PR's scripts on both
-          # routes. Its bound is its own fork-head withholding - see claude.yml.)
-          #
-          # NOT WIDENED FURTHER, and the remaining enumeration is not laziness. `Bash(bin/*.sh:*)`
-          # would sweep in exactly the scripts this list refuses on purpose - quarantined-test.sh,
-          # quarantine-lane-report.sh, chaos-test.sh, soak-test.sh, performance-test.sh, deploy.sh
-          # - so ci-unit-test.sh, ci-integration-test.sh and todo-index.sh stay named one by one.
-          # `check-` and `test-check-` are the two prefixes this repo uses for fast, read-only
-          # guards, and the pattern is scoped to exactly those.
-          #
-          # bin/test-check-docs-data.sh is the one grant that writes: it mutates a corpus file,
-          # asks the guard for a verdict, and copies the file back, one case at a time. That is a
-          # considered exception to "do not grant anything that writes" rather than an oversight.
-          # It touches only the ephemeral runner workspace, restores through a trap on any exit,
-          # and the claim it lets a reviewer test is the one this repo has most often got wrong -
-          # whether the guard actually catches what it says it catches. A reviewer that cannot run
-          # it is left reasoning statically about a gate whose whole history is looking green while
-          # broken. (Carried across from claude-code-review.yml with
-          # astubbs/parallel-consumer#273, which added the scripts; the reviewer moved out of that
-          # file, so the grant had to move with it or be silently lost.)
+          # `bin/todo-index.sh` CARRIES ITS ARGUMENT INTO THE GRANT and is the ONE ENTRY HERE WITH
+          # NO `:*` - an exact-command grant, deliberately. A wildcard here reopens a tree-rewrite
+          # hole, so do not "tidy" it for consistency with its neighbours. WHY, in full: the header
+          # comment of bin/todo-index.sh, which owns this and is the parser that enforces it.
+          # Pinned by bin/test-todo-index.sh.
           #
           # Every ENUMERATED grant here is a script that EXISTS ON MASTER. Granting one that only
           # exists on another branch makes the grant inert and the claim false - which is how

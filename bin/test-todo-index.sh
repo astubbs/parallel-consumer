@@ -17,21 +17,18 @@
 #    9. both workflows grant the EXACT command, in BOTH the `bin/...` and `./bin/...` spellings,
 #       and carry no wildcard todo-index grant in either
 #
-# CASE 4 IS THE REGRESSION, and it is the reason this file exists. The reviewer is granted this
-# script so it can ask whether the committed index is stale WITHOUT being able to rewrite the tree it
-# is inspecting. Before astubbs/parallel-consumer#286 the grant was written `Bash(bin/todo-index.sh
-# --check:*)` - a PREFIX grant - and the script tested `[[ "$1" == "--check" ]]`, which
-# `--check=false` does not equal. So the allowed command took the REGENERATE branch and exited 0.
-# Run case 4 against that revision and it fails on both assertions: exit 0 rather than 2, and a
-# rewritten index. A regression test that has never failed proves nothing (bin/AGENTS.md).
+# WHAT THIS PROTECTS AND WHY IS OWNED BY bin/todo-index.sh's HEADER COMMENT - read that first; it is
+# the parser that enforces the boundary. What matters here is only which shapes are asserted:
 #
-# CASE 9 GUARDS THE OTHER HALF. The parser fix is worthless if a later edit restores `:*` to either
-# allowlist "for consistency" with its wildcard-bearing neighbours - which is exactly the shape the
-# rest of both lists has. Only the paired assertion closes the boundary, so it is pinned here rather
-# than left to review. It checks BOTH command spellings: a rule matches the command as written, so
-# the two workflows grant `bin/...` and `./bin/...` separately, and an earlier revision of this test
-# guarded only the bare one - leaving the dot-prefixed half free to be removed or wildcarded while
-# the suite stayed green.
+# CASE 4 IS THE REGRESSION - the exact argument that defeated the first attempt at the fix. A
+# regression test that has never failed proves nothing (bin/AGENTS.md), so run it against the
+# pre-fix revision and watch it report `0 REWRITTEN`.
+#
+# CASE 9 GUARDS THE ALLOWLIST SIDE, which no amount of parser strictness can cover. It asserts the
+# real property - that NO rule in either allowlist permits the bare command - rather than the proxy
+# of "no wildcard rule names this script", because a broader neighbour such as `Bash(bin/*.sh:*)`
+# re-covers it without mentioning it. Both command spellings are checked: a rule matches the command
+# as written, so `bin/...` and `./bin/...` are separate grants and each needs its own assertion.
 #
 # Run: bin/test-todo-index.sh
 #
@@ -98,14 +95,7 @@ assert "--Check is refused"                             "2 untouched" "$(run_cas
 assert "-c is refused"                                  "2 untouched" "$(run_case -c)"
 assert "a second argument is refused"                   "2 untouched" "$(run_case --check extra)"
 
-# Case 9: the grant must be the exact command, in BOTH SPELLINGS. `:*` is the trailing-wildcard form,
-# and restoring it reopens case 4 from the allowlist side no matter how strict the parser is.
-#
-# BOTH `bin/...` AND `./bin/...` ARE CHECKED, and that is not belt-and-braces. A rule is matched
-# against the command AS WRITTEN, so `Bash(bin/todo-index.sh --check)` does not match
-# `./bin/todo-index.sh --check` - which is why both workflows grant the two spellings, and why
-# guarding only the bare one leaves half the permission contract unpinned: removing or wildcarding
-# just the dot-prefixed grant would go green. Raised in review on astubbs/parallel-consumer#286.
+# Case 9 - the allowlist side. See the header above for what is asserted and why.
 for yml in "$CLAUDE_YML" "$DISPATCH_YML"; do
     name="$(basename "$yml")"
     contents="$(cat "$yml")"
@@ -124,12 +114,7 @@ for yml in "$CLAUDE_YML" "$DISPATCH_YML"; do
         fi
         assert "$name grants the exact '$spelling --check' command" present "$exact"
 
-        # THE REAL INVARIANT: no rule anywhere in the allowlist may permit the BARE rewriting
-        # command. Asking only whether a `<spelling>:*` rule exists was too narrow - a broader
-        # neighbour such as `Bash(bin/*.sh:*)` or `Bash(*:*)` re-covers the bare script while
-        # every literal-spelling assertion still reports absent. The dispatch workflow's own
-        # comment names `Bash(bin/*.sh:*)` as exactly that hazard, so it is tested rather than
-        # trusted. Raised in review on astubbs/parallel-consumer#286.
+        # No rule may permit the BARE rewriting command - the property itself, not the proxy.
         permitted_by=""
         while IFS= read -r rule; do
             [ -n "$rule" ] || continue
