@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ideation: Language-Proxy Interaction Model</title>
+<title>Ideation: Language Proxy — Interaction Model &amp; Polyglot Demo</title>
 <style>
   :root {
     --bg: #fbfaf8; --fg: #1a1a1a; --muted: #5c5c5c; --rule: #e0dcd6;
@@ -61,15 +61,35 @@
           padding: 1rem 1.25rem; margin: 1.5rem 0; }
   ul { margin: 0 0 .85rem; padding-left: 1.2rem; } li { margin-bottom: .35rem; }
   .axis-note { color: var(--muted); font-size: .88rem; font-style: italic; }
+  .partnav { display: flex; gap: .6rem; flex-wrap: wrap; margin: 1.2rem 0 0; }
+  .partnav a { font-size: .85rem; text-decoration: none; color: var(--accent); background: var(--accent-bg);
+               border: 1px solid var(--rule); border-radius: 999px; padding: .25em .85em; }
+  .part-divider { margin: 4rem 0 0; border-top: 3px double var(--rule); padding-top: 2.5rem; }
+  .jump { font-size: .88rem; margin: 0 0 1.4rem; padding-left: 1.2rem; }
+  .jump a { color: var(--accent); text-decoration: none; }
+  .diagram { margin: .9rem 0; overflow-x: auto; }
+  .diagram svg { display: block; max-width: 100%; height: auto; }
+  .diagram-caption { color: var(--muted); font-size: .82rem; font-style: italic; margin-top: .2rem; }
+  footer.composition-signal { max-width: 62rem; margin: 3rem auto 0; color: var(--muted); font-size: .78rem;
+                              border-top: 1px solid var(--rule); padding-top: .8rem; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<h1>Ideation: Language-Proxy Interaction Model</h1>
+<h1>Ideation: Language Proxy — Interaction Model &amp; Polyglot Demo</h1>
 <p class="sub">
-  2026-08-14 · <code>astubbs/parallel-consumer#242</code> · branch <code>feats/proxy-requirements</code><br>
-  27 raw candidates → 16 after merge → <strong>6 survivors: 3 settled, 3 open</strong> · 5 axes · repo-grounded
+  Two runs in one document · repo-grounded · branch <code>feats/proxy-requirements</code> · <code>astubbs/parallel-consumer#242</code>
+</p>
+<nav class="partnav">
+  <a href="#part-interaction-model">Part 1 · Interaction model (2026-08-14)</a>
+  <a href="#part-polyglot-demo">Part 2 · Polyglot demo app (2026-08-17)</a>
+</nav>
+
+<section id="part-interaction-model">
+<h1 style="font-size:1.45rem; margin-top:2.2rem">Part 1 · Interaction Model</h1>
+<p class="sub">
+  2026-08-14 · 27 raw candidates → 16 after merge → <strong>6 survivors: 3 settled, 3 open</strong> · 5 axes · repo-grounded
 </p>
 
 <p class="lede">
@@ -404,7 +424,497 @@ credit ledger were live. Beyond that supersession, these move:</p>
       <code>docs/inflight/next-connect-connectors-in-foreign-languages.md</code>. Unread:
       <code>feats/connect-on-pc-spike</code> may already assume a shape.</li>
 </ul>
+</section>
+
+<section id="part-polyglot-demo" class="part-divider">
+<h1 style="font-size:1.45rem">Part 2 · Polyglot Demo App</h1>
+<p class="sub">
+  2026-08-17 · topic <code>polyglot-demo-app</code> · repo-grounded ·
+  40 raw candidates → 28 after merge → <strong>6 survivors</strong> · 5 axes<br>
+  Focus: run all 11 language bindings simultaneously (each demo dockerized), collect their output
+  together, and prove in a single view that they all read the same records.
+</p>
+
+<p class="lede">
+  The plan already <em>requires</em> per-language demo containers (R72–R77) and a one-command launch
+  (R20) — but R20's text is singular ("a workload and a worker using <em>a</em> client library"), and
+  nothing anywhere specifies the all-eleven-at-once show, the aggregation layer, or the single UI.
+  That gap is exactly this ideation's subject. Zero demos exist today; the conformance suite,
+  the frozen stdout grammar, the sanctioned produce path, and the README's asciinema slot are the
+  assets everything below compounds on.
+</p>
+
+<h2>Grounding Context</h2>
+<p><strong>Codebase Context (verified this run, with a fresh-context verifier pass over every basis):</strong></p>
+<ul>
+  <li><strong>What exists:</strong> sidecar complete; frozen v1 gRPC schema with CI breaking-checks;
+      11 client directories (Python and Go substantially implemented, others skeletal; Java ships two
+      transports — gRPC hop and direct-to-engine control). A conformance suite drives every binding
+      through four identical scenarios via a JVM <code>ProxyHarness</code> (Mock clients, no broker)
+      reached over production gRPC; golden bytes pin the wire format.</li>
+  <li><strong>Runner output grammar (frozen, sabotage-tested):</strong> every conformance runner prints
+      one observation line per delivery — <code>dispatch key=&lt;key&gt; offset=&lt;n&gt; attempt=&lt;n&gt;
+      reason=&lt;last-failure-reason&gt;</code> — and "anything else on stdout is ignored".</li>
+  <li><strong>Demo requirements already frozen:</strong> R72–R77 (one container per language, three modes —
+      broker on TTY / mock without TTY / own-cluster via flags+env — identical UX in all eleven, marked
+      serde extension point, rate-limited stats, credential hygiene), R31 (latency: proxy <em>and</em>
+      in-process on the same workload), KTD40 (seven-rule demo contract), U16 (<code>run.sh</code> +
+      compose), U25 (reference demo), U35 (all eleven mirror it).</li>
+  <li><strong>Sanctioned output path:</strong> <code>Report.Success</code> carries <code>produce</code> —
+      "the only sanctioned route for worker output to Kafka; workers never produce directly" — with no
+      topic restriction. Verifier-confirmed at the proto and the protocol spec.</li>
+  <li><strong>Parked neighbours:</strong> the sidecar-embedded web GUI waits until both
+      <code>feats/web-gui</code> and the proxy are on trunk (dependency, never copied code); the hosted
+      demo gallery is blocked on the undecided docs site (astubbs#208) — its own fallback ladder ends in
+      "recorded captures". The README is generated from <code>src/docs/README_TEMPLATE.adoc</code> and
+      already carries an asciinema demo slot.</li>
+  <li><strong>Metrics:</strong> Micrometer <code>PCMetricsDef</code> (~17 gauges/counters/timers) is live in
+      core; the proxy constructs its own meter registry. <em>Verifier correction:</em> R10 forbids passing a
+      <code>MeterRegistry</code> <strong>object</strong> over the wire — it does not forbid a proxy-local
+      Prometheus scrape endpoint, which is additive config.</li>
+  <li><strong>Doc-hygiene find (bonus):</strong> <code>docs/inflight/parked-sidecar-embeds-web-gui.md</code>
+      cites "KTD5 of the proxy plan", but the plan's KTD5 is configuration-is-code — pre-existing citation
+      drift, worth a one-line fix.</li>
+</ul>
+<p><strong>External prior art:</strong> Temporal Polyglot (shared server, four languages concurrently —
+<em>no unified UI</em>, separate terminal logs) · Dapr Multi-App Run (one YAML launches every language
+quickstart) · gRPC interop matrix (language × test-case conformance grid, CI artifact) · Redpanda Console
+(consumer-group UI patterns) · Jepsen op-colour-plots (consistency made visually legible) ·
+kafka-visual-demo–style WebSocket swim-lanes (single-language). <strong>The gap:</strong> nobody combines
+all-languages-simultaneous with a single-glass-pane proof — the closest prior art stops at side-by-side
+terminals.</p>
+<p><strong>Institutional learnings:</strong> nothing on this domain (green field); the only adjacent entries
+are Kafka-Testcontainers startup-timing pitfalls from the test suite, relevant to whoever builds the broker
+mode.</p>
+
+<h2>Topic Axes</h2>
+<div class="scroll">
+<table>
+  <tr><th>Axis</th><th>Question it holds</th><th>Survivors</th></tr>
+  <tr><td>Orchestration &amp; launch</td><td>How broker + sidecars + N docker clients come up with one command</td><td>3</td></tr>
+  <tr><td>Proving sameness</td><td>What "they all read the same records" means, and who checks it</td><td>1, 2</td></tr>
+  <tr><td>Aggregation &amp; UI</td><td>How per-client output funnels into one view</td><td>1, 4</td></tr>
+  <tr><td>Per-language demo clients</td><td>What each language's demo app is; identical UX across eleven</td><td>3, 5</td></tr>
+  <tr><td>Distribution &amp; reach</td><td>How the demo ships and gets seen</td><td>1, 4, 6</td></tr>
+</table>
+</div>
+<p class="axis-note">Every axis carries at least one survivor; no deliberate gaps.</p>
+
+<h2>Ranked Ideas</h2>
+<ul class="jump">
+  <li><a href="#d1">1. The skateboard stack — runners in costume, receipts over the produce path, one TUI, a recorded cast</a></li>
+  <li><a href="#d2">2. The two-act show with a chaos finale — one consumer group across eleven runtimes</a></li>
+  <li><a href="#d3">3. The demo is conformance infrastructure — golden transcript, generated compose, one launch path</a></li>
+  <li><a href="#d4">4. The live performance show — single-clock scoreboard, streaming plots, and the story page</a></li>
+  <li><a href="#d5">5. The template flywheel — Rosetta panel, scaffold kit, mock-first authoring</a></li>
+  <li><a href="#d6">6. The polyglot mega-image — the whole thing fits in a tweet</a></li>
+</ul>
+
+<article class="card" id="d1">
+  <div class="rank"><span class="num">1</span><h3>The skateboard stack: conformance runners in demo costume, receipts over the produce path, one TUI, a recorded cast</h3></div>
+  <div class="tags"><span class="tag">proving sameness</span><span class="tag">aggregation &amp; ui</span><span class="tag">distribution</span><span class="tag conf-high">Confidence: 85%</span><span class="tag">Complexity: Medium</span></div>
+  <div class="field"><b>Description</b>
+    <p>Four existing assets compose into the end-to-end demo with almost no new code. (1) Each language's
+    demo is its <strong>conformance runner wearing a costume</strong> — the runner already connects over
+    production gRPC and prints the frozen observation line per delivery; the demo is that binary with a
+    real-sidecar flag plus the R77 stats printer. (2) Each worker's Success report carries a
+    <strong>receipt</strong> — <code>{record_id, language, offset, attempt, payload_checksum}</code> —
+    produced through the protocol's only sanctioned output route onto a <code>demo-observations</code>
+    topic, so Kafka itself is the aggregation bus: no log-shipping fabric, and the demo's plumbing
+    dogfoods terminal produce and the epoch fence. (3) The single UI is a small <strong>TUI
+    aggregator</strong> container — one plain consumer of the receipts topic rendering eleven lanes —
+    that also <strong>machine-asserts</strong> sameness: matching checksums per record and one line at
+    the end, "11/11 languages converged at offset N". (4) CI records the run as an asciinema cast into
+    the README's existing demo slot, refreshed each release — a broken demo breaks the reel, so
+    distribution doubles as a continuous end-to-end test. Design the receipt/stats seam as a clean
+    interface so the parked web-GUI dashboard can slot in later as a dependency, not a rewrite.</p>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 860 150" role="img" aria-label="Flow: eleven runners through sidecars produce receipts to one topic, read by one TUI, recorded to the README">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+      <rect x="8" y="30" width="150" height="62" rx="8" fill="var(--accent-bg)" stroke="var(--rule)"/>
+      <text x="83" y="56" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600">11 runners</text>
+      <text x="83" y="74" text-anchor="middle" fill="var(--muted)" font-size="11">in demo costume</text>
+      <rect x="208" y="30" width="130" height="62" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+      <text x="273" y="56" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600">11 sidecars</text>
+      <text x="273" y="74" text-anchor="middle" fill="var(--muted)" font-size="11">Report.produce</text>
+      <rect x="388" y="30" width="160" height="62" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+      <text x="468" y="56" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600">demo-observations</text>
+      <text x="468" y="74" text-anchor="middle" fill="var(--muted)" font-size="11">receipts topic</text>
+      <rect x="598" y="30" width="120" height="62" rx="8" fill="var(--accent-bg)" stroke="var(--accent)"/>
+      <text x="658" y="56" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600">TUI</text>
+      <text x="658" y="74" text-anchor="middle" fill="var(--muted)" font-size="11">asserts 11/11</text>
+      <rect x="768" y="30" width="84" height="62" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+      <text x="810" y="56" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600">README</text>
+      <text x="810" y="74" text-anchor="middle" fill="var(--muted)" font-size="11">CI cast</text>
+      <line x1="158" y1="61" x2="200" y2="61" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <line x1="338" y1="61" x2="380" y2="61" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <line x1="548" y1="61" x2="590" y2="61" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <line x1="718" y1="61" x2="760" y2="61" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <text x="430" y="122" text-anchor="middle" fill="var(--muted)" font-size="11.5">the only genuinely new code is the TUI renderer — every other box already exists or is already mandated</text>
+    </svg>
+    <div class="diagram-caption">Illustrative — the direction's shape, not a spec.</div>
+  </div>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> conformance README — "dispatch key=&lt;key&gt; offset=&lt;n&gt; attempt=&lt;n&gt;
+    reason=&lt;last-failure-reason&gt;", "Anything else on stdout is ignored", and "adding a language is one
+    runner and one registry entry. There is no test to port." <code>direct:</code> protocol spec — Report.Success
+    "may carry <code>produce</code>… the only sanctioned route for worker output to Kafka"; verifier-confirmed
+    in <code>proxy.proto</code>, arbitrary topic legal in frozen v1. <code>direct:</code>
+    <code>src/docs/README_TEMPLATE.adoc</code> demo section already embeds an asciinema player; the parked
+    gallery's own fallback ladder ends in "recorded captures". <code>external:</code> Dapr Multi-App Run —
+    one command, N language apps — is the UX precedent; Temporal Polyglot's missing unified view is the gap.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    <p>This is the user's ask delivered as a skateboard: every layer reuses something already built,
+    already tested, or already frozen — so the first shippable version is mostly wiring. The receipts move
+    makes the proof <em>machine-checked</em> (checksums, convergence) instead of eyeballed logs, answers
+    "collecting logs together" with the product's own produce path, and exercises the one protocol feature
+    no demo would otherwise show. Recording it closes distribution without touching either parked effort.</p>
+  </div>
+  <div class="field"><b>Downsides</b>
+    <p>A TUI is less shareable as a live artifact than a web page (mitigated by the cast); receipts add
+    produce load to the demo workload — negligible at demo rates, but <strong>a constraint from the perf
+    track</strong>: when an arm is under measurement, the harness must be able to run with receipts off, or
+    the receipts' produce cost must appear as its own component in the attribution ladder — the demo's
+    transport must never distort the numbers it displays. The runner-in-costume framing must not leak
+    conformance-only flags into the user-facing demo UX, or KTD40's identical-UX contract gets muddied.</p>
+  </div>
+</article>
+
+<article class="card" id="d2">
+  <div class="rank"><span class="num">2</span><h3>The two-act show with a chaos finale: one consumer group across eleven runtimes</h3></div>
+  <div class="tags"><span class="tag">proving sameness</span><span class="tag conf-high">Confidence: 80%</span><span class="tag">Complexity: Medium–Large</span></div>
+  <div class="field"><b>Description</b>
+    <p>"They all read the same records" is ambiguous, and the demo should exploit that instead of picking
+    silently. <strong>Act 1 — everyone reads everything:</strong> eleven consumer groups, one topic; every
+    language processes every record; identical behaviour side by side (optionally rendered record-centric —
+    one "speaker" feed, eleven booth renderings, UN-interpreting style — rather than eleven independent
+    lanes). <strong>Act 2 — one team shares the work:</strong> all eleven join <em>one</em> consumer group
+    and cooperatively split the topic. Render the offset axis as a Jepsen-style colour plot — each record
+    coloured by the language that processed it — then pull the andon cord: SIGSTOP a lane and its partitions'
+    colours freeze while ten advance; SIGKILL it and the broker's own rebalance hands its partitions to a
+    demo written in a different language, records redelivering with <code>attempt=2</code> and the failure
+    reason carried verbatim. The proof is the broker's coordinator and the engine's redelivery semantics —
+    facts the demo cannot fake — not the demo's own logging.</p>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 860 170" role="img" aria-label="Act 2 colour plot: offsets coloured by processing language; after a kill, one colour disappears and others take over">
+      <text x="8" y="18" fill="var(--fg)" font-size="12.5" font-weight="600">Act 2 — one group, offset axis coloured by processing language</text>
+      <g>
+        <rect x="8"   y="34" width="30" height="26" rx="4" fill="#5b8dd9"/><rect x="42"  y="34" width="30" height="26" rx="4" fill="#c98a4b"/><rect x="76"  y="34" width="30" height="26" rx="4" fill="#69a56e"/><rect x="110" y="34" width="30" height="26" rx="4" fill="#b06ab0"/><rect x="144" y="34" width="30" height="26" rx="4" fill="#5b8dd9"/><rect x="178" y="34" width="30" height="26" rx="4" fill="#c9b44b"/><rect x="212" y="34" width="30" height="26" rx="4" fill="#69a56e"/><rect x="246" y="34" width="30" height="26" rx="4" fill="#c98a4b"/><rect x="280" y="34" width="30" height="26" rx="4" fill="#b06ab0"/><rect x="314" y="34" width="30" height="26" rx="4" fill="#5b8dd9"/><rect x="348" y="34" width="30" height="26" rx="4" fill="#c9b44b"/><rect x="382" y="34" width="30" height="26" rx="4" fill="#69a56e"/>
+        <line x1="428" y1="26" x2="428" y2="70" stroke="var(--bad)" stroke-width="2" stroke-dasharray="4 3"/>
+        <rect x="444" y="34" width="30" height="26" rx="4" fill="#c98a4b"/><rect x="478" y="34" width="30" height="26" rx="4" fill="#69a56e"/><rect x="512" y="34" width="30" height="26" rx="4" fill="#c9b44b"/><rect x="546" y="34" width="30" height="26" rx="4" fill="#b06ab0"/><rect x="580" y="34" width="30" height="26" rx="4" fill="#69a56e"/><rect x="614" y="34" width="30" height="26" rx="4" fill="#c98a4b"/><rect x="648" y="34" width="30" height="26" rx="4" fill="#c9b44b"/><rect x="682" y="34" width="30" height="26" rx="4" fill="#b06ab0"/><rect x="716" y="34" width="30" height="26" rx="4" fill="#c98a4b"/><rect x="750" y="34" width="30" height="26" rx="4" fill="#69a56e"/>
+      </g>
+      <text x="428" y="88" text-anchor="middle" fill="var(--bad)" font-size="11.5">SIGKILL the blue lane</text>
+      <text x="8" y="115" fill="var(--muted)" font-size="11.5">→ blue never reappears; the broker reassigns its partitions to other languages live — offsets advance exactly once,</text>
+      <text x="8" y="132" fill="var(--muted)" font-size="11.5">redeliveries arrive elsewhere with attempt=2 and the reason verbatim. Colour legend: each hue = one language binding.</text>
+      <text x="8" y="158" fill="var(--muted)" font-size="11.5" font-style="italic">Act 1 (not shown): the same records in eleven separate groups — every language processes every record identically.</text>
+    </svg>
+    <div class="diagram-caption">Illustrative — the direction's shape, not a spec.</div>
+  </div>
+  <div class="field"><b>Basis</b>
+    <div class="basis">
+      <code>direct:</code> Part 1's settled model — "the protocol permits exactly one connection per
+      application" with one sidecar per app — plus the plan's statement that the Kafka cluster "sees an
+      ordinary consumer group member": eleven apps in one group are just eleven ordinary members.
+      <em>Verifier note: sound as architecture, but inferred — no requirement writes the shared-group demo
+      down, so this is a genuine design decision.</em> <code>direct:</code> conformance scenario
+      "a-failed-record-is-redelivered-with-its-failure-history" asserts the reason is carried
+      <em>verbatim</em>; the chaos scenario framework already exists on <code>feats/web-gui</code>, and
+      <code>docs/inflight/branch-language-proxy.md</code> names it as something "this work would want".
+      <code>external:</code> Jepsen op-colour-plots — consistency made visually legible.
+    </div>
+  </div>
+  <div class="field"><b>Rationale</b>
+    <p>Happy-path sameness is weak evidence — eleven green lanes could all be faking it, which is the
+    conformance suite's own founding argument. Cooperative rebalancing across eleven runtimes through one
+    engine implementation is the strongest possible claim of behavioural identity, and the colour plot is
+    the shareable screenshot no other vendor has. The kill beat converts an already-tested protocol
+    behaviour into the demo's most convincing thirty seconds, for free.</p>
+  </div>
+  <div class="field"><b>Downsides</b>
+    <p>Act 2 needs partitions ≥ languages and a workload shaped so every language visibly participates;
+    the chaos framework lives on a sibling branch (consume it as a dependency when it lands, or ship a
+    demo-local kill script until then); a two-act script is more demo choreography to maintain than a
+    single always-on view.</p>
+  </div>
+</article>
+
+<article class="card" id="d3">
+  <div class="rank"><span class="num">3</span><h3>The demo is conformance infrastructure: golden transcript, generated compose, one launch path, go/no-go roll call</h3></div>
+  <div class="tags"><span class="tag">orchestration</span><span class="tag">per-language clients</span><span class="tag conf-high">Confidence: 85%</span><span class="tag">Complexity: Medium</span></div>
+  <div class="field"><b>Description</b>
+    <p>Treat the demo layer with the same discipline the wire already gets, four moves. (1) <strong>Golden
+    demo transcript:</strong> normalise the reference demo's output (strip timestamps and the language tag)
+    and CI-diff every language's demo against it byte-for-shape — KTD40's seven rules become a machine check,
+    not eleven authors hand-mirroring a document; the party trick on top is "lineup mode" (lanes labelled
+    A–K, audience challenged to spot Ruby — they can't). (2) <strong>Generated orchestration:</strong> emit
+    the compose services from the conformance suite's <code>LanguageRunners</code> registry so there is never
+    a second hand-maintained list of eleven languages — a twelfth language appears in the demo by adding its
+    registry entry. (3) <strong>One launch path:</strong> <code>run.sh</code> <em>is</em> the CI
+    cross-language integration test (<code>--ci</code> flag), and demo images ride the existing
+    <code>bin/build-client.sh</code> gate and KTD35 checkpoints — the demo cannot silently rot because CI
+    runs it. (4) <strong>Go/no-go roll call:</strong> the workload fires only after all requested lanes report
+    GO (connected, handshake, self-check) with per-lane reasons on NO-GO — a silently absent lane must never
+    read as a green wall. Default to a fast subset; <code>--languages=all</code> opts into the full eleven.</p>
+  </div>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> conformance README — "Ten definitions of correct is no definition at all… Written
+    once, agreement between clients is evidence; written eleven times, it is coincidence", and "Absence must
+    never read as agreement". <code>direct:</code> plan — KTD40's own risk note: "the mode logic is the part
+    that will drift, because eleven authors each have a reasonable opinion about it"; U16 lists
+    <code>run.sh</code>, <code>docker-compose.yml</code> and <code>CrossLanguageConcurrencyIT.java</code> as
+    one unit's fileset; KTD25 "a matrix keyed on language… adds a language by adding a row";
+    <code>bin/build-client.sh</code> — "a red test… fails the IMAGE BUILD, which fails the Maven reactor".
+    <code>direct:</code> R20's singular wording confirms the eleven-at-once launch is unspecified — the
+    subset-default question is genuinely open. <code>external:</code> gRPC's interop matrix — conformance as
+    a language-cross-version grid.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    <p>The most likely failure of this whole feature is not building it — it is the demo being subtly
+    different in three languages and broken in two more six months later, discovered live in front of an
+    audience. Every mechanism here already exists for the protocol layer; extending the same epistemology
+    (golden fixed points, single source of truth, absence-fails-loud) down to the demo layer is cheap now
+    and unaffordable to retrofit.</p>
+  </div>
+  <div class="field"><b>Downsides</b>
+    <p>Transcript normalisation needs care (timestamps, rates, locale) or the diff flakes; generating
+    compose from a Java registry needs a small extraction step at build time; the roll-call barrier adds
+    startup latency to the full-eleven mode (acceptable — it replaces a race).</p>
+  </div>
+</article>
+
+<article class="card" id="d4">
+  <div class="rank"><span class="num">4</span><h3>The live performance show: single-clock scoreboard, streaming plots, and the story page</h3></div>
+  <div class="tags"><span class="tag">aggregation &amp; ui</span><span class="tag">distribution</span><span class="tag conf-high">Confidence: 80%</span><span class="tag">Complexity: Medium–Large</span></div>
+  <div class="field"><b>Description</b>
+    <p>Don't just publish the performance numbers — <strong>run the performance test live inside the demo and
+    let the audience watch the evidence accumulate.</strong> A web dashboard plots results as they arrive:
+    each measurement lands as a point, the percentile bands tighten on screen, and the chart <em>builds</em>
+    rather than appears — the reproducibility argument made visible. Structure it as the two-shapes story the
+    benchmark design already mandates: the realistic key-ordered scenario this product exists for, <em>and</em>
+    the plain unfavourable case published on purpose — honesty as the narrative arc. Three layers share one
+    measurement seam:</p>
+    <ul>
+      <li><strong>Photo-finish timing:</strong> the sidecar — one JVM, one clock — timestamps dispatch-out and
+          report-in for every language: honest per-language p50/p99 with zero cross-container clock skew,
+          in-process Java as the printed pace car (the Java client's two transports make the hop cost a
+          visible delta on otherwise-identical code). Ban per-container clocks from the board.</li>
+      <li><strong>Live web dashboard:</strong> a small results-plotting page (streaming points over WebSocket
+          or polling the receipts topic) — each language's curve drawing itself during the run, displayed as
+          the <em>attribution ladder</em> (java-direct → java-gRPC → foreign client: engine cost + protocol
+          cost + runtime cost as stacked components) and as per-language ratios against the in-process Java
+          baseline — never an absolute records/sec ranking. Hardware class printed on screen; the honest run
+          shape is mock-mode all-parallel (labelled) or a <em>carousel spotlight</em> — one language measured
+          on the uncontended broker while the others tick — because thirteen concurrent workloads starving one
+          broker is noise, not data. A results surface, deliberately distinct from the parked engine-internals
+          dashboard; a Prometheus + Grafana fragment remains the ops-shaped variant.</li>
+      <li><strong>The story page:</strong> the static marketing/method page rendered not from the live run but
+          from the <em>blessed-numbers pipeline</em> — <code>docs/data/performance-profile.d/</code> fragments
+          validated by the existing docs-data gate — with the method beside the numbers, the expected-loss
+          case stated plainly, effective-config fingerprint printed (proxy UNSPECIFIED defaults diverge from
+          core defaults, so parity must be pinned, not assumed), and links into the features corpus and
+          testing-evidence entries. Embeddable in the README today, the docs site when astubbs#208 lands;
+          local-first — a hosted live variant re-inherits every blocker that parked the gallery.</li>
+    </ul>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 860 150" role="img" aria-label="One clock in the sidecar times all languages; per-container clocks are banned">
+      <rect x="330" y="26" width="200" height="72" rx="10" fill="var(--accent-bg)" stroke="var(--accent)"/>
+      <text x="430" y="52" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600">sidecar JVM — one clock</text>
+      <text x="430" y="70" text-anchor="middle" fill="var(--muted)" font-size="11">t₀ = dispatch out · t₁ = report in</text>
+      <text x="430" y="87" text-anchor="middle" fill="var(--muted)" font-size="11">latency = t₁ − t₀, same clock</text>
+      <rect x="8" y="34" width="110" height="56" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+      <text x="63" y="58" text-anchor="middle" fill="var(--fg)" font-size="12.5">Python</text>
+      <text x="63" y="76" text-anchor="middle" fill="var(--muted)" font-size="10.5">no clock needed</text>
+      <rect x="742" y="34" width="110" height="56" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+      <text x="797" y="58" text-anchor="middle" fill="var(--fg)" font-size="12.5">Rust</text>
+      <text x="797" y="76" text-anchor="middle" fill="var(--muted)" font-size="10.5">no clock needed</text>
+      <line x1="118" y1="62" x2="322" y2="62" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <line x1="742" y1="62" x2="538" y2="62" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <text x="430" y="130" text-anchor="middle" fill="var(--muted)" font-size="11.5">a photo finish uses one camera at the line because per-runner watches cannot be compared</text>
+    </svg>
+    <div class="diagram-caption">Illustrative — the direction's shape, not a spec.</div>
+  </div>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> plan R31 — "v1 measures median and p99 poll-to-completion latency through the proxy
+    and for in-process PC on the same workload, and reports both"; KTD20 — "One Java client API, two
+    transports, one transport-parameterised test suite". <code>direct:</code> owner's recorded requirements in
+    <code>docs/inflight/parked-testing-as-a-feature-for-the-clients.md</code> (2026-08-15) — "the answer has
+    to be visible, not asserted"; compare each language <strong>against the standard Java client</strong>,
+    "not languages against each other"; reuse the two-shapes benchmark design from
+    <code>feats/ks-streams-seam-on-upstream-gate</code> including "figures from a single run are not yet
+    evidence". <code>direct:</code> <code>PCMetricsDef</code>'s gauge/counter/timer set and the proxy
+    constructing its own meter registry; <em>verifier-settled:</em> R10 blocks passing the registry object
+    over the wire, not a proxy-local scrape endpoint. <code>direct:</code> STRATEGY.md — "visibility is the
+    bill that comes with the choice". <code>reasoned:</code> the single-clock argument: all timing already
+    flows through one process, so the demo gets honest cross-language comparison structurally, where
+    per-container timestamping would be junk — and a chart that visibly accumulates samples <em>is</em> the
+    single-run caveat answered on screen.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    <p>"What does the hop cost in my language?" is the first question every evaluator asks, and the easiest
+    to measure wrongly. Running the required R31 measurement <em>live</em> — plots forming as results arrive,
+    the unfavourable case shown on purpose — turns the benchmark from a table someone must trust into a
+    process the viewer watched, which is the "visible, not asserted" requirement taken to its logical end.
+    The story page then reuses the same output as the release's most persuasive artifact, with the docs-gate
+    keeping its claims from quietly going stale.</p>
+  </div>
+  <div class="field"><b>Downsides</b>
+    <p><strong>Framing constraint is hard:</strong> the recorded owner rule is per-language-vs-Java hop cost,
+    never a cross-language race — the dashboard must not render as a language leaderboard. Live numbers on
+    demo hardware are demonstrations, not published benchmarks — the story page must carry the method and the
+    reproducibility caveats or it becomes the badly-run benchmark the parked notes warn about. A results web
+    page is a second web surface near the parked engine-internals dashboard — keep the seam shared and the
+    pitch distinct, or fold them when <code>feats/web-gui</code> lands. Measurement design (scenarios,
+    harness, credibility) is in flight in a concurrent session — this idea owns presentation and must consume
+    that session's results format, not fork its own.</p>
+  </div>
+</article>
+
+<article class="card" id="d5">
+  <div class="rank"><span class="num">5</span><h3>The template flywheel: Rosetta panel, scaffold kit, mock-first authoring</h3></div>
+  <div class="tags"><span class="tag">per-language clients</span><span class="tag conf-med">Confidence: 70%</span><span class="tag">Complexity: Medium</span></div>
+  <div class="field"><b>Description</b>
+    <p>The demo doubles as the onboarding surface, three moves. (1) <strong>Rosetta panel:</strong> each lane
+    can flip to show that language's ~15 load-bearing lines around the <code>PLACE SERDE SETUP IN YOUR
+    LANGUAGE HERE</code> marker beside its live stream — one record, eleven renderings, eleven snippets, one
+    screen; the container serves its own source so code and behaviour cannot drift. (2) <strong>Scaffold
+    kit:</strong> package the reference demo + KTD40 contract + Dockerfile + conformance-registry stub as a
+    twelfth-language generator, so the next binding starts from "instantiate the template" rather than
+    re-deriving seven rules. (3) <strong>Mock-first authoring:</strong> name the Docker-free inner loop in the
+    client-authoring guide — authors iterate against the test-mode sidecar binary (Mock clients, ordinary
+    child-process path) and containerise last.</p>
+  </div>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> plan R76 — "the demo doubles as the user's starting template"; the parked gallery's
+    own argument — "a snippet beside a running demo makes that argument in one screen, in ten languages" —
+    landed locally without the parked hosting substrate. <code>direct:</code> U31 — "a test-mode sidecar
+    artifact that boots with MockConsumer and MockProducer… over the ordinary child-process path"; the Go
+    client already carries the serde marker. <code>direct:</code> conformance README — "adding a language is
+    one runner and one registry entry."
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    <p>The proxy's whole pitch is how little code a client needs; the Rosetta panel makes that argument
+    visually, and the scaffold converts the demo from marketing into the twelfth language's first working
+    day. Mock-first authoring removes the drift-breeding effort tax KTD40 already worries about.</p>
+  </div>
+  <div class="field"><b>Downsides</b>
+    <p>Serving source from containers needs a tiny HTTP/stdout affordance per image; the scaffold generator
+    is a tool to maintain (keep it thin — templates plus a checklist, not a framework); flip-panel UI only
+    pays off in the browser/web-GUI era, so sequence it after the TUI skateboard.</p>
+  </div>
+</article>
+
+<article class="card" id="d6">
+  <div class="rank"><span class="num">6</span><h3>The polyglot mega-image: the whole thing fits in a tweet</h3></div>
+  <div class="tags"><span class="tag">distribution</span><span class="tag conf-med">Confidence: 60%</span><span class="tag">Complexity: Medium</span></div>
+  <div class="field"><b>Description</b>
+    <p><code>docker run -it stub.bz/pc-polyglot</code> — one image assembled <code>COPY --from</code> the
+    eleven per-language demo images R72 mandates anyway, booting in mock mode with the TUI aggregator as
+    PID 1. No compose, no clone, no broker pull: the sub-ten-second, tweet-length funnel from "sounds cool"
+    to "ran it". The broker-backed path stays in <code>run.sh</code> for those who want honesty over speed.</p>
+  </div>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> plan KTD13 — "native wins on startup and memory and needs no JDK in the user's
+    runtime, which is what makes pip install self-contained" — and R51's dual JVM/native shipping; mock mode
+    exists "for fast boot and automation". <em>Verifier:</em> the no-host-Docker-socket rule governs demo
+    containers starting brokers; a mock-only mega-image needs no broker, so nothing forbids it.
+    <code>reasoned:</code> demo funnels die at the second command; a single copy-pasteable line is the
+    difference between a README claim and a Show HN.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    <p>Distribution reach with zero hosting: the mega-image rides artifacts the plan already requires and
+    gives the project its most quotable invocation. It composes with idea 1 (the TUI is PID 1) and idea 3
+    (the image is assembled from gate-verified per-language images).</p>
+  </div>
+  <div class="field"><b>Downsides</b>
+    <p>Verifier-flagged: combining a JVM/native sidecar with several interpreter runtimes (Python, Ruby,
+    Node, .NET) in one image is genuinely non-trivial and unaddressed by any KTD — image size and base-layer
+    conflicts are the real risk; mock mode only (fine — it is the funnel, not the proof); one more release
+    artifact in the KTD36 lockstep set.</p>
+  </div>
+</article>
+
+<h2>Rejection Summary</h2>
+<div class="scroll">
+<table>
+  <tr><th>Candidate</th><th>Verdict</th><th>Reason</th></tr>
+  <tr><td>Keynote mode — the audience is the workload (hosted, viewers produce records live)</td><td>Rejected</td>
+      <td>Refuted by the project's own recorded security posture: the parked gallery requires "no visitor
+      input reaching a demo or sidecar process", and a sanitising frontend is still visitor input reaching
+      the sidecar. Viable only after redesign (pre-canned replayed actions) or an explicit re-litigation of
+      that posture — neither belongs inside the demo track.</td></tr>
+  <tr><td>Codegen the ten mirrored demos' CLI/mode/sampling logic from one declarative spec</td><td>Rejected</td>
+      <td>Duplicates survivor 3's drift control at higher cost: the plan's "copy a written rule" approach
+      plus a golden-transcript CI diff achieves the same guarantee without inventing a per-language code
+      generator. Revisit only if transcript-diffing proves insufficient in practice.</td></tr>
+  <tr><td>UN interpreting-booth UI (record-centric single-speaker layout)</td><td>Folded in</td>
+      <td>Strong layout insight — one event, eleven renderings, not eleven independent feeds — absorbed as
+      Act 1's optional rendering inside survivor 2 rather than ranked separately.</td></tr>
+  <tr><td>Machine-checked convergence line ("11/11 converged at offset N")</td><td>Folded in</td>
+      <td>Absorbed as the TUI's assertion duty in survivor 1 — the principle (the demo asserts, the viewer
+      does not eyeball) rather than a separate idea.</td></tr>
+  <tr><td>Grafana-over-Micrometer discarded during generation citing R10</td><td>Overruled</td>
+      <td>One generation agent discarded the metrics plane claiming R10 forbids it; the verifier read R10:
+      it blocks passing MeterRegistry <em>objects</em> over the wire, not a proxy-local scrape endpoint. The
+      idea survives inside survivor 4 — recorded here so the misreading is not re-derived.</td></tr>
+  <tr><td>Two-act framing as its own ranked idea</td><td>Folded in</td>
+      <td>A naming device, not an agenda item — became survivor 2's structure.</td></tr>
+  <tr><td>Live performance show (owner's follow-on idea, 2026-08-17: run the perf tests live, web dashboard
+      plotting as results arrive, story + marketing page + doc links)</td><td>Folded in</td>
+      <td>Merged into survivor 4, which was already its seed — same measurement seam, same UI surface. Carries
+      the recorded constraints: per-language-vs-Java hop cost only (never a language race), two-shapes
+      story including the expected-loss case, single-run figures are not evidence. Measurement design stays
+      with the concurrent perf-comparison session; this doc owns the presentation layer.</td></tr>
+  <tr><td>Web-GUI seam design (R77 output behind a clean interface)</td><td>Folded in</td>
+      <td>A design constraint, not a direction — carried as survivor 1's residual so the parked dashboard
+      lands later as a dependency, not a rewrite.</td></tr>
+  <tr><td>Nightly mock-mode boot canary; roll-call barrier; subset flag; registry-generated compose;
+      run.sh-as-CI-test; golden transcript</td><td>Merged</td>
+      <td>Six orchestration/anti-rot candidates from three frames merged into survivor 3 — same underlying
+      move: extend the conformance layer's epistemology to the demo layer.</td></tr>
+  <tr><td>Plain swim-lane log tail as the UI</td><td>Rejected (in-frame)</td>
+      <td>The prior-art baseline the market-gap analysis dismisses — Temporal Polyglot already ends there.</td></tr>
+  <tr><td>Firefly-synchronisation visual metaphor</td><td>Rejected (in-frame)</td>
+      <td>Surface vocabulary only — clients do not couple to each other, they follow the engine; the
+      structural analogy fails.</td></tr>
+  <tr><td>iframe eleven embedded web-GUI dashboards as the aggregate view</td><td>Rejected (in-frame)</td>
+      <td>Collides with the parked feats/web-gui dependency freeze and the duplicate-code gate; and eleven
+      dashboards is eleven views, not one proof.</td></tr>
+</table>
+</div>
+
+<h2>What Part 2 does not settle</h2>
+<ul>
+  <li><strong>Subset default vs full eleven</strong> — R20's singular wording leaves the eleven-at-once
+      launch genuinely unspecified; survivor 3 proposes subset-default + <code>--languages=all</code>, but
+      the default is a product call.</li>
+  <li><strong>Shared-group demo (Act 2) is inferred-legal, not written down</strong> — eleven apps in one
+      consumer group violates nothing, but no requirement records it; if adopted, write it into the plan as
+      a requirement so the conformance layer can eventually cover it.</li>
+  <li><strong>Sequencing against U25/U35</strong> — survivor 1 can ship before any per-language demo exists
+      (runners in costume); the R72-R77 demo containers then upgrade the show lane by lane. Whether that
+      ordering is adopted belongs to planning, not ideation.</li>
+  <li><strong>The KTD5 citation drift</strong> in <code>parked-sidecar-embeds-web-gui.md</code> — a one-line
+      doc fix, noted here so it is not lost.</li>
+  <li><strong>The boundary with the performance-comparison track — proposed both ways, now aligned:</strong>
+      this track owns the app, UI, live loop and marketing narrative; the perf track (sibling ideation,
+      <code>2026-08-17-perf-comparison-matrix-ideation.html</code>) owns workload definitions, measurement
+      semantics and the blessed-numbers pipeline. The shared contract is (a) the R77 stats stream each demo
+      emits and (b) the scenario definitions; timing is engine-side in both designs ("runners measure
+      nothing"). The stats stream and survivor 1's observation-receipts topic are to be designed as
+      <strong>one shape, not two transports</strong>: the R77 trio (per-window consumed count, processing
+      rate, per-key/per-partition spread) plus provenance on anything leaving the process (scenario id +
+      version, arm id, config fingerprint, hardware class) — so a live stream sample and a blessed
+      <code>performance-profile.d</code> fragment are the same record at different aggregation levels. The
+      concrete field list is the perf track's brainstorm/plan-stage decision; nothing is schema-settled yet.</li>
+</ul>
+
+</section>
 
 </div>
+<footer class="composition-signal">Composed 2026-08-14, extended 2026-08-17 by ce-ideate · Part 2 grounding: <code>docs/plans/2026-08-14-001-feat-language-proxy-plan.md</code>, conformance suite READMEs, <code>docs/inflight/parked-*.md</code>, <code>STRATEGY.md</code> · branch <code>docs/ideate-polyglot-demo</code> off <code>feats/proxy-requirements</code></footer>
 </body>
 </html>
