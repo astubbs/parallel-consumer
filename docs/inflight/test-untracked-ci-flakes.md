@@ -11,14 +11,10 @@ one met later. Two are fixed and gone from this ledger:
 - `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
   (3/45) - astubbs#260 established the extra commit was correct product behaviour and the assertion
   was wrong, so no product change was needed.
-- `PCMetricsTest.metricsRegisterBinding` (2 seen) - astubbs#265 replaced the `Thread.sleep(1000)`
-  standing between a test-side counter snapshot and the gauge read with an
-  `await().untilAsserted(...)` on the trailing meters, and returned the test to the gating lane in
-  the same commit, per rule 3 of [`docs/quarantined-tests.md`](../quarantined-tests.md). The
-  generalisation is what survives it - **do not compare two moving values; await a quiescent state,
-  then read both** - and its durable home is
-  [`assert-the-commit-frontier-not-the-tick-path.md`](../solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md),
-  which already cites the rule and notes that a ledger row was the wrong place to keep it.
+- `PCMetricsTest.metricsRegisterBinding` (2 seen) - astubbs#265 fixed the counter-versus-gauge race
+  and returned the test to the gating lane in the same commit, per rule 3 of
+  [`docs/quarantined-tests.md`](../quarantined-tests.md). The rule it produced lives in
+  [`assert-the-commit-frontier-not-the-tick-path.md`](../solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md).
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
@@ -68,9 +64,9 @@ than waiting for a sweep.
 
 ### Controls for these flakes - the void one, and the one that works
 
-Kept after the `PCMetricsTest` entry above closed, because it is method rather than diagnosis and the
-two tests still open need it. The worked example is that entry: a sighting on astubbs#286, a PR
-containing **no Java and no `pom.xml`** - workflow and markdown only.
+Method for the two tests still open, not a diagnosis of any one of them. It is written from a
+2026-08-11 sighting on astubbs#286, a PR containing **no Java and no `pom.xml`** - workflow and
+markdown only - which is what made the control question sharp enough to answer.
 
 **Record the control that was tried and was void, because it is the trap next door.** The first
 attempt at one was "`master` at `a797f756`, the exact base commit, passed the same suite 35 minutes
