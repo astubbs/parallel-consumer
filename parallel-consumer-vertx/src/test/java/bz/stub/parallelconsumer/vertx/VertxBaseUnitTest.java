@@ -12,11 +12,13 @@ import bz.stub.parallelconsumer.internal.DrainingCloseable.DrainingMode;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.ext.web.client.WebClient;
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
 import java.time.Duration;
 
+@Slf4j
 public abstract class VertxBaseUnitTest extends ParallelEoSStreamProcessorTestBase {
 
     JStreamVertxParallelEoSStreamProcessor<String, String> vertxAsync;
@@ -51,10 +53,21 @@ public abstract class VertxBaseUnitTest extends ParallelEoSStreamProcessorTestBa
      * Safe when the test already closed the processor: the shutdown short-circuits on the already-{@code
      * CLOSED} state and the Vert.x teardown after it still runs. The {@link Duration} is a ceiling rather
      * than a wait - the close polls for completion and returns as soon as it has it.
+     * <p>
+     * Failures are swallowed, matching the core test base's reason for guarding its own close: a test that
+     * deliberately drives the consumer into a failed state must not then be reported as a teardown error.
+     * Note what that cannot rescue -
+     * {@link VertxParallelEoSStreamProcessor#close(Duration, DrainingMode)} closes the web client and Vert.x
+     * <i>after</i> delegating to {@code super}, with no {@code finally}, so a shutdown that throws skips both
+     * regardless of what happens here. Releasing them on that path needs a fix in the processor.
      */
     @AfterEach
     void closeVertxResources() {
-        vertxAsync.close(Duration.ofSeconds(10), DrainingMode.DONT_DRAIN);
+        try {
+            vertxAsync.close(Duration.ofSeconds(10), DrainingMode.DONT_DRAIN);
+        } catch (Exception e) {
+            log.warn("Ignoring close failure while releasing Vert.x resources in teardown", e);
+        }
     }
 
 }

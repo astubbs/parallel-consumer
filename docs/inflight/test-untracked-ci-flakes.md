@@ -142,12 +142,15 @@ written for.
 
 Two things worth ruling in or out before anyone "fixes" it again:
 
-1. **It is the shape the sibling doc already named.** `assert-the-commit-frontier-not-the-tick-path.md`
+1. **It shares that sibling doc's symptom, but not its defect - do not "fix" the assertion.**
+   `assert-the-commit-frontier-not-the-tick-path.md`
    (written 2026-08-13, one day earlier, for `processInKeyOrder`) lists the symptom *"the await burns
    its full 30s: once the tick has landed, the condition is permanently false"*, and its
-   `applies_when` covers any assertion over a PC commit history in a core unit test. This test asserts
-   `PARTITION_LAST_COMMITTED_OFFSET == counterP1 + p1StartingOffset` - an exact commit position, not a
-   frontier.
+   `applies_when` covers any assertion over a PC commit history in a core unit test. But
+   `PARTITION_LAST_COMMITTED_OFFSET` *is* the committed frontier, and the counter it is compared against is
+   frozen by then (every worker is latched past the block point) - so this test already does what that doc
+   prescribes: await quiescence, then compare frontiers. The frontier simply never arrives. Changing the
+   assertion style is therefore the one fix that cannot work, and the real question stays open below.
 2. **It rhymes with the undiagnosed entry next door.**
    `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
    is recorded as *"the committed high-water mark never reaches `expectedHighestSeen` (139), with a

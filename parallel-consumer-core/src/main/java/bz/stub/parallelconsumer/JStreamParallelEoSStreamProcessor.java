@@ -54,9 +54,15 @@ public class JStreamParallelEoSStreamProcessor<K, V> extends ParallelEoSStreamPr
      * Clears any unconsumed results from the deque once shutdown completes, so closing actually releases them.
      * <p>
      * This overrides {@link DrainingMode}-taking close rather than the no-arg {@code close()}, because that is
-     * the single method every other entry point funnels through - {@code close()},
+     * the single method every <i>caller-facing</i> entry point funnels through - {@code close()},
      * {@code closeDrainFirst()}, {@code closeDontDrainFirst()} and the {@link Duration} variants all end up
      * here. Overriding the no-arg version would leave every other shutdown path leaking.
+     * <p>
+     * It does <b>not</b> cover the control thread closing itself: on an unhandled error the control task
+     * calls the internal shutdown directly rather than through any of those, so a processor that dies that
+     * way keeps its backlog. Releasing it there would need a hook in the shared base class, which is not
+     * worth adding to an API being removed - the gap is recorded in
+     * {@code docs/inflight/bug-jstream-unbounded-result-deque.md}.
      * <p>
      * The clear happens <b>after</b> the shutdown completes, not before: a {@link DrainingMode#DRAIN} close
      * keeps processing in-flight work, and that work enqueues more results.

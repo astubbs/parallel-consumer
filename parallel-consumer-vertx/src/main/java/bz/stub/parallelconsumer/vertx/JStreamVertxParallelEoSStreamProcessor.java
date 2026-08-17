@@ -31,8 +31,9 @@ import java.util.stream.Stream;
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
 
 /**
- * @deprecated Being removed — the JStream interface is not widely used and its unbounded result deque
- * can cause memory leaks if the stream is not actively consumed. Use the callback-based API instead.
+ * @deprecated Being removed, for the reason given on
+ * {@link bz.stub.parallelconsumer.JStreamParallelEoSStreamProcessor} - the result deque is unbounded and
+ * drains only as the caller consumes the stream. Use the callback-based API instead.
  * See <a href="https://github.com/astubbs/parallel-consumer/issues/122">astubbs#122</a> (mirrors <a href="https://github.com/confluentinc/parallel-consumer/issues/912">confluentinc#912</a>).
  */
 @Slf4j

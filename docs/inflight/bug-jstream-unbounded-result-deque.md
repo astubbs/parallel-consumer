@@ -27,6 +27,15 @@ The growth itself is unchanged: consume the stream as results arrive, or use the
   live and enqueue after the clear runs. A close that completes normally has no such window.
   Preventing it needs a closed flag on each processor; judged not worth the machinery on an API
   being deleted.
+- **The clear does not run at all when the control thread closes itself.** On an unhandled error the
+  control task calls the internal shutdown directly, not through any caller-facing `close`, so the
+  override never fires and the backlog survives. Covering it needs a close hook on
+  `AbstractParallelEoSStreamProcessor` that both JStream processors override - a change to shared core
+  for an API being removed, which is why astubbs#116 documented the boundary instead. Found by review,
+  not in the field.
+- **The `finally` that releases the backlog on a failed close is untested**, because forcing
+  `super.close` to throw needs a seam the class does not expose. The success path is covered by
+  `JStreamMemoryLeak912Test` and `JStreamVertxMemoryLeak912Test`; the failure path is reasoning only.
 
 ## Why this file is not a `branch-` note any more
 

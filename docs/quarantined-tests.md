@@ -95,9 +95,11 @@ were hidden by the surefire retry until astubbs#224 removed it.
   What fails now is the metric *behind* and never converging: `PARTITION_LAST_COMMITTED_OFFSET` for
   partition 1 stays short of `counterP1 + p1StartingOffset` for the whole 120s budget. Seen twice in a
   row on one head (astubbs#116, 2026-08-14) as `expected 1213.0 but was 1209.0` then `expected 1207.0
-  but was 1195.0` - a shortfall that varies, so no wait closes it. That is the shape
+  but was 1195.0` - a shortfall that varies, so no wait closes it. It shares the *symptom*
   [`assert-the-commit-frontier-not-the-tick-path.md`](solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md)
-  warns against, and it rhymes with the `OffsetEncodingBackPressureTest` entry below, whose committed
+  describes - an await burning its full budget on a condition that is permanently false - but **not** its
+  defect: this test already compares the committed frontier at a quiescent point, which is exactly what that
+  doc prescribes, so rewriting the assertion will not help. It also rhymes with the `OffsetEncodingBackPressureTest` entry below, whose committed
   high-water mark also never reaches its expectation with a different actual each run - worth ruling
   in or out as one phenomenon rather than two. Whether the un-committed tail is a wrong test
   assumption or real commit behaviour is undecided and is the open task. No owner yet; diagnosis in

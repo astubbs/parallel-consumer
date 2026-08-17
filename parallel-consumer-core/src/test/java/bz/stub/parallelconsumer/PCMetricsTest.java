@@ -45,7 +45,11 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
                     + "Seen as expected 1213.0 but was 1209.0, then 1207.0 vs 1195.0 on a rerun of the same "
                     + "head, then 1211.0 vs 1201.0 on an unrelated branch. astubbs#265 released it on a fix "
                     + "for the opposite direction - the metric being MORE current than the expectation - which "
-                    + "an await cannot close when the gap never converges. Whether the un-committed tail is a "
+                    + "an await cannot close when the gap never converges. Note the test already asserts the "
+                    + "committed frontier at a quiescent point, which is what "
+                    + "assert-the-commit-frontier-not-the-tick-path.md prescribes - it shares that doc's "
+                    + "symptom (the await burning its full budget on a permanently false condition), not its "
+                    + "defect, so switching assertion style will not help. Whether the un-committed tail is a "
                     + "test assumption or real commit behaviour is the open task; the tracking doc has the "
                     + "history and the two leads.",
             tracking = "docs/inflight/test-untracked-ci-flakes.md",
