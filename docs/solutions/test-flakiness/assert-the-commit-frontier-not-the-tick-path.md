@@ -39,7 +39,7 @@ related:
   - "docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md - sibling rule, opposite direction: an await that tests nothing"
   - "docs/solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md - sibling rule: a test awaiting a trigger it cannot force"
   - "docs/test-hardening/inactive-tests-audit-2026-08-08.md - section 1.2 predicted exactly this class of assertion failure"
-  - "docs/inflight/test-untracked-ci-flakes.md - holds the parent rule this one specialises"
+  - "docs/inflight/test-untracked-ci-flakes.md - held the parent rule this one specialises; removed from that ledger by cbd328746 when its entry closed. Read it at `git show cbd328746^:docs/inflight/test-untracked-ci-flakes.md`, grep `do not compare two moving values`"
 ---
 
 # Assert the commit frontier, not the path of ticks that reached it
@@ -289,6 +289,13 @@ This is also a specialisation of a rule the repo had already stated elsewhere an
 not compare two moving values; await a quiescent state, then read both", recorded inside one row of
 `docs/inflight/test-untracked-ci-flakes.md`. A commit history is a moving value; the frontier is the
 quiescent reading of it.
+
+*(Citation repair: that row is gone. Its entry closed when astubbs#265 fixed and re-enabled the test,
+and `cbd328746` removed the rule text with it - which is this write-up's own complaint about local
+recording, arriving. Read the row as this document read it with
+`git show cbd328746^:docs/inflight/test-untracked-ci-flakes.md` and grep `do not compare two moving
+values`. The claim above is left as written: the rule WAS recorded there, and that it no longer is
+does not change what was true on 2026-08-13.)*
 
 ## Prevention
 
