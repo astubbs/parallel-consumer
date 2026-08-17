@@ -14,7 +14,8 @@
 #    6. `--Check`, wrong case                          -> usage (2)
 #    7. `-c`, short form that was never supported      -> usage (2)
 #    8. `--check extra`, a second argument             -> usage (2)
-#    9. both workflows grant the EXACT command         -> no `:*` on the todo-index grant
+#    9. both workflows grant the EXACT command, in BOTH the `bin/...` and `./bin/...` spellings,
+#       and carry no wildcard todo-index grant in either
 #
 # CASE 4 IS THE REGRESSION, and it is the reason this file exists. The reviewer is granted this
 # script so it can ask whether the committed index is stale WITHOUT being able to rewrite the tree it
@@ -27,7 +28,10 @@
 # CASE 9 GUARDS THE OTHER HALF. The parser fix is worthless if a later edit restores `:*` to either
 # allowlist "for consistency" with its wildcard-bearing neighbours - which is exactly the shape the
 # rest of both lists has. Only the paired assertion closes the boundary, so it is pinned here rather
-# than left to review.
+# than left to review. It checks BOTH command spellings: a rule matches the command as written, so
+# the two workflows grant `bin/...` and `./bin/...` separately, and an earlier revision of this test
+# guarded only the bare one - leaving the dot-prefixed half free to be removed or wildcarded while
+# the suite stayed green.
 #
 # Run: bin/test-todo-index.sh
 #
@@ -94,25 +98,39 @@ assert "--Check is refused"                             "2 untouched" "$(run_cas
 assert "-c is refused"                                  "2 untouched" "$(run_case -c)"
 assert "a second argument is refused"                   "2 untouched" "$(run_case --check extra)"
 
-# Case 9: the grant must be the exact command. `:*` is the trailing-wildcard form, and restoring it
-# reopens case 4 from the allowlist side no matter how strict the parser is.
+# Case 9: the grant must be the exact command, in BOTH SPELLINGS. `:*` is the trailing-wildcard form,
+# and restoring it reopens case 4 from the allowlist side no matter how strict the parser is.
+#
+# BOTH `bin/...` AND `./bin/...` ARE CHECKED, and that is not belt-and-braces. A rule is matched
+# against the command AS WRITTEN, so `Bash(bin/todo-index.sh --check)` does not match
+# `./bin/todo-index.sh --check` - which is why both workflows grant the two spellings, and why
+# guarding only the bare one leaves half the permission contract unpinned: removing or wildcarding
+# just the dot-prefixed grant would go green. Raised in review on astubbs/parallel-consumer#286.
 for yml in "$CLAUDE_YML" "$DISPATCH_YML"; do
     name="$(basename "$yml")"
     contents="$(cat "$yml")"
-    exact=absent
-    if grep -q 'Bash(bin/todo-index.sh --check)' <<<"$contents"; then
-        exact=present
-    fi
-    assert "$name grants the exact todo-index command" present "$exact"
 
-    # Guards against `--check:*` and a reverted bare `bin/todo-index.sh:*`. The comments in both
-    # files discuss the old wildcard forms deliberately, so only GRANT lines are considered - a
-    # grant line is one carrying the allowlist's `Bash(gh pr view:*)` neighbour.
-    wildcard=absent
-    if grep -q 'Bash(bin/todo-index\.sh[^)]*:\*)' <<<"$(grep 'Bash(gh pr view:\*)' <<<"$contents")"; then
-        wildcard=present
-    fi
-    assert "$name has no wildcard todo-index grant" absent "$wildcard"
+    # Only GRANT lines are considered - the comments in both files discuss the old wildcard forms
+    # deliberately. A grant line is one carrying the allowlist's `Bash(gh pr view:*)` neighbour.
+    grants="$(grep 'Bash(gh pr view:\*)' <<<"$contents")"
+
+    for spelling in 'bin/todo-index.sh' './bin/todo-index.sh'; do
+        exact=absent
+        if grep -qF "Bash($spelling --check)" <<<"$grants"; then
+            exact=present
+        fi
+        assert "$name grants the exact '$spelling --check' command" present "$exact"
+
+        # Guards against `--check:*` and a reverted bare `<spelling>:*`, for this spelling only.
+        # Only the dots need escaping; the literal `Bash(` prefix is what keeps the bare
+        # spelling from also matching the dot-prefixed one.
+        escaped="$(sed 's/[.]/\\./g' <<<"$spelling")"
+        wildcard=absent
+        if grep -q "Bash($escaped[^)]*:\*)" <<<"$grants"; then
+            wildcard=present
+        fi
+        assert "$name has no wildcard '$spelling' grant" absent "$wildcard"
+    done
 done
 
 # The trap restores the index, but CI runs this immediately BEFORE `bin/todo-index.sh --check`, so a
