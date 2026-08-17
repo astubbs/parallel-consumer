@@ -95,17 +95,27 @@ jobs:
       # this line the instruction would be a dead letter telling the reviewer to run something it
       # gets refused for. Read-only, and it mutates nothing.
       #
-      # `bin/todo-index.sh` IS GRANTED ONLY WITH `--check`, and the argument is the whole point.
-      # Bare, it REGENERATES `docs/todo-index.md` - `generate > "$OUT"` at the end of its main
-      # path - so `Bash(bin/todo-index.sh:*)` permitted the reviewer to modify the very tree it
-      # was inspecting, and any diff it then reported would have been partly its own work. That
-      # is the false-confidence class this allowlist exists to avoid, arriving through the
-      # allowlist itself. `--check` is the read-only mode the script already documents, and it is
-      # the only mode a reviewer wants: it answers "is the committed index stale?", which is the
-      # claim a PR makes, without touching anything.
+      # `bin/todo-index.sh` IS GRANTED ONLY WITH `--check`, EXACTLY - note the absence of `:*`,
+      # which is deliberate and is the second half of this fix.
+      #
+      # Bare, the script REGENERATES `docs/todo-index.md` (`generate > "$OUT"` at the end of its
+      # main path), so `Bash(bin/todo-index.sh:*)` let the reviewer modify the very tree it was
+      # inspecting, and any diff it then reported was partly its own work - the false-confidence
+      # class this allowlist exists to prevent, arriving through the allowlist itself.
+      #
+      # Narrowing that to `Bash(bin/todo-index.sh --check:*)` was NOT enough, and the trailing
+      # wildcard is why: `:*` is a PREFIX grant, so `bin/todo-index.sh --check=false` still
+      # matched it, and the script's old `[[ "$1" == "--check" ]]` test did not equal
+      # `--check=false`, so it took the REWRITE path and exited 0. Reproduced on
+      # astubbs/parallel-consumer#286. Dropping `:*` makes this an exact-command grant, and
+      # `bin/todo-index.sh` now rejects unknown arguments outright so the guarantee also holds
+      # where the script is invoked by any other route.
+      #
+      # `--check` is the read-only mode the script documents, and the only mode a reviewer wants:
+      # it answers "is the committed index stale?", which is the claim a PR makes.
       #
       # KEEP IN SYNC with `--allowedTools` in claude-code-review-dispatch.yml.
-      REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git rev-parse:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-*.sh:*),Bash(./bin/check-*.sh:*),Bash(bin/test-check-*.sh:*),Bash(./bin/test-check-*.sh:*),Bash(bin/todo-index.sh --check:*),Bash(./bin/todo-index.sh --check:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
+      REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git rev-parse:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-*.sh:*),Bash(./bin/check-*.sh:*),Bash(bin/test-check-*.sh:*),Bash(./bin/test-check-*.sh:*),Bash(bin/todo-index.sh --check),Bash(./bin/todo-index.sh --check),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
     permissions:
       contents: read
       pull-requests: read

@@ -211,6 +211,6 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   slash-command does) but it changes user-facing semantics - a mention part-way through a sentence
   would stop working - so it is a decision rather than a silent tightening.
 
-  **Related trap while testing any of this:** a comment-triggered workflow always runs the copy of
-  the file on the **default branch**, never the PR's. A change to this behaviour cannot be observed
-  on the PR that makes it, and a passing run there is evidence about `master`.
+  Testing a fix is subject to the default-branch rule stated in the comment-route entry above, and
+  owned by [`docs/ci.md`](../ci.md) → "Editing the reviewer". The consequence specific to this
+  entry: whichever way the trigger is tightened, it cannot be exercised on the PR that tightens it.
