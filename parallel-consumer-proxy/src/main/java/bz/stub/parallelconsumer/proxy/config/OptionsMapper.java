@@ -82,9 +82,15 @@ public class OptionsMapper {
      */
     public static final class Subscription {
         private final List<String> topics;
-        private final String pattern;
 
-        private Subscription(List<String> topics, String pattern) {
+        /**
+         * The compiled pattern, carried rather than re-derived: {@link #subscriptionOf} has to compile it
+         * anyway to refuse an invalid one, and {@code Pattern} remembers its own source text, so one field
+         * serves both the engine's {@code subscribe} call and the {@code Configured} echo.
+         */
+        private final Pattern pattern;
+
+        private Subscription(List<String> topics, Pattern pattern) {
             this.topics = topics;
             this.pattern = pattern;
         }
@@ -97,15 +103,22 @@ public class OptionsMapper {
             return topics;
         }
 
+        /** The pattern's source text as {@code Configure} sent it, or {@code null} for a topic list. */
         public String pattern() {
+            return pattern == null ? null : pattern.pattern();
+        }
+
+        /** The pattern the engine subscribes with - the same instance {@link #subscriptionOf} validated. */
+        public Pattern compiledPattern() {
             return pattern;
         }
     }
 
     /**
      * Reads the subscription out of a {@code Configure}, refusing an ambiguous one. A pattern is compiled here,
-     * once, precisely so an invalid one is refused <em>before any Kafka client is constructed</em> - left to
-     * {@code ConfigureHandler}'s own {@code Pattern.compile} at subscribe time, the {@code PatternSyntaxException}
+     * once - and the {@link Subscription} carries that instance to the engine's {@code subscribe} call -
+     * precisely so an invalid one is refused <em>before any Kafka client is constructed</em>. Left to a
+     * {@code Pattern.compile} at subscribe time, the {@code PatternSyntaxException}
      * would fire after the consumer, producer and engine were already built, leaking all three. The rejection
      * message may embed the pattern: it is subscription data, never {@code kafka_properties}.
      *
@@ -122,13 +135,14 @@ public class OptionsMapper {
                     : "Configure names no subscription: give either a topic list or a topic pattern (R36)");
         }
         if (hasPattern) {
+            Pattern compiled;
             try {
-                Pattern.compile(configure.getTopicPattern());
+                compiled = Pattern.compile(configure.getTopicPattern());
             } catch (PatternSyntaxException invalid) {
                 throw new ConfigureRejectedException(
                         "topic_pattern is not a valid regular expression: " + invalid.getMessage());
             }
-            return new Subscription(null, configure.getTopicPattern());
+            return new Subscription(null, compiled);
         }
         return new Subscription(List.copyOf(configure.getTopicsList()), null);
     }

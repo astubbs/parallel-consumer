@@ -27,7 +27,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
  * The proxy's session service: connect-time configuration, reconnect reconciliation, and the
@@ -291,7 +290,7 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 builtEngine = new ProxyProcessor(options, router, ProxyProcessor.DEFAULT_COALESCING_WINDOW,
                         liveness);
                 if (subscription.isPattern()) {
-                    builtEngine.subscribe(Pattern.compile(subscription.pattern()));
+                    builtEngine.subscribe(subscription.compiledPattern());
                 } else {
                     builtEngine.subscribe(subscription.topics());
                 }
