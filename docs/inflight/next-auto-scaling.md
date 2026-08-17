@@ -73,7 +73,11 @@ subscribed topics once per-topic processing functions land (astubbs#254 / conflu
 related: astubbs#245 runtime subscription change, astubbs#236 topic priorities). Separately,
 Kafka share groups (KIP-932) relieve the partitions-cap constraint at the protocol level - a
 share-group-aware PC could recommend instance counts beyond partition count; note for the
-positioning story, not v1. This whole feature is candidate STRATEGY.md material ("the engine
+positioning story, not v1. And the pairing spark from 2026-08-18: auto-scaling inside a Kafka
+Streams topology - astubbs#255 already tracks giving a Streams topology PC's per-key
+parallelism, and a self-tuning PC under a Streams operator would bring runtime-discovered
+concurrency to the ecosystem's own processing engine; far future, but the two features
+multiply. This whole feature is candidate STRATEGY.md material ("the engine
 every language re-implements badly" positioning) - fold in via ce-strategy when direction is
 confirmed.
 
