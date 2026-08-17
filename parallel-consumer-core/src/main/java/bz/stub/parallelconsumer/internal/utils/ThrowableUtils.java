@@ -8,6 +8,7 @@ import lombok.experimental.UtilityClass;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.function.Predicate;
 
 /**
  * Describing a throwable for a human, when the throwable came from somewhere we do not control.
@@ -100,15 +101,12 @@ public class ThrowableUtils {
      */
     public static boolean hasCauseOfType(Throwable t, Class<? extends Throwable> type) {
         try {
-            var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
-            var current = t;
-            for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && seen.add(current); depth++) {
-                if (type.isInstance(current)) {
-                    return true;
-                }
-                current = current.getCause();
-            }
-            return false;
+            var found = new boolean[1];
+            walkCauseChain(t, link -> {
+                found[0] = type.isInstance(link);
+                return !found[0]; // stop at the first match
+            });
+            return found[0];
         } catch (Throwable searchingItFailed) {
             return false;
         }
@@ -123,14 +121,29 @@ public class ThrowableUtils {
      * guard at all. The JDK's own {@code printStackTrace} keeps an identity set for this reason.
      */
     private static Throwable rootCauseOf(Throwable t) {
+        var root = new Throwable[]{t};
+        walkCauseChain(t, link -> {
+            root[0] = link;
+            return true; // every link, so the last one reached is the deepest
+        });
+        return root[0];
+    }
+
+    /**
+     * Walks {@code t} and its causes, applying both guards, until {@code visitor} returns {@code false} or the chain
+     * ends. One walk rather than two, because both guards have to hold in both places and a second copy is a second
+     * chance to omit one.
+     *
+     * @param visitor called per link; returns {@code true} to continue
+     */
+    private static void walkCauseChain(Throwable t, Predicate<Throwable> visitor) {
         var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
-        var root = t;
-        seen.add(root);
-        int depth = 0;
-        for (var cause = root.getCause(); cause != null && depth < MAX_CAUSE_DEPTH && seen.add(cause); cause = cause.getCause()) {
-            root = cause;
-            depth++;
+        var current = t;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && seen.add(current); depth++) {
+            if (!visitor.test(current)) {
+                return;
+            }
+            current = current.getCause();
         }
-        return root;
     }
 }

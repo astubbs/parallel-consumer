@@ -43,7 +43,6 @@ import java.util.stream.Collectors;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.isEmpty;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
-import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.hasCauseOfType;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
@@ -858,18 +857,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     if (Thread.interrupted()) { //clear interrupted flag
                         log.debug("Thread interrupted flag cleared in control loop error handling");
                     }
-                    // Describing the failure must never prevent shutting down because of it. describeWithRootCause
-                    // guarantees that for itself, but the logger walks the chain too, and rendering a throwable from
-                    // user code runs that user's overrides. Anything escaping here would skip doClose and leave a
-                    // running consumer whose control future has already failed - the shape this handler exists to
-                    // prevent, reached while describing it.
-                    try {
-                        var described = describeWithRootCause(e);
-                        log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e);
-                        failureReason = new RuntimeException("Error from poll control thread: " + described, e);
-                    } catch (Throwable describingTheFailureFailed) {
-                        failureReason = new RuntimeException("Error from poll control thread", e);
-                    }
+                    // describeWithRootCause never throws, so nothing here needs guarding beyond that. The logger
+                    // renders the same user-supplied throwable and could in principle throw - but that is true of
+                    // every log call taking a throwable in this codebase, including doClose's own a few lines into
+                    // the shutdown this handler is about to start. Guarding only here would not reduce that risk, it
+                    // would just make one call site look like it knows something the rest do not.
+                    var described = describeWithRootCause(e);
+                    log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e);
+                    failureReason = new RuntimeException("Error from poll control thread: " + described, e);
                     doClose(shutdownTimeout); // attempt to close
                     throw failureReason;
                 }
@@ -1382,10 +1377,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // handle fail
             String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
                     " mailbox. Context: {}", context, e);
-            // the whole chain, not just e.getCause(): a PCRetriableException means "expected, retry me" regardless of
-            // how many wrappers it picked up on the way here, and the old check also missed it arriving unwrapped,
-            // because it never looked at e itself
-            if (hasCauseOfType(e, PCRetriableException.class)) {
+            if (PCRetriableException.isPresentIn(e)) {
                 log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
             } else {
                 log.error(msg, e);
@@ -1516,7 +1508,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void setLongPollTimeout(Duration ofMillis) {
         BrokerPollSystem.setLongPollTimeout(ofMillis);
     }
-
 
     /**
      * Request a commit as soon as possible (ASAP), overriding other constraints.

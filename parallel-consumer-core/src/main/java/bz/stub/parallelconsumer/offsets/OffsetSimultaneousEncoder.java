@@ -169,7 +169,7 @@ public class OffsetSimultaneousEncoder {
         try {
             newEncoders.add(new BitSetEncoder(lengthBetweenBaseAndHighOffset, this, version));
         } catch (BitSetEncodingNotSupportedException a) {
-            log.debug("Cannot construct {} version {} : {}", BitSetEncoder.class.getSimpleName(), version, a.getMessage());
+            log.debug("Cannot construct {} version {}", BitSetEncoder.class.getSimpleName(), version, a);
         }
     }
 
@@ -189,8 +189,6 @@ public class OffsetSimultaneousEncoder {
         try {
             activeEncoders.add(new ByteBufferEncoder(lengthBetweenBaseAndHighOffset, this));
         } catch (ArithmeticException a) {
-            // names ByteBufferEncoder, which is what this method builds - it reported BitSetEncoder, so the one
-            // warning telling you which encoder is unavailable named the wrong one
             log.warn("Cannot use {} encoder", ByteBufferEncoder.class.getSimpleName(), a);
         }
     }
@@ -265,7 +263,7 @@ public class OffsetSimultaneousEncoder {
             try {
                 encoder.register();
             } catch (EncodingNotSupportedException e) {
-                log.debug("Removing {} encoder, not supported ({})", encoder.getEncodingType().description(), e.getMessage());
+                log.debug("Removing {} encoder, not supported", encoder.getEncodingType().description(), e);
                 toRemove.add(encoder);
             }
         }

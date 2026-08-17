@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 
 /**
  * A user's processing function can throw this exception, which signals to PC that processing of the message has failed,
@@ -35,6 +36,22 @@ public class PCRetriableException extends RuntimeException {
 
     public PCRetriableException(Throwable cause) {
         super(cause);
+    }
+
+    /**
+     * Whether this failure is one the user marked as expected - the question every engine asks before deciding
+     * whether to log at debug or at error.
+     * <p>
+     * Here rather than at each engine because it is a policy, not a mechanism: "expected means retriable anywhere in
+     * the chain" is one decision about what this type means, and re-deriving it per engine is how the engines came to
+     * disagree. Three of them tested only the outermost throwable, so an instance that arrived wrapped - which is
+     * routine, since the reactive engines repackage what they propagate - was logged as an error; a fourth never
+     * asked at all.
+     *
+     * @param t the failure to classify; null is not expected
+     */
+    public static boolean isPresentIn(Throwable t) {
+        return ThrowableUtils.hasCauseOfType(t, PCRetriableException.class);
     }
 
 }

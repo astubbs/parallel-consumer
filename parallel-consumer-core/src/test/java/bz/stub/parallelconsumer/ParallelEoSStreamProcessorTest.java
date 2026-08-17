@@ -778,10 +778,9 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
      * {@code WorkManager.onSuccessResult} iterates the listeners on the control thread. Plain-list iteration breaks
      * when a registration lands mid-notify.
      * <p>
-     * This registration used to be spelled {@code getSuccessfulWorkListeners().add(..)}, against a list handed out
-     * whole by a Lombok {@code @Getter(PUBLIC)} - which is exactly why the bug stayed hidden. Searching for the field
-     * name found the declaration and the iteration but never a mutation, so it read as dead code. The accessor is now
-     * a real method, so the next such search finds its callers.
+     * Registration is a real method rather than a {@code @Getter}-exposed list, so a search for the field finds its
+     * writers. A handed-out collection is mutated through the accessor's name, not the field's, which leaves the
+     * field reading as dead code to exactly the sweep that looks for this defect class.
      */
     @Test
     @SneakyThrows

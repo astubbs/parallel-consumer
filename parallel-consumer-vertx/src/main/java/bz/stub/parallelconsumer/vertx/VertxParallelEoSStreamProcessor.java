@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.vertx;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
@@ -214,7 +215,11 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 // the throwable rather than its message: this is the only record of why a send failed, and
                 // getMessage() alone drops the type, the cause chain and the stack - and reads "fail: null"
                 // for anything thrown without a message
-                log.error("Vert.x Vertical fail", h);
+                if (PCRetriableException.isPresentIn(h)) {
+                    log.debug("Vert.x Vertical fail", h);
+                } else {
+                    log.error("Vert.x Vertical fail", h);
+                }
                 wc.onUserFunctionFailure(h);
                 addToMailbox(context, wc);
             });

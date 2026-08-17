@@ -9,7 +9,6 @@ import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
-import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
@@ -121,9 +120,7 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        // the chain, not the top: Reactor repackages what it propagates, so a PCRetriableException from user code
-        // routinely arrives wrapped - and then an expected retry was logged as an error
-        if (ThrowableUtils.hasCauseOfType(throwable, PCRetriableException.class)) {
+        if (PCRetriableException.isPresentIn(throwable)) {
             log.debug("Reactor fail signal", throwable);
         } else {
             log.error("Reactor fail signal", throwable);
