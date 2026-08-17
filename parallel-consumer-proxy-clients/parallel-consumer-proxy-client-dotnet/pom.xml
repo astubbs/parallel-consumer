@@ -149,7 +149,8 @@
                 intermediate output, which here also holds the protobuf and gRPC stubs Grpc.Tools
                 generates on every build) beside each .csproj - three of them, src/ plus the two
                 under tests/. Nothing else in the reactor would ever delete those, so without this
-                block a clean tree still carries a full Release build of the conformance runner.
+                block a clean tree still carries a full build of the conformance runner - Debug here,
+                since `dotnet build` defaults to it and nothing in this module asks for Release.
 
                 DELETED BY DIRECTORY PATTERN RATHER THAN BY PATH, to match this module's own
                 .gitignore (`bin/`, `obj/`, `target/`) - that file is the module's existing
