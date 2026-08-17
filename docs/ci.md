@@ -118,6 +118,21 @@ document. This section is the detail behind it.
     silently. It also asks that every row name its `scanner`, and that a `scanner-cmd` pointing at
     a module script (`scripts/analyse.sh`) points at one that is there. **`clients: static analysis
     coverage` is a new job name and is NOT yet a required status check.**
+  - `dependabot-coverage` runs `bin/check-dependabot-coverage.sh`, which asserts that
+    `.github/dependabot.yml` and the manifests actually in the tree agree, **in both directions**. An
+    ecosystem Dependabot was never told about produces no error, no warning and no PR, so it is
+    indistinguishable from an ecosystem with nothing to update - which is how seven of this repo's
+    nine ecosystems went unwatched for the whole of the language-proxy work, surfacing only when a
+    gRPC CVE was found by a CI scan rather than by a bot. A manifest with no entry covering it fails
+    (the recurring direction: a new language arrives), and so does an entry whose `directory` does
+    not exist or holds no manifest of its ecosystem, because Dependabot reports *that* only in a
+    repository settings page nobody opens. It checks coverage **only** - never grouping, schedule or
+    ignores, which are policy the config argues for itself entry by entry. `parallel-consumer-proxy-
+    client-cpp` is genuinely uncoverable (no package manager) and is printed on every run, green ones
+    included, so it stays a stated fact rather than an absence. **Exit 1** = the check could not run
+    (no config, unparseable YAML); **exit 2** = a real coverage gap - the
+    `bin/check-ossindex-audit.sh` split, for the same reason. **`deps: Dependabot coverage` is a new
+    job name and is NOT yet a required status check.**
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
