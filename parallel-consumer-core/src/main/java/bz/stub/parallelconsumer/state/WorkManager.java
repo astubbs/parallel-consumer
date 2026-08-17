@@ -206,9 +206,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // notify listeners - user code, so run it through the same wrapper every other user function goes through.
         // It still propagates and still stops the consumer; what changes is that the failure arrives named
         // ("Error occurred in code supplied by user") instead of surfacing as "Error from poll control thread: null"
-        successfulWorkListeners.forEach(c -> UserFunctions.carefullyRun(c, wc));
-
-        numberRecordsOutForProcessing--;
+        // in a finally for the same reason the loop-end hooks count in one: the listener is user code that can
+        // throw, and the in-flight count is this class's own bookkeeping, not the listener's. Leaving it
+        // un-decremented is the counter drift this file documents as the silent-stall signature
+        try {
+            successfulWorkListeners.forEach(c -> UserFunctions.carefullyRun(c, wc));
+        } finally {
+            numberRecordsOutForProcessing--;
+        }
     }
 
     /**

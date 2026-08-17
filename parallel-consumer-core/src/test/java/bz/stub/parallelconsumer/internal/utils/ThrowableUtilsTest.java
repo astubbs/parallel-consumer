@@ -44,6 +44,26 @@ class ThrowableUtilsTest {
     }
 
     /**
+     * The original complaint - {@code "Error from poll control thread: null"} - surviving in the one branch that had
+     * no cause to fall back to. A throwable with neither a message nor a cause is exactly what an NPE from user code
+     * looks like when nothing wrapped it.
+     */
+    @Test
+    void noMessageAndNoCauseReportsTheTypeRatherThanNull() {
+        assertThat(describeWithRootCause(new NullPointerException()))
+                .isEqualTo("NullPointerException")
+                .isNotEqualTo("null");
+    }
+
+    @Test
+    void aRootCauseWithNoMessageIsNamedOnceByType() {
+        var wrapper = new RuntimeException("outer", new IllegalStateException());
+
+        // not "IllegalStateException: null", and not the type repeated
+        assertThat(describeWithRootCause(wrapper)).isEqualTo("outer - caused by IllegalStateException");
+    }
+
+    /**
      * {@code initCause} refuses self-causation, so {@code A -> A} cannot be built and a self-reference check reads as
      * sufficient. {@code A -> B -> A} can be, and defeats it - the walk never terminates.
      * <p>

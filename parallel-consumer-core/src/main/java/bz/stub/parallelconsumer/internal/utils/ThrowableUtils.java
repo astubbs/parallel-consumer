@@ -69,11 +69,34 @@ public class ThrowableUtils {
         try {
             Throwable root = rootCauseOf(t);
             return root == t
-                    ? String.valueOf(t.getMessage())
-                    : t.getMessage() + " - caused by " + root.getClass().getSimpleName() + ": " + root.getMessage();
+                    ? describeOne(t)
+                    : describeOne(t) + " - caused by " + describeWithType(root);
         } catch (Throwable describingItFailed) {
             return t.getClass().getName();
         }
+    }
+
+    /**
+     * The message, or the type when there is no message.
+     * <p>
+     * A throwable with neither a message nor a cause was the one shape still reaching the caller as the literal
+     * string {@code "null"} - which is the {@code "Error: null"} this method exists to replace, surviving in the
+     * branch where there is no cause to fall back to.
+     */
+    private static String describeOne(Throwable t) {
+        String message = t.getMessage();
+        return message != null ? message : t.getClass().getSimpleName();
+    }
+
+    /**
+     * As {@link #describeOne}, but always naming the type - the root cause's type is the useful half when its
+     * message is the uninformative one, and repeating the type when there is no message would read as
+     * {@code "NullPointerException: NullPointerException"}.
+     */
+    private static String describeWithType(Throwable t) {
+        String message = t.getMessage();
+        String type = t.getClass().getSimpleName();
+        return message != null ? type + ": " + message : type;
     }
 
     /**
