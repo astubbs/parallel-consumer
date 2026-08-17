@@ -656,6 +656,13 @@ Redis-backed plug is ever built.</p>
     only); and the controller must not fight <code>DynamicLoadFactor</code>/backpressure —
     they control different variables (pool size vs buffer depth) but share signals, so the
     boundary needs stating up front.</dd>
+    <dt>Second dimension (2026-08-18)</dt>
+    <dd>Beyond per-instance concurrency lies <em>instance count</em>: PC never spawns instances
+    itself, but can expose a suggested-total-instance-count metric — raised only after a
+    PC-owned cool-down establishes that instance-local concurrency has plateaued while the
+    workload is still behind, capped at partition count, with rebalance as the natural
+    acknowledgement that infrastructure acted. Staged as a follow-on; working design lives in
+    <code>docs/inflight/next-auto-scaling.md</code>.</dd>
   </dl>
 </article>
 
