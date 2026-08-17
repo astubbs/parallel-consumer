@@ -193,3 +193,24 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap -
   Testcontainers on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than
   a misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
+- **Writing about the trigger fires the trigger, and the fix is the owner's call.** `claude.yml`
+  matches on `contains(github.event.comment.body, '@claude')` - a plain substring test with no
+  awareness of backticks, code fences or quotation - so any comment *discussing* the mechanism
+  starts a billed job.
+
+  Observed, not theorised. While replying to review feedback on astubbs#286, two replies explained
+  the trust model and quoted the trigger string inside backticks. Exactly two `Claude Code` runs
+  fired on `pull_request_review_comment` and ran to completion: a one-to-one match with the two
+  replies that contained it. Nothing asked for a review; prose about the feature invoked the
+  feature. The same applies to quoting this entry into a PR comment - the trigger does not care
+  that you are describing it.
+
+  It was harmless while the fallback could execute nothing. It is not now - the route runs the
+  curated allowlist, so an unasked-for start costs a runner, a token-bearing job and money. A fix
+  is cheap (`startsWith` on the trimmed body, so the trigger must open the comment the way a
+  slash-command does) but it changes user-facing semantics - a mention part-way through a sentence
+  would stop working - so it is a decision rather than a silent tightening.
+
+  **Related trap while testing any of this:** a comment-triggered workflow always runs the copy of
+  the file on the **default branch**, never the PR's. A change to this behaviour cannot be observed
+  on the PR that makes it, and a passing run there is evidence about `master`.
