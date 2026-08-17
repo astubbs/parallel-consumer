@@ -95,6 +95,28 @@ jobs:
           # cache this job exists to populate actually got populated.
           test -s ~/.m2/repository/com/google/protobuf/protoc/"${protoc_version}"/protoc-"${protoc_version}"-linux-x86_64.exe
           test -s ~/.m2/repository/io/grpc/protoc-gen-grpc-java/"${grpc_version}"/protoc-gen-grpc-java-"${grpc_version}"-linux-x86_64.exe
+      # The same class of miss as protoc above, in a different plugin: scala-maven-plugin resolves
+      # the Scala COMPILER and the zinc compiler-bridge sources jar for itself at scala:compile time,
+      # so neither is a declared dependency and go-offline leaves both cold. Measured on
+      # astubbs/parallel-consumer#293, run 32008526667: "Unit Tests" spent 4m01s on
+      # scala-compiler-2.13.18.jar before Central gave up and it fell to the mirror, then was still
+      # fetching compiler-bridge_2.13-1.12.0-sources.jar 3m12s later when the lane's 15-minute cap
+      # killed it - the same CDN route lottery documented above, and it cost the whole job.
+      #
+      # Warmed by COMPILING the module rather than by naming coordinates: the bridge version comes
+      # from the plugin's own zinc dependency and no pom property carries it, so a `dependency:get`
+      # would need a literal that rots silently the next time the plugin is bumped - warming the
+      # wrong coordinate being indistinguishable from a cache hit is the defect the block above
+      # exists to prevent. -am keeps this to the scala module's own reactor chain.
+      - name: Warm scala-maven-plugin's compiler and zinc bridge
+        run: |
+          set -euo pipefail
+          ./mvnw --batch-mode -ntp -Pci -pl :parallel-consumer-proxy-client-scala -am -DskipTests compile
+          # Assert by glob, not by version, for the same reason the compile is version-free: the
+          # point is that the cache got populated, and a run that resolved nothing must go red here
+          # rather than four minutes into a downstream lane.
+          test -n "$(find ~/.m2/repository/org/scala-lang/scala-compiler -name 'scala-compiler-*.jar' -print -quit 2>/dev/null)"
+          test -n "$(find ~/.m2/repository/org/scala-sbt -name 'compiler-bridge_*-sources.jar' -print -quit 2>/dev/null)"
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
