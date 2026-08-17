@@ -8,6 +8,25 @@ the start, one idle Kotlin build daemon, no other build running, 32 cores.
 **Verdict: mergeable on this evidence. The branch is clean; the one red is master's, not this
 branch's, and this branch fails it LESS often than master does.**
 
+> **CORRECTION, 2026-08-17.** The self-test row above was true locally and false in CI, at the same
+> moment. `bin/test-check-proto-breaking.sh` builds two of its fixtures with `git commit-tree`, which
+> refuses to write an object when git cannot resolve a committer - and a GitHub-hosted runner has no
+> identity at any config level. So `proto: breaking` was red on **every** run from `222940cbb`, the
+> commit that added the self-test, and this verification could not see it: every developer box has an
+> identity configured, so the lane passed here exactly because of what made it fail there.
+>
+> **The verdict above still holds, and for a reason worth stating**: the failure was in the gate's own
+> self-check, never in `buf breaking`, and the schema was independently confirmed unchanged since the
+> freeze commit `c23794008` apart from the six per-language file options landed deliberately before
+> the gate armed. Fixed on this branch by `1c4101780`, which stamps the identity per-invocation in the
+> environment - **not** via `git -c`, which loses to an empty environment identity and was the first
+> attempt.
+>
+> **The lesson this record now carries is about itself.** A green measured on one box is evidence
+> about that box. This row was one of the inputs to a *mergeable* verdict, and the thing it was
+> blindest to was a check that had never once been green where it actually runs. The row is left
+> standing rather than rewritten - it is what was measured - and the correction sits beside it.
+
 Base for every comparison below: `cae88c7aa` (master). The branch moved twice mid-run
 (`280a4b8f2` → `0c369366c`, a parallel documentation session) - both commits are markdown only, so
 no result here is split across a code change.
@@ -17,7 +36,7 @@ no result here is split across a code change.
 | Lane | Result | Uncontended time |
 |---|---|---|
 | 10 executable `bin/check-*.sh` gates | all pass | seconds each, ~4 min for the proto/CVE three |
-| 10 `bin/test-check-*.sh` self-tests | all pass | seconds each |
+| 10 `bin/test-check-*.sh` self-tests | all pass **locally** - see the correction below; one was red in CI at this moment | seconds each |
 | Full reactor `bin/build.sh` (clean package, 30 modules) | **BUILD SUCCESS**, 615 tests, 0 failures, 8 skipped | **6 min 04 s** |
 | Foreign-client lane, 7 languages, `-Dpc.foreignClients` | all pass, all with native test output | see below |
 | Container lane, `bin/build-client.sh cpp/swift --test` | both pass | 1 s each - **cache hit, see the caveat** |
@@ -59,6 +78,14 @@ half did run - the extracted static binary executed, the dynamically linked cont
 expected, which is the portability assertion the script exists for - but no compilation happened. A
 cache hit does mean the inputs were byte-identical to a build that succeeded, so this is not a hole;
 it is just not a fresh measurement, and nobody should quote "swift builds in 1 s".
+
+> **SUPERSEDED, 2026-08-17.** Both caveats in this section have since been closed, and two other
+> statements above have gone stale. `LanguageRunners.all()` now registers **ten** command-driven
+> languages - go, python, typescript, rust, ruby, dotnet, kotlin, scala, cpp, swift - which with the
+> core and two Java in-process bindings is thirteen, all green in CI at 4 scenarios each. The branch
+> **has** since been pushed, as astubbs/parallel-consumer#293, so the three gates recorded below as
+> unrunnable for want of a PR number now run. And `check-proto-breaking.sh` still passes vacuously
+> against `origin/master` for the reason given - the freeze arms only when the schema lands on master.
 
 **The shared conformance suite drives one language, not every language.** `LanguageRunners.registered()`
 returns `List.of(go())`, and python, typescript, rust and ruby are commented placeholders in that same
