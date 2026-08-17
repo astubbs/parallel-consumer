@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.proxy.engine;
  */
 
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
+import bz.stub.parallelconsumer.proxy.protocol.WireTimestamps;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Record;
@@ -11,11 +12,9 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import com.google.protobuf.ByteString;
-import com.google.protobuf.Timestamp;
 import lombok.experimental.UtilityClass;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
-import java.time.Instant;
 import java.util.Optional;
 
 /**
@@ -90,7 +89,7 @@ public class RecordCodec {
                 // which also counts verdict-free redeliveries that consumed no attempt
                 .setAttempt(wc.getNumberOfFailedAttempts() + 1);
 
-        wc.getLastFailedAt().ifPresent(at -> dispatch.setLastFailureAt(toTimestamp(at)));
+        wc.getLastFailedAt().ifPresent(at -> dispatch.setLastFailureAt(WireTimestamps.toWire(at)));
         lastFailureReasonText(wc).ifPresent(dispatch::setLastFailureReason);
 
         return dispatch.build();
@@ -133,13 +132,5 @@ public class RecordCodec {
             cause = cause.getCause();
         }
         return cause;
-    }
-
-    private static Timestamp toTimestamp(Instant instant) {
-        // built by hand rather than with protobuf-java-util's Timestamps, which is not on this module's classpath
-        return Timestamp.newBuilder()
-                .setSeconds(instant.getEpochSecond())
-                .setNanos(instant.getNano())
-                .build();
     }
 }

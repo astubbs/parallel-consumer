@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.client.InboundRecord;
 import bz.stub.parallelconsumer.client.Outcome;
 import bz.stub.parallelconsumer.client.OutboundRecord;
 import bz.stub.parallelconsumer.proxy.protocol.WireDurations;
+import bz.stub.parallelconsumer.proxy.protocol.WireTimestamps;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
@@ -17,7 +18,6 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import com.google.protobuf.ByteString;
 
-import java.time.Instant;
 import java.util.LinkedHashSet;
 
 /**
@@ -96,10 +96,7 @@ final class WireMapping {
                 record.hasKey() ? record.getKey().toByteArray() : null,
                 record.hasValue() ? record.getValue().toByteArray() : null,
                 dispatch.hasAttempt() ? dispatch.getAttempt() : 1,
-                dispatch.hasLastFailureAt()
-                        ? Instant.ofEpochSecond(dispatch.getLastFailureAt().getSeconds(),
-                        dispatch.getLastFailureAt().getNanos())
-                        : null,
+                dispatch.hasLastFailureAt() ? WireTimestamps.toJava(dispatch.getLastFailureAt()) : null,
                 dispatch.hasLastFailureReason() ? dispatch.getLastFailureReason() : null);
     }
 

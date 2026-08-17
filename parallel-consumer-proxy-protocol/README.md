@@ -18,15 +18,18 @@ the single source here.
 - Per-language option lines (`go_package`, `csharp_namespace`, `ruby_package`, and the rest). These
   are **wire-invisible**, but they are not optional extras: adding one after the freeze gate arms is
   a breaking change by the gate's own reckoning, which is why they all landed before it did.
-- `src/main/java/.../WireDurations.java` - the **one** implementation of the
-  `google.protobuf.Duration` ↔ `java.time.Duration` bridge, for both JVM speakers of the protocol.
-  This is the module's only hand-written production Java, and it is here rather than in either caller
-  because a conversion between a wire field and a language type *is* wire semantics: two hand-written
-  copies of it (which is what the sidecar and the Java client each had) can drift on a nanos or
-  negative edge case, and the result is a protocol bug the conformance suite catches only if a
-  scenario happens to exercise the value that drifted. The class javadoc carries the measurements
-  behind not using protobuf-java-util's `Durations` instead. Anything that *interprets* a message
-  rather than decoding a well-known type belongs in a caller, not here.
+- `src/main/java/.../WireDurations.java` and `WireTimestamps.java` - the **one** implementation each
+  of the `google.protobuf.Duration` ↔ `java.time.Duration` and `google.protobuf.Timestamp` ↔
+  `java.time.Instant` bridges, for both JVM speakers of the protocol. These are the module's only
+  hand-written production Java, and they are here rather than in either caller because a conversion
+  between a wire field and a language type *is* wire semantics: hand-written copies (which is what
+  the sidecar and the Java client each had - for the timestamp, the encoder and the decoder lived in
+  different modules and could not see each other) can drift on a nanos or negative edge case, and the
+  result is a protocol bug the conformance suite catches only if a scenario happens to exercise the
+  value that drifted. The class javadoc carries the measurements behind not using
+  protobuf-java-util's `Durations`/`Timestamps` instead - neither offers a `java.time` bridge at the
+  pinned version. Anything that *interprets* a message rather than decoding a well-known type belongs
+  in a caller, not here.
 
 ## Why v1 is frozen, and what that costs you
 
