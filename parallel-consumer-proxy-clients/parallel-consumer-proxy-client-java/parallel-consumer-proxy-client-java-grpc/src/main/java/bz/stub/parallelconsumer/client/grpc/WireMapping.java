@@ -7,6 +7,8 @@ import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.InboundRecord;
 import bz.stub.parallelconsumer.client.Outcome;
 import bz.stub.parallelconsumer.client.OutboundRecord;
+import bz.stub.parallelconsumer.proxy.protocol.WireDurations;
+import bz.stub.parallelconsumer.proxy.protocol.WireTimestamps;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
@@ -16,7 +18,6 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import com.google.protobuf.ByteString;
 
-import java.time.Instant;
 import java.util.LinkedHashSet;
 
 /**
@@ -56,9 +57,9 @@ final class WireMapping {
                 .putAllKafkaProperties(options.kafkaProperties());
         options.maxConcurrency().ifPresent(configure::setMaxConcurrency);
         options.ordering().ifPresent(ordering -> configure.setOrdering(toWireOrdering(ordering)));
-        options.commitInterval().ifPresent(interval -> configure.setCommitInterval(toWireDuration(interval)));
+        options.commitInterval().ifPresent(interval -> configure.setCommitInterval(WireDurations.toWire(interval)));
         options.defaultMessageRetryDelay().ifPresent(delay ->
-                configure.setDefaultMessageRetryDelay(toWireDuration(delay)));
+                configure.setDefaultMessageRetryDelay(WireDurations.toWire(delay)));
         return configure.build();
     }
 
@@ -95,10 +96,7 @@ final class WireMapping {
                 record.hasKey() ? record.getKey().toByteArray() : null,
                 record.hasValue() ? record.getValue().toByteArray() : null,
                 dispatch.hasAttempt() ? dispatch.getAttempt() : 1,
-                dispatch.hasLastFailureAt()
-                        ? Instant.ofEpochSecond(dispatch.getLastFailureAt().getSeconds(),
-                        dispatch.getLastFailureAt().getNanos())
-                        : null,
+                dispatch.hasLastFailureAt() ? WireTimestamps.toJava(dispatch.getLastFailureAt()) : null,
                 dispatch.hasLastFailureReason() ? dispatch.getLastFailureReason() : null);
     }
 
@@ -143,13 +141,5 @@ final class WireMapping {
             default:
                 return ProcessingOrder.PROCESSING_ORDER_KEY;
         }
-    }
-
-    private static com.google.protobuf.Duration toWireDuration(java.time.Duration duration) {
-        // built by hand rather than with protobuf-java-util's Durations, which is not on this module's classpath
-        return com.google.protobuf.Duration.newBuilder()
-                .setSeconds(duration.getSeconds())
-                .setNanos(duration.getNano())
-                .build();
     }
 }

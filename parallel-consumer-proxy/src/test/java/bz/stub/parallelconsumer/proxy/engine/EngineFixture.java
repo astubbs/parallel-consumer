@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.proxy.engine;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.model.CommitHistory;
 import bz.stub.parallelconsumer.proxy.engine.ProxyProcessor.ReportResult;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
@@ -193,14 +194,7 @@ class EngineFixture implements AutoCloseable {
     }
 
     Optional<OffsetAndMetadata> lastCommitted() {
-        var history = mockConsumer.getCommitHistoryInt();
-        for (int i = history.size() - 1; i >= 0; i--) {
-            var offsetAndMetadata = history.get(i).get(topicPartition);
-            if (offsetAndMetadata != null) {
-                return Optional.of(offsetAndMetadata);
-            }
-        }
-        return Optional.empty();
+        return CommitHistory.forPartition(mockConsumer.getCommitHistoryInt(), topicPartition).lastCommit();
     }
 
     void awaitCommittedOffset(long expectedOffset) {

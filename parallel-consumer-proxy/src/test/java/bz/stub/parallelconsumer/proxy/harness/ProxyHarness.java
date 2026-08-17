@@ -7,6 +7,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.model.CommitHistory;
 import bz.stub.parallelconsumer.proxy.config.ConfigureHandler;
 import bz.stub.parallelconsumer.proxy.config.KafkaClientFactory;
 import bz.stub.parallelconsumer.proxy.config.OptionsMapper;
@@ -345,13 +346,9 @@ public class ProxyHarness implements AutoCloseable {
     /** The most recently committed offset for the scenario's partition, whichever lane is active. */
     public OptionalLong lastCommittedOffset() {
         var history = (engineMockConsumer != null ? engineMockConsumer : mockConsumer).getCommitHistoryInt();
-        for (int i = history.size() - 1; i >= 0; i--) {
-            var offsetAndMetadata = history.get(i).get(topicPartition);
-            if (offsetAndMetadata != null) {
-                return OptionalLong.of(offsetAndMetadata.offset());
-            }
-        }
-        return OptionalLong.empty();
+        return CommitHistory.forPartition(history, topicPartition).highestCommit()
+                .map(OptionalLong::of)
+                .orElseGet(OptionalLong::empty);
     }
 
     /** Arrival-sync: waits until at least {@code atLeast} records have been handed to the client. */

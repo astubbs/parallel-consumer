@@ -16,7 +16,10 @@
     <artifactId>parallel-consumer-proxy-protocol</artifactId>
 
     <!--
-        This module owns proxy.proto and its generated Java; the engine depends on it, the gRPC
+        This module owns proxy.proto, its generated Java, and the hand-written classes that bridge a
+        well-known type to a JVM type for every JVM speaker of the protocol (WireDurations,
+        WireTimestamps - their javadoc and the README say why the bridges live here rather than in
+        each caller). The engine depends on it, the gRPC
         transport depends on it, and the direct transport must NEVER depend on it - that arrow is
         enforced by bannedDependencies in parallel-consumer-proxy-client-java-direct. Non-JVM
         clients generate from src/main/proto/parallelconsumer/proxy/v1/proxy.proto by path, with no

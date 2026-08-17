@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.client.RecordProcessor;
 import bz.stub.parallelconsumer.client.conformance.SpikeConformanceTest;
 import bz.stub.parallelconsumer.client.conformance.SpikeFixture;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import bz.stub.parallelconsumer.model.CommitHistory;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
@@ -99,14 +100,9 @@ class DirectSpikeConformanceTest extends SpikeConformanceTest {
 
         @Override
         public OptionalLong committedOffset() {
-            var history = mockConsumer.getCommitHistoryInt();
-            for (int i = history.size() - 1; i >= 0; i--) {
-                var offsetAndMetadata = history.get(i).get(topicPartition);
-                if (offsetAndMetadata != null) {
-                    return OptionalLong.of(offsetAndMetadata.offset());
-                }
-            }
-            return OptionalLong.empty();
+            return CommitHistory.forPartition(mockConsumer.getCommitHistoryInt(), topicPartition).highestCommit()
+                    .map(OptionalLong::of)
+                    .orElseGet(OptionalLong::empty);
         }
 
         @Override
