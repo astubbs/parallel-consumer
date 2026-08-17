@@ -578,6 +578,20 @@ Cross-cutting above; the rest:
 - `origin/features/least-loaded` @278cc0a5 - incomplete futures as a loading proxy (→ draft
   `confluentinc#473` / issue `confluentinc#394`, least-loaded broker).
 
+**Flow control / self-tuning** → tie to astubbs#227 (confluentinc#21, dynamic concurrency) and
+astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
+`docs/ideation/2026-08-17-distributed-throttling-ideation.html`:
+- `origin/features/dynamic-concurrency-control` @6f85eac41 - Netflix concurrency-limits
+  (`Gradient2Limit`/`SimpleLimiter`/`BlockingAdaptiveExecutor` as the worker pool), README
+  "Automatic Concurrency Scaling" section, mid-extraction to a `parallel-consumer-core-auto-scale`
+  module for the zero-deps policy. Upstream twin: draft PR `confluentinc#22` @ba6b71f10.
+- `origin/feature/auto-tuning-pressure` @f4aa09788 - "Wip! Experiments in self tuning": hand-rolled
+  self-tuning of the backpressure system (WorkManager, load factor). The
+  `DynamicLoadFactor` no-step-down gap is the fossil of this unfinished work.
+- `origin/features/rate-limiting` @e9f49d321 - bucket4j POC in the Reactor example app; policed
+  (`Mono.error`) instead of deferring, declared-but-unused Hazelcast dep, build-breaking pom
+  properties. Full autopsy in the ideation doc.
+
 **Offset encoding** → relevant to the offsets/*Encoder items above:
 - `origin/refactor/encode-with-incompletes-direct` @fa56ff18 - invoke the encoder with known
   incompletes directly instead of iterating (the `OffsetSimultaneousEncoder`

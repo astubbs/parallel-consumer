@@ -115,7 +115,7 @@
   <div class="stats">
     <div class="stat"><b>46</b> raw ideas</div>
     <div class="stat"><b>17+5</b> clusters + syntheses</div>
-    <div class="stat"><b>7</b> survivors</div>
+    <div class="stat"><b>8</b> survivors</div>
     <div class="stat"><b>5</b> axes, all covered</div>
     <div class="stat"><b>8/8</b> verifier spot-checks held</div>
   </div>
@@ -199,6 +199,7 @@ Redis-backed plug is ever built.</p>
     <li><a href="#i5">Socket-and-plug: SPI in core, backends as extension artifacts</a></li>
     <li><a href="#i6">Adaptive AIMD on rate: no configured number, no coordination</a></li>
     <li><a href="#i7">Decorrelated jitter for the retry path</a></li>
+    <li><a href="#i8">Self-scaling: one adaptive controller replaces concurrency <em>and</em> rate configuration</a></li>
   </ol>
 </nav>
 
@@ -452,6 +453,17 @@ Redis-backed plug is ever built.</p>
     apps). One interface additionally unifies the three "who owns the number" philosophies —
     operator-published, downstream-reported (429/<code>Retry-After</code>), and adaptive — as
     three implementations instead of three competing features.</dd>
+    <dt>Strategy menu (refined 2026-08-18)</dt>
+    <dd>The built-in implementations form a curated menu where each serves a <em>distinct
+    situation</em> rather than being a different way of doing the same thing: partition-share
+    (you know the number and PC is its only consumer), downstream-signal (the service reports —
+    also the only strategy correct when non-PC clients share the budget), adaptive (nobody
+    knows the number, or it shifts — idea 8), BYO bucket4j (exact cross-client enforcement,
+    existing cache). Multiple active strategies compose by taking the <strong>minimum of their
+    emitted ceilings</strong>, so any combination is safe by construction — partition-share as
+    the prior with adaptive trimming below it is the natural stack. The enforcement mechanism
+    (ideas 2/3) is deliberately <em>not</em> on the menu: it is internal plumbing, not user
+    policy, and offering it doubles the maintenance surface.</dd>
     <dt>Downsides</dt>
     <dd>Public SPI signatures are one-way doors; the SPI alone delivers no throttling until at
     least the default impl (idea 1) lands with it. Distributed backends still carry the
@@ -578,6 +590,72 @@ Redis-backed plug is ever built.</p>
   </figure>
 </article>
 
+<article class="idea" id="i8">
+  <div class="idea-head"><span class="idchip">8</span><h3>Self-scaling: one adaptive controller replaces concurrency <em>and</em> rate configuration</h3></div>
+  <div class="chips">
+    <span class="chip axis">limit-specification</span>
+    <span class="chip">Confidence 70%</span>
+    <span class="chip">Complexity High</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Added 2026-08-18, merging this ideation with the fork's oldest open ambition:
+    <a href="https://github.com/astubbs/parallel-consumer/issues/227">astubbs#227</a>
+    (mirror of <a href="https://github.com/confluentinc/parallel-consumer/issues/21">confluentinc#21</a>,
+    "Dynamic concurrency control with flow control or tcp congestion control theory"). Instead of
+    the user pre-selecting <code>maxConcurrency</code> — a number that is hard to choose, goes
+    stale as integrated systems evolve, and when set too <em>low</em> silently leaves throughput
+    on the table — one adaptive controller owns the dispatch budget, fed by three signals:
+    <strong>latency gradient</strong> (step concurrency up until job time degrades, then
+    contract), <strong>failures</strong>, and <strong>structured rate-limit feedback</strong> —
+    the user function throws an engine-recognised exception (e.g.
+    <code>RateLimitExceededException(serviceKey, retryAfter)</code>) when a downstream returns
+    429/overloaded, and the engine builds a per-service ceiling from it at runtime. Per-service
+    limits thus <em>materialize from feedback instead of config</em>: a user function may call
+    dozens of services depending on record data, each with its own limit, none declared anywhere.
+    The effective budget is <code>min(hard maxConcurrency cap if configured, configured rate
+    ceilings, discovered per-service ceilings, adaptive capacity estimate)</code>. Off by
+    default (experimental); a user may run self-scaling <em>and</em> a hard upper cap.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> astubbs#227 is open, labelled
+    <code>pr-available</code>/<code>next-feature-release</code>, and already distinguishes this
+    from <code>DynamicLoadFactor</code> (which sizes the buffer feeding a fixed pool, not the
+    pool). Two abandoned fork branches hold real prior work:
+    <code>features/dynamic-concurrency-control</code> @6f85eac41 wired Netflix
+    concurrency-limits (<code>Gradient2Limit</code>/<code>SimpleLimiter</code>/<code>BlockingAdaptiveExecutor</code>
+    as the worker pool) with a README section "Automatic Concurrency Scaling (self
+    configuring)" and a mid-extraction to a <code>parallel-consumer-core-auto-scale</code>
+    module honouring the zero-deps policy; <code>feature/auto-tuning-pressure</code> @f4aa09788
+    ("Wip! Experiments in self tuning") hand-rolled the same instinct into the backpressure
+    system. Upstream twin: draft PR
+    <a href="https://github.com/confluentinc/parallel-consumer/pull/22">confluentinc#22</a>
+    @ba6b71f10, closed unmerged in the 2023 sweep.
+    <span class="basis-tag">external:</span> Netflix concurrency-limits
+    (<code>Gradient2Limit</code> has the built-in maximum the hard-cap composition needs).</dd>
+    <dt>Rationale</dt>
+    <dd>This subsumes most of the rate-limiting ask: when the downstream's limit is a
+    <em>capacity</em> limit, adaptive discovery finds it without configuration, exploits bursts
+    a static number would waste, and re-converges automatically when the PC group itself scales
+    up or down (each instance's fair share shrinks or grows with membership — distributed rate
+    limiting as an emergent property, no coordination substrate at all). The structured
+    exception dissolves idea 4's <code>ShardKey</code> correction — the engine <em>learns</em>
+    destinations instead of being configured with them — and its <code>retryAfter</code> feeds
+    idea 2's <code>availableAt</code> deferral directly. Critically, a rate-limit signal is a
+    <em>deferral instruction, not a failure</em>: it must not increment failure history or
+    failure metrics. The one thing self-scaling cannot subsume: a <strong>contractual</strong>
+    quota (a vendor that bills or bans at N RPS) is invisible to latency — a well-provisioned
+    endpoint shows no degradation right up until it rejects you — so explicit ceilings (ideas
+    1/5) remain complements, composed by <code>min()</code>, not rivals.</dd>
+    <dt>Downsides</dt>
+    <dd>Experimental by nature; the old branch's own README warning stands (a contracting pool
+    can strand timed-out jobs as duplicates downstream); requires the async-engine timing fix
+    (confluentinc#766) as signal integrity; both prior WIPs have bitrotted (design references
+    only); and the controller must not fight <code>DynamicLoadFactor</code>/backpressure —
+    they control different variables (pool size vs buffer depth) but share signals, so the
+    boundary needs stating up front.</dd>
+  </dl>
+</article>
+
 <div class="callout">
   <span class="eyebrow">Recommended build order</span>
   <p style="margin:0.4rem 0 0;">Skateboard first: <strong>observe-only metrics</strong> (compute
@@ -619,7 +697,7 @@ Redis-backed plug is ever built.</p>
 </section>
 
 <footer class="composition-signal">
-  Composed 2026-08-17 by ce-ideate (repo-grounded) from
+  Composed 2026-08-17, updated 2026-08-18 (idea 8, strategy menu) by ce-ideate (repo-grounded) from
   <code>astubbs#228</code>, <code>confluentinc#24</code>, <code>confluentinc#766</code>,
   five repo evidence dossiers, and the <code>features/rate-limiting</code> branch autopsy ·
   46 raw ideas, 5 ideation frames, fresh-context basis verification (8/8 spot-checks confirmed).
