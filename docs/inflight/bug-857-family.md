@@ -145,6 +145,43 @@ exist. This generalises beyond the entry - it belongs in the ambient-probe secti
 `docs/testing.md`, which currently states that every broker integration test failure *log* includes
 the block, and that file was owned by another branch when this was written.
 
+**Fifth sighting, 2026-08-17 - the eager `CLASS2_STALL` again, and it reproduces the second sighting
+almost exactly.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed fail-fast by
+`ProgressProbe` on
+[job 95331078881](https://github.com/astubbs/parallel-consumer/actions/runs/32011246250/job/95331078881),
+on astubbs#293 at head `b94e85d64`:
+
+```
+CLASS2_STALL/LAG_STAGNATION: partition ChaosRevokeUnderWorkIT-w4-204589915-25 lag=2885 with
+committed offset stagnant at 296 for 154s (bound 150s) - protocol-invisible
+```
+
+Two violations, eight frozen partitions (lag 79-1676, stagnant 12-23s), `peaks:
+rebalanceDwell=10990ms lagStagnation=154235ms`. **Replay seed `1870799285619636118`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1870799285619636118
+
+**Why this one is worth more than another tally mark: it is the same variant and the same signature
+as the second sighting**, four days apart on an unrelated branch - eager assignor, `CLASS2_STALL`/
+`LAG_STAGNATION`, and 154s of stagnation against the same 150s bound. The second sighting stands as
+the family's strongest datapoint partly because it was single; it is not any more.
+
+**Control arm, from the same run:** both siblings passed - `ChaosRevokeUnderWorkCooperativeIT` on
+seed `4957387373444835170` and `ChaosChurnStormIT` on `9069097373343684126`. Same runner, same
+broker image, same minute, so this is not an ambient property of the machine, and the cooperative
+variant again did not draw it.
+
+**Branch context: astubbs#293 is not a suspect.** It adds a proxy sidecar and eleven language
+clients; nothing in it touches the rebalance, poll, commit or shutdown path in
+`parallel-consumer-core`, and the same lane was green on the previous head of the same branch two
+runs earlier with different seeds.
+
+**One correction to the retrieval note above: this time the autopsy WAS in the console log**, read
+straight out of `gh api .../actions/jobs/<id>/logs`. The truncation that hid it on 2026-08-12 is
+intermittent, not the rule - go to the artifact when the console lacks the block, not instead of
+looking.
+
 **Gated on astubbs#29: proving thread-parallel integration tests are safe again.** astubbs#68 made the integration
 suite reliable by *forking* per broker (`forkCount=4`), which sidesteps the deadlock rather than
 proving it gone - the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure it was hiding is
