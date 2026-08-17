@@ -61,7 +61,7 @@ Documentation:
 
 - Non-goal: adopting the RoaringBitmap library or its portable format (KTD1 records why).
 - Non-goal: changing the commit path or back-pressure policy.
-- Non-goal: encode-time CPU optimization - PR #106 (`perf/sparse-offset-encoding`) owns that; this plan measures density only.
+- Non-goal: encode-time CPU optimization - PR astubbs#106 (`perf/sparse-offset-encoding`) owns that; this plan measures density only.
 
 Deferred to follow-up work:
 
@@ -133,7 +133,7 @@ Candidate wire formats (directional guidance, frozen at implementation; every ca
 - Test infrastructure to reuse: `WorkManagerOffsetMapCodecManagerTest.differentInputsAndCompressions` (x/o bitmap corpus + random data up to 30k), `OffsetEncodingTests` (`@EnumSource(OffsetEncoding.class)` auto-enrolls new entries and asserts highest-seen/succeeded round-trips; `CODECS_THAT_DEGRADE` list), `BitSetEncodingTest.basic` (unit-test template), `OffsetCodecTestUtils`, `ForeignOffsetMetadataOnAssignmentTest`, resource locks `METADATA_DATA_SIZE_RESOURCE_LOCK` / `COMPRESSION_FORCED_RESOURCE_LOCK`.
 - Report/CI conventions: `docs/data/` is schema-governed hand-written YAML only (`bin/check-docs-data.sh` globs `*.yaml`) - the benchmark report lives in `docs/` instead; freshness gating follows the `bin/todo-index.sh --check` pattern wired in `.github/workflows/pr-checklist.yml`; surefire's working directory is the module basedir, so report generation resolves the repo root via a `bin/` script, not a relative path from the test.
 - External: RoaringFormatSpec container costs (array <= 4096 entries at 2B/entry, 8192B bitmap containers, 4B/run; ~8-16B header floor); Z85 spec rfc.zeromq.org/spec/32 (4-byte blocks, application-defined padding - hence KTD2's partial-block scheme); Base64 `4*ceil(n/3)` vs sentinel+Z85 `1 + 5*floor(n/4) + (n%4 ? n%4+1 : 0)` - crossover per KTD6.
-- Collisions and hazards: PR #106 owns this package (conflict expected in `OffsetSimultaneousEncoder`, possibly semantic - that PR reworks the per-offset walk; resolve at merge, do not reshape); `RunLengthEncoderTest`'s INT-overflow case is the unit-suite wall-clock floor - new tests must use single-delta-jump patterns, never walk billions of offsets; the offsets package is the PIT mutation-testing lane (`PIT_DECIDABLE_PACKAGES`) and the benchmark test is excluded from it deliberately (U1); `OffsetEncodingBackPressureTest` is quarantined with an encoding-size-threshold hypothesis - denser payloads move its block point.
+- Collisions and hazards: PR astubbs#106 owns this package (conflict expected in `OffsetSimultaneousEncoder`, possibly semantic - that PR reworks the per-offset walk; resolve at merge, do not reshape); `RunLengthEncoderTest`'s INT-overflow case is the unit-suite wall-clock floor - new tests must use single-delta-jump patterns, never walk billions of offsets; the offsets package is the PIT mutation-testing lane (`PIT_DECIDABLE_PACKAGES`) and the benchmark test is excluded from it deliberately (U1); `OffsetEncodingBackPressureTest` is quarantined with an encoding-size-threshold hypothesis - denser payloads move its block point.
 
 ---
 
@@ -142,7 +142,7 @@ Candidate wire formats (directional guidance, frozen at implementation; every ca
 - Mixed-version consumer groups: an older PC instance reading a newer instance's commit hits an unreadable string (Z85, payloads >= 22 bytes) or unknown magic byte; it drops the map and resumes from the committed offset, which can redeliver in-flight work. Bounded to rolling-upgrade windows and larger payloads per KTD6; documented per R10.
 - Back-pressure tests (`OffsetEncodingBackPressureTest`, `...UnitTest`) force `DefaultMaxMetadataSize` to 40/30; at those payload sizes the outer codec is in the tie/crossover band, so string lengths may shift either way. Verification Contract requires before/after runs with recorded high-water marks; adjust test constants only with the arithmetic shown, never by loosening assertions.
 - `EncodedOffsetPair.SIZE_COMPARATOR` drops size-ties from `sortedEncodings`: a new encoder tying an existing size silently vanishes from tests iterating `sortedEncodings`. U4 must not rely on set membership for assertions; compare via `encodingMap`.
-- PR #106 merge conflict in `OffsetSimultaneousEncoder` is likely and may be semantic (it reworks the per-offset walk U4's registration touches). Resolve at merge time; do not pre-shape this plan around it.
+- PR astubbs#106 merge conflict in `OffsetSimultaneousEncoder` is likely and may be semantic (it reworks the per-offset walk U4's registration touches). Resolve at merge time; do not pre-shape this plan around it.
 - Public test-facing API rename: `deserialiseIncompleteOffsetMapFromBase64` becomes misnamed once Z85 exists; U3 renames it to `deserialiseIncompleteOffsetMapFromString` and updates callers (`CommitHistory`, tests). Internal API; no deprecation cycle.
 - Kafka-clients may permit null `OffsetAndMetadata.metadata()` depending on version; U3's dispatch treats null like empty (Base64 path, no-map result) and pins it with a test.
 
@@ -249,7 +249,7 @@ Do not start this unit before U1's verdict line exists; if the verdict is case-a
 - Goal: R9, R10 - the issue's explicit ask to record the reasoning where the next asker finds it.
 - Requirements: R9, R10.
 - Dependencies: U1-U5 (numbers final).
-- Files: new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/package-info.java`; `src/docs/README_TEMPLATE.adoc` (offset-encoding section: pipeline description, "base 64" wording, density claims; regenerate `README.adoc` via `mvn process-sources`); `CHANGELOG.adoc`; `docs/todo-index.md` if TODOs changed; `docs/refactoring.md` row for #192 updated to point at the record.
+- Files: new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/package-info.java`; `src/docs/README_TEMPLATE.adoc` (offset-encoding section: pipeline description, "base 64" wording, density claims; regenerate `README.adoc` via `mvn process-sources`); `CHANGELOG.adoc`; `docs/todo-index.md` if TODOs changed; `docs/refactoring.md` row for astubbs#192 updated to point at the record.
 - Approach: package-info carries the competitive-set design, the wire-format compatibility contract (write-new/read-all, magic-byte registry including reserved pairs, sentinel scheme with the `%`-in-alphabet non-nesting note), the RoaringBitmap decision with U1's numbers, the outer-codec decision with KTD6's crossover math, and the candidate verdicts. Keep the README section user-facing (what, not why); the why lives in the javadoc. CHANGELOG wording per R10 names the operator-visible redelivery effect.
 - Test expectation: none - documentation unit; README regeneration is verified by the repo's generated-docs check.
 - Verification: README regenerated not hand-edited; changelog entry present; javadoc builds clean.

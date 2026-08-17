@@ -42,7 +42,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <h2>It is a SIZE benchmark, not a timing benchmark</h2>
  * There is no JMH here and there must not be. Encoded size is a deterministic function of the incompletes
  * distribution and the range length, so it can be measured exactly, reproducibly and cheaply - which is what makes
- * the output committable and diffable. Encode-time CPU is explicitly out of scope for this plan (PR #106 owns it).
+ * the output committable and diffable. Encode-time CPU is explicitly out of scope for this plan (PR astubbs#106 owns it).
  *
  * <h2>Why the candidates are LAYOUT WRITERS and not encoders</h2>
  * The three candidates below ({@link #chunkedBitSetLayout}, {@link #sparseDeltaListLayout},
