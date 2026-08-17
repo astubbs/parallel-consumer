@@ -26,3 +26,12 @@ that PR, and none are resolved by it.
   increment in `OffsetMapCodecManager#encodeOffsetsCompressed`) is then nondeterministic across
   runs. Attribution noise only - the payload chosen is the same size either way. The benchmark
   already works around it by reading `getEncodingMap()`.
+
+## SpotBugs: DeltaListEncoder CT_CONSTRUCTOR_THROW is accepted, convention-consistent
+
+astubbs#306's SpotBugs pass flags `CT_CONSTRUCTOR_THROW` on `DeltaListEncoder` (constructor throws
+`DeltaListEncodingNotSupportedException` on range overflow). This mirrors `BitSetEncoder`'s identical
+constructor-throw pattern, whose same finding sits latent in the baseline (see
+`static-spotbugs-latent-findings.md`). Restructuring one encoder to a static factory while its
+siblings keep the throw would be worse than the finding; if the pattern is ever fixed, fix it across
+all encoders at once.

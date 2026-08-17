@@ -372,16 +372,17 @@ public class OffsetMapCodecManager<K, V> {
             long highestSeenOffsetIsThen = nextExpectedOffset - 1;
             return HighestOffsetAndIncompletes.of(highestSeenOffsetIsThen);
         } else {
+            // unknown magic byte raises OffsetDecodingError here - already the recoverable signal
+            var result = EncodedOffsetPair.unwrap(decodedBytes);
             try {
-                var result = EncodedOffsetPair.unwrap(decodedBytes);
                 return result.getDecodedIncompletes(nextExpectedOffset, errorPolicy);
-            } catch (OffsetDecodingError alreadyClassified) {
-                // already the recoverable signal - never double-wrap it
-                throw alreadyClassified;
             } catch (Exception decodeFailure) {
-                // KafkaStreamsEncodingNotSupported (sneaky-thrown, checked) is the FAIL policy's verdict on
-                // recognisably-Kafka-Streams metadata - propagate it exactly as before this choke point existed
-                if (decodeFailure instanceof EncodingNotSupportedException) {
+                // Only the Kafka Streams arms can raise the FAIL policy's verdict on recognisably-Kafka-Streams
+                // metadata (KafkaStreamsEncodingNotSupported, sneaky-thrown) - a policy outcome with an actionable
+                // message, not a decode failure, propagated exactly as before this choke point existed. Keying on
+                // the encoding rather than the exception type keeps this visible to static analysis: the sneaky
+                // throw makes an instanceof-a-checked-type test look impossible to SpotBugs even though it is live.
+                if (result.getEncoding() == OffsetEncoding.KafkaStreams || result.getEncoding() == OffsetEncoding.KafkaStreamsV2) {
                     throw decodeFailure;
                 }
                 // everything else - BufferUnderflowException, InternalRuntimeException, the zstd IOException
