@@ -1,7 +1,24 @@
 /mk-include
 /.mk-include-timestamp
 .DS_Store
+
+# A `CLAUDE.md` is ignored BY DEFAULT, at any depth: historically these were personal scratch files,
+# and the default should stay "yours, not the repo's" so nobody's local notes land by accident.
 CLAUDE.md
+# ...except the harness bridges, which are the opposite of personal - they are the ONLY reason
+# Claude Code sees this repo's AGENTS.md rules at all (it never reads AGENTS.md; verified against
+# 2.1.223). Ignored, they exist on the author's machine and nowhere else, which is exactly how they
+# were nearly shipped as a no-op: everything looked wired up locally.
+#
+# ENUMERATED, NOT BLANKET (`!CLAUDE.md`), for two reasons. The default above is worth keeping for
+# any other CLAUDE.md, and a blanket negation would also invite the drifting second copy of the
+# rules that docs/agent-harness.md argues against - the stubs are pure `@AGENTS.md` imports on
+# purpose. And adding a nested AGENTS.md then requires a deliberate line here, which is one more
+# place the "did you add the bridge?" question gets asked; until the gate under "Worth adding" in
+# docs/agent-harness.md exists, that is the only place it gets asked at all.
+!/CLAUDE.md
+!/bin/CLAUDE.md
+!/docs/inflight/CLAUDE.md
 
 # Local per-worktree ownership markers (see AGENTS.md "Worktree ownership")
 .worktree-owner
@@ -12,6 +29,21 @@ CLAUDE.md
 # that shared config can be un-ignored later with a negation, e.g.
 # `!/.claude/settings.json`; git will not descend into a fully-excluded directory.
 /.claude/*
+# ...which is now done: the shared harness config is tracked, personal overrides are not.
+# settings.local.json stays ignored - it is where per-machine permission grants accumulate.
+#
+# ONE-TIME MIGRATION HAZARD, and it is silent. Git refuses to overwrite an untracked file, but it
+# will overwrite an IGNORED one without a word. So an existing clone that already has a local
+# `.claude/settings.json` - which every clone did, because it was ignored until this commit - has it
+# REPLACED by the tracked version on the first pull, with no conflict, no warning, and no copy left
+# anywhere: the file was never in git, so there is nothing to recover from. Verified, not assumed.
+# Nothing inside the repo can prevent it; git resolves the checkout before any hook of ours runs.
+# Copy anything local out of `.claude/settings.json` into `.claude/settings.local.json` BEFORE
+# pulling this commit - that is where it belonged anyway, and it survives every later pull.
+# See docs/agent-harness.md.
+!/.claude/settings.json
+!/.claude/hooks/
+!/.claude/hooks/**
 /.codebuddy/
 /.context/
 /.compound-engineering/

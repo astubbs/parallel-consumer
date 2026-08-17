@@ -47,6 +47,21 @@ jobs:
       - name: No SIGPIPE-prone pipes in bin/
         run: bash bin/check-shell-sigpipe.sh
 
+  agent-hooks:
+    name: "agents: hook self-tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads .claude/hooks/* and docs/merge-checklist.md from the working tree; no history needed.
+      - uses: actions/checkout@v6
+
+      # The hooks in .claude/hooks/ enforce repo conventions on every agent session, and they are
+      # the one layer with no CI behind it - a broken hook either blocks work or silently stops
+      # checking, and both look like nothing happening. docs/agent-harness.md rule 3 ("give it a
+      # negative control") applies to the harness itself; this is that control.
+      - name: Self-test the agent hooks
+        run: bash bin/test-check-agent-hooks.sh
+
   rename:
     name: "tooling: package rename"
     runs-on: ubuntu-latest
