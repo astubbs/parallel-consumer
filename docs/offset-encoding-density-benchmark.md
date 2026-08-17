@@ -36,10 +36,11 @@ committable. Encode-time CPU is a separate concern owned elsewhere.
   winner. No codec is implemented here; this is the arithmetic only.
 - **Two compression views.** *Forced* sets `OffsetSimultaneousEncoder.compressionForced`, so every
   encoder gets a zstd twin - it shows what compression is worth in principle. *Production* applies
-  the real rule: today's all-or-nothing gate for the incumbents (NO twins register if ANY encoder's
-  plain form is under 200 bytes), and, for a candidate, its own zstd twin only when its own plain
-  form is at or over that threshold - because a candidate can only ship alongside KTD8's
-  per-encoder registration fix (R11). **The verdicts use the production view.**
+  the real rule, which is now PER ENCODER (KTD8): an encoding gets a zstd twin exactly when its own
+  plain form is at or over 200 bytes. Before KTD8 the gate was all-or-nothing - NO twin registered
+  for anything if ANY ONE encoder's plain form was under the threshold - which is what R11 required
+  fixing before a candidate could ship, and which incumbents and candidates alike are now measured
+  under. **The verdicts use the production view.**
 - **`ByteArray` is absent** from the tables: `addByteBufferEncoder()` is not called in production,
   as BitSet always beats it.
 - **Scenario data is seeded** (`java.util.Random`, seed derived from the family and range size
@@ -130,52 +131,53 @@ columns are plain / zstd. All figures are **packed bytes** (magic byte included)
 ## Sizes - production compression rule
 
 The rule that actually ships, per the Method note above. **This is the table the verdicts use.**
-A `!` in the *twins* column marks a scenario where today's all-or-nothing gate suppressed every
-compressed twin because one encoding was small - the pre-existing inefficiency KTD8 fixes.
+A `!` in the *twins* column marks a scenario where at least one registered encoding was itself too
+small to earn a zstd twin. Under KTD8's per-encoder rule the other encodings keep theirs; under the
+all-or-nothing gate this report was first generated with, one such encoding suppressed them all.
 
 | Scenario | Range | Incompletes | BitSet v1 | BitSet v2 | RunLength v1 | RunLength v2 | chunked-bitset | delta-list | u-run-length | twins | Winner | bytes | Base64 | Z85 |
 |---|---:|---:|---:|---:|---:|---:|---|---|---|:-:|---|---:|---:|---:|
 | `trailing-incomplete-run` | 1,000 | 50 | 129 | 131 | 7 | 13 | 16 / 25 | 57 / 24 | 11 / 20 | ! | `RunLength` | 7 | 12 | 10 |
-| `trailing-incomplete-run` | 10,000 | 500 | 1,254 | 1,256 | 7 | 13 | 16 / 25 | 508 / 26 | 11 / 20 | ! | `RunLength` | 7 | 12 | 10 |
-| `trailing-incomplete-run` | 100,000 | 5,000 | n/a | 12,506 | n/a | 13 | 16 / 25 | 5,009 / 27 | 15 / 24 | ! | `RunLengthV2` | 13 | 20 | 18 |
-| `trailing-incomplete-run` | 1,000,000 | 50,000 | n/a | 125,006 | n/a | 13 | 25 / 34 | 50,010 / 29 | 67 / 28 | ! | `RunLengthV2` | 13 | 20 | 18 |
+| `trailing-incomplete-run` | 10,000 | 500 | 24 | 26 | 7 | 13 | 16 / 25 | 508 / 26 | 11 / 20 | ! | `RunLength` | 7 | 12 | 10 |
+| `trailing-incomplete-run` | 100,000 | 5,000 | n/a | 26 | n/a | 13 | 16 / 25 | 5,009 / 27 | 15 / 24 | ! | `RunLengthV2` | 13 | 20 | 18 |
+| `trailing-incomplete-run` | 1,000,000 | 50,000 | n/a | 27 | n/a | 13 | 25 / 34 | 50,010 / 29 | 67 / 28 | ! | `RunLengthV2` | 13 | 20 | 18 |
 | `uniform-random 0.1%` | 1,000 | 1 | 129 | 131 | 9 | 17 | 14 / 23 | 8 / 17 | 13 / 22 | ! | `delta-list` | 8 | 12 | 11 |
-| `uniform-random 0.1%` | 10,000 | 10 | 1,254 | 1,256 | 45 | 89 | 32 / 41 | 23 / 32 | 49 / 58 | ! | `delta-list` | 23 | 32 | 30 |
+| `uniform-random 0.1%` | 10,000 | 10 | 58 | 60 | 45 | 89 | 32 / 41 | 23 / 32 | 49 / 58 | ! | `delta-list` | 23 | 32 | 30 |
 | `uniform-random 0.1%` | 100,000 | 100 | n/a | 352 | 284 | 246 | 217 / 226 | 191 / 200 | 409 / 286 | yes | `delta-list` | 191 | 256 | 240 |
 | `uniform-random 0.1%` | 1,000,000 | 1,000 | n/a | 2,666 | 2,209 | 2,083 | 2,087 / 2,096 | 1,884 / 1,728 | 4,005 / 2,213 | yes | `delta-list+zstd` | 1,728 | 2,304 | 2,161 |
 | `uniform-random 1%` | 1,000 | 10 | 129 | 131 | 45 | 89 | 32 / 41 | 20 / 29 | 49 / 58 | ! | `delta-list` | 20 | 28 | 26 |
 | `uniform-random 1%` | 10,000 | 100 | 229 | 231 | 241 | 177 | 212 / 221 | 130 / 139 | 409 / 242 | yes | `delta-list` | 130 | 176 | 164 |
 | `uniform-random 1%` | 100,000 | 1,000 | n/a | 1,840 | 1,629 | 1,496 | 2,017 / 2,026 | 1,297 / 1,203 | 3,977 / 1,632 | yes | `delta-list+zstd` | 1,203 | 1,604 | 1,505 |
 | `uniform-random 1%` | 1,000,000 | 10,000 | n/a | 17,676 | 14,921 | 14,062 | 20,087 / 20,096 | 12,773 / 11,274 | 39,629 / 14,925 | yes | `delta-list+zstd` | 11,274 | 15,032 | 14,094 |
-| `uniform-random 5%` | 1,000 | 50 | 129 | 131 | 197 | 393 | 112 / 114 | 56 / 65 | 201 / 116 | ! | `delta-list` | 56 | 76 | 71 |
+| `uniform-random 5%` | 1,000 | 50 | 129 | 131 | 197 | 129 | 112 / 114 | 56 / 65 | 201 / 116 | ! | `delta-list` | 56 | 76 | 71 |
 | `uniform-random 5%` | 10,000 | 500 | 523 | 525 | 683 | 563 | 1,012 / 992 | 510 / 435 | 1,881 / 685 | yes | `delta-list+zstd` | 435 | 580 | 545 |
 | `uniform-random 5%` | 100,000 | 5,000 | n/a | 4,722 | 5,838 | 4,668 | 10,017 / 10,026 | 5,014 / 3,692 | 19,081 / 5,844 | yes | `delta-list+zstd` | 3,692 | 4,924 | 4,616 |
 | `uniform-random 5%` | 1,000,000 | 50,000 | n/a | 47,025 | 55,573 | 47,573 | 100,087 / 100,096 | 50,100 / 36,336 | 189,833 / 55,580 | yes | `delta-list+zstd` | 36,336 | 48,448 | 45,421 |
-| `uniform-random 20%` | 1,000 | 200 | 129 | 131 | 665 | 1,329 | 137 / 141 | 207 / 135 | 669 / 230 | ! | `BitSet` | 129 | 172 | 163 |
+| `uniform-random 20%` | 1,000 | 200 | 129 | 131 | 218 | 230 | 137 / 141 | 207 / 135 | 669 / 230 | ! | `BitSet` | 129 | 172 | 163 |
 | `uniform-random 20%` | 10,000 | 2,000 | 987 | 990 | 1,680 | 1,865 | 1,262 / 990 | 2,007 / 974 | 6,421 / 1,683 | yes | `delta-list+zstd` | 974 | 1,300 | 1,219 |
 | `uniform-random 20%` | 100,000 | 20,000 | n/a | 9,241 | 15,541 | 18,090 | 12,517 / 9,239 | 20,008 / 9,726 | 63,997 / 15,553 | yes | `chunked-bitset+zstd` | 9,239 | 12,320 | 11,550 |
 | `uniform-random 20%` | 1,000,000 | 200,000 | n/a | 91,891 | 151,251 | 181,268 | 125,087 / 91,933 | 200,008 / 101,217 | 640,099 / 151,346 | yes | `BitSetV2Compressed` | 91,891 | 122,524 | 114,865 |
 | `clustered-bursts` | 1,000 | 47 | 129 | 131 | 9 | 17 | 16 / 25 | 53 / 23 | 13 / 22 | ! | `RunLength` | 9 | 12 | 13 |
-| `clustered-bursts` | 10,000 | 587 | 1,254 | 1,256 | 37 | 73 | 44 / 53 | 602 / 61 | 41 / 50 | ! | `RunLength` | 37 | 52 | 48 |
+| `clustered-bursts` | 10,000 | 587 | 87 | 89 | 37 | 73 | 44 / 53 | 602 / 61 | 41 / 50 | ! | `RunLength` | 37 | 52 | 48 |
 | `clustered-bursts` | 100,000 | 5,349 | n/a | 560 | 352 | 436 | 397 / 406 | 5,441 / 455 | 389 / 355 | yes | `RunLengthCompressed` | 352 | 472 | 441 |
 | `clustered-bursts` | 1,000,000 | 53,780 | n/a | 4,827 | 2,858 | 3,421 | 3,851 / 3,288 | 54,607 / 3,838 | 3,769 / 2,862 | yes | `RunLengthCompressed` | 2,858 | 3,812 | 3,574 |
-| `alternating-xo` | 1,000 | 500 | 129 | 131 | 2,003 | 4,005 | 137 / 28 | 507 / 25 | 2,007 / 25 | ! | `delta-list+zstd` | 25 | 36 | 33 |
+| `alternating-xo` | 1,000 | 500 | 129 | 131 | 21 | 22 | 137 / 28 | 507 / 25 | 2,007 / 25 | ! | `RunLengthCompressed` | 21 | 28 | 28 |
 | `alternating-xo` | 10,000 | 5,000 | 21 | 23 | 22 | 23 | 1,262 / 29 | 5,007 / 25 | 20,007 / 26 | yes | `BitSetCompressed` | 21 | 28 | 28 |
 | `alternating-xo` | 100,000 | 50,000 | n/a | 23 | 34 | 58 | 12,517 / 39 | 50,008 / 27 | 200,007 / 38 | yes | `BitSetV2Compressed` | 23 | 32 | 30 |
 | `alternating-xo` | 1,000,000 | 500,000 | n/a | 24 | 202 | 384 | 125,087 / 104 | 500,008 / 39 | 2,000,007 / 206 | yes | `BitSetV2Compressed` | 24 | 32 | 31 |
 | `all-incomplete` | 1,000 | 1,000 | 129 | 131 | 3 | 5 | 16 / 25 | 1,007 / 25 | 7 / 16 | ! | `RunLength` | 3 | 4 | 5 |
-| `all-incomplete` | 10,000 | 10,000 | 1,254 | 1,256 | 3 | 5 | 16 / 25 | 10,007 / 25 | 7 / 16 | ! | `RunLength` | 3 | 4 | 5 |
-| `all-incomplete` | 100,000 | 100,000 | n/a | 12,506 | n/a | 5 | 25 / 34 | 100,008 / 27 | 11 / 20 | ! | `RunLengthV2` | 5 | 8 | 8 |
-| `all-incomplete` | 1,000,000 | 1,000,000 | n/a | 125,006 | n/a | 5 | 151 / 71 | 1,000,008 / 55 | 67 / 26 | ! | `RunLengthV2` | 5 | 8 | 8 |
+| `all-incomplete` | 10,000 | 10,000 | 20 | 22 | 3 | 5 | 16 / 25 | 10,007 / 25 | 7 / 16 | ! | `RunLength` | 3 | 4 | 5 |
+| `all-incomplete` | 100,000 | 100,000 | n/a | 22 | n/a | 5 | 25 / 34 | 100,008 / 27 | 11 / 20 | ! | `RunLengthV2` | 5 | 8 | 8 |
+| `all-incomplete` | 1,000,000 | 1,000,000 | n/a | 23 | n/a | 5 | 151 / 71 | 1,000,008 / 55 | 67 / 26 | ! | `RunLengthV2` | 5 | 8 | 8 |
 
 ## What the numbers say
 
 - **`chunked-bitset`**: best result anywhere in the corpus is **+29.3%** against the incumbent, on uniform-random 0.1% @ range
-  10,000 (41 chars vs 58) - but that is a `!` row, where the incumbents lost their zstd twins to the all-or-nothing gate, so the margin is mostly that gate and not the format. It is the production-view winner on **1 of 32** scenarios.
-- **`delta-list`**: best result anywhere in the corpus is **+79.8%** against the incumbent, on alternating-xo @ range
-  1,000 (33 chars vs 163) - but that is a `!` row, where the incumbents lost their zstd twins to the all-or-nothing gate, so the margin is mostly that gate and not the format. It is the production-view winner on **14 of 32** scenarios.
-- **`u-run-length`**: best result anywhere in the corpus is **+79.8%** against the incumbent, on alternating-xo @ range
-  1,000 (33 chars vs 163) - but that is a `!` row, where the incumbents lost their zstd twins to the all-or-nothing gate, so the margin is mostly that gate and not the format. It is the production-view winner on **0 of 32** scenarios.
+  10,000 (41 chars vs 58) - but that is a `!` row, where at least one incumbent was too small to earn a zstd twin, so read the margin against the forced table too. It is the production-view winner on **1 of 32** scenarios.
+- **`delta-list`**: best result anywhere in the corpus is **+56.4%** against the incumbent, on uniform-random 5% @ range
+  1,000 (71 chars vs 163) - but that is a `!` row, where at least one incumbent was too small to earn a zstd twin, so read the margin against the forced table too. It is the production-view winner on **13 of 32** scenarios.
+- **`u-run-length`**: best result anywhere in the corpus is **+10.4%** against the incumbent, on uniform-random 5% @ range
+  1,000 (146 chars vs 163) - but that is a `!` row, where at least one incumbent was too small to earn a zstd twin, so read the margin against the forced table too. It is the production-view winner on **0 of 32** scenarios.
 - **zstd on a sparse bitmap is the incumbent's strongest move.** A BitSet of a low-density
   incompletes set is a long run of zeros with a few ones, and zstd takes it close to its entropy -
   which is why the pre-compression size advantage of a sparse format shrinks so much by the time it
@@ -189,10 +191,11 @@ compressed twin because one encoding was small - the pre-existing inefficiency K
   incomplete run, or an all-incomplete range, `RunLength` commits 4-20 chars - a candidate cannot
   beat that, and the 5-byte `[magic:1][rangeLength:int4]` header the candidates carry (against the
   incumbents' 1 byte, since their payloads already imply the range) is decisive at that size.
-- **The all-or-nothing compression gate costs real chars today.** Every `!` row in the production
-  table is a scenario where one small encoding suppressed every other encoder's zstd twin; compare
-  such a row across the two tables to see what that costs. The `alternating-xo` rows are the
-  clearest. That is KTD8/R11, and it is independent of any candidate.
+- **The all-or-nothing compression gate cost real chars, and no longer exists.** It suppressed every
+  encoder's zstd twin as soon as one encoding was small; the `alternating-xo` rows were the clearest
+  case, where a tiny run-length encoding cost the bitsets a compression that takes them from
+  thousands of bytes to a few dozen. KTD8/R11 replaced it with the per-encoder rule these tables are
+  now generated under, and that change is independent of any candidate.
 - **Base64 vs Z85 is a small win, and it is free.** Z85 converges on ~6% shorter, applies to every
   encoding at once, and is independent of everything else in this report - compare the last two
   columns of either table.
@@ -244,10 +247,11 @@ multiple of the 4,096-char metadata cap.
    written is applied exactly here; whether a win concentrated this far past the cap satisfies
    its SPIRIT ("real headroom at the point where density matters") is a judgement for whoever
    decides on U4, and this table is what that decision should be made on.
-2. **The compression views are not symmetric, by design.** Incumbents are gated by today's
-   all-or-nothing rule; candidates get KTD8's per-encoder rule, since a candidate can only ship
-   alongside that fix. On a `!` row that asymmetry flatters the candidate. Check the *twins* column
-   before trusting a `!` row's percentage.
+2. **Incumbents and candidates are now measured under the same compression rule.** Both get a zstd
+   twin exactly when their own plain form is large enough to be worth compressing (KTD8). The first
+   generation of this report gated the incumbents with the old all-or-nothing rule and the candidates
+   per encoder, which flattered the candidates on `!` rows; that asymmetry is gone, and every
+   qualifying row above was a `yes` row under either rule.
 
 ### Why not the RoaringBitmap library (KTD1)
 

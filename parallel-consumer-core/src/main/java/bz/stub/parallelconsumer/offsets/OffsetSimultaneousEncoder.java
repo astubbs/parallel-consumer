@@ -57,12 +57,14 @@ public class OffsetSimultaneousEncoder {
      * The lowest committable offset
      */
     @ToString.Include
+    @Getter
     private final long lowWaterMark;
 
     /**
      * The difference between the base offset (the offset to be committed) and the highest seen offset.
      */
     @ToString.Include
+    @Getter
     private final long lengthBetweenBaseAndHighOffset;
 
     /**
@@ -162,7 +164,22 @@ public class OffsetSimultaneousEncoder {
         newEncoders.add(new RunLengthEncoder(this, v1));
         newEncoders.add(new RunLengthEncoder(this, v2));
 
+        addDeltaListEncoder(newEncoders);
+
         return newEncoders;
+    }
+
+    /**
+     * The sparse delta list wins wherever the incompletes are scattered over a wide range - see
+     * {@link DeltaListEncoder}. It declines ranges past {@link Integer#MAX_VALUE}, which the other encoders cannot
+     * express either.
+     */
+    private void addDeltaListEncoder(ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> newEncoders) {
+        try {
+            newEncoders.add(new DeltaListEncoder(this));
+        } catch (DeltaListEncodingNotSupportedException a) {
+            log.debug("Cannot construct {} : {}", DeltaListEncoder.class.getSimpleName(), a.getMessage());
+        }
     }
 
     private void addBitsetEncoder(ConcurrentHashMap.KeySetView<OffsetEncoder, Boolean> newEncoders, OffsetEncoding.Version version) {
@@ -201,11 +218,13 @@ public class OffsetSimultaneousEncoder {
      * <ul>
      * <li>{@link OffsetEncoding#BitSet}</li>
      * <li>{@link OffsetEncoding#RunLength}</li>
+     * <li>{@link OffsetEncoding#DeltaList}</li>
      * </ul>
-     * Conditionally encodes compression variants:
+     * Conditionally encodes compression variants, per encoder (see {@link #registerCompressedTwins}):
      * <ul>
      * <li>{@link OffsetEncoding#BitSetCompressed}</li>
      * <li>{@link OffsetEncoding#RunLengthCompressed}</li>
+     * <li>{@link OffsetEncoding#DeltaListCompressed}</li>
      * </ul>
      * Currently commented out is {@link OffsetEncoding#ByteArray} as there doesn't seem to be an advantage over
      * BitSet encoding.
@@ -269,11 +288,26 @@ public class OffsetSimultaneousEncoder {
         }
         toRemove.forEach(encoders::remove);
 
-        // compressed versions
-        // sizes over LARGE_INPUT_MAP_SIZE_THRESHOLD bytes seem to benefit from compression
-        boolean noEncodingsAreSmallEnough = encoders.stream().noneMatch(OffsetEncoder::quiteSmall);
-        if (noEncodingsAreSmallEnough || compressionForced) {
-            encoders.forEach(OffsetEncoder::registerCompressed);
+        registerCompressedTwins(encoders);
+    }
+
+    /**
+     * Registers a zstd twin for each encoder whose own plain encoding is large enough to be worth compressing
+     * (sizes over {@link #LARGE_ENCODED_SIZE_THRESHOLD_BYTES} seem to benefit).
+     * <p>
+     * PER ENCODER, not all-or-nothing (KTD8 of the offset-encoding density plan). This gate used to skip compression
+     * for EVERY encoder as soon as ANY ONE of them was {@link OffsetEncoder#quiteSmall()}, which meant a run-length
+     * encoding of a handful of bytes suppressed the compressed twin of a bitset thousands of bytes long. Whenever the
+     * small encoder was not itself the winner, that cost real characters against the metadata cap - the
+     * {@code !}-marked rows of {@code docs/offset-encoding-density-benchmark.md} are the measurement of it. A
+     * compressed twin can only ever be chosen by {@link #packSmallest()} if it is smaller, so registering more of them
+     * cannot make a commit bigger.
+     */
+    private static void registerCompressedTwins(final Set<? extends OffsetEncoder> encoders) {
+        for (OffsetEncoder encoder : encoders) {
+            if (compressionForced || !encoder.quiteSmall()) {
+                encoder.registerCompressed();
+            }
         }
     }
 

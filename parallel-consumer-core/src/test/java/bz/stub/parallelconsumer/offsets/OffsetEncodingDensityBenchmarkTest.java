@@ -168,6 +168,23 @@ class OffsetEncodingDensityBenchmarkTest {
     }
 
     /**
+     * The corpus, addressed by a family's label - so sibling tests can assert against the same scenarios this report
+     * is generated from instead of inventing their own.
+     *
+     * @param familyLabel one of the {@link #FAMILIES} labels, e.g. {@code "uniform-random 1%"}
+     * @see DeltaListEncodingTest#matchesTheBenchmarkLayoutWriterByteForByte()
+     * @see OffsetEncoderRegistrationTest#theShippedPayloadIsNeverLargerThanBeforeTheDeltaList()
+     */
+    static SortedSet<Long> corpusIncompletes(String familyLabel, int rangeSize) {
+        for (final Family family : FAMILIES) {
+            if (family.label.equals(familyLabel)) {
+                return incompletesFor(family, rangeSize);
+            }
+        }
+        throw new IllegalArgumentException("no such scenario family: " + familyLabel);
+    }
+
+    /**
      * @return the incomplete offsets for a scenario, as absolute offsets from a base of 0 (the encoders work on
      *         relative offsets, so the base offset cannot change any size measured here)
      */
@@ -537,7 +554,10 @@ class OffsetEncodingDensityBenchmarkTest {
         final int[] candidatePlain = new int[CANDIDATES.length];
         final int[] candidateZstd = new int[CANDIDATES.length];
 
-        /** Whether today's all-or-nothing gate leaves the incumbents' zstd twins registered. */
+        /** Whether each incumbent's own plain form is large enough to earn a zstd twin (KTD8, per encoder). */
+        final boolean[] incumbentTwinRegistered = new boolean[INCUMBENTS.length];
+
+        /** Whether EVERY registered incumbent got a twin - what the {@code twins} column reports. */
         boolean productionTwinsRegistered;
 
         Choice winnerForced;
@@ -589,13 +609,16 @@ class OffsetEncodingDensityBenchmarkTest {
                 new OffsetSimultaneousEncoder(0L, rangeSize - 1L, incompletes).invoke();
         final Map<OffsetEncoding, byte[]> map = encoder.getEncodingMap();
 
-        row.productionTwinsRegistered = productionTwinsWouldRegister(map);
-
+        row.productionTwinsRegistered = true;
         for (int i = 0; i < INCUMBENTS.length; i++) {
             final byte[] plain = map.get(INCUMBENTS[i][0]);
             final byte[] compressed = map.get(INCUMBENTS[i][1]);
+            row.incumbentTwinRegistered[i] = productionTwinWouldRegister(plain);
             row.incumbentForced[i] = bestPacked(plain, compressed);
-            row.incumbentProduction[i] = bestPacked(plain, row.productionTwinsRegistered ? compressed : null);
+            row.incumbentProduction[i] = bestPacked(plain, row.incumbentTwinRegistered[i] ? compressed : null);
+            if (plain != null && !row.incumbentTwinRegistered[i]) {
+                row.productionTwinsRegistered = false;
+            }
         }
 
         final long rangeLength = rangeSize;
@@ -615,9 +638,9 @@ class OffsetEncodingDensityBenchmarkTest {
         final List<Choice> incumbentProduction = new ArrayList<>();
         for (int i = 0; i < INCUMBENTS.length; i++) {
             addIncumbentChoices(forced, map, INCUMBENTS[i][0], INCUMBENTS[i][1], true);
-            addIncumbentChoices(production, map, INCUMBENTS[i][0], INCUMBENTS[i][1], row.productionTwinsRegistered);
+            addIncumbentChoices(production, map, INCUMBENTS[i][0], INCUMBENTS[i][1], row.incumbentTwinRegistered[i]);
             addIncumbentChoices(incumbentProduction, map, INCUMBENTS[i][0], INCUMBENTS[i][1],
-                    row.productionTwinsRegistered);
+                    row.incumbentTwinRegistered[i]);
         }
         for (int c = 0; c < CANDIDATES.length; c++) {
             final List<Choice> candidateProduction = new ArrayList<>();
@@ -652,19 +675,16 @@ class OffsetEncodingDensityBenchmarkTest {
     }
 
     /**
-     * Today's all-or-nothing compression gate, evaluated from the plain sizes in the encoding map: a zstd twin is
-     * registered for EVERY encoder unless ANY ONE of them is below
-     * {@link OffsetSimultaneousEncoder#LARGE_ENCODED_SIZE_THRESHOLD_BYTES}, in which case NONE are. This is the
-     * inefficiency KTD8 fixes if a candidate ships (R11) - a small encoding suppressing a large one's twin.
+     * The production compression rule, evaluated from one encoder's own plain size: it gets a zstd twin exactly when
+     * that size is at or above {@link OffsetSimultaneousEncoder#LARGE_ENCODED_SIZE_THRESHOLD_BYTES}.
+     * <p>
+     * PER ENCODER (KTD8). It used to be all-or-nothing - no encoder got a twin if ANY ONE of them was small - which is
+     * the inefficiency R11 required fixing before a new candidate could ship, since a small candidate would otherwise
+     * have suppressed the incumbents' twins and made winning payloads larger.
+     * {@link #productionCompressionGateModelMatchesReality()} pins this derivation against a real unforced run.
      */
-    private static boolean productionTwinsWouldRegister(Map<OffsetEncoding, byte[]> map) {
-        for (final OffsetEncoding[] pair : INCUMBENTS) {
-            final byte[] plain = map.get(pair[0]);
-            if (plain != null && plain.length < OffsetSimultaneousEncoder.LARGE_ENCODED_SIZE_THRESHOLD_BYTES) {
-                return false;
-            }
-        }
-        return true;
+    private static boolean productionTwinWouldRegister(byte[] plain) {
+        return plain != null && plain.length >= OffsetSimultaneousEncoder.LARGE_ENCODED_SIZE_THRESHOLD_BYTES;
     }
 
     private static int bestPacked(byte[] plain, byte[] compressed) {
@@ -1038,11 +1058,12 @@ class OffsetEncodingDensityBenchmarkTest {
         out.append("- **Two compression views.** *Forced* sets `OffsetSimultaneousEncoder.compressionForced`, so every\n");
         out.append("  encoder gets a zstd twin - it shows what compression is worth in principle. *Production* applies\n");
         out.append(String.format(Locale.ROOT,
-                "  the real rule: today's all-or-nothing gate for the incumbents (NO twins register if ANY encoder's\n"
-                        + "  plain form is under %d bytes), and, for a candidate, its own zstd twin only when its own plain\n",
+                "  the real rule, which is now PER ENCODER (KTD8): an encoding gets a zstd twin exactly when its own\n"
+                        + "  plain form is at or over %d bytes. Before KTD8 the gate was all-or-nothing - NO twin registered\n",
                 OffsetSimultaneousEncoder.LARGE_ENCODED_SIZE_THRESHOLD_BYTES));
-        out.append("  form is at or over that threshold - because a candidate can only ship alongside KTD8's\n");
-        out.append("  per-encoder registration fix (R11). **The verdicts use the production view.**\n");
+        out.append("  for anything if ANY ONE encoder's plain form was under the threshold - which is what R11 required\n");
+        out.append("  fixing before a candidate could ship, and which incumbents and candidates alike are now measured\n");
+        out.append("  under. **The verdicts use the production view.**\n");
         out.append("- **`ByteArray` is absent** from the tables: `addByteBufferEncoder()` is not called in production,\n");
         out.append("  as BitSet always beats it.\n");
         out.append("- **Scenario data is seeded** (`java.util.Random`, seed derived from the family and range size\n");
@@ -1109,8 +1130,9 @@ class OffsetEncodingDensityBenchmarkTest {
 
         out.append("\n## Sizes - production compression rule\n\n");
         out.append("The rule that actually ships, per the Method note above. **This is the table the verdicts use.**\n");
-        out.append("A `!` in the *twins* column marks a scenario where today's all-or-nothing gate suppressed every\n");
-        out.append("compressed twin because one encoding was small - the pre-existing inefficiency KTD8 fixes.\n\n");
+        out.append("A `!` in the *twins* column marks a scenario where at least one registered encoding was itself too\n");
+        out.append("small to earn a zstd twin. Under KTD8's per-encoder rule the other encodings keep theirs; under the\n");
+        out.append("all-or-nothing gate this report was first generated with, one such encoding suppressed them all.\n\n");
         appendSizeTable(out, rows, false);
 
         out.append("\n## What the numbers say\n\n");
@@ -1127,8 +1149,8 @@ class OffsetEncodingDensityBenchmarkTest {
                     verdict.bestAnyRow.bestIncumbentProduction.chars(),
                     verdict.bestAnyRow.productionTwinsRegistered
                             ? ""
-                            : " - but that is a `!` row, where the incumbents lost their zstd twins to the "
-                            + "all-or-nothing gate, so the margin is mostly that gate and not the format",
+                            : " - but that is a `!` row, where at least one incumbent was too small to earn a zstd "
+                            + "twin, so read the margin against the forced table too",
                     verdict.scenariosWon,
                     rows.size()));
         }
@@ -1145,10 +1167,11 @@ class OffsetEncodingDensityBenchmarkTest {
         out.append("  incomplete run, or an all-incomplete range, `RunLength` commits 4-20 chars - a candidate cannot\n");
         out.append("  beat that, and the 5-byte `[magic:1][rangeLength:int4]` header the candidates carry (against the\n");
         out.append("  incumbents' 1 byte, since their payloads already imply the range) is decisive at that size.\n");
-        out.append("- **The all-or-nothing compression gate costs real chars today.** Every `!` row in the production\n");
-        out.append("  table is a scenario where one small encoding suppressed every other encoder's zstd twin; compare\n");
-        out.append("  such a row across the two tables to see what that costs. The `alternating-xo` rows are the\n");
-        out.append("  clearest. That is KTD8/R11, and it is independent of any candidate.\n");
+        out.append("- **The all-or-nothing compression gate cost real chars, and no longer exists.** It suppressed every\n");
+        out.append("  encoder's zstd twin as soon as one encoding was small; the `alternating-xo` rows were the clearest\n");
+        out.append("  case, where a tiny run-length encoding cost the bitsets a compression that takes them from\n");
+        out.append("  thousands of bytes to a few dozen. KTD8/R11 replaced it with the per-encoder rule these tables are\n");
+        out.append("  now generated under, and that change is independent of any candidate.\n");
         out.append("- **Base64 vs Z85 is a small win, and it is free.** Z85 converges on ~6% shorter, applies to every\n");
         out.append("  encoding at once, and is independent of everything else in this report - compare the last two\n");
         out.append("  columns of either table.\n\n");
@@ -1215,10 +1238,11 @@ class OffsetEncodingDensityBenchmarkTest {
                         + "   its SPIRIT (\"real headroom at the point where density matters\") is a judgement for whoever\n"
                         + "   decides on U4, and this table is what that decision should be made on.\n",
                 qualifyingPastTheCap, qualifying, MAX_METADATA_CHARS, BACK_PRESSURE_CHARS));
-        out.append("2. **The compression views are not symmetric, by design.** Incumbents are gated by today's\n");
-        out.append("   all-or-nothing rule; candidates get KTD8's per-encoder rule, since a candidate can only ship\n");
-        out.append("   alongside that fix. On a `!` row that asymmetry flatters the candidate. Check the *twins* column\n");
-        out.append("   before trusting a `!` row's percentage.\n\n");
+        out.append("2. **Incumbents and candidates are now measured under the same compression rule.** Both get a zstd\n");
+        out.append("   twin exactly when their own plain form is large enough to be worth compressing (KTD8). The first\n");
+        out.append("   generation of this report gated the incumbents with the old all-or-nothing rule and the candidates\n");
+        out.append("   per encoder, which flattered the candidates on `!` rows; that asymmetry is gone, and every\n");
+        out.append("   qualifying row above was a `yes` row under either rule.\n\n");
 
         out.append("### Why not the RoaringBitmap library (KTD1)\n\n");
         out.append("The `chunked-bitset` rows above ARE Roaring's container model - array, bitmap and run containers\n");
@@ -1416,18 +1440,18 @@ class OffsetEncodingDensityBenchmarkTest {
                 OffsetSimultaneousEncoder.compressionForced = true;
                 final Map<OffsetEncoding, byte[]> forced =
                         new OffsetSimultaneousEncoder(0L, rangeSize - 1L, incompletes).invoke().getEncodingMap();
-                final boolean predicted = productionTwinsWouldRegister(forced);
 
                 OffsetSimultaneousEncoder.compressionForced = false;
                 final Map<OffsetEncoding, byte[]> production =
                         new OffsetSimultaneousEncoder(0L, rangeSize - 1L, incompletes).invoke().getEncodingMap();
-                boolean actual = false;
-                for (final OffsetEncoding[] pair : INCUMBENTS) {
-                    actual |= production.containsKey(pair[1]);
-                }
 
-                assertWithMessage("derived production compression gate for %s @ %s", family.label, rangeSize)
-                        .that(predicted).isEqualTo(actual);
+                // Per encoder since KTD8: each twin is present exactly when its own plain form is not quiteSmall.
+                for (final OffsetEncoding[] pair : INCUMBENTS) {
+                    assertWithMessage("derived production compression gate for %s, %s @ %s",
+                            pair[0], family.label, rangeSize)
+                            .that(productionTwinWouldRegister(forced.get(pair[0])))
+                            .isEqualTo(production.containsKey(pair[1]));
+                }
                 // and the plain entries must be identical either way - forcing compression adds twins, nothing else
                 for (final OffsetEncoding[] pair : INCUMBENTS) {
                     assertWithMessage("plain %s for %s @ %s", pair[0], family.label, rangeSize)
