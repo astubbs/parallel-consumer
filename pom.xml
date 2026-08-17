@@ -64,6 +64,8 @@
     </scm>
 
     <properties>
+        <!-- Set true by the foreign-clients profile; the notice only fires when they are absent. -->
+        <pc.foreign.notice.skip>false</pc.foreign.notice.skip>
         <source.version>17</source.version>
         <release.target>8</release.target>
 
@@ -164,40 +166,30 @@
             parallel-consumer-proxy-clients/pom.xml OWNS the exclusion; this only decides what the
             root module says about it. Adding a language means editing the text here.
         -->
+        <!--
+            ONE PROFILE ID, ONE SWITCH. `foreign-clients` exists in this pom and in
+            parallel-consumer-proxy-clients/pom.xml, which OWNS the module exclusion. Sharing the id
+            means every way of turning it on turns all of it on:
+
+                ./mvnw -P foreign-clients ...          one flag
+                ./mvnw -Dpc.foreignClients ...         the property activation below
+                ~/.m2/settings.xml <activeProfiles>    for a machine that always wants them
+
+            The notice is therefore NOT gated on `!pc.foreignClients`: a negated-property profile
+            cannot be switched off by activating something by id, so `-P foreign-clients` would have
+            built the clients while the notice still said they were absent. It is always declared and
+            this profile silences it instead, which every activation route reaches.
+        -->
         <profile>
-            <id>foreign-clients-absent-notice</id>
+            <id>foreign-clients</id>
             <activation>
                 <property>
-                    <name>!pc.foreignClients</name>
+                    <name>pc.foreignClients</name>
                 </property>
             </activation>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>com.soebes.maven.plugins</groupId>
-                        <artifactId>echo-maven-plugin</artifactId>
-                        <version>0.5.0</version>
-                        <inherited>false</inherited>
-                        <executions>
-                            <execution>
-                                <id>foreign-clients-absent-notice</id>
-                                <phase>validate</phase>
-                                <goals>
-                                    <goal>echo</goal>
-                                </goals>
-                                <configuration>
-                                    <echos>
-                                        <echo>Parallel Consumer - JVM modules only.</echo>
-                                        <echo>- NOT in this build: the 8 foreign-language clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</echo>
-                                        <echo>- Add -Dpc.foreignClients to build and test them.</echo>
-                                        <echo>- That needs go, node, cargo, dotnet and ruby on PATH, plus Docker for cpp and swift.</echo>
-                                    </echos>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
+            <properties>
+                <pc.foreign.notice.skip>true</pc.foreign.notice.skip>
+            </properties>
         </profile>
 
         <profile>
@@ -798,6 +790,30 @@
                         <goals>
                             <goal>audit</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <inherited>false</inherited>
+                <executions>
+                    <execution>
+                        <id>foreign-clients-notice</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${pc.foreign.notice.skip}</skip>
+                            <target>
+                                <echo level="info">Parallel Consumer - JVM modules only.</echo>
+                                <echo level="info">- NOT in this build: the 8 foreign-language clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</echo>
+                                <echo level="info">- Add -P foreign-clients to build and test them.</echo>
+                                <echo level="info">- That needs go, node, cargo, dotnet and ruby on PATH, plus Docker for cpp and swift.</echo>
+                            </target>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
