@@ -100,7 +100,7 @@ diagnosis and current status live) and the upstream original.
 | [#143](https://github.com/astubbs/parallel-consumer/issues/143) | [#241](https://github.com/confluentinc/parallel-consumer/issues/241) | `WorkContainer.workType` `String` → enum | *state/WorkContainer.java* |
 | [#146](https://github.com/astubbs/parallel-consumer/issues/146) | [#290](https://github.com/confluentinc/parallel-consumer/issues/290) | Refactor the test base - finish the Truth-Subject extraction | *(no section yet)* |
 | [#139](https://github.com/astubbs/parallel-consumer/issues/139) | [#186](https://github.com/confluentinc/parallel-consumer/issues/186) | Thread-safe public API surface | *Thread-safe public API surface* |
-| [#192](https://github.com/astubbs/parallel-consumer/issues/192) | [#903](https://github.com/confluentinc/parallel-consumer/issues/903) | Why custom run-length/bitset encoders, not RoaringBitmap | *offsets/* |
+| [#192](https://github.com/astubbs/parallel-consumer/issues/192) | [#903](https://github.com/confluentinc/parallel-consumer/issues/903) | Why custom run-length/bitset encoders, not RoaringBitmap - ANSWERED: the reasoning record now lives in the offsets package javadoc (`offsets/package-info.java`), with the measurements in `docs/offset-encoding-density-benchmark.md` | *offsets/* |
 
 Two of these carry findings that are **not** in this document, because they were discovered while
 diagnosing the mirror rather than while reading the file:

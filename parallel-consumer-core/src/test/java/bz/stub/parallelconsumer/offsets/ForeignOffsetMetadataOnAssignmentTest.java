@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
+import java.util.Arrays;
 import java.util.Base64;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -106,6 +107,91 @@ class ForeignOffsetMetadataOnAssignmentTest {
         assertThat(wm.getPm().getPartitionState(TP))
                 .as("partition should still be assigned")
                 .isNotNull();
+    }
+
+    /**
+     * The Z85 sentinel does not open a second way to crash the rebalance.
+     * <p>
+     * PC now writes {@code '%'}-prefixed Z85 for larger payloads, which means {@code '%'} is a leading character the
+     * reader takes seriously - so a foreign or corrupted string that happens to start with it must land in the same
+     * recovery path as any other undecodable metadata, and a truncated offset map must never be preferred over a
+     * rejected one (silently dropping incompletes marks unfinished work complete).
+     *
+     * @see Z85Codec
+     */
+    @Test
+    void sentinelPrefixedGarbageDoesNotEscapeOnPartitionsAssigned() {
+        // '~' is not in the Z85 alphabet
+        var module = moduleWithCommittedMetadata("%~~~~~~~~~",
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("a sentinel-prefixed string that isn't Z85 must not escape the rebalance listener")
+                .doesNotThrowAnyException();
+
+        var partitionState = wm.getPm().getPartitionState(TP);
+        assertThat(partitionState)
+                .as("partition should still be assigned, with a default (dropped offset map) state")
+                .isNotNull();
+        assertThat(partitionState.getAllIncompleteOffsets())
+                .as("the offset map was dropped, not partially decoded")
+                .isEmpty();
+    }
+
+    /**
+     * A recognised magic byte with a truncated body: {@code "ZA=="} decodes to the single byte {@code 0x64}, which is
+     * the {@code 'd'} {@link OffsetEncoding#DeltaList} magic byte followed by no body at all. The magic-byte dispatch
+     * succeeds, so the failure happens deeper - reading the header off an empty buffer - and used to surface as a
+     * {@link java.nio.BufferUnderflowException} that sailed past the {@link OffsetDecodingError} recovery, escaped the
+     * rebalance listener and crash-looped the consumer (the poison metadata stays committed, so every restart hits it
+     * again).
+     */
+    @Test
+    void truncatedDeltaListBodyDoesNotEscapeOnPartitionsAssigned() {
+        var module = moduleWithCommittedMetadata("ZA==",
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("a truncated offset-map body must not escape the rebalance listener")
+                .doesNotThrowAnyException();
+
+        var partitionState = wm.getPm().getPartitionState(TP);
+        assertThat(partitionState)
+                .as("partition should still be assigned, with a default (dropped offset map) state")
+                .isNotNull();
+        assertThat(partitionState.getAllIncompleteOffsets())
+                .as("the offset map was dropped, not partially decoded")
+                .isEmpty();
+    }
+
+    /**
+     * A recognised magic byte whose body is varint garbage: ten continuation bytes ({@code 0x80}) after the
+     * {@link OffsetEncoding#DeltaList} magic byte. Depending on where the corruption lands the decoder raises
+     * {@link bz.stub.parallelconsumer.internal.InternalRuntimeException} (over-long varint, negative range length) -
+     * unchecked either way, and it must land in the same drop-the-map recovery as any other undecodable metadata.
+     */
+    @Test
+    void malformedDeltaListVarintBodyDoesNotEscapeOnPartitionsAssigned() {
+        byte[] payload = new byte[11];
+        payload[0] = (byte) 'd'; // OffsetEncoding.DeltaList
+        Arrays.fill(payload, 1, payload.length, (byte) 0x80);
+        var module = moduleWithCommittedMetadata(Base64.getEncoder().encodeToString(payload),
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("a corrupt offset-map body must not escape the rebalance listener")
+                .doesNotThrowAnyException();
+
+        var partitionState = wm.getPm().getPartitionState(TP);
+        assertThat(partitionState)
+                .as("partition should still be assigned, with a default (dropped offset map) state")
+                .isNotNull();
+        assertThat(partitionState.getAllIncompleteOffsets())
+                .as("the offset map was dropped, not partially decoded")
+                .isEmpty();
     }
 
     /**

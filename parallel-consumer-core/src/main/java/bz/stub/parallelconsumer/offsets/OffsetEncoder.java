@@ -28,7 +28,11 @@ public abstract class OffsetEncoder {
      */
     protected final OffsetEncoding.Version version;
 
-    private final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
+    /**
+     * Protected so a subtype that does not need the per-offset walk can read the input straight off it at serialise
+     * time - see {@link DeltaListEncoder}.
+     */
+    protected final OffsetSimultaneousEncoder offsetSimultaneousEncoder;
 
     protected OffsetEncoder(OffsetSimultaneousEncoder offsetSimultaneousEncoder, OffsetEncoding.Version version) {
         this.offsetSimultaneousEncoder = offsetSimultaneousEncoder;

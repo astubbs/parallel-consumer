@@ -24,6 +24,10 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.JavaUtils.toTreeSet;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.BitSetV2;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.BitSetV2Compressed;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.DeltaList;
+import static bz.stub.parallelconsumer.offsets.OffsetEncoding.RunLengthV2;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
 import static bz.stub.parallelconsumer.state.PartitionState.KAFKA_OFFSET_ABSENCE;
 import static javax.lang.model.type.TypeKind.INT;
@@ -237,9 +241,11 @@ class RunLengthEncoderTest {
      * encodings, not by crashing:
      * <ul>
      *   <li>{@code SHORT}: the run overflows only the {@code short}-width (v1) run-length encodings; wider
-     *       encodings still fit, so the map comes back with the survivors (2).</li>
-     *   <li>{@code INT}: the run overflows every candidate (the {@code int}-width v2 run-length, and the raw
-     *       bitset/bytebuffer encodings are too large to allocate for a ~2.1B span), so the map is empty.</li>
+     *       encodings still fit, so the map comes back with the survivors - asserted by name rather than by
+     *       count, so it says which encodings survived and why.</li>
+     *   <li>{@code INT}: the run overflows every candidate (the {@code int}-width v2 run-length, the raw
+     *       bitset/bytebuffer encodings are too large to allocate for a ~2.1B span, and the delta list's
+     *       {@code rangeLength} field cannot address it either), so the map is empty.</li>
      * </ul>
      * <p>
      * Unlike {@link #vTwoIntegerOverflow}, this test cannot use the single-large-delta shortcut: the
@@ -275,8 +281,16 @@ class RunLengthEncoderTest {
 
         //
         switch (primitiveSize) {
-            case SHORT -> Truth.assertThat(encodingMap).hasSize(2);
-            case INT -> Truth.assertThat(encodingMap).hasSize(0);
+            // Was `hasSize(2)` (BitSetV2 + RunLengthV2) until the offset-encoding density work added two encodings to
+            // this exact set. Both additions are deliberate, and both are visible here:
+            // - OffsetEncoding.DeltaList joins the competitive set (R4 of the density plan): a ~32K range is well
+            //   inside what its rangeLength field addresses, so unlike the v1 encodings it does not overflow.
+            // - BitSetV2Compressed is back, because compressed twins now register PER ENCODER (KTD8). The 4KB bitset
+            //   earns a twin on its own size; before KTD8 the tiny RunLengthV2 encoding suppressed every twin,
+            //   including the one that saves the most bytes.
+            case SHORT -> Truth.assertThat(encodingMap.keySet())
+                    .containsExactly(BitSetV2, BitSetV2Compressed, RunLengthV2, DeltaList);
+            case INT -> Truth.assertThat(encodingMap).isEmpty();
             default -> throw new IllegalStateException("Unexpected value: " + primitiveSize);
         }
         ;

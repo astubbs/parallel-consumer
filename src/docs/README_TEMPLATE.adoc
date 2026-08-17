@@ -689,7 +689,9 @@ NOTE: That `sed -i` is GNU syntax. On macOS or BSD, use `sed -i '' -e 's/…/…
 
 Nothing else changes.
 The API is source-compatible, so beyond the import lines no source edit is needed, and most codebases reference only a handful of types.
-Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
+Committed offset metadata written by any earlier version is still read, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
+This version does, however, write denser metadata formats that older versions cannot read: during a _rolling_ upgrade, a not-yet-upgraded instance that reads a newer instance's commit falls back to the committed offset - safe, but it can redeliver work that was in flight beyond that offset, which matters to non-idempotent processors.
+The exposure ends when the rolling upgrade completes (see <<offset_map,the offset map>>).
 The library's shared internal utilities moved with the rest, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
 
 === From 0.4 to 0.5
@@ -1117,7 +1119,7 @@ Time spend encoding offsets
 
 **Offsets Encoding Usage**
 
-Counter `pc.offsets.encoding.usage{subsystem=offsetencoder, codec="BitSet|BitSetCompressed|BitSetV2Compressed|RunLength"}`
+Counter `pc.offsets.encoding.usage{subsystem=offsetencoder, codec="BitSet|BitSetCompressed|BitSetV2|BitSetV2Compressed|RunLength|RunLengthCompressed|RunLengthV2|RunLengthV2Compressed|DeltaList|DeltaListCompressed"}`
 
 Offset encoding usage per encoding type
 
@@ -1490,7 +1492,7 @@ When messages beyond the highest committable offset are successfully processed;
 . they are stored as such in an internal memory map.
 . when the system then next commits offsets
 . if there are any messages beyond the highest offset which have been marked as succeeded
-.. the offset map is serialised and encoded into a base 64 string, and added to the commit message metadata.
+.. the offset map is serialised and string-encoded - Base64 for small payloads (below 22 bytes, keeping them readable by older releases), the denser Z85 from 22 payload bytes up, where it is always shorter - and added to the commit message metadata.
 . upon restore, if needed, the system then deserializes this offset map and loads it back into memory
 . when each messages is polled into the system
 .. it checks if it's already been previously completed
@@ -1501,9 +1503,9 @@ This ensures that no message is reprocessed if it's been previously completed.
 IMPORTANT: Successful messages beyond the _highest committable offset_ are still recorded as such in a specially constructed metadata payload stored alongside the Kafka committed offset.
 These messages are not replayed upon restore/restart.
 
-The offset map is compressed in parallel using two different compression techniques - run length encoding and bitmap encoding.
-The sizes of the compressed maps are then compared, and the smallest chosen for serialization.
-If both serialised formats are significantly large, they are then both compressed using `zstd` compression, and if that results in a smaller serialization then the compressed form is used instead.
+The offset map is encoded in parallel using several different techniques - run length encoding, bitmap encoding, and a sparse delta-list for maps where the incomplete offsets are few and far apart.
+The sizes of the encoded maps are then compared, and the smallest chosen for serialization.
+Any encoding whose result is significantly large is also tried `zstd`-compressed, and if that results in a smaller serialization then the compressed form is used instead.
 
 
 ==== Storage Notes
@@ -1511,8 +1513,9 @@ If both serialised formats are significantly large, they are then both compresse
 * Runtime data model creates list of incomplete offsets
 * Continuously builds a full complete / not complete bit map from the base offset to be committed
 * Dynamically switching storage
-** encodes into a `BitSet`, and a `RunLength`, then compresses both using zstd, then uses the smallest and tags as such in the encoded String
+** encodes into a `BitSet`, a `RunLength` and a sparse delta-list - each with a zstd-compressed twin when large enough to be worth compressing - then uses the smallest and tags as such in the encoded String
 ** Which is smallest can depend on the size and information density of the offset map
+** Measured sizes for every encoding across a scenario corpus - and the reasoning for the set - are in link:docs/offset-encoding-density-benchmark.md[the offset-encoding density benchmark report]
 *** Smaller maps fit better into uncompressed `BitSets` ~(30 entry map bitset: compressed: 13 Bytes, uncompressed: 4 Bytes)
 *** Larger maps with continuous sections usually better in compressed `RunLength`
 *** Completely random offset maps, compressed and uncompressed `BitSet` is roughly the same (2000 entries, uncompressed bitset: 250, compressed: 259, compressed bytes array: 477)

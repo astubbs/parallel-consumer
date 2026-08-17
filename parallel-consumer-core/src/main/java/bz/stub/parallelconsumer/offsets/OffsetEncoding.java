@@ -43,6 +43,18 @@ public enum OffsetEncoding {
     RunLengthV2Compressed(v2, (byte) 'p'),
 
     /**
+     * Sparse delta list: the gaps between consecutive incomplete offsets, as unsigned varints. Denser than a bitset
+     * whenever the incompletes are sparse - see {@link OffsetDeltaList} for the wire format and
+     * {@link DeltaListEncoder} for why it ships.
+     * <p>
+     * KTD7 of the density plan reserved a magic-byte pair per measured candidate. This is the pair that shipped; the
+     * chunked bitset ({@code 'r'} / {@code 'z'}) and the unsigned run-length ({@code 'u'} / {@code 'U'}) pairs stay
+     * reserved and unregistered, so whoever revisits them does not have to re-verify which bytes are free.
+     */
+    DeltaList(v1, (byte) 'd'),
+    DeltaListCompressed(v1, (byte) 'D'),
+
+    /**
      * Checks for pre-existing Kafka Streams metadata. Although the Kafka Streams magic numbers are annoyingly simple, ours are not, so should be safe to take this guess that they are indeed from Kafka Streams.
      * <a href="https://github.com/apache/kafka/blob/cc77a38d280657a0e3969b255f103af4d11c7914/streams/src/main/java/org/apache/kafka/streams/processor/internals/TopicPartitionMetadata.java#L33">source from Kafka Streams code</a>
      */

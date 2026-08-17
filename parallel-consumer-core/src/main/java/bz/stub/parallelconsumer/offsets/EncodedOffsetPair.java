@@ -17,6 +17,8 @@ import java.util.Comparator;
 
 import static bz.stub.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrap;
 import static bz.stub.parallelconsumer.offsets.OffsetBitSet.deserialiseBitSetWrapToIncompletes;
+import static bz.stub.parallelconsumer.offsets.OffsetDeltaList.deserialiseDeltaListToIncompletes;
+import static bz.stub.parallelconsumer.offsets.OffsetDeltaList.deserialiseDeltaListToString;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.*;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v1;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.Version.v2;
@@ -97,6 +99,11 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             case BitSetV2Compressed -> deserialiseBitSetWrap(data, v2);
             case RunLengthV2 -> deserialiseBitSetWrap(data, v2);
             case RunLengthV2Compressed -> deserialiseBitSetWrap(data, v2);
+            // NB: unlike the four arms above, these two decompress before decoding and name their own decoder. The v2
+            // arms are wrong on both counts (a known defect of this debug-only rendering path, out of scope here) - do
+            // not copy them.
+            case DeltaList -> deserialiseDeltaListToString(data);
+            case DeltaListCompressed -> deserialiseDeltaListToString(decompressZstd(data));
             default ->
                     throw new InternalRuntimeException("Invalid state"); // todo why is this needed? what's not covered?
         };
@@ -120,6 +127,8 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             case BitSetV2Compressed -> deserialiseBitSetWrapToIncompletes(BitSetV2, baseOffset, decompressZstd(data));
             case RunLengthV2 -> runLengthDecodeToIncompletes(encoding, baseOffset, data);
             case RunLengthV2Compressed -> runLengthDecodeToIncompletes(RunLengthV2, baseOffset, decompressZstd(data));
+            case DeltaList -> deserialiseDeltaListToIncompletes(baseOffset, data);
+            case DeltaListCompressed -> deserialiseDeltaListToIncompletes(baseOffset, decompressZstd(data));
             case KafkaStreams, KafkaStreamsV2 ->{
                 if (errorPolicy == ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE) {
                     log.warn("Ignoring existing Kafka Streams offset metadata and reusing offsets");
