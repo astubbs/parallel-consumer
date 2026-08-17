@@ -39,7 +39,7 @@
              generated stubs this module serves and the transport runtime must agree on one gRPC
              version. The pin is repeated rather than shared because Maven properties do not flow
              between sibling modules, so a mismatch here is possible and this comment is the guard. -->
-        <grpc.version>1.73.0</grpc.version>
+        <grpc.version>1.75.0</grpc.version>
     </properties>
 
     <dependencies>

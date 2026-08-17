@@ -43,9 +43,14 @@
         -->
         <release.target>17</release.target>
 
-        <!-- gRPC 1.73.0 pairs with protobuf-java 3.25.5; the generated code and the runtime must
-             agree, so both versions live here and nowhere else in the module. -->
-        <grpc.version>1.73.0</grpc.version>
+        <!-- gRPC 1.75.0 pairs with protobuf-java 3.25.x; the generated code and the runtime must
+             agree, so both versions live here and nowhere else in the module.
+
+             1.75.0 is the floor, not a preference: it is the first release GHSA-prj3-ccx8-p6x4
+             (MadeYouReset HTTP/2 DDoS, high) names as patched, and 1.73.0 shipped the affected
+             shaded Netty. Every line from 1.75.0 to 1.83.x still declares protobuf-java 3.25.x,
+             so moving further is a free choice rather than a forced one - and is left as one. -->
+        <grpc.version>1.75.0</grpc.version>
         <protobuf.version>3.25.5</protobuf.version>
 
         <!--

@@ -38,7 +38,9 @@ Where the metadata actually comes from, since almost none of it is protobuf's:
   `<metadataRepository><enabled>true</enabled>`) contributes exactly **one** entry:
   `java.time.Instant` with `allDeclaredMethods`, conditional on
   `io.grpc.internal.InstantTimeProvider`. It carries no entry for gRPC 1.73.0 and silently resolves
-  to the `1.69.0` directory.
+  to the `1.69.0` directory. The pin has since moved to 1.75.0 (GHSA-prj3-ccx8-p6x4) and this is
+  unchanged: `1.69.0` is still the only `io.grpc/grpc-core` directory the 0.10.6 repository ships,
+  so every version we could pin resolves to it.
 
 **Direct generated-API use needs no protobuf hints.** `setRecordId`/`getRecord` and the generated
 parser are plain Java. That is the entire hand-out path, and it is why the first native build passed
