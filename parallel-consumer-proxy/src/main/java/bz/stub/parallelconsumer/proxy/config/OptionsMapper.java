@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.proxy.config;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.proxy.protocol.WireDurations;
 import bz.stub.parallelconsumer.proxy.protocol.v1.CommitMode;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
@@ -186,33 +187,33 @@ public class OptionsMapper {
             builder.commitMode(toCoreCommitMode(configure.getCommitMode(), configure.getCommitModeValue()));
         }
         if (configure.hasCommitInterval()) {
-            builder.commitInterval(toJavaDuration(configure.getCommitInterval()));
+            builder.commitInterval(WireDurations.toJava(configure.getCommitInterval()));
         }
         if (configure.hasDefaultMessageRetryDelay()) {
-            builder.defaultMessageRetryDelay(toJavaDuration(configure.getDefaultMessageRetryDelay()));
+            builder.defaultMessageRetryDelay(WireDurations.toJava(configure.getDefaultMessageRetryDelay()));
         }
         if (configure.hasSendTimeout()) {
-            builder.sendTimeout(toJavaDuration(configure.getSendTimeout()));
+            builder.sendTimeout(WireDurations.toJava(configure.getSendTimeout()));
         }
         if (configure.hasOffsetCommitTimeout()) {
-            builder.offsetCommitTimeout(toJavaDuration(configure.getOffsetCommitTimeout()));
+            builder.offsetCommitTimeout(WireDurations.toJava(configure.getOffsetCommitTimeout()));
         }
         if (configure.hasShutdownTimeout()) {
-            builder.shutdownTimeout(toJavaDuration(configure.getShutdownTimeout()));
+            builder.shutdownTimeout(WireDurations.toJava(configure.getShutdownTimeout()));
         }
         if (configure.hasDrainTimeout()) {
-            builder.drainTimeout(toJavaDuration(configure.getDrainTimeout()));
+            builder.drainTimeout(WireDurations.toJava(configure.getDrainTimeout()));
         }
         if (configure.hasThresholdForTimeSpendInQueueWarning()) {
             builder.thresholdForTimeSpendInQueueWarning(
-                    toJavaDuration(configure.getThresholdForTimeSpendInQueueWarning()));
+                    WireDurations.toJava(configure.getThresholdForTimeSpendInQueueWarning()));
         }
         if (configure.hasSaslAuthenticationRetryTimeout()) {
-            builder.saslAuthenticationRetryTimeout(toJavaDuration(configure.getSaslAuthenticationRetryTimeout()));
+            builder.saslAuthenticationRetryTimeout(WireDurations.toJava(configure.getSaslAuthenticationRetryTimeout()));
         }
         if (configure.hasSaslAuthenticationExceptionRetryBackoff()) {
             builder.saslAuthenticationExceptionRetryBackoff(
-                    toJavaDuration(configure.getSaslAuthenticationExceptionRetryBackoff()));
+                    WireDurations.toJava(configure.getSaslAuthenticationExceptionRetryBackoff()));
         }
         if (configure.hasMaxFailureHistory()) {
             builder.maxFailureHistory(configure.getMaxFailureHistory());
@@ -253,17 +254,17 @@ public class OptionsMapper {
                 .addAllCapabilities(negotiatedCapabilities)
                 .setOrdering(toWireOrdering(options.getOrdering()))
                 .setCommitMode(toWireCommitMode(options.getCommitMode()))
-                .setCommitInterval(toWireDuration(options.getCommitInterval()))
-                .setDefaultMessageRetryDelay(toWireDuration(options.getDefaultMessageRetryDelay()))
-                .setSendTimeout(toWireDuration(options.getSendTimeout()))
-                .setOffsetCommitTimeout(toWireDuration(options.getOffsetCommitTimeout()))
-                .setShutdownTimeout(toWireDuration(options.getShutdownTimeout()))
-                .setDrainTimeout(toWireDuration(options.getDrainTimeout()))
+                .setCommitInterval(WireDurations.toWire(options.getCommitInterval()))
+                .setDefaultMessageRetryDelay(WireDurations.toWire(options.getDefaultMessageRetryDelay()))
+                .setSendTimeout(WireDurations.toWire(options.getSendTimeout()))
+                .setOffsetCommitTimeout(WireDurations.toWire(options.getOffsetCommitTimeout()))
+                .setShutdownTimeout(WireDurations.toWire(options.getShutdownTimeout()))
+                .setDrainTimeout(WireDurations.toWire(options.getDrainTimeout()))
                 .setThresholdForTimeSpendInQueueWarning(
-                        toWireDuration(options.getThresholdForTimeSpendInQueueWarning()))
-                .setSaslAuthenticationRetryTimeout(toWireDuration(options.getSaslAuthenticationRetryTimeout()))
+                        WireDurations.toWire(options.getThresholdForTimeSpendInQueueWarning()))
+                .setSaslAuthenticationRetryTimeout(WireDurations.toWire(options.getSaslAuthenticationRetryTimeout()))
                 .setSaslAuthenticationExceptionRetryBackoff(
-                        toWireDuration(options.getSaslAuthenticationExceptionRetryBackoff()))
+                        WireDurations.toWire(options.getSaslAuthenticationExceptionRetryBackoff()))
                 .setMaxFailureHistory(options.getMaxFailureHistory())
                 .setInvalidOffsetMetadataPolicy(toWirePolicy(options.getInvalidOffsetMetadataPolicy()))
                 .setMessageBufferSize(options.getMessageBufferSize())
@@ -281,11 +282,11 @@ public class OptionsMapper {
         // client did not negotiate the machinery they configure - a client must never be told to heartbeat on
         // a session where no lease exists
         if (negotiatedCapabilities.contains(ConfigureHandler.CAPABILITY_HEARTBEAT)) {
-            configured.setLeaseDuration(toWireDuration(liveness.leaseDuration()))
-                    .setHeartbeatInterval(toWireDuration(liveness.heartbeatInterval()));
+            configured.setLeaseDuration(WireDurations.toWire(liveness.leaseDuration()))
+                    .setHeartbeatInterval(WireDurations.toWire(liveness.heartbeatInterval()));
         }
         if (negotiatedCapabilities.contains(ConfigureHandler.CAPABILITY_MANIFEST)) {
-            configured.setReconnectWindow(toWireDuration(liveness.reconnectWindow()));
+            configured.setReconnectWindow(WireDurations.toWire(liveness.reconnectWindow()));
         }
         return configured.build();
     }
@@ -324,7 +325,7 @@ public class OptionsMapper {
         if (!present) {
             return fallback;
         }
-        var duration = toJavaDuration(wire);
+        var duration = WireDurations.toJava(wire);
         if (duration.isZero() || duration.isNegative()) {
             throw new ConfigureRejectedException(fieldName + " must be positive, got " + duration);
         }
@@ -409,17 +410,5 @@ public class OptionsMapper {
             default:
                 return InvalidOffsetMetadataPolicy.INVALID_OFFSET_METADATA_POLICY_FAIL;
         }
-    }
-
-    private static Duration toJavaDuration(com.google.protobuf.Duration duration) {
-        // built by hand rather than with protobuf-java-util's Durations, which is not on this module's classpath
-        return Duration.ofSeconds(duration.getSeconds(), duration.getNanos());
-    }
-
-    private static com.google.protobuf.Duration toWireDuration(Duration duration) {
-        return com.google.protobuf.Duration.newBuilder()
-                .setSeconds(duration.getSeconds())
-                .setNanos(duration.getNano())
-                .build();
     }
 }

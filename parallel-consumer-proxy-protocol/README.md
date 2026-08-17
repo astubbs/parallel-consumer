@@ -6,10 +6,11 @@
 > and the v1 protocol - though frozen - has never carried production traffic. Tracking: astubbs#242,
 > upstream confluentinc#154.
 
-This module holds **one `.proto` file and the tests that defend it**. It contains no logic: the
-sidecar is [`parallel-consumer-proxy`](../parallel-consumer-proxy), and the language libraries are
-under [`parallel-consumer-proxy-clients`](../parallel-consumer-proxy-clients). Everything that speaks
-the protocol - eleven client languages and the sidecar itself - generates from the single source here.
+This module holds **one `.proto` file, the tests that defend it, and nothing else that decides
+behaviour**. The sidecar is [`parallel-consumer-proxy`](../parallel-consumer-proxy), and the language
+libraries are under [`parallel-consumer-proxy-clients`](../parallel-consumer-proxy-clients).
+Everything that speaks the protocol - eleven client languages and the sidecar itself - generates from
+the single source here.
 
 ## What is in it
 
@@ -17,6 +18,15 @@ the protocol - eleven client languages and the sidecar itself - generates from t
 - Per-language option lines (`go_package`, `csharp_namespace`, `ruby_package`, and the rest). These
   are **wire-invisible**, but they are not optional extras: adding one after the freeze gate arms is
   a breaking change by the gate's own reckoning, which is why they all landed before it did.
+- `src/main/java/.../WireDurations.java` - the **one** implementation of the
+  `google.protobuf.Duration` ↔ `java.time.Duration` bridge, for both JVM speakers of the protocol.
+  This is the module's only hand-written production Java, and it is here rather than in either caller
+  because a conversion between a wire field and a language type *is* wire semantics: two hand-written
+  copies of it (which is what the sidecar and the Java client each had) can drift on a nanos or
+  negative edge case, and the result is a protocol bug the conformance suite catches only if a
+  scenario happens to exercise the value that drifted. The class javadoc carries the measurements
+  behind not using protobuf-java-util's `Durations` instead. Anything that *interprets* a message
+  rather than decoding a well-known type belongs in a caller, not here.
 
 ## Why v1 is frozen, and what that costs you
 

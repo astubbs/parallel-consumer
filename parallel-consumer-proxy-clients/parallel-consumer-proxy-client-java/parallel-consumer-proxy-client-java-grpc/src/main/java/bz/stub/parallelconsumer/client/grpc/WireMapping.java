@@ -7,6 +7,7 @@ import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.InboundRecord;
 import bz.stub.parallelconsumer.client.Outcome;
 import bz.stub.parallelconsumer.client.OutboundRecord;
+import bz.stub.parallelconsumer.proxy.protocol.WireDurations;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
 import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
@@ -56,9 +57,9 @@ final class WireMapping {
                 .putAllKafkaProperties(options.kafkaProperties());
         options.maxConcurrency().ifPresent(configure::setMaxConcurrency);
         options.ordering().ifPresent(ordering -> configure.setOrdering(toWireOrdering(ordering)));
-        options.commitInterval().ifPresent(interval -> configure.setCommitInterval(toWireDuration(interval)));
+        options.commitInterval().ifPresent(interval -> configure.setCommitInterval(WireDurations.toWire(interval)));
         options.defaultMessageRetryDelay().ifPresent(delay ->
-                configure.setDefaultMessageRetryDelay(toWireDuration(delay)));
+                configure.setDefaultMessageRetryDelay(WireDurations.toWire(delay)));
         return configure.build();
     }
 
@@ -143,13 +144,5 @@ final class WireMapping {
             default:
                 return ProcessingOrder.PROCESSING_ORDER_KEY;
         }
-    }
-
-    private static com.google.protobuf.Duration toWireDuration(java.time.Duration duration) {
-        // built by hand rather than with protobuf-java-util's Durations, which is not on this module's classpath
-        return com.google.protobuf.Duration.newBuilder()
-                .setSeconds(duration.getSeconds())
-                .setNanos(duration.getNano())
-                .build();
     }
 }
