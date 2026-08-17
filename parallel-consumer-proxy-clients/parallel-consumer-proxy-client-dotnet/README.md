@@ -102,7 +102,6 @@ Everything below runs from this directory. All three are local commands - none o
 tell you the answer.
 
 ```bash
-bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests   # once: the test spawns this harness
 dotnet build                                                # build, WITH the lint (see below)
 dotnet test                                                 # the end-to-end conformance test
 dotnet format --verify-no-changes                           # formatting and style, no build needed
@@ -115,10 +114,47 @@ Through Maven, which is what the CI row does:
 ```
 
 The Maven wrapper runs the .NET toolchain **only** under `-Dpc.foreignClients`; an ordinary
-`bin/build.sh -am` builds this module's pom and runs no `dotnet` at all. The proxy module must be
-built first either way: the test spawns the JVM conformance harness, and this module deliberately
-has no Maven dependency on the engine, so nothing can order that build for you. The test *fails*
-with that command in its message rather than skipping.
+`bin/build.sh -am` builds this module's pom and runs no `dotnet` at all.
+
+### In the Maven build
+
+This module is `packaging: pom` with four `pc.foreign.*` properties naming `dotnet build` and
+`dotnet test`, and the `foreign-clients` profile in the clients aggregator
+([`../pom.xml`](../pom.xml)) binds them to `compile` and `test` and decides whether the module is in
+the reactor at all. `clean` is `maven-clean-plugin` filesets in this module's own pom instead - no
+shell-out can be bound to `clean`, and the aggregator's pom carries that argument.
+
+- **The bare `build` and `test` arguments work because this directory holds exactly one solution
+  file.** A second solution, or a stray project at this level, makes every `dotnet` command here
+  ambiguous - including the CI row's `dotnet format analyzers`, which also takes no argument.
+- **`package`, not `test`**: `ConformanceHarness.cs` looks for the proxy module's test jar as a
+  *file*, and `test` stops one phase short of producing one. The `dotnet-e2e-harness` profile is
+  what puts the proxy in the reactor, so the older instruction to build it by hand first is no
+  longer a prerequisite - `bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests` is now just
+  the fastest local loop. That profile activates on `-Dpc.foreignClients` and **not** on
+  `-P foreign-clients`, which activates the module without the engine behind it. That has its uses:
+  `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
+  which makes it the quicker loop when all you want is `dotnet build`.
+- **`-am` is not optional for `compile` or `test`.** `-pl` alone fails the enforcer's
+  `ReactorModuleConvergence` with a message about parent modules, which reads as a broken pom;
+  [`docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md`](../../docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md)
+  owns that. `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-dotnet` still
+  needs the profile - without it the module is not in the reactor at all - but needs no `-am`, the
+  clean lifecycle never reaching `validate` where the enforcer is bound.
+
+**What a Java engineer will find surprising:**
+
+- **None of the output is under `target/`.** MSBuild writes `bin/` (the assemblies) and `obj/` (the
+  intermediates, including the protobuf and gRPC stubs `Grpc.Tools` regenerates on every build)
+  beside each of the three `.csproj` files. Measured: a compile leaves
+  `src/…/bin/Debug/net8.0/*.dll` and `src/…/obj/Debug/net8.0/parallelconsumer/proxy/v1/Proxy.cs`.
+- **`clean` therefore has to be told**, and it is - by directory *pattern* rather than by path, so a
+  fourth project added to the solution is covered without a second edit. Verified: after
+  `./mvnw clean`, no `bin/` or `obj/` remains anywhere in this module.
+- **`~/.nuget/packages` is not touched**, being fetched dependencies rather than build output -
+  this language's `~/.m2`, which `mvn clean` does not empty either. `dotnet clean` is not used
+  because it needs the SDK present to delete files, and the point of the opt-in profile is that the
+  SDK is usually absent.
 
 ### The lint is the build
 

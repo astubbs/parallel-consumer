@@ -95,7 +95,7 @@ each wave adds its token alongside its duty.
 ## Working on it
 
 ```bash
-make build        # install into .venv, with the dev tools
+make build        # install into .venv, then parse every source file - what Maven's compile runs
 make test         # the suite, including the end-to-end test against the real sidecar
 make lint         # ruff - the same check CI runs
 make proto        # regenerate the stubs from the frozen proxy.proto
@@ -125,6 +125,43 @@ module's *test* jar and therefore needs a JVM classpath. Maven writes that class
 empty skeleton and starts no Python interpreter; the `exec` bindings that call `make` are inactive
 unless `-Dpc.foreignClients` is passed. That is what keeps the reactor buildable on a machine with
 no Python client toolchain.
+
+### In the Maven build
+
+```bash
+./mvnw compile -Dpc.foreignClients -pl :parallel-consumer-proxy-client-python -am   # runs: make build
+./mvnw test    -Dpc.foreignClients -pl :parallel-consumer-proxy-client-python -am   # runs: make test
+```
+
+This module is `packaging: pom` with four `pc.foreign.*` properties naming those `make` targets, and
+the `foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.xml)) binds them to
+`compile` and `test` and decides whether the module is in the reactor at all.
+
+- **`-am` is not optional for `compile` or `test`.** `-pl` alone fails the enforcer's
+  `ReactorModuleConvergence` with a message about parent modules, which reads as a broken pom;
+  [`docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md`](../../docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md)
+  owns that. `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-python` still
+  needs the profile - without it the module is not in the reactor at all - but needs no `-am`, the
+  clean lifecycle never reaching `validate` where the enforcer is bound.
+- **Reaching the test phase needs `-Dpc.foreignClients`, not `-P foreign-clients`.** Both activate
+  the module, but the `python-e2e-harness` profile - which pulls the proxy module into the reactor
+  and writes the sidecar classpath - activates on the *property*. The flip side is worth knowing:
+  `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
+  which makes it the quicker loop when all you want is this module compiled.
+
+**What a Java engineer will find surprising**, beyond the `.venv` rule above:
+
+- **`compile` installs dependencies.** `make build` is `deps` then `compile`: it creates `.venv` if
+  absent and `pip install --editable '.[dev]'` into it, every time, before anything is parsed. There
+  is no phase here that corresponds to resolution being someone else's job.
+- **The parse check is a deliberate addition, not something the language does for you.** `make
+  compile` is `python -m compileall` over the four source directories; without it the compile phase
+  installed packages and read no source, so `mvn compile` reported SUCCESS on a file ending
+  `this is not valid python @@@`. Re-verified from this branch: the sabotage now fails the Maven
+  build with CPython's own `SyntaxError`. The Makefile's `compile` target owns the reasoning,
+  including what the check deliberately does not catch and why it is not `ruff` or `mypy`.
+- **`clean` deletes the `egg-info` the editable install produced** and leaves `.venv` intact;
+  imports keep working afterwards, so there is no rebuild to remember. Verified after a clean.
 
 The shared cross-language conformance suite drives this client's runner
 (`scripts/conformance_runner.py`) through the same scenarios as every other language, asserting

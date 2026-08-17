@@ -99,6 +99,40 @@ raised to errors). Untyped ESLint on TypeScript finds formatting; the typed rule
 failure this codebase is shaped for, which is an unawaited promise whose rejection nobody sees.
 `npm run lint` alone is exactly what the CI matrix row runs.
 
+### In the Maven build
+
+```bash
+./mvnw compile -Dpc.foreignClients -pl :parallel-consumer-proxy-client-typescript -am   # npm run build
+./mvnw test    -Dpc.foreignClients -pl :parallel-consumer-proxy-client-typescript -am   # npm test
+```
+
+This module is `packaging: pom` with four `pc.foreign.*` properties naming those npm scripts, and
+the `foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.xml)) binds them to
+`compile` and `test` and decides whether the module is in the reactor at all. Nothing binds to
+`clean` in any language here - the pom says why that is forced rather than chosen.
+
+**What a Java engineer will find surprising:**
+
+- **`compile` installs the dependencies first.** `npm run build` is `npm ci` then `tsc --build`: the
+  exec binding calls one program with no shell, so there is nowhere else for the install to live,
+  and `npm ci` from the committed lockfile is its reproducible form. It runs on every compile
+  (measured: 128 packages, under a second warm), which is not a step a Maven build has.
+- **Everything `tsc` emits lands in `dist/`** - `dist/src`, `dist/test`, and the incremental state
+  at `dist/tsconfig.tsbuildinfo` - so one fileset is the whole answer and `clean` needs no pattern.
+  Measured: after a build nothing outside `dist/` is new.
+- **`node_modules` survives `clean`, deliberately** - see above; it is this language's `~/.m2`.
+- **`-am` is not optional for `compile` or `test`.** `-pl` alone fails the enforcer's
+  `ReactorModuleConvergence` with a message about parent modules, which reads as a broken pom;
+  [`docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md`](../../docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md)
+  owns that. `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-typescript` still
+  needs the profile - without it the module is not in the reactor at all - but needs no `-am`, the
+  clean lifecycle never reaching `validate` where the enforcer is bound.
+- **`-P foreign-clients` is not a synonym for `-Dpc.foreignClients` here.** It activates the module,
+  but the `typescript-e2e-harness` profile below activates on the *property*, so under `-P` the
+  classpath file is never written and the end-to-end test fails looking for it. That has its uses:
+  `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
+  which makes it the quicker loop when all you want is `tsc`.
+
 ### The end-to-end test needs the proxy module built
 
 The test spawns the real test-mode sidecar (`TestModeMain`, in the proxy module's **test** jar), so

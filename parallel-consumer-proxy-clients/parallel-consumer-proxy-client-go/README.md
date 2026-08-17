@@ -113,14 +113,51 @@ where each tool comes from and why it is assembled rather than assumed - notably
 ## Building and testing
 
 ```bash
-bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests   # the test spawns this module's harness
-go test ./...                                               # or: ./mvnw -pl :parallel-consumer-proxy-client-go test -Dpc.foreignClients
+./mvnw compile -Dpc.foreignClients -pl :parallel-consumer-proxy-client-go -am   # runs: go build ./...
+./mvnw test    -Dpc.foreignClients -pl :parallel-consumer-proxy-client-go -am   # runs: go test ./...
+go test ./...                                                                   # the shorter loop, once Maven has run
 ```
 
-The Maven wrapper runs the Go toolchain **only** under `-Dpc.foreignClients`; an ordinary
-`bin/build.sh -am` builds this module's pom and runs no Go at all. The proxy module must be built
-first either way: the test spawns the JVM conformance harness, and this module deliberately has no
-Maven dependency on the engine, so nothing can order that build for you.
+Those two phases are the whole of what Maven does here. This module is `packaging: pom` with four
+`pc.foreign.*` properties naming the Go commands, and the `foreign-clients` profile in the clients
+aggregator ([`../pom.xml`](../pom.xml)) binds them to `compile` and `test`; the profile also owns
+whether this module is in the reactor at all, so an ordinary `bin/build.sh -am` runs no Go
+whatsoever. Nothing binds to `clean` - see below.
+
+- **`-am` is not optional for `compile` or `test`.** `-pl` alone fails the enforcer's
+  `ReactorModuleConvergence` with a message about parent modules, which reads as a broken pom;
+  [`docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md`](../../docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md)
+  owns that. `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-go` still needs
+  the profile - without it the module is not in the reactor at all - but needs no `-am`, the clean
+  lifecycle never reaching `validate` where the enforcer is bound.
+- **Reaching the test phase needs `-Dpc.foreignClients`, not `-P foreign-clients`.** Both activate
+  the module, but the `go-e2e-harness` profile - which is what pulls the proxy module into the
+  reactor and writes `target/sidecar-classpath.txt` for the harness to read - activates on the
+  *property*. Under `-P` alone the Go test fails hunting for the proxy's test jar. `-am` then builds
+  the engine for you, so the older instruction to build the proxy by hand first is no longer
+  required; it remains the fastest loop when you are only re-running `go test`. The flip side is
+  worth knowing: `-P` leaves the engine out of the reactor - three modules instead of six, and no
+  JDK 17 needed - which makes it the quicker loop when all you want is this module compiled.
+
+### What a Java engineer will find surprising here
+
+- **`compile` writes nothing into this directory.** `go build ./...` matches several packages, and
+  for that form the toolchain compiles as a check and discards the objects. Measured: a build leaves
+  `git status --ignored` on this module unchanged. The compiled output goes to Go's shared,
+  content-addressed build cache (`go env GOCACHE`; 725MB on this machine) and the fetched modules to
+  `GOMODCACHE`.
+- **So `clean` does not put Go back to a from-scratch state** - a rebuild reuses cached compilation
+  of our own code, which is not how `target/classes` behaves.
+  [`docs/inflight/bug-mvn-clean-does-not-clean-go-output.md`](../../docs/inflight/bug-mvn-clean-does-not-clean-go-output.md)
+  **owns that gap**: what is left behind, why neither route to a fix is worth taking, and the change
+  that should make someone revisit it. What `clean` does remove is `target/`, holding
+  `conformance-runner` and `sidecar-classpath.txt`, by Maven's default fileset with nothing added.
+- **Never `go clean -cache` or `-modcache` to tidy up after a build.** Both are shared with every
+  worktree, agent and unrelated Go project on the machine, which makes them this language's `~/.m2`
+  - and `mvn clean` does not empty `~/.m2`.
+- **A green test phase may have run nothing.** `go test` caches passing results, so a second
+  `./mvnw test ...` over unchanged sources prints `ok ... (cached)` and executes no test. Surefire
+  has no equivalent. `go test -count=1 ./...` forces the re-run when you need to see it happen.
 
 The shared cross-language conformance suite drives this client's runner
 (`cmd/conformance-runner`) through the same scenarios as every other language, asserting engine

@@ -71,6 +71,7 @@ consumer group, each with its own sidecar.
 ```bash
 bundle install                # once
 bundle exec rake              # rubocop, then the specs - the whole local loop
+bundle exec rake syntax       # ruby -c over every source file - the parse check Maven's compile runs
 bundle exec rubocop           # the bug finder alone
 bundle exec rspec             # the specs alone
 ```
@@ -81,19 +82,43 @@ is `vendor/bundle` - the installed bundle, which is this language's `~/.m2` and 
 has no more business deleting than it has emptying `~/.m2`. So `./mvnw clean` removes this module's
 `target/` and nothing else, and `pom.xml` configures no clean filesets on purpose - the reasoning
 is written out there, because an empty configuration and an unconsidered one look identical.
+Measured again on this branch: a compile adds nothing to this directory but `vendor/`.
 
-`bundle exec rake` is what the Maven wrapper runs too, so `-Dpc.foreignClients` and a developer's
-box run the same thing:
+### In the Maven build
 
 ```bash
-JAVA_HOME=... bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests   # the harness, first
-JAVA_HOME=... bin/build.sh -pl :parallel-consumer-proxy-client-ruby -am -Dpc.foreignClients
+./mvnw compile -Dpc.foreignClients -pl :parallel-consumer-proxy-client-ruby -am   # scripts/build.sh
+./mvnw package -Dpc.foreignClients -pl :parallel-consumer-proxy-client-ruby -am   # bundle exec rake
 ```
 
-The first command is not optional and Maven cannot do it for us: the conformance spec spawns the
-JVM-side test-mode sidecar from the proxy module's **test** jar, and this module deliberately has
-no Maven dependency on the proxy. Without it the spec fails naming that command, rather than
-skipping.
+This module is `packaging: pom` with four `pc.foreign.*` properties naming those commands, and the
+`foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.xml)) binds them to
+`compile` and `test` and decides whether the module is in the reactor at all. Nothing is bound to
+`clean` in any language here - the pom says why that is forced rather than chosen.
+
+- **`compile` runs `scripts/build.sh`: `bundle install`, then `rake syntax`.** Installing gems is
+  not compiling, and while it was the whole of the phase `mvn compile` reported SUCCESS on a `lib/`
+  file ending `this is not valid ruby @@@`. Re-verified from this branch: the same sabotage now
+  fails the Maven build with MRI's own `SyntaxError`. The script's header owns why it is a script
+  rather than two words in the pom, and the Rakefile's `syntax` task owns why `ruby -c` rather than
+  RuboCop.
+- **`test` runs `bundle exec rake`, whose default task is RuboCop then RSpec** - so the bug finder
+  fails the Maven build on a developer's box, not only in the CI row that repeats it.
+- **`package`, not `test`**: `spec/support/harness.rb` looks for the proxy module's test jar as a
+  *file*, and `test` stops one phase short of producing one. The `ruby-e2e-harness` profile is what
+  puts the proxy in the reactor at all, so the older instruction to build it by hand first is no
+  longer a prerequisite - and that profile activates on `-Dpc.foreignClients`, *not* on
+  `-P foreign-clients`, which activates the module without the engine behind it. That has its uses:
+  `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
+  which makes it the quicker loop when all you want is the gems installed and the sources parsed.
+- **`-am` is not optional for `compile` or `test`.** `-pl` alone fails the enforcer's
+  `ReactorModuleConvergence` with a message about parent modules, which reads as a broken pom;
+  [`docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md`](../../docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md)
+  owns that. `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-ruby` still needs
+  the profile - without it the module is not in the reactor at all - but needs no `-am`, the clean
+  lifecycle never reaching `validate` where the enforcer is bound.
+- **`vendor/bundle` must survive a clean**, and RuboCop's cache (`~/.cache/rubocop_cache`) is
+  outside the module and shared with every checkout on the box. Neither is build output.
 
 ### The shared conformance suite
 

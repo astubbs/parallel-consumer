@@ -57,10 +57,6 @@ client.shutdown().await?;
 ## Building and testing
 
 ```bash
-# once, so the conformance harness exists (it lives in the proxy module's TEST jar, and this
-# module deliberately has no Maven dependency on the engine, so -am cannot pull it in)
-bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
-
 cd parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust
 cargo clippy --all-targets -- -D warnings     # THE LINT GATE - run it before every commit
 cargo test                                    # unit, integration and doc tests
@@ -70,17 +66,49 @@ cargo test                                    # unit, integration and doc tests
 `PC_PROXY_TEST_JAVA`) pointing at JDK 17. `protoc` is needed to build at all - `build.rs` explains
 where it looks and how to override it.
 
-Through Maven, the same two commands are the module's build and test steps, active only under the
-opt-in profile:
+Through Maven those same two commands *are* the module's build and test steps:
 
 ```bash
-bin/build.sh -pl :parallel-consumer-proxy-client-rust -am -Dpc.foreignClients
+./mvnw compile -Dpc.foreignClients -pl :parallel-consumer-proxy-client-rust -am   # the clippy gate
+./mvnw package -Dpc.foreignClients -pl :parallel-consumer-proxy-client-rust -am   # cargo test, and the CI row
 ```
 
-Without `-Dpc.foreignClients` an ordinary build of this module runs no Rust toolchain whatsoever.
-Note that cargo and Maven share `target/`, so `mvn clean` deletes the Rust build output too and the
-next foreign build recompiles the dependency tree - deliberately, since a clean that spares a
-foreign toolchain's output is a clean that lies.
+This module is `packaging: pom` with four `pc.foreign.*` properties naming the cargo commands, and
+the `foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.xml)) binds them to
+`compile` and `test` and decides whether the module is in the reactor at all. Without it, an
+ordinary build of this module runs no Rust toolchain whatsoever.
+
+- **`compile` is the lint, not the build.** `cargo clippy` type-checks every target and `-D
+  warnings` turns any finding into a failure, so `mvn compile` here is stricter than javac would be:
+  an unused variable fails it. The real compile happens at `test`. The pom carries why.
+- **`-am` is not optional for `compile` or `test`.** `-pl` alone fails the enforcer's
+  `ReactorModuleConvergence` with a message about parent modules, which reads as a broken pom;
+  [`docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md`](../../docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md)
+  owns that. `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-rust` still needs
+  the profile - without it the module is not in the reactor at all - but needs no `-am`, the clean
+  lifecycle never reaching `validate` where the enforcer is bound.
+- **Reaching the test phase needs `-Dpc.foreignClients`, not `-P foreign-clients`.** Both activate
+  the module, but the `rust-e2e-harness` profile - which pulls the proxy module into the reactor for
+  the sidecar the test spawns - activates on the *property*. `-am` then builds the engine, so the
+  older instruction to build the proxy by hand first is no longer a prerequisite. The flip side is
+  worth knowing: `-P` leaves the engine out of the reactor - three modules instead of six, and no
+  JDK 17 needed - which makes it the quicker loop when all you want is the clippy gate.
+- **`package`, not `test`, for that lane**, because `tests/harness` looks for the proxy's test jar as
+  a *file* and `test` stops one phase short of producing one. Same reason the CI row runs `package`.
+
+### What a Java engineer will find surprising here
+
+- **Cargo and Maven share `target/`**, this module having no workspace and no `build.target-dir`. So
+  `mvn clean` deletes the Rust build output as well, and the next foreign build recompiles the
+  dependency tree from nothing. That is deliberate - a clean that spares a foreign toolchain's
+  output is a clean that lies - and it is why the pom configures no `maven-clean-plugin` fileset:
+  the default one already covers it. Verified both ways here: `target/debug` present after a build,
+  gone after `mvn clean`, and the next build green.
+- **The fetched crates are not output and do not go.** The registry and its sources live in
+  `~/.cargo`, which is this language's `~/.m2`; `mvn clean` does not empty `~/.m2`. `cargo clean` is
+  not used either - it needs the toolchain present to delete files, and the whole premise of the
+  opt-in profile is that the toolchain is usually absent.
+- **`Cargo.lock` is committed source**, not a build artefact, and nothing regenerates it for you.
 
 The shared cross-language conformance suite drives this crate's runner
 (`src/bin/conformance-runner.rs`) through the same scenarios as every other language, on a
