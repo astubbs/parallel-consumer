@@ -10,12 +10,14 @@ BIN := $(VENV)/bin
 REPO_ROOT := ../..
 CLASSPATH_FILE := target/sidecar-classpath.txt
 
-.PHONY: all build test lint ruff typecheck proto proto-check install clean distclean help
+.PHONY: all build compile deps test lint ruff typecheck proto proto-check install clean distclean help
 
 all: build test
 
 help:
-	@echo "build       install the package and its dev tools into $(VENV)"
+	@echo "build       deps + compile - what Maven's compile phase runs, and the whole of it"
+	@echo "deps        install the package and its dev tools into $(VENV)"
+	@echo "compile     parse every source file - the syntax check Maven's compile phase must fail on"
 	@echo "test        run the suite (spawns the test-mode sidecar for the end-to-end test)"
 	@echo "lint        ruff + mypy - the whole static analysis, and exactly what the CI row runs"
 	@echo "ruff        the linter alone (pyflakes, bugbear, bandit)"
@@ -28,9 +30,41 @@ help:
 $(BIN)/python:
 	$(PYTHON) -m venv $(VENV)
 
-install build: $(BIN)/python
+# WHAT MAVEN'S compile PHASE RUNS, and it is two steps because installing dependencies is not
+# compiling. `build` used to be `deps` alone, and a module whose Python never parses is a module
+# whose `mvn compile` reports SUCCESS on a source file containing `this is not valid python @@@` -
+# measured, on this Makefile, before this target existed. Six of the eight foreign clients already
+# went red on that sabotage; Python and Ruby did not, which is the check-that-passes-without-having-
+# run class (docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+install build: deps compile
+
+deps: $(BIN)/python
 	$(BIN)/pip install --quiet --upgrade pip
 	$(BIN)/pip install --quiet --editable '.[dev]'
+
+# THE PARSE, AND ONLY THE PARSE. compileall walks each directory, byte-compiles every .py it finds,
+# and exits non-zero printing CPython's own `SyntaxError` with the file, line and caret. That is the
+# whole claim being made here: the sources are Python. It is the interpreter's own front end rather
+# than a second implementation of it, which is why it is preferred to `ruff check` - ruff parses
+# just as thoroughly and costs about the same, but it is the LINTER, and pointing the compile phase
+# at it would make `mvn compile` go red on an unused import and make the lane sensitive to
+# [tool.ruff] settings. `mypy --strict` was rejected on the same boundary plus cost: it catches
+# strictly more, takes ~1s warm against 25ms here and far longer cold, and it is already `make lint`
+# - the CI Python row runs that, so a type error is caught by the lane that owns it.
+#
+# WHAT IT DOES NOT CATCH, stated so the next reader does not over-trust it: anything past the
+# grammar - undefined names, wrong types, imports that do not resolve - and any syntax that this
+# interpreter accepts but the declared floor (requires-python = ">=3.10") does not, since it parses
+# with whatever $(PYTHON) built $(VENV). Both belong to `make lint`.
+#
+# THE SAME FOUR DIRECTORIES AS `typecheck`, for the reason given there, and poc/ is excluded for the
+# reason given in [tool.ruff] and [tool.mypy] in pyproject.toml: it is preserved evidence, not
+# maintained source. Keep the three lists in step.
+#
+# Output lands in __pycache__ beside each source, which is already on both clean lists - the `clean`
+# target below and the maven-clean-plugin filesets in pom.xml.
+compile: deps
+	$(BIN)/python -m compileall -q src tests tools scripts
 
 test: build $(CLASSPATH_FILE)
 	$(BIN)/python -m pytest -q

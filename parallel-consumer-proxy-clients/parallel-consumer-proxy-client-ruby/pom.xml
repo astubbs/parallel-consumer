@@ -40,10 +40,25 @@
         quietly does not run is not a passing test. Recorded as a wave finding in
         docs/inflight/clients/ruby.md (astubbs#242).
     -->
+    <!--
+        THE COMPILE PHASE RUNS scripts/build.sh, NOT `bundle install`, AND THAT IS THE POINT.
+        Installing gems is not compiling: with `bundle install` as the whole of the compile phase,
+        `mvn compile -Dpc.foreignClients` reported BUILD SUCCESS on a lib/ file ending in
+        `this is not valid ruby @@@`, because nothing in the phase ever parsed a source file. The
+        script installs the gems and then runs `rake syntax`, which is `ruby -c` over every source
+        file; the script's header says why the two steps cannot be one property, and the Rakefile
+        task says why `ruby -c` rather than RuboCop. Ruby wave of the language-proxy plan,
+        astubbs#242.
+    -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>bundle</pc.foreign.build.executable>
-        <pc.foreign.build.args>install</pc.foreign.build.args>
+        <pc.foreign.build.executable>${project.basedir}/scripts/build.sh</pc.foreign.build.executable>
+        <!--
+            EMPTY ON PURPOSE: the script takes no arguments, and the aggregator's exec execution
+            reads this property unconditionally, so it has to resolve to something. An empty value
+            resolves to no arguments at all, which was verified rather than assumed.
+        -->
+        <pc.foreign.build.args></pc.foreign.build.args>
         <pc.foreign.test.executable>bundle</pc.foreign.test.executable>
         <pc.foreign.test.args>exec rake</pc.foreign.test.args>
     </properties>
