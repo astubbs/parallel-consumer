@@ -1,12 +1,18 @@
-# Branch audit 2026-08-17: orphans to investigate, and upstream tips not preserved on origin
+# Branch audit 2026-08-17: orphans to investigate
 
 A full sweep of all 196 origin branches against the tracking corpus (upstream-map.yaml,
 docs/refactoring.md, upstream-pr-analysis.adoc, docs/inflight/, docs/upstream.md) found the
-actor-IPC family and the thread-model family had no manifest entries (fixed in the same PR as this
-note), plus the two lists below, which are NOT yet resolved. Method note: "referenced" meant the
-full branch name, or its basename, appearing anywhere in that corpus - existing references were not
-verified correct (one, in `sweep-2023-async-produce`, was already known wrong and is fixed
-alongside this note).
+actor-IPC and thread-model families had no manifest entries (fixed in the same PR as this note).
+The list below is what remains OPEN. Method note: "referenced" meant the full branch name, or its
+basename, appearing anywhere in that corpus - existing references were not verified correct (one,
+in `sweep-2023-async-produce`, was already known wrong and is fixed alongside this note).
+
+Upstream-tip preservation is DONE, not open: every non-bot `upstream/*` branch tip is now reachable
+from an origin branch or pinned under `archive/upstream-branch/*` /
+`archive/upstream-pr-*` tags. `preserved_branch_tips` in upstream-map.yaml owns the tag/SHA record;
+docs/upstream.md owns the method, including the trap that the 2026-08-14 containment command
+(`git branch -r --contains`) cannot see tags, so re-running it verbatim reports already-preserved
+heads as lost.
 
 ## 1. Interesting orphans - branches referenced nowhere, likely carrying real work
 
@@ -34,7 +40,9 @@ Defect / correctness cohort:
 Feature drafts with likely manifest homes (attribute, then back-fill the entry):
 
 - `features/retry-exception`, `features/retry-exception-w-terminal` - likely confluentinc#291 /
-  confluentinc#268 (adoc A10/E1); no dedicated manifest entry exists for that pair yet
+  confluentinc#268 (adoc A10/E1); no dedicated manifest entry exists for that pair yet. NB the
+  upstream same-named branch tip diverged from origin's but is contained in another origin branch -
+  attribution should look at both lines
 - `features/configure-retry` - possibly confluentinc#66 (which was deliberately REMOVED from the
   sweep cohort - see sweep-2023-admin-closure notes); needs its own entry if real
 - `features/failure-history`
@@ -46,44 +54,21 @@ Feature drafts with likely manifest homes (attribute, then back-fill the entry):
   nearest entry but its issues are confluentinc#175/confluentinc#372 - verify before attaching
 - `feats/jstream-bounded-blocking-buffer` - relates to `refactor/deprecate-jstream`?
 
-## 2. Upstream branches NOT preserved on origin
+Newly preserved upstream tips whose CONTENT was never assessed (read before judging):
 
-Answer to "do we have every upstream branch?": **no.** Every tip exists in local clones with the
-`upstream` remote, but only origin-pushed refs survive confluentinc deleting or GC-ing branches.
-Verified 2026-08-17 by checking every `upstream/*` tip for reachability from any origin ref:
+- `archive/upstream-branch/PL-176/DontDrainIssue` - name suggests a real drain-behaviour
+  investigation; not in docs/upstream.md's earlier ruled-out orphan list
+- `archive/upstream-branch/features/batching` - batching shipped upstream separately; the tip may
+  carry unmerged event-system work
 
-Same-name pairs where the UPSTREAM side has commits origin's copy lacks:
-
-- `0.5.3.x` - upstream ahead
-- `improvements/rebalance-messages` - upstream ahead
-- `improvements/remove-static` - upstream ahead
-- `features/dynamic-concurrency-control` - DIVERGED (upstream tip ba6b71f10 is the SHA the
-  manifest cites for draft PR confluentinc#22; origin's copy @6f85eac41 is older)
-- `features/retry-exception` - DIVERGED
-
-Upstream-only branches with no origin counterpart (bot branches excluded):
-
-- `PL-176/DontDrainIssue` - unknown content, name suggests a real bug investigation; NOT in
-  docs/upstream.md's ruled-out orphan list
-- `features/batching` (2022, "Batching feature and Event system improvements")
-- `docs/back-pressure` (PR confluentinc#508, adoc E3)
-- `improvements/vertx-vertical` @02ab32894 (draft PR confluentinc#204 - the SHA the manifest
-  cites; the manifest citation currently resolves only via the upstream remote)
-- `fix-charts` (despite the name, tip is "more tests", 2022)
-- `pyallel-consumer` + `python-cd-pipeline` (PR confluentinc#443 family)
-- `correct-failing-license-check` (2025-10)
-- `upstream/master` itself - the 2026 tip (rmoff, "Add link to fork") is ahead of
-  `origin/master-confluent`
-
-Proposed preservation action (cheap, one-off, decision pending): push each unpreserved upstream
-tip to origin under `upstream-archive/<name>` so the fork holds a durable copy; then
-docs/upstream.md's orphan-branch section should be updated to cover the full list above, not just
-the five it names.
-
-## 3. Tooling follow-up
+## 2. Tooling follow-up
 
 `scripts/upstream-sweep.sh --audit` checks for untracked upstream *issues/PRs*; nothing checks for
 *branches* unreferenced by the manifest or refactoring.md - which is exactly how the actor family
-stayed invisible for three years. Add a branch-audit mode (origin branches vs manifest
-`fork.branches` + refactoring.md, with an explicit junk allowlist) so this list cannot silently
-regrow.
+stayed invisible for three years. Two audit modes wanted:
+
+- branch-audit: origin branches vs manifest `fork.branches` + refactoring.md, with an explicit junk
+  allowlist, so untracked work cannot silently regrow
+- containment re-check: every `preserved_heads` / `preserved_branch_tips` SHA still reachable on
+  origin (branch OR tag - see the docs/upstream.md trap above); docs/upstream.md already records
+  this as manual-only, tracked in astubbs#300

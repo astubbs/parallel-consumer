@@ -61,6 +61,28 @@ last_swept: 2026-08-06
 upstream_repo: confluentinc/parallel-consumer
 fork_repo: astubbs/parallel-consumer
 
+# Upstream BRANCH tips reachable from nothing on this fork (no origin branch, no tag),
+# pinned as annotated tags 2026-08-17 -- the branch-tip counterpart of
+# sweep-2023-admin-closure.preserved_heads, which covers swept PR heads. Same contract:
+# SHAs recorded here so the containment check can be redone without re-querying
+# upstream; a missing tag, or one no longer pointing at its SHA, means the copy is
+# gone. Re-verify with:
+#   git ls-remote --tags origin 'archive/upstream-branch/*'
+# Deliberately excluded: 18 dependabot/renovate/chore bot branches (recreatable
+# version bumps, not work) and upstream/HEAD (duplicates master).
+preserved_branch_tips:
+  - {branch: 0.5.3.x, sha: c097a3745, tag: archive/upstream-branch/0.5.3.x}
+  - {branch: DP-12547, sha: 87cdcf48c, tag: archive/upstream-branch/DP-12547}
+  - {branch: PL-176/DontDrainIssue, sha: 4869ccf65, tag: archive/upstream-branch/PL-176/DontDrainIssue}
+  - {branch: correct-failing-license-check, sha: e8c6ff5fa, tag: archive/upstream-branch/correct-failing-license-check}
+  - {branch: docs/back-pressure, sha: 50cd1cf01, tag: archive/upstream-branch/docs/back-pressure}
+  - {branch: features/batching, sha: 7e2607560, tag: archive/upstream-branch/features/batching}
+  - {branch: master, sha: 9b582c246, tag: archive/upstream-branch/master}
+  - {branch: python-cd-pipeline, sha: c3796a2fd, tag: archive/upstream-branch/python-cd-pipeline}
+  - {branch: v0.5.2.x-dev, sha: 5f5de9154, tag: archive/upstream-branch/v0.5.2.x-dev}
+  - {branch: v0.6.x, sha: 58159a0b9, tag: archive/upstream-branch/v0.6.x}
+preserved_branch_tips_checked: 2026-08-17
+
 entries:
 
   # ---------------------------------------------------------------------------
