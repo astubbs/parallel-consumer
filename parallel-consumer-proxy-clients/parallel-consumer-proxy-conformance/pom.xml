@@ -141,10 +141,27 @@
             the runner and writes its classpath file before a single scenario starts, so the Kotlin
             entry in LanguageRunners needs no build command at all.
         -->
+        <!--
+            KOTLIN AND SCALA ARE <type>pom</type> ON PURPOSE - DO NOT "FIX" THEM BACK TO A JAR.
+            Neither module's classes are ever used here: both are SPAWNED runners, invoked as
+            scripts/conformance-runner exactly like go and python, so the only thing these two
+            dependencies buy is the reactor edge that builds their runner before the suite looks
+            for it. Typing them `jar` asserted a classpath need that does not exist, and cost a
+            real failure: ossindex's audit goal is bound to `validate` in the root pom and needs
+            the whole test-scope tree resolved, so before `compile` the reactor has nothing to
+            substitute and Maven goes to the repository - where these two never appear, because a
+            module nobody consumes a jar from never gets installed. `./mvnw validate` then died on
+            them. The reactor supplies a `pom` artifact straight from the project file on disk, so
+            it resolves with nothing built, and `-pl :parallel-consumer-proxy-conformance -am`
+            still pulls both modules in. Verified: full-reactor validate green, the measurement
+            above still 0, no kotlin or scala transitives on the test classpath, and both
+            languages' conformance scenarios green.
+        -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-proxy-client-kotlin</artifactId>
             <version>${project.version}</version>
+            <type>pom</type>
             <scope>test</scope>
         </dependency>
 
@@ -157,6 +174,7 @@
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-proxy-client-scala</artifactId>
             <version>${project.version}</version>
+            <type>pom</type>
             <scope>test</scope>
         </dependency>
     </dependencies>
