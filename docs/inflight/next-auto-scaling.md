@@ -33,6 +33,31 @@ Two dimensions, deliberately staged:
   autoscaling, which flaps and scales uselessly when the bottleneck is downstream, because the
   metric encodes "another instance would actually help", not "we are behind".
 
+**The aggregation problem (dimension 2, open).** Each instance sees only its own performance,
+so per-instance "suggested total" numbers will conflict. Candidate resolutions, simplest first:
+
+- **Don't ask instances for a total at all** - an instance genuinely cannot know the right
+  global count; it only knows its own state. Have each expose a local signal instead: a delta
+  vote (+1 "plateaued locally and still behind" / 0 / -1 "underutilized") that infrastructure
+  sums, or a saturation/headroom gauge that HPA's own algorithm already aggregates by
+  averaging across pods (`desired = ceil(current x metric/target)`) - convergence for free, no
+  leader, no new channel.
+- If a single agreed number is ever needed: the group already has a leader and a data channel -
+  the partition-assignor `userData` protocol (catalogued in the ideation doc's rejection table
+  as the deferred lease-allocator) lets members ship demand up and the assignment leader ship
+  one decision down, fenced by generation. Kafka-Streams-style control topics are a heavier
+  alternative; later phase either way.
+- If operators aggregate raw totals anyway: median over mean (outlier-resistant), never max.
+
+**Earmarks.** The partition-count cap is per-subscription today; it must become the sum across
+subscribed topics once per-topic processing functions land (astubbs#254 / confluentinc#372;
+related: astubbs#245 runtime subscription change, astubbs#236 topic priorities). Separately,
+Kafka share groups (KIP-932) relieve the partitions-cap constraint at the protocol level - a
+share-group-aware PC could recommend instance counts beyond partition count; note for the
+positioning story, not v1. This whole feature is candidate STRATEGY.md material ("the engine
+every language re-implements badly" positioning) - fold in via ce-strategy when direction is
+confirmed.
+
 Prior art (design references, bitrotted - catalogued in `docs/refactoring.md` idea bank):
 `features/dynamic-concurrency-control` @6f85eac41 (Netflix concurrency-limits Gradient2Limit as
 the worker pool, auto-scale module extraction started, README section written) and
