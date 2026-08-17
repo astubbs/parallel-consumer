@@ -2,7 +2,7 @@
 // broken rule fails loudly rather than silently passing - or failing - every PR.
 const assert = require("assert");
 const {
-  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
+  suspectRefs, findOptOut, hasFileOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
   QUALIFY_BELOW, PR_BODY_LABEL,
 } = require("./issue-ref-gate.js");
 
@@ -345,13 +345,105 @@ check("formatFailure takes the repo from its caller, and defaults to the fork", 
   assert.ok(formatFailure(HITS).includes("gh issue list -R astubbs/parallel-consumer"));
 });
 
-check("the opt-out tail matches whether the caller can read the PR body", () => {
-  assert.ok(!formatFailure(HITS).includes("does not read the PR body"));
+check("the opt-out tail matches whether the caller could read the PR body", () => {
+  assert.ok(!formatFailure(HITS).includes("could not read the PR body"));
   const local = formatFailure(HITS, { readsPrBody: false });
-  assert.ok(local.includes("does not read the PR body"));
+  assert.ok(local.includes("could not read the PR body"));
   // CI now scans the body as well as honouring the opt-out from it, so a caller with no body is
   // missing both. A tail naming only the opt-out would understate what the local run cannot see.
   assert.ok(local.includes("scans the body itself"), "must say CI reads the body for references too");
+});
+
+check("the fix/opt-out reminder comes AFTER the last hit, where truncated reads still see it", () => {
+  // Readers of a failing tool consume its tail - often literally, via `| tail`. Guidance printed
+  // only above the hits list is invisible to them; this trailer is the copy that survives.
+  const msg = formatFailure(HITS);
+  const lastHit = msg.lastIndexOf("docs/x.md: #857");
+  const trailer = msg.lastIndexOf("issue-refs: N/A - <reason>");
+  assert.ok(lastHit !== -1 && trailer !== -1, "both the hit and the trailer must be present");
+  assert.ok(trailer > lastHit, "the opt-out reminder must follow the hits list");
+  assert.ok(msg.slice(lastHit).includes("Fix: qualify each ref"), "the trailer must lead with the fix");
+  assert.ok(msg.slice(lastHit).includes("issue-refs: exempt"), "the trailer must name the line opt-out too");
+});
+
+// The LINE opt-out: `issue-refs: exempt` on the flagged line itself. It exists for the ref that
+// must stay bare - quoted source material above all, where qualifying the number edits the quote -
+// and unlike the PR-body opt-out it travels with the file, so it holds for future PRs and for
+// local runs on branches that have no PR body to opt out in.
+check("a line carrying issue-refs: exempt is not flagged", () => {
+  const hits = suspectRefs(file("docs/x.md", 'He wrote "see #857 for that" <!-- issue-refs: exempt -->'));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("the line opt-out exempts ONLY its own line", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "See #857 for the stall family.",
+    "And #858 too. <!-- issue-refs: exempt -->"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#857"]);
+});
+
+check("the line opt-out is case-insensitive and comment-syntax-agnostic", () => {
+  const hits = suspectRefs(file("src/X.java", "int x = 857; // was #857 upstream - Issue-Refs: EXEMPT"));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("the line opt-out works in the PR body too - same rule, same adapter", () => {
+  const hits = suspectRefs(body("Quoting the old thread: fixes #858 <!-- issue-refs: exempt -->"));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("issue-refs: exempt without a ref on the line exempts nothing else", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "issue-refs: exempt",
+    "See #857 for the stall family."));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#857"]);
+});
+
+// The BLOCK opt-out: exempt-begin/exempt-end around a pasted run of lines - the tool for quoted
+// material too dense for per-line markers, where marking every line would be a mess in itself.
+check("exempt-begin/exempt-end exempts the lines between, and only those", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "Before the quote: #100 is flagged.",
+    "<!-- issue-refs: exempt-begin -->",
+    "> the old thread said #857 and #858 fix it",
+    "> and #859 was a duplicate",
+    "<!-- issue-refs: exempt-end -->",
+    "After the quote: #200 is flagged again."));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100", "#200"]);
+});
+
+check("an unclosed exempt-begin swallows the rest of the file's added lines, like an unclosed fence", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "<!-- issue-refs: exempt-begin -->",
+    "quoted #857 forever"));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("block state resets between files - one file's begin cannot exempt another file", () => {
+  const hits = suspectRefs([
+    { filename: "docs/a.md", patch: "+<!-- issue-refs: exempt-begin -->\n+quoted #857" },
+    { filename: "docs/b.md", patch: "+plain #858" },
+  ]);
+  assert.deepStrictEqual(hits.map((h) => [h.file, h.ref]), [["docs/b.md", "#858"]]);
+});
+
+check("blocks work in the PR body too - same rule, same adapter", () => {
+  const hits = suspectRefs(body(
+    "Real text, so #100 is flagged.",
+    "<!-- issue-refs: exempt-begin -->",
+    "unfenced paste mentioning #857",
+    "<!-- issue-refs: exempt-end -->"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100"]);
+});
+
+// The FILE opt-out is content-based, applied by the callers via hasFileOptOut - so it holds
+// however small the patch, unlike line/block markers which must be IN the patch to be seen.
+check("hasFileOptOut finds the file marker in any comment syntax, and not its absence", () => {
+  assert.strictEqual(hasFileOptOut("<!-- issue-refs: exempt-file - generated doc -->\ntext"), true);
+  assert.strictEqual(hasFileOptOut("// Issue-Refs: EXEMPT-FILE"), true);
+  assert.strictEqual(hasFileOptOut("issue-refs: exempt on a line is not the file marker"), false);
+  assert.strictEqual(hasFileOptOut(""), false);
+  assert.strictEqual(hasFileOptOut(null), false);
 });
 
 check("a body hit reads as the body in the failure listing", () => {

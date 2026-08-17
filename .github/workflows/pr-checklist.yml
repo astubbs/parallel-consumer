@@ -45,6 +45,12 @@ jobs:
       - name: Self-test the issue-reference gate logic
         run: node .github/scripts/issue-ref-gate.test.js
 
+      # The local mirror (bin/check-issue-refs.sh) fetches the PR body via gh to honour the
+      # `issue-refs: N/A` opt-out the way this workflow does; that plumbing is shell, not gate
+      # logic, so it has its own self-test.
+      - name: Self-test the local issue-reference checker's body plumbing
+        run: bash bin/test-check-issue-refs.sh
+
       # docs/todo-index.md is generated from the markers in the tree, so it can silently stop
       # matching them. Entries are keyed by marker TEXT, not line number, so this only fires when a
       # marker is actually added, removed or reworded - editing above one no longer churns the file.
@@ -142,7 +148,27 @@ jobs:
               ...context.repo, pull_number: pr.number, per_page: 100,
             });
 
-            const hits = gate.suspectRefs([...files, gate.prBodyEntry(pr.body)]);
+            let hits = gate.suspectRefs([...files, gate.prBodyEntry(pr.body)]);
+
+            // File-scoped opt-out (`issue-refs: exempt-file`) is judged against file CONTENT, not
+            // the patch, so it holds however small the diff. Fetched only for files that actually
+            // have hits - usually none. A fetch failure keeps the hit: failing open here would let
+            // an unreadable file silently pass, which is the wrong direction for a gate.
+            for (const path of [...new Set(hits.map((h) => h.file))]) {
+              if (path === gate.PR_BODY_LABEL) continue;
+              try {
+                const res = await github.rest.repos.getContent({
+                  ...context.repo, path, ref: pr.head.sha, mediaType: { format: "raw" },
+                });
+                if (gate.hasFileOptOut(String(res.data))) {
+                  hits = hits.filter((h) => h.file !== path);
+                  core.info(`${path}: issue-refs: exempt-file present - its hits dropped.`);
+                }
+              } catch (e) {
+                core.info(`${path}: file opt-out check unavailable (${e.message}) - hits kept.`);
+              }
+            }
+
             if (hits.length === 0) {
               core.info(
                 `No unqualified references below #${gate.QUALIFY_BELOW} on added lines or in the PR body.`);

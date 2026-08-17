@@ -50,8 +50,42 @@ const NOT_A_REF = [
 
 const OPT_OUT = /^\s*issue-refs:\s*N\/?A\b\s*-\s*\S[^\n]*/im;
 
+// IN-FILE opt-outs, three scopes, narrowest first. They exist for the ref that genuinely must stay
+// bare - above all quoted source material, where qualifying the number edits the quotation - and
+// unlike the PR-body OPT_OUT above they travel with the file: they hold for every future PR
+// touching the text and for local runs on branches with no PR body to opt out in. The author
+// writes the marker in whatever comment syntax the file already has (`// issue-refs: exempt` in
+// code, `<!-- issue-refs: exempt -->` in markdown/HTML, where it is invisible when rendered).
+//
+//   issue-refs: exempt          this line only
+//   issue-refs: exempt-begin    from here (added lines in the same patch) ...
+//   issue-refs: exempt-end      ... to here
+//   issue-refs: exempt-file     the whole file, judged against file CONTENT, not the patch
+//
+// Scopes are patch-shaped where they must be: suspectRefs judges added patch lines, so line and
+// block markers take effect only when they are IN the patch - which they are, in the paste-a-
+// quoted-block case they exist for. A lone later edit inside an old block re-carries its own
+// marker. The file scope has no such caveat: hasFileOptOut is applied by both callers to the
+// file's full text (local: disk; CI: contents API, fetched only for files with hits), so it holds
+// however small the patch. A backslash-escape (`\#857`) was considered and rejected: it edits the
+// text it is meant to preserve - so a quotation is no longer verbatim - renders visibly outside
+// markdown, and is an illegal escape in a Java string literal.
+//
+// NB LINE_OPT_OUT's `exempt\b` also matches the longer markers (the `-` is a word boundary), so a
+// begin/end/file marker line never flags its own bare refs either - harmless, and one less way to
+// trip over the tool that is meant to be the escape hatch.
+const LINE_OPT_OUT = /issue-refs:\s*exempt\b/i;
+const BLOCK_BEGIN = /issue-refs:\s*exempt-begin\b/i;
+const BLOCK_END = /issue-refs:\s*exempt-end\b/i;
+const FILE_OPT_OUT = /issue-refs:\s*exempt-file\b/i;
+
 function findOptOut(prBody) {
   return OPT_OUT.test(prBody || "");
+}
+
+// The file-scope test, applied to full file text by whichever caller can supply it.
+function hasFileOptOut(text) {
+  return FILE_OPT_OUT.test(text || "");
 }
 
 function isExempt(path) {
@@ -100,10 +134,19 @@ function suspectRefs(files, opts = {}) {
   const out = [];
   for (const f of files || []) {
     if (!f.patch || isExempt(f.filename)) continue;
+    // Block opt-out state, per file. An unclosed exempt-begin swallows the rest of this file's
+    // added lines - the same direction prBodyEntry fails in for an unclosed fence, and for the
+    // same reason: silently resuming after a marker the author forgot to close would flag text
+    // they believed exempt, and a plausible-looking wrong answer is this gate's stated enemy.
+    let exemptBlock = false;
     for (const raw of f.patch.split("\n")) {
       if (!raw.startsWith("+") || raw.startsWith("+++")) continue;
       const line = raw.slice(1);
+      if (BLOCK_BEGIN.test(line)) { exemptBlock = true; continue; }
+      if (BLOCK_END.test(line)) { exemptBlock = false; continue; }
+      if (exemptBlock) continue;
       if (NOT_A_REF.some((re) => re.test(line))) continue;
+      if (LINE_OPT_OUT.test(line)) continue;
 
       for (const m of stripQualified(line).matchAll(/(?<![\w\/#])#(\d+)\b/g)) {
         const n = Number(m[1]);
@@ -196,7 +239,8 @@ function prBodyEntry(body) {
  *
  * @param hits  [{ file, ref, text }] from suspectRefs
  * @param opts  { repo }        owner/name used in the mirror-lookup hint
- *              { readsPrBody } false when the caller has no PR body: it can neither honour the
+ *              { readsPrBody } false when the caller could not read a PR body this run (no PR
+ *                              yet, or gh unavailable): it could neither honour the
  *                              "issue-refs: N/A" opt-out nor scan the body for references
  * @returns string
  */
@@ -204,7 +248,7 @@ function formatFailure(hits, opts = {}) {
   const repo = opts.repo ?? "astubbs/parallel-consumer";
   const optOutTail = opts.readsPrBody === false
     ? "line in the PR body - the workflow honours that opt-out, and also scans the body itself;\n" +
-      "this script does not read the PR body, so it does neither."
+      "this run could not read the PR body (no PR yet, or gh unavailable), so it did neither."
     : "line in the PR body.";
 
   // The advice above is right for a file and incomplete for the body, because the body is rendered
@@ -218,6 +262,11 @@ function formatFailure(hits, opts = {}) {
       "goes for closing keywords: `Fixes astubbs#NN` closes nothing.\n"
     : "";
 
+  // The guidance is repeated in one line AFTER the hits, because the hits are what survives
+  // truncation: agents and humans alike read a failing tool's tail (or pipe it through
+  // `tail`/`head`), so advice printed only above the list is advice that is never seen. On
+  // 2026-08-17 an agent hand-qualified 25 refs, some inside quotations, without ever learning the
+  // opt-out existed - the header had said so all along, 23 hits earlier.
   return (
     `${hits.length} reference(s) below #${QUALIFY_BELOW} do not say which repo they mean.\n` +
     "The fork's numbers sit inside confluentinc's range, so a bare number there is a coin flip.\n" +
@@ -226,15 +275,26 @@ function formatFailure(hits, opts = {}) {
     "an upstream to anyone who forks it. Use `confluentinc#NN`.)\n" +
     "Every confluentinc issue is mirrored here, and the mirror is usually the better number to cite:\n" +
     `  gh issue list -R ${repo} --label upstream-mirror --search "confluentinc#NN"\n` +
-    'If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" on its own\n' +
+    "A ref that genuinely needs no qualifier (e.g. quoted source material) takes an IN-FILE opt-out,\n" +
+    "written in the file's own comment syntax (`// ...` in code, `<!-- ... -->` in markdown/HTML,\n" +
+    'invisible when rendered): "issue-refs: exempt" on the line itself, "issue-refs: exempt-begin" /\n' +
+    '"issue-refs: exempt-end" around a pasted block, or "issue-refs: exempt-file" anywhere in a file\n' +
+    "that is legitimately full of them. These travel with the file, so they keep holding in future\n" +
+    "PRs and local runs.\n" +
+    'To opt the WHOLE PR out instead, put "issue-refs: N/A - <reason>" on its own\n' +
     `${optOutTail}\n` +
     bodyNote +
     "\n" +
-    hits.map((h) => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")
+    hits.map((h) => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n") +
+    "\n\n" +
+    "Fix: qualify each ref (`astubbs#NN` / `confluentinc#NN`). Refs that must stay bare (quoted\n" +
+    'source material): in a comment, "issue-refs: exempt" on the line, "issue-refs: exempt-begin"/\n' +
+    '"-end" around a block, "issue-refs: exempt-file" for a whole file. Whole-PR opt-out:\n' +
+    '"issue-refs: N/A - <reason>" in the PR body. Full guidance above the list.'
   );
 }
 
 module.exports = {
-  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
-  EXEMPT_PATHS, QUALIFY_BELOW, PR_BODY_LABEL,
+  suspectRefs, findOptOut, hasFileOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
+  EXEMPT_PATHS, QUALIFY_BELOW, PR_BODY_LABEL, LINE_OPT_OUT, FILE_OPT_OUT,
 };

@@ -28,11 +28,15 @@
 #   * CI reads patches from GitHub's `pulls.listFiles`, which omits `patch` on a very large diff, and
 #     the gate skips a file it cannot see. This script builds its own patch with `git diff`, so it
 #     still checks that file - it flags something CI would silently pass.
-#   * CI also scans the PR BODY (`gate.prBodyEntry`), which does not exist yet when you run this. So
-#     a bare `#NN` written into the description is CI's to catch, and this cannot pre-empt it.
+#   * CI also scans the PR BODY (`gate.prBodyEntry`) and honours the `issue-refs: N/A` opt-out
+#     written there. When `gh` can resolve the current branch to a PR, this script does the same -
+#     without that, the opt-out was one-sided: CI accepted it while every local run stayed red on
+#     the same file forever, teaching people the local check lies. When there is no PR yet (or no
+#     gh, or no network) there is no body to read, so a bare `#NN` destined for the description is
+#     still CI's to catch, and an opt-out you are only planning to write cannot be honoured.
 #
 # So a red result here is always real, but a green one promises neither that CI examined every file
-# nor that the description you have not written yet will pass.
+# nor that a description you have not written yet will pass.
 #
 # Usage: bin/check-issue-refs.sh [base-ref]      (default base: origin/master, else master)
 # Exit codes: 0 = clean, 1 = unqualified refs found,
@@ -69,6 +73,31 @@ const gate = require("./.github/scripts/issue-ref-gate.js");
 const base = process.argv[2];
 const git = (args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 
+// owner/name from origin, so the gh call and the mirror-lookup hint name the repo being checked
+// rather than assuming the fork (AGENTS.md: qualify gh in anything written down).
+let repo = null;
+try {
+  const m = git(["remote", "get-url", "origin"]).trim().match(/[:/]([^/:]+\/[^/:]+?)(?:\.git)?$/);
+  if (m) repo = m[1];
+} catch { /* no origin - the gate's default stands */ }
+
+// Mirror CI's body handling whenever a body is reachable: honour the opt-out, scan the body.
+// `gh pr view` resolves the PR from the current branch; ANY failure (no PR yet, gh missing,
+// offline) degrades to the body-less behaviour, and the failure message says which run this was.
+let prBody = null, prNumber = null;
+try {
+  const pr = JSON.parse(execFileSync("gh",
+    ["pr", "view", ...(repo ? ["-R", repo] : []), "--json", "number,body"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  prBody = pr.body || "";
+  prNumber = pr.number;
+} catch { /* body unreadable this run */ }
+
+if (prBody !== null && gate.findOptOut(prBody)) {
+  console.log(`issue-refs: N/A opt-out found in PR ${prNumber}'s body - skipping, exactly as CI will.`);
+  process.exit(0);
+}
+
 // Working tree vs merge-base, so uncommitted edits are judged too.
 const names = git(["diff", "--name-only", base, "--"]).split("\n").filter(Boolean);
 
@@ -76,17 +105,33 @@ const files = names.map((filename) => ({
   filename,
   patch: git(["diff", "--unified=0", base, "--", filename]),
 }));
+if (prBody !== null) files.push(gate.prBodyEntry(prBody));
 
-const hits = gate.suspectRefs(files);
+let hits = gate.suspectRefs(files);
+
+// File-scoped opt-out (`issue-refs: exempt-file`) is judged against file CONTENT, not the patch,
+// so it holds however small the diff. Only files that actually have hits are read.
+const fs = require("fs");
+for (const path of [...new Set(hits.map((h) => h.file))]) {
+  if (path === gate.PR_BODY_LABEL) continue;
+  try {
+    if (gate.hasFileOptOut(fs.readFileSync(path, "utf8"))) {
+      hits = hits.filter((h) => h.file !== path);
+    }
+  } catch { /* deleted or unreadable - nothing to exempt */ }
+}
 
 if (hits.length === 0) {
+  const bodyNote = prBody !== null ? ` and PR ${prNumber}'s body` : "";
   console.log(
     `No unqualified references below #${gate.QUALIFY_BELOW} on added lines ` +
-    `(${files.length} changed file(s) vs ${base.slice(0, 12)}).`
+    `(${names.length} changed file(s) vs ${base.slice(0, 12)}${bodyNote}).`
   );
   process.exit(0);
 }
 
-console.error(gate.formatFailure(hits, { readsPrBody: false }));
+const opts = repo ? { repo } : {};
+if (prBody === null) opts.readsPrBody = false;
+console.error(gate.formatFailure(hits, opts));
 process.exit(1);
 NODE
