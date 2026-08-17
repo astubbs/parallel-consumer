@@ -33,9 +33,21 @@
 #
 # Baselines are built without touching the shared git index: the fixture refs are commit objects
 # written with `commit-tree` against a temp GIT_INDEX_FILE, so a parallel agent's staged work is
-# never disturbed and no branch is moved.
+# never disturbed and no branch is moved. They carry an identity supplied with `git -c`, because
+# `commit-tree` refuses to write an object when git cannot resolve a committer and a GitHub-hosted
+# runner has none configured - which is how cases 6 and 7 failed on every CI run while passing on
+# every developer box. Neither fixture's verdict may be read unless its ref was actually built: an
+# empty ref reaches the gate as PROTO_BREAKING_BASELINE_REF= and its `:-` default quietly
+# substitutes origin/master, which is the grace branch case 7 asserts - so case 7 reported ok while
+# testing nothing at all.
 #
 # Run: bin/test-check-proto-breaking.sh   (CI runs it before the gate it protects)
+#
+# A developer box has a configured git user and a hosted runner does not, so the green that matters
+# is the one WITHOUT one - and the runner's condition cannot be reproduced locally by unsetting
+# config, which every worktree of this clone shares. Run this arm instead, which is stricter than
+# the runner (an empty environment identity outranks every config level) and must also pass:
+#   GIT_AUTHOR_NAME='' GIT_COMMITTER_NAME='' bin/test-check-proto-breaking.sh
 
 set -uo pipefail
 
@@ -129,6 +141,22 @@ PYTHON
   fi
 }
 
+# fixture_commit_tree <commit-tree args...> - `git commit-tree` that works with no configured user
+#
+# The identity is supplied per-invocation in the ENVIRONMENT, which nothing outranks. Not written
+# to config, because config is shared by every worktree of this clone and setting user.name here
+# would reach into a parallel agent's checkout; and not passed with `git -c`, which config-level
+# precedence lets an empty GIT_COMMITTER_NAME in the environment beat - so the runner's condition
+# would be fixed while the stricter arm below still failed. Who stamps a throwaway fixture is
+# irrelevant to every assertion in this file; that it can be stamped at all is not.
+# bin/test-check-copyright-headers.sh solves the same problem by configuring the fixture repo its
+# `new_repo` creates - it has one to configure, and this file deliberately does not.
+fixture_commit_tree() {
+  GIT_AUTHOR_NAME='proto-gate self-test'    GIT_AUTHOR_EMAIL='self-test@invalid' \
+  GIT_COMMITTER_NAME='proto-gate self-test' GIT_COMMITTER_EMAIL='self-test@invalid' \
+    git commit-tree "$@"
+}
+
 # commit_fixture <prefix> - a commit object holding HEAD's module at <prefix>, on no branch
 #
 # GIT_INDEX_FILE points at a path that does NOT exist yet: git rejects an existing empty file as a
@@ -139,11 +167,11 @@ commit_fixture() {
   GIT_INDEX_FILE=$idx git read-tree --prefix="$prefix/" "HEAD:$MODULE" || return 1
   tree=$(GIT_INDEX_FILE=$idx git write-tree) || return 1
   rm -f "$idx"
-  git commit-tree "$tree" -m "self-test fixture: the frozen module at $prefix"
+  fixture_commit_tree "$tree" -m "self-test fixture: the frozen module at $prefix"
 }
 
 empty_fixture() {
-  git commit-tree "$(git mktree </dev/null)" -m "self-test fixture: a baseline with no schema"
+  fixture_commit_tree "$(git mktree </dev/null)" -m "self-test fixture: a baseline with no schema"
 }
 
 expect 0 "baseline: the working tree matches the frozen module" "PROTO_BREAKING_AGAINST=$PRISTINE/$MODULE"
@@ -182,10 +210,21 @@ fi
 
 # Case 7: the grace branch itself, which must survive the hardening - master genuinely has no
 # frozen schema until the freeze merges, and this gate may not go red on every PR until then.
+#
+# Guarded exactly as case 6 is, and for a sharper reason: this is the one case whose expected
+# verdict the gate ALSO reaches when handed nothing. An unbuilt fixture arrives as
+# PROTO_BREAKING_BASELINE_REF= , the gate's `:-origin/master` default replaces it, and today's
+# origin/master genuinely carries no frozen schema - so the case printed ok for exactly the reason
+# it was written to distinguish from.
 empty_baseline=$(empty_fixture)
-expect_mentioning 0 "nothing frozen to compare against" \
-  "a baseline with no schema anywhere passes, and says that is why" \
-  "PROTO_BREAKING_BASELINE_REF=$empty_baseline"
+if [ -z "${empty_baseline:-}" ]; then
+  printf 'FAIL: could not build the empty baseline fixture - the case below would pass by falling back to the default baseline\n'
+  failures=$((failures + 1))
+else
+  expect_mentioning 0 "nothing frozen to compare against" \
+    "a baseline with no schema anywhere passes, and says that is why" \
+    "PROTO_BREAKING_BASELINE_REF=$empty_baseline"
+fi
 
 expect 0 "restored: the working tree matches the frozen module again" "PROTO_BREAKING_AGAINST=$PRISTINE/$MODULE"
 
