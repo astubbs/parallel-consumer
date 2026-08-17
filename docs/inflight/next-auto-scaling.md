@@ -33,21 +33,25 @@ Two dimensions, deliberately staged:
   autoscaling, which flaps and scales uselessly when the bottleneck is downstream, because the
   metric encodes "another instance would actually help", not "we are behind".
 
-**The aggregation problem (dimension 2, open).** Each instance sees only its own performance,
-so per-instance "suggested total" numbers will conflict. Candidate resolutions, simplest first:
+**Dimension-2 signal design (settled 2026-08-18): local delta vote, no global number.** An
+instance genuinely cannot know the right global count - it only knows its own state - so no
+instance ever emits a "suggested total". Each exposes a delta vote, limited to **+1 / 0 / -1**
+(+1 "plateaued at my sustainable local concurrency and still behind" / -1 "underutilized" /
+0 otherwise). Infrastructure sums the votes (or HPA averages an equivalent headroom gauge -
+`desired = ceil(current x metric/target)` - convergence for free, no leader, no new channel).
+Lifecycle rules:
 
-- **Don't ask instances for a total at all** - an instance genuinely cannot know the right
-  global count; it only knows its own state. Have each expose a local signal instead: a delta
-  vote (+1 "plateaued locally and still behind" / 0 / -1 "underutilized") that infrastructure
-  sums, or a saturation/headroom gauge that HPA's own algorithm already aggregates by
-  averaging across pods (`desired = ceil(current x metric/target)`) - convergence for free, no
-  leader, no new channel.
-- If a single agreed number is ever needed: the group already has a leader and a data channel -
-  the partition-assignor `userData` protocol (catalogued in the ideation doc's rejection table
-  as the deferred lease-allocator) lets members ship demand up and the assignment leader ship
-  one decision down, fenced by generation. Kafka-Streams-style control topics are a heavier
-  alternative; later phase either way.
-- If operators aggregate raw totals anyway: median over mean (outlier-resistant), never max.
+- **Post-rebalance cooldown, per instance.** Any membership or assignment change invalidates
+  every instance's assessment - new partition set, new data mix. After a rebalance each
+  instance votes 0 while it re-converges: run for a while, re-assess its own performance and
+  the jitter/variance in its records, only then resume voting. This also makes the
+  acknowledgement loop implicit: infrastructure acts -> rebalance -> everyone cools down ->
+  fresh votes reflect the new topology. No explicit ack protocol needed.
+- The pre-vote cooldown (fixed ~5min or dynamic from observed variance) applies to *raising* a
+  vote away from 0, so a transient burst does not summon an instance.
+- Later phase, only if ever needed: the partition-assignor `userData` leader channel
+  (catalogued in the ideation doc's rejection table as the deferred lease-allocator) could
+  compute a coordinated decision - but the delta-vote design likely makes it unnecessary.
 
 **Earmarks.** The partition-count cap is per-subscription today; it must become the sum across
 subscribed topics once per-topic processing functions land (astubbs#254 / confluentinc#372;
