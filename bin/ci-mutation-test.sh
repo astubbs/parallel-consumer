@@ -143,12 +143,20 @@ fi
 # skipFailingTests is set in the POM, not here: its PitMojo @Parameter declares a defaultValue and no
 # `property`, so -DskipFailingTests is SILENTLY IGNORED - no warning, it just doesn't apply. Check for a
 # `property` before concluding that some other pitest setting "doesn't work" from the command line.
+#
+# OffsetEncodingDensityBenchmarkTest is in excludedTestClasses below: density benchmark excluded
+# deliberately - mutation kills come from exact-value unit tests. It touches nearly every line of the
+# offsets encoders (it runs the whole encoder set over a 32-scenario corpus), so it would "cover" and
+# often "kill" mutants incidentally, by way of a size number moving. That is the opposite of a useful
+# kill: it hides the real gap, because the assertion that died was a benchmark's aggregate, not a
+# statement about the mutated behaviour. The kills that count come from the exact-value tests
+# (BitSetEncodingTest, RunLengthEncoderTest, and the candidate/codec unit tests).
 set +e
 ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
   -Djacoco.skip=true \
   -DtargetClasses="${TARGET_CLASSES}" \
   -DtargetTests="${TARGET_TESTS}" \
-  -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*" \
+  -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.offsets.OffsetEncodingDensityBenchmarkTest" \
   -DjvmArgs=-Xmx2g \
   -DoutputFormats=XML,HTML \
   -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
