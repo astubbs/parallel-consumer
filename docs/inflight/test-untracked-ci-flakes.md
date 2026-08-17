@@ -41,14 +41,29 @@ however long arming plus lambda setup takes. Under load that gap widens past a m
 `isAtLeast` fails a correct implementation. Any test using this helper can show the same signature,
 which is why it is filed against the helper.
 
-**Owned: astubbs#262** stamps `armedAtNanos` immediately before `schedule()` and asserts against that
-instead. Its own comment is honest about the residual: the window measured is now slightly *longer*
-than the true one, so the error is sub-millisecond and in the safe direction - a genuinely early
-return is still caught unless it is early by less than the arming cost.
+**The mechanism above no longer exists, and this entry's open task has changed accordingly.** Two
+PRs proposed different fixes - astubbs#262 stamping `armedAtNanos` just before `schedule()` so the
+measurement is correct, and astubbs#265 deleting the wall-clock assertion outright. This ledger
+predicted the collision and called it a real decision: measure it correctly, or stop measuring it.
+**astubbs#265 landed second and chose to stop measuring it.**
 
-**Note astubbs#265 touches the same line differently**, deleting the assertion along with the sleeps
-it removes. Whichever of the two lands second will conflict here, and the conflict is a real
-decision - measure it correctly, or stop measuring it - not a mechanical merge.
+`BlockedThreadAsserter#assertUnblocksAfter` now asserts an ordering fact - both events take a tick
+from a shared monotonic sequence and the return must come after the unblock - so there is no elapsed
+clock left to be short, and `isAtLeast(unblocksAfter)`/`getElapsed()` are gone from the helper. Its
+javadoc states the new contract: *"That is a causality assertion, so it is asserted as an ordering
+fact rather than as a duration."*
+
+**So the diagnosis this test is quarantined under describes code that is not there.** Measured
+2026-08-17 on `master` merged in: 4 runs, 4 passes, 2.66-4.37s (astubbs#265 reported the same test
+going from 23.06s to 3.32s). Run it with
+`bin/quarantined-test.sh` or `-Dincluded.groups=quarantined` - a plain `-Dtest=` run reports
+`Tests run: 0` because the gating suites exclude it, which is not a pass.
+
+**What is open is the re-enable, not the fix.** Under rule 3 of
+[`docs/quarantined-tests.md`](../quarantined-tests.md) the annotation and the registry entry come out
+together, in the owning change, after merging master. astubbs#262 is still open and still named as
+the owner, but its fix is now redundant - so whoever picks this up should decide whether astubbs#262
+still carries the re-enable or whether it belongs in a change of its own.
 
 **Why it was not in this ledger already.** The 2026-08-07 scan read surefire `Flakes:` markers, which
 only appear when the retry re-ran a test and it then passed. This one failed the run outright, so it
