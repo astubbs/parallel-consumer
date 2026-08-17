@@ -22,7 +22,7 @@ TIP:: Editing template file
 endif::[]
 
 
-= Kafka Parallel Consumer
+= Parallel Consumer for Apache Kafka
 :icons:
 :toc: macro
 :toclevels: 3
@@ -57,7 +57,7 @@ Parallel Apache Kafka client wrapper with client side queueing, a simpler consum
 ====
 This is a community-maintained fork of https://github.com/confluentinc/parallel-consumer[confluentinc/parallel-consumer], published under new Maven coordinates. The original upstream project is no longer actively maintained.
 
-It is a *drop-in replacement*: the Java API and package (`io.confluent.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
+It is a *drop-in replacement*: the Java API and package (`bz.stub.parallelconsumer`) are unchanged from upstream 0.5.x -- only the Maven `groupId` differs.
 
 [source,xml]
 ----
@@ -74,6 +74,15 @@ TIP: If you like this project, please ⭐ Star it in GitHub to show your appreci
 NOTE: This is a community-maintained project with no commercial support.
 See the <<Support and Issues>> section for more information.
 
+[[trademarks]]
+[NOTE]
+.Trademarks
+====
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
+
+See <<Attribution>> for the other Apache marks referenced in this document.
+====
+
 [[when-to-use]]
 == When to use this library (vs KIP-932 Share Groups)
 
@@ -85,21 +94,63 @@ The Kafka landscape has shifted since this library's 2021 stable release. *KIP-9
 
 The two are not strict alternatives -- they solve different problems.
 
+=== How they differ
+
+[cols="1,2,2", options="header"]
+|===
+| | Share Groups | Parallel Consumer
+
+| Ordering
+| None guaranteed. Records in a share-partition "can be delivered out of order to a consumer, in particular when redeliveries occur", and only offsets *within a single batch* ascend -- there are "no guarantees about the ordering of offsets between different batches"
+| Per key, per partition, or unordered -- your choice. See <<ordering-guarantees,Ordering Guarantees>>
+
+| Exactly-once
+| Not supported. There is no transactional read-process-write for share consumers
+| Supported. Produced records and their source offsets commit as one atomic transaction -- see <<transaction-system,the EoS transaction model>>
+
+| Slow processing
+| Each record carries an acquisition lock (`share.record.lock.duration.ms`, default 30s). Overrun it and the record is redelivered to another consumer while you are still processing it
+| A record stays in flight until your function returns. There is no clock
+
+| Poison messages
+| Broker-side: after `group.share.delivery.attempt.limit` attempts (default 5) the record is Archived and never redelivered
+| In your code: a configurable retry delay function, record skipping, or a circuit breaker
+
+| Broker cost
+| Per-record state is persisted to the internal `__share_group_state` topic through a share coordinator, plus acknowledgement RPCs -- but that topic is theirs alone, so the state is isolated
+| None beyond an ordinary consumer group: no coordinator, no per-record RPCs. The trade is isolation rather than load -- the state rides in the commit metadata field, which is free-form and shared with anything else that has ever owned the group, so foreign bytes there have to be survived rather than prevented -- see <<offset_map,the offset map>>
+
+| Requires
+| KRaft, and Apache Kafka 4.2 / Confluent Platform 8.2. The 4.0 release was early access and explicitly not for production clusters
+| Nothing. The broker does not know you are using it
+
+| Scaling axis
+| *Out.* Several consumers may share one partition, so throughput can scale past the partition count across machines
+| *Up.* One instance processes its whole assignment concurrently; add instances for availability as usual
+|===
+
 [TIP]
 ====
-* If you want unordered queue semantics on Kafka 4.2+, reach for *Share Groups*. The "partitions are fixed, I need more consumers" motivation is now solved at the broker.
-* If you need *key-level ordering with concurrency beyond partition count*, reach for *Parallel Consumer*. Nothing else does that cleanly today.
+* *Both* solve "partitions are fixed, I need more consumers" -- so the choice between them is about *ordering*, not about concurrency. Reach for *Share Groups* on Kafka 4.2+ when ordering genuinely does not matter to you: that condition is the whole trade, not a footnote to it. You get consumers decoupled from partition count at the broker, in exchange for delivery that may be out of order, and for redelivery of a record another consumer may still be working on.
+* Reach for *Parallel Consumer* when you need *key-level ordering with concurrency beyond partition count* -- nothing else does that cleanly today. Also when you need exactly-once together with parallelism, when a processing step can outlive a 30 second lock, or when you are simply not on Kafka 4.2 yet, which includes every cluster still running 3.x.
+* Spreading a *single* partition's throughput across several machines is genuinely theirs alone. Worth putting in perspective, though: that requirement is largely inherited from an era when adding consumers was the only way to add concurrency at all. Parallel Consumer already drives one partition at high concurrency inside a single instance, so what actually remains is throughput beyond what one instance can carry, or a deliberate want for machine-level isolation.
 ====
+
+NOTE: For the reasoning behind the project as a whole -- the problem it exists to solve, why it is solved in the client rather than the broker, and where effort is currently going -- see link:STRATEGY.md[STRATEGY.md].
 
 [[intro]]
 This library lets you process messages in parallel via a single Kafka Consumer meaning you can increase consumer parallelism without increasing the number of partitions in the topic you intend to process.
 For many use cases this improves both throughput and latency by reducing load on your brokers.
 It also opens up new use cases like extreme parallelism, external data enrichment, and queuing.
 
+NOTE: Below 1.0 does not mean unproven.
+The same core engine has been in production use for years.
+What 1.0 is waiting on is a settled API surface, the functionality still intended for it, and confidence that reaches beyond the defects already known.
+
 .Consume many messages _concurrently_ with a *single* consumer instance:
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=example]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=example]
 ----
 
 An overview article to the library can also be found on Confluent's https://www.confluent.io/blog/[blog]: https://www.confluent.io/blog/introducing-confluent-parallel-message-processing-client/[Introducing the Confluent Parallel Consumer].
@@ -130,6 +181,7 @@ image::{talk_preview_image}[Talk]
 
 toc::[]
 
+[[motivation]]
 == Motivation
 
 === Why would I need this?
@@ -254,7 +306,11 @@ The end-to-end latency of the responses to these answers needs to be as low as t
 We can break out as described below into the tool for processing that step, then return to the Kafka Streams context.
 * Provisioning extra machines (either virtual machines or real machines) to run multiple clients has a cost, using this library instead avoids the need for extra instances to be deployed in any respect.
 
+[[features-list]]
 == Features List
+
+Renderer-ready source data for every capability in this list lives in link:docs/features/[`docs/features/`].
+This README remains the current presentation until the separate documentation-site work renders that data.
 
 * Have massively parallel consumption processing without running hundreds or thousands of:
 ** Kafka consumer clients,
@@ -308,7 +364,7 @@ The user just has to provide a function to extract from the message the HTTP cal
 
 === Illustrative Performance Example
 
-.(see link:./parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
+.(see link:./parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/VeryLargeMessageVolumeTest.java[VeryLargeMessageVolumeTest.java])
 These performance comparison results below, even though are based on real performance measurement results, are for illustrative purposes.
 To see how the performance of the tool is related to instance counts, partition counts, key distribution and how it would relate to the vanilla client.
 Actual results will vary wildly depending upon the setup being deployed into.
@@ -417,7 +473,7 @@ This library is copyright Confluent, Inc. and contributors, and licensed under t
 
 === Maven
 
-This project is available in Maven Central, https://repo1.maven.org/maven2/io/github/astubbs/parallelconsumer/[repo1].
+This project is available in Maven Central, https://repo1.maven.org/maven2/bz/stub/parallelconsumer/[repo1].
 
 Latest version can be seen https://search.maven.org/artifact/bz.stub.parallelconsumer/parallel-consumer-core[here].
 
@@ -439,13 +495,17 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-rea
 [source,xml,indent=0]
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/pom.xml[tag=exampleDep]
 
+.Dashboard Module Dependency (experimental - see <<dashboard>>)
+[source,xml,indent=0]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/pom.xml[tag=exampleDep]
+
 [[common_preparation]]
 === Common Preparation
 
 .Setup the client
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=exampleSetup]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=exampleSetup]
 ----
 
 <1> Setup your clients as per normal.
@@ -470,7 +530,7 @@ See {base_confluent_url}/issues/12[confluentinc issue #12], and the `ParallelCon
 
 [source,java]
 ----
-include::{project_root}/parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumer.java[tag=javadoc]
+include::{project_root}/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumer.java[tag=javadoc]
 ----
 
 === Core
@@ -481,9 +541,9 @@ This is the only thing you need to do, in order to get massively concurrent proc
 
 .Usage - print message content out to the console in parallel
 [source,java,indent=0]
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=example]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=example]
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[core example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[core example] project, and it's test.
 
 ==== Process and Produce a Response Message
 
@@ -492,7 +552,7 @@ You can also optionally provide a callback function to be run after the message(
 
 .Usage - print message content out to the console in parallel
 [source,java,indent=0]
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=exampleProduce]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=exampleProduce]
 
 ==== Callbacks vs Streams
 
@@ -520,7 +580,7 @@ There is no guarantee that the messages will be retried again in the same batch.
 
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=batching]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=batching]
 ----
 
 <1> Choose your batch size.
@@ -536,12 +596,12 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 .Call an HTTP endpoint for each message usage
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java[tag=example]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[tag=example]
 ----
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/io/confluent/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
 
 [[project-reactor]]
 === Project Reactor
@@ -549,12 +609,12 @@ See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example
 As per the Vert.x support, there is also a Reactor module.
 This means you can use Reactor's non-blocking threading model to process your messages, allowing for orders of magnitudes higher concurrent processing than the core module's thread per worker module.
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/ReactorApp.java[Reactor example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/bz/stub/parallelconsumer/examples/reactor/ReactorApp.java[Reactor example] project, and it's test.
 
 .Call any Reactor API for each message usage. This example uses a simple `Mono.just` to return a value, but you can use any Reactor API here.
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/io/confluent/parallelconsumer/examples/reactor/ReactorApp.java[tag=example]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-reactor/src/main/java/bz/stub/parallelconsumer/examples/reactor/ReactorApp.java[tag=example]
 ----
 
 [[spring]]
@@ -569,13 +629,13 @@ image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fb
 .Preprocess in Kafka Streams, then process concurrently
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/io/confluent/parallelconsumer/examples/streams/StreamsApp.java[tag=example]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/bz/stub/parallelconsumer/examples/streams/StreamsApp.java[tag=example]
 ----
 
 <1> Setup your Kafka Streams stage as per normal, performing any type of preprocessing in Kafka Streams
 <2> For the slow consumer part of your Topology, drop down into the parallel consumer, and use massive concurrency
 
-See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/io/confluent/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-streams/src/main/java/bz/stub/parallelconsumer/examples/streams/StreamsApp.java[Kafka Streams example] project, and it's test.
 
 [[upgrading]]
 == Upgrading
@@ -705,7 +765,7 @@ You can access the retry count of a record through it's wrapped `WorkContainer` 
 .Example retry delay function implementing exponential backoff
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=customRetryDelay]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=customRetryDelay]
 ----
 
 [[skipping-records]]
@@ -721,7 +781,7 @@ Implementing a https://github.com/confluentinc/parallel-consumer/issues/196[max 
 .Example of skipping a record after a maximum number of retries is reached
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=maxRetries]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=maxRetries]
 ----
 
 === Circuit Breaker Pattern
@@ -734,9 +794,10 @@ This will put the message back in the queue.
 .Example of circuit break implementation
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=circuitBreaker]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=circuitBreaker]
 ----
 
+[[head-of-line-blocking]]
 === Head of Line Blocking
 
 In order to have a failing record not block progress of a partition, one of the ordering modes other than `PARTITION` must be used, so that the system is allowed to process other messages that are perhaps in `KEY` order or in the case of `UNORDERED` processing - any message.
@@ -804,7 +865,7 @@ For implementations details, see the <<Transactional System Architecture>> secti
 .From the Options Javadoc
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java[tag=transactionalJavadoc]
+include::{project_root}/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java[tag=transactionalJavadoc]
 ----
 
 [[shutdown]]
@@ -834,7 +895,7 @@ NOTE: The `Duration` argument on the `close(Duration, ...)` overloads overrides 
 .Configuring the close timeouts, and closing with draining
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/io/confluent/parallelconsumer/examples/core/CoreApp.java[tag=closeModes]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=closeModes]
 ----
 
 <1> Budget for finishing the already downloaded backlog - only used by a `DRAIN` close.
@@ -853,7 +914,9 @@ For a code example, see the <<streams-usage-code>> section.
 
 .Example usage with Kafka Streams
 image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fbf/image.png[Kafka Streams Usage,align="center"]
+// [[mertics]] is a long-standing misspelling. Kept so existing links still resolve.
 [[mertics]]
+[[metrics]]
 == Metrics
 
 Metrics collection subsystem is implemented using Micrometer. This allows for flexible configuration of target metrics backend to be used. See below on example of how to configure MeterRegistry for Parallel Consumer to use for metrics collection.
@@ -1026,7 +1089,7 @@ Following example illustrates setup of Parallel Consumer with Meter Registry and
 
 [source,java,indent=0]
 ----
-include::{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/io/confluent/parallelconsumer/examples/metrics/CoreApp.java[tag=example]
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-metrics/src/main/java/bz/stub/parallelconsumer/examples/metrics/CoreApp.java[tag=example]
 ----
 <1> - Meter Registry is set through ParallelConsumerOptions.builder(), if not specified - will default to CompositeMeterRegistry - which is No-op.
 <2> - Optional - common tags can be specified through same builder - they will be added to all Parallel Consumer meters
@@ -1036,6 +1099,75 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-met
 
 NOTE:: any additional binders / metrics need to be cleaned up appropriately - for example the Kafka Consumer Metrics registered above - need to be closed using `kafkaClientMetrics.close()` after calling shutting down Parallel Consumer as Parallel Consumer will close Kafka Consumer on shutdown.
 
+
+[[dashboard]]
+== Dashboard
+
+WARNING: *Experimental, and off until you switch it on.*
+Putting `parallel-consumer-dashboard` on the classpath does nothing at all - there is no auto-start, no
+service loader, and no classpath-scanning activation.
+It serves a page only once you call `DashboardServer.startFor(..)`.
+The module is annotated `@InterfaceStability.Unstable` and its API may change without notice.
+
+An embedded, read-only web page showing what a running Parallel Consumer instance is actually doing.
+It is a diagnostic tool for a live instance, not a monitoring system - it keeps no history and stores
+nothing.
+
+Today it draws one graphic: the *offset ribbon*, per partition.
+Its point is to make visible the thing that is otherwise invisible - the records Parallel Consumer has
+already completed *beyond* the offset a single-threaded consumer would still be stuck at, encoded into
+the commit metadata so a restart does not replay them.
+The headline count on the page is exactly that: how many records are finished past the block.
+
+The dependency is the `parallel-consumer-dashboard` block in <<Maven>>.
+
+=== Switching it on
+
+The dashboard reads what it draws from Micrometer, so *the same registry must reach both the consumer
+and the dashboard*.
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/src/main/java/bz/stub/parallelconsumer/examples/dashboard/DashboardApp.java[tag=example]
+----
+<1> *The one mistake the API cannot prevent.* Without a `meterRegistry` on the Parallel Consumer options, the dashboard starts, serves, and renders an empty page. Nothing errors - there is simply nothing to read.
+<2> `startFor` takes the concrete `ParallelEoSStreamProcessor`, because it registers sampling on the control loop. `ParallelStreamProcessor.createEosStreamProcessor(options)` returns the interface, which does not expose that, so construct the implementation directly when you want the dashboard.
+<3> This is the whole integration. Your Parallel Consumer construction is otherwise unchanged.
+<4> The URL is also logged once, on start, in a form terminals linkify. When several instances share a machine the port *is* how you tell them apart, so that line is the primary output of starting the dashboard rather than an aside.
+
+Sampling runs in a callback on the consumer's control loop, at a default interval of 100ms.
+
+`DashboardServer` is `AutoCloseable`. Close it *before* the consumer: it samples on the consumer's own
+control loop.
+
+=== Security
+
+The dashboard exposes consumer group id, topic names, partition assignments and offsets. The threat
+model is therefore *information disclosure*, and the defaults are chosen for a developer machine.
+
+* *It binds loopback, and only loopback, by default.* Deliberately not `InetAddress.getLocalHost()`, which resolves the machine's hostname and is therefore sometimes loopback and sometimes a routable address depending on `/etc/hosts` - a default that is only usually safe is not a safe default.
+* *Plain HTTP. There is no TLS and no authentication.* Neither is planned for the experimental phase. Binding anywhere other than loopback puts everything above onto the network in the clear, readable by anything that can route to that address. If you need it off-box, forward a port over a channel that is already authenticated (`kubectl port-forward`, an SSH tunnel) rather than binding a routable interface.
+* *Read-only, structurally.* Every request that is not `GET` or `HEAD` is answered `405` by a handler that runs *before* the route table, so the property holds for routes that do not exist yet as well as the ones that do.
+* *The `Host` allowlist* exists for exactly those port-forwarding workflows, where the browser's idea of the host is legitimately not one the server can derive. Entries may carry a port.
+* *It starts on port 8080 and walks upward* until it finds a free one (up to 100 attempts), so two instances on one machine do not fight. Nothing is logged during the search - a busy port is not news.
+
+To bind elsewhere, having read the above:
+
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/src/main/java/bz/stub/parallelconsumer/examples/dashboard/DashboardApp.java[tag=exampleBind]
+----
+
+The module creates and owns its own Vert.x instance and closes it in `close()`. It deliberately does
+not adopt one your application may be using: closing somebody else's event loop as a side effect of
+stopping a dashboard would be a spectacular way for a diagnostic tool to cause an outage.
+
+=== Seeing it without wiring anything up
+
+`bin/dashboard-demo.sh` brings up a broker, a workload deliberately made to misbehave, Parallel
+Consumer and the page, in one command. It needs Docker.
+
+See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-dashboard/src/main/java/bz/stub/parallelconsumer/examples/dashboard/DashboardApp.java[dashboard example] project.
 
 [[roadmap]]
 == Roadmap
@@ -1047,11 +1179,11 @@ The original {base_confluent_url}[confluentinc/parallel-consumer] is no longer a
 
 For what has already shipped, see the link:CHANGELOG.adoc[CHANGELOG].
 
-For what is planned, in progress, or known-broken, the {issues_link}[issue tracker on this repository]
-is the single place to look. We mirrored every open issue from the upstream tracker into it (all 78 of
-them, labelled `upstream-mirror` and titled `confluentinc#NNN: ...`), so an upstream report you are
-following has a counterpart here that reflects its real status on this fork. Please raise new issues
-here rather than upstream - see <<Support and Issues>>.
+For the direction of the project, see link:docs/data/roadmap.yaml[the roadmap data]. For work in progress and
+known defects, use the {issues_link}[issue tracker on this repository]. We mirrored every open issue from
+the upstream tracker into it (labelled `upstream-mirror` and titled
+`confluentinc#NNN: ...`), so an upstream report you are following has a counterpart here that reflects its
+real status on this fork. Please raise new issues here rather than upstream - see <<Support and Issues>>.
 
 == Usage Requirements
 
@@ -1087,11 +1219,69 @@ Most modules run on Java 8. The Mutiny module does not, because SmallRye Mutiny 
 
 | `parallel-consumer-mutiny`
 | 17
+
 |===
 
 WARNING: Adding `parallel-consumer-mutiny` to a Java 8 or Java 11 application will build without complaint and then fail at runtime with an `UnsupportedClassVersionError`, because its SmallRye Mutiny dependency is compiled for Java 17.
 Maven cannot warn you about this, so check the table before picking the module.
 The other modules are unaffected, and using them does not pull Mutiny in.
+
+=== Module maturity
+
+Reliability and API stability are separate questions, and the version number answers neither.
+
+On reliability: 0.6.0.0 ships only once every known *critical* defect in its scope is resolved and evidenced.
+Critical is the line, deliberately. Claiming that all known defects are fixed would be a promise this project cannot
+keep, and non-critical defects are not claimed to be fixed. The claim also does not deny that unknown defects exist.
+
+On API stability: the published modules remain pre-1.0, so a compatible change is preferred but not guaranteed.
+
+The published modules share one answer to both. They all depend on `parallel-consumer-core` and run the same engine, so
+there is no per-module reliability gradient to publish. What does differ is the experimental artifacts, which are a
+separate and explicit opt-in and cannot change an application that does not depend on one.
+
+Virtual threads, micro-batching and a dead-letter queue are intentionally deferred capabilities, not exceptions to the
+critical-defect gate.
+
+|===
+| Module | Status | Reliability confidence | API expectation | Use this if
+
+| `parallel-consumer-core`
+| Production use
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| You need ordered concurrent Kafka consumption in a standard Java application.
+
+| `parallel-consumer-vertx`
+| Production use
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Vert.x asynchronous APIs.
+
+| `parallel-consumer-reactor`
+| Production use
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses Project Reactor.
+
+| `parallel-consumer-mutiny`
+| Production use (Java 17)
+| Release-gated on known critical defects
+| Pre-1.0; compatible change is preferred, not guaranteed
+| Your processing uses SmallRye Mutiny.
+
+| `parallel-consumer-examples`
+| Reference examples
+| Exercises supported use cases; not a runtime dependency
+| Changes with the APIs it demonstrates
+| You want runnable examples before choosing an integration module.
+
+|===
+
+The experimental artifacts are not listed above because they are not in this release's build yet. When one lands it
+brings its own row, and depending on that artifact is the entire opt-in. For the reliability evidence and the
+release-time limits behind the claim, see link:docs/data/testing-evidence.yaml[the testing evidence data] and
+link:docs/data/module-maturity.yaml[the module-maturity data].
 
 == Development Information
 
@@ -1371,6 +1561,8 @@ So it's very efficient.
 
 == Attribution
 
+KAFKA is a registered trademark of The Apache Software Foundation and has been licensed for use by Antony Stubbs and contributors. Antony Stubbs and contributors have no affiliation with and are not endorsed by The Apache Software Foundation.
+
 http://www.apache.org/[Apache®], http://kafka.apache.org/[Apache Kafka], and http://kafka.apache.org/[Kafka®] are either registered trademarks or trademarks of the http://www.apache.org/[Apache Software Foundation] in the United States and/or other countries.
 
 == Tools
@@ -1392,5 +1584,3 @@ https://www.google.com/url?q=https://www.yourkit.com/.net/profiler/&source=gmail
 == Change Log
 
 Release notes for every version live in link:CHANGELOG.adoc[CHANGELOG.adoc].
-
-

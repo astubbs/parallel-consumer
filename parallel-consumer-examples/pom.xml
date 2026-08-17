@@ -14,11 +14,12 @@
     </parent>
 
     <artifactId>parallel-consumer-examples</artifactId>
-    <name>Kafka Parallel Consumer Examples</name>
+    <name>Parallel Consumer - Examples</name>
     <packaging>pom</packaging>
 
     <modules>
         <module>parallel-consumer-example-core</module>
+        <module>parallel-consumer-example-dashboard</module>
         <module>parallel-consumer-example-metrics</module>
         <module>parallel-consumer-example-streams</module>
         <module>parallel-consumer-example-vertx</module>
@@ -29,7 +30,7 @@
          Note: in central-publishing-maven-plugin 0.8.0, setting skipPublishing=true on a module
          that is last in the reactor order skipped the ENTIRE aggregated bundle upload (not
          just that module). Plugin 0.9.0+ evaluates skipPublishing per-module and artifact,
-         which is what we rely on now (pom.xml pins 0.10.0). -->
+         which is what we rely on now (the parent pom pins the version in pluginManagement). -->
     <properties>
         <maven.deploy.skip>true</maven.deploy.skip>
         <maven.install.skip>true</maven.install.skip>

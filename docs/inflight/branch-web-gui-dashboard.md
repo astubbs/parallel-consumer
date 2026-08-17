@@ -69,11 +69,21 @@ What actually worked, since the recorded method needed amending:
 
 Remaining: rebase-merge, so each commit lands on master on its own.
 
-## TODO later: end-user docs and promotional material in the README
+## TODO later: promotional material in the README
 
-Not started, and not in Phase 1. Plan unit **U11** already scopes the mechanics (how to wire it up,
-the security posture, a runnable example); what is additionally wanted is **promotional** material -
-telling a reader why this is worth their attention, not only how to switch it on.
+**The mechanics are done.** Plan unit **U11** landed the reader path: a `== Dashboard` section in
+`src/docs/README_TEMPLATE.adoc` (experimental status first, then wiring, then security as its own
+section), and a runnable `parallel-consumer-example-dashboard` module the README `include::`s its
+snippets from, so the documented code is code the reactor compiles. The dashboard dependency is also
+in the README's Maven section, and `parallel-consumer-dashboard` now has a row in AGENTS.md's module
+table.
+
+Still owed is the **promotional** material - telling a reader why this is worth their attention, not
+only how to switch it on. Deliberately not bundled with the mechanics: its raw material carries
+caveats that make it wrong if copied carelessly (below), which is a different kind of risk from
+documenting an API.
+
+Also still absent: `parallel-consumer-dashboard/README.adoc`, the third file in U11's list.
 
 **The trap: `README.adoc` is generated. Never hand-edit it.** Edit
 [`src/docs/README_TEMPLATE.adoc`](../../src/docs/README_TEMPLATE.adoc) and regenerate, or the work is
