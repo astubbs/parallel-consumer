@@ -33,15 +33,7 @@
     -->
     <modules>
         <module>parallel-consumer-proxy-client-java</module>
-        <module>parallel-consumer-proxy-client-python</module>
-        <module>parallel-consumer-proxy-client-go</module>
-        <module>parallel-consumer-proxy-client-swift</module>
-        <module>parallel-consumer-proxy-client-rust</module>
-        <module>parallel-consumer-proxy-client-dotnet</module>
-        <module>parallel-consumer-proxy-client-typescript</module>
         <module>parallel-consumer-proxy-client-kotlin</module>
-        <module>parallel-consumer-proxy-client-ruby</module>
-        <module>parallel-consumer-proxy-client-cpp</module>
         <module>parallel-consumer-proxy-client-scala</module>
         <!--
             NOT A CLIENT: the shared cross-language conformance suite, which drives every client
@@ -182,13 +174,36 @@
             asked to rebuild.
         -->
         <profile>
-            <id>foreign-clients-off</id>
-            <activation><property><name>!pc.foreignClients</name></property></activation>
-            <properties><pc.foreign.state>- NOT BUILT (add -Dpc.foreignClients)</pc.foreign.state></properties>
-        </profile>
-        <profile>
             <id>foreign-clients</id>
-            <properties><pc.foreign.state></pc.foreign.state></properties>
+            <!--
+                THE EIGHT FOREIGN MODULES LIVE HERE, NOT IN THE DEFAULT <modules>.
+
+                An ordinary Java build must not require go, cargo, dotnet, node, ruby and Docker,
+                so these modules did nothing unless -Dpc.foreignClients was set - but they still
+                appeared in the reactor, and printed SUCCESS for work that never ran. That is the
+                same untruth as a check that passes without having run, which this repo takes
+                seriously enough to have a solutions write-up for.
+
+                Excluding them is the honest form: the reactor now contains only what it builds.
+                The cost is that a developer cannot discover the other eight from the build, and
+                that is bought back by the notice the root pom prints once at the start.
+
+                CLEAN FOLLOWS PARTICIPATION. Each module's own clean is maven-clean-plugin, outside
+                any profile, so `mvn clean -Dpc.foreignClients` removes their output. A module that
+                is not in the build is not cleaned either, which is the consistent reading and the
+                owner's call.
+            -->
+            <modules>
+                <module>parallel-consumer-proxy-client-python</module>
+                <module>parallel-consumer-proxy-client-go</module>
+                <module>parallel-consumer-proxy-client-swift</module>
+                <module>parallel-consumer-proxy-client-rust</module>
+                <module>parallel-consumer-proxy-client-dotnet</module>
+                <module>parallel-consumer-proxy-client-typescript</module>
+                <module>parallel-consumer-proxy-client-ruby</module>
+                <module>parallel-consumer-proxy-client-cpp</module>
+            </modules>
+            <properties></properties>
             <activation>
                 <property>
                     <name>pc.foreignClients</name>

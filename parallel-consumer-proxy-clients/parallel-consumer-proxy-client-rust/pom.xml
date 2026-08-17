@@ -12,7 +12,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <name>Parallel Consumer - Proxy Client Rust ${pc.foreign.state}</name>
+    <name>Parallel Consumer - Proxy Client Rust</name>
     <artifactId>parallel-consumer-proxy-client-rust</artifactId>
     <packaging>pom</packaging>
 
