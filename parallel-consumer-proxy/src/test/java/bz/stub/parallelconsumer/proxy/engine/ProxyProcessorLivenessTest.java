@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -373,6 +374,9 @@ class ProxyProcessorLivenessTest {
         var root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
         var previousLevel = root.getLevel();
         var capture = new ListAppender<ILoggingEvent>();
+        // the engine's own threads write this capture while the assertion below reads it - see
+        // ConfigureHandlerTest#credentialsAppearInNoLogLineAtAnyLevel for the race a bare ArrayList allows
+        capture.list = Collections.synchronizedList(new ArrayList<>());
         capture.start();
         root.addAppender(capture);
         root.setLevel(Level.WARN);
@@ -400,9 +404,13 @@ class ProxyProcessorLivenessTest {
 
             var redelivery = fixture.takeDispatch();
             assertThat(redelivery.getToken().getRecordId()).isEqualTo(stranded.getToken().getRecordId());
+            boolean sawTheReplacement;
+            synchronized (capture.list) {
+                sawTheReplacement = capture.list.stream().map(ILoggingEvent::getFormattedMessage)
+                        .anyMatch(line -> line.contains("Replacing a stranded registration"));
+            }
             assertWithMessage("the stranded entry must have been REPLACED - that is what this test is about")
-                    .that(capture.list.stream().map(ILoggingEvent::getFormattedMessage)
-                            .anyMatch(line -> line.contains("Replacing a stranded registration"))).isTrue();
+                    .that(sawTheReplacement).isTrue();
 
             assertThat(fixture.reportSuccess(redelivery.getToken())).isEqualTo(ReportResult.APPLIED_SUCCESS);
             fixture.awaitCommittedOffset(1);

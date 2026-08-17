@@ -33,6 +33,8 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -179,6 +181,13 @@ class ConfigureHandlerTest {
         var root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
         var previousLevel = root.getLevel();
         var capture = new ListAppender<ILoggingEvent>();
+        // Configure starts a real engine, and its threads keep logging for as long as this test runs - so the
+        // capture is WRITTEN by them while it is READ here. ListAppender's own list is a bare ArrayList, which
+        // makes that a data race: in CI an append landed inside the scan below and threw
+        // ConcurrentModificationException. Detaching first does not close the window - an append already inside
+        // doAppend completes afterwards. A synchronized list, scanned under its own monitor, does close it, and
+        // asserts on exactly the same events.
+        capture.list = Collections.synchronizedList(new ArrayList<>());
         capture.start();
         root.addAppender(capture);
         root.setLevel(Level.TRACE);
@@ -204,15 +213,18 @@ class ConfigureHandlerTest {
         } finally {
             root.setLevel(previousLevel);
             root.detachAppender(capture);
+            capture.stop();
         }
 
-        for (ILoggingEvent event : capture.list) {
-            assertWithMessage("log line leaks the credential (logger %s): %s",
-                    event.getLoggerName(), event.getFormattedMessage())
-                    .that(event.getFormattedMessage()).doesNotContain(SECRET);
+        synchronized (capture.list) {
+            for (ILoggingEvent event : capture.list) {
+                assertWithMessage("log line leaks the credential (logger %s): %s",
+                        event.getLoggerName(), event.getFormattedMessage())
+                        .that(event.getFormattedMessage()).doesNotContain(SECRET);
+            }
+            assertWithMessage("the capture saw the session at all - an empty capture proves nothing")
+                    .that(capture.list).isNotEmpty();
         }
-        assertWithMessage("the capture saw the session at all - an empty capture proves nothing")
-                .that(capture.list).isNotEmpty();
     }
 
     /**

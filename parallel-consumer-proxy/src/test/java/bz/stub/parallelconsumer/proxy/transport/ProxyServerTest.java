@@ -15,6 +15,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Optional;
 
@@ -95,12 +96,15 @@ class ProxyServerTest {
                 .start()) {
             assertThat(server.port()).isGreaterThan(0);
 
-            String warning = warnings.list.stream()
-                    .filter(event -> event.getLevel().toString().equals("WARN"))
-                    .map(ILoggingEvent::getFormattedMessage)
-                    .filter(message -> message.contains("NO AUTHENTICATION"))
-                    .findFirst()
-                    .orElseThrow(() -> new AssertionError("no unauthenticated-surface warning was logged"));
+            String warning;
+            synchronized (warnings.list) {
+                warning = warnings.list.stream()
+                        .filter(event -> event.getLevel().toString().equals("WARN"))
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .filter(message -> message.contains("NO AUTHENTICATION"))
+                        .findFirst()
+                        .orElseThrow(() -> new AssertionError("no unauthenticated-surface warning was logged"));
+            }
             assertThat(warning).contains("offsets");
             assertThat(warning).contains("credentials");
             assertThat(warning).contains("class-valued");
@@ -111,6 +115,9 @@ class ProxyServerTest {
 
     private static ListAppender<ILoggingEvent> captureLogFor(Class<?> loggerOwner) {
         var appender = new ListAppender<ILoggingEvent>();
+        // the server's own threads write this capture while the test reads it - see
+        // ConfigureHandlerTest#credentialsAppearInNoLogLineAtAnyLevel for the race a bare ArrayList allows
+        appender.list = Collections.synchronizedList(new ArrayList<>());
         appender.start();
         ((Logger) LoggerFactory.getLogger(loggerOwner)).addAppender(appender);
         return appender;
