@@ -141,7 +141,13 @@
             propagates the exit code - so a red row means a real failure.
         -->
         <profile>
+            <id>foreign-clients-off</id>
+            <activation><property><name>!pc.foreignClients</name></property></activation>
+            <properties><pc.foreign.state>- NOT BUILT (add -Dpc.foreignClients)</pc.foreign.state></properties>
+        </profile>
+        <profile>
             <id>foreign-clients</id>
+            <properties><pc.foreign.state></pc.foreign.state></properties>
             <activation>
                 <property>
                     <name>pc.foreignClients</name>

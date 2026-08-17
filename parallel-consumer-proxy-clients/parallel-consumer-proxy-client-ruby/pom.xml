@@ -12,7 +12,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <name>Parallel Consumer - Proxy Client Ruby</name>
+    <name>Parallel Consumer - Proxy Client Ruby ${pc.foreign.state}</name>
     <artifactId>parallel-consumer-proxy-client-ruby</artifactId>
     <packaging>pom</packaging>
 
