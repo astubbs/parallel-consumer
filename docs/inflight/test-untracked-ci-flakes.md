@@ -27,6 +27,8 @@ defect:
 - `ParallelEoSStreamProcessorTest.executorThreadsInterruptedOnShutdownTimeout`
 - `CheckQuarantineOwnersScriptTest` - two different methods, on different runs
 - `ProxyProcessorLivenessTest.aSlowWorkerKeepsItsRecordWhileHeartbeatsContinueAndLosesItWhenTheyStop`
+- `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` - added 2026-08-17, seen with ~60
+  worktrees live on the box; passed in isolation and in the same session's full post-change run
 
 **Do not quarantine any of them on this evidence.** Contention on a box running many JVMs is exactly
 the condition rule 2 exists to rule out, and the first uncontended full run of this branch passed all
