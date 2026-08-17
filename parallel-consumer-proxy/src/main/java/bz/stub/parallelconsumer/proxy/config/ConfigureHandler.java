@@ -315,11 +315,10 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                                 + "values, and kafka_properties may carry credentials - R48)"));
                 return;
             }
-            var startedEngine = builtEngine;
             negotiatedCapabilities = capabilities;
             effectiveConfiguration =
                     OptionsMapper.effectiveConfiguration(options, subscription, capabilities, liveness);
-            engine = startedEngine;
+            engine = builtEngine;
 
             // bind before the reply: the client may report the moment Configured arrives, and a wave
             // dispatched in that instant must have somewhere to go
@@ -334,7 +333,7 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                     options.getMaxConcurrency(), OptionsMapper.executorCountFor(options), capabilities);
 
             if (engineStartedListener != null) {
-                engineStartedListener.engineStarted(startedEngine, subscription);
+                engineStartedListener.engineStarted(builtEngine, subscription);
             }
         }
 
