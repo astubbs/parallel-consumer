@@ -370,28 +370,28 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
         private void releaseHalfBuilt(ProxyProcessor builtEngine,
                                       Consumer<byte[], byte[]> consumer,
                                       Producer<byte[], byte[]> producer) {
-            if (builtEngine != null) {
-                try {
-                    // never started, so core's close transitions UNUSED -> CLOSED immediately; the close
-                    // funnel's finally tears down the wave-window timer either way
-                    builtEngine.close();
-                } catch (Exception e) { // Exception, not RuntimeException: core's close sneaky-throws checked ones
-                    log.warn("Half-built engine refused to close: {}", e.getClass().getName());
-                }
+            // the engine was never started, so core's close transitions UNUSED -> CLOSED immediately; the
+            // close funnel's finally tears down the wave-window timer either way
+            releaseQuietly("Half-built engine", builtEngine);
+            releaseQuietly("Consumer built by a failed configure", consumer);
+            releaseQuietly("Producer built by a failed configure", producer);
+        }
+
+        /**
+         * One release: absent is nothing to do, and a refusal is logged by class name only rather than
+         * propagated, so the releases after it still run.
+         *
+         * @param resource {@code AutoCloseable} rather than a narrower type because core's close sneaky-throws
+         *                 checked exceptions, which is also why the catch is {@code Exception}
+         */
+        private void releaseQuietly(String what, AutoCloseable resource) {
+            if (resource == null) {
+                return;
             }
-            if (consumer != null) {
-                try {
-                    consumer.close();
-                } catch (Exception e) {
-                    log.warn("Consumer built by a failed configure refused to close: {}", e.getClass().getName());
-                }
-            }
-            if (producer != null) {
-                try {
-                    producer.close();
-                } catch (Exception e) {
-                    log.warn("Producer built by a failed configure refused to close: {}", e.getClass().getName());
-                }
+            try {
+                resource.close();
+            } catch (Exception e) {
+                log.warn("{} refused to close: {}", what, e.getClass().getName());
             }
         }
 
