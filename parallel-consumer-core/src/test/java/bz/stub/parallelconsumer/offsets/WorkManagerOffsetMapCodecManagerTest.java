@@ -182,26 +182,28 @@ class WorkManagerOffsetMapCodecManagerTest {
 
     /**
      * The incompletes ({@code o}) / completes ({@code x}) pattern behind {@link #LEGACY_BARE_BASE64_LARGE_GOLDEN_VECTOR},
-     * relative to a committed offset of 0. Large enough that the new writer prefers Z85 for it, which is exactly why
-     * the legacy bare-Base64 form of it needs pinning.
+     * relative to a committed offset of 0.
      */
     static final String LARGE_GOLDEN_VECTOR_BITMAP =
             "xxxxxxoooooxoxoxoooooxxxxoooooxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxoxoxooxoxoxoxoxoxoxoxoxoxoxoxo";
 
     /**
-     * As {@link #LEGACY_BARE_BASE64_GOLDEN_VECTOR}, but for a payload big enough that the length-competitive writer now
-     * emits the {@code '%'}-prefixed Z85 form instead. Older PC releases wrote this bare-Base64 string, so it is the
-     * pin that matters most: an upgraded instance must still read what its predecessor committed.
+     * As {@link #LEGACY_BARE_BASE64_GOLDEN_VECTOR}, but for a larger (17-byte) payload. A pure shorter-of writer
+     * would emit the {@code '%'}-prefixed Z85 form for it (23 chars against Base64's 24), but 17 bytes is under the
+     * 22-byte Z85 floor, so today's writer still emits bare Base64 here too. Either way the pin is the same: older PC
+     * releases wrote this exact bare-Base64 string, and an upgraded instance must still read what its predecessor
+     * committed.
      * <p>
-     * <strong>Never regenerate.</strong> Same reasoning as above.
+     * <strong>Never regenerate.</strong> Same reasoning as above - this is a decode pin, independent of what the
+     * writer chooses today.
      */
     static final String LEGACY_BARE_BASE64_LARGE_GOLDEN_VECTOR = "bABkP6jgwf////+/UlVVBQA=";
 
     /**
      * Characterization: the small golden vector is still what the writer emits, and still a bare Base64 string.
      * <p>
-     * Its payload is 5 bytes, where Base64's 8 characters and sentinel+Z85's 8 characters tie - and the writer breaks
-     * ties towards Base64 precisely so that small payloads stay readable by older PC releases.
+     * Its payload is 5 bytes - far under the 22-byte Z85 floor, so the writer emits Base64 and small payloads stay
+     * readable by older PC releases (at 5 bytes the two forms happen to tie at 8 characters anyway).
      */
     @SneakyThrows
     @Test
@@ -232,26 +234,35 @@ class WorkManagerOffsetMapCodecManagerTest {
     }
 
     /**
-     * KTD6's crossover arithmetic, asserted on the writer's actual output at the payload sizes either side of it.
+     * KTD6's crossover arithmetic and U3's floor, asserted on the writer's actual output at the payload sizes around
+     * both.
      * <p>
      * The two formulas are restated here rather than reused from production on purpose: they are the specification the
      * production code is being checked against, so a mutant in
      * {@link OffsetSimpleSerialisation#base64Length(int)} or {@link Z85Codec#encodedLength(int)} must not be able to
      * move both sides of the comparison at once.
      * <p>
-     * Note 22, not 24, is where Z85 first wins: at 22 payload bytes Base64 needs 32 characters and sentinel+Z85 needs
-     * 29. The plan's prose says "from 24 bytes up" in one place and "&gt;= 22 bytes" in another; the formulas settle it
-     * at 22, and this test is what the writer is held to.
+     * The writer is NOT a pure shorter-of: below the 22-byte floor
+     * ({@link OffsetSimpleSerialisation#Z85_MIN_PAYLOAD_BYTES}) sentinel+Z85 is a character shorter at 1, 4, 7, 13,
+     * ... payload bytes, and the writer still emits Base64 - those payloads are nowhere near the metadata cap, and
+     * Base64 there keeps old readers working for free. The rows below the floor where Z85 would win are what pin the
+     * floor. 22, not 24, is where Z85 wins for good: at 22 payload bytes Base64 needs 32 characters and sentinel+Z85
+     * needs 29, and from there Z85 is always strictly shorter. The plan's prose says "from 24 bytes up" in one place
+     * and "&gt;= 22 bytes" in another; the formulas settle it at 22, and this test is what the writer is held to.
      */
     @SneakyThrows
     @Test
     void writerPicksTheShorterOuterCodecAtTheCrossover() {
         // payloadBytes, expected base64 chars, expected sentinel+z85 chars
         int[][] cases = {
-                {3, 4, 5},    // z85 longer - small payloads keep base64
-                {12, 16, 16}, // first tie
-                {21, 28, 28}, // last tie
-                {22, 32, 29}, // z85 first wins here
+                {1, 4, 3},    // z85 a char shorter, but under the floor - the writer keeps base64
+                {3, 4, 5},    // z85 longer - base64 either way
+                {4, 8, 6},    // z85 shorter, under the floor - base64
+                {7, 12, 10},  // z85 shorter, under the floor - base64
+                {12, 16, 16}, // equal length
+                {13, 20, 18}, // z85 shorter, under the floor - base64
+                {21, 28, 28}, // equal length; the last size below the floor
+                {22, 32, 29}, // the floor: z85 fires, and from here it is always strictly shorter
                 {24, 32, 31},
                 {64, 88, 81}, // ~8% saved; converges on ~6%
         };
@@ -261,20 +272,23 @@ class WorkManagerOffsetMapCodecManagerTest {
             int expectedBase64 = testCase[1];
             int expectedSentinelZ85 = testCase[2];
 
-            // 4*ceil(n/3), padded
             assertWithMessage("base64 length of %s bytes", payloadBytes)
-                    .that(4 * ((payloadBytes + 2) / 3)).isEqualTo(expectedBase64);
-            // 1 sentinel + 5 chars per 4 byte block + (n%4 ? n%4+1 : 0) for the partial tail group
+                    .that(expectedBase64Chars(payloadBytes)).isEqualTo(expectedBase64);
             assertWithMessage("sentinel+z85 length of %s bytes", payloadBytes)
-                    .that(1 + 5 * (payloadBytes / 4) + (payloadBytes % 4 == 0 ? 0 : payloadBytes % 4 + 1))
+                    .that(expectedSentinelZ85Chars(payloadBytes))
                     .isEqualTo(expectedSentinelZ85);
 
             byte[] payload = distinctBytes(payloadBytes);
             String chosen = OffsetSimpleSerialisation.encodeShorterOfBase64OrZ85(payload);
 
             assertChosenOuterCodec("crossover", payloadBytes, chosen);
+            boolean z85Expected = payloadBytes >= 22 && expectedSentinelZ85 < expectedBase64;
             assertWithMessage("chosen string length for a %s byte payload", payloadBytes)
-                    .that(chosen.length()).isEqualTo(Math.min(expectedBase64, expectedSentinelZ85));
+                    .that(chosen.length()).isEqualTo(z85Expected ? expectedSentinelZ85 : expectedBase64);
+            if (!z85Expected) {
+                assertWithMessage("below the floor the chosen string IS the Base64 form (%s bytes)", payloadBytes)
+                        .that(chosen).isEqualTo(Base64.getEncoder().encodeToString(payload));
+            }
             assertWithMessage("round trip of %s bytes", payloadBytes)
                     .that(OffsetSimpleSerialisation.decodeBase64OrZ85(chosen)).isEqualTo(payload);
         }
@@ -670,6 +684,23 @@ class WorkManagerOffsetMapCodecManagerTest {
         assertThat(longs.getIncompleteOffsets()).isEqualTo(Collections.emptySet());
     }
 
+    /**
+     * The decode choke point ({@link OffsetMapCodecManager#decodeCompressedOffsets}) converts unchecked decode
+     * failures to {@link OffsetDecodingError} - but {@link KafkaStreamsEncodingNotSupported} under the FAIL policy is
+     * a policy verdict with an actionable message, not a decode failure, and must pass through it unconverted (and
+     * NOT wrapped in an {@link OffsetDecodingError}, which callers would silently recover from).
+     */
+    @Test
+    void kafkaStreamsMetadataUnderFailPolicyPassesThroughTheDecodeChokePointUnconverted() {
+        final var input = ByteBuffer.allocate(32);
+        input.put((byte) 1); // Kafka Streams v1 magic number
+        input.putLong(System.currentTimeMillis());
+        String metadata = Base64.getEncoder().encodeToString(input.array());
+
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(0L, metadata))
+                .isInstanceOf(KafkaStreamsEncodingNotSupported.class);
+    }
+
     @SneakyThrows
     @Test
     void compressionCycle() {
@@ -748,22 +779,43 @@ class WorkManagerOffsetMapCodecManagerTest {
     }
 
     /**
-     * Holds the writer to KTD6: it emits the shorter of the two forms, breaks ties towards Base64, carries the sentinel
-     * exactly when it chose Z85, and never emits a character outside 7-bit ASCII (R8 - the cap counts characters while
-     * the broker counts bytes).
+     * Holds the writer to KTD6 with U3's floor: Base64 for every payload below 22 bytes (old-reader compatibility,
+     * even at the sizes where sentinel+Z85 would be a character shorter), sentinel+Z85 from 22 bytes up where it is
+     * always strictly shorter, the sentinel carried exactly when Z85 was chosen, and never a character outside 7-bit
+     * ASCII (R8 - the cap counts characters while the broker counts bytes). The floor is restated as a literal 22
+     * rather than read from {@link OffsetSimpleSerialisation#Z85_MIN_PAYLOAD_BYTES}, for the same
+     * mutant-cannot-move-both-sides reason as the formulas below.
      */
     private static void assertChosenOuterCodec(String encodingName, int payloadBytes, String chosen) {
-        int base64Chars = 4 * ((payloadBytes + 2) / 3);
-        int sentinelZ85Chars = 1 + 5 * (payloadBytes / 4) + (payloadBytes % 4 == 0 ? 0 : payloadBytes % 4 + 1);
+        int base64Chars = expectedBase64Chars(payloadBytes);
+        int sentinelZ85Chars = expectedSentinelZ85Chars(payloadBytes);
+        boolean z85Expected = payloadBytes >= 22 && sentinelZ85Chars < base64Chars;
 
-        assertWithMessage("%s: shorter of base64 %s and sentinel+z85 %s for a %s byte payload",
+        assertWithMessage("%s: base64 %s vs sentinel+z85 %s under the 22-byte floor, for a %s byte payload",
                 encodingName, base64Chars, sentinelZ85Chars, payloadBytes)
-                .that(chosen.length()).isEqualTo(Math.min(base64Chars, sentinelZ85Chars));
-        assertWithMessage("%s: sentinel present exactly when z85 is strictly shorter (%s byte payload)",
+                .that(chosen.length()).isEqualTo(z85Expected ? sentinelZ85Chars : base64Chars);
+        assertWithMessage("%s: sentinel present exactly when the floor lets z85 fire (%s byte payload)",
                 encodingName, payloadBytes)
-                .that(chosen.startsWith("%")).isEqualTo(sentinelZ85Chars < base64Chars);
+                .that(chosen.startsWith("%")).isEqualTo(z85Expected);
         assertWithMessage("%s: 7-bit ASCII only, so length() is the UTF-8 byte length", encodingName)
                 .that(chosen.length()).isEqualTo(chosen.getBytes(UTF_8).length);
+    }
+
+    /**
+     * {@code 4*ceil(n/3)}, padded. Deliberately restated from first principles rather than calling
+     * {@link OffsetSimpleSerialisation#base64Length}, so a mutant in the production formula cannot make both sides of
+     * the comparison move together.
+     */
+    private static int expectedBase64Chars(int payloadBytes) {
+        return 4 * ((payloadBytes + 2) / 3);
+    }
+
+    /**
+     * 1 sentinel + 5 chars per 4-byte block + {@code (n%4 ? n%4+1 : 0)} for the partial tail group. Independent of
+     * {@link Z85Codec#encodedLength} for the same reason as {@link #expectedBase64Chars}.
+     */
+    private static int expectedSentinelZ85Chars(int payloadBytes) {
+        return 1 + 5 * (payloadBytes / 4) + (payloadBytes % 4 == 0 ? 0 : payloadBytes % 4 + 1);
     }
 
 }

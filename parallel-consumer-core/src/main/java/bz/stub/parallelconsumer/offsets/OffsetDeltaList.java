@@ -93,6 +93,12 @@ public class OffsetDeltaList {
         wrap.rewind();
 
         final int rangeLength = wrap.getInt();
+        if (rangeLength < 0) {
+            // no writer emits one (DeltaListEncoder declines past Integer.MAX_VALUE), so this is corruption - and
+            // without the check it would decode SILENTLY to a highest-seen offset below the committed base. The
+            // decode choke point (OffsetMapCodecManager#decodeCompressedOffsets) converts this to OffsetDecodingError.
+            throw new InternalRuntimeException("Corrupt offset map: negative range length " + rangeLength);
+        }
         final long count = readUnsignedVarint(wrap);
 
         final var relativeIncompletes = new TreeSet<Long>();

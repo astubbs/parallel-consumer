@@ -31,9 +31,10 @@ committable. Encode-time CPU is a separate concern owned elsewhere.
   compared on the same footing. Every candidate layout begins
   `[magic:1][rangeLength:int4]`, because the incompletes alone cannot reconstruct the top of the
   range (the highest offset is always complete).
-- **String length** is the shorter of Base64 `4*ceil(n/3)` and sentinel+Z85
-  `1 + 5*floor(n/4) + (n%4 ? n%4+1 : 0)` (KTD6's per-payload choice). Both are reported for the
-  winner. No codec is implemented here; this is the arithmetic only.
+- **String length** models the writer's floored rule (KTD6): Base64 `4*ceil(n/3)` for payloads
+  below 22 bytes, and the shorter of that and sentinel+Z85 `1 + 5*floor(n/4) + (n%4 ? n%4+1 : 0)`
+  - from 22 bytes up always Z85 - beyond it. Both are reported for the winner. No codec is
+  implemented here; this is the arithmetic only.
 - **Two compression views.** *Forced* sets `OffsetSimultaneousEncoder.compressionForced`, so every
   encoder gets a zstd twin - it shows what compression is worth in principle. *Production* applies
   the real rule, which is now PER ENCODER (KTD8): an encoding gets a zstd twin exactly when its own
@@ -75,7 +76,7 @@ each probe costs a full per-offset encode pass; families that never block within
 
 | Scenario | Last fitting range | incompletes | winner | chars | First blocking range | incompletes | winner | chars |
 |---|---:|---:|---|---:|---:|---:|---|---:|
-| `trailing-incomplete-run` | 197,850 | 9,892 | `RunLengthV2` | 18 | none at or below 197,850 | - | - | - |
+| `trailing-incomplete-run` | 197,850 | 9,892 | `RunLengthV2` | 20 | none at or below 197,850 | - | - | - |
 | `uniform-random 0.1%` | 197,850 | 198 | `delta-list` | 474 | none at or below 197,850 | - | - | - |
 | `uniform-random 1%` | 197,850 | 1,979 | `delta-list+zstd` | 2,869 | none at or below 197,850 | - | - | - |
 | `uniform-random 5%` | 55,217 | 2,761 | `delta-list+zstd` | 2,600 | 66,260 | 3,313 | `delta-list+zstd` | 3,099 |
@@ -99,7 +100,7 @@ columns are plain / zstd. All figures are **packed bytes** (magic byte included)
 | `trailing-incomplete-run` | 10,000 | 500 | 24 | 26 | 7 | 13 | 16 / 25 | 508 / 26 | 11 / 20 | `RunLength` | 7 | 12 | 10 |
 | `trailing-incomplete-run` | 100,000 | 5,000 | n/a | 26 | n/a | 13 | 16 / 25 | 5,009 / 27 | 15 / 24 | `RunLengthV2` | 13 | 20 | 18 |
 | `trailing-incomplete-run` | 1,000,000 | 50,000 | n/a | 27 | n/a | 13 | 25 / 34 | 50,010 / 29 | 67 / 28 | `RunLengthV2` | 13 | 20 | 18 |
-| `uniform-random 0.1%` | 1,000 | 1 | 24 | 26 | 9 | 17 | 14 / 23 | 8 / 17 | 13 / 22 | `delta-list` | 8 | 12 | 11 |
+| `uniform-random 0.1%` | 1,000 | 1 | 24 | 26 | 9 | 17 | 14 / 23 | 8 / 17 | 13 / 22 | `RunLength` | 9 | 12 | 13 |
 | `uniform-random 0.1%` | 10,000 | 10 | 58 | 60 | 45 | 62 | 32 / 41 | 23 / 32 | 49 / 58 | `delta-list` | 23 | 32 | 30 |
 | `uniform-random 0.1%` | 100,000 | 100 | n/a | 352 | 284 | 246 | 217 / 226 | 191 / 200 | 409 / 286 | `delta-list` | 191 | 256 | 240 |
 | `uniform-random 0.1%` | 1,000,000 | 1,000 | n/a | 2,666 | 2,209 | 2,083 | 2,087 / 2,096 | 1,884 / 1,728 | 4,005 / 2,213 | `delta-list+zstd` | 1,728 | 2,304 | 2,161 |
@@ -141,7 +142,7 @@ all-or-nothing gate this report was first generated with, one such encoding supp
 | `trailing-incomplete-run` | 10,000 | 500 | 24 | 26 | 7 | 13 | 16 / 25 | 508 / 26 | 11 / 20 | ! | `RunLength` | 7 | 12 | 10 |
 | `trailing-incomplete-run` | 100,000 | 5,000 | n/a | 26 | n/a | 13 | 16 / 25 | 5,009 / 27 | 15 / 24 | ! | `RunLengthV2` | 13 | 20 | 18 |
 | `trailing-incomplete-run` | 1,000,000 | 50,000 | n/a | 27 | n/a | 13 | 25 / 34 | 50,010 / 29 | 67 / 28 | ! | `RunLengthV2` | 13 | 20 | 18 |
-| `uniform-random 0.1%` | 1,000 | 1 | 129 | 131 | 9 | 17 | 14 / 23 | 8 / 17 | 13 / 22 | ! | `delta-list` | 8 | 12 | 11 |
+| `uniform-random 0.1%` | 1,000 | 1 | 129 | 131 | 9 | 17 | 14 / 23 | 8 / 17 | 13 / 22 | ! | `RunLength` | 9 | 12 | 13 |
 | `uniform-random 0.1%` | 10,000 | 10 | 58 | 60 | 45 | 89 | 32 / 41 | 23 / 32 | 49 / 58 | ! | `delta-list` | 23 | 32 | 30 |
 | `uniform-random 0.1%` | 100,000 | 100 | n/a | 352 | 284 | 246 | 217 / 226 | 191 / 200 | 409 / 286 | yes | `delta-list` | 191 | 256 | 240 |
 | `uniform-random 0.1%` | 1,000,000 | 1,000 | n/a | 2,666 | 2,209 | 2,083 | 2,087 / 2,096 | 1,884 / 1,728 | 4,005 / 2,213 | yes | `delta-list+zstd` | 1,728 | 2,304 | 2,161 |
@@ -175,7 +176,7 @@ all-or-nothing gate this report was first generated with, one such encoding supp
 - **`chunked-bitset`**: best result anywhere in the corpus is **+29.3%** against the incumbent, on uniform-random 0.1% @ range
   10,000 (41 chars vs 58) - but that is a `!` row, where at least one incumbent was too small to earn a zstd twin, so read the margin against the forced table too. It is the production-view winner on **1 of 32** scenarios.
 - **`delta-list`**: best result anywhere in the corpus is **+56.4%** against the incumbent, on uniform-random 5% @ range
-  1,000 (71 chars vs 163) - but that is a `!` row, where at least one incumbent was too small to earn a zstd twin, so read the margin against the forced table too. It is the production-view winner on **13 of 32** scenarios.
+  1,000 (71 chars vs 163) - but that is a `!` row, where at least one incumbent was too small to earn a zstd twin, so read the margin against the forced table too. It is the production-view winner on **12 of 32** scenarios.
 - **`u-run-length`**: best result anywhere in the corpus is **+10.4%** against the incumbent, on uniform-random 5% @ range
   1,000 (146 chars vs 163) - but that is a `!` row, where at least one incumbent was too small to earn a zstd twin, so read the margin against the forced table too. It is the production-view winner on **0 of 32** scenarios.
 - **zstd on a sparse bitmap is the incumbent's strongest move.** A BitSet of a low-density
@@ -255,11 +256,8 @@ multiple of the 4,096-char metadata cap.
 
 ### Why not the RoaringBitmap library (KTD1)
 
-The `chunked-bitset` rows above ARE Roaring's container model - array, bitmap and run containers
-over 2^16-bit chunks, picking the smallest per chunk - measured against the incumbents on the same
-corpus. So the question "would RoaringBitmap be denser?" is answered by a number rather than an
-opinion, and it is answered without taking a ~450KB dependency into a library that deliberately has
-four. Of Roaring's containers, PC's existing encoders already cover two: run containers duplicate
-`RunLengthEncoder` and bitmap containers duplicate `BitSetEncoder`. The only capability PC lacks is
-the sparse array container, and the `delta-list` rows model that directly - more densely than
-Roaring's own fixed 2 bytes per entry.
+The `chunked-bitset` rows above ARE Roaring's container model, measured on this corpus: its best
+qualifying result is **+0.03%** against the incumbent encoders, far short of the **10%**
+ship bar above. The design reasoning behind declining the library lives with the code, in the
+offsets package javadoc
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/package-info.java`).

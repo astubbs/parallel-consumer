@@ -1492,7 +1492,7 @@ When messages beyond the highest committable offset are successfully processed;
 . they are stored as such in an internal memory map.
 . when the system then next commits offsets
 . if there are any messages beyond the highest offset which have been marked as succeeded
-.. the offset map is serialised and string-encoded with whichever of Base64 or Z85 yields the shorter string, and added to the commit message metadata.
+.. the offset map is serialised and string-encoded - Base64 for small payloads (below 22 bytes, keeping them readable by older releases), the denser Z85 from 22 payload bytes up, where it is always shorter - and added to the commit message metadata.
 . upon restore, if needed, the system then deserializes this offset map and loads it back into memory
 . when each messages is polled into the system
 .. it checks if it's already been previously completed

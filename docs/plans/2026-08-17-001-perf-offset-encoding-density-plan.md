@@ -55,7 +55,7 @@ Compatibility:
 Documentation:
 
 - R9. The offsets package javadoc (`package-info.java`) records the measured reasoning: why encoders are custom rather than RoaringBitmap, the outer-codec decision with its crossover math, and the candidate verdicts with the benchmark numbers. The generated README's offset-encoding section (edit `src/docs/README_TEMPLATE.adoc`, regenerate) is updated to match the new pipeline.
-- R10. CHANGELOG gains one entry covering the density change and the operator-visible mixed-version caveat: during a rolling upgrade, a not-yet-upgraded instance reading a newer instance's commit drops the offset map and resumes from the committed offset, which can redeliver in-flight work to non-idempotent processors. Upgrade-in-place from older versions still works.
+- R10. The density change and the operator-visible mixed-version caveat are recorded for the changelog via the squash-commit body, per repo policy (`CHANGELOG.adoc` is generated at release time; a PR never edits it): during a rolling upgrade, a not-yet-upgraded instance reading a newer instance's commit drops the offset map and resumes from the committed offset, which can redeliver in-flight work to non-idempotent processors. Upgrade-in-place from older versions still works. The operator wording is preserved in the README and the offsets package javadoc.
 
 ### Scope Boundaries
 
@@ -249,10 +249,10 @@ Do not start this unit before U1's verdict line exists; if the verdict is case-a
 - Goal: R9, R10 - the issue's explicit ask to record the reasoning where the next asker finds it.
 - Requirements: R9, R10.
 - Dependencies: U1-U5 (numbers final).
-- Files: new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/package-info.java`; `src/docs/README_TEMPLATE.adoc` (offset-encoding section: pipeline description, "base 64" wording, density claims; regenerate `README.adoc` via `mvn process-sources`); `CHANGELOG.adoc`; `docs/todo-index.md` if TODOs changed; `docs/refactoring.md` row for astubbs#192 updated to point at the record.
-- Approach: package-info carries the competitive-set design, the wire-format compatibility contract (write-new/read-all, magic-byte registry including reserved pairs, sentinel scheme with the `%`-in-alphabet non-nesting note), the RoaringBitmap decision with U1's numbers, the outer-codec decision with KTD6's crossover math, and the candidate verdicts. Keep the README section user-facing (what, not why); the why lives in the javadoc. CHANGELOG wording per R10 names the operator-visible redelivery effect.
+- Files: new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/package-info.java`; `src/docs/README_TEMPLATE.adoc` (offset-encoding section: pipeline description, "base 64" wording, density claims; regenerate `README.adoc` via `mvn process-sources`); `docs/todo-index.md` if TODOs changed; `docs/refactoring.md` row for astubbs#192 updated to point at the record. (No `CHANGELOG.adoc` edit - it is generated at release from commit bodies, per repo policy.)
+- Approach: package-info carries the competitive-set design, the wire-format compatibility contract (write-new/read-all, magic-byte registry including reserved pairs, sentinel scheme with the `%`-in-alphabet non-nesting note), the RoaringBitmap decision with U1's numbers, the outer-codec decision with KTD6's crossover math, and the candidate verdicts. Keep the README section user-facing (what, not why); the why lives in the javadoc. The R10 operator wording (redelivery effect) goes in the squash-commit body for the release-time changelog generator, and is preserved in the README and package javadoc.
 - Test expectation: none - documentation unit; README regeneration is verified by the repo's generated-docs check.
-- Verification: README regenerated not hand-edited; changelog entry present; javadoc builds clean.
+- Verification: README regenerated not hand-edited; R10 operator wording present in README, package javadoc and the squash-commit body; javadoc builds clean.
 
 ---
 
@@ -271,5 +271,5 @@ Do not start this unit before U1's verdict line exists; if the verdict is case-a
 - R1-R11 satisfied or their conditional branch resolved and recorded (R2/R4/R11 may resolve to "case-against" - that is done, not failure).
 - All units' verification steps pass; full suite green; no weakened assertions anywhere.
 - Benchmark report committed and in sync with shipped code; verdict line per candidate present; per-scenario engagement points show what each shipped change bought in back-pressure headroom.
-- README regenerated from template; CHANGELOG entry present with the R10 operator wording; package-info records the reasoning with numbers.
+- README regenerated from template; the R10 operator wording recorded for the changelog via the squash-commit body (per repo policy - `CHANGELOG.adoc` is generated at release, PRs never edit it) and preserved in README + package javadoc; package-info records the reasoning with numbers.
 - No abandoned experimental code in the diff (candidate layout writers live in the benchmark test and stay; an unshipped registered encoder does not exist on any branch of the verdict).

@@ -495,8 +495,17 @@ class OffsetEncodingDensityBenchmarkTest {
         return 1 + 5 * (payloadBytes / 4) + (tail == 0 ? 0 : tail + 1);
     }
 
-    /** KTD6: the writer emits whichever of the two forms is shorter, per payload. */
+    /**
+     * KTD6 with U3's floor: Base64 for every payload below 22 bytes (old-reader compatibility - at that size the odd
+     * character sentinel+Z85 would save buys no headroom), and the shorter form - from there always Z85 - from 22
+     * bytes up. The floor is restated as a literal 22 rather than read from
+     * {@code OffsetSimpleSerialisation.Z85_MIN_PAYLOAD_BYTES}, like the formulas above, so the report models the
+     * writer's rule independently of the code implementing it.
+     */
     static int stringChars(int payloadBytes) {
+        if (payloadBytes < 22) {
+            return base64Chars(payloadBytes);
+        }
         return Math.min(base64Chars(payloadBytes), sentinelZ85Chars(payloadBytes));
     }
 
@@ -1052,9 +1061,10 @@ class OffsetEncodingDensityBenchmarkTest {
         out.append("  compared on the same footing. Every candidate layout begins\n");
         out.append("  `[magic:1][rangeLength:int4]`, because the incompletes alone cannot reconstruct the top of the\n");
         out.append("  range (the highest offset is always complete).\n");
-        out.append("- **String length** is the shorter of Base64 `4*ceil(n/3)` and sentinel+Z85\n");
-        out.append("  `1 + 5*floor(n/4) + (n%4 ? n%4+1 : 0)` (KTD6's per-payload choice). Both are reported for the\n");
-        out.append("  winner. No codec is implemented here; this is the arithmetic only.\n");
+        out.append("- **String length** models the writer's floored rule (KTD6): Base64 `4*ceil(n/3)` for payloads\n");
+        out.append("  below 22 bytes, and the shorter of that and sentinel+Z85 `1 + 5*floor(n/4) + (n%4 ? n%4+1 : 0)`\n");
+        out.append("  - from 22 bytes up always Z85 - beyond it. Both are reported for the winner. No codec is\n");
+        out.append("  implemented here; this is the arithmetic only.\n");
         out.append("- **Two compression views.** *Forced* sets `OffsetSimultaneousEncoder.compressionForced`, so every\n");
         out.append("  encoder gets a zstd twin - it shows what compression is worth in principle. *Production* applies\n");
         out.append(String.format(Locale.ROOT,
@@ -1245,14 +1255,16 @@ class OffsetEncodingDensityBenchmarkTest {
         out.append("   qualifying row above was a `yes` row under either rule.\n\n");
 
         out.append("### Why not the RoaringBitmap library (KTD1)\n\n");
-        out.append("The `chunked-bitset` rows above ARE Roaring's container model - array, bitmap and run containers\n");
-        out.append("over 2^16-bit chunks, picking the smallest per chunk - measured against the incumbents on the same\n");
-        out.append("corpus. So the question \"would RoaringBitmap be denser?\" is answered by a number rather than an\n");
-        out.append("opinion, and it is answered without taking a ~450KB dependency into a library that deliberately has\n");
-        out.append("four. Of Roaring's containers, PC's existing encoders already cover two: run containers duplicate\n");
-        out.append("`RunLengthEncoder` and bitmap containers duplicate `BitSetEncoder`. The only capability PC lacks is\n");
-        out.append("the sparse array container, and the `delta-list` rows model that directly - more densely than\n");
-        out.append("Roaring's own fixed 2 bytes per entry.\n");
+        final CandidateVerdict chunked = verdicts.stream()
+                .filter(verdict -> verdict.name.equals(CANDIDATE_CHUNKED))
+                .findFirst().orElseThrow(IllegalStateException::new);
+        out.append(String.format(Locale.ROOT,
+                "The `chunked-bitset` rows above ARE Roaring's container model, measured on this corpus: its best\n"
+                        + "qualifying result is **%+.2f%%** against the incumbent encoders, far short of the **%.0f%%**\n"
+                        + "ship bar above. The design reasoning behind declining the library lives with the code, in the\n"
+                        + "offsets package javadoc\n"
+                        + "(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/package-info.java`).\n",
+                chunked.bestQualifyingImprovement * 100, SHIP_THRESHOLD_FRACTION * 100));
         return out.toString();
     }
 
@@ -1411,19 +1423,23 @@ class OffsetEncodingDensityBenchmarkTest {
     @Test
     void outerCodecArithmeticMatchesKtd6() {
         assertThat(base64Chars(3)).isEqualTo(4);
-        assertThat(sentinelZ85Chars(3)).isEqualTo(5);   // Z85 longer below 12 bytes
+        assertThat(sentinelZ85Chars(3)).isEqualTo(5);   // Z85 longer here; below 22 the raw formulas interleave
         assertThat(base64Chars(12)).isEqualTo(16);
-        assertThat(sentinelZ85Chars(12)).isEqualTo(16); // tie from 12
+        assertThat(sentinelZ85Chars(12)).isEqualTo(16); // tied at 12
         assertThat(base64Chars(21)).isEqualTo(28);
-        assertThat(sentinelZ85Chars(21)).isEqualTo(28); // still tied at 21
+        assertThat(sentinelZ85Chars(21)).isEqualTo(28); // tied at 21
         assertThat(base64Chars(24)).isEqualTo(32);
-        assertThat(sentinelZ85Chars(24)).isEqualTo(31); // Z85 wins from 24 up
+        assertThat(sentinelZ85Chars(24)).isEqualTo(31); // strictly shorter from the 22-byte floor up
         assertThat(base64Chars(1_024)).isEqualTo(1_368);
         assertThat(sentinelZ85Chars(1_024)).isEqualTo(1_281);
         // ...converging on ~6%
         assertThat(1 - sentinelZ85Chars(1_024) / (double) base64Chars(1_024)).isWithin(0.005d).of(0.0636d);
-        // the writer takes the min, per payload
+        // the writer's floored rule: base64 below 22 payload bytes - even at 13, where the raw z85 formula
+        // (18 chars vs base64's 20) would win a pure shorter-of - then the min from 22 up
         assertThat(stringChars(3)).isEqualTo(4);
+        assertThat(sentinelZ85Chars(13)).isEqualTo(18);
+        assertThat(stringChars(13)).isEqualTo(20);
+        assertThat(stringChars(22)).isEqualTo(29);
         assertThat(stringChars(24)).isEqualTo(31);
     }
 

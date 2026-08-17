@@ -9,6 +9,7 @@ import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.util.Optional;
 import java.util.SortedSet;
 
@@ -108,36 +109,32 @@ public class DeltaListEncoder extends OffsetEncoder {
         final SortedSet<Long> encodable = offsetSimultaneousEncoder.getIncompleteOffsets()
                 .subSet(baseOffset, baseOffset + rangeLength);
 
-        final ByteArrayOutputStream buffer = new ByteArrayOutputStream(HEADER_BYTES + 2 + encodable.size() * 2);
-        writeRangeLength(buffer, rangeLength);
-        OffsetDeltaList.writeUnsignedVarint(buffer, encodable.size());
-
+        // single pass over the subset view: its size() re-counts the elements on every call, so the deltas are
+        // written (and counted) first, then wrapped with the fixed header
+        final ByteArrayOutputStream deltas = new ByteArrayOutputStream();
+        int count = 0;
         long previousRelativeOffset = 0;
-        boolean first = true;
         for (final long offset : encodable) {
             final long relativeOffset = offset - baseOffset;
             // the first entry is the position in the range, the rest are the gaps between consecutive incompletes
-            OffsetDeltaList.writeUnsignedVarint(buffer, first ? relativeOffset : relativeOffset - previousRelativeOffset);
+            OffsetDeltaList.writeUnsignedVarint(deltas, count == 0 ? relativeOffset : relativeOffset - previousRelativeOffset);
             previousRelativeOffset = relativeOffset;
-            first = false;
+            count++;
         }
+
+        final ByteArrayOutputStream buffer = new ByteArrayOutputStream(HEADER_BYTES + 2 + deltas.size());
+        // big-endian, matching every other length field in this package
+        final byte[] rangeLengthHeader = ByteBuffer.allocate(HEADER_BYTES).putInt((int) rangeLength).array();
+        buffer.write(rangeLengthHeader, 0, rangeLengthHeader.length);
+        OffsetDeltaList.writeUnsignedVarint(buffer, count);
+        final byte[] deltaBytes = deltas.toByteArray();
+        buffer.write(deltaBytes, 0, deltaBytes.length);
 
         final byte[] array = buffer.toByteArray();
         log.trace("Encoded {} incomplete offset(s) over a range of {} into {} bytes",
-                encodable.size(), rangeLength, array.length);
+                count, rangeLength, array.length);
         this.encodedBytes = Optional.of(array);
         return array;
-    }
-
-    /**
-     * Big-endian, matching every other length field in this package (and {@link java.nio.ByteBuffer}'s default), so a
-     * payload can be read by eye against the others.
-     */
-    private static void writeRangeLength(final ByteArrayOutputStream buffer, final long rangeLength) {
-        buffer.write((int) ((rangeLength >>> 24) & 0xFF));
-        buffer.write((int) ((rangeLength >>> 16) & 0xFF));
-        buffer.write((int) ((rangeLength >>> 8) & 0xFF));
-        buffer.write((int) (rangeLength & 0xFF));
     }
 
     @Override

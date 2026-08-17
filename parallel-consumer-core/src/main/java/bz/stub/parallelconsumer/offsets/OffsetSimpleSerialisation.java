@@ -119,18 +119,30 @@ public class OffsetSimpleSerialisation {
     }
 
     /**
-     * Encodes a payload as whichever of Base64 or sentinel-prefixed Z85 is the <em>shorter</em> string, since the string
-     * length is what the metadata cap and the back-pressure threshold are measured against.
+     * The payload size (KTD6's crossover) from which the writer will emit sentinel-prefixed Z85; below it every
+     * payload is Base64, whatever the arithmetic says.
      * <p>
-     * Base64 wins ties. Z85's 25% expansion beats Base64's 33%, but the sentinel costs a character and both codecs round
-     * up to their block size, so sentinel+Z85 is longer below 12 payload bytes, ties from 12 through 21, and wins from 22
-     * bytes up, converging on ~6% shorter. Breaking ties towards Base64 therefore keeps every small payload in the form
-     * older PC releases can read, and spends the compatibility cost only where there is actually density to gain.
+     * From 22 bytes up sentinel+Z85 is <em>always</em> strictly shorter than Base64 (Z85's 25% expansion plus the
+     * sentinel character against Base64's 33%), converging on ~6% shorter as payloads grow.
+     */
+    static final int Z85_MIN_PAYLOAD_BYTES = 22;
+
+    /**
+     * Encodes a payload as the shorter of Base64 and sentinel-prefixed Z85 - the string length being what the metadata
+     * cap and the back-pressure threshold are measured against - but only from
+     * {@link #Z85_MIN_PAYLOAD_BYTES 22 payload bytes} up; below that floor every payload is Base64.
+     * <p>
+     * Below the floor, sentinel+Z85 is sometimes a single character shorter than Base64 (at 1, 4, 7, ... payload
+     * bytes, where Base64 pads a mostly-empty final block) - but payloads that small are nowhere near the metadata
+     * cap, so a character there buys no real headroom. Keeping them Base64 keeps them readable by every older PC
+     * release, at zero density cost where density matters. From 22 bytes up Z85 is always strictly shorter and always
+     * chosen, converging on ~6% shorter; the strict-shorter comparison below is kept as the semantic guard on that
+     * claim rather than trusted arithmetic.
      *
      * @see #decodeBase64OrZ85(String)
      */
     static String encodeShorterOfBase64OrZ85(final byte[] src) {
-        if (Z85Codec.encodedLength(src.length) + 1 < base64Length(src.length)) {
+        if (src.length >= Z85_MIN_PAYLOAD_BYTES && Z85Codec.encodedLength(src.length) + 1 < base64Length(src.length)) {
             final String z85 = Z85_SENTINEL + Z85Codec.encode(src);
             log.trace("Final z85 size: {} (base64 would have been {})", z85.length(), base64Length(src.length));
             return z85;

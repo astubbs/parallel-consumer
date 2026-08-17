@@ -214,9 +214,11 @@ public class OffsetMapCodecManager<K, V> {
      * {@link Z85Codec Z85} after the sentinel, and anything else is Base64. The sentinel character is not in the Base64
      * alphabet, so no payload written by any earlier release of PC can start with it - which is what makes bare Base64
      * safe to keep reading forever, and why blank or foreign strings still take the Base64 path and its existing
-     * error handling. The writer picks per payload: it emits whichever form is shorter, which is Base64 below 22
-     * payload bytes (the 12-to-21 ties included) and sentinel+Z85 from 22 bytes up, where the denser codec starts
-     * winning characters against the metadata cap.
+     * error handling. The writer picks per payload with a floor: Base64 for every payload below
+     * {@link OffsetSimpleSerialisation#Z85_MIN_PAYLOAD_BYTES 22 bytes} (even at the handful of small sizes where
+     * sentinel+Z85 would be a character shorter - old-reader compatibility is worth more there than a character that
+     * buys no headroom), and sentinel+Z85 from 22 bytes up, where it is always strictly shorter and the denser codec
+     * starts winning characters against the metadata cap.
      *
      * @param committedOffsetForPartition the committed offset the payload is relative to - incompletes are encoded as
      *                                    offsets from this base
@@ -255,8 +257,9 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     /**
-     * Encodes the offset map, then string-encodes it with whichever outer codec yields the shorter string - the length
-     * being what {@link PartitionState} measures against the metadata cap.
+     * Encodes the offset map, then string-encodes it under the floored outer-codec rule (Base64 below 22 payload
+     * bytes, the shorter form - always Z85 - from there up) - the string length being what {@link PartitionState}
+     * measures against the metadata cap.
      *
      * @see OffsetSimpleSerialisation#encodeShorterOfBase64OrZ85(byte[])
      * @see #deserialiseIncompleteOffsetMapFromString(long, String, ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy)
@@ -338,14 +341,25 @@ public class OffsetMapCodecManager<K, V> {
      * <p>
      * Empty input is not an error: it means the commit carried no offset map, so nothing was incomplete below the
      * committed offset.
+     * <p>
+     * This is the decode choke point, and the metadata it decodes is UNTRUSTED input - anything sharing the consumer
+     * group may have written it, and even a recognised magic byte can be followed by a truncated or corrupt body. Any
+     * failure to decode it, whatever the decoder throws, is therefore an {@link OffsetDecodingError}, which callers
+     * recover from by dropping the offset map and replaying from the committed offset (the astubbs#118 precedent,
+     * pinned at the assignment level by {@code ForeignOffsetMetadataOnAssignmentTest}) - where an unchecked exception
+     * would escape the rebalance listener and crash-loop the consumer against metadata that stays committed. The one
+     * deliberate exception: {@link KafkaStreamsEncodingNotSupported} under the
+     * {@link ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy#FAIL} policy is a policy verdict with an
+     * actionable message, not a decode failure, and passes through unconverted.
      *
      * @param nextExpectedOffset the committed offset the map is relative to
      * @param decodedBytes       the payload, magic byte first
-     * @param errorPolicy        what to do about metadata recognisable as Kafka Streams'. Does <em>not</em> govern an
-     *                           unreadable magic byte, which always raises {@link OffsetDecodingError} so the caller
-     *                           can drop the offset map rather than die - see {@link OffsetEncoding#decode(byte)}
+     * @param errorPolicy        what to do about metadata recognisable as Kafka Streams'. Does <em>not</em> govern
+     *                           metadata that cannot be decoded at all, which always raises
+     *                           {@link OffsetDecodingError} so the caller can drop the offset map rather than die
      * @return Set of offsets which are not complete, and the highest offset encoded.
-     * @throws OffsetDecodingError if the magic byte matches no encoding this version knows
+     * @throws OffsetDecodingError if the magic byte matches no encoding this version knows, or the payload body fails
+     *                             to decode for any reason
      */
     static HighestOffsetAndIncompletes decodeCompressedOffsets(long nextExpectedOffset,
                                                                byte[] decodedBytes,
@@ -358,8 +372,26 @@ public class OffsetMapCodecManager<K, V> {
             long highestSeenOffsetIsThen = nextExpectedOffset - 1;
             return HighestOffsetAndIncompletes.of(highestSeenOffsetIsThen);
         } else {
-            var result = EncodedOffsetPair.unwrap(decodedBytes);
-            return result.getDecodedIncompletes(nextExpectedOffset, errorPolicy);
+            try {
+                var result = EncodedOffsetPair.unwrap(decodedBytes);
+                return result.getDecodedIncompletes(nextExpectedOffset, errorPolicy);
+            } catch (OffsetDecodingError alreadyClassified) {
+                // already the recoverable signal - never double-wrap it
+                throw alreadyClassified;
+            } catch (Exception decodeFailure) {
+                // KafkaStreamsEncodingNotSupported (sneaky-thrown, checked) is the FAIL policy's verdict on
+                // recognisably-Kafka-Streams metadata - propagate it exactly as before this choke point existed
+                if (decodeFailure instanceof EncodingNotSupportedException) {
+                    throw decodeFailure;
+                }
+                // everything else - BufferUnderflowException, InternalRuntimeException, the zstd IOException
+                // sneaky-thrown through getDecodedIncompletes, and whatever a future decoder invents - is corrupt
+                // or foreign metadata, converted to the recoverable signal
+                throw new OffsetDecodingError(
+                        msg("Error decoding offset metadata payload, input (base64) was: {}",
+                                Base64.getEncoder().encodeToString(decodedBytes)),
+                        decodeFailure);
+            }
         }
     }
 

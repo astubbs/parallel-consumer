@@ -365,6 +365,71 @@ class DeltaListEncodingTest {
         }
     }
 
+    /**
+     * Base64 of a raw payload, as it would sit in a committed offset's metadata field - the shape the corrupt-payload
+     * tests below feed to the real string-decode entry point.
+     */
+    private static String base64Metadata(byte... payload) {
+        return java.util.Base64.getEncoder().encodeToString(payload);
+    }
+
+    /**
+     * Corrupt and truncated payloads: whatever is wrong with the bytes after the {@code 'd'} magic byte, the failure
+     * must surface from {@link OffsetMapCodecManager#deserialiseIncompleteOffsetMapFromString} as
+     * {@link OffsetDecodingError} - never as an unchecked exception. The committed metadata is untrusted input, and
+     * only {@code OffsetDecodingError} reaches the drop-the-map recovery in
+     * {@code OffsetMapCodecManager#loadPartitionStateForAssignment}; anything unchecked escapes the rebalance
+     * listener and crash-loops the consumer, which {@link ForeignOffsetMetadataOnAssignmentTest} pins at the
+     * assignment level.
+     */
+    @Test
+    void aTruncatedBodyIsARecoverableDecodingError() {
+        // "ZA==": the DeltaList magic byte alone, no header - getInt() has nothing to read
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(
+                0L, base64Metadata((byte) 'd')))
+                .isInstanceOf(OffsetDecodingError.class)
+                .hasCauseInstanceOf(java.nio.BufferUnderflowException.class);
+    }
+
+    /** A varint longer than any {@code long}: ten continuation bytes where the count should be. */
+    @Test
+    void anOverLongVarintIsARecoverableDecodingError() {
+        final byte[] payload = new byte[15];
+        payload[0] = (byte) 'd';
+        // plausible rangeLength of 5...
+        payload[4] = 5;
+        // ...then ten bytes all with the continuation bit set
+        Arrays.fill(payload, 5, payload.length, (byte) 0x80);
+
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(
+                0L, base64Metadata(payload)))
+                .isInstanceOf(OffsetDecodingError.class)
+                .hasCauseInstanceOf(bz.stub.parallelconsumer.internal.InternalRuntimeException.class);
+    }
+
+    /**
+     * A negative range length. No writer emits one (the encoder declines past {@link Integer#MAX_VALUE}), so it can
+     * only be corruption - and before it was rejected explicitly it decoded SILENTLY to garbage: a highest-seen
+     * offset below the committed base.
+     */
+    @Test
+    void aNegativeRangeLengthIsARecoverableDecodingError() {
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(
+                0L, base64Metadata((byte) 'd', (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0)))
+                .isInstanceOf(OffsetDecodingError.class)
+                .hasCauseInstanceOf(bz.stub.parallelconsumer.internal.InternalRuntimeException.class);
+    }
+
+    /** A count claiming more deltas than the payload holds: the reader runs off the end of the buffer. */
+    @Test
+    void aCountExceedingTheRemainingBytesIsARecoverableDecodingError() {
+        // rangeLength 5, count 3, but only one delta present
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(
+                0L, base64Metadata((byte) 'd', (byte) 0, (byte) 0, (byte) 0, (byte) 5, (byte) 3, (byte) 1)))
+                .isInstanceOf(OffsetDecodingError.class)
+                .hasCauseInstanceOf(java.nio.BufferUnderflowException.class);
+    }
+
     /** The debug rendering path ({@code getDecodedString}) must decompress before decoding, and agree with the plain arm. */
     @SneakyThrows
     @Test

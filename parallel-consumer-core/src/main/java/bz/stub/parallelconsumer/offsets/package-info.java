@@ -56,12 +56,15 @@
  *
  * <h2>The outer string codec: Base64 versus sentinel-prefixed Z85, per payload</h2>
  * The chosen binary encoding is string-encoded into the metadata field. Historically that was always Base64 (33%
- * expansion); {@link bz.stub.parallelconsumer.offsets.Z85Codec} (25% expansion) now competes with it under the same
- * smallest-wins rule: the writer emits whichever of the Base64 form and the {@code '%'}-sentinel-prefixed Z85 form
- * is shorter, and Base64 wins ties. The crossover math: Base64 costs {@code 4*ceil(n/3)} characters and
- * sentinel+Z85 costs {@code 1 + 5*floor(n/4) + (n%4 == 0 ? 0 : n%4 + 1)}, so Z85 is longer below 12 payload bytes,
- * ties from 12 through 21, and wins from 22 bytes up, converging on ~6.25% shorter. Breaking ties towards Base64
- * keeps every small payload in the form all older readers understand; Z85 fires exactly where density pays.
+ * expansion); {@link bz.stub.parallelconsumer.offsets.Z85Codec} (25% expansion) now competes with it under a
+ * floored shorter-wins rule: below 22 payload bytes
+ * ({@code OffsetSimpleSerialisation#Z85_MIN_PAYLOAD_BYTES}) the writer always emits Base64, and from 22 bytes up it
+ * emits the {@code '%'}-sentinel-prefixed Z85 form, which is by then always strictly shorter. The arithmetic: Base64
+ * costs {@code 4*ceil(n/3)} characters and sentinel+Z85 costs {@code 1 + 5*floor(n/4) + (n%4 == 0 ? 0 : n%4 + 1)}.
+ * Below the floor the two interleave - sentinel+Z85 is a character shorter at n = 1, 4, 7, ... and equal or longer
+ * elsewhere - but payloads that small are nowhere near the metadata cap, so the floor trades those single
+ * characters for keeping every small payload in the form all older readers understand, at zero cost where density
+ * matters. From 22 bytes up Z85 wins outright, converging on ~6.25% shorter: it fires exactly where density pays.
  * <p>
  * The sentinel scheme: {@code '%'} is outside the Base64 alphabet, so a leading {@code '%'} unambiguously marks Z85
  * (readers accept both forms forever). But {@code '%'} <em>is</em> in the Z85 alphabet itself - a Z85 string can
