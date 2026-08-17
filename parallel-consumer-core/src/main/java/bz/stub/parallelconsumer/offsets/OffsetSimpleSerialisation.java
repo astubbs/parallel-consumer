@@ -98,6 +98,73 @@ public class OffsetSimpleSerialisation {
         return Base64.getDecoder().decode(bytes);
     }
 
+    /**
+     * Marks a metadata string as {@link Z85Codec} output rather than Base64.
+     * <p>
+     * The encoding's own magic byte is <em>inside</em> the payload (see
+     * {@link OffsetSimultaneousEncoder#packEncoding}), so it is already string-encoded by the time anyone reads it and
+     * cannot say which string codec was used. Hence a sentinel character outside the Base64 alphabet
+     * ({@code [A-Za-z0-9+/=]}), which no previously written payload can start with.
+     */
+    static final char Z85_SENTINEL = '%';
+
+    /**
+     * The number of characters {@link #base64(byte[])} produces for a given number of input bytes - Base64's
+     * {@code 4*ceil(n/3)}, padded, as {@link Base64#getEncoder()} emits it.
+     *
+     * @see Z85Codec#encodedLength(int)
+     */
+    static int base64Length(final int byteCount) {
+        return 4 * ((byteCount + 2) / 3);
+    }
+
+    /**
+     * Encodes a payload as whichever of Base64 or sentinel-prefixed Z85 is the <em>shorter</em> string, since the string
+     * length is what the metadata cap and the back-pressure threshold are measured against.
+     * <p>
+     * Base64 wins ties. Z85's 25% expansion beats Base64's 33%, but the sentinel costs a character and both codecs round
+     * up to their block size, so sentinel+Z85 is longer below 12 payload bytes, ties from 12 through 21, and wins from 22
+     * bytes up, converging on ~6% shorter. Breaking ties towards Base64 therefore keeps every small payload in the form
+     * older PC releases can read, and spends the compatibility cost only where there is actually density to gain.
+     *
+     * @see #decodeBase64OrZ85(String)
+     */
+    static String encodeShorterOfBase64OrZ85(final byte[] src) {
+        if (Z85Codec.encodedLength(src.length) + 1 < base64Length(src.length)) {
+            final String z85 = Z85_SENTINEL + Z85Codec.encode(src);
+            log.trace("Final z85 size: {} (base64 would have been {})", z85.length(), base64Length(src.length));
+            return z85;
+        }
+        return base64(src);
+    }
+
+    /**
+     * Decodes a metadata string written by any version of PC: sentinel-prefixed Z85, or - for everything ever written
+     * before the Z85 codec existed, and for small payloads still - bare Base64.
+     * <p>
+     * Dispatch is on the leading {@link #Z85_SENTINEL} alone, so anything else, blank strings and unrecognisable junk
+     * included, goes down the Base64 path exactly as it did before this method existed. An empty string decodes to zero
+     * bytes, which callers read as "this commit carried no offset map".
+     *
+     * @param metadata the {@code metadata} field of a committed offset. {@code null} is read as empty: kafka-clients
+     *                 normalises null to {@code ""} in every {@link org.apache.kafka.clients.consumer.OffsetAndMetadata}
+     *                 constructor, so PC's own read path cannot see one, but this is a recovery path for bytes written
+     *                 by other tools and it should not turn a surprise into a {@link NullPointerException}
+     * @return the payload bytes, magic byte first
+     * @throws Z85DecodingException     if the string is sentinel-prefixed but is not Z85
+     * @throws IllegalArgumentException if the string is not sentinel-prefixed and is not valid Base64
+     * @see #encodeShorterOfBase64OrZ85(byte[])
+     */
+    static byte[] decodeBase64OrZ85(final String metadata) throws Z85DecodingException {
+        if (metadata == null) {
+            return new byte[0];
+        }
+        if (!metadata.isEmpty() && metadata.charAt(0) == Z85_SENTINEL) {
+            return Z85Codec.decode(metadata.substring(1));
+        }
+        return decodeBase64(metadata);
+    }
+
     static ByteBuffer decompressZstd(final ByteBuffer input) throws IOException {
         try (final var zstream = new ZstdInputStream(new ByteBufferInputStream(input))) {
             final byte[] bytes = readFully(zstream);

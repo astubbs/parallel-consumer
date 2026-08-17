@@ -164,14 +164,219 @@ class WorkManagerOffsetMapCodecManagerTest {
         return randomInput;
     }
 
+    /**
+     * The exact metadata string PC wrote for {@link #incompleteOffsets} (0, 2, 3 incomplete below a highest
+     * succeeded of 4, committed offset 0) before this repo had any outer codec other than Base64.
+     * <p>
+     * <strong>This constant must never be regenerated.</strong> It is the wire-format pin for every release of PC
+     * ever written: a running consumer group holds strings of exactly this shape in its committed metadata, and if a
+     * change makes this string stop decoding to (0, 2, 3) then that change has silently made real committed offsets
+     * unreadable. A failure here is a compatibility break to be fixed in the production code, not a stale fixture to
+     * be refreshed - if you find yourself pasting a new value in, stop.
+     * <p>
+     * Captured on 2026-08-17 from a real writer run, before the length-competitive outer codec landed - back when the
+     * writer was still called {@code serialiseIncompleteOffsetMapToBase64} and Base64 was the only form it could emit.
+     * Bare Base64, no sentinel prefix.
+     */
+    static final String LEGACY_BARE_BASE64_GOLDEN_VECTOR = "bAAFEgA=";
+
+    /**
+     * The incompletes ({@code o}) / completes ({@code x}) pattern behind {@link #LEGACY_BARE_BASE64_LARGE_GOLDEN_VECTOR},
+     * relative to a committed offset of 0. Large enough that the new writer prefers Z85 for it, which is exactly why
+     * the legacy bare-Base64 form of it needs pinning.
+     */
+    static final String LARGE_GOLDEN_VECTOR_BITMAP =
+            "xxxxxxoooooxoxoxoooooxxxxoooooxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxoxoxooxoxoxoxoxoxoxoxoxoxoxoxo";
+
+    /**
+     * As {@link #LEGACY_BARE_BASE64_GOLDEN_VECTOR}, but for a payload big enough that the length-competitive writer now
+     * emits the {@code '%'}-prefixed Z85 form instead. Older PC releases wrote this bare-Base64 string, so it is the
+     * pin that matters most: an upgraded instance must still read what its predecessor committed.
+     * <p>
+     * <strong>Never regenerate.</strong> Same reasoning as above.
+     */
+    static final String LEGACY_BARE_BASE64_LARGE_GOLDEN_VECTOR = "bABkP6jgwf////+/UlVVBQA=";
+
+    /**
+     * Characterization: the small golden vector is still what the writer emits, and still a bare Base64 string.
+     * <p>
+     * Its payload is 5 bytes, where Base64's 8 characters and sentinel+Z85's 8 characters tie - and the writer breaks
+     * ties towards Base64 precisely so that small payloads stay readable by older PC releases.
+     */
+    @SneakyThrows
+    @Test
+    void writerStillEmitsTheLegacyBareBase64StringForSmallPayloads() {
+        String written = offsetCodecManager.serialiseIncompleteOffsetMapToString(finalOffsetForPartition, state);
+
+        assertThat(written).isEqualTo(LEGACY_BARE_BASE64_GOLDEN_VECTOR);
+        assertThat(written).as("no sentinel - a small payload keeps the legacy form").doesNotStartWith("%");
+    }
+
+    /**
+     * Characterization / R5: a bare Base64 string as written by an older PC release decodes to the incompletes it always
+     * did. Both golden vectors, including the larger one the writer now prefers Z85 for.
+     */
+    @SneakyThrows
+    @Test
+    void legacyBareBase64GoldenVectorsStillDecode() {
+        var small = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(
+                finalOffsetForPartition, LEGACY_BARE_BASE64_GOLDEN_VECTOR);
+        assertThat(small.getIncompleteOffsets()).containsExactlyElementsOf(incompleteOffsets);
+        assertThat(small.getHighestSeenOffset()).isEqualTo(of(highestSucceeded));
+
+        var large = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(
+                0L, LEGACY_BARE_BASE64_LARGE_GOLDEN_VECTOR);
+        assertThat(large.getIncompleteOffsets())
+                .containsExactlyElementsOf(bitmapStringToIncomplete(0L, LARGE_GOLDEN_VECTOR_BITMAP));
+        assertThat(large.getHighestSeenOffset()).isEqualTo(of((long) LARGE_GOLDEN_VECTOR_BITMAP.length() - 1));
+    }
+
+    /**
+     * KTD6's crossover arithmetic, asserted on the writer's actual output at the payload sizes either side of it.
+     * <p>
+     * The two formulas are restated here rather than reused from production on purpose: they are the specification the
+     * production code is being checked against, so a mutant in
+     * {@link OffsetSimpleSerialisation#base64Length(int)} or {@link Z85Codec#encodedLength(int)} must not be able to
+     * move both sides of the comparison at once.
+     * <p>
+     * Note 22, not 24, is where Z85 first wins: at 22 payload bytes Base64 needs 32 characters and sentinel+Z85 needs
+     * 29. The plan's prose says "from 24 bytes up" in one place and "&gt;= 22 bytes" in another; the formulas settle it
+     * at 22, and this test is what the writer is held to.
+     */
+    @SneakyThrows
+    @Test
+    void writerPicksTheShorterOuterCodecAtTheCrossover() {
+        // payloadBytes, expected base64 chars, expected sentinel+z85 chars
+        int[][] cases = {
+                {3, 4, 5},    // z85 longer - small payloads keep base64
+                {12, 16, 16}, // first tie
+                {21, 28, 28}, // last tie
+                {22, 32, 29}, // z85 first wins here
+                {24, 32, 31},
+                {64, 88, 81}, // ~8% saved; converges on ~6%
+        };
+
+        for (int[] testCase : cases) {
+            int payloadBytes = testCase[0];
+            int expectedBase64 = testCase[1];
+            int expectedSentinelZ85 = testCase[2];
+
+            // 4*ceil(n/3), padded
+            assertWithMessage("base64 length of %s bytes", payloadBytes)
+                    .that(4 * ((payloadBytes + 2) / 3)).isEqualTo(expectedBase64);
+            // 1 sentinel + 5 chars per 4 byte block + (n%4 ? n%4+1 : 0) for the partial tail group
+            assertWithMessage("sentinel+z85 length of %s bytes", payloadBytes)
+                    .that(1 + 5 * (payloadBytes / 4) + (payloadBytes % 4 == 0 ? 0 : payloadBytes % 4 + 1))
+                    .isEqualTo(expectedSentinelZ85);
+
+            byte[] payload = distinctBytes(payloadBytes);
+            String chosen = OffsetSimpleSerialisation.encodeShorterOfBase64OrZ85(payload);
+
+            assertChosenOuterCodec("crossover", payloadBytes, chosen);
+            assertWithMessage("chosen string length for a %s byte payload", payloadBytes)
+                    .that(chosen.length()).isEqualTo(Math.min(expectedBase64, expectedSentinelZ85));
+            assertWithMessage("round trip of %s bytes", payloadBytes)
+                    .that(OffsetSimpleSerialisation.decodeBase64OrZ85(chosen)).isEqualTo(payload);
+        }
+    }
+
+    /**
+     * Bytes with no structure a compressor or a formula could accidentally agree with - just needs to be deterministic
+     * and to exercise the full byte range.
+     */
+    private static byte[] distinctBytes(int count) {
+        byte[] bytes = new byte[count];
+        for (int i = 0; i < count; i++) {
+            bytes[i] = (byte) (i * 37 + 11);
+        }
+        return bytes;
+    }
+
+    /**
+     * A commit with no offset map at all: the map is simply absent, which is not an error. The highest offset seen must
+     * then be the one below the committed offset.
+     *
+     * @see OffsetMapCodecManager#decodeCompressedOffsets(long, byte[], ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy)
+     */
+    @SneakyThrows
+    @Test
+    void emptyMetadataDecodesToTheNoMapResult() {
+        var decoded = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(5L, "");
+
+        assertThat(decoded.getIncompleteOffsets()).isEmpty();
+        assertThat(decoded.getHighestSeenOffset()).isEqualTo(of(4L));
+    }
+
+    /**
+     * Null is read as absent metadata, same as empty.
+     * <p>
+     * kafka-clients normalises a null metadata argument to {@code ""} in
+     * {@link org.apache.kafka.clients.consumer.OffsetAndMetadata}'s canonical constructor (verified against 3.9.2, and
+     * every other constructor delegates to it), so PC's own read path cannot produce one. This is here because the
+     * method is the entry point for metadata written by anything at all, and a recovery path should not convert a
+     * surprise into a {@link NullPointerException}.
+     */
+    @SneakyThrows
+    @Test
+    void nullMetadataDecodesToTheNoMapResult() {
+        var decoded = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(5L, null);
+
+        assertThat(decoded.getIncompleteOffsets()).isEmpty();
+        assertThat(decoded.getHighestSeenOffset()).isEqualTo(of(4L));
+    }
+
+    /**
+     * Blank metadata keeps the behaviour it has always had: it is not empty, it does not carry the Z85 sentinel, so it
+     * goes to the strict Base64 decoder, which rejects a space and raises {@link OffsetDecodingError}. That is the
+     * recoverable signal - callers drop the offset map rather than fail, which
+     * {@link ForeignOffsetMetadataOnAssignmentTest} pins at the assignment level.
+     */
+    @Test
+    void blankMetadataKeepsItsExistingRecoverableError() {
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(5L, " "))
+                .isInstanceOf(OffsetDecodingError.class)
+                .hasCauseInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * R6: a sentinel-prefixed string that is not Z85 must reach the same recovery path as any other foreign metadata -
+     * an {@link OffsetDecodingError} the caller drops the offset map for, not a crash and not a silently truncated map.
+     */
+    @Test
+    void sentinelPrefixedGarbageIsARecoverableDecodingError() {
+        // '~' is not in the Z85 alphabet at all
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(5L, "%~~~~~"))
+                .as("non-alphabet characters")
+                .isInstanceOf(OffsetDecodingError.class)
+                .hasCauseInstanceOf(Z85DecodingException.class);
+
+        // valid alphabet, but no encoding produces a length of 5n+1
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(5L, "%abcdef"))
+                .as("impossible length")
+                .isInstanceOf(OffsetDecodingError.class)
+                .hasCauseInstanceOf(Z85DecodingException.class);
+    }
+
+    /**
+     * R6: valid Z85 whose payload starts with a magic byte no {@link OffsetEncoding} knows. The string codec is happy;
+     * the encoding dispatch is what rejects it, and it must reject it the same way it rejects unknown-magic Base64.
+     */
+    @Test
+    void sentinelPrefixedUnknownMagicByteIsARecoverableDecodingError() {
+        String metadata = "%" + Z85Codec.encode(new byte[]{(byte) 42, 0, 0, 0});
+
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(5L, metadata))
+                .isInstanceOf(OffsetDecodingError.class);
+    }
+
     @SneakyThrows
     @Test
     void serialiseCycle() {
-        String serialised = offsetCodecManager.serialiseIncompleteOffsetMapToBase64(finalOffsetForPartition, state);
+        String serialised = offsetCodecManager.serialiseIncompleteOffsetMapToString(finalOffsetForPartition, state);
         log.info("Size: {}", serialised.length());
 
         //
-        OffsetMapCodecManager.HighestOffsetAndIncompletes highestOffsetAndIncompletes = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(finalOffsetForPartition, serialised);
+        OffsetMapCodecManager.HighestOffsetAndIncompletes highestOffsetAndIncompletes = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(finalOffsetForPartition, serialised);
         Set<Long> deserializedIncompletes = highestOffsetAndIncompletes.getIncompleteOffsets();
 
         //
@@ -491,6 +696,10 @@ class WorkManagerOffsetMapCodecManagerTest {
     /**
      * Compare compression performance on different types of inputs, and tests that each encoding type is decompressed
      * again correctly
+     * <p>
+     * Each encoding is also taken through the outer string codec and back, so the whole writer-to-reader path is
+     * covered on the same corpus: the writer's per-payload choice between Base64 and sentinel+Z85 is checked against
+     * KTD6's arithmetic, and whichever it picks must decode to exactly the same incompletes.
      */
     @SneakyThrows
     @ParameterizedTest
@@ -525,7 +734,36 @@ class WorkManagerOffsetMapCodecManagerTest {
             String simple = incompletesToBitmapString(finalOffsetForPartition, highestSeen + 1, recoveredIncompletes);
             assertWithMessage(encoding.encoding.name())
                     .that(simple).isEqualTo(input);
+
+            // and again through the full outer-codec path the writer and the reader actually use
+            String stringEncoded = OffsetSimpleSerialisation.encodeShorterOfBase64OrZ85(packedEncoding);
+            assertChosenOuterCodec(encoding.encoding.name(), packedEncoding.length, stringEncoded);
+
+            var viaString = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(finalOffsetForPartition, stringEncoded);
+            assertWithMessage("%s round tripped through the %s outer codec",
+                    encoding.encoding.name(), stringEncoded.startsWith("%") ? "z85" : "base64")
+                    .that(incompletesToBitmapString(finalOffsetForPartition, highestSeen + 1, viaString.getIncompleteOffsets()))
+                    .isEqualTo(input);
         }
+    }
+
+    /**
+     * Holds the writer to KTD6: it emits the shorter of the two forms, breaks ties towards Base64, carries the sentinel
+     * exactly when it chose Z85, and never emits a character outside 7-bit ASCII (R8 - the cap counts characters while
+     * the broker counts bytes).
+     */
+    private static void assertChosenOuterCodec(String encodingName, int payloadBytes, String chosen) {
+        int base64Chars = 4 * ((payloadBytes + 2) / 3);
+        int sentinelZ85Chars = 1 + 5 * (payloadBytes / 4) + (payloadBytes % 4 == 0 ? 0 : payloadBytes % 4 + 1);
+
+        assertWithMessage("%s: shorter of base64 %s and sentinel+z85 %s for a %s byte payload",
+                encodingName, base64Chars, sentinelZ85Chars, payloadBytes)
+                .that(chosen.length()).isEqualTo(Math.min(base64Chars, sentinelZ85Chars));
+        assertWithMessage("%s: sentinel present exactly when z85 is strictly shorter (%s byte payload)",
+                encodingName, payloadBytes)
+                .that(chosen.startsWith("%")).isEqualTo(sentinelZ85Chars < base64Chars);
+        assertWithMessage("%s: 7-bit ASCII only, so length() is the UTF-8 byte length", encodingName)
+                .that(chosen.length()).isEqualTo(chosen.getBytes(UTF_8).length);
     }
 
 }

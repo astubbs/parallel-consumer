@@ -109,6 +109,36 @@ class ForeignOffsetMetadataOnAssignmentTest {
     }
 
     /**
+     * The Z85 sentinel does not open a second way to crash the rebalance.
+     * <p>
+     * PC now writes {@code '%'}-prefixed Z85 for larger payloads, which means {@code '%'} is a leading character the
+     * reader takes seriously - so a foreign or corrupted string that happens to start with it must land in the same
+     * recovery path as any other undecodable metadata, and a truncated offset map must never be preferred over a
+     * rejected one (silently dropping incompletes marks unfinished work complete).
+     *
+     * @see Z85Codec
+     */
+    @Test
+    void sentinelPrefixedGarbageDoesNotEscapeOnPartitionsAssigned() {
+        // '~' is not in the Z85 alphabet
+        var module = moduleWithCommittedMetadata("%~~~~~~~~~",
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("a sentinel-prefixed string that isn't Z85 must not escape the rebalance listener")
+                .doesNotThrowAnyException();
+
+        var partitionState = wm.getPm().getPartitionState(TP);
+        assertThat(partitionState)
+                .as("partition should still be assigned, with a default (dropped offset map) state")
+                .isNotNull();
+        assertThat(partitionState.getAllIncompleteOffsets())
+                .as("the offset map was dropped, not partially decoded")
+                .isEmpty();
+    }
+
+    /**
      * Kafka Streams metadata under the IGNORE policy - the case upstream 0.5.2.6 added the option for. Pinned here at
      * the assignment level (existing coverage only exercises {@link EncodedOffsetPair} directly).
      */

@@ -43,7 +43,7 @@ public class CommitHistory {
         Optional<OffsetAndMetadata> first = getHead();
         OffsetAndMetadata offsetAndMetadata = first.get();
         HighestOffsetAndIncompletes highestOffsetAndIncompletes =
-                OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(offsetAndMetadata.offset(), offsetAndMetadata.metadata());
+                OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromString(offsetAndMetadata.offset(), offsetAndMetadata.metadata());
         return highestOffsetAndIncompletes;
     }
 
