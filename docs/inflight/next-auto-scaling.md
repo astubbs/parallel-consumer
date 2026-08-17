@@ -15,12 +15,22 @@ Two dimensions, deliberately staged:
 
 - **Per-instance concurrency (build first, easier).** Adaptive controller steps concurrency up
   until measured performance degrades or failures rise, then contracts - TCP-congestion shape.
+  **The cause of the plateau never needs diagnosing**: host too slow, Kafka fetch bandwidth,
+  downstream saturation - the controller reacts identically, which is exactly why runtime
+  discovery beats compile-time configuration (the operator cannot enumerate the causes either).
   Each instance converges independently, so instances legitimately run *different* concurrency
-  depending on the data in their assigned partitions. No coordination substrate (no Redis/quota
-  tokens) for v1 - dynamic self-assessment only. Design to the optimal downstream (services
-  that return rate-limit-exceeded, surfaced via a structured engine-recognised exception - which
-  also frees users from computing their own retry intervals); degrade to inference from
-  performance/failures when downstreams communicate nothing.
+  depending on the data in their assigned partitions - the right value is a function of the
+  runtime data, unknowable ahead of time, and it changes as the data changes. No coordination
+  substrate (no Redis/quota tokens) for v1 - dynamic self-assessment only. Design to the
+  optimal downstream (services that return rate-limit-exceeded, surfaced via a structured
+  engine-recognised exception - which also frees users from computing their own retry
+  intervals); degrade to inference from performance/failures when downstreams communicate
+  nothing.
+  **Relationship to rate limiting, resolved**: dimension 1 ships with no rate-limiting
+  infrastructure and no rate config - the controller consumes *ceilings as inputs*
+  (min-composition, ideation idea 5/8), not a distributed substrate. The genuinely shared
+  pieces are the enforcement seam (ideation ideas 2/3) and the structured exception; design
+  the SPI together, ship the features independently.
 - **Instance count (later, harder).** PC never spawns instances itself (rejected: overlaps
   provisioning/infra, messy). Instead PC *recommends*: expose a suggested-total-instance-count
   metric that infrastructure (HPA/KEDA external metrics is the natural consumer) acts on. PC
@@ -35,10 +45,12 @@ Two dimensions, deliberately staged:
 
 **Dimension-2 signal design (settled 2026-08-18): local delta vote, no global number.** An
 instance genuinely cannot know the right global count - it only knows its own state - so no
-instance ever emits a "suggested total". Each exposes a delta vote, limited to **+1 / 0 / -1**
-(+1 "plateaued at my sustainable local concurrency and still behind" / -1 "underutilized" /
-0 otherwise). Infrastructure sums the votes (or HPA averages an equivalent headroom gauge -
-`desired = ceil(current x metric/target)` - convergence for free, no leader, no new channel).
+instance ever emits a "suggested total". Each exposes a delta vote, **deliberately clamped to
++1 / 0 / -1** even when an instance believes more would help - bounded small steps are how the
+fleet converges without oscillation, AIMD-style (+1 "plateaued at my sustainable local
+concurrency and still behind" / -1 "underutilized" / 0 otherwise). Infrastructure sums the
+votes (or HPA averages an equivalent headroom gauge - `desired = ceil(current x metric/target)`
+- convergence for free, no leader, no new channel).
 Lifecycle rules:
 
 - **Post-rebalance cooldown, per instance.** Any membership or assignment change invalidates
@@ -47,8 +59,11 @@ Lifecycle rules:
   the jitter/variance in its records, only then resume voting. This also makes the
   acknowledgement loop implicit: infrastructure acts -> rebalance -> everyone cools down ->
   fresh votes reflect the new topology. No explicit ack protocol needed.
-- The pre-vote cooldown (fixed ~5min or dynamic from observed variance) applies to *raising* a
-  vote away from 0, so a transient burst does not summon an instance.
+- **All cooldown windows are dynamic by design**, derived from the fluctuation observed in the
+  instance's own recorded metrics - high jitter/variance means a longer window before trusting
+  an assessment, steady metrics mean a shorter one. A fixed value (~5min) is only the fallback
+  floor, not the mechanism. Applies to both the post-rebalance window and the pre-vote window
+  (raising a vote away from 0), so a transient burst does not summon an instance.
 - Later phase, only if ever needed: the partition-assignor `userData` leader channel
   (catalogued in the ideation doc's rejection table as the deferred lease-allocator) could
   compute a coordinated decision - but the delta-vote design likely makes it unnecessary.
@@ -71,6 +86,22 @@ the worker pool, auto-scale module extraction started, README section written) a
 async-engine timing metrics are inaccurate under Vert.x (confluentinc#766) - the controller's
 signal integrity depends on fixing that first.
 
+**Positioning (safekeeping until the ce-strategy run; keep depersonalised - no vendor
+commentary).** The consumer-side programming model has barely evolved in a decade: every team,
+in every language, gets a poll of records and must then answer "how do I process these quickly,
+in order, with retries?" - and re-implements that engine, usually badly, usually per project.
+Recent protocol work (share groups, KIP-932) changes *delivery* semantics but leaves the
+processing engine unaddressed; the evolution the consumer model has been waiting for is at the
+engine layer, and PC is the working demonstration. The same universality applies to scaling:
+even without PC, every operator must guess an instance count, the guess is workload-dependent,
+and the workload changes at runtime. External autoscalers treat the consumer as a black box
+(consumption lag is the state of the art - it cannot distinguish "more instances would help"
+from "the downstream is the bottleneck"); an engine that lives inside the processing loop can
+scale from per-record ground truth. Key-ordered concurrency + runtime-discovered scaling, with
+bindings for every language, is the "client as engine" story - candidate for the strategy doc's
+core positioning.
+
 Next step when picked up: ce-brainstorm the per-instance controller (dimension 1 only) into
 requirements; instance-count recommendation is a follow-on with its own note when dimension 1
-lands.
+lands. Branch plan: this docs branch merges as one unit; implementation work starts in its own
+worktree from master afterwards (do not stack implementation on a docs branch).
