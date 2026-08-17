@@ -10,7 +10,7 @@
 // exit; if it were free to decide what "correct" means, ten languages would each decide it
 // slightly differently and the agreement between them would prove nothing.
 //
-// Its contract - flags, exit codes, the stdout line, the behaviour tokens - is documented once, in
+// Its contract - flags, exit codes, the stdout lines, the behaviour tokens - is documented once, in
 // parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/README.md, and is identical
 // in every language. Read that before writing the next one.
 //
@@ -51,6 +51,7 @@ const (
 	behaviourReportNothing        = "report-nothing"
 	behaviourFailThenSucceed      = "fail-then-succeed"
 	behaviourHoldFirstUntilSecond = "hold-first-until-second"
+	behaviourHoldUntilCeilingFull = "hold-until-ceiling-full"
 )
 
 // prescribedFailureReason is the exact text a fail-then-succeed run reports as its failure reason.
@@ -77,10 +78,35 @@ const (
 // that was sent has been committed and seen long before the process goes away.
 const reportNothingHold = 3 * time.Second
 
-// dispatchLineFormat is the ONE line this runner prints per delivery, on stdout. It is an
-// observation, not a verdict: the Java suite parses these and decides what they mean. reason comes
-// last because it is worker-supplied text that may contain spaces.
-const dispatchLineFormat = "dispatch key=%s offset=%d attempt=%d reason=%s\n"
+// ceilingSettle is how long hold-until-ceiling-full keeps a FULL group held before releasing it.
+//
+// IT IS WHAT TURNS "THE CEILING WAS NEVER EXCEEDED" FROM A RACE INTO A MEASUREMENT. Release the
+// group the instant it fills and a client that declared a larger ceiling still passes - its extra
+// records arrive a few milliseconds later, by which time the outstanding count has already fallen
+// back. Holding the full ceiling still means the extra dispatch arrives INSIDE the window and prints
+// its line while every other record is unresolved. A correct engine cannot dispatch anything during
+// the window at all, so the wait costs a conforming client nothing but time.
+const ceilingSettle = 250 * time.Millisecond
+
+// The two lines this runner prints per delivery, on stdout: one the moment the record arrives, and
+// one the moment the prescribed behaviour has DECIDED that record's outcome. Both are observations,
+// never verdicts - the Java suite parses them and decides what they mean. reason comes last because
+// it is worker-supplied text that may contain spaces; on a dispatch it is the history the record
+// ARRIVED with, on a settled line it is the failure this runner REPORTED, empty for a success.
+//
+// THE ORDER OF THESE LINES IS THE WHOLE OF WHAT THE SUITE READS, and no clock is involved: a
+// dispatch opens a record's unresolved window and its settled line closes it, so the running
+// difference between the two counts, in line order, is how many records this client was holding at
+// that instant - which is what max concurrency bounds. Both are therefore printed under the
+// tracker's mutex, because two goroutines that took their counts in one order must not then reach
+// stdout in the other.
+//
+// report-nothing prints no settled line, EVER: by prescription its record is never resolved, and the
+// absence is the observation.
+const (
+	dispatchLineFormat = "dispatch key=%s offset=%d attempt=%d reason=%s\n"
+	settledLineFormat  = "settled key=%s offset=%d attempt=%d reason=%s\n"
+)
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -90,9 +116,10 @@ func run(args []string) int {
 	fs := flag.NewFlagSet("conformance-runner", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	scenario := fs.String("scenario", "", "the conformance scenario's name, which is also the topic to subscribe to")
-	behaviour := fs.String("behaviour", "", "what to do with each dispatch: succeed | report-nothing | fail-then-succeed | hold-first-until-second")
+	behaviour := fs.String("behaviour", "", "what to do with each dispatch: succeed | report-nothing | fail-then-succeed | hold-first-until-second | hold-until-ceiling-full")
 	sidecar := fs.String("sidecar", "", "absolute path of the sidecar command to spawn")
 	expect := fs.Int("expect-dispatches", 0, "how many dispatches the scenario prescribes before this runner exits")
+	maxConcurrency := fs.Int("max-concurrency", 0, "the in-flight ceiling to configure on the session; the only thing it is set from")
 	budget := fs.Int("timeout-seconds", 0, "wall-clock budget; exceeding it without completing the behaviour exits 1")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -109,11 +136,14 @@ func run(args []string) int {
 		return usage(fs, fmt.Sprintf("--sidecar must be absolute, got %q", *sidecar))
 	case *expect < 1:
 		return usage(fs, "--expect-dispatches must be at least 1")
+	case *maxConcurrency < 1:
+		return usage(fs, "--max-concurrency must be at least 1")
 	case *budget < 1:
 		return usage(fs, "--timeout-seconds must be at least 1")
 	}
 	switch *behaviour {
-	case behaviourSucceed, behaviourReportNothing, behaviourFailThenSucceed, behaviourHoldFirstUntilSecond:
+	case behaviourSucceed, behaviourReportNothing, behaviourFailThenSucceed, behaviourHoldFirstUntilSecond,
+		behaviourHoldUntilCeilingFull:
 	default:
 		return usage(fs, fmt.Sprintf("unknown behaviour %q", *behaviour))
 	}
@@ -132,9 +162,10 @@ func run(args []string) int {
 		// The mock lane builds mock Kafka clients and reads no properties. Real credentials never
 		// belong in a conformance test.
 		KafkaProperties: map[string]string{},
-		// Enough executors for every dispatch the scenario prescribes, so a scenario that holds a
-		// record cannot deadlock on an executor count smaller than its own shape.
-		MaxConcurrency:           int32(*expect),
+		// THE CEILING IS THE SCENARIO'S TO CHOOSE, and this runner never derives one. It used to be
+		// set from --expect-dispatches, which is by construction a ceiling no scenario can reach - so
+		// no scenario could ask a client to prove it respected one, and none did.
+		MaxConcurrency:           int32(*maxConcurrency),
 		CommitInterval:           commitInterval,
 		DefaultMessageRetryDelay: retryDelay,
 		InstanceTag:              "conformance-runner-go",
@@ -144,7 +175,7 @@ func run(args []string) int {
 		return exitBehaviourFailed
 	}
 
-	t := newTracker(*expect)
+	t := newTracker(*expect, *maxConcurrency)
 
 	if err := client.Poll(ctx, processorFor(*behaviour, t)); err != nil {
 		fmt.Fprintf(os.Stderr, "conformance-runner: starting the poll: %v\n", err)
@@ -194,9 +225,12 @@ func processorFor(behaviour string, t *tracker) parallelconsumer.Processor {
 	return func(ctx context.Context, record parallelconsumer.InboundRecord) (parallelconsumer.Outcome, error) {
 		ordinal := t.observe(record)
 
+		// Each branch settles the record - prints its settled line and counts it - IMMEDIATELY BEFORE
+		// returning the outcome, so the line lands while the record is still unresolved to the engine.
+		// report-nothing is the one behaviour that never settles: its record is never resolved.
 		switch behaviour {
 		case behaviourSucceed:
-			defer t.complete()
+			t.settle(record, "")
 			return parallelconsumer.Succeed(), nil
 
 		case behaviourReportNothing:
@@ -206,14 +240,14 @@ func processorFor(behaviour string, t *tracker) parallelconsumer.Processor {
 			return parallelconsumer.Succeed(), nil
 
 		case behaviourFailThenSucceed:
-			defer t.complete()
 			if record.Attempt == 1 {
+				t.settle(record, prescribedFailureReason)
 				return parallelconsumer.Outcome{}, errors.New(prescribedFailureReason)
 			}
+			t.settle(record, "")
 			return parallelconsumer.Succeed(), nil
 
 		case behaviourHoldFirstUntilSecond:
-			defer t.complete()
 			if ordinal == 1 {
 				// Hold the first record until a SECOND is dispatched. Whether one arrives at all,
 				// and which key it carries, is the whole of what the scenario is asking - and it is
@@ -221,9 +255,24 @@ func processorFor(behaviour string, t *tracker) parallelconsumer.Processor {
 				select {
 				case <-t.secondArrived:
 				case <-ctx.Done():
-					return parallelconsumer.Outcome{}, errors.New("conformance: no second dispatch arrived while the first was held")
+					reason := "conformance: no second dispatch arrived while the first was held"
+					t.settle(record, reason)
+					return parallelconsumer.Outcome{}, errors.New(reason)
 				}
 			}
+			t.settle(record, "")
+			return parallelconsumer.Succeed(), nil
+
+		case behaviourHoldUntilCeilingFull:
+			// Hold until --max-concurrency records are held AT ONCE, keep the full group still for
+			// the settle window, then succeed the whole group. Blocking is how a Go worker says the
+			// record is still out, so a held record is genuinely unresolved for as long as its
+			// dispatch line says it is - which is the property the scenario measures.
+			if err := t.enterCeilingGroup(ctx); err != nil {
+				t.settle(record, err.Error())
+				return parallelconsumer.Outcome{}, err
+			}
+			t.settle(record, "")
 			return parallelconsumer.Succeed(), nil
 		}
 
@@ -232,15 +281,26 @@ func processorFor(behaviour string, t *tracker) parallelconsumer.Processor {
 	}
 }
 
-// tracker counts deliveries and outcomes, and prints the observation line. It holds no per-record
-// state - only counts - because the client library holds none either and this runner must not
-// become the place where a client's missing bookkeeping is quietly supplied.
+// tracker counts deliveries and outcomes, prints both observation lines, and owns the ceiling
+// group's barrier. It holds no per-record state - only counts - because the client library holds
+// none either and this runner must not become the place where a client's missing bookkeeping is
+// quietly supplied.
+//
+// ITS MUTEX IS ALSO THE STDOUT LOCK. The suite reads the client's outstanding count from nothing but
+// the order of the dispatch and settled lines, so the print has to happen in the same critical
+// section as the count it corresponds to - see dispatchLineFormat.
 type tracker struct {
-	expected int
+	expected       int
+	maxConcurrency int
 
 	mu        sync.Mutex
 	observed  int
 	completed int
+
+	// The hold-until-ceiling-full barrier's state: how many records are held right now, and the
+	// channel every one of them is waiting on - see enterCeilingGroup.
+	ceilingHeld    int
+	ceilingRelease chan struct{}
 
 	secondOnce    sync.Once
 	observedOnce  sync.Once
@@ -251,12 +311,14 @@ type tracker struct {
 	allCompleted  chan struct{}
 }
 
-func newTracker(expected int) *tracker {
+func newTracker(expected, maxConcurrency int) *tracker {
 	return &tracker{
-		expected:      expected,
-		secondArrived: make(chan struct{}),
-		allObserved:   make(chan struct{}),
-		allCompleted:  make(chan struct{}),
+		expected:       expected,
+		maxConcurrency: maxConcurrency,
+		ceilingRelease: make(chan struct{}),
+		secondArrived:  make(chan struct{}),
+		allObserved:    make(chan struct{}),
+		allCompleted:   make(chan struct{}),
 	}
 }
 
@@ -265,9 +327,11 @@ func (t *tracker) observe(record parallelconsumer.InboundRecord) int {
 	t.mu.Lock()
 	t.observed++
 	ordinal := t.observed
-	t.mu.Unlock()
-
+	// PRINTED INSIDE THE LOCK, not after it. Several shards deliver concurrently here, and a print
+	// moved outside would let two goroutines take their ordinals in one order and print in the other,
+	// which is the suite reading an overlap that never happened - or missing one that did.
 	fmt.Printf(dispatchLineFormat, string(record.Key), record.Offset, record.Attempt, record.LastFailureReason)
+	t.mu.Unlock()
 
 	if ordinal >= 2 {
 		t.secondOnce.Do(func() { close(t.secondArrived) })
@@ -278,14 +342,64 @@ func (t *tracker) observe(record parallelconsumer.InboundRecord) int {
 	return ordinal
 }
 
-func (t *tracker) complete() {
+// settle prints the record's decided outcome - the moment it stops being unresolved - and counts it
+// as completed. reason is the failure this runner is REPORTING, empty for a success, and never the
+// reason the record arrived with.
+func (t *tracker) settle(record parallelconsumer.InboundRecord, reason string) {
 	t.mu.Lock()
+	fmt.Printf(settledLineFormat, string(record.Key), record.Offset, record.Attempt, reason)
 	t.completed++
 	reached := t.completed >= t.expected
 	t.mu.Unlock()
 	if reached {
 		t.completedOnce.Do(func() { close(t.allCompleted) })
 	}
+}
+
+// enterCeilingGroup is the cyclic barrier at the heart of hold-until-ceiling-full: block until this
+// record is one of maxConcurrency held at once, keep the full group still for ceilingSettle, and
+// release every member of it. It is called AFTER the dispatch line has been printed, so the arrivals
+// the scenario is looking for are on stdout before anything waits on anything.
+//
+// THE GENERATION IS THE CHANNEL, not a counter. A waiter captures the current release channel under
+// the mutex; the releaser closes that channel and installs a fresh one for the next group. A closed
+// channel wakes every waiter at once and stays closed, so this needs neither the re-check loop nor
+// the spurious-wakeup guard that a condition variable would - which is what the other languages'
+// "wait until generation != myGeneration" spells out by hand.
+//
+// A group also releases once every prescribed delivery has been observed, so a scenario whose record
+// count is not a multiple of its ceiling cannot strand its last, short group.
+//
+// The wait is bounded by ctx, which carries the runner's whole --timeout-seconds budget: a group that
+// never fills fails this record AND leaves run()'s own select on ctx.Done to exit 1, which is the
+// same path every other uncompletable prescription already takes.
+func (t *tracker) enterCeilingGroup(ctx context.Context) error {
+	t.mu.Lock()
+	t.ceilingHeld++
+	releasing := t.ceilingHeld >= t.maxConcurrency || t.observed >= t.expected
+	if !releasing {
+		release := t.ceilingRelease
+		t.mu.Unlock()
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("conformance: the ceiling group of %d never filled", t.maxConcurrency)
+		}
+	}
+	t.mu.Unlock()
+
+	// THE SETTLE WINDOW, SLEPT OUTSIDE THE LOCK. A record the engine should not be dispatching still
+	// has to be able to print its arrival line during the window - that arrival is the whole thing
+	// the scenario looks for - and holding the mutex across the sleep would block exactly that print.
+	time.Sleep(ceilingSettle)
+
+	t.mu.Lock()
+	t.ceilingHeld = 0
+	close(t.ceilingRelease) // wakes every waiter of this generation, and only them
+	t.ceilingRelease = make(chan struct{})
+	t.mu.Unlock()
+	return nil
 }
 
 func (t *tracker) observedCount() int {

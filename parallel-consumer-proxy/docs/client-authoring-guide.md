@@ -142,8 +142,10 @@ is normative.
 
 The gap between the proxy's in-flight ceiling and the client's executor count is a queue **inside the
 client library**, and it is specified once, here, because everything about it is an ordering-or-liveness
-decision ten authors would otherwise each invent. Conformance scenario:
-`the-client-queue-hands-out-fifo-and-releases-on-shutdown` (see §7).
+decision ten authors would otherwise each invent. Conformance scenarios:
+`the-in-flight-ceiling-bounds-unresolved-records`, which is live and holds rule 2's *bound* end to end, and
+`the-client-queue-hands-out-fifo-and-releases-on-shutdown`, which is named-not-yet-served and will hold the
+rest of this section (see §7 for both, and for the half of rule 2 no conformance scenario can reach).
 
 1. **The admin always reads the stream. It never applies backpressure by not reading.** The stream also
    carries `Drop`, `Shutdown` and reconnect traffic; an admin that stops reading to slow the proxy down
@@ -376,6 +378,18 @@ Live now (the harness serves them today):
 | `an-unreported-record-holds-back-the-commit` | The negative control: a client that never reports leaves the offset uncommitted - proves the harness can fail |
 | `a-failed-record-is-redelivered-with-its-failure-history` | Failure → redelivery with attempt=2 and the previous reason verbatim |
 | `records-sharing-a-key-share-a-shard-distinct-keys-run-concurrently` | Key ordering serializes per key, parallelizes across keys |
+| `the-in-flight-ceiling-bounds-unresolved-records` | §3 rule 2's bound, end to end: six records on six distinct keys against a `max_concurrency` of two, and the client held **exactly two** unresolved at any instant - never three - while every one of them was eventually delivered and committed |
+
+**On the ceiling scenario, and what it does not cover.** It is driven by the `hold-until-ceiling-full`
+behaviour, which reports nothing until `max_concurrency` records are inside the user function at once and then
+keeps the full group still for a fixed settle window; the suite reads the peak from the order of the runner's
+`dispatch` and `settled` lines. Filling the group is what stops "never exceeded" being vacuously true for a
+client that ran everything serially or stopped asking for work - such a client times out and exits 1. What it
+**cannot** see is the counting basis itself: while the proxy is correct it never over-dispatches, so a client
+bounding its queue rather than its unresolved records is never offered the record that would expose it. That
+stays a matter for your own tests, per "The negative control, and the test shape that looks like it but is
+not" above. What this scenario catches is the consequence reaching the engine - a mis-declared ceiling, an
+executor pool wider than it, or a record resolved before its function returned.
 
 Named now, harness support lands with the engine units (a client author writes these tests against the
 scenario names; they activate as the harness grows):

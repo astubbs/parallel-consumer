@@ -50,7 +50,7 @@ Identical work in each, and the registry entries are already sketched as comment
 | Rust | `…-client-rust/` | `cargo build --bin conformance-runner` |
 | Ruby | `…-client-ruby/`, an executable script | `bundle install`, or nothing |
 
-Per language: implement the contract (five flags, three exit statuses, the observation line, four
+Per language: implement the contract (six flags, three exit statuses, both observation lines, five
 behaviour tokens, the fixed literals), add one registry entry, run it, **prove each scenario red**,
 and record the evidence in that module's `docs/data/testing-evidence.d/` fragment. Nothing in the
 conformance module changes - the scenarios, assertions and driver are already language-blind.

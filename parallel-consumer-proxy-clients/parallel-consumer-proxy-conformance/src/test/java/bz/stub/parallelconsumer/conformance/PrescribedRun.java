@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * The runner contract carried out <b>in this JVM</b>: the four {@link RunnerBehaviour} tokens, the fixed
+ * The runner contract carried out <b>in this JVM</b>: the five {@link RunnerBehaviour} tokens, the fixed
  * failure literal, one {@link DispatchObservation} per delivery, and an exit status as the verdict channel -
  * written once for every binding whose "wire" is a method call.
  * <p>
@@ -57,6 +57,18 @@ final class PrescribedRun implements ConformanceBinding.Run {
     /** Released when the observation window closes, so a held record can never outlive the assertions. */
     private final CountDownLatch windowClosed = new CountDownLatch(1);
 
+    /**
+     * The {@code hold-until-ceiling-full} group: how many records are held right now, and which generation
+     * of the group they belong to. A cyclic barrier of the scenario's ceiling, written out rather than taken
+     * from {@code java.util.concurrent} because every other language writes it out too and the three lines
+     * of state are the whole of what a runner author has to reproduce.
+     */
+    private final Object ceilingGroup = new Object();
+
+    private int heldInGroup;
+
+    private long groupGeneration;
+
     private volatile int exitCode = RunnerContract.EXIT_OK;
 
     PrescribedRun(String bindingName, ConformanceScenario scenario) {
@@ -85,7 +97,7 @@ final class PrescribedRun implements ConformanceBinding.Run {
         return switch (scenario.behaviour()) {
             case SUCCEED -> {
                 allCompleted.countDown();
-                yield Optional.empty();
+                yield settle(key, offset, attempt, Optional.empty());
             }
 
             // Never report. Blocking is how this layer says "this record's function has not returned", and
@@ -104,7 +116,9 @@ final class PrescribedRun implements ConformanceBinding.Run {
                 allCompleted.countDown();
                 // The reason is the contract's fixed literal, never a message this binding composes: the
                 // suite asserts the redelivery carries it back verbatim.
-                yield attempt == 1 ? Optional.of(RunnerContract.PRESCRIBED_FAILURE_REASON) : Optional.empty();
+                yield settle(key, offset, attempt, attempt == 1
+                        ? Optional.of(RunnerContract.PRESCRIBED_FAILURE_REASON)
+                        : Optional.empty());
             }
 
             case HOLD_FIRST_UNTIL_SECOND -> {
@@ -113,12 +127,102 @@ final class PrescribedRun implements ConformanceBinding.Run {
                     // The same verdict a runner process gives here: it could not do what was prescribed, so
                     // the run fails rather than reporting a plausible-looking outcome.
                     abandon();
-                    yield Optional.of("conformance: no second delivery arrived while the first was held");
+                    yield settle(key, offset, attempt,
+                            Optional.of("conformance: no second delivery arrived while the first was held"));
                 }
                 allCompleted.countDown();
-                yield Optional.empty();
+                yield settle(key, offset, attempt, Optional.empty());
+            }
+
+            // Hold until the ceiling's worth of records are held AT ONCE, keep the full group still for the
+            // contract's settle window, then release the whole group. Blocking is how this layer says the
+            // record's function has not returned, so a held record is genuinely unresolved for as long as it
+            // looks - which is the property the scenario measures.
+            case HOLD_UNTIL_CEILING_FULL -> {
+                if (!awaitCeilingGroup()) {
+                    abandon();
+                    yield settle(key, offset, attempt, Optional.of("conformance: the ceiling group of "
+                            + scenario.maxConcurrency() + " never filled"));
+                }
+                allCompleted.countDown();
+                yield settle(key, offset, attempt, Optional.empty());
             }
         };
+    }
+
+    /**
+     * The cyclic barrier at the heart of {@code hold-until-ceiling-full}: block until this record is one of
+     * {@code maxConcurrency} held at once, hold the full group still for {@link RunnerContract#CEILING_SETTLE},
+     * and release it.
+     * <p>
+     * A group also releases once every prescribed delivery has been observed, so a scenario whose record
+     * count is not a multiple of its ceiling cannot strand its last, short group.
+     *
+     * @return false if the group never filled inside the budget, which is this runner failing rather than
+     *         the client being wrong about anything
+     */
+    private boolean awaitCeilingGroup() {
+        long deadline = System.nanoTime() + scenario.runnerBudget().toNanos();
+        long generation;
+        boolean releasing;
+        synchronized (ceilingGroup) {
+            generation = groupGeneration;
+            heldInGroup++;
+            releasing = heldInGroup >= scenario.maxConcurrency()
+                    || observed.get() >= scenario.expectedDispatches();
+            if (!releasing) {
+                while (groupGeneration == generation) {
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0) {
+                        synchronized (diagnostics) {
+                            diagnostics.append("the ceiling group of ").append(scenario.maxConcurrency())
+                                    .append(" never filled: ").append(heldInGroup).append(" held\n");
+                        }
+                        return false;
+                    }
+                    try {
+                        ceilingGroup.wait(Math.max(1L, remaining / 1_000_000L));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        // THE SETTLE WINDOW, HELD OUTSIDE THE LOCK so a record the engine should not be dispatching can
+        // still print its arrival if it turns up. A correct engine cannot dispatch anything here - the
+        // ceiling is full - so an extra line inside this window IS the excess this scenario looks for.
+        try {
+            Thread.sleep(RunnerContract.CEILING_SETTLE.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        synchronized (ceilingGroup) {
+            heldInGroup = 0;
+            groupGeneration++;
+            ceilingGroup.notifyAll();
+        }
+        return true;
+    }
+
+    /**
+     * Records that this record's outcome has been decided, which is the moment it stops being unresolved,
+     * and returns the outcome unchanged so a caller can {@code yield} it.
+     * <p>
+     * <b>The order these are appended in is the whole of what the suite reads.</b> A settled observation
+     * closes the window a dispatch observation opened, and the running difference between the two in list
+     * order is how many records this client held at that instant - so appending happens under the same lock
+     * the dispatch side uses, exactly as a foreign runner serializes its stdout.
+     */
+    private Optional<String> settle(String key, long offset, int attempt, Optional<String> failure) {
+        synchronized (observations) {
+            observations.add(new DispatchObservation(DispatchObservation.Kind.SETTLED, key, offset, attempt,
+                    failure.orElse("")));
+        }
+        return failure;
     }
 
     /** Prints the delivery into the transcript and returns its 1-based ordinal in arrival order. */
@@ -128,7 +232,7 @@ final class PrescribedRun implements ConformanceBinding.Run {
         int ordinal;
         synchronized (observations) {
             ordinal = observed.incrementAndGet();
-            observations.add(new DispatchObservation(key, offset, attempt,
+            observations.add(new DispatchObservation(DispatchObservation.Kind.DISPATCH, key, offset, attempt,
                     lastFailureReason == null ? "" : lastFailureReason));
         }
         log.info("{} binding observed delivery {}: key={} offset={} attempt={}", bindingName, ordinal, key,
@@ -186,13 +290,17 @@ final class PrescribedRun implements ConformanceBinding.Run {
     public RunnerTranscript transcript() {
         synchronized (observations) {
             var stdout = observations.stream()
-                    .map(o -> RunnerContract.DISPATCH_LINE_PREFIX + "key=" + o.key() + " offset=" + o.offset()
+                    .map(o -> (o.kind() == DispatchObservation.Kind.DISPATCH
+                            ? RunnerContract.DISPATCH_LINE_PREFIX
+                            : RunnerContract.SETTLED_LINE_PREFIX)
+                            + "key=" + o.key() + " offset=" + o.offset()
                             + " attempt=" + o.attempt() + " reason=" + o.reason())
                     .reduce("", (all, line) -> all + line + "\n");
             return new RunnerTranscript(bindingName,
                     "in-process " + bindingName + " binding: --scenario " + scenario.name()
                             + " --behaviour " + scenario.behaviour().token()
-                            + " --expect-dispatches " + scenario.expectedDispatches(),
+                            + " --expect-dispatches " + scenario.expectedDispatches()
+                            + " --max-concurrency " + scenario.maxConcurrency(),
                     exitCode, List.copyOf(observations), stdout, diagnostics.toString());
         }
     }

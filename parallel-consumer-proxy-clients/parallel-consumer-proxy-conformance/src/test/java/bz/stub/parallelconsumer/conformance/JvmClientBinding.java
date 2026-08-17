@@ -29,7 +29,7 @@ import java.util.List;
  * untested by this choice: the Kotlin client owns one, and its runner is a real child process.
  * <p>
  * <b>What is not relaxed is the prescription.</b> {@link PrescribedRun} is the same code the control arm
- * runs and states the same contract a foreign runner implements - the four behaviour tokens, the fixed
+ * runs and states the same contract a foreign runner implements - the five behaviour tokens, the fixed
  * failure literal, one observation per delivery, an exit status as the verdict - so a scenario cannot tell
  * this binding from a Ruby process, and no assertion can be written to suit it.
  * <p>
@@ -108,8 +108,13 @@ public final class JvmClientBinding implements ConformanceBinding {
 
     /**
      * The connect-time configuration every binding uses, foreign runners included: the scenario's name is
-     * the topic, the in-flight ceiling is the scenario's own shape so a held record cannot deadlock on an
-     * executor count smaller than it, and the two fixed tunables come from {@link RunnerContract}.
+     * the topic, the in-flight ceiling is the one the scenario prescribed, and the two fixed tunables come
+     * from {@link RunnerContract}.
+     * <p>
+     * <b>The ceiling comes from the scenario and nowhere else</b> - it reaches a foreign runner as
+     * {@link RunnerContract#FLAG_MAX_CONCURRENCY} and is set here from the same field, so the binding that
+     * needs no command line is configured by the same number the ones that do are. It used to be the
+     * scenario's dispatch count in both places, which is a ceiling no scenario can reach.
      * <p>
      * <b>Ordering is deliberately not set</b> - "unset means take the engine's default", which is what every
      * language's runner does. A binding that pinned it would be running a configuration no client runs.
@@ -117,7 +122,7 @@ public final class JvmClientBinding implements ConformanceBinding {
     static ClientOptions optionsFor(ConformanceScenario scenario) {
         return ClientOptions.builder()
                 .topics(List.of(scenario.name()))
-                .maxConcurrency(scenario.expectedDispatches())
+                .maxConcurrency(scenario.maxConcurrency())
                 .commitInterval(RunnerContract.COMMIT_INTERVAL)
                 .defaultMessageRetryDelay(RunnerContract.RETRY_DELAY)
                 .build();

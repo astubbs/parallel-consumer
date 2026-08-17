@@ -152,6 +152,20 @@ public class ProxyHarness implements AutoCloseable {
      * remains the harness's own stub-client lane - the one that proves the harness can fail.
      */
     public void start(Client client) {
+        start(client, ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY);
+    }
+
+    /**
+     * The same lane with the in-flight ceiling set, for a scenario that is a claim about how many records may
+     * be outstanding at once.
+     * <p>
+     * <b>A control arm that could not be given the ceiling would be a control arm for a different
+     * configuration.</b> Max concurrency is what an application sets and the proxy passes straight through -
+     * {@code maxConcurrency * batchSize}, with the batch size pinned at 1 - so the engine driven by a plain
+     * Java function has to be handed the number a foreign client would have sent, or a scenario about the
+     * ceiling would go red here for want of a setting rather than for anything about the product.
+     */
+    public void start(Client client, int maxConcurrency) {
         if (parallelConsumer != null) {
             throw new IllegalStateException("harness already started");
         }
@@ -160,6 +174,7 @@ public class ProxyHarness implements AutoCloseable {
                 .consumer(mockConsumer)
                 .producer(mockProducer)
                 .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
+                .maxConcurrency(maxConcurrency)
                 .commitInterval(COMMIT_INTERVAL)
                 .defaultMessageRetryDelay(RETRY_DELAY)
                 .build();

@@ -22,9 +22,9 @@ import bz.stub.parallelconsumer.client.scaladsl._
  * exit; if it were free to decide what "correct" means, eleven languages would each decide it
  * slightly differently and the agreement between them would prove nothing.
  *
- * Its contract - the five flags, the three exit statuses, the observation line, the behaviour tokens
- * and the fixed literals - is documented once, in that module's `README.md`, and is identical in
- * every language.
+ * Its contract - the six flags, the three exit statuses, the two observation lines, the behaviour
+ * tokens and the fixed literals - is documented once, in that module's `README.md`, and is identical
+ * in every language.
  *
  * '''THIS DOES NOT REPLACE THE MODULE'S OWN TESTS.''' The shared suite proves every client behaves
  * identically on the protocol; `src/test` catches what is invisible from outside the process - a
@@ -49,7 +49,9 @@ object ConformanceRunner {
   private val ReportNothing = "report-nothing"
   private val FailThenSucceed = "fail-then-succeed"
   private val HoldFirstUntilSecond = "hold-first-until-second"
-  private val Behaviours = Set(Succeed, ReportNothing, FailThenSucceed, HoldFirstUntilSecond)
+  private val HoldUntilCeilingFull = "hold-until-ceiling-full"
+  private val Behaviours =
+    Set(Succeed, ReportNothing, FailThenSucceed, HoldFirstUntilSecond, HoldUntilCeilingFull)
 
   /**
    * The exact text a `fail-then-succeed` run reports. The Java suite asserts the redelivery carries
@@ -76,10 +78,25 @@ object ConformanceRunner {
    */
   private val ReportNothingHold = 3.seconds
 
+  /**
+   * How long `hold-until-ceiling-full` keeps a FULL group held before releasing it.
+   *
+   * '''IT IS WHAT TURNS "THE CEILING WAS NEVER EXCEEDED" FROM A RACE INTO A MEASUREMENT.''' Release
+   * the group the instant it fills and a client that declared a larger ceiling still passes - its
+   * extra records arrive a few milliseconds later, by which time the outstanding count has already
+   * fallen back. Holding the full ceiling still means the extra dispatch arrives INSIDE the window
+   * and prints its line while every other record is unresolved. A correct engine cannot dispatch
+   * anything during the window at all, so the wait costs a conforming client nothing but time.
+   */
+  private val CeilingSettle = 250.millis
+
   private val HandshakeBudget = 60.seconds
   private val ShutdownBudget = 30.seconds
 
-  /** Fires the two timeouts this runner needs without blocking a thread to wait for either. */
+  /**
+   * Fires every delay this runner needs - the second-arrival budget, the ceiling group's budget and
+   * the ceiling settle window - without blocking a thread to wait for any of them.
+   */
   private val timers = Executors.newSingleThreadScheduledExecutor { runnable =>
     val thread = new Thread(runnable, "conformance-timers")
     thread.setDaemon(true)
@@ -95,12 +112,13 @@ object ConformanceRunner {
     case Right(request) => drive(request)
   }
 
-  /** The five flags, spelled identically in every language - including the British `--behaviour`. */
+  /** The six flags, spelled identically in every language - including the British `--behaviour`. */
   private final case class Request(
       scenario: String,
       behaviour: String,
       sidecar: String,
       expect: Int,
+      maxConcurrency: Int,
       budget: FiniteDuration)
 
   private def parse(arguments: Seq[String]): Either[String, Request] = {
@@ -114,13 +132,14 @@ object ConformanceRunner {
         behaviour <- required(flags, "--behaviour")
         sidecar <- required(flags, "--sidecar")
         expect <- positive(flags, "--expect-dispatches")
+        maxConcurrency <- positive(flags, "--max-concurrency")
         budget <- positive(flags, "--timeout-seconds")
         _ <- Either.cond(Behaviours.contains(behaviour), (), s"unknown behaviour '$behaviour'")
         _ <- Either.cond(
           Paths.get(sidecar).isAbsolute,
           (),
           s"--sidecar must be absolute, got '$sidecar'")
-      } yield Request(scenario, behaviour, sidecar, expect, budget.seconds)
+      } yield Request(scenario, behaviour, sidecar, expect, maxConcurrency, budget.seconds)
     }
   }
 
@@ -136,7 +155,9 @@ object ConformanceRunner {
     Console.err.println(s"conformance-runner: $problem")
     Console.err.println(
       "usage: conformance-runner --scenario <name> --behaviour <token> --sidecar <abs-path> " +
-        "--expect-dispatches <n> --timeout-seconds <n>")
+        "--expect-dispatches <n> --max-concurrency <n> --timeout-seconds <n>")
+    Console.err.println(
+      s"  --behaviour is one of: ${Behaviours.toSeq.sorted.mkString(", ")}")
     ExitUsage
   }
 
@@ -199,56 +220,73 @@ object ConformanceRunner {
     // The mock lane builds mock Kafka clients and reads no properties. Real credentials never belong
     // in a conformance test.
     kafkaProperties = Map.empty,
-    // Enough in-flight room for every dispatch the scenario prescribes, so a scenario that holds a
-    // record cannot deadlock on a ceiling smaller than its own shape.
-    maxConcurrency = Some(request.expect),
+    // THE CEILING IS THE SCENARIO'S TO CHOOSE, AND THIS RUNNER NEVER DERIVES ONE. `--max-concurrency`
+    // is the only thing it may be set from: a runner that derived it from `--expect-dispatches`, as
+    // this one used to, declares a ceiling no scenario can ever reach, so no scenario could ask this
+    // client to prove it respected one.
+    maxConcurrency = Some(request.maxConcurrency),
     commitInterval = Some(CommitInterval),
     defaultMessageRetryDelay = Some(RetryDelay))
 
-  private def processorFor(request: Request, tracker: Tracker): RecordProcessor = { record =>
-    val ordinal = tracker.observe(record)
-    request.behaviour match {
-      case Succeed =>
-        tracker.complete()
-        Future.successful(Outcome.succeeded)
+  private def processorFor(request: Request, tracker: Tracker): RecordProcessor = {
+    val ceiling = new CeilingGroup(request.maxConcurrency, request.expect, () => tracker.observed)
 
-      case ReportNothing =>
-        // Never report. A future that never completes is this client's ONLY way to say "no verdict
-        // for this record", and it is exactly what this behaviour prescribes.
-        ParallelConsumerClient.noVerdict
+    record =>
+      val ordinal = tracker.observe(record)
+      request.behaviour match {
+        case Succeed =>
+          Future.successful(tracker.settleSuccess(record))
 
-      case FailThenSucceed =>
-        tracker.complete()
-        if (record.attempt == 1) Future.successful(Outcome.failed(PrescribedFailureReason))
-        else Future.successful(Outcome.succeeded)
+        case ReportNothing =>
+          // Never report, and print NO `settled` line: by prescription this record is never resolved
+          // and the absence of the line is the observation. A future that never completes is this
+          // client's ONLY way to say "no verdict for this record".
+          ParallelConsumerClient.noVerdict
 
-      case HoldFirstUntilSecond =>
-        if (ordinal == 1) {
-          // Hold the first record until a SECOND is dispatched. Whether one arrives at all, and
-          // which key it carries, is the whole of what the scenario is asking - and it is the Java
-          // suite that decides what the answer means. Holding is a future nobody has completed, not
-          // a blocked thread: blocking a transport executor here is the very defect the scenario is
-          // an instrument for.
-          tracker.secondArrivedWithin(request.budget).map { arrived =>
-            if (arrived) {
-              tracker.complete()
-              Outcome.succeeded
-            } else {
-              // deliberately NOT counted as completed: the prescription was not carried out, so the
-              // outer wait must time out and this process must exit 1 rather than report a tidy
-              // failure and call the scenario done
-              Outcome.failed("conformance: no second dispatch arrived while the first was held")
+        case FailThenSucceed =>
+          if (record.attempt == 1) Future.successful(tracker.settleFailure(record, PrescribedFailureReason))
+          else Future.successful(tracker.settleSuccess(record))
+
+        case HoldFirstUntilSecond =>
+          if (ordinal == 1) {
+            // Hold the first record until a SECOND is dispatched. Whether one arrives at all, and
+            // which key it carries, is the whole of what the scenario is asking - and it is the Java
+            // suite that decides what the answer means. Holding is a future nobody has completed, not
+            // a blocked thread: blocking a transport executor here is the very defect the scenario is
+            // an instrument for.
+            tracker.secondArrivedWithin(request.budget).map { arrived =>
+              if (arrived) tracker.settleSuccess(record)
+              else
+                // deliberately NOT counted as completed: the prescription was not carried out, so the
+                // outer wait must time out and this process must exit 1 rather than report a tidy
+                // failure and call the scenario done
+                tracker.settleGaveUp(
+                  record,
+                  "conformance: no second dispatch arrived while the first was held")
             }
+          } else {
+            Future.successful(tracker.settleSuccess(record))
           }
-        } else {
-          tracker.complete()
-          Future.successful(Outcome.succeeded)
-        }
 
-      case other =>
-        // unreachable: parse rejects an unknown behaviour before the session opens
-        Future.failed(new IllegalStateException(s"conformance: unknown behaviour '$other'"))
-    }
+        case HoldUntilCeilingFull =>
+          // Hold EVERY record until `--max-concurrency` of them are held at once, keep the full group
+          // held for the settle window, then report the whole group as successes. Holding is again a
+          // future nobody has completed: the barrier below never parks a thread, so a ceiling wider
+          // than this execution context could not starve itself of one.
+          ceiling.enter(request.budget).map { filled =>
+            if (filled) tracker.settleSuccess(record)
+            else
+              // same shape as the hold-first-until-second give-up: not counted as completed, so the
+              // outer wait times out and this process exits 1
+              tracker.settleGaveUp(
+                record,
+                s"conformance: the ceiling group of ${request.maxConcurrency} never filled")
+          }
+
+        case other =>
+          // unreachable: parse rejects an unknown behaviour before the session opens
+          Future.failed(new IllegalStateException(s"conformance: unknown behaviour '$other'"))
+      }
   }
 
   private def closeQuietly(client: ParallelConsumerClient): Unit =
@@ -258,19 +296,31 @@ object ConformanceRunner {
     }
 
   /**
-   * Counts deliveries and outcomes, and prints the observation line. It holds no per-record state -
-   * only counts - because the client library holds none either, and this runner must not become the
-   * place where a client's missing bookkeeping is quietly supplied.
+   * Counts deliveries and outcomes, and prints the two observation lines. It holds no per-record
+   * state - only counts - because the client library holds none either, and this runner must not
+   * become the place where a client's missing bookkeeping is quietly supplied.
+   *
+   * '''THE SUITE READS OVERLAP FROM THE ORDER OF THE LINES, SO EVERY WRITE GOES UNDER ONE LOCK.''' A
+   * `dispatch` line opens a record's unresolved window and its `settled` line closes it, and the
+   * running difference between the two counts, read in line order, is how many records this client
+   * was holding at that instant. Several executor threads print here, so the lock that hands out the
+   * ordinal is the same lock that writes both line types - no clock is involved anywhere.
    */
   private final class Tracker(expected: Int) {
 
     private val observedAll = Promise[Unit]()
     private val completedAll = Promise[Unit]()
     private val secondDelivery = Promise[Unit]()
-    private var observedCount = 0
+
+    /**
+     * Volatile so the ceiling barrier can read it without reaching into this lock from inside its
+     * own - the same reason the Java reference holds this count in an `AtomicInteger`. Writes still
+     * happen under the lock, beside the line they belong to.
+     */
+    @volatile private var observedCount = 0
     private var completedCount = 0
 
-    def observed: Int = synchronized(observedCount)
+    def observed: Int = observedCount
 
     def completed: Int = synchronized(completedCount)
 
@@ -285,10 +335,8 @@ object ConformanceRunner {
         // printed at the moment of delivery, before the behaviour acts on it, and under the same
         // lock as the ordinal so the transcript's ORDER is the arrival order: two executors share
         // one stdout
-        val key = record.key.map(new String(_, StandardCharsets.UTF_8)).getOrElse("")
         val reason = record.previousFailure.flatMap(_.reason).getOrElse("")
-        println(s"dispatch key=$key offset=${record.offset} attempt=${record.attempt} reason=$reason")
-        Console.out.flush()
+        emit("dispatch ", record, reason)
         observedCount
       }
       if (ordinal >= 2) {
@@ -300,7 +348,45 @@ object ConformanceRunner {
       ordinal
     }
 
-    def complete(): Unit = {
+    /**
+     * The record's outcome is decided and it stops being unresolved: prints the `settled` line, then
+     * counts the record as complete, then hands back the outcome to report.
+     *
+     * The line goes out BEFORE the count, because the count is what releases the run's outer wait -
+     * print after it and the process can exit over the top of its own last observation.
+     */
+    def settleSuccess(record: InboundRecord): Outcome = {
+      synchronized(emit("settled ", record, ""))
+      complete()
+      Outcome.succeeded
+    }
+
+    /** As [[settleSuccess]], for a failure this runner is PRESCRIBED to report. */
+    def settleFailure(record: InboundRecord, reason: String): Outcome = {
+      synchronized(emit("settled ", record, reason))
+      complete()
+      Outcome.failed(reason)
+    }
+
+    /**
+     * As [[settleFailure]], but for a behaviour that could not be carried out - and deliberately NOT
+     * counted as complete, so the run's outer wait times out and the process exits 1 rather than
+     * reporting a tidy failure and calling the scenario done.
+     */
+    def settleGaveUp(record: InboundRecord, reason: String): Outcome = {
+      synchronized(emit("settled ", record, reason))
+      Outcome.failed(reason)
+    }
+
+    /** Caller holds this Tracker's lock: the line order IS the event order. */
+    private def emit(prefix: String, record: InboundRecord, reason: String): Unit = {
+      val key = record.key.map(new String(_, StandardCharsets.UTF_8)).getOrElse("")
+      println(
+        s"${prefix}key=$key offset=${record.offset} attempt=${record.attempt} reason=$reason")
+      Console.out.flush()
+    }
+
+    private def complete(): Unit = {
       val reached = synchronized {
         completedCount += 1
         completedCount >= expected
@@ -319,6 +405,103 @@ object ConformanceRunner {
         budget.toMillis,
         TimeUnit.MILLISECONDS)
       answer.future
+    }
+  }
+
+  /**
+   * The cyclic barrier at the heart of `hold-until-ceiling-full`: a record entering it is held until
+   * `maxConcurrency` of them are held at once, the full group is then kept held for
+   * [[CeilingSettle]], and the whole generation is released together.
+   *
+   * '''NOTHING HERE PARKS A THREAD, WHICH IS THE ONLY WAY SCALA CAN WRITE IT.''' The Java reference
+   * spells the same barrier with `wait`/`notifyAll` and a `Thread.sleep`, because a JVM record is
+   * held by a user function that has not returned. Here a record is held by a `Future` nobody has
+   * completed, so the barrier is a promise per generation and the two delays are scheduled rather
+   * than slept: a group of width `n` holding `n` threads of the execution context would deadlock the
+   * very concurrency the scenario is measuring - the client-side shape of the defect this whole
+   * scenario exists to catch.
+   *
+   * A group also releases once every prescribed delivery has been observed, so a scenario whose
+   * record count is not a multiple of its ceiling cannot strand its last, short group.
+   */
+  private final class CeilingGroup(maxConcurrency: Int, expected: Int, observed: () => Int) {
+
+    private var held = 0
+    private var generation = 0L
+
+    /** Completed when `generation` advances, which is how a waiter learns its group was released. */
+    private var gate = Promise[Unit]()
+
+    /**
+     * Enters the group for one record.
+     *
+     * @return a future completing true once the group has filled and settled, and false if it never
+     *         filled inside the budget - which is this runner failing to carry out the prescription,
+     *         not the client being wrong about anything
+     */
+    def enter(budget: FiniteDuration): Future[Boolean] = {
+      val waiting = synchronized {
+        held += 1
+        val releasing = held >= maxConcurrency || observed() >= expected
+        if (releasing) None else Some((generation, held, gate.future))
+      }
+      waiting match {
+        case Some((myGeneration, heldSoFar, opened)) => waitForRelease(myGeneration, heldSoFar, opened, budget)
+        case None => releaseAfterSettle()
+      }
+    }
+
+    /** Bounded by the remaining budget: a group that never fills fails the run rather than hanging. */
+    private def waitForRelease(
+        myGeneration: Long,
+        heldSoFar: Int,
+        opened: Future[Unit],
+        budget: FiniteDuration): Future[Boolean] = {
+      val answer = Promise[Boolean]()
+      opened.foreach(_ => answer.trySuccess(true))
+      val _ = timers.schedule(
+        new Runnable {
+          override def run(): Unit =
+            if (answer.trySuccess(false)) {
+              Console.err.println(
+                s"conformance-runner: the ceiling group of $maxConcurrency never filled in " +
+                  s"generation $myGeneration: $heldSoFar held")
+            }
+        },
+        budget.toMillis,
+        TimeUnit.MILLISECONDS)
+      answer.future
+    }
+
+    /**
+     * The releaser's path. '''THE SETTLE WINDOW IS OUTSIDE THE LOCK''' - a record the engine should
+     * not be dispatching still has to be able to print its arrival line during it, and that arrival
+     * is the whole thing the scenario looks for. A correct engine cannot dispatch anything here,
+     * because the ceiling is full, so an extra line inside the window IS the excess.
+     */
+    private def releaseAfterSettle(): Future[Boolean] = {
+      val released = Promise[Boolean]()
+      val _ = timers.schedule(
+        new Runnable {
+          override def run(): Unit = {
+            // CeilingGroup.this, not the Runnable's own monitor: an anonymous class inside a method
+            // makes a bare `synchronized` lock the wrong object, silently and with no warning
+            val opening = CeilingGroup.this.synchronized {
+              held = 0
+              generation += 1
+              val current = gate
+              gate = Promise[Unit]()
+              current
+            }
+            // waking every waiter happens outside the lock, so a woken record's own settle line is
+            // never printed behind this barrier's monitor
+            val _ = opening.trySuccess(())
+            val _ = released.trySuccess(true)
+          }
+        },
+        CeilingSettle.toMillis,
+        TimeUnit.MILLISECONDS)
+      released.future
     }
   }
 }

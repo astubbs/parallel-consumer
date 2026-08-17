@@ -10,6 +10,7 @@ import org.awaitility.Awaitility;
 import java.time.Duration;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -153,6 +154,87 @@ public final class ConformanceScenarios {
                     });
 
     /**
+     * The ceiling the in-flight scenario configures, and the width of the group its behaviour holds.
+     * <p>
+     * <b>Two, because the smallest ceiling that can still be exceeded is the one hardest to satisfy by
+     * accident.</b> The seeded record count is a multiple of it, so every group the prescribed behaviour
+     * forms divides exactly.
+     */
+    private static final int IN_FLIGHT_CEILING = 2;
+
+    /** Records the ceiling scenario seeds - three full groups of {@link #IN_FLIGHT_CEILING}, on distinct keys. */
+    private static final int CEILING_SCENARIO_RECORDS = 6;
+
+    /**
+     * <b>The in-flight ceiling, and the one scenario that constrains how many records may be outstanding at
+     * once.</b> The other four each watch a single record, or three whose concurrency the shard decides;
+     * none of them would notice a client holding every record it was ever offered.
+     * <p>
+     * <b>Why this one is worth the eleven implementations it costs.</b> The ceiling counts records a client
+     * has been dispatched and has not yet reported - queued PLUS executing - and counting the queue alone
+     * instead lets a client exceed it by the size of its executor pool. Three of the first five clients
+     * shipped exactly that (see the client-authoring guide's §3 rule 2), and it was found by reading them
+     * side by side rather than by any test. Nothing here asked a client to prove it, until this.
+     * <p>
+     * <b>The instrument is the GROUP, and the settle window that holds it still.</b> {@code
+     * hold-until-ceiling-full} reports nothing until {@link #IN_FLIGHT_CEILING} records are inside the user
+     * function at once, so a client that never reaches the ceiling - one that runs records one at a time,
+     * whose executor pool is smaller than the ceiling it asked for, or that simply stops asking for work -
+     * runs out of budget and exits 1 rather than passing a bound it never approached. Then the full group is
+     * held still for {@link RunnerContract#CEILING_SETTLE}, during which a correct engine can dispatch
+     * nothing at all, so any line that does arrive is the excess, printed while every other record is
+     * unresolved.
+     * <p>
+     * <b>What it cannot see, stated so nobody reads more into a green run.</b> A client whose accounting is
+     * wrong is invisible here while the proxy is right: the proxy never over-dispatches, so a client that
+     * would have admitted the extra record is never offered one. What this catches is the consequence
+     * reaching the engine - a ceiling the client mis-declares, an executor pool wider than the ceiling, or a
+     * record resolved before its function returned, each of which frees a slot the client should still be
+     * holding. The queue-versus-unresolved counting itself stays a matter for each client's own tests, which
+     * is where the guide points it.
+     */
+    public static final ConformanceScenario THE_IN_FLIGHT_CEILING_BOUNDS_UNRESOLVED_RECORDS =
+            new ConformanceScenario(HarnessScenario.THE_IN_FLIGHT_CEILING_BOUNDS_UNRESOLVED_RECORDS,
+                    RunnerBehaviour.HOLD_UNTIL_CEILING_FULL, CEILING_SCENARIO_RECORDS, IN_FLIGHT_CEILING,
+                    RUNNER_BUDGET,
+                    (harness, transcript) -> {
+                        // EVERY RECORD ARRIVED. Without this half, a client that simply stopped asking for
+                        // work would satisfy the bound below perfectly by never approaching it.
+                        assertWithMessage("deliveries the runner saw%s", transcript.diagnostics())
+                                .that(transcript.dispatches()).hasSize(CEILING_SCENARIO_RECORDS);
+                        assertWithMessage("every seeded record was delivered exactly once, on its own key - a "
+                                + "redelivery or a duplicate would make the outstanding count mean something "
+                                + "else%s", transcript.diagnostics())
+                                .that(transcript.dispatches().stream().map(DispatchObservation::offset).toList())
+                                .containsExactly(0L, 1L, 2L, 3L, 4L, 5L);
+                        assertWithMessage("the keys are distinct, so nothing but the ceiling limited how many "
+                                + "could run at once%s", transcript.diagnostics())
+                                .that(transcript.dispatches().stream().map(DispatchObservation::key)
+                                        .collect(Collectors.toSet()))
+                                .hasSize(CEILING_SCENARIO_RECORDS);
+
+                        // THE CEILING WAS REACHED, AND NEVER EXCEEDED - as one equality, deliberately.
+                        // "At most" alone is satisfied by a client that ran everything serially; "exactly"
+                        // says the client got the whole ceiling's worth of work outstanding and not one
+                        // record more. The prescribed group guarantees the first half, so a failure here is
+                        // always the second.
+                        assertWithMessage("records this client held unresolved at once - dispatched and not "
+                                + "yet reported, which is what max_concurrency bounds. More than %s means the "
+                                + "client freed a slot it was still holding, or asked the engine for a "
+                                + "ceiling it was not configured with%s", IN_FLIGHT_CEILING,
+                                transcript.diagnostics())
+                                .that(transcript.peakUnresolved()).isEqualTo(IN_FLIGHT_CEILING);
+                        assertWithMessage("every delivery was settled: an unresolved record at the end would "
+                                + "make the peak above a measurement of a run that never finished%s",
+                                transcript.diagnostics())
+                                .that(transcript.settlements().stream().map(DispatchObservation::offset).toList())
+                                .containsExactly(0L, 1L, 2L, 3L, 4L, 5L);
+
+                        // ...AND ALL OF THEM COMPLETED. The engine-side truth no client can see.
+                        harness.awaitCommittedOffset(CEILING_SCENARIO_RECORDS);
+                    });
+
+    /**
      * The scenarios this suite drives today, in the order a new language should attempt them.
      * <p>
      * {@code ScenarioCoverageTest} holds this list against {@link HarnessScenario#conformanceScenarios()},
@@ -163,7 +245,8 @@ public final class ConformanceScenarios {
                 PROCESSED_RECORD_ADVANCES_THE_COMMITTED_OFFSET,
                 UNREPORTED_RECORD_HOLDS_BACK_THE_COMMIT,
                 FAILED_RECORD_IS_REDELIVERED_WITH_ITS_FAILURE_HISTORY,
-                RECORDS_SHARING_A_KEY_SHARE_A_SHARD);
+                RECORDS_SHARING_A_KEY_SHARE_A_SHARD,
+                THE_IN_FLIGHT_CEILING_BOUNDS_UNRESOLVED_RECORDS);
     }
 
     /**

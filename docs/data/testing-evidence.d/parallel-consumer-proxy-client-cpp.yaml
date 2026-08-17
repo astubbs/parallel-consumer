@@ -9,16 +9,18 @@ module_evidence:
   - id: proxy-client-cpp
     artifact: parallel-consumer-proxy-client-cpp
     coverage: >-
-      All four conformance scenarios the harness serves today, run end to end over real gRPC against
+      All five conformance scenarios the harness serves today, run end to end over real gRPC against
       the test-mode sidecar through the shared cross-language suite: the processed record advancing
       the committed offset, the unreported record holding the commit back, the failure redelivered
-      with attempt=2 and the reason verbatim, and a held record admitting a concurrent delivery on
-      another key. In each, the sidecar is spawned as a child process with execv and never through a
+      with attempt=2 and the reason verbatim, a held record admitting a concurrent delivery on
+      another key, and the in-flight ceiling holding this client to exactly two unresolved records
+      at once. In each, the sidecar is spawned as a child process with execv and never through a
       shell, its port read by scanning the lifecycle channel, the fresh-session handshake completed,
       a dispatch wave queued and handed to a std::thread executor, the user function run, the outcome
       reported with the token echoed verbatim, and - except in the negative control - the session
       closed by half-close and the lifecycle pipe.
-      EACH OF THE FOUR WAS PROVEN ABLE TO FAIL, by sabotaging the runner and watching the suite go
+      The fifth, the in-flight ceiling, was proven able to fail once for every language rather than here - in Go and in Kotlin, by declaring double the ceiling the scenario prescribed - and the conformance module's own evidence records it.
+      EACH OF THE FIRST FOUR WAS PROVEN ABLE TO FAIL, by sabotaging the runner and watching the suite go
       red for the right reason: reporting a failure where success was prescribed left the offset
       uncommitted; reporting success where silence was prescribed advanced an offset the assertion
       forbids advancing, which also demonstrates that the contract's three-second hold is what lets

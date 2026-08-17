@@ -11,8 +11,8 @@
 # exit; if it were free to decide what "correct" means, ten languages would each decide it slightly
 # differently and the agreement between them would prove nothing.
 #
-# Its contract - flags, exit codes, the stdout line, the behaviour tokens - is documented once, in
-# that module's README.md, and is identical in every language.
+# Its contract - flags, exit codes, the two stdout lines per record, the behaviour tokens - is
+# documented once, in that module's README.md, and is identical in every language.
 #
 # THIS DOES NOT REPLACE THE GEM'S OWN SPECS. The shared suite proves every client behaves
 # identically on the protocol; spec/ catches what is invisible from outside the process - a
@@ -35,7 +35,8 @@ EXIT_OK = 0
 EXIT_BEHAVIOUR_FAILED = 1
 EXIT_USAGE = 2
 
-BEHAVIOURS = %w[succeed report-nothing fail-then-succeed hold-first-until-second].freeze
+BEHAVIOURS = %w[succeed report-nothing fail-then-succeed hold-first-until-second
+                hold-until-ceiling-full].freeze
 
 # The exact text a fail-then-succeed run reports. The Java suite asserts the redelivery carries it
 # back VERBATIM, so it is a fixed literal of the contract in every language, never composed here.
@@ -56,9 +57,25 @@ RETRY_DELAY = 0.05
 # left the suite green until the hold existed.
 REPORT_NOTHING_HOLD = 3
 
-# Counts deliveries and outcomes, and prints the observation line. It holds no per-record state -
-# only counts - because the client library holds none either, and this runner must not become the
-# place where a client's missing bookkeeping is quietly supplied.
+# How long hold-until-ceiling-full keeps a FULL group held before releasing it.
+#
+# IT IS WHAT TURNS "THE CEILING WAS NEVER EXCEEDED" FROM A RACE INTO A MEASUREMENT. Release the
+# group the instant it fills and a client that declared a larger ceiling still passes - its extra
+# records arrive a few milliseconds later, by which time the outstanding count has already fallen
+# back. Holding the full ceiling still means the extra dispatch arrives INSIDE the window and
+# prints its line while every other record is unresolved. A correct engine cannot dispatch anything
+# during the window at all, so the wait costs a conforming client nothing but time.
+CEILING_SETTLE = 0.25
+
+# The clock every budget in this runner is measured on. Monotonic, so a wall-clock correction
+# arriving mid-run can neither expire a budget early nor extend one.
+def monotonic
+  Process.clock_gettime(Process::CLOCK_MONOTONIC)
+end
+
+# Counts deliveries and outcomes, and prints the two observation lines. It holds no per-record
+# state - only counts - because the client library holds none either, and this runner must not
+# become the place where a client's missing bookkeeping is quietly supplied.
 class Tracker
   attr_reader :observed, :completed
 
@@ -80,14 +97,31 @@ class Tracker
       # Printed at the moment of delivery, before the behaviour acts on it, and under the same lock
       # as the ordinal so the transcript's ORDER is the arrival order: executors are threads here
       # and two of them share one stdout.
-      key = record.key.nil? ? "" : record.key.dup.force_encoding(Encoding::UTF_8)
-      $stdout.puts("dispatch key=#{key} offset=#{record.offset} attempt=#{record.attempt} " \
-                   "reason=#{record.last_failure_reason || ''}")
-      $stdout.flush
+      print_observation("dispatch", record, record.last_failure_reason)
       @progress.broadcast
     end
     @second_arrived.close if ordinal >= 2
     ordinal
+  end
+
+  # Prints the record's outcome the moment the prescribed behaviour DECIDED it, which is the moment
+  # it stops being unresolved. +reason+ is what this runner is reporting - nil for a success - and
+  # never the reason the record arrived with.
+  #
+  # Under the SAME lock as the dispatch line, deliberately: the suite reads overlap purely from the
+  # order of the two line types, and Ruby's executors are threads sharing one stdout.
+  def settle(record, reason = nil)
+    @mutex.synchronize { print_observation("settled", record, reason) }
+    nil
+  end
+
+  # Whether every prescribed delivery has arrived. It is the ceiling group's escape hatch - a final
+  # group smaller than the ceiling can never fill, and must not deadlock the run.
+  #
+  # CeilingGroup calls this while holding its own lock; nothing here ever reaches back into the
+  # group, so the two locks are ordered and cannot deadlock.
+  def all_observed?
+    @mutex.synchronize { @observed >= @expected }
   end
 
   def complete
@@ -120,16 +154,96 @@ class Tracker
     end
   end
 
+  # The barrier hold-until-ceiling-full is built on, for this run's ceiling.
+  def ceiling_group(width)
+    CeilingGroup.new(width, self)
+  end
+
+  # The cyclic barrier at the heart of hold-until-ceiling-full: every delivery blocks until +width+
+  # of them are held at once, the full group is kept still for CEILING_SETTLE, and then the whole
+  # group is released and the next one begins.
+  #
+  # A MUTEX AND A CONDITION VARIABLE, NOT A SIZEDQUEUE. A SizedQueue of the ceiling's capacity reads
+  # like the same barrier and is not one: it frees each producer the moment a consumer pops, so a
+  # full group is never held still - and a queue that blocks a thread which had other work to do is
+  # this client's own recorded hazard, not a shape to reach for again. The three pieces of state
+  # below are the whole of the barrier, and every language writes them out.
+  #
+  # It lives inside Tracker because it is this run's group-level bookkeeping beside its counts, and
+  # because it asks the tracker whether every prescribed delivery has now arrived.
+  class CeilingGroup
+    attr_reader :width
+
+    def initialize(width, tracker)
+      @width = width
+      @tracker = tracker
+      @mutex = Mutex.new
+      @released = ConditionVariable.new
+      @held = 0
+      @generation = 0
+    end
+
+    # Blocks until this record is one of a full group, or until the group is released early because
+    # every prescribed delivery has now been observed - a final short group must not deadlock.
+    #
+    # @return [Boolean] false if the group never filled inside the budget, which is this runner
+    #   failing rather than the client being wrong about anything
+    def held_until_full?(budget)
+      @mutex.synchronize do
+        generation = @generation
+        @held += 1
+        return released_within?(generation, budget) unless @held >= @width || @tracker.all_observed?
+      end
+      settle_and_release
+      true
+    end
+
+    private
+
+    # Called holding @mutex, which the wait releases while it sleeps. The generation counter is what
+    # makes the wait immune to a wake-up it arrived too late for: a sleeper checks whether the group
+    # it JOINED has gone, not a flag a later group has already reset.
+    def released_within?(generation, budget)
+      deadline = monotonic + budget
+      while @generation == generation
+        remaining = deadline - monotonic
+        return false if remaining <= 0
+
+        @released.wait(@mutex, remaining)
+      end
+      true
+    end
+
+    # THE SETTLE SLEEP IS OUTSIDE THE LOCK, deliberately. A record the engine should not be
+    # dispatching still has to be able to print its arrival line during the window - that arrival is
+    # the whole thing the scenario looks for - and it could not if the releaser slept holding a lock
+    # the arriving thread needs.
+    def settle_and_release
+      sleep(CEILING_SETTLE)
+      @mutex.synchronize do
+        @held = 0
+        @generation += 1
+        @released.broadcast
+      end
+    end
+  end
+
   private
 
-  def monotonic
-    Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  # The two line types share their four fields and their +reason=+ last, which takes the rest of the
+  # line because it is worker-supplied text that may contain spaces. ONLY EVER CALLED UNDER @mutex.
+  def print_observation(kind, record, reason)
+    key = record.key.nil? ? "" : record.key.dup.force_encoding(Encoding::UTF_8)
+    $stdout.puts("#{kind} key=#{key} offset=#{record.offset} attempt=#{record.attempt} " \
+                 "reason=#{reason || ''}")
+    $stdout.flush
   end
 end
 
-REQUIRED_FLAGS = %w[--scenario --behaviour --sidecar --expect-dispatches --timeout-seconds].freeze
+REQUIRED_FLAGS = %w[--scenario --behaviour --sidecar --expect-dispatches --max-concurrency
+                    --timeout-seconds].freeze
 
-# The five flags, spelled identically in every language - including the British --behaviour.
+# The six flags, spelled identically in every language - including the British --behaviour.
 def parse(argv)
   values = collect(argv)
   return values if values.is_a?(Integer)
@@ -138,7 +252,8 @@ def parse(argv)
   return usage(problem) if problem
 
   { scenario: values["--scenario"], behaviour: values["--behaviour"], sidecar: values["--sidecar"],
-    expect: Integer(values["--expect-dispatches"]), budget: Integer(values["--timeout-seconds"]) }
+    expect: Integer(values["--expect-dispatches"]), ceiling: Integer(values["--max-concurrency"]),
+    budget: Integer(values["--timeout-seconds"]) }
 end
 
 def collect(argv)
@@ -158,7 +273,8 @@ def complaint_about(values)
   return "unknown behaviour #{values['--behaviour'].inspect}" unless BEHAVIOURS.include?(values["--behaviour"])
   return "--sidecar must be absolute, got #{values['--sidecar'].inspect}" unless values["--sidecar"].start_with?("/")
 
-  positive_or_complaint(values, "--expect-dispatches") || positive_or_complaint(values, "--timeout-seconds")
+  %w[--expect-dispatches --max-concurrency --timeout-seconds]
+    .filter_map { |flag| positive_or_complaint(values, flag) }.first
 end
 
 def positive_or_complaint(values, flag)
@@ -171,18 +287,20 @@ def usage(problem)
   EXIT_USAGE
 end
 
-def processor_for(behaviour, tracker, budget)
+def processor_for(behaviour, tracker, group, budget)
   lambda do |record|
     ordinal = tracker.observe(record)
 
     case behaviour
-    when "succeed" then tracker.complete
+    when "succeed" then succeed(tracker, record)
     when "report-nothing"
-      # Never report. Blocking here is how a Ruby worker says "this record's function has not
-      # returned"; the process exits with the record still in flight.
+      # Never report, and print no settled line: by prescription this record is never resolved and
+      # the ABSENCE is the observation. Blocking here is how a Ruby worker says "this record's
+      # function has not returned"; the process exits with the record still in flight.
       sleep
     when "fail-then-succeed" then fail_then_succeed(tracker, record)
-    when "hold-first-until-second" then hold_first_until_second(tracker, ordinal, budget)
+    when "hold-first-until-second" then hold_first_until_second(tracker, record, ordinal, budget)
+    when "hold-until-ceiling-full" then hold_until_ceiling_full(tracker, group, record, budget)
     else
       # unreachable: parse rejects an unknown behaviour before the session opens
       raise "conformance: unknown behaviour #{behaviour.inspect}"
@@ -191,30 +309,55 @@ def processor_for(behaviour, tracker, budget)
   end
 end
 
+# The outcome is decided, so the settled line goes out before the record is reported - which for a
+# success is the moment this returns and the client library reports for it.
+def succeed(tracker, record)
+  tracker.settle(record)
+  tracker.complete
+end
+
 def fail_then_succeed(tracker, record)
+  reason = record.attempt == 1 ? PRESCRIBED_FAILURE_REASON : nil
+  tracker.settle(record, reason)
   tracker.complete
   # A raise IS Ruby's failure idiom, and the message travels as the reason verbatim.
-  raise PRESCRIBED_FAILURE_REASON if record.attempt == 1
+  raise reason if reason
 end
 
 # Hold the first record until a SECOND is dispatched. Whether one arrives at all, and which key it
 # carries, is the whole of what the scenario is asking - and it is the Java suite that decides what
 # the answer means.
-def hold_first_until_second(tracker, ordinal, budget)
+def hold_first_until_second(tracker, record, ordinal, budget)
   if ordinal == 1 && !tracker.second_arrived?(budget)
-    raise "conformance: no second dispatch arrived while the first was held"
+    reason = "conformance: no second dispatch arrived while the first was held"
+    tracker.settle(record, reason)
+    raise reason
   end
 
-  tracker.complete
+  succeed(tracker, record)
+end
+
+# Hold EVERY record until the ceiling's worth are held at once, keep the full group still for the
+# settle window, then succeed the lot. Filling the group is what forces the ceiling to be reached;
+# the window is what makes an excess visible rather than a race.
+def hold_until_ceiling_full(tracker, group, record, budget)
+  unless group.held_until_full?(budget)
+    reason = "conformance: the ceiling group of #{group.width} never filled"
+    tracker.settle(record, reason)
+    raise reason
+  end
+
+  succeed(tracker, record)
 end
 
 def options_for(arguments)
   ParallelConsumer::ClientOptions.new(
     # THE SCENARIO NAME IS ALSO THE TOPIC NAME.
     topics: [arguments[:scenario]],
-    # Enough executors for every dispatch the scenario prescribes, so a scenario that holds a record
-    # cannot deadlock on an executor count smaller than its own shape.
-    max_concurrency: arguments[:expect],
+    # THE CEILING IS THE SCENARIO'S TO CHOOSE, and this runner never derives one. It used to be set
+    # from --expect-dispatches, which is by construction a ceiling no scenario can reach - so no
+    # scenario could ask this client to prove it respected one.
+    max_concurrency: arguments[:ceiling],
     commit_interval: COMMIT_INTERVAL,
     default_message_retry_delay: RETRY_DELAY,
     # The mock lane builds mock Kafka clients and reads no properties. Real credentials never belong
@@ -224,17 +367,22 @@ def options_for(arguments)
   )
 end
 
+# The session, or nil having said why not: a client that cannot connect has not failed a scenario,
+# it has failed to run one, and both are EXIT_BEHAVIOUR_FAILED.
+def open_session(arguments)
+  ParallelConsumer::Client.open(options_for(arguments), sidecar: arguments[:sidecar])
+rescue StandardError => e
+  warn("conformance-runner: opening the session: #{e.class}: #{e.message}")
+  nil
+end
+
 def run(arguments)
   tracker = Tracker.new(arguments[:expect])
+  client = open_session(arguments)
+  return EXIT_BEHAVIOUR_FAILED if client.nil?
 
-  begin
-    client = ParallelConsumer::Client.open(options_for(arguments), sidecar: arguments[:sidecar])
-  rescue StandardError => e
-    warn("conformance-runner: opening the session: #{e.class}: #{e.message}")
-    return EXIT_BEHAVIOUR_FAILED
-  end
-
-  client.poll(&processor_for(arguments[:behaviour], tracker, arguments[:budget]))
+  group = tracker.ceiling_group(arguments[:ceiling])
+  client.poll(&processor_for(arguments[:behaviour], tracker, group, arguments[:budget]))
 
   # report-nothing completes at OBSERVATION, because by prescription its records are never reported
   # and so can never complete. Every other behaviour completes when the last record it was handed

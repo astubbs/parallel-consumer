@@ -9,10 +9,11 @@ module_evidence:
   - id: proxy-client-swift
     artifact: parallel-consumer-proxy-client-swift
     coverage: >-
-      All four conformance scenarios the harness serves today, run end to end over real gRPC against
+      All five conformance scenarios the harness serves, run end to end over real gRPC against
       the test-mode sidecar through the shared cross-language suite: the processed record advancing
       the committed offset, the unreported record holding the commit back, the failure redelivered
-      with attempt=2 and the reason verbatim, and a held record admitting a concurrent delivery on
+      with attempt=2 and the reason verbatim, the in-flight ceiling holding this client to exactly
+      two unresolved records at once, and a held record admitting a concurrent delivery on
       another key. In each, the sidecar is spawned as a child process directly rather than through a
       shell, its stdout drained for the child's whole life and scanned for the port line, the
       fresh-session handshake completed, a dispatch wave queued and handed to a child task of a task
@@ -26,6 +27,13 @@ module_evidence:
       processor - the only sabotage that works on the ordering scenario, since the engine dispatches
       both shards in one wave regardless - left the runner having observed 1 of 3 dispatches, over
       its 60s budget, exiting 1.
+      THE FIFTH SCENARIO PASSES BUT WAS NOT RED-PROVEN HERE. The in-flight ceiling was proven able
+      to fail once for every language rather than in each - in Go and in Kotlin, by declaring double
+      the ceiling the scenario prescribed - and the conformance module's own evidence records it.
+      What Swift's own runner contributes is the `hold-until-ceiling-full` behaviour on a cooperative
+      thread pool: the barrier is an actor with per-generation continuations and a `Task.sleep`
+      settle, because a waiter that blocked its thread would remove one of the very tasks the group
+      needs to fill, and the group is exactly as wide as the executor count.
       THE FIRST ATTEMPT AT THAT LAST SABOTAGE PASSED, AND WHY IT DID IS WORTH MORE THAN THE SABOTAGE:
       an actor whose method merely awaits the body serialises nothing, because Swift actors are
       REENTRANT across a suspension - the moment the body awaits, the actor admits the next caller.

@@ -35,11 +35,12 @@ module_evidence:
       control, and nothing covering connection loss, lease expiry, worker death, terminal outcomes or
       the Shutdown drain - because none of those paths is implemented here, and the ones that are
       belong to the shared gRPC transport and are tested there. The cross-language conformance runner at
-      scripts/conformance-runner is registered in the shared suite and answers all four scenarios
+      scripts/conformance-runner is registered in the shared suite and answers all five scenarios
       alongside every other binding, so this client's behaviour at the protocol boundary is asserted
       by the same definitions and the same assertions as everyone else's. What it has NOT had is its
       own red-then-green pass through that suite: the wave that wrote it proved the runner by hand
-      against the test-mode sidecar - all four behaviour tokens, all three exit statuses - and
+      against the test-mode sidecar - the four behaviour tokens that existed then, all three exit
+      statuses - and
       deliberately left the registry entry to be landed separately, because three agents were editing
       that file and a lost update there is silent. So the scenarios are green here and were proven
       able to fail for other bindings, but not sabotaged against this one.

@@ -24,7 +24,22 @@ import java.time.Duration;
  */
 @Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
 public record ConformanceScenario(HarnessScenario harnessScenario, RunnerBehaviour behaviour,
-                                  int expectedDispatches, Duration runnerBudget, Assertion assertion) {
+                                  int expectedDispatches, int maxConcurrency, Duration runnerBudget,
+                                  Assertion assertion) {
+
+    /**
+     * A scenario whose in-flight ceiling is its own dispatch count - which is a ceiling nothing can reach,
+     * and so no constraint at all.
+     * <p>
+     * <b>Every scenario written before the ceiling was testable is this one</b>, and the value is not
+     * arbitrary: a scenario that holds a record must not deadlock on an executor count smaller than its own
+     * shape, so its ceiling has to be at least as large as the number of records it prescribes. Making the
+     * ceiling explicit is what let a scenario finally set it SMALLER and ask a client to prove it.
+     */
+    public ConformanceScenario(HarnessScenario harnessScenario, RunnerBehaviour behaviour,
+                               int expectedDispatches, Duration runnerBudget, Assertion assertion) {
+        this(harnessScenario, behaviour, expectedDispatches, expectedDispatches, runnerBudget, assertion);
+    }
 
     /**
      * What must be true once the runner has done what it was told. It receives the harness - so it can read
