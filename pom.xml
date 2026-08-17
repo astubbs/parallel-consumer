@@ -171,9 +171,14 @@
             parallel-consumer-proxy-clients/pom.xml, which OWNS the module exclusion. Sharing the id
             means every way of turning it on turns all of it on:
 
-                ./mvnw -P foreign-clients ...          one flag
-                ./mvnw -Dpc.foreignClients ...         the property activation below
-                ~/.m2/settings.xml <activeProfiles>    for a machine that always wants them
+                ./mvnw -Dpc.foreignClients ...   the switch
+                ~/.m2/settings.xml, a profile that SETS that property, for a machine that
+                always wants them - verified to activate everything the flag does
+
+            NOT -P foreign-clients. It activates this profile and the aggregator's by id, but the
+            eight per-language e2e-harness profiles activate on the PROPERTY, which -P never sets -
+            so the clients build with the engine missing from the reactor. Measured: 6 modules
+            under -P against 12 under -D.
 
             The notice is therefore NOT gated on `!pc.foreignClients`: a negated-property profile
             cannot be switched off by activating something by id, so `-P foreign-clients` would have
@@ -810,7 +815,7 @@
                             <target>
                                 <echo level="info">Parallel Consumer - JVM modules only.</echo>
                                 <echo level="info">- NOT in this build: the 8 foreign-language clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</echo>
-                                <echo level="info">- Add -P foreign-clients to build and test them.</echo>
+                                <echo level="info">- Add -Dpc.foreignClients to build and test them.</echo>
                                 <echo level="info">- That needs go, node, cargo, dotnet and ruby on PATH, plus Docker for cpp and swift.</echo>
                             </target>
                         </configuration>

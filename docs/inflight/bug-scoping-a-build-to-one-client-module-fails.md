@@ -20,6 +20,10 @@ requires every module's parent to be *in the reactor*. `-pl` on its own builds o
 ancestors, so the rule fires on any scoped build in this repo - the client modules are simply where a
 person is most likely to try it.
 
+**One exemption, measured 2026-08-17**: `clean` never reaches `validate`, so the enforcer never runs
+and `-am` is unnecessary there. The *profile* is still required, or the module is not in the reactor
+at all.
+
 ## Why it is worth fixing rather than knowing
 
 **The message describes the enforcer's world, not the user's mistake.** Someone scoping a build to one

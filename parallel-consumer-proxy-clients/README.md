@@ -111,17 +111,22 @@ broken runner fails rather than skipping.
 ## Building
 
 ```bash
-./mvnw test -P foreign-clients                      # everything, including the eight foreign clients
+./mvnw test -Dpc.foreignClients                     # everything, including the eight foreign clients
 ./mvnw test                                         # JVM only - the eight are not in the reactor at all
 bin/build-client.sh --list                          # every language that script knows
 bin/build-client.sh cpp --test                      # the container route
 ```
 
-**One profile id is the switch**, and every way of turning it on turns all of it on:
+**`-Dpc.foreignClients` is the switch.** Two ways to set it, and they are equivalent:
 
-- `-P foreign-clients`
-- `-Dpc.foreignClients` (the profile's own activation)
-- a `<activeProfiles>` entry in `~/.m2/settings.xml`, for a machine that always wants them
+- `-Dpc.foreignClients` on the command line
+- a `~/.m2/settings.xml` profile that **sets that property**, `activeByDefault`, for a machine that
+  always wants them - verified to activate everything the command-line flag does
+
+**Not `-P foreign-clients`, which half-works and is the trap.** It activates the root and aggregator
+profiles by id, but each language's `<lang>-e2e-harness` profile activates on the **property**, which
+`-P` never sets - so the clients build with the engine absent from the reactor and their end-to-end
+tests fail hunting for it. Measured: **6 modules under `-P`, 12 under `-D`**.
 
 Without it the eight foreign modules are **excluded from the reactor entirely** - not present-and-idle.
 That is deliberate: an ordinary Java build must not require Go, Node, Ruby, Rust, Python, .NET or
