@@ -35,6 +35,37 @@
         property is set by the mvn launcher and is empty when the build is driven by an IDE or an
         embedder, which would silently invoke "/bin/build-client.sh".
 
+        THIS MODULE CONFIGURES NO maven-clean-plugin FILESET, AND THAT IS THE ANSWER RATHER THAN AN
+        OMISSION. Every other foreign client declares one, because its native toolchain writes
+        somewhere Maven has never heard of; the container route writes exactly ONE host-side path,
+        the export directory bin/build-client.sh computes as <module>/target/container (grep
+        `out_dir` in that script). That is inside ${project.build.directory}, so the default clean
+        already deletes the two extracted binaries, the dynamic control, Package.resolved and
+        link-report.txt - by the same mechanism that keeps the promise for a Java module, with
+        nothing added. Measured on this module: build, `target/container/pc-swift-selftest`
+        present, `mvn clean`, gone, rebuild green.
+
+        THERE IS NO `.build` DIRECTORY HERE TO DELETE, and the reason is worth knowing before
+        someone adds a fileset for one. SwiftPM's three scratch paths are BuildKit CACHE MOUNTS
+        inside the image (grep `pc-swift-scratch-static` in the Dockerfile), one per build
+        configuration because two configurations sharing a path invalidate each other's whole
+        dependency graph - measured at 151s of pure re-compilation per edit. They are shared build
+        cache, not module output: deleting them would not remove one file from this directory, and
+        would cost the next build a full rebuild of SwiftNIO and grpc-swift. The Dockerfile keeps
+        them outside the package directory precisely so a stray `.build` can never appear in the
+        checkout.
+
+        WHAT MUST NOT BE ADDED HERE. Everything else this build produces is SHARED: the swift:6.1
+        base image (3.4 GB), the BuildKit layer cache including the two compiled protoc plugins, and
+        the apt and SwiftPM cache mounts. Several agents and worktrees run against this machine at
+        once, so deleting any of them would throw away output nobody asked this module to rebuild,
+        and would turn a colleague's 2-second cached build into a many-minute one.
+        bin/build-client.sh's `build_natively` records the same reasoning for the native route.
+        They are this language's ~/.m2, and `mvn clean` does not empty ~/.m2.
+
+        And nothing here may list `target/container` explicitly either: that would be a second copy
+        of the script's `out_dir`, free to drift from it, deleting something already deleted.
+
         Skeleton until the Swift wave of the language-proxy plan starts; that wave owns everything in
         this directory except the build environment (Dockerfile, toolchain-smoke/), and may replace
         the smoke target once it has one of its own.
