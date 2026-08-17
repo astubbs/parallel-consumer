@@ -429,8 +429,8 @@ credit ledger were live. Beyond that supersession, these move:</p>
 <section id="part-polyglot-demo" class="part-divider">
 <h1 style="font-size:1.45rem">Part 2 · Polyglot Demo App</h1>
 <p class="sub">
-  2026-08-17 · topic <code>polyglot-demo-app</code> · repo-grounded ·
-  40 raw candidates → 28 after merge → <strong>6 survivors</strong> · 5 axes<br>
+  2026-08-17, extended 2026-08-18 · topic <code>polyglot-demo-app</code> · repo-grounded ·
+  40 raw candidates → 28 after merge → <strong>7 survivors</strong> · 5 axes<br>
   Focus: run all 11 language bindings simultaneously (each demo dockerized), collect their output
   together, and prove in a single view that they all read the same records.
 </p>
@@ -491,11 +491,11 @@ mode.</p>
 <div class="scroll">
 <table>
   <tr><th>Axis</th><th>Question it holds</th><th>Survivors</th></tr>
-  <tr><td>Orchestration &amp; launch</td><td>How broker + sidecars + N docker clients come up with one command</td><td>3</td></tr>
+  <tr><td>Orchestration &amp; launch</td><td>How broker + sidecars + N docker clients come up with one command</td><td>4</td></tr>
   <tr><td>Proving sameness</td><td>What "they all read the same records" means, and who checks it</td><td>1, 2</td></tr>
-  <tr><td>Aggregation &amp; UI</td><td>How per-client output funnels into one view</td><td>1, 4</td></tr>
-  <tr><td>Per-language demo clients</td><td>What each language's demo app is; identical UX across eleven</td><td>3, 5</td></tr>
-  <tr><td>Distribution &amp; reach</td><td>How the demo ships and gets seen</td><td>1, 4, 6</td></tr>
+  <tr><td>Aggregation &amp; UI</td><td>How per-client output funnels into one view</td><td>1, 5</td></tr>
+  <tr><td>Per-language demo clients</td><td>What each language's demo app is; identical UX across eleven</td><td>3, 4, 6</td></tr>
+  <tr><td>Distribution &amp; reach</td><td>How the demo ships and gets seen</td><td>1, 5, 7</td></tr>
 </table>
 </div>
 <p class="axis-note">Every axis carries at least one survivor; no deliberate gaps.</p>
@@ -504,10 +504,11 @@ mode.</p>
 <ul class="jump">
   <li><a href="#d1">1. The skateboard stack — runners in costume, receipts over the produce path, one TUI, a recorded cast</a></li>
   <li><a href="#d2">2. The two-act show with a chaos finale — one consumer group across eleven runtimes</a></li>
-  <li><a href="#d3">3. The demo is conformance infrastructure — golden transcript, generated compose, one launch path</a></li>
-  <li><a href="#d4">4. The live performance show — single-clock scoreboard, streaming plots, and the story page</a></li>
-  <li><a href="#d5">5. The template flywheel — Rosetta panel, scaffold kit, mock-first authoring</a></li>
-  <li><a href="#d6">6. The polyglot mega-image — the whole thing fits in a tweet</a></li>
+  <li><a href="#d7">3. The bring-your-own-topic what-if machine — your topic, your latency, your failure rate, live</a></li>
+  <li><a href="#d3">4. The demo is conformance infrastructure — golden transcript, generated compose, one launch path</a></li>
+  <li><a href="#d4">5. The live performance show — single-clock scoreboard, streaming plots, and the story page</a></li>
+  <li><a href="#d5">6. The template flywheel — Rosetta panel, scaffold kit, mock-first authoring</a></li>
+  <li><a href="#d6">7. The polyglot mega-image — the whole thing fits in a tweet</a></li>
 </ul>
 
 <article class="card" id="d1">
@@ -641,8 +642,62 @@ mode.</p>
   </div>
 </article>
 
+<article class="card" id="d7">
+  <div class="rank"><span class="num">3</span><h3>The bring-your-own-topic what-if machine: your topic, your latency, your failure rate, live</h3></div>
+  <div class="tags"><span class="tag">per-language clients</span><span class="tag conf-high">Confidence: 80%</span><span class="tag">Complexity: Medium–Large</span></div>
+  <div class="field"><b>Description</b>
+    <p>Turn the demo from a show into <strong>the evaluator's own experiment</strong>. Point it at a real
+    topic in your test environment (R73's own-cluster mode — flags and env vars, credentials never logged),
+    then dial in your workload's truth on a small control surface: simulated per-record processing time
+    ("my function takes ~100ms"), ordering mode (defaults to KEY), a percentage of random processing
+    failures that must be retried, max concurrency, and which language bindings to run. Hit run and watch
+    PC churn through <em>your</em> topic live — its committed-offset frontier racing a plain
+    <code>KafkaConsumer</code> arm processing the same topic at the same time — with retries visibly
+    landing and ordering visibly held. The safety property that makes real topics acceptable is that the
+    function is <em>pretend</em>: a delay-and-dice simulator has no side effects, consumes under its own
+    group ids, and writes nothing to user topics, so at-least-once redelivery of real records costs
+    nothing. The knobs are all real product options, so the demo's control surface doubles as a live
+    options tutorial — and turning the dials far enough (0&nbsp;ms, no ordering requirement) lets the user
+    <em>discover</em> the case where the plain consumer wins, which is the published-losing-case
+    discipline delivered interactively instead of as a footnote.</p>
+  </div>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> plan R73 — the own-cluster mode with its flag/env contract and credential hygiene is
+    already a frozen demo requirement, so "point it at your real test env" is the third mode the demo must
+    support anyway, upgraded from smoke test to headline. <code>direct:</code> R76 — "the demo doubles as the
+    user's starting template": the simulated function with a delay knob is the pretend version of the marked
+    serde/handler extension point. <code>direct:</code>
+    <code>docs/inflight/parked-testing-as-a-feature-for-the-clients.md</code> — each language races its own
+    serial baseline; the two-shapes discipline (favourable case <em>and</em> the case we expect to lose) is
+    here spanned by one parameter space the user explores themselves. <code>reasoned:</code> a canned
+    benchmark answers "is PC fast?"; only the user's own topic, key distribution and latency answer "will PC
+    help <em>me</em>?" — key-skew and processing time are exactly the variables that decide PC's advantage,
+    and no published table can enumerate them. The delay knob generalises the perf track's fixed slow-stage
+    scenario into user-supplied truth.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    <p>This is the strongest adoption artifact in the whole set: it converts an evaluator's private question
+    into a five-minute experiment on their own data, produces the "we watched it eat our topic eleven ways"
+    moment no slide deck can, and doubles as a sizing calculator — the concurrency and ordering knobs show
+    what the user's partition count <em>doesn't</em> have to be. It reuses survivor 1's stack (runners,
+    receipts, aggregator) and survivor 5's display seam; the only genuinely new surface is the parameter
+    panel and the plain-consumer comparison arm, which the perf track's arm design already defines.</p>
+  </div>
+  <div class="field"><b>Downsides</b>
+    <p>The comparison-on-your-cluster is a demonstration, not a benchmark — contention on the user's own
+    environment is the user's own reality, but the display must still print both arms' effective-config
+    fingerprint (proxy UNSPECIFIED defaults diverge from core defaults) and avoid absolute-number framing.
+    A free parameter space invites unfair configurations — the UI should show, not hide, what the dials do
+    to fairness (e.g. label the 0&nbsp;ms/no-ordering corner as the plain consumer's home turf). Reading real
+    topics needs a visible "consumes only, writes nothing, own group ids" promise, and the receipts channel
+    must respect the receipts-off constraint when any arm is being measured. Whether this is a mode of the
+    demo binary or a separate app is a design decision for brainstorm — the KTD40 identical-UX contract
+    across eleven languages caps how much per-language control-surface divergence is tolerable.</p>
+  </div>
+</article>
+
 <article class="card" id="d3">
-  <div class="rank"><span class="num">3</span><h3>The demo is conformance infrastructure: golden transcript, generated compose, one launch path, go/no-go roll call</h3></div>
+  <div class="rank"><span class="num">4</span><h3>The demo is conformance infrastructure: golden transcript, generated compose, one launch path, go/no-go roll call</h3></div>
   <div class="tags"><span class="tag">orchestration</span><span class="tag">per-language clients</span><span class="tag conf-high">Confidence: 85%</span><span class="tag">Complexity: Medium</span></div>
   <div class="field"><b>Description</b>
     <p>Treat the demo layer with the same discipline the wire already gets, four moves. (1) <strong>Golden
@@ -686,7 +741,7 @@ mode.</p>
 </article>
 
 <article class="card" id="d4">
-  <div class="rank"><span class="num">4</span><h3>The live performance show: single-clock scoreboard, streaming plots, and the story page</h3></div>
+  <div class="rank"><span class="num">5</span><h3>The live performance show: single-clock scoreboard, streaming plots, and the story page</h3></div>
   <div class="tags"><span class="tag">aggregation &amp; ui</span><span class="tag">distribution</span><span class="tag conf-high">Confidence: 80%</span><span class="tag">Complexity: Medium–Large</span></div>
   <div class="field"><b>Description</b>
     <p>Don't just publish the performance numbers — <strong>run the performance test live inside the demo and
@@ -774,7 +829,7 @@ mode.</p>
 </article>
 
 <article class="card" id="d5">
-  <div class="rank"><span class="num">5</span><h3>The template flywheel: Rosetta panel, scaffold kit, mock-first authoring</h3></div>
+  <div class="rank"><span class="num">6</span><h3>The template flywheel: Rosetta panel, scaffold kit, mock-first authoring</h3></div>
   <div class="tags"><span class="tag">per-language clients</span><span class="tag conf-med">Confidence: 70%</span><span class="tag">Complexity: Medium</span></div>
   <div class="field"><b>Description</b>
     <p>The demo doubles as the onboarding surface, three moves. (1) <strong>Rosetta panel:</strong> each lane
@@ -808,7 +863,7 @@ mode.</p>
 </article>
 
 <article class="card" id="d6">
-  <div class="rank"><span class="num">6</span><h3>The polyglot mega-image: the whole thing fits in a tweet</h3></div>
+  <div class="rank"><span class="num">7</span><h3>The polyglot mega-image: the whole thing fits in a tweet</h3></div>
   <div class="tags"><span class="tag">distribution</span><span class="tag conf-med">Confidence: 60%</span><span class="tag">Complexity: Medium</span></div>
   <div class="field"><b>Description</b>
     <p><code>docker run -it stub.bz/pc-polyglot</code> — one image assembled <code>COPY --from</code> the
@@ -826,7 +881,7 @@ mode.</p>
   </div></div>
   <div class="field"><b>Rationale</b>
     <p>Distribution reach with zero hosting: the mega-image rides artifacts the plan already requires and
-    gives the project its most quotable invocation. It composes with idea 1 (the TUI is PID 1) and idea 3
+    gives the project its most quotable invocation. It composes with idea 1 (the TUI is PID 1) and idea 4
     (the image is assembled from gate-verified per-language images).</p>
   </div>
   <div class="field"><b>Downsides</b>
@@ -864,7 +919,7 @@ mode.</p>
       <td>A naming device, not an agenda item — became survivor 2's structure.</td></tr>
   <tr><td>Live performance show (owner's follow-on idea, 2026-08-17: run the perf tests live, web dashboard
       plotting as results arrive, story + marketing page + doc links)</td><td>Folded in</td>
-      <td>Merged into survivor 4, which was already its seed — same measurement seam, same UI surface. Carries
+      <td>Merged into survivor 5, which was already its seed — same measurement seam, same UI surface. Carries
       the recorded constraints: per-language-vs-Java hop cost only (never a language race), two-shapes
       story including the expected-loss case, single-run figures are not evidence. Measurement design stays
       with the concurrent perf-comparison session; this doc owns the presentation layer.</td></tr>
@@ -873,7 +928,7 @@ mode.</p>
       lands later as a dependency, not a rewrite.</td></tr>
   <tr><td>Nightly mock-mode boot canary; roll-call barrier; subset flag; registry-generated compose;
       run.sh-as-CI-test; golden transcript</td><td>Merged</td>
-      <td>Six orchestration/anti-rot candidates from three frames merged into survivor 3 — same underlying
+      <td>Six orchestration/anti-rot candidates from three frames merged into survivor 4 — same underlying
       move: extend the conformance layer's epistemology to the demo layer.</td></tr>
   <tr><td>Plain swim-lane log tail as the UI</td><td>Rejected (in-frame)</td>
       <td>The prior-art baseline the market-gap analysis dismisses — Temporal Polyglot already ends there.</td></tr>
@@ -889,7 +944,7 @@ mode.</p>
 <h2>What Part 2 does not settle</h2>
 <ul>
   <li><strong>Subset default vs full eleven</strong> — R20's singular wording leaves the eleven-at-once
-      launch genuinely unspecified; survivor 3 proposes subset-default + <code>--languages=all</code>, but
+      launch genuinely unspecified; survivor 4 proposes subset-default + <code>--languages=all</code>, but
       the default is a product call.</li>
   <li><strong>Shared-group demo (Act 2) is inferred-legal, not written down</strong> — eleven apps in one
       consumer group violates nothing, but no requirement records it; if adopted, write it into the plan as

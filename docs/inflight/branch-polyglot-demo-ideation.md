@@ -2,8 +2,8 @@
 
 Branch `docs/ideate-polyglot-demo` (off `feats/proxy-requirements`, astubbs#242) carries Part 2 of
 [`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html`](../ideation/2026-08-14-language-proxy-interaction-model-ideation.html):
-six ranked, verifier-checked directions for a demo that runs all eleven language bindings at once
-and proves in one view that they read the same records. Read the doc before designing any demo,
+seven ranked directions (six verifier-checked; the seventh, owner-added 2026-08-18) for a demo that
+runs all eleven language bindings at once and proves in one view that they read the same records. Read the doc before designing any demo,
 orchestration, aggregation or perf-display work — it records what was rejected and why (notably:
 audience-as-workload keynote mode violates the recorded no-visitor-input security posture).
 
@@ -25,5 +25,6 @@ What no command will tell you:
   its dependency freeze, but the plan's KTD5 is configuration-is-code — one-line citation fix.
 
 Next step when picked up: choose a survivor (1, the skateboard stack, is the fastest to something
-running; 4, the live performance show, is the most fully specified) and take it through brainstorm
-to a plan; the work would land as a stacked PR on astubbs#293.
+running; 3, the bring-your-own-topic what-if machine, is the owner's own direction and the strongest
+adoption artifact; 5, the live performance show, is the most fully specified) and take it through
+brainstorm to a plan; the work would land as a stacked PR on astubbs#293.
