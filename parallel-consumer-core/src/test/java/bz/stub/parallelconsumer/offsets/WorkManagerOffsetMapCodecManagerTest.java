@@ -243,7 +243,7 @@ class WorkManagerOffsetMapCodecManagerTest {
      * move both sides of the comparison at once.
      * <p>
      * The writer is NOT a pure shorter-of: below the 22-byte floor
-     * ({@link OffsetSimpleSerialisation#Z85_MIN_PAYLOAD_BYTES}) sentinel+Z85 is a character shorter at 1, 4, 7, 13,
+     * ({@link OffsetSimpleSerialisation#Z85_MIN_PAYLOAD_BYTES}) sentinel+Z85 is one to three characters shorter at 1, 4, 7, 13,
      * ... payload bytes, and the writer still emits Base64 - those payloads are nowhere near the metadata cap, and
      * Base64 there keeps old readers working for free. The rows below the floor where Z85 would win are what pin the
      * floor. 22, not 24, is where Z85 wins for good: at 22 payload bytes Base64 needs 32 characters and sentinel+Z85
@@ -780,7 +780,7 @@ class WorkManagerOffsetMapCodecManagerTest {
 
     /**
      * Holds the writer to KTD6 with U3's floor: Base64 for every payload below 22 bytes (old-reader compatibility,
-     * even at the sizes where sentinel+Z85 would be a character shorter), sentinel+Z85 from 22 bytes up where it is
+     * even at the sizes where sentinel+Z85 would be marginally shorter), sentinel+Z85 from 22 bytes up where it is
      * always strictly shorter, the sentinel carried exactly when Z85 was chosen, and never a character outside 7-bit
      * ASCII (R8 - the cap counts characters while the broker counts bytes). The floor is restated as a literal 22
      * rather than read from {@link OffsetSimpleSerialisation#Z85_MIN_PAYLOAD_BYTES}, for the same

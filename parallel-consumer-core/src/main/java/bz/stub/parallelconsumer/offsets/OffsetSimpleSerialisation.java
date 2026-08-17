@@ -132,7 +132,7 @@ public class OffsetSimpleSerialisation {
      * cap and the back-pressure threshold are measured against - but only from
      * {@link #Z85_MIN_PAYLOAD_BYTES 22 payload bytes} up; below that floor every payload is Base64.
      * <p>
-     * Below the floor, sentinel+Z85 is sometimes a single character shorter than Base64 (at 1, 4, 7, ... payload
+     * Below the floor, sentinel+Z85 is sometimes one to three characters shorter than Base64 (at 1, 4, 7, ... payload
      * bytes, where Base64 pads a mostly-empty final block) - but payloads that small are nowhere near the metadata
      * cap, so a character there buys no real headroom. Keeping them Base64 keeps them readable by every older PC
      * release, at zero density cost where density matters. From 22 bytes up Z85 is always strictly shorter and always
