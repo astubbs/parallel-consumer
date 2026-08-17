@@ -3,6 +3,7 @@ package bz.stub.parallelconsumer.proxy.engine;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import com.github.bsideup.jabel.Desugar;
 
 import java.time.Clock;
@@ -51,10 +52,10 @@ public record LivenessSettings(boolean leasesEnabled,
     /** ASM6's number: the bounded window after connection loss during which records are held, not returned. */
     public static final Duration DEFAULT_RECONNECT_WINDOW = Duration.ofSeconds(30);
 
-    /** The defaults on the system clock, with leases enabled - what a session negotiating everything gets. */
+    /** The defaults on the production clock, with leases enabled - what a session negotiating everything gets. */
     public static LivenessSettings defaults() {
         return new LivenessSettings(true, DEFAULT_LEASE_DURATION, DEFAULT_HEARTBEAT_INTERVAL,
-                DEFAULT_RECONNECT_WINDOW, Clock.systemUTC());
+                DEFAULT_RECONNECT_WINDOW, TimeUtils.getClock());
     }
 
     /**
