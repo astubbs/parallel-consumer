@@ -104,7 +104,7 @@
 <h2>Grounding Context</h2>
 <p><b>Codebase context.</b> The fork carries five abandoned 2022 branches implementing a "Micro Actor framework for structured, ordered, simple IPC" (the author's own javadoc): <code>improvements/lambda-actor-bus</code>, <code>commit-command-actor</code>, <code>poller-bus-actor</code>, <code>async-process-send-results-using-actor</code>, <code>actor-scheduled</code> — plus three dependent branches (<code>transactions-dont-block</code>, <code>scheduled-commit</code>, <code>remove-commit-queue</code>). Tips date Jul&ndash;Dec 2022; master has since been fully package-renamed (<code>io.confluent.*</code> &rarr; <code>bz.stub.*</code>). The framework proper is <b>537 lines in 4 files in its own package</b>, coupled to PC by a single 16-line marker interface. The God class (<code>AbstractParallelEoSStreamProcessor</code>) is 1534 lines and has moved by one line since the refactor index was written; master core carries 10 <code>synchronized</code>, 11 <code>AtomicBoolean</code>, 0 <code>ReentrantLock</code>.</p>
 <p><b>Recorded verdicts under test.</b> (1) <code>docs/refactoring.md:151</code>: the actor work is "Only meaningful as part of the confluentinc#200 rework." (2) <code>upstream-pr-analysis.adoc</code> Group C: "keep ideas, not code &mdash; branches are far too stale to apply directly." Both were written before the rename tooling, chaos harness maturity, and the map itself existed &mdash; and the fork's own tables already contradict them once (async-produce is ranked Group B, "throughput-critical").</p>
-<p><b>Tracking gaps found during grounding.</b> The actor family has <b>no</b> <code>upstream-map.yaml</code> entry, no fork issue, and no fork PR; the one adjacent map entry (<code>sweep-2023-async-produce</code>) records a wrong branch name and a stale SHA. Live adjacent work: bug-857 (poll/control <code>synchronized(commitCommand)</code> deadlock) is still open in draft PR #29 with recorded chaos replay seeds; the blocking <code>futureSend.get(sendTimeout)</code> that #356 was written to remove is verified still in master source today.</p>
+<p><b>Tracking gaps found during grounding.</b> The actor family has <b>no</b> <code>upstream-map.yaml</code> entry, no fork issue, and no fork PR; the one adjacent map entry (<code>sweep-2023-async-produce</code>) records a wrong branch name and a stale SHA. Live adjacent work: bug-857 (poll/control <code>synchronized(commitCommand)</code> deadlock) is still open in draft PR astubbs#29 with recorded chaos replay seeds; the blocking <code>futureSend.get(sendTimeout)</code> that confluentinc#356 was written to remove is verified still in master source today.</p>
 </section>
 
 <section id="topic-axes">
@@ -114,7 +114,7 @@
   <li><b>A2 Call-site conversion</b> — which coordination point converts to actors, in what order, how far</li>
   <li><b>A3 Salvage mechanics</b> — moving 2022 code across 3.5 years of drift plus a full package rename</li>
   <li><b>A4 Proof</b> — demonstrating a conversion fixed something real and broke nothing</li>
-  <li><b>A5 Framing</b> — tracking, verdict revision, sequencing against #142/#200 and the God-class work</li>
+  <li><b>A5 Framing</b> — tracking, verdict revision, sequencing against astubbs#142/confluentinc#200 and the God-class work</li>
 </ul>
 </section>
 
@@ -180,7 +180,7 @@
   <div class="chips"><span class="chip axis">A2 Conversion + A5 Framing</span><span class="chip conf-high">Confidence 80%</span><span class="chip cx">Complexity Medium</span></div>
 
   <div class="field"><span class="fl">Description</span>
-  Stop treating the collection as one project. It coordinates three unrelated things — the commit path, the poller thread, and async produce — and only the poller one is genuinely subordinate to the shared-nothing (#200) rework. Split <code>docs/refactoring.md:151</code>'s blanket verdict into gated vs ungated claims, and promote <code>async-process-send-results-using-actor</code> (upstream draft #356) to its own track: it is the one branch the fork's own analysis ranks Group&nbsp;B "throughput-critical," its target defect is verified still in master today, and fork issue #230 already exists to hang it on.</div>
+  Stop treating the collection as one project. It coordinates three unrelated things — the commit path, the poller thread, and async produce — and only the poller one is genuinely subordinate to the shared-nothing (confluentinc#200) rework. Split <code>docs/refactoring.md:151</code>'s blanket verdict into gated vs ungated claims, and promote <code>async-process-send-results-using-actor</code> (upstream draft confluentinc#356) to its own track: it is the one branch the fork's own analysis ranks Group&nbsp;B "throughput-critical," its target defect is verified still in master today, and fork issue astubbs#230 already exists to hang it on.</div>
 
   <figure>
   <svg viewBox="0 0 860 205" role="img" aria-label="One label, three projects: commit path, poller thread, async produce, each with a different gate">
@@ -192,32 +192,32 @@
     <line x1="210" y1="102" x2="300" y2="102" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
     <line x1="210" y1="119" x2="300" y2="169" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
     <rect x="305" y="10" width="250" height="52" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
-    <text x="430" y="31" text-anchor="middle" font-size="12.5" fill="#1f2430">async produce (#356, issue #230)</text>
+    <text x="430" y="31" text-anchor="middle" font-size="12.5" fill="#1f2430">async produce (confluentinc#356, issue astubbs#230)</text>
     <text x="430" y="48" text-anchor="middle" font-size="11" fill="#5c6370">futureSend.get() still in master</text>
     <rect x="305" y="76" width="250" height="52" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
-    <text x="430" y="97" text-anchor="middle" font-size="12.5" fill="#1f2430">commit path (#524 lineage)</text>
-    <text x="430" y="114" text-anchor="middle" font-size="11" fill="#5c6370">bug-857 site, PR #29 still open</text>
+    <text x="430" y="97" text-anchor="middle" font-size="12.5" fill="#1f2430">commit path (confluentinc#524 lineage)</text>
+    <text x="430" y="114" text-anchor="middle" font-size="11" fill="#5c6370">bug-857 site, PR astubbs#29 still open</text>
     <rect x="305" y="142" width="250" height="52" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
     <text x="430" y="163" text-anchor="middle" font-size="12.5" fill="#1f2430">poller thread (poller-bus-actor)</text>
-    <text x="430" y="180" text-anchor="middle" font-size="11" fill="#5c6370">the one genuinely #200-shaped piece</text>
+    <text x="430" y="180" text-anchor="middle" font-size="11" fill="#5c6370">the one genuinely confluentinc#200-shaped piece</text>
     <rect x="590" y="10" width="260" height="52" rx="8" fill="#e6f2ea" stroke="#a8cdb6"/>
     <text x="720" y="31" text-anchor="middle" font-size="12" fill="#2c6e49">UNGATED — Group B</text>
     <text x="720" y="48" text-anchor="middle" font-size="11" fill="#2c6e49">"throughput-critical"</text>
     <rect x="590" y="76" width="260" height="52" rx="8" fill="#fbf0dd" stroke="#dcc296"/>
     <text x="720" y="97" text-anchor="middle" font-size="12" fill="#a4611d">GATE = the experiment (idea 3)</text>
-    <text x="720" y="114" text-anchor="middle" font-size="11" fill="#a4611d">not #200</text>
+    <text x="720" y="114" text-anchor="middle" font-size="11" fill="#a4611d">not confluentinc#200</text>
     <rect x="590" y="142" width="260" height="52" rx="8" fill="#f9e8e7" stroke="#dcaead"/>
-    <text x="720" y="163" text-anchor="middle" font-size="12" fill="#9e3a38">GATED on #200 / #142</text>
+    <text x="720" y="163" text-anchor="middle" font-size="12" fill="#9e3a38">GATED on confluentinc#200 / astubbs#142</text>
     <text x="720" y="180" text-anchor="middle" font-size="11" fill="#9e3a38">verdict stays, but only here</text>
     <line x1="555" y1="36" x2="585" y2="36" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
     <line x1="555" y1="102" x2="585" y2="102" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
     <line x1="555" y1="168" x2="585" y2="168" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr2)"/>
   </svg>
-  <figcaption>Three projects wearing one name. The blanket "#200 gate" verdict only fits one of them.</figcaption>
+  <figcaption>Three projects wearing one name. The blanket "confluentinc#200 gate" verdict only fits one of them.</figcaption>
   </figure>
 
   <div class="field"><span class="fl">Basis</span>
-  <code>direct:</code> Verified by the fresh-context verifier on master today: <code>ParallelEoSStreamProcessor.java:122</code> reads "// wait for all acks to complete, see PR confluentinc#356 for a fully async version which doesn't need to block here", with <code>futureSend.get(options.getSendTimeout()&hellip;)</code> at line 130. <code>upstream-pr-analysis.adoc:196</code> ranks it "B3 #356 &hellip; throughput-critical" while the Group C header ("keep ideas, not code") sits at line 204&ndash;206 — the two verdicts already disagree about the same branch. The map's <code>sweep-2023-async-produce</code> entry adds the design constraints: "Needs work-unit limbo state + back pressure so producer timeouts do not feed themselves."</div>
+  <code>direct:</code> Verified by the fresh-context verifier on master today: <code>ParallelEoSStreamProcessor.java:122</code> reads "// wait for all acks to complete, see PR confluentinc#356 for a fully async version which doesn't need to block here", with <code>futureSend.get(options.getSendTimeout()&hellip;)</code> at line 130. <code>upstream-pr-analysis.adoc:196</code> ranks it "B3 confluentinc#356 &hellip; throughput-critical" while the Group C header ("keep ideas, not code") sits at line 204&ndash;206 — the two verdicts already disagree about the same branch. The map's <code>sweep-2023-async-produce</code> entry adds the design constraints: "Needs work-unit limbo state + back pressure so producer timeouts do not feed themselves."</div>
 
   <div class="field"><span class="fl">Rationale</span>
   A verdict that bundles a 10-file branch and a 72-file branch, a Group-B item and Group-C items, under one gate is the reason nothing has moved in 3.5 years. Un-bundling is the actual unblocking move — cheaper and higher-leverage than any single code change, and it aligns the fork's two editorial records, which currently contradict each other.</div>
@@ -231,7 +231,7 @@
   <div class="chips"><span class="chip axis">A2 Conversion + A4 Proof</span><span class="chip conf-med">Confidence 65%</span><span class="chip cx">Complexity High</span></div>
 
   <div class="field"><span class="fl">Description</span>
-  The <code>synchronized(commitCommand)</code> poll-vs-control deadlock is still open (draft PR #29 mitigates with <code>ReentrantLock.tryLock()</code>, chaos pass rate ~20%&rarr;~80%, fourth sighting 2026-08-12), and the map records the open question verbatim: "User still weighing a larger poll+control single-thread refactor to kill the whole bug class." <code>commit-command-actor</code> is the second design for that exact defect. Convert the commit path to a mailbox in a worktree, replay the two recorded chaos seeds (<code>4734674029169027864</code> CLASS2_STALL, <code>7731567379755737438</code> ZOMBIE_MEMBER), and compare against #29's lock arm in the same pass-rate currency. Acceptance rule inverted: a conversion that moves no number is rejected as unproven, not accepted as safe. Decision rider: no dual-path/feature-flag — a flagged concurrency transport doubles the chaos state space for users who don't exist. Escalation option: a seeded-interleaving deterministic scheduler over the mailboxes (FoundationDB/TigerBeetle style — <code>process()</code> drains on the calling thread, so a mailbox-based controller is drivable single-threaded), which upgrades the comparison from statistical to replayable; its deterministic frontier honestly stops at <code>ConsumerManager</code>.</div>
+  The <code>synchronized(commitCommand)</code> poll-vs-control deadlock is still open (draft PR astubbs#29 mitigates with <code>ReentrantLock.tryLock()</code>, chaos pass rate ~20%&rarr;~80%, fourth sighting 2026-08-12), and the map records the open question verbatim: "User still weighing a larger poll+control single-thread refactor to kill the whole bug class." <code>commit-command-actor</code> is the second design for that exact defect. Convert the commit path to a mailbox in a worktree, replay the two recorded chaos seeds (<code>4734674029169027864</code> CLASS2_STALL, <code>7731567379755737438</code> ZOMBIE_MEMBER), and compare against astubbs#29's lock arm in the same pass-rate currency. Acceptance rule inverted: a conversion that moves no number is rejected as unproven, not accepted as safe. Decision rider: no dual-path/feature-flag — a flagged concurrency transport doubles the chaos state space for users who don't exist. Escalation option: a seeded-interleaving deterministic scheduler over the mailboxes (FoundationDB/TigerBeetle style — <code>process()</code> drains on the calling thread, so a mailbox-based controller is drivable single-threaded), which upgrades the comparison from statistical to replayable; its deterministic frontier honestly stops at <code>ConsumerManager</code>.</div>
 
   <figure>
   <svg viewBox="0 0 860 190" role="img" aria-label="Two arms, one defect, one instrument: lock arm and mailbox arm both judged by the same replay seeds">
@@ -242,7 +242,7 @@
     <line x1="230" y1="80" x2="320" y2="45" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr3)"/>
     <line x1="230" y1="110" x2="320" y2="145" stroke="#5c6370" stroke-width="1.5" marker-end="url(#arr3)"/>
     <rect x="325" y="18" width="230" height="55" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
-    <text x="440" y="40" text-anchor="middle" font-size="12.5" fill="#1f2430">Arm A: ReentrantLock (PR #29)</text>
+    <text x="440" y="40" text-anchor="middle" font-size="12.5" fill="#1f2430">Arm A: ReentrantLock (PR astubbs#29)</text>
     <text x="440" y="58" text-anchor="middle" font-size="11" fill="#5c6370">measured: ~20% &rarr; ~80%</text>
     <rect x="325" y="118" width="230" height="55" rx="8" fill="#ffffff" stroke="#c9c4bb"/>
     <text x="440" y="140" text-anchor="middle" font-size="12.5" fill="#1f2430">Arm B: mailbox (commit-command-actor)</text>
@@ -257,13 +257,13 @@
   </figure>
 
   <div class="field"><span class="fl">Basis</span>
-  <code>direct:</code> Both replay seeds and the exact <code>mvnw</code> chaos invocations verified present at <code>docs/inflight/bug-857-family.md:33,110</code>; the "fourth sighting, 2026-08-12" ZOMBIE_MEMBER entry verified at line 94. PR #29's pass-rate framing and the "user still weighing" line are in <code>upstream-map.yaml</code>'s <code>bug-857-stall-after-rebalance</code> entry. <code>external:</code> FoundationDB simulation-first testing / TigerBeetle VOPR for the deterministic escalation. One unverified assumption flagged by the verifier: that <code>ConsumerOffsetCommitter</code> is convertible without touching the God class — check before scoping.</div>
+  <code>direct:</code> Both replay seeds and the exact <code>mvnw</code> chaos invocations verified present at <code>docs/inflight/bug-857-family.md:33,110</code>; the "fourth sighting, 2026-08-12" ZOMBIE_MEMBER entry verified at line 94. PR astubbs#29's pass-rate framing and the "user still weighing" line are in <code>upstream-map.yaml</code>'s <code>bug-857-stall-after-rebalance</code> entry. <code>external:</code> FoundationDB simulation-first testing / TigerBeetle VOPR for the deterministic escalation. One unverified assumption flagged by the verifier: that <code>ConsumerOffsetCommitter</code> is convertible without touching the God class — check before scoping.</div>
 
   <div class="field"><span class="fl">Rationale</span>
   This is the one call site where reviving the actor work is not speculative architecture: it is a second candidate fix for a still-reproducing defect, with a recorded control arm and a recorded instrument. It directly answers the largest open architectural question in the fork's own tracking, and 80% is not a fix — it is a smaller haystack.</div>
 
   <div class="field"><span class="fl">Downsides</span>
-  Largest effort on this list; touches the God class's hottest coordination. If #29 lands first and holds at ~100%, the experiment's payoff drops to "confirms the cheaper fix sufficed" — worth knowing, but run the sequencing deliberately. Chaos pass rates are statistical; without the deterministic escalation, a small delta may not settle the argument.</div>
+  Largest effort on this list; touches the God class's hottest coordination. If astubbs#29 lands first and holds at ~100%, the experiment's payoff drops to "confirms the cheaper fix sufficed" — worth knowing, but run the sequencing deliberately. Chaos pass rates are statistical; without the deterministic escalation, a small delta may not settle the argument.</div>
 </article>
 
 <article class="idea" id="i4">
@@ -274,7 +274,7 @@
   One administrative pass, museum-accession style: (a) add a dedicated <code>upstream-map.yaml</code> entry naming all five actor branches plus the three dependents, with per-branch readiness grades instead of one binary verdict; (b) open one fork issue to hang decisions on; (c) annotated tags on the five tips so branch cleanup can never lose them; (d) fix the live data-integrity bug — <code>sweep-2023-async-produce</code> records branch <code>async-process-send-results</code> (actual: <code>&hellip;-using-actor</code>) and SHA <code>a89f0bce2</code> (actual tip: <code>00f350166</code>); (e) add <code>poller-bus-actor</code> to <code>refactoring.md</code>'s Actor/IPC list, where it is currently missing despite carrying the second actor base; (f) write the short ideas-doc that finally executes "keep ideas, not code" — which has been recorded for years while the ideas lived exclusively in unmerged branch tips; (g) skim <code>upstream/refactor/actor-base-fixes</code>'s ~121-line review diff for still-applicable feedback.</div>
 
   <div class="field"><span class="fl">Basis</span>
-  <code>direct:</code> "upstream-map.yaml has NO dedicated entry for the actor family&hellip; PRs #325 and #524 appear exactly once in the whole file: inside the bulk prs list of sweep-2023-admin-closure" — and the map's own schema warns a mis-listed ref "would be hidden from every future audit." The wrong branch name/SHA and the missing <code>poller-bus-actor</code> cross-reference were both independently re-verified by the verifier. The map is the declared SOURCE OF TRUTH; the family is currently marked accounted-for while being invisible.</div>
+  <code>direct:</code> "upstream-map.yaml has NO dedicated entry for the actor family&hellip; PRs confluentinc#325 and confluentinc#524 appear exactly once in the whole file: inside the bulk prs list of sweep-2023-admin-closure" — and the map's own schema warns a mis-listed ref "would be hidden from every future audit." The wrong branch name/SHA and the missing <code>poller-bus-actor</code> cross-reference were both independently re-verified by the verifier. The map is the declared SOURCE OF TRUTH; the family is currently marked accounted-for while being invisible.</div>
 
   <div class="field"><span class="fl">Rationale</span>
   Cheapest item on the list and a prerequisite for every other one: decisions made in this conversation are worthless if the next audit, sweep, or session cannot find where they landed. Grading per-branch (the family is already graded inconsistently — B vs C) is what makes the un-bundling in idea 2 durable rather than a one-off argument.</div>
@@ -372,7 +372,7 @@
   <li><a href="https://github.com/astubbs/parallel-consumer/blob/master/docs/inflight/bug-857-family.md"><code>docs/inflight/bug-857-family.md</code></a> — chaos seeds, replay invocations, sightings</li>
   <li><a href="https://github.com/astubbs/parallel-consumer/blob/master/bin/rename-packages.sh"><code>bin/rename-packages.sh</code></a> — the datum-shift script ("BRINGING AN OPEN BRANCH ACROSS")</li>
   <li>Branches: <code>origin/improvements/lambda-actor-bus</code> @da7dc92c1 &middot; <code>commit-command-actor</code> @1c50225e5 &middot; <code>poller-bus-actor</code> @b1598f219 &middot; <code>async-process-send-results-using-actor</code> @00f350166 &middot; <code>actor-scheduled</code> @4db0da0fd &middot; <code>upstream/refactor/actor-base-fixes</code> @09a13d070</li>
-  <li>Fork PRs/issues: <a href="https://github.com/astubbs/parallel-consumer/pull/29">PR #29</a> (lock arm) &middot; <a href="https://github.com/astubbs/parallel-consumer/issues/230">issue #230</a> (async produce) &middot; <a href="https://github.com/astubbs/parallel-consumer/issues/142">issue #142</a> (shared-nothing mirror)</li>
+  <li>Fork PRs/issues: <a href="https://github.com/astubbs/parallel-consumer/pull/29">PR astubbs#29</a> (lock arm) &middot; <a href="https://github.com/astubbs/parallel-consumer/issues/230">issue astubbs#230</a> (async produce) &middot; <a href="https://github.com/astubbs/parallel-consumer/issues/142">issue astubbs#142</a> (shared-nothing mirror)</li>
 </ul>
 </section>
 
