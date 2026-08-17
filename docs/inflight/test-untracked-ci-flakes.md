@@ -6,15 +6,8 @@ and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
 which also has the scan method. What is open is the tests themselves - one of the scan's three, plus
-one met later. Two are fixed and gone from this ledger:
-
-- `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-  (3/45) - astubbs#260 established the extra commit was correct product behaviour and the assertion
-  was wrong, so no product change was needed.
-- `PCMetricsTest.metricsRegisterBinding` (2 seen) - astubbs#265 fixed the counter-versus-gauge race
-  and returned the test to the gating lane in the same commit, per rule 3 of
-  [`docs/quarantined-tests.md`](../quarantined-tests.md). The rule it produced lives in
-  [`assert-the-commit-frontier-not-the-tick-path.md`](../solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md).
+one met later. The other two are fixed and out of this ledger (astubbs#260 and astubbs#265); where
+their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
@@ -97,9 +90,8 @@ that the first did not reproduce. Review caught this; it is exactly the invalid-
 that AGENTS.md warns about, and left standing it would have licensed quarantining a real product bug.
 
 What the rerun **does** establish: the failure is not deterministic, and the unit lane is currently
-producing red from more than one already-tracked test. The load-bearing evidence for the
-now-closed `PCMetricsTest` diagnosis was a source-level read - the counter snapshot and the gauge
-are taken at different instants - not the rerun.
+producing red from more than one already-tracked test. What it is *not* is evidence about any one
+test's mechanism - that has always come from a source-level read, never from a rerun's landing spot.
 
 ### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - quarantined anyway, by explicit exception
 
