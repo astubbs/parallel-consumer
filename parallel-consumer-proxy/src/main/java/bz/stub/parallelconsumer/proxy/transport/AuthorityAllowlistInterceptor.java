@@ -97,6 +97,10 @@ public class AuthorityAllowlistInterceptor implements ServerInterceptor {
      * leaves a bare unbracketed IPv6 literal (more than one colon) intact rather than mistaking its last
      * segment for a port.
      */
+    // DO NOT swap this for Guava's HostAndPort. It throws on a bare unbracketed IPv6 authority,
+    // which this method deliberately admits - so the swap would narrow what the allowlist accepts,
+    // which is a security-posture change wearing a library upgrade. Declined 2026-08-17; see
+    // parallel-consumer-proxy/docs/simplifications-declined.md.
     static String normalizeToHost(String authority) {
         String a = authority.trim().toLowerCase(Locale.ROOT);
         if (a.startsWith("[")) {

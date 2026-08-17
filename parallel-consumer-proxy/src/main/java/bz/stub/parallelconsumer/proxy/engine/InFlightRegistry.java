@@ -126,6 +126,11 @@ class InFlightRegistry {
      */
     Optional<InFlight> register(String recordId, InFlight entry) {
         hook.beforeRegister(recordId);
+        // DO NOT replace this loop with ConcurrentHashMap.compute. Proposed as exactly equivalent during
+        // the 2026-08-17 simplification pass, and it is not: compute would run the staleness predicate -
+        // a call into core's WorkManager - and log, both under the map's bin lock, where this loop is
+        // lock-free and structurally cannot deadlock against core's own locks. No test in the suite
+        // fails on the difference. See parallel-consumer-proxy/docs/simplifications-declined.md.
         while (true) {
             var previous = byRecordId.putIfAbsent(recordId, entry);
             if (previous == null) {
