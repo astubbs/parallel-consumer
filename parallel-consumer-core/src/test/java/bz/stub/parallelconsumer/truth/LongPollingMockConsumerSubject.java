@@ -51,12 +51,7 @@ public class LongPollingMockConsumerSubject<K, V> extends Subject {
 
     public CommitHistorySubject hasCommittedToPartition(TopicPartition tp) {
         isNotNull();
-        CopyOnWriteArrayList<Map<TopicPartition, OffsetAndMetadata>> allCommits = actual.getCommitHistoryInt();
-        List<OffsetAndMetadata> historyForCommitsToPartition = allCommits.stream()
-                .filter(aCommitInstance -> aCommitInstance.containsKey(tp))
-                .map(aCommitInstance -> aCommitInstance.get(tp))
-                .collect(Collectors.toList());
-        CommitHistory commitHistory = new CommitHistory(historyForCommitsToPartition);
+        CommitHistory commitHistory = CommitHistory.forPartition(actual.getCommitHistoryInt(), tp);
         return check("getCommitHistory(%s)", tp).about(commitHistories()).that(commitHistory);
     }
 
