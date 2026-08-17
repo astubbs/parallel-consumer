@@ -1,7 +1,7 @@
 package bz.stub.parallelconsumer.internal.utils;
 
 /*-
- * Copyright (C) 2020-2026 Antony Stubbs and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
@@ -87,7 +87,19 @@ public class ThrowableUtils {
      */
     private static String describeOne(Throwable t) {
         String message = t.getMessage();
-        return message != null ? message : t.getClass().getSimpleName();
+        return message != null ? message : typeName(t);
+    }
+
+    /**
+     * The simple name, except for the shapes that do not have one.
+     * <p>
+     * {@code getSimpleName()} returns the <b>empty string</b> for an anonymous class, so a message-less anonymous
+     * throwable - an ad-hoc signal exception, which a lambda or a framework may well construct - described itself as
+     * nothing at all. Same uselessness the null fallback was added to remove, one shape over.
+     */
+    private static String typeName(Throwable t) {
+        String simple = t.getClass().getSimpleName();
+        return simple.isEmpty() ? t.getClass().getName() : simple;
     }
 
     /**
@@ -97,7 +109,7 @@ public class ThrowableUtils {
      */
     private static String describeWithType(Throwable t) {
         String message = t.getMessage();
-        String type = t.getClass().getSimpleName();
+        String type = typeName(t);
         return message != null ? type + ": " + message : type;
     }
 
@@ -143,10 +155,14 @@ public class ThrowableUtils {
      */
     public static Throwable unwrapTransparentWrappers(Throwable t) {
         try {
+            var seen = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
             var current = t;
-            for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && isTransparentWrapper(current); depth++) {
+            // identity, not just a self-reference check - the same guard walkCauseChain uses, for the same reason:
+            // two wrappers can point at each other, and the depth bound alone would spend 100 hops on a 2-cycle
+            for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH && seen.add(current)
+                    && isTransparentWrapper(current); depth++) {
                 Throwable cause = current.getCause();
-                if (cause == null || cause == current) {
+                if (cause == null) {
                     break;
                 }
                 current = cause;

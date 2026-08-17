@@ -1,13 +1,13 @@
 package bz.stub.parallelconsumer;
 
 /*-
- * Copyright (C) 2020-2026 Antony Stubbs and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import bz.stub.parallelconsumer.internal.InternalRuntimeException;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static com.google.common.truth.Truth.assertThat;
 
 /**
  * The decision that turns a failure into a DEBUG line or an ERROR line.

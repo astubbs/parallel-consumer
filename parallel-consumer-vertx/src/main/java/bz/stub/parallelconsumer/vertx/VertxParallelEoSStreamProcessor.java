@@ -212,6 +212,15 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 addToMailbox(context, wc);
             });
             send.onFailure(h -> {
+                // Record the failure BEFORE rendering it. Logging a throwable hands it to the logging binding,
+                // which walks the cause chain itself to build a stack trace - unbounded, and running the
+                // throwable author's overrides. If that throws, everything after it is skipped, and what would be
+                // skipped here is the work container's own completion: the record would stay marked in flight
+                // forever, stalling ordering and draining. The failure is the thing that must be recorded; the
+                // log line is the thing that can be lost.
+                wc.onUserFunctionFailure(h);
+                addToMailbox(context, wc);
+
                 // the throwable rather than its message: this is the only record of why a send failed, and
                 // getMessage() alone drops the type, the cause chain and the stack - and reads "fail: null"
                 // for anything thrown without a message
@@ -220,8 +229,6 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 } else {
                     log.error("Vert.x Vertical fail", h);
                 }
-                wc.onUserFunctionFailure(h);
-                addToMailbox(context, wc);
             });
 
             // add plugin callback hook

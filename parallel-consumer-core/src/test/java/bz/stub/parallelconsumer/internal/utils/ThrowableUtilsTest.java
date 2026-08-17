@@ -1,7 +1,7 @@
 package bz.stub.parallelconsumer.internal.utils;
 
 /*-
- * Copyright (C) 2020-2026 Antony Stubbs and contributors
+ * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
 import org.junit.jupiter.api.Test;
@@ -12,7 +12,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.hasCauseOfType;
-import static org.assertj.core.api.Assertions.assertThat;
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * The cases that matter here are the hostile ones. This runs on the failure path, describing a throwable that came
@@ -26,9 +27,9 @@ class ThrowableUtilsTest {
         var root = new IllegalStateException("the sentence a human needs");
         var wrapper = new RuntimeException("Error occurred in code supplied by user", root);
 
-        assertThat(describeWithRootCause(wrapper))
-                .contains("the sentence a human needs")
-                .contains("IllegalStateException");
+        var described = describeWithRootCause(wrapper);
+        assertThat(described).contains("the sentence a human needs");
+        assertThat(described).contains("IllegalStateException");
     }
 
     @Test
@@ -50,9 +51,24 @@ class ThrowableUtilsTest {
      */
     @Test
     void noMessageAndNoCauseReportsTheTypeRatherThanNull() {
-        assertThat(describeWithRootCause(new NullPointerException()))
-                .isEqualTo("NullPointerException")
-                .isNotEqualTo("null");
+        var described = describeWithRootCause(new NullPointerException());
+        assertThat(described).isEqualTo("NullPointerException");
+        assertThat(described).isNotEqualTo("null");
+    }
+
+    /**
+     * The same uselessness one shape over: {@code getSimpleName()} is the <b>empty string</b> for an anonymous class,
+     * so a message-less anonymous throwable described itself as nothing at all rather than as {@code "null"}.
+     */
+    @Test
+    void anAnonymousThrowableWithNoMessageStillNamesSomething() {
+        var anonymous = new RuntimeException() {
+        };
+
+        var described = describeWithRootCause(anonymous);
+
+        assertThat(described).isNotEmpty();
+        assertThat(described).contains("ThrowableUtilsTest");
     }
 
     @Test
@@ -81,8 +97,8 @@ class ThrowableUtilsTest {
         // takes a couple of hops. Without it the walk still terminates - MAX_CAUSE_DEPTH catches it - but only after
         // 100. Asserting termination alone therefore proves nothing about the guard, which is what the previous
         // version of this test did.
-        assertThat(CountingCycle.hops.get())
-                .as("hops taken over a two-node cycle")
+        assertWithMessage("hops taken over a two-node cycle")
+                .that(CountingCycle.hops.get())
                 .isLessThan(10);
     }
 
@@ -126,8 +142,8 @@ class ThrowableUtilsTest {
             }
         };
 
-        assertThat(describeWithRootCause(hostile))
-                .as("falls back to something, rather than throwing out of the failure handler")
+        assertWithMessage("falls back to something, rather than throwing out of the failure handler")
+                .that(describeWithRootCause(hostile))
                 .contains("ThrowableUtilsTest");
     }
 
@@ -140,7 +156,8 @@ class ThrowableUtilsTest {
         // the depth is the point: an "is it retriable?" check that only reads the top answers no here, which is how
         // an expected failure gets logged as an error
         assertThat(hasCauseOfType(buried, UnsupportedOperationException.class)).isTrue();
-        assertThat(hasCauseOfType(buried, IllegalStateException.class)).as("the throwable itself counts").isTrue();
+        assertWithMessage("the throwable itself counts")
+                .that(hasCauseOfType(buried, IllegalStateException.class)).isTrue();
         assertThat(hasCauseOfType(buried, NumberFormatException.class)).isFalse();
     }
 
@@ -161,15 +178,15 @@ class ThrowableUtilsTest {
     void anEndlesslyFreshCauseChainIsBounded() {
         EndlessCause.hops.set(0);
         assertThat(describeWithRootCause(new EndlessCause())).isNotNull();
-        assertThat(EndlessCause.hops.get())
-                .as("hops taken while describing an endless chain")
-                .isLessThanOrEqualTo(HOP_CEILING);
+        assertWithMessage("hops taken while describing an endless chain")
+                .that(EndlessCause.hops.get())
+                .isAtMost(HOP_CEILING);
 
         EndlessCause.hops.set(0);
         assertThat(hasCauseOfType(new EndlessCause(), NumberFormatException.class)).isFalse();
-        assertThat(EndlessCause.hops.get())
-                .as("hops taken while searching an endless chain")
-                .isLessThanOrEqualTo(HOP_CEILING);
+        assertWithMessage("hops taken while searching an endless chain")
+                .that(EndlessCause.hops.get())
+                .isAtMost(HOP_CEILING);
     }
 
     /**
@@ -231,7 +248,8 @@ class ThrowableUtilsTest {
         head.initCause(tail);
 
         assertThat(hasCauseOfType(head, RuntimeException.class)).isTrue();
-        assertThat(hasCauseOfType(head, NumberFormatException.class)).as("absent, and the walk still ends").isFalse();
+        assertWithMessage("absent, and the walk still ends")
+                .that(hasCauseOfType(head, NumberFormatException.class)).isFalse();
     }
 
     @Test
@@ -244,8 +262,8 @@ class ThrowableUtilsTest {
             }
         };
 
-        assertThat(hasCauseOfType(hostile, NumberFormatException.class))
-                .as("an unreadable chain answers false rather than replacing one failure with another")
+        assertWithMessage("an unreadable chain answers false rather than replacing one failure with another")
+                .that(hasCauseOfType(hostile, NumberFormatException.class))
                 .isFalse();
     }
 
@@ -259,8 +277,8 @@ class ThrowableUtilsTest {
             }
         };
 
-        assertThat(describeWithRootCause(hostile))
-                .as("falls back to something, rather than throwing out of the failure handler")
+        assertWithMessage("falls back to something, rather than throwing out of the failure handler")
+                .that(describeWithRootCause(hostile))
                 .contains("ThrowableUtilsTest");
     }
 }
