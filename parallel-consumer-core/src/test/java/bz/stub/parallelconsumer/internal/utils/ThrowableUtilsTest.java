@@ -132,10 +132,40 @@ class ThrowableUtilsTest {
         }
     }
 
+    /**
+     * An unreadable cause chain costs the CAUSE, not the whole description.
+     * <p>
+     * The two halves are read separately for this reason: one guard around both meant a throwing {@code getCause}
+     * discarded the throwable's own message too, answering with a bare class name - the same uninformative answer
+     * this method exists to replace, reached from the one input most likely to need a good one.
+     */
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void aThrowingGetCauseFallsBackRatherThanEscaping() {
-        var hostile = new RuntimeException("hostile") {
+    void aThrowingGetCauseCostsTheCauseNotTheMessage() {
+        var hostile = new RuntimeException("the part that could be read") {
+            @Override
+            public synchronized Throwable getCause() {
+                throw new UnsupportedOperationException("no cause for you");
+            }
+        };
+
+        assertWithMessage("keeps what it could read, rather than throwing out of the failure handler")
+                .that(describeWithRootCause(hostile))
+                .isEqualTo("the part that could be read");
+    }
+
+    /**
+     * The same input with nothing readable at all - both halves fail, so the type name is all that is left.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void aThrowableThatCanBeReadNoWayAtAllStillNamesItsType() {
+        var hostile = new RuntimeException() {
+            @Override
+            public String getMessage() {
+                throw new IllegalStateException("no message for you");
+            }
+
             @Override
             public synchronized Throwable getCause() {
                 throw new UnsupportedOperationException("no cause for you");

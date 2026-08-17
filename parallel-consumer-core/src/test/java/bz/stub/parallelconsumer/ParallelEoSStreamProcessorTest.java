@@ -666,6 +666,37 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 .hasMessageContainingAll("Error", "poll", "thread");
     }
 
+    /**
+     * When rendering the failure fails, the reported failure must still be the ORIGINAL one.
+     *
+     * <p>The catch block hands the user's throwable to the logger, whose binding is also the user's, and both
+     * {@code getMessage} and {@code getCause} are overridable - so rendering it runs code that can throw. Guarding
+     * that with {@code finally} alone shuts down correctly but lets the logger's exception propagate in place of the
+     * assigned {@code failureReason}, so {@code closeDrainFirst} reports "the logger blew up" instead of what
+     * actually killed the consumer. The diagnosis is the whole point of this handler.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aFailureThatCannotBeLoggedIsStillReportedAsItself() {
+        var unloggable = new FakeRuntimeException("the failure that actually happened") {
+            @Override
+            public synchronized Throwable getCause() {
+                throw new UnsupportedOperationException("rendering me fails");
+            }
+        };
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            throw unloggable;
+        });
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        assertThatThrownBy(() -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)))
+                .as("the original failure, not whatever failed while trying to render it")
+                .hasMessageContainingAll("Error", "poll", "thread")
+                .hasMessageContaining("the failure that actually happened");
+    }
+
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {

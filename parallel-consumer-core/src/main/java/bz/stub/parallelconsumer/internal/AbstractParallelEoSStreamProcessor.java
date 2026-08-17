@@ -43,6 +43,7 @@ import java.util.stream.Collectors;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.isEmpty;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
@@ -649,9 +650,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // ignore
                 log.trace("Interrupted", e);
             } catch (ExecutionException | TimeoutException e) {
-                log.error("Execution or timeout exception while waiting for the control thread to close cleanly " +
-                        "(state was {}). Try increasing your time-out to allow the system to drain, or close without " +
-                        "draining.", state, e);
+                // e carries the control thread's failure - the reason the caller is here. Rendering it runs the
+                // thrower's getCause/getMessage inside the logging binding, and an escape would replace that
+                // diagnosis with a stack trace from inside the logger.
+                logWithoutEscaping(e, () ->
+                        log.error("Execution or timeout exception while waiting for the control thread to close cleanly " +
+                                "(state was {}). Try increasing your time-out to allow the system to drain, or close without " +
+                                "draining.", state, e));
                 throw e;
             }
             log.trace("Still waiting for system to close...");
@@ -664,7 +669,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         try {
             innerDoClose(timeout);
         } catch (Exception e) {
-            log.error("exception during close", e);
+            logWithoutEscaping(e, () -> log.error("exception during close", e));
             throw e;
         } finally {
             deregisterMeters();
@@ -865,7 +870,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     var described = describeWithRootCause(e);
                     failureReason = new RuntimeException("Error from poll control thread: " + described, e);
                     try {
-                        log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e);
+                        // guarded, not just finally'd: an escaping logger failure would propagate INSTEAD of
+                        // failureReason, so the control future would report "the logger blew up" rather than what
+                        // actually killed the consumer
+                        logWithoutEscaping(failureReason, () ->
+                                log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e));
                     } finally {
                         doClose(shutdownTimeout); // attempt to close
                     }

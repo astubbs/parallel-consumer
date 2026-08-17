@@ -68,11 +68,61 @@ public class ThrowableUtils {
             // described - and the fallback below dereferences t, so it cannot be the null handler.
             return "null";
         }
+        // the two halves degrade INDEPENDENTLY. One try around both would let an unreadable cause chain discard a
+        // perfectly readable top-level message - which is how a hostile getCause() turned "the thing that actually
+        // went wrong" back into a bare class name, the exact uselessness this method exists to remove.
+        String own = describeSafely(t);
+        Throwable root;
         try {
-            Throwable root = rootCauseOf(t);
-            return root == t
-                    ? describeOne(t)
-                    : describeOne(t) + " - caused by " + describeWithType(root);
+            root = rootCauseOf(t);
+        } catch (Throwable chainUnreadable) {
+            return own; // as much as could be read, which is more than the type name alone
+        }
+        return root == t ? own : own + " - caused by " + describeSafely(root, ThrowableUtils::describeWithType);
+    }
+
+    /**
+     * Runs a log call that renders {@code reported}, guaranteeing it cannot become the failure.
+     * <p>
+     * Handing a throwable to the logger passes it to a binding that walks the cause chain to build a stack trace -
+     * Logback's {@code ThrowableProxy} constructor calls {@code getCause} directly - and both {@code getCause} and
+     * {@code getMessage} are overridable by whoever threw. So on any path that logs a user-supplied throwable and
+     * then does something that must happen - rethrowing it, shutting down, marking work complete - the log call is
+     * user code running before the part that matters.
+     * <p>
+     * The failure is silent and specific: the caller sees whatever the logger threw INSTEAD of the failure it was
+     * trying to report, so the diagnosis is replaced by a stack trace from inside the logging framework.
+     *
+     * @param reported the throwable being logged; a logging failure is attached to it as suppressed rather than
+     *                 logged, because logging is the thing that just failed
+     * @param logCall  the log statement, which may render {@code reported}
+     */
+    public static void logWithoutEscaping(Throwable reported, Runnable logCall) {
+        try {
+            logCall.run();
+        } catch (Throwable loggingItFailed) {
+            if (reported != null && reported != loggingItFailed) {
+                try {
+                    reported.addSuppressed(loggingItFailed);
+                } catch (Throwable evenThatFailed) {
+                    // addSuppressed runs no user code, but a throwable built with suppression disabled ignores it
+                    // and a subclass may override it. Nothing left to do but not make it worse.
+                }
+            }
+        }
+    }
+
+    private static String describeSafely(Throwable t) {
+        return describeSafely(t, ThrowableUtils::describeOne);
+    }
+
+    /**
+     * Applies a describer, falling back to the type name when reading the throwable throws - {@code getMessage} is
+     * overridable, so even naming a single link runs its author's code.
+     */
+    private static String describeSafely(Throwable t, java.util.function.Function<Throwable, String> describer) {
+        try {
+            return describer.apply(t);
         } catch (Throwable describingItFailed) {
             return t.getClass().getName();
         }
@@ -211,7 +261,14 @@ public class ThrowableUtils {
             if (!visitor.test(current)) {
                 return;
             }
-            current = current.getCause();
+            try {
+                current = current.getCause();
+            } catch (Throwable chainEndsHere) {
+                // stop where the chain became unreadable, KEEPING what was already walked. Letting this escape
+                // discarded the whole walk, so one hostile link buried under a wrapper cost the caller every link
+                // above it too - including the one carrying the message a human needs.
+                return;
+            }
         }
     }
 }
