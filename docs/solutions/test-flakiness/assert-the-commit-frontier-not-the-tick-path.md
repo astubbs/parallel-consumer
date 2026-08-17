@@ -39,7 +39,7 @@ related:
   - "docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md - sibling rule, opposite direction: an await that tests nothing"
   - "docs/solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md - sibling rule: a test awaiting a trigger it cannot force"
   - "docs/test-hardening/inactive-tests-audit-2026-08-08.md - section 1.2 predicted exactly this class of assertion failure"
-  - "docs/inflight/test-untracked-ci-flakes.md - held the parent rule this one specialises; removed from that ledger by cbd328746 when its entry closed. Read it at `git show cbd328746^:docs/inflight/test-untracked-ci-flakes.md`, grep `do not compare two moving values`"
+  - "docs/inflight/test-untracked-ci-flakes.md - held the parent rule this one specialises, until its entry closed and the rule was removed with it. Read it as recorded: `git show b42733abef45e792df6fca1b3fb8d49d7dfc7946:docs/inflight/test-untracked-ci-flakes.md`, grep `do not compare two moving values`"
 ---
 
 # Assert the commit frontier, not the path of ticks that reached it
@@ -290,12 +290,20 @@ not compare two moving values; await a quiescent state, then read both", recorde
 `docs/inflight/test-untracked-ci-flakes.md`. A commit history is a moving value; the frontier is the
 quiescent reading of it.
 
-*(Citation repair: that row is gone. Its entry closed when astubbs#265 fixed and re-enabled the test,
-and `cbd328746` removed the rule text with it - which is this write-up's own complaint about local
-recording, arriving. Read the row as this document read it with
-`git show cbd328746^:docs/inflight/test-untracked-ci-flakes.md` and grep `do not compare two moving
-values`. The claim above is left as written: the rule WAS recorded there, and that it no longer is
-does not change what was true on 2026-08-13.)*
+*(Citation repair: that row is gone. Its entry closed once astubbs#265 fixed and re-enabled the test,
+and the rule text went with it - which is this write-up's own complaint about local recording,
+arriving. Read the row as this document read it:*
+
+```
+git show b42733abef45e792df6fca1b3fb8d49d7dfc7946:docs/inflight/test-untracked-ci-flakes.md
+grep 'do not compare two moving values'
+```
+
+*`b42733abe` is astubbs#288, the commit that RECORDED the rule, and it is on `master` - deliberately
+not the commit that removed it, which lived only on the removing branch and would not survive that
+branch's squash-merge or deletion. A repair whose own pointer expires is not a repair. The claim
+above is left as written: the rule WAS recorded there, and that it no longer is does not change what
+was true on 2026-08-13.)*
 
 ## Prevention
 
