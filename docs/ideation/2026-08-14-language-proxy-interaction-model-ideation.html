@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ideation: Language-Proxy Interaction Model</title>
+<title>Ideation: Language Proxy — Interaction Model &amp; HTTP Strategy</title>
 <style>
   :root {
     --bg: #fbfaf8; --fg: #1a1a1a; --muted: #5c5c5c; --rule: #e0dcd6;
@@ -61,16 +61,28 @@
           padding: 1rem 1.25rem; margin: 1.5rem 0; }
   ul { margin: 0 0 .85rem; padding-left: 1.2rem; } li { margin-bottom: .35rem; }
   .axis-note { color: var(--muted); font-size: .88rem; font-style: italic; }
+  .part { font-size: 1.45rem; margin: 4rem 0 .5rem; padding-top: 1.5rem; border-top: 4px double var(--rule); letter-spacing: -.01em; }
+  .jump { font-size: .88rem; margin: 0 0 1.4rem; padding: .7rem 1rem; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; }
+  .jump a { color: var(--accent); text-decoration: none; }
+  .jump a:hover { text-decoration: underline; }
+  figure { margin: 1rem 0; }
+  figcaption { font-size: .82rem; color: var(--muted); margin-top: .3rem; }
+  footer.composition-signal { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+          font-size: .8rem; color: var(--muted); }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<h1>Ideation: Language-Proxy Interaction Model</h1>
+<h1>Ideation: Language Proxy — Interaction Model &amp; HTTP Strategy</h1>
 <p class="sub">
-  2026-08-14 · <code>astubbs/parallel-consumer#242</code> · branch <code>feats/proxy-requirements</code><br>
-  27 raw candidates → 16 after merge → <strong>6 survivors: 3 settled, 3 open</strong> · 5 axes · repo-grounded
+  <code>astubbs/parallel-consumer#242</code> · branch <code>feats/proxy-requirements</code> · repo-grounded<br>
+  <strong>Part 1</strong> (2026-08-14): interaction model — 27 raw → 6 survivors ·
+  <strong>Part 2</strong> (2026-08-17): HTTP dialect, generated clients, REST Proxy compatibility — 44 raw → 7 survivors
 </p>
+
+<h2 class="part" id="part-1">Part 1 — Interaction Model <span style="font-size:.9rem;color:var(--muted);font-weight:400">(2026-08-14)</span></h2>
 
 <p class="lede">
   The subject is <em>how</em> the sidecar and its non-Java workers interact — not the transport (gRPC is
@@ -404,6 +416,497 @@ credit ledger were live. Beyond that supersession, these move:</p>
       <code>docs/inflight/next-connect-connectors-in-foreign-languages.md</code>. Unread:
       <code>feats/connect-on-pc-spike</code> may already assume a shape.</li>
 </ul>
+
+<h2 class="part" id="part-2">Part 2 — HTTP Dialect, Generated Clients, REST Proxy Compatibility <span style="font-size:.9rem;color:var(--muted);font-weight:400">(2026-08-17)</span></h2>
+
+<p class="lede">
+  The subject is the HTTP strategy: a native HTTP dialect of the frozen protocol, clients
+  <em>generated</em> from an HTTP specification rather than hand-written, and a
+  <strong>Confluent REST Proxy compatible</strong> surface. This is the "proper ideation pass" that
+  <code>docs/inflight/next-http-strategy-ideas.md</code> says it is owed — the seed notes' option space is
+  the starting line, and every idea below is held to advancing beyond it. 44 raw candidates from five
+  frames → merged and adversarially verified → 7 survivors.
+</p>
+
+<div class="flag">
+  <h3 style="margin-top:0">The run's headline: the REST Proxy feasibility unknown is settled — compatible-and-beneficial</h3>
+  <p style="margin-bottom:.5rem">
+    The seed notes parked compatibility on one unknown: <em>"if their endpoint hands out one message per
+    partition assignment, a compatible implementation may be unable to hand out several from one partition
+    … compatibility without the concurrency benefit, i.e. pointless. Read their API before believing either
+    way."</em> This run read the primary sources (Confluent's v2 API reference, the kafka-rest
+    New-Consumer-API-Design wiki, the v3 <code>openapi.yaml</code>).
+  </p>
+  <p style="margin-bottom:0">
+    <strong>Verdict: the contract has room.</strong> v2's only client-visible unit of progress is a
+    <em>cumulative per-partition offset watermark</em> (<code>POST …/offsets</code>, same shape as
+    <code>commitSync</code>) — exactly what Parallel Consumer already computes internally from its offset
+    map. No per-record ack exists in their contract, so beyond-partition concurrency is purely server-side
+    scheduling, invisible to a well-behaved client. Two obligations: records within one
+    <code>/records</code> reply must arrive in offset order, and auto-commit must mean "commit the
+    internally-verified-safe watermark". One caveat: <strong>v3 has no consumer data plane at all</strong>
+    (monitoring/admin only) — "REST Proxy compatible" necessarily means emulating v2.
+  </p>
+</div>
+
+<h2>Grounding Context</h2>
+<p><strong>Codebase and branch state (verified this run):</strong></p>
+<ul>
+  <li>The protocol is <strong>frozen</strong> (<code>bin/check-proto-breaking.sh</code>: "after the freeze
+      the wire may only GAIN"); 11 language clients and a 13-binding conformance suite exist, keyed by
+      <em>(language, dialect)</em> with a control-arm ladder: <code>core</code> → <code>java-direct</code> →
+      <code>java-grpc</code>.</li>
+  <li>The engine seam is <code>ProxyProcessor extends ExternalEngine</code>; admission is
+      <code>SingleConnectionGuard</code> (one connection, generation counter) +
+      <code>AuthorityAllowlistInterceptor</code>; the session already outlives connections
+      (<code>ConfigureHandler</code> re-routes dispatch at whichever stream holds the session).</li>
+  <li><code>protocol-specification.md</code> states <em>"the lease is connection-scoped"</em> — load-bearing
+      for Part 2's survivor 3.</li>
+  <li><code>KafkaClientFactory</code> copies <code>kafka_properties</code> with <strong>zero key
+      filtering</strong> (verified in code) — the plan's recorded, unactioned escalation gap.</li>
+  <li>Seed notes: <code>parked-http-dialect-and-generated-clients.md</code> (SSE+POST shape, gateway-inside-
+      the-sidecar, controller-vs-transport split, UDS as first seam proof) and
+      <code>next-http-strategy-ideas.md</code> (compat surfaces, Dapr, multi-entry-point 4e/4f, demand-decides,
+      sidecar-vs-server fork).</li>
+</ul>
+<p><strong>External prior art (fresh research, primary sources):</strong> Confluent REST Proxy v2 contract
+(above) · Strimzi HTTP Bridge and kafka-rest#1057/#212 — both converged on session-pinned consumer
+instances; affinity is the load-bearing hazard of "Kafka over HTTP" · Karapace targets 1:1 REST Proxy
+compatibility (the wire format is a de facto standard) · kafka-pixy (dual gRPC+REST, REST second-class;
+abandoned) · gRPC↔REST bridging tiers: grpc-gateway / Envoy transcoding / Connect RPC · Temporal exposes
+HTTP for admin but keeps worker dispatch gRPC-only · Dapr steers pub/sub to gRPC streaming, HTTP as the
+reach tier · no major OpenAPI generator treats SSE/long-poll as first-class — streaming client generation
+is a genuine gap · JDK 16+ ships native cross-platform Unix-domain-socket support
+(<code>UnixDomainSocketAddress</code>), independent of netty's platform transports.</p>
+
+<h2>Topic Axes</h2>
+<div class="scroll">
+<table>
+  <tr><th>Axis</th><th>Question it holds</th><th>Survivors</th></tr>
+  <tr><td>Native dialect wire shape</td><td>SSE+POST vs WebSocket vs GET/PUT; preserving push; framing, termination, reconnect, leases</td><td>3</td></tr>
+  <tr><td>REST Proxy compat</td><td>What a v2-compatible surface must honor; what it buys; pull-shim boundaries</td><td>1</td></tr>
+  <tr><td>Client generation</td><td>OpenAPI as a second contract; generated surface vs hand-written controller; conformance rows</td><td>2, 4</td></tr>
+  <tr><td>Entry points &amp; session</td><td>One listener or two; dashboard sharing; admission; "which client owns this session"</td><td>5</td></tr>
+  <tr><td>Security posture</td><td>Loopback opt-in, browser origins, UDS, credentials on the wire</td><td>6, 7</td></tr>
+</table>
+</div>
+<p class="axis-note">Every axis carries at least one survivor; no deliberate gaps.</p>
+
+<h2>Ranked Ideas</h2>
+<div class="jump"><strong>Jump to:</strong>
+  <a href="#p2-i1">1 Watermark compat</a> ·
+  <a href="#p2-i2">2 Compat is the generated-client story</a> ·
+  <a href="#p2-i3">3 Session-scoped lease</a> ·
+  <a href="#p2-i4">4 Derive, don't author</a> ·
+  <a href="#p2-i5">5 Control/observation planes</a> ·
+  <a href="#p2-i6">6 Admission identity</a> ·
+  <a href="#p2-i7">7 kafka_properties allowlist</a>
+</div>
+
+<div class="card" id="p2-i1">
+  <div class="rank"><span class="num">1</span><h3>REST Proxy v2 compat is real: one gateway, one conformance row, proven with their own tooling</h3></div>
+  <div class="tags"><span class="tag">rest-proxy-compat</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Build the v2-compatible consumer surface as a gateway that is a <em>client of the native engine seam</em>
+     (the XWayland rule: the legacy protocol lives entirely outside the core, with no private hooks — its
+     existence proves the seam sufficient). <code>GET …/records</code> long-polls the engine's push buffer and
+     replies in offset order; <code>POST …/offsets</code> with watermark X becomes per-record success for
+     fetched records ≤ X; auto-commit commits the internally-verified-safe watermark. Prove the compatibility
+     claim the pgwire way: drive the conformance row with Confluent's own v2 client, and run the same
+     scenarios <em>differentially</em> against a real REST Proxy container — the divergence report <strong>is</strong>
+     the compatibility claim, datable and falsifiable.</p>
+  <figure>
+  <svg viewBox="0 0 720 200" role="img" aria-label="Compat gateway maps v2 pull clients onto the push engine via the watermark" style="max-width:100%;height:auto">
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    <rect x="10" y="30" width="170" height="120" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="95" y="52" text-anchor="middle" font-size="12" fill="var(--muted)">EXISTING v2 CLIENTS</text>
+    <text x="95" y="76" text-anchor="middle" font-size="13" fill="var(--fg)">curl · any language</text>
+    <text x="95" y="96" text-anchor="middle" font-size="13" fill="var(--fg)">REST Proxy users</text>
+    <text x="95" y="116" text-anchor="middle" font-size="12" fill="var(--muted)">(no new client code)</text>
+    <rect x="260" y="30" width="190" height="120" rx="8" fill="var(--accent-bg)" stroke="var(--accent)"/>
+    <text x="355" y="52" text-anchor="middle" font-size="12" fill="var(--accent)">COMPAT GATEWAY</text>
+    <text x="355" y="76" text-anchor="middle" font-size="13" fill="var(--fg)">pull shim: GET/POST</text>
+    <text x="355" y="96" text-anchor="middle" font-size="13" fill="var(--fg)">client of the seam</text>
+    <text x="355" y="116" text-anchor="middle" font-size="12" fill="var(--muted)">no private hooks</text>
+    <rect x="530" y="30" width="180" height="120" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="620" y="52" text-anchor="middle" font-size="12" fill="var(--muted)">ONE ENGINE</text>
+    <text x="620" y="76" text-anchor="middle" font-size="13" fill="var(--fg)">push · per-record acks</text>
+    <text x="620" y="96" text-anchor="middle" font-size="13" fill="var(--fg)">offset map →</text>
+    <text x="620" y="116" text-anchor="middle" font-size="13" fill="var(--fg)">safe watermark</text>
+    <line x1="180" y1="70" x2="255" y2="70" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="217" y="60" text-anchor="middle" font-size="11" fill="var(--muted)">GET /records</text>
+    <line x1="255" y1="110" x2="180" y2="110" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="217" y="130" text-anchor="middle" font-size="11" fill="var(--muted)">offset order</text>
+    <line x1="450" y1="70" x2="525" y2="70" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="487" y="60" text-anchor="middle" font-size="11" fill="var(--muted)">seam calls</text>
+    <line x1="525" y1="110" x2="450" y2="110" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="487" y="130" text-anchor="middle" font-size="11" fill="var(--muted)">watermark</text>
+    <text x="360" y="180" text-anchor="middle" font-size="12" fill="var(--muted)">beyond-partition concurrency happens inside the engine — invisible to the v2 wire contract</text>
+  </svg>
+  <figcaption>The v2 contract's only progress unit is the cumulative watermark, so the engine's internal per-record scheduling never leaks.</figcaption>
+  </figure>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> Primary-source contract read (this run): v2 <code>POST …/offsets</code> commits a
+    cumulative per-partition watermark, "identical in shape to <code>commitSync</code>"; no per-record ack
+    exists; v3 ships no consumer data plane. Sources: docs.confluent.io kafka-rest API reference;
+    kafka-rest New-Consumer-API-Design wiki; kafka-rest <code>api/v3/openapi.yaml</code>.
+    <code>external:</code> CockroachDB's Postgres-compat program (run the incumbent's tests, publish a
+    feature matrix, fail loudly on unsupported features); Karapace already treats the v2 wire format as a
+    standard worth cloning 1:1.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    This flips the seed's recorded "possibly pointless" unknown into "provably beneficial with almost no new
+    logic": the hardest-looking piece — reconciling out-of-order per-record completion into a single number
+    an offset-committing client understands — is the offset map PC already maintains. And the sidecar's
+    single-instance shape makes REST Proxy's most-cited operational hazard (sticky instance affinity,
+    kafka-rest#1057/#212, Strimzi's multi-replica warning) <em>impossible by construction</em>: there is
+    nothing to pin. A migrating user changes a hostname and gains key-ordered concurrency beyond partitions.</div>
+  <div class="field"><b>Downsides</b>
+    It is a pull shim, and it must stay one — quarantined in its own module so pull semantics never leak
+    into the native dialect (the recorded concession). Long-poll latency is inherent to the v2 shape.
+    "Run their tests" may need harness adaptation; the differential container run stands on its own if so.
+    A lagging record caps the advertised watermark for its partition — standard cumulative-commit behaviour,
+    but worth documenting for migrants expecting REST Proxy's simpler internals.</div>
+</div>
+
+<div class="card" id="p2-i2">
+  <div class="rank"><span class="num">2</span><h3>Compat is where "generated clients" lives — the codegen ask lands on the pull surface, by design</h3></div>
+  <div class="tags"><span class="tag">client-generation</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag">direct + external</span></div>
+  <p>The ask behind this run — clients <em>generated</em> from the HTTP API — splits cleanly once the codegen
+     landscape is faced honestly: OpenAPI generators produce excellent request/response clients and
+     essentially no streaming ones (no major generator treats SSE or long-poll as first-class). A GET/PUT
+     resource surface is almost entirely generatable; an SSE push surface is mostly not. So put the
+     generated-multilingual-clients story where generation actually works — the compat/resource surface —
+     and keep the native dialect's per-language surface deliberately thin: a small hand-written SSE transport
+     feeding the shared, dialect-agnostic controller. State this scope split up front, before anyone
+     estimates "generate 11 HTTP clients" as one line item.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> The seed's own caveat — "OpenAPI describes request/response well and streaming
+    poorly … the dispatch stream is the part a generator will not give you" — and its corollary: "a GET/PUT
+    resource model is almost entirely generatable … the generator gets the boring half, which is exactly the
+    half compatibility needs" (<code>next-http-strategy-ideas.md</code> §4b).
+    <code>external:</code> Speakeasy/Fern/Stainless/Kiota comparisons (this run): none claims first-class
+    SSE/long-poll generation.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    This dissolves the apparent conflict between the user's ask and the settled push model. Nothing pull-shaped
+    becomes native — the pull surface exists anyway for compatibility, and it happens to be the one place the
+    generated-client promise is fully keepable. The native dialect keeps the controller (the hard,
+    correctness-bearing part — "every client that went wrong in this project went wrong exactly there")
+    hand-written and shared, exactly as the gRPC clients do today.</div>
+  <div class="field"><b>Downsides</b>
+    "Generated clients" becomes a nuanced claim rather than a slogan — the docs must say which surface
+    generates fully. Languages wanting native-dialect HTTP still hand-write the SSE consumption. If a
+    streaming-capable generator matures (Connect RPC's coverage grows, or OpenAPI's SSE story improves),
+    the split should be revisited.</div>
+</div>
+
+<div class="card" id="p2-i3">
+  <div class="rank"><span class="num">3</span><h3>Session-scoped lease + one termination vocabulary — the re-spec that blocks every HTTP wire shape</h3></div>
+  <div class="tags"><span class="tag">native-dialect-wire-shape</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>The frozen spec says <em>"the lease is connection-scoped"</em> — a definition with no referent once
+     dispatch (SSE) and reports (POSTs) travel different connections, which the seed already flags: "the two
+     halves can disagree about liveness." Adopt the transponder rule from aviation's lost-comms doctrine:
+     contact on <em>any</em> channel is proof of life. Redefine the lease as <strong>session-scoped</strong> —
+     any authenticated session traffic (a report POST counts) extends it; a dead SSE stream with live POSTs
+     is a reconnect-the-push-channel event, not session death — and gRPC's connection-scoped lease becomes
+     the degenerate case. Pair it with one dialect-neutral termination taxonomy (who ended the session, why,
+     is reconnect legal) that each transport maps its native signals into. Prove it with a
+     <code>java-http</code> conformance row extending the existing control-arm ladder
+     (<code>core</code> → <code>java-direct</code> → <code>java-grpc</code> → <code>java-http</code>: transport
+     isolated from language by construction), and a <code>curl-shell</code> binding as a falsifiable
+     simplicity ceiling — if ~100 lines of shell cannot pass the scenarios, the wire is too complex.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> <code>protocol-specification.md</code>: "the lease is connection-scoped" (verified
+    this run); <code>parked-http-dialect-and-generated-clients.md</code>: "dispatch and reports are separate,
+    so the two halves can disagree about liveness" and "Termination must normalise … it needs one vocabulary
+    behind it."
+    <code>external:</code> Aviation lost-communications doctrine — voice and transponder are separate
+    channels; either one is proof of life, and only total silence triggers the protection procedure.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    This is the one place the frozen protocol's vocabulary literally cannot survive transliteration to HTTP,
+    and it touches the protocol's most safety-critical semantics — premature record reclamation on one side,
+    zombie sessions on the other. Deciding the liveness unit before the first HTTP client exists prevents the
+    two dialects diverging where divergence hurts most. It also cheapens clients: a reporting worker needs no
+    separate heartbeat timer. The session already outlives connections (<code>ConfigureHandler</code>'s
+    routing) — the lease vocabulary just hasn't caught up with the protocol's own reconnect design.</div>
+  <div class="field"><b>Downsides</b>
+    Amends documented semantics of the frozen spec — additive in wire terms (no message changes required for
+    gRPC) but a real semantic re-spec that existing bindings must re-verify against. The transponder rule
+    makes lease expiry marginally slower to detect for a client whose only live channel is reports (by
+    design). The curl-shell binding is a maintenance commitment.</div>
+</div>
+
+<div class="card" id="p2-i4">
+  <div class="rank"><span class="num">4</span><h3>Derive, don't author: one frozen contract, N derived encodings</h3></div>
+  <div class="tags"><span class="tag">client-generation</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Never hand-author a second frozen contract. Derive the OpenAPI document from the already-frozen
+     <code>.proto</code> — transcoding annotations (grpc-gateway / Connect style <code>google.api.http</code>)
+     for paths, proto3's canonical JSON mapping for bodies — and commit it as a <em>build artifact</em>: the
+     generated document regenerating differently is a build failure, not a review comment.
+     <code>bin/check-proto-breaking.sh</code> remains the single freeze gate; the existing capability-versioning
+     rule automatically governs the HTTP contract too. Zero new governance surface for the second dialect.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> <code>bin/check-proto-breaking.sh</code>: "after the freeze the wire may only GAIN,
+    never change" (verified this run) — the discipline exists once and should not be re-implemented for a
+    sibling document.
+    <code>external:</code> ASN.1's encoding rules (X.690/691/693): one schema, multiple wire encodings derived
+    by published rule, so encodings cannot drift — and proto3's canonical JSON mapping is the same construct
+    already standardized for this schema language. Envoy/grpc-gateway transcoding derives REST + OpenAPI from
+    annotated protos in production systems today.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    The freeze discipline exists because a moving spec makes ten clients diverge ten ways; a second
+    <em>hand-frozen</em> spec reintroduces that hazard as slow drift between two frozen documents with two
+    gates — drift neither gate can see. Deriving mechanically means there is nothing new to govern, and the
+    annotations do not touch wire bytes, so the frozen-wire rule is respected.</div>
+  <div class="field"><b>Downsides / alternatives recorded</b>
+    Transcoding annotations constrain URL/verb design to what the mapping can express — a REST-Proxy-shaped
+    compat surface (survivor 1) stays a separately-described emulation, since its wire is Confluent's, not
+    ours. Two alternatives were weighed: a transport-neutral core spec with per-dialect binding chapters
+    (sound, heavier restructuring of the frozen document), and adopting Connect RPC wholesale (verified this
+    run: official codegen covers roughly five of the eleven target languages — real, but overstated as a
+    full answer; recorded as a partial option, not the default).</div>
+</div>
+
+<div class="card" id="p2-i5">
+  <div class="rank"><span class="num">5</span><h3>Control plane / observation plane — one ruling that settles the listener, the dashboard, and the browser</h3></div>
+  <div class="tags"><span class="tag">entry-points-session</span><span class="tag conf-med">Confidence: Med</span><span class="tag">Complexity: L</span><span class="tag">direct + reasoned</span></div>
+  <p>Split every HTTP surface into two planes with independent postures, decided once. The
+     <strong>control plane</strong> (Configure, dispatch, reports) is never browser-reachable — ideally not
+     even TCP: bind it to a Unix domain socket (<code>curl --unix-socket</code>; the Docker API precedent),
+     where filesystem permissions are kernel-enforced authorization. The <strong>observation plane</strong>
+     (session state, offset frontier, in-flight-per-key as SSE, health) is read-only, carries no credentials,
+     and is designed for a browser deliberately — CORS and origin rules answered once. The parked dashboard
+     becomes the observation plane's first client, dogfooding the HTTP dialect daily; a
+     <code>/.well-known</code> descriptor enumerating the surfaces and their postures gives discovery a
+     single home. This answers "one listener, two purposes — decide before either is built" with a ruling
+     both parked workstreams can build on, and gives the browser its first safe rung without touching the
+     recorded "never a control default" guidance.</p>
+  <figure>
+  <svg viewBox="0 0 720 210" role="img" aria-label="Control plane on a unix socket, observation plane read-only over TCP" style="max-width:100%;height:auto">
+    <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    <rect x="270" y="20" width="180" height="170" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="360" y="42" text-anchor="middle" font-size="12" fill="var(--muted)">SIDECAR</text>
+    <rect x="290" y="55" width="140" height="55" rx="6" fill="var(--accent-bg)" stroke="var(--accent)"/>
+    <text x="360" y="78" text-anchor="middle" font-size="12" fill="var(--accent)">CONTROL PLANE</text>
+    <text x="360" y="96" text-anchor="middle" font-size="11" fill="var(--fg)">configure · dispatch · report</text>
+    <rect x="290" y="122" width="140" height="55" rx="6" fill="none" stroke="var(--rule)"/>
+    <text x="360" y="145" text-anchor="middle" font-size="12" fill="var(--muted)">OBSERVATION PLANE</text>
+    <text x="360" y="163" text-anchor="middle" font-size="11" fill="var(--fg)">read-only state · SSE · health</text>
+    <rect x="20" y="55" width="160" height="55" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="100" y="78" text-anchor="middle" font-size="13" fill="var(--fg)">app + client library</text>
+    <text x="100" y="96" text-anchor="middle" font-size="11" fill="var(--muted)">the one session owner</text>
+    <line x1="180" y1="82" x2="285" y2="82" stroke="var(--muted)" marker-end="url(#ah2)"/>
+    <text x="232" y="72" text-anchor="middle" font-size="11" fill="var(--muted)">unix socket</text>
+    <text x="232" y="100" text-anchor="middle" font-size="10" fill="var(--muted)">kernel-enforced perms</text>
+    <rect x="540" y="55" width="160" height="55" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="620" y="78" text-anchor="middle" font-size="13" fill="var(--fg)">operator's browser</text>
+    <text x="620" y="96" text-anchor="middle" font-size="11" fill="var(--muted)">dashboard = first client</text>
+    <line x1="540" y1="150" x2="435" y2="150" stroke="var(--muted)" marker-end="url(#ah2)"/>
+    <text x="487" y="140" text-anchor="middle" font-size="11" fill="var(--muted)">TCP · read-only</text>
+    <text x="487" y="168" text-anchor="middle" font-size="10" fill="var(--muted)">CORS designed once</text>
+  </svg>
+  <figcaption>Exposure is asymmetric by construction: nothing that mutates is reachable from anything a browser can touch.</figcaption>
+  </figure>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> "One listener, two purposes — decide that before either is built, not after" and the
+    browser-surface warning that it "breaks completely" the four load-bearing sidecar constraints
+    (<code>next-http-strategy-ideas.md</code> §4e/§4f; <code>parked-sidecar-embeds-web-gui.md</code>).
+    <code>direct:</code> JDK 16+ <code>UnixDomainSocketAddress</code> is cross-platform in <code>java.nio</code>
+    — independent of netty's transports, so a plain HTTP server dodges the netty-kqueue gap that blocks
+    gRPC-over-UDS on macOS (verified this run; macOS peer credentials via <code>LOCAL_PEERCRED</code> rather
+    than Linux's <code>SO_PEERCRED</code>).
+    <code>external:</code> Docker's API on a unix socket; CUPS serving IPP and a web UI from one loopback
+    daemon for 25 years with Host-header validation — the same authority-allowlist posture this project built.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    The multi-entry-point questions (§4e/§4f) are the design work this branch says is "more interesting than
+    any individual dialect" — and one asymmetric ruling answers most of them: the plane a surface belongs to
+    determines its posture, its listener, and whether it may ever own the session. The UDS control plane
+    upgrades the same-host security story (kernel-verified peer identity where the TCP allowlist trusts the
+    client's self-report), and a UDS-only <code>/debug/session</code> endpoint gives operators the curl-able
+    incident view they currently lack without widening the TCP surface.</div>
+  <div class="field"><b>Downsides</b>
+    The largest design surface in the set — two postures to specify and keep honest, and the observation
+    plane's browser exposure still owes the CORS/DNS-rebinding write-up before anything binds off loopback.
+    Windows UDS support (AF_UNIX exists since 2018) needs verifying for the control plane's default there.
+    Med confidence: the plane split is well-grounded; "control on UDS by default" needs a spike.</div>
+</div>
+
+<div class="card" id="p2-i6">
+  <div class="rank"><span class="num">6</span><h3>Admission gets a real identity: a session secret on the wire, an inherited socket underneath</h3></div>
+  <div class="tags"><span class="tag">security-posture</span><span class="tag">entry-points-session</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Two complementary mechanisms, both additive. (a) <strong>Session-continuity secret:</strong>
+     <code>Configured</code> returns a random bearer token; manifests, reports and heartbeats present it;
+     reconnect without it is refused. HTTP needs a session identifier anyway — separate requests must name
+     their session — so mint it as a capability and backport it to gRPC, closing the recorded KTD11
+     reconnect falsifier ("R41 hands the admission slot back on every reconnect, and nothing re-authenticates
+     the peer"). It is also the answer to "which client owns this session" once entry points multiply: the
+     owner is the bearer, not whoever holds a connection. (b) <strong>Admission by inheritance:</strong> the
+     spawner creates a connected socketpair and passes one end to the sidecar as an inherited fd (the
+     LSP-stdio / inetd / systemd socket-activation model). No listener ever exists, so the first-vs-parent
+     race — the half of KTD11 no allowlist can close — cannot occur; "only my parent can reach me" becomes a
+     property of the kernel's fd table.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> The plan's own KTD11 falsifier, verified this run: over loopback TCP "there is no
+    peer-credential mechanism at all … any local process that connects before the spawning application does is
+    indistinguishable from it", and reconnect re-opens the window for the process lifetime.
+    <code>external:</code> LSP's default stdio transport and inetd/systemd fd passing — decades-old
+    sidecar-shaped systems whose admission model is inheritance, not racing to a port.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    One small wire addition and one transport mode close both halves of the only recorded unmitigated gap in
+    the security posture — and they are exactly the primitives the HTTP dialect and the multi-entry-point
+    future need anyway (session affinity for split channels; an ownership token for survivor 5's planes).
+    The engine-puppeteers-client-spawns decision already establishes the parent relationship that inheritance
+    authenticates.</div>
+  <div class="field"><b>Downsides</b>
+    The secret protects reconnect, not first admission (that is what inheritance is for) — the two must ship
+    as a pair to close the gap fully, and the doc must not claim either alone suffices. Inherited-fd mode
+    changes the spawn contract per language (fd passing is awkward in some runtimes) — it should be the
+    default where cheap, an option elsewhere, and the socketpair mode needs a Windows story
+    (named-pipe inheritance) before it is claimed cross-platform.</div>
+</div>
+
+<div class="card" id="p2-i7">
+  <div class="rank"><span class="num">7</span><h3>kafka_properties key allowlist — escalate regardless of the HTTP decision</h3></div>
+  <div class="tags"><span class="tag">security-posture</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag" style="background:var(--warn);color:var(--bg)">ESCALATE</span></div>
+  <p>The plan records it, and this run verified it live in code: <code>KafkaClientFactory</code> copies the
+     client-supplied <code>kafka_properties</code> map with zero key filtering, and Kafka instantiates
+     class-valued properties reflectively (<code>interceptor.classes</code>, <code>metric.reporters</code>,
+     the <code>LoginModule</code> inside <code>sasl.jaas.config</code>) — so capturing the admission slot
+     escalates from credential theft to arbitrary class instantiation inside the sidecar JVM. Fix it once at
+     the <code>Configure → KafkaClientFactory</code> seam, now, while only gRPC reaches it: every future
+     entry point — native HTTP, compat gateway, anything — inherits the allowlist automatically instead of
+     each dialect's author having to remember it. Per-surface credential policy follows: the HTTP dialect
+     should carry no credentials at all (env/file at spawn), recorded as a first-class row in the spec.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> Plan: "the Kafka client property map arrives over the same socket with no key
+    allowlist … escalates to arbitrary class instantiation inside the sidecar JVM" — marked
+    <em>unactioned, and the more serious of the two</em>. Verified this run against the live code:
+    <code>KafkaClientFactory.production()</code> does <code>new HashMap&lt;&gt;(kafkaProperties)</code> with
+    no filtering.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    Like Part 1's reconnect-manifest finding, this is not a preference between directions — it is a recorded,
+    verified defect whose cheapest fix window is before a second surface multiplies the exposure. It sits at
+    the one seam every dialect must pass through, which is what makes fixing it now compounding rather than
+    merely prudent.</div>
+  <div class="field"><b>Downsides</b>
+    An allowlist must be curated — legitimate advanced properties (custom partitioners, metric reporters the
+    operator actually wants) need an explicit opt-in path or the proxy breaks real configurations. Small,
+    bounded work; the cost is deciding the list, not writing the code.</div>
+</div>
+
+<h2>Rejection Summary</h2>
+<div class="scroll">
+<table>
+  <tr><th>Candidate</th><th>Verdict</th><th>Reason</th></tr>
+  <tr><td><strong>Zero-client dialect: per-executor hanging-GET work channels</strong> (controller evaporates into the engine; dozen-line workers in any language)</td><td>Refuted</td>
+      <td>The fresh-context verifier's argument is accepted: N open hanging GETs <em>is</em> a credit ledger of
+      granularity 1 — the client supplies the in-flight ceiling by choosing how many GETs to hold open, and
+      wave dispatch (the point of push) is lost. The rejected pull model relabeled, proposed for the
+      <em>native</em> dialect where the settled rule forbids it. The kernel survives legitimately as the
+      compat shim's delivery mechanism (survivor 1) and the curl-shell conformance row (survivor 3).</td></tr>
+  <tr><td>Browser-only design center (TypeScript-in-a-browser as the only first-class native-HTTP client)</td><td>Refuted</td>
+      <td>Contradicts the recorded guidance — "treat 'the browser can be a worker' as an interesting demo …
+      never as a default" — while the browser security posture is still unanswered, and is dominated by
+      survivor 5's observation plane, which gives the browser a safe rung without making it the design center.</td></tr>
+  <tr><td>Adopt Connect RPC wholesale as the native HTTP dialect</td><td>Downgraded</td>
+      <td>Verified this run: official codegen covers roughly five of the eleven target languages — real
+      leverage, overstated as a whole answer. Recorded as a partial alternative under survivor 4.</td></tr>
+  <tr><td>JMAP (RFC 8620) transliteration for the HTTP framing</td><td>Downgraded</td>
+      <td>The prior art is real (session document at a well-known URL, SSE push, opaque state tokens) but its
+      push is notify-then-fetch — the SSE event carries a state change, not the payload — structurally closer
+      to pull than this protocol's payload-carrying push. The discovery-document piece folds into survivor 5.</td></tr>
+  <tr><td>Author and freeze OpenAPI as a second contract with its own gate</td><td>Rejected</td>
+      <td>Loses to derive-don't-author (survivor 4): two frozen documents drift in a way neither gate can see.</td></tr>
+  <tr><td>Dapr pluggable-component adapter as the third encoding proving the dialect seam</td><td>Deferred</td>
+      <td>Rests on the recorded, still-unresolved unknown — whether Dapr's broker-agnostic contract is
+      work-shaped enough to express per-key ordering and per-record acks. "Read their contract" is still owed;
+      until then the adapter cannot be scoped honestly.</td></tr>
+  <tr><td>Every non-native surface is a network client; listener questions dissolve</td><td>Superseded</td>
+      <td>Quietly redefines "embed the dashboard" (the parked decision) as "dashboard connects over the
+      network" without arguing for the change. Survivor 5's plane split answers the same questions while
+      keeping the embedding decision intact.</td></tr>
+  <tr><td>UDS-before-HTTP as the transport-seam proof</td><td>Already settled</td>
+      <td>Restates the parked owner decision of 2026-08-15 rather than advancing it. Its substance rides in
+      survivor 5 (UDS control plane) instead.</td></tr>
+  <tr><td>UDS-only <code>/debug/session</code> introspection endpoint</td><td>Folded in</td>
+      <td>Good and small — absorbed into survivor 5 as an observation-plane feature rather than ranked alone.</td></tr>
+  <tr><td>Tenancy by socket: one node-local daemon, N unix sockets, kernel permissions as tenant isolation</td><td>Deferred</td>
+      <td>A genuinely new answer to the "middle rung nobody has costed" in the sidecar-vs-server fork — but that
+      fork is a different decision than this run's, and it should not be settled as a side effect. Recorded for
+      the fork discussion.</td></tr>
+  <tr><td>Generator scoreboard (candidate OpenAPI generators as competing conformance rows, wpt.fyi-style)</td><td>Deferred</td>
+      <td>Right method, wrong moment: valuable once survivors 2 and 4 have decided what is generated at all.</td></tr>
+  <tr><td>Conformance cost meter (per-binding defect/time/flake scoreboard feeding demand-decides calls)</td><td>Deferred</td>
+      <td>Operationalizes a real recorded concern (decision throughput, support cost per surface) but is
+      process instrumentation, not an HTTP-direction decision. Worth raising when the dialect count actually grows.</td></tr>
+  <tr><td>Pure-userspace stdlib-HTTP escape hatch for gRPC-hostile packaging (musl/Alpine)</td><td>Parked with trigger</td>
+      <td>Real failure mode (gRPC native transports vs musl images) distinct from the network-reach arguments,
+      but demand-decides applies: build it when a musl build-failure report exists — that report is the
+      trigger, defined in advance.</td></tr>
+  <tr><td>Sticky-affinity marketing angle; pgwire their-tests harness; SessionRouter ownership SPI; composite-device descriptor; HTTP-carries-no-credentials</td><td>Folded in</td>
+      <td>Absorbed into survivors 1, 1, 6, 5 and 7 respectively — properties of stronger ideas rather than competitors.</td></tr>
+</table>
+</div>
+
+<h2>Settled during this run</h2>
+<ul>
+  <li><strong>The REST Proxy compatibility unknown is settled: compatible-and-beneficial.</strong> v2's
+      cumulative watermark is the engine's own offset-map product; beyond-partition concurrency is invisible
+      to the wire contract. v3 has no consumer data plane, so compat means v2. (Primary sources read this
+      run; the seed's "read their API before believing either way" is discharged.)</li>
+  <li><strong>The generated-clients ask splits by surface.</strong> Fully generatable where the surface is
+      request/response (compat); thin hand-written transport + shared controller where it streams (native
+      dialect). No generator does SSE first-class — verified across the major vendors.</li>
+  <li><strong>Pull stays quarantined.</strong> The hanging-GET native dialect was tested against the settled
+      push rule and refuted — pull exists only behind the compat boundary.</li>
+  <li><strong>A plain HTTP server can reach a Unix socket on macOS.</strong> JDK 16+
+      <code>UnixDomainSocketAddress</code> is netty-independent — the parked gRPC-UDS macOS blocker does not
+      transfer to the HTTP dialect.</li>
+</ul>
+
+<h2>Requirements this moves</h2>
+<div class="scroll">
+<table>
+  <tr><th>Item</th><th>Currently says</th><th>Now</th></tr>
+  <tr><td>Protocol spec (lease)</td><td>"The lease is connection-scoped"</td>
+      <td>Survivor 3: session-scoped, extended by any authenticated session traffic; connection-scoped is the
+          gRPC degenerate case. Semantic amendment; no wire change for gRPC.</td></tr>
+  <tr><td>KTD11 (admission)</td><td>Falsifier recorded: reconnect re-admission and first-vs-parent both open</td>
+      <td>Survivor 6: bearer secret (reconnect half, additive capability) + inherited socketpair (first-vs-parent
+          half). Ship as a pair.</td></tr>
+  <tr><td>Plan (kafka_properties)</td><td>"No key allowlist … unactioned"</td>
+      <td>Survivor 7: allowlist at the one seam every dialect passes through, before a second surface ships.</td></tr>
+  <tr><td><code>next-http-strategy-ideas.md</code></td><td>"A proper ideation pass is owed; this is the seed for it"</td>
+      <td>This document is that pass — the note should point here once this lands, and its §2 feasibility
+          unknown is resolved (see Settled).</td></tr>
+  <tr><td><code>parked-sidecar-embeds-web-gui.md</code></td><td>Dashboard parked post-v6; listener sharing undecided</td>
+      <td>Survivor 5 proposes the ruling: the dashboard is the observation plane's first client.</td></tr>
+</table>
+</div>
+
+<h2>What this set does not settle</h2>
+<ul>
+  <li><strong>Priority between the compat surface and the native HTTP dialect.</strong> Survivor 1 is the
+      cheapest reach play (zero new clients); survivor 3 is the prerequisite for any native dialect. Demand
+      decides — and currently no one has asked for either. The set defines both well enough to scope; it does
+      not choose.</li>
+  <li><strong>The browser security write-up.</strong> Survivor 5 bounds the browser to a read-only plane, but
+      CORS, origin rules and the DNS-rebinding class still owe their own KTD before anything binds off
+      loopback.</li>
+  <li><strong>The sidecar-vs-server fork.</strong> Untouched by design; the tenancy-by-socket idea is
+      recorded for that discussion, not this one.</li>
+  <li><strong>Windows.</strong> Both UDS mechanisms (AF_UNIX, socketpair inheritance) need a Windows story
+      before any "cross-platform" claim.</li>
+</ul>
+
+<footer class="composition-signal">Part 1 composed 2026-08-14 · Part 2 composed 2026-08-17 by ce-ideate
+from <code>docs/inflight/next-http-strategy-ideas.md</code> + <code>docs/inflight/parked-http-dialect-and-generated-clients.md</code>
+(branch <code>feats/proxy-requirements</code>)</footer>
 
 </div>
 </body>
