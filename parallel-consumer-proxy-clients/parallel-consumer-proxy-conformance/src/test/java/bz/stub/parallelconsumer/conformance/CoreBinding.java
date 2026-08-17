@@ -44,7 +44,9 @@ public final class CoreBinding implements ConformanceBinding {
     @Override
     public Run execute(ProxyHarness harness, ConformanceScenario scenario) {
         var run = new PrescribedRun(NAME, scenario);
-        harness.start(record -> process(run, record));
+        // The ceiling the scenario prescribes, which every other binding sends over the wire as
+        // max_concurrency. The control arm has to run the same configuration or it controls for nothing.
+        harness.start(record -> process(run, record), scenario.maxConcurrency());
         harness.seed();
         run.awaitPrescribedBehaviour();
         return run;

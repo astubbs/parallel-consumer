@@ -69,6 +69,29 @@ public record HarnessScenario(String name, List<SeedRecord> seeds) {
                             new SeedRecord("distinct", "only-of-distinct")));
 
     /**
+     * The in-flight ceiling: however many records are waiting, a client may hold only as many unresolved at
+     * once as the {@code max_concurrency} it configured - queued <em>plus</em> executing.
+     * <p>
+     * <b>Six records on six DISTINCT keys, so key ordering is not what limits concurrency.</b> Seeded on one
+     * key, a small observed concurrency would prove only that the shard serialized them, and the scenario
+     * would pass for a client that respected no ceiling at all. Distinct keys mean the engine is free to
+     * dispatch every one of them at once, and the only thing standing between the client and six concurrent
+     * records is the ceiling it asked for.
+     * <p>
+     * The count is a multiple of the ceiling the conformance suite drives this with, so the prescribed
+     * behaviour's groups divide exactly - {@code ConformanceScenarios} owns that number, because how many
+     * records may be outstanding is the client's half of the scenario rather than the engine's.
+     */
+    public static final HarnessScenario THE_IN_FLIGHT_CEILING_BOUNDS_UNRESOLVED_RECORDS =
+            new HarnessScenario("the-in-flight-ceiling-bounds-unresolved-records",
+                    List.of(new SeedRecord("ceiling-a", "first"),
+                            new SeedRecord("ceiling-b", "second"),
+                            new SeedRecord("ceiling-c", "third"),
+                            new SeedRecord("ceiling-d", "fourth"),
+                            new SeedRecord("ceiling-e", "fifth"),
+                            new SeedRecord("ceiling-f", "sixth")));
+
+    /**
      * The conformance set so far, in the order a new client should attempt them. Grown here, scenario by
      * scenario, as the engine units land behaviours worth conforming to.
      */
@@ -77,7 +100,8 @@ public record HarnessScenario(String name, List<SeedRecord> seeds) {
                 A_PROCESSED_RECORD_ADVANCES_THE_COMMITTED_OFFSET,
                 AN_UNREPORTED_RECORD_HOLDS_BACK_THE_COMMIT,
                 A_FAILED_RECORD_IS_REDELIVERED_WITH_ITS_FAILURE_HISTORY,
-                RECORDS_SHARING_A_KEY_SHARE_A_SHARD_DISTINCT_KEYS_RUN_CONCURRENTLY);
+                RECORDS_SHARING_A_KEY_SHARE_A_SHARD_DISTINCT_KEYS_RUN_CONCURRENTLY,
+                THE_IN_FLIGHT_CEILING_BOUNDS_UNRESOLVED_RECORDS);
     }
 
     /**

@@ -66,6 +66,30 @@ class ScenarioCoverageTest {
             // the vacuous-assertion shape this suite exists to avoid.
             assertWithMessage("%s expects at least one delivery", scenario.name())
                     .that(scenario.expectedDispatches()).isAtLeast(1);
+            assertWithMessage("%s configures an in-flight ceiling the proxy would accept", scenario.name())
+                    .that(scenario.maxConcurrency()).isAtLeast(1);
+        }
+    }
+
+    /**
+     * A ceiling at or above a scenario's own dispatch count is one the scenario can never reach, so a
+     * behaviour whose whole instrument is FILLING the ceiling would hold a group that never fills - and the
+     * runner would exit 1 for a reason that is nothing to do with the client.
+     * <p>
+     * Written as a property of the pair rather than as a comment on one scenario, because the trap is
+     * invisible at the call site: the ceiling's default is the dispatch count, so a ceiling scenario written
+     * without an explicit one looks identical to the four that want the default.
+     */
+    @Test
+    void aScenarioThatFillsTheCeilingSetsOneItCanReach() {
+        for (var scenario : ConformanceScenarios.all()) {
+            if (scenario.behaviour() != RunnerBehaviour.HOLD_UNTIL_CEILING_FULL) {
+                continue;
+            }
+            assertWithMessage("%s prescribes hold-until-ceiling-full, so its ceiling must be below the number "
+                    + "of records it seeds - otherwise the group never fills and the runner times out "
+                    + "against a client that did nothing wrong", scenario.name())
+                    .that(scenario.maxConcurrency()).isLessThan(scenario.expectedDispatches());
         }
     }
 }

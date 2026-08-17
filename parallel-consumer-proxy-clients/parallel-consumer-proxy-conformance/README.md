@@ -83,7 +83,7 @@ own module. It uses the client library exactly as an application would.
 ### Command line
 
 ```
-<runner> --scenario <name> --behaviour <token> --sidecar <abs-path> --expect-dispatches <n> --timeout-seconds <n>
+<runner> --scenario <name> --behaviour <token> --sidecar <abs-path> --expect-dispatches <n> --max-concurrency <n> --timeout-seconds <n>
 ```
 
 | Flag | Meaning |
@@ -92,9 +92,16 @@ own module. It uses the client library exactly as an application would.
 | `--behaviour <token>` | What to do with each delivery. One of the closed set below; anything else is a usage error. |
 | `--sidecar <abs-path>` | The sidecar command to spawn, absolute. Passed straight to the client library's spawn option; a runner never chooses its own fixture. |
 | `--expect-dispatches <n>` | How many deliveries the scenario prescribes before the runner is finished. |
+| `--max-concurrency <n>` | The in-flight ceiling to configure on the session, and the **only** thing `max_concurrency` may be set from. |
 | `--timeout-seconds <n>` | The runner's whole wall-clock budget. |
 
-All five are required. Every language spells them the same way, including the British `--behaviour`.
+All six are required. Every language spells them the same way, including the British `--behaviour`.
+
+**`--max-concurrency` is a flag rather than a runner's own arithmetic, and that is what made the ceiling
+testable at all.** Every runner used to set `max_concurrency` to `--expect-dispatches`, which is by
+construction a ceiling no scenario can reach - so no scenario could ask a client to prove it respected one,
+and none did. The four older scenarios are driven with the two numbers equal, which is exactly what the
+runners hard-coded before, so nothing about them changed.
 
 ### Exit statuses - the verdict channel
 
@@ -109,20 +116,32 @@ considered and rejected: carrying test results over a wire is the whole wire pro
 languages, to say something an exit status already says. Everything the suite knows about engine state it
 reads from the engine it is hosting, in its own JVM.
 
-### stdout: one observation line per delivery
+### stdout: two observation lines per record
 
 ```
 dispatch key=<key> offset=<n> attempt=<n> reason=<last-failure-reason>
+settled key=<key> offset=<n> attempt=<n> reason=<reason-this-runner-reported>
 ```
 
-- Printed at the moment of delivery, before the behaviour acts on it. Keys and reasons are UTF-8 text;
-  `reason=` is **last** and takes the rest of the line, because it is worker-supplied and may contain spaces.
-  `reason=` is empty on a first delivery.
-- These are **observations, never verdicts**. The runner reports what arrived; the suite decides what it
+- The `dispatch` line is printed at the moment of delivery, **before** the behaviour acts on it. The
+  `settled` line is printed the moment the behaviour has decided that record's outcome, which is when the
+  record stops being unresolved. Keys and reasons are UTF-8 text; `reason=` is **last** and takes the rest of
+  the line, because it is worker-supplied and may contain spaces. On a dispatch it is the history the record
+  *arrived* with, empty on a first delivery; on a settled line it is the failure this runner *reported*,
+  empty for a success.
+- **`report-nothing` prints no `settled` line, ever.** By prescription it never resolves its record, and the
+  absence is the observation.
+- These are **observations, never verdicts**. The runner reports what happened; the suite decides what it
   means. That is what keeps the assertions in one language while the runners stay dumb.
+- **The pair is how the suite sees overlap, and no clock is involved.** A dispatch opens a record's
+  unresolved window and its settled line closes it, so the running difference between the two counts, read in
+  line order, is how many records the client was holding at that instant - which is what `max_concurrency`
+  bounds. **A runner therefore serializes its stdout writes**: the order of the lines has to be the order of
+  the events, which the ordering scenario already relied on for its dispatch lines. Print under whatever lock
+  the runner already takes to count deliveries.
 - Anything else on stdout is ignored, so a spawned sidecar's logging on the same stream is harmless. A line
-  that *starts* with `dispatch ` but does not parse is a contract violation and fails loudly - silently
-  dropping it would let a runner pass by printing nothing readable.
+  that *starts* with `dispatch ` or `settled ` but does not parse is a contract violation and fails loudly -
+  silently dropping it would let a runner pass by printing nothing readable.
 - Diagnostics go to **stderr**, which the suite captures and attaches to any failure message.
 
 ### Behaviour tokens (the closed set)
@@ -133,9 +152,18 @@ dispatch key=<key> offset=<n> attempt=<n> reason=<last-failure-reason>
 | `report-nothing` | Take the delivery and **never** report an outcome for it. Then hold the session open for the fixed hold below, and exit `0` without a clean close - a worker that vanished mid-record. |
 | `fail-then-succeed` | On `attempt == 1`, report a failure whose reason is exactly `conformance-prescribed-failure`. On any later attempt, report success. |
 | `hold-first-until-second` | Do not report the **first** delivery until a **second** one arrives; then succeed both and everything after. If no second arrives within the budget, fail that record and exit `1`. |
+| `hold-until-ceiling-full` | Hold **every** delivery until `--max-concurrency` of them are held at once. Keep the full group held for the fixed **ceiling settle** below, then report all of them as successes and begin the next group. Release whatever is held early once `--expect-dispatches` deliveries have been observed, so a final short group cannot deadlock. If a group never fills within the budget, exit `1`. |
 
 Adding a behaviour is a change to this table, to `RunnerBehaviour.java`, and to every runner - deliberately
 expensive, because the alternative is runners inventing logic that makes an assertion mean nothing.
+
+**`hold-until-ceiling-full` is a two-sided instrument and both sides earn their place.** Filling the group is
+what forces the ceiling to be *reached*, so "never exceeded" is not the vacuous truth it would be for a client
+running one record at a time; the settle window is what makes an excess *visible* rather than a race. A client
+that cannot get `max_concurrency` records into its user function at once runs out of budget and says so; one
+that gets more prints the extra dispatch lines while the group is still held, and the suite reads a peak above
+the ceiling. It is the same lesson the ordering scenario learned: **the hold is the instrument, not the
+transcript.**
 
 ### Fixed literals every runner hard-codes
 
@@ -148,7 +176,8 @@ budgets mean something different in each language.
 | Commit interval | `100ms` | Set on the session. The engine's production default is 5s; scenarios must converge at unit-test speed. |
 | Retry delay | `50ms` | Same reason; the production default is 1s. |
 | `report-nothing` hold | `3s` | See below - it is what makes the negative control a control. |
-| Max concurrency | `--expect-dispatches` | So a scenario prescribing a **held** record cannot deadlock on an executor count smaller than its own shape. |
+| Ceiling settle | `250ms` | How long `hold-until-ceiling-full` keeps a *full* group held before releasing it. Release it the instant it fills and a client that declared a larger ceiling still passes: its extra records arrive a few milliseconds later, by which time the outstanding count has already fallen back. A correct engine can dispatch nothing during the window - the ceiling is full - so the wait costs a conforming client only time. |
+| Max concurrency | `--max-concurrency` | Never derived from anything else. Deriving it from `--expect-dispatches`, which is what every runner used to do, is a ceiling no scenario can reach. |
 
 **The `report-nothing` hold is not cosmetic, and it was found the hard way.** Without it, the runner exits the
 instant the record arrives - and a *sabotaged* runner that wrongly reported success has its report killed in
@@ -192,21 +221,39 @@ which is the wrapper's message rather than the user's - the same unwrap the engi
 before it puts the reason on the wire. That was a bug in the *binding*, found in seconds, that would have read
 as "the client mangles the reason" in any language it appeared in.
 
-Wired today, all four passing for every binding:
+Wired today, all five passing for every binding:
 
-| Scenario | Behaviour | Deliveries | Asserted |
-|---|---|---|---|
-| `a-processed-record-advances-the-committed-offset` | `succeed` | 1 | One delivery, `attempt=1`, and the committed offset advances past it |
-| `an-unreported-record-holds-back-the-commit` | `report-nothing` | 1 | The record **reached** a client (arrival sync), and the offset never advances past it |
-| `a-failed-record-is-redelivered-with-its-failure-history` | `fail-then-succeed` | 2 | Redelivery of the same offset with `attempt=2` and the reason verbatim; then the offset advances |
-| `records-sharing-a-key-share-a-shard-distinct-keys-run-concurrently` | `hold-first-until-second` | 3 | While one record is held, the client accepts and runs a delivery on the **other** key, and the same key's next record does not arrive until the held one is reported |
+| Scenario | Behaviour | Deliveries | Ceiling | Asserted |
+|---|---|---|---|---|
+| `a-processed-record-advances-the-committed-offset` | `succeed` | 1 | 1 | One delivery, `attempt=1`, and the committed offset advances past it |
+| `an-unreported-record-holds-back-the-commit` | `report-nothing` | 1 | 1 | The record **reached** a client (arrival sync), and the offset never advances past it |
+| `a-failed-record-is-redelivered-with-its-failure-history` | `fail-then-succeed` | 2 | 2 | Redelivery of the same offset with `attempt=2` and the reason verbatim; then the offset advances |
+| `records-sharing-a-key-share-a-shard-distinct-keys-run-concurrently` | `hold-first-until-second` | 3 | 3 | While one record is held, the client accepts and runs a delivery on the **other** key, and the same key's next record does not arrive until the held one is reported |
+| `the-in-flight-ceiling-bounds-unresolved-records` | `hold-until-ceiling-full` | 6 | **2** | Six records on six distinct keys, and the client held **exactly** two unresolved at any instant - never three - while every one of them was eventually delivered and committed |
 
-The last one is a client test, not a shard-selection test: what it catches is a client whose admin loop
+The fourth is a client test, not a shard-selection test: what it catches is a client whose admin loop
 head-of-line-blocks, whose queue hands out wrongly, or which reports a record whose function has not returned.
 Its instrument is the **hold**, not the transcript - removing the hold leaves every one of its assertions
 still true, because the engine dispatches both shards in one wave regardless. The sabotage that proves it red
 is a client that can only run one record at a time (a mutex around the whole processor - the shape of Ruby's
 `SizedQueue` and Rust's blocking-in-an-executor defects): it deadlocks, exceeds its budget, and exits `1`.
+
+**The fifth is the only one that constrains how many records may be outstanding at once**, and it is the first
+scenario whose ceiling is smaller than its own record count - which is why the flag had to exist. The keys are
+distinct so that key ordering is not what limits concurrency: seeded on one key, a small observed concurrency
+would prove only that the shard serialized them, and the scenario would pass for a client respecting no
+ceiling at all. Both halves of its assertion are load-bearing - **at most the ceiling** is the product's
+claim, and **every record eventually delivered** is what stops a client satisfying it by never asking for
+work. It is written as one equality (`peak == ceiling`) because the prescribed group guarantees the ceiling
+is reached, so anything else is the client holding a slot it should have freed, or freeing one it should
+still have held.
+
+**What it deliberately cannot see, so nobody reads more into a green run.** The counting defect the guide's
+§3 rule 2 is about - a client bounding its *queue* rather than its *unresolved* records - is invisible from
+out here while the proxy is correct, because the proxy never over-dispatches and so never offers the extra
+record that would expose it. What this catches is the consequence reaching the engine: a ceiling the client
+mis-declares, an executor pool wider than the ceiling, or a record resolved before its function returned.
+The counting itself stays a matter for each client's own tests, which is where the guide points it.
 
 ## 5. How the mechanism works
 
@@ -313,7 +360,7 @@ to run the control arm alone - no toolchain, a few seconds.
 
 1. **Write the runner** in the client's own module, using the client library as an application would. Go's
    lives at `parallel-consumer-proxy-client-go/cmd/conformance-runner/main.go` and is the reference. Implement
-   §3 exactly: the five flags, the three exit statuses, the observation line, all four behaviour tokens, and
+   §3 exactly: the six flags, the three exit statuses, both observation lines, all five behaviour tokens, and
    the fixed literals - including the `report-nothing` hold.
 2. **Add one registry entry** in `LanguageRunners.java`: the language's name, its module directory, the
    command that builds the runner, and where the binary lands. Copy whichever entry is closest in shape. The
@@ -343,7 +390,7 @@ the lifecycle unit. Wrapping one in a subprocess would have meant *writing* the 
 have, and then testing that.
 
 What is not relaxed is the prescription. `PrescribedRun.java` is the runner contract carried out in this JVM
-- the four behaviour tokens, the fixed failure literal, one observation per delivery, an exit status as the
+- the five behaviour tokens, the fixed failure literal, the observation lines per record, an exit status as the
 verdict - and it is the same code the control arm runs, so no assertion can be written to suit an in-process
 binding. `java-direct` is the most interesting binding in the set for the same reason it is the least
 ceremonious: its wire is a function call, so a scenario that passes for `java-grpc` and fails there is a

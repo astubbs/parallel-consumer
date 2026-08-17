@@ -18,8 +18,8 @@ namespace Bz.Stub.ParallelConsumer.Proxy.Client.Conformance;
 /// then exit; if it were free to decide what "correct" means, ten languages would each decide it
 /// slightly differently and the agreement between them would prove nothing.
 /// <para>
-/// Its contract - flags, exit codes, the stdout line, the behaviour tokens - is documented once, in
-/// that module's <c>README.md</c>, and is identical in every language.
+/// Its contract - flags, exit codes, the two stdout lines per record, the behaviour tokens - is
+/// documented once, in that module's <c>README.md</c>, and is identical in every language.
 /// </para>
 /// <para>
 /// THIS DOES NOT REPLACE THIS MODULE'S OWN TESTS. The shared suite proves every client behaves
@@ -45,10 +45,12 @@ internal static class Program
     private const string BehaviourReportNothing = "report-nothing";
     private const string BehaviourFailThenSucceed = "fail-then-succeed";
     private const string BehaviourHoldFirstUntilSecond = "hold-first-until-second";
+    private const string BehaviourHoldUntilCeilingFull = "hold-until-ceiling-full";
 
     private static readonly string[] Behaviours =
     {
         BehaviourSucceed, BehaviourReportNothing, BehaviourFailThenSucceed, BehaviourHoldFirstUntilSecond,
+        BehaviourHoldUntilCeilingFull,
     };
 
     /// <summary>
@@ -79,6 +81,20 @@ internal static class Program
     /// </remarks>
     private static readonly TimeSpan ReportNothingHold = TimeSpan.FromSeconds(3);
 
+    /// <summary>
+    /// How long <c>hold-until-ceiling-full</c> keeps a FULL group held before releasing it.
+    /// </summary>
+    /// <remarks>
+    /// IT IS WHAT TURNS "THE CEILING WAS NEVER EXCEEDED" FROM A RACE INTO A MEASUREMENT. Release the
+    /// group the instant it fills and a client that declared a larger ceiling still passes - its
+    /// extra records arrive a few milliseconds later, by which time the outstanding count has
+    /// already fallen back. Holding the full ceiling still means the extra dispatch arrives INSIDE
+    /// the window and prints its line while every other record is unresolved. A correct engine
+    /// cannot dispatch anything during the window at all, so the wait costs a conforming client
+    /// nothing but time.
+    /// </remarks>
+    private static readonly TimeSpan CeilingSettle = TimeSpan.FromMilliseconds(250);
+
     private static async Task<int> Main(string[] arguments)
     {
         if (!Arguments.TryParse(arguments, out var parsed, out var problem))
@@ -92,8 +108,10 @@ internal static class Program
 
     private static async Task<int> RunAsync(Arguments arguments)
     {
-        var tracker = new Tracker(arguments.ExpectDispatches);
+        // The budget is created first because the tracker holds it: every wait the prescription can
+        // block on - including the ceiling group - is bounded by the same wall clock the run is.
         using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(arguments.TimeoutSeconds));
+        var tracker = new Tracker(arguments.ExpectDispatches, arguments.MaxConcurrency, budget.Token);
 
         ParallelConsumerClient client;
         try
@@ -103,9 +121,12 @@ internal static class Program
                 SidecarPath = arguments.Sidecar,
                 // THE SCENARIO NAME IS ALSO THE TOPIC NAME.
                 Topics = new[] { arguments.Scenario },
-                // Enough executors for every dispatch the scenario prescribes, so a scenario that
-                // holds a record cannot deadlock on a ceiling smaller than its own shape.
-                MaxConcurrency = arguments.ExpectDispatches,
+                // The ceiling is the SCENARIO'S to choose and this runner never derives one: it is
+                // set from --max-concurrency and from nothing else. Deriving it from
+                // --expect-dispatches, which is what this line used to do, is by construction a
+                // ceiling no scenario can reach - so no scenario could ask this client to prove it
+                // respected one.
+                MaxConcurrency = arguments.MaxConcurrency,
                 CommitInterval = CommitInterval,
                 DefaultMessageRetryDelay = RetryDelay,
                 // The mock lane builds mock Kafka clients and reads no properties. Real credentials
@@ -132,7 +153,7 @@ internal static class Program
         // reported and so can never complete. Every other behaviour completes when the last record
         // it was handed has had its outcome decided.
         var reportNothing = arguments.Behaviour == BehaviourReportNothing;
-        if (!await tracker.WaitForPrescribedBehaviourAsync(reportNothing, budget.Token).ConfigureAwait(false))
+        if (!await tracker.WaitForPrescribedBehaviourAsync(reportNothing).ConfigureAwait(false))
         {
             await Console.Error.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
                     $"conformance-runner: scenario {arguments.Scenario} behaviour {arguments.Behaviour} did not " +
@@ -177,21 +198,31 @@ internal static class Program
     {
         var ordinal = tracker.Observe(record);
 
+        // Every branch prints its settled line BEFORE it counts the record as complete: the count is
+        // what releases the main flow to dispose the client and exit, so completing first would race
+        // the process exit against the line that says how the record ended.
         switch (behaviour)
         {
             case BehaviourSucceed:
+                tracker.Settle(record, string.Empty);
                 tracker.Complete();
                 return Outcome.Succeed();
 
             case BehaviourReportNothing:
-                // Never report. A task that never completes is how a .NET worker says "this record's
-                // function has not returned"; the process exits with the record still in flight.
+                // Never report, and print NO settled line - by prescription this record is never
+                // resolved and the absence is the observation. A task that never completes is how a
+                // .NET worker says "this record's function has not returned"; the process exits with
+                // the record still in flight.
                 await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
                 return Outcome.Succeed();
 
             case BehaviourFailThenSucceed:
+                // The reason is the contract's fixed literal, never a message this runner composes:
+                // the suite asserts the redelivery carries it back verbatim.
+                var reported = record.Attempt == 1 ? PrescribedFailureReason : string.Empty;
+                tracker.Settle(record, reported);
                 tracker.Complete();
-                return record.Attempt == 1 ? Outcome.Fail(PrescribedFailureReason) : Outcome.Succeed();
+                return reported.Length == 0 ? Outcome.Succeed() : Outcome.Fail(reported);
 
             case BehaviourHoldFirstUntilSecond:
                 if (ordinal == 1)
@@ -202,6 +233,28 @@ internal static class Program
                     await tracker.SecondArrived.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
 
+                tracker.Settle(record, string.Empty);
+                tracker.Complete();
+                return Outcome.Succeed();
+
+            case BehaviourHoldUntilCeilingFull:
+                // Hold until --max-concurrency records are held AT ONCE, keep the full group still
+                // for the settle window, then release the whole group as successes. Not returning is
+                // how this runner says the record's function has not returned, so a held record is
+                // genuinely unresolved for as long as it looks - the property the scenario measures.
+                if (!await tracker.EnterCeilingGroupAsync().ConfigureAwait(false))
+                {
+                    // The prescription could not be carried out. Reporting the reason rather than a
+                    // plausible-looking success is the same verdict the Java binding gives, and the
+                    // record is deliberately NOT counted complete: the budget that released this
+                    // wait has released the main one too, so the run exits 1.
+                    var never = string.Create(CultureInfo.InvariantCulture,
+                        $"conformance: the ceiling group of {tracker.MaxConcurrency} never filled");
+                    tracker.Settle(record, never);
+                    return Outcome.Fail(never);
+                }
+
+                tracker.Settle(record, string.Empty);
                 tracker.Complete();
                 return Outcome.Succeed();
 
@@ -226,15 +279,18 @@ internal static class Program
     }
 
     /// <summary>
-    /// The five flags, spelled identically in every language - including the British
-    /// <c>--behaviour</c>.
+    /// The six flags, spelled identically in every language - including the British
+    /// <c>--behaviour</c>:
+    /// <c>--scenario --behaviour --sidecar --expect-dispatches --max-concurrency --timeout-seconds</c>.
+    /// All six are required, and anything missing or out of range is a usage error.
     /// </summary>
     private sealed record Arguments(
-        string Scenario, string Behaviour, string Sidecar, int ExpectDispatches, int TimeoutSeconds)
+        string Scenario, string Behaviour, string Sidecar, int ExpectDispatches, int MaxConcurrency,
+        int TimeoutSeconds)
     {
         public static bool TryParse(string[] argv, out Arguments parsed, out string problem)
         {
-            parsed = new Arguments(string.Empty, string.Empty, string.Empty, 0, 0);
+            parsed = new Arguments(string.Empty, string.Empty, string.Empty, 0, 0, 0);
             var values = new Dictionary<string, string>(StringComparer.Ordinal);
             for (var index = 0; index < argv.Length; index += 2)
             {
@@ -247,7 +303,11 @@ internal static class Program
                 values[argv[index]] = argv[index + 1];
             }
 
-            foreach (var flag in new[] { "--scenario", "--behaviour", "--sidecar", "--expect-dispatches", "--timeout-seconds" })
+            foreach (var flag in new[]
+                     {
+                         "--scenario", "--behaviour", "--sidecar", "--expect-dispatches", "--max-concurrency",
+                         "--timeout-seconds",
+                     })
             {
                 if (!values.TryGetValue(flag, out var value) || value.Length == 0)
                 {
@@ -277,6 +337,13 @@ internal static class Program
                 return false;
             }
 
+            if (!int.TryParse(values["--max-concurrency"], NumberStyles.Integer, CultureInfo.InvariantCulture,
+                    out var ceiling) || ceiling < 1)
+            {
+                problem = "--max-concurrency must be at least 1";
+                return false;
+            }
+
             if (!int.TryParse(values["--timeout-seconds"], NumberStyles.Integer, CultureInfo.InvariantCulture,
                     out var budget) || budget < 1)
             {
@@ -284,7 +351,7 @@ internal static class Program
                 return false;
             }
 
-            parsed = new Arguments(values["--scenario"], behaviour, sidecar, expect, budget);
+            parsed = new Arguments(values["--scenario"], behaviour, sidecar, expect, ceiling, budget);
             problem = string.Empty;
             return true;
         }
@@ -299,7 +366,25 @@ internal static class Program
     {
         private readonly int _expected;
 
+        private readonly int _maxConcurrency;
+
+        /// <summary>The run's whole wall clock, which bounds every wait the prescription can block on.</summary>
+        private readonly CancellationToken _budget;
+
         private readonly object _printing = new();
+
+        /// <summary>
+        /// The <c>hold-until-ceiling-full</c> group: how many records are held right now, and the
+        /// task the current generation of them is waiting on. A cyclic barrier of the scenario's
+        /// ceiling, written out rather than taken from a library, because these two fields are the
+        /// whole of what a runner author in any language has to reproduce.
+        /// </summary>
+        private readonly object _ceilingGroup = new();
+
+        private TaskCompletionSource _groupReleased =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private int _heldInGroup;
 
         private readonly TaskCompletionSource _second =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -314,11 +399,19 @@ internal static class Program
 
         private int _completed;
 
-        public Tracker(int expected) => _expected = expected;
+        public Tracker(int expected, int maxConcurrency, CancellationToken budget)
+        {
+            _expected = expected;
+            _maxConcurrency = maxConcurrency;
+            _budget = budget;
+        }
 
         public int Observed => Volatile.Read(ref _observed);
 
         public int Completed => Volatile.Read(ref _completed);
+
+        /// <summary>The ceiling the session was configured with, and the ceiling group's width.</summary>
+        public int MaxConcurrency => _maxConcurrency;
 
         /// <summary>Completes once a second delivery has arrived - the ordering scenario's instrument.</summary>
         public Task SecondArrived => _second.Task;
@@ -353,6 +446,90 @@ internal static class Program
             return ordinal;
         }
 
+        /// <summary>
+        /// Prints the record's outcome, at the moment the prescribed behaviour decided it - which is
+        /// the moment the record stops being unresolved.
+        /// </summary>
+        /// <remarks>
+        /// UNDER THE SAME LOCK AS THE DISPATCH LINE, because the suite reads overlap purely from the
+        /// ORDER of the two line types and no clock is involved: a dispatch opens a record's
+        /// unresolved window, its settled line closes it, and the running difference between the two
+        /// counts in line order is how many records this client was holding at that instant.
+        /// Executors here are tasks sharing one stdout, so an unserialized write would report a peak
+        /// that never happened about a client that behaved perfectly.
+        /// </remarks>
+        /// <param name="record">The delivery whose outcome has been decided.</param>
+        /// <param name="reason">The failure reason THIS runner is reporting; empty for a success.</param>
+        public void Settle(InboundRecord record, string reason)
+        {
+            lock (_printing)
+            {
+                Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"settled key={Text(record.Key)} offset={record.Offset} attempt={record.Attempt} " +
+                    $"reason={reason}"));
+                Console.Out.Flush();
+            }
+        }
+
+        /// <summary>
+        /// The cyclic barrier at the heart of <c>hold-until-ceiling-full</c>: hold this record until
+        /// it is one of <see cref="MaxConcurrency"/> held at once, keep the full group still for
+        /// <see cref="CeilingSettle"/>, and release it. Called AFTER the dispatch line is printed.
+        /// </summary>
+        /// <remarks>
+        /// A group also releases once every prescribed delivery has been observed, so a scenario
+        /// whose record count is not a multiple of its ceiling cannot strand its last, short group.
+        /// </remarks>
+        /// <returns>
+        /// False if the group never filled inside the budget - this runner failing to carry out the
+        /// prescription, rather than the client being wrong about anything.
+        /// </returns>
+        public async Task<bool> EnterCeilingGroupAsync()
+        {
+            Task released;
+            bool releasing;
+            lock (_ceilingGroup)
+            {
+                // The task captured here IS this record's generation: the releaser swaps in a fresh
+                // one, so awaiting the captured task is exactly "wait until the generation is no
+                // longer mine". C# cannot await inside a lock, which is what makes an async barrier
+                // read differently from the Java one - the state is decided under the lock and every
+                // wait happens after it has been left.
+                released = _groupReleased.Task;
+                _heldInGroup++;
+                releasing = _heldInGroup >= _maxConcurrency || Observed >= _expected;
+            }
+
+            if (!releasing)
+            {
+                try
+                {
+                    await released.WaitAsync(_budget).ConfigureAwait(false);
+                    return true;
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+            }
+
+            // THE SETTLE WINDOW, HELD OUTSIDE THE LOCK so a record the engine should not be
+            // dispatching can still print its arrival line if it turns up - that arrival is the whole
+            // thing the scenario looks for. A correct engine cannot dispatch anything here, the
+            // ceiling being full, so a dispatch line inside this window IS the excess.
+            await Task.Delay(CeilingSettle).ConfigureAwait(false);
+
+            lock (_ceilingGroup)
+            {
+                _heldInGroup = 0;
+                var waiters = _groupReleased;
+                _groupReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                waiters.SetResult();
+            }
+
+            return true;
+        }
+
         public void Complete()
         {
             if (Interlocked.Increment(ref _completed) >= _expected)
@@ -362,12 +539,12 @@ internal static class Program
         }
 
         /// <summary>Whether the prescription finished inside the budget.</summary>
-        public async Task<bool> WaitForPrescribedBehaviourAsync(bool atObservation, CancellationToken budget)
+        public async Task<bool> WaitForPrescribedBehaviourAsync(bool atObservation)
         {
             var finished = atObservation ? _allObserved.Task : _allCompleted.Task;
             try
             {
-                await finished.WaitAsync(budget).ConfigureAwait(false);
+                await finished.WaitAsync(_budget).ConfigureAwait(false);
                 return true;
             }
             catch (OperationCanceledException)

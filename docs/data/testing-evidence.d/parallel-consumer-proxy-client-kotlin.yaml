@@ -24,8 +24,9 @@ module_evidence:
       fail against an injected defect.
       Beyond this module's own tests, the shared cross-language conformance suite drives this client as a spawned
       runner (scripts/conformance-runner, launching the runner in this module's test tree with a Maven-resolved
-      classpath) through all four wired scenarios - the processed record, the unreported record, the redelivered
-      failure with its reason verbatim, and the held record that admits a concurrent dispatch on another key -
+      classpath) through all five wired scenarios - the processed record, the unreported record, the redelivered
+      failure with its reason verbatim, the held record that admits a concurrent dispatch on another key,
+      and the in-flight ceiling holding this client to exactly two unresolved records at once -
       with the engine hosted in the suite's JVM and the sidecar spawn exercised through the suite's shim.
     inspect:
       - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/src/test/kotlin/bz/stub/parallelconsumer/client/coroutines/conformance/ConformanceRunner.kt
@@ -37,5 +38,7 @@ module_evidence:
       test, no multi-record concurrency or FIFO hand-out test, no overflow negative control, and nothing
       covering connection loss, lease expiry, worker death, terminal outcomes or the Shutdown drain -
       because none of those paths is implemented. The one thing that is no longer a gap is the shared
-      cross-language conformance suite: this client now answers all four of its scenarios through a real child-process
-      runner, alongside every other client, and each scenario was proven able to fail by sabotaging that runner.
+      cross-language conformance suite: this client now answers all five of its scenarios through a real child-process
+      runner, alongside every other client, and each scenario was proven able to fail by sabotaging that runner -
+      the ceiling by declaring double the ceiling the scenario prescribed, which the suite read as a peak of four
+      against a bound of two.

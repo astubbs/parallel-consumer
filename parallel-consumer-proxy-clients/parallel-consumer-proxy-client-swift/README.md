@@ -25,7 +25,7 @@ isolation boundary here is checked rather than asserted and a data race is a com
 
 Connect, `Configure`, dispatch waves, the user's function, per-record reports with the delivery token
 echoed verbatim, records produced back on success, and a clean client-initiated shutdown - all end to
-end over real gRPC, and all four shared conformance scenarios.
+end over real gRPC, and all five shared conformance scenarios.
 
 Not implemented, and therefore **not declared**: the liveness lease and heartbeats, the manifest
 reconnect, worker-death reporting, terminal outcomes and the proxy-initiated drain.

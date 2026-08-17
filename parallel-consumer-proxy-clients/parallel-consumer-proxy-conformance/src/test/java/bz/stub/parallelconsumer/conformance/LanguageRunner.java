@@ -159,6 +159,7 @@ public record LanguageRunner(String language, Path workingDirectory, List<String
                 RunnerContract.FLAG_BEHAVIOUR, scenario.behaviour().token(),
                 RunnerContract.FLAG_SIDECAR, sidecar.toString(),
                 RunnerContract.FLAG_EXPECT_DISPATCHES, Integer.toString(scenario.expectedDispatches()),
+                RunnerContract.FLAG_MAX_CONCURRENCY, Integer.toString(scenario.maxConcurrency()),
                 RunnerContract.FLAG_TIMEOUT_SECONDS, Long.toString(scenario.runnerBudget().toSeconds()));
     }
 

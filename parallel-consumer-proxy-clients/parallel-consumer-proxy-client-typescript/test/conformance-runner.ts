@@ -10,7 +10,7 @@
  * exit; if it were free to decide what "correct" means, ten languages would each decide it slightly
  * differently and the agreement between them would prove nothing.
  *
- * Its contract - flags, exit codes, the stdout line, the behaviour tokens - is documented once, in
+ * Its contract - flags, exit codes, the two stdout lines, the behaviour tokens - is documented once, in
  * parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/README.md, and is identical
  * in every language.
  *
@@ -39,6 +39,7 @@ const BEHAVIOURS = [
   "report-nothing",
   "fail-then-succeed",
   "hold-first-until-second",
+  "hold-until-ceiling-full",
 ] as const;
 type Behaviour = (typeof BEHAVIOURS)[number];
 
@@ -65,11 +66,24 @@ const RETRY_DELAY_MS = 50;
  */
 const REPORT_NOTHING_HOLD_MS = 3_000;
 
+/**
+ * How long `hold-until-ceiling-full` keeps a FULL group held before releasing it.
+ *
+ * IT IS WHAT TURNS "the ceiling was never exceeded" FROM A RACE INTO A MEASUREMENT. Release the
+ * group the instant it fills and a client that declared a larger ceiling still passes - its extra
+ * records arrive a few milliseconds later, by which time the outstanding count has already fallen
+ * back. Holding the full ceiling still means the extra dispatch arrives INSIDE the window and
+ * prints its line while every other record is unresolved. A correct engine cannot dispatch anything
+ * during the window at all, so the wait costs a conforming client nothing but time.
+ */
+const CEILING_SETTLE_MS = 250;
+
 interface Arguments {
   scenario: string;
   behaviour: Behaviour;
   sidecar: string;
   expectDispatches: number;
+  maxConcurrency: number;
   timeoutSeconds: number;
 }
 
@@ -81,7 +95,7 @@ async function main(argv: readonly string[]): Promise<number> {
   return run(parsed);
 }
 
-/** The five flags, spelled identically in every language - including the British `--behaviour`. */
+/** The six flags, spelled identically in every language - including the British `--behaviour`. */
 function parse(argv: readonly string[]): Arguments | number {
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
@@ -97,6 +111,7 @@ function parse(argv: readonly string[]): Arguments | number {
   const behaviour = values.get("--behaviour");
   const sidecar = values.get("--sidecar");
   const expect = Number(values.get("--expect-dispatches"));
+  const ceiling = Number(values.get("--max-concurrency"));
   const budget = Number(values.get("--timeout-seconds"));
 
   if (scenario === undefined || scenario.length === 0) return usage("--scenario is required");
@@ -107,6 +122,7 @@ function parse(argv: readonly string[]): Arguments | number {
   if (sidecar === undefined || sidecar.length === 0) return usage("--sidecar is required");
   if (!isAbsolute(sidecar)) return usage(`--sidecar must be absolute, got ${JSON.stringify(sidecar)}`);
   if (!Number.isInteger(expect) || expect < 1) return usage("--expect-dispatches must be at least 1");
+  if (!Number.isInteger(ceiling) || ceiling < 1) return usage("--max-concurrency must be at least 1");
   if (!Number.isInteger(budget) || budget < 1) return usage("--timeout-seconds must be at least 1");
 
   return {
@@ -114,6 +130,7 @@ function parse(argv: readonly string[]): Arguments | number {
     behaviour: behaviour as Behaviour,
     sidecar,
     expectDispatches: expect,
+    maxConcurrency: ceiling,
     timeoutSeconds: budget,
   };
 }
@@ -124,7 +141,7 @@ function usage(problem: string): number {
 }
 
 async function run(args: Arguments): Promise<number> {
-  const tracker = new Tracker(args.expectDispatches);
+  const tracker = new Tracker(args.expectDispatches, args.maxConcurrency, args.timeoutSeconds * 1_000);
 
   let client: ParallelConsumerClient;
   try {
@@ -132,9 +149,10 @@ async function run(args: Arguments): Promise<number> {
       sidecar: { executable: args.sidecar, stderr: "inherit" },
       // THE SCENARIO NAME IS ALSO THE TOPIC NAME.
       topics: [args.scenario],
-      // Enough executors for every dispatch the scenario prescribes, so a scenario that holds a
-      // record cannot deadlock on a ceiling smaller than its own shape.
-      maxConcurrency: args.expectDispatches,
+      // The ceiling is the SCENARIO's to choose and this runner never derives one: it is whatever
+      // --max-concurrency said, and nothing else may set it. Deriving it from --expect-dispatches,
+      // which is what this line used to do, is by construction a ceiling no scenario can reach.
+      maxConcurrency: args.maxConcurrency,
       commitIntervalMs: COMMIT_INTERVAL_MS,
       defaultMessageRetryDelayMs: RETRY_DELAY_MS,
       // The mock lane builds mock Kafka clients and reads no properties. Real credentials never
@@ -161,6 +179,16 @@ async function run(args: Arguments): Promise<number> {
       `conformance-runner: scenario ${args.scenario} behaviour ${args.behaviour} did not complete ` +
         `within ${args.timeoutSeconds}s - observed ${tracker.observed} of ${args.expectDispatches}, ` +
         `completed ${tracker.completed}\n`,
+    );
+    await closeQuietly(client);
+    return EXIT_BEHAVIOUR_FAILED;
+  }
+
+  // A prescribed behaviour that gave up releases every wait rather than letting each time out in
+  // turn, so the run finishes inside the budget with the verdict already decided against it.
+  if (tracker.failure !== undefined) {
+    process.stderr.write(
+      `conformance-runner: scenario ${args.scenario} behaviour ${args.behaviour}: ${tracker.failure}\n`,
     );
     await closeQuietly(client);
     return EXIT_BEHAVIOUR_FAILED;
@@ -194,22 +222,27 @@ function processorFor(
 
     switch (behaviour) {
       case "succeed":
-        tracker.complete();
+        tracker.complete(record);
         return;
 
       case "report-nothing":
-        // Never report. An await that never settles is how a JavaScript worker says "this record's
-        // function has not returned"; the process exits with the record still in flight.
+        // Never report, and print no `settled` line: by prescription this record is never resolved
+        // and the ABSENCE is the observation. An await that never settles is how a JavaScript worker
+        // says "this record's function has not returned"; the process exits with it still in flight.
         await new Promise<never>(() => {});
         return;
 
-      case "fail-then-succeed":
-        tracker.complete();
-        if (record.attempt === 1) {
+      case "fail-then-succeed": {
+        // The reason is the contract's fixed literal on the first attempt and empty afterwards, and
+        // it is the reason this runner REPORTS - not the one the record arrived carrying.
+        const reason = record.attempt === 1 ? PRESCRIBED_FAILURE_REASON : "";
+        tracker.complete(record, reason);
+        if (reason !== "") {
           // A throw IS the language's failure idiom, and the message is the reason verbatim.
-          throw new Error(PRESCRIBED_FAILURE_REASON);
+          throw new Error(reason);
         }
         return;
+      }
 
       case "hold-first-until-second":
         if (ordinal === 1) {
@@ -218,21 +251,51 @@ function processorFor(
           // suite that decides what the answer means.
           await tracker.secondArrived;
         }
-        tracker.complete();
+        tracker.complete(record);
         return;
+
+      case "hold-until-ceiling-full": {
+        // Hold until a ceiling's worth of records are held AT ONCE, keep the full group still for
+        // CEILING_SETTLE_MS, then release the whole group as successes. An await that has not
+        // resolved is how this runtime says the record's function has not returned, so a held
+        // record is genuinely unresolved for as long as it looks - the property the scenario
+        // measures.
+        const filled = await tracker.enterCeilingGroup();
+        if (!filled) {
+          // The group never filled inside the budget: this runner could not do what was prescribed,
+          // so it reports a failure rather than a plausible-looking success, and the run exits 1.
+          const reason = tracker.abandon(`the ceiling group of ${tracker.ceiling} never filled`);
+          tracker.complete(record, reason);
+          throw new Error(reason);
+        }
+        tracker.complete(record);
+        return;
+      }
     }
   };
 }
 
 /**
- * Counts deliveries and outcomes, and prints the observation line. It holds no per-record state -
- * only counts - because the client library holds none either, and this runner must not become the
- * place where a client's missing bookkeeping is quietly supplied.
+ * Counts deliveries and outcomes, and prints the two observation lines. It holds no per-record
+ * state - only counts - because the client library holds none either, and this runner must not
+ * become the place where a client's missing bookkeeping is quietly supplied.
+ *
+ * THERE IS NO LOCK HERE, AND NOTHING SERIALIZES THE STDOUT WRITES. That is the one place this
+ * differs visibly from the Go, Java and Rust runners, so a reader arriving from one of those will
+ * come looking for the mutex the contract asks for - and its absence is deliberate, not an
+ * omission. The suite reads overlap purely from the ORDER of these lines, and one event loop
+ * already guarantees it: `observe` and `complete` each run to completion without yielding, so no
+ * second delivery can interleave between counting a record and printing the line that reports it.
+ * A mutex would have nothing to exclude. The contract says as much in its own words - "in a
+ * single-threaded async runtime (TypeScript) the event loop already serializes writes".
  */
 class Tracker {
   observed = 0;
 
   completed = 0;
+
+  /** Set the first time a prescribed behaviour gives up, and it is the run's verdict from then on. */
+  failure: string | undefined;
 
   private readonly second = deferred();
 
@@ -240,7 +303,24 @@ class Tracker {
 
   private readonly completedEnough = deferred();
 
-  constructor(private readonly expected: number) {}
+  /** The `hold-until-ceiling-full` group: how many are held right now, and of which generation. */
+  private held = 0;
+
+  private generation = 0;
+
+  /** Resolved when the CURRENT generation is released - a fresh one replaces it each time. */
+  private groupReleased = deferred();
+
+  /** When the whole run's budget runs out, so a group that never fills fails instead of hanging. */
+  private readonly deadline: number;
+
+  constructor(
+    private readonly expected: number,
+    readonly ceiling: number,
+    budgetMs: number,
+  ) {
+    this.deadline = Date.now() + budgetMs;
+  }
 
   get secondArrived(): Promise<void> {
     return this.second.promise;
@@ -257,13 +337,9 @@ class Tracker {
   /** Prints the delivery and returns its 1-based ordinal in arrival order. */
   observe(record: InboundRecord): number {
     const ordinal = ++this.observed;
-    // Printed at the moment of delivery, before the behaviour acts on it. reason comes last because
-    // it is worker-supplied text that may contain spaces.
-    process.stdout.write(
-      `dispatch key=${record.key === null ? "" : record.key.toString("utf8")} ` +
-        `offset=${record.offset} attempt=${record.attempt} ` +
-        `reason=${record.lastFailureReason ?? ""}\n`,
-    );
+    // Printed at the moment of delivery, before the behaviour acts on it, and it OPENS this
+    // record's unresolved window - the settled line closes it.
+    this.print("dispatch", record, record.lastFailureReason ?? "");
     if (ordinal >= 2) {
       this.second.resolve();
     }
@@ -273,11 +349,85 @@ class Tracker {
     return ordinal;
   }
 
-  complete(): void {
+  /**
+   * Prints the `settled` line and counts the outcome. Called the moment the prescribed behaviour has
+   * DECIDED this record's outcome, immediately before the runner reports it, because that is when
+   * the record stops being unresolved.
+   *
+   * @param reason the failure this runner is reporting, empty for a success - never the reason the
+   *     record arrived carrying
+   */
+  complete(record: InboundRecord, reason = ""): void {
+    this.print("settled", record, reason);
     this.completed += 1;
     if (this.completed >= this.expected) {
       this.completedEnough.resolve();
     }
+  }
+
+  /**
+   * The cyclic barrier at the heart of `hold-until-ceiling-full`: hold this record until it is one
+   * of `ceiling` held at once, keep the full group still for CEILING_SETTLE_MS, and release it.
+   *
+   * A group also releases once every prescribed delivery has been observed, so a scenario whose
+   * record count is not a multiple of its ceiling cannot strand its last, short group.
+   *
+   * @returns false if the group never filled inside the budget - this runner failing, rather than
+   *     the client being wrong about anything
+   */
+  async enterCeilingGroup(): Promise<boolean> {
+    const myGeneration = this.generation;
+    let released = this.groupReleased.promise;
+    this.held += 1;
+    const releasing = this.held >= this.ceiling || this.observed >= this.expected;
+
+    if (!releasing) {
+      // The waiter's half. In a runtime with threads this is a condition-variable wait re-checking
+      // the generation under the lock; here the generation's own promise IS the condition, and the
+      // loop re-reads the counter for exactly the same reason - to wake for THIS group's release
+      // rather than for whatever happens to resolve first.
+      while (this.generation === myGeneration) {
+        if (!(await raceBudget(released, this.deadline - Date.now()))) {
+          return false;
+        }
+        released = this.groupReleased.promise;
+      }
+      return true;
+    }
+
+    // THE SETTLE WINDOW. Nothing is held across it in the sense the other languages mean - this
+    // await yields the event loop, which is the whole point: a record the engine should not be
+    // dispatching can still arrive and print its line during the window, and that arrival is what
+    // the scenario looks for. A correct engine cannot dispatch anything here, so the wait costs a
+    // conforming client only time.
+    await sleep(CEILING_SETTLE_MS);
+    this.held = 0;
+    this.generation += 1;
+    const ending = this.groupReleased;
+    this.groupReleased = deferred();
+    ending.resolve();
+    return true;
+  }
+
+  /**
+   * "Exit 1" from inside a behaviour: record the verdict and release every wait rather than leaving
+   * each to time out in turn.
+   *
+   * @returns the failure reason to report for the record that gave up
+   */
+  abandon(problem: string): string {
+    this.failure ??= problem;
+    this.observedEnough.resolve();
+    this.completedEnough.resolve();
+    return `conformance: ${problem}`;
+  }
+
+  /** reason comes LAST because it is worker-supplied text that may contain spaces. */
+  private print(kind: "dispatch" | "settled", record: InboundRecord, reason: string): void {
+    process.stdout.write(
+      `${kind} key=${record.key === null ? "" : record.key.toString("utf8")} ` +
+        `offset=${record.offset} attempt=${record.attempt} reason=${reason}\n`,
+    );
   }
 }
 

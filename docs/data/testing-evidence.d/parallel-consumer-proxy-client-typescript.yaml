@@ -23,10 +23,10 @@ module_evidence:
       because a one-record scenario cannot reach them.
       Beside that, and not replacing it, TypeScript is wired into the shared cross-language
       conformance suite: a conformance runner at test/conformance-runner.ts implements the contract
-      every language implements, and the suite drives it through all four scenarios the harness
-      serves - the processed record, the unreported record, the failure-and-redelivery history, and
-      a held record admitting a concurrent delivery on another key - asserting engine state this
-      client cannot see. Each of the four was proven able to fail by sabotaging the runner,
+      every language implements, and the suite drives it through all five scenarios the harness
+      serves - the processed record, the unreported record, the failure-and-redelivery history, a
+      held record admitting a concurrent delivery on another key, and the in-flight ceiling holding this client to exactly two unresolved records at once - asserting engine
+      state this client cannot see. The fifth, the in-flight ceiling, was proven able to fail once for every language rather than here - in Go and in Kotlin, by declaring double the ceiling the scenario prescribed - and the conformance module's own evidence records it. Each of the first four was proven able to fail by sabotaging the runner,
       including the one sabotage that works on the ordering scenario: serializing the processor, so
       the held record's promise blocks the next delivery and the run exits 1.
     inspect:

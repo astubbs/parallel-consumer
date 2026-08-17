@@ -21,10 +21,10 @@ module_evidence:
       injected useless assignment and an injected unreachable statement each turned it red.
       Beside that, and not replacing it, Ruby is wired into the shared cross-language conformance
       suite: a conformance runner at scripts/conformance-runner implements the contract every
-      language implements, and the suite drives it through all four scenarios the harness serves -
-      the processed record, the unreported record, the failure-and-redelivery history, and a held
-      record admitting a concurrent delivery on another key - asserting engine state Ruby cannot
-      see. Each of the four was proven able to fail by sabotaging the runner, including the one
+      language implements, and the suite drives it through all five scenarios the harness serves -
+      the processed record, the unreported record, the failure-and-redelivery history, a held record
+      admitting a concurrent delivery on another key, and the in-flight ceiling holding this client to exactly two unresolved records at once - asserting engine state Ruby
+      cannot see. The fifth, the in-flight ceiling, was proven able to fail once for every language rather than here - in Go and in Kotlin, by declaring double the ceiling the scenario prescribed - and the conformance module's own evidence records it. Each of the first four was proven able to fail by sabotaging the runner, including the one
       sabotage that works on the ordering scenario: a mutex around the whole processor, which
       deadlocks and exits 1. That sweep is also what found the failure-reason divergence: a raised exception's reason reached
       the wire prefixed with its class, which no sibling client does and this module's own README
