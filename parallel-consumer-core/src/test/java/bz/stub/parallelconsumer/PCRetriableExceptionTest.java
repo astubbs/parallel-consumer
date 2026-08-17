@@ -34,12 +34,33 @@ class PCRetriableExceptionTest {
         assertThat(PCRetriableException.isPresentIn(wrapped)).isTrue();
     }
 
+    /**
+     * {@link InternalRuntimeException} reads like a pass-through wrapper and is not one.
+     * <p>
+     * Its message is how callers tell distinct internal failures apart - {@code "Error encoding offsets"},
+     * {@code "Error producing result message"}, {@code "Too many attempts taking commit responses"}. Peeling it would
+     * let the retriable underneath speak for a failure that is not retriable, so a genuine offset-encoding fault
+     * carrying one would be logged at DEBUG - which is off in production, so the fault would simply be gone.
+     * <p>
+     * The user-code path never produces this shape anyway: {@code UserFunctions.carefullyRun} wraps in
+     * {@link ExceptionInUserFunctionException} and nothing else.
+     */
     @Test
-    void wrappedTwiceByPCsOwnWrappersIsStillExpected() {
-        var wrapped = new ExceptionInUserFunctionException("outer",
-                new InternalRuntimeException("inner", new PCRetriableException("retry me")));
+    void anInternalFailureCarryingARetriableIsNotExpected() {
+        var internal = new InternalRuntimeException("Error encoding offsets", new PCRetriableException("retry me"));
 
-        assertThat(PCRetriableException.isPresentIn(wrapped)).isTrue();
+        assertThat(PCRetriableException.isPresentIn(internal)).isFalse();
+    }
+
+    /**
+     * The same distinction one level down: peeling PC's genuine wrapper must not then peel a semantic one.
+     */
+    @Test
+    void anInternalFailureBeneathTheUserWrapperIsNotExpected() {
+        var wrapped = new ExceptionInUserFunctionException("Error occurred in code supplied by user",
+                new InternalRuntimeException("Error producing result message", new PCRetriableException("retry me")));
+
+        assertThat(PCRetriableException.isPresentIn(wrapped)).isFalse();
     }
 
     @Test

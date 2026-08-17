@@ -51,7 +51,9 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -661,9 +663,14 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
 
         // the outcome that matters is that this returns at all
-        assertThatThrownBy(() -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)))
-                .as("the failure is reported rather than spun on")
-                .hasMessageContainingAll("Error", "poll", "thread");
+        var thrown = assertThrows(Exception.class, () -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)));
+
+        // asserted on the MESSAGE, not the throwable: both Truth and AssertJ walk the cause chain to render a
+        // throwable when an assertion fails (Truth via StackTraceCleaner, AssertJ via printStackTrace), so handing
+        // either one a deliberately hostile throwable replaces the assertion failure with the hostile exception -
+        // measured, not assumed. The message string is captured safely above and is what the test is about anyway.
+        assertWithMessage("the failure is reported rather than spun on")
+                .that(thrown.getMessage()).containsMatch("Error.*poll.*thread");
     }
 
     /**
@@ -691,10 +698,16 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
 
-        assertThatThrownBy(() -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)))
-                .as("the original failure, not whatever failed while trying to render it")
-                .hasMessageContainingAll("Error", "poll", "thread")
-                .hasMessageContaining("the failure that actually happened");
+        var thrown = assertThrows(Exception.class, () -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)));
+
+        // the message, not the throwable - see the note in controlLoopSurvivesACyclicCauseChain. It matters more
+        // here: this test's input is hostile by construction, so asserting on the throwable made a failure of THIS
+        // test surface as "UnsupportedOperationException: rendering me fails" with no sign of what was expected.
+        var message = thrown.getMessage();
+        assertWithMessage("the original failure, not whatever failed while trying to render it")
+                .that(message).containsMatch("Error.*poll.*thread");
+        assertWithMessage("the original failure, not whatever failed while trying to render it")
+                .that(message).contains("the failure that actually happened");
     }
 
     @ParameterizedTest

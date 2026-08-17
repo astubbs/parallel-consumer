@@ -43,10 +43,10 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
@@ -193,12 +193,12 @@ public class WorkManagerTest {
         var gottenWork = wm.getWorkIfAvailable();
         int inFlightBefore = wm.getNumberRecordsOutForProcessing();
 
-        assertThatThrownBy(() -> wm.onSuccessResult(gottenWork.get(0)))
-                .as("the listener failure still propagates - it is not swallowed")
-                .isInstanceOf(ExceptionInUserFunctionException.class);
+        var thrown = assertThrows(Throwable.class, () -> wm.onSuccessResult(gottenWork.get(0)));
+        assertWithMessage("the listener failure still propagates - it is not swallowed")
+                .that(thrown).isInstanceOf(ExceptionInUserFunctionException.class);
 
-        assertThat(wm.getNumberRecordsOutForProcessing())
-                .as("in-flight count after a throwing listener")
+        assertWithMessage("in-flight count after a throwing listener")
+                .that(wm.getNumberRecordsOutForProcessing())
                 .isEqualTo(inFlightBefore - 1);
     }
 

@@ -225,9 +225,21 @@ public class ThrowableUtils {
 
     /**
      * A wrapper that means "something below this threw", and nothing else - so the failure it carries is the failure.
+     * <p>
+     * {@link ExceptionInUserFunctionException} is the only one. It is documented as used <em>only</em> when user code
+     * threw, and {@code UserFunctions.carefullyRun} is the sole construction site, so it adds a name and no failure
+     * semantics of its own.
+     * <p>
+     * <b>{@link InternalRuntimeException} deliberately does NOT qualify</b>, though it reads like a wrapper. Its
+     * message is how callers tell distinct internal failures apart - {@code "Error encoding offsets"},
+     * {@code "Error producing result message"}, {@code "Too many attempts taking commit responses"} - so peeling it
+     * would let a retriable cause speak for a failure that is not retriable at all, and an offset-encoding error
+     * carrying one would be demoted to DEBUG. That is the same "a buried match decides the whole failure" mistake
+     * {@link #hasCauseOfType} warns about, which is what this method exists to avoid. Its one cause-only site wraps a
+     * {@code ProducerFencedException}, which is likewise a different failure rather than a pass-through.
      */
     private static boolean isTransparentWrapper(Throwable t) {
-        return t instanceof ExceptionInUserFunctionException || t instanceof InternalRuntimeException;
+        return t instanceof ExceptionInUserFunctionException;
     }
 
     /**
