@@ -321,7 +321,7 @@ because without it a sighting cannot be attributed at all.
 | 4 | 08-12 | `ChaosChurnStormIT` | `CONSUMER_ASYNCHRONOUS` | `ZOMBIE_MEMBER/REBALANCE_BLOCKED`, dwell 15426ms | `7731567379755737438` |
 | 5 | 08-18 | `ChaosChurnStormIT` | `CONSUMER_ASYNCHRONOUS` | `NO_PROGRESS`, fleet stuck 98150/100000 | `3086917415748208232` |
 | 6 | 08-17 | `ChaosChurnStormIT` | `CONSUMER_ASYNCHRONOUS` | `NO_PROGRESS`, fleet stuck 95382/100000 | `8603691233664838594` |
-| 7 | 08-18 | `ChaosRevokeUnderWorkIT` (eager) | `CONSUMER_SYNC` | same as #2: `CLASS2_STALL`, 154s vs 150s | **none** - console truncated |
+| 7 | 08-18 | `ChaosRevokeUnderWorkIT` (eager) | `CONSUMER_SYNC` | same as #2: `CLASS2_STALL`, 154s vs 150s | `4709156528562690268` |
 
 Replay any seed with:
 
@@ -373,7 +373,20 @@ Go to the **uploaded test-report artifact** first for any chaos or broker failur
 embedded in the failsafe XML's captured `system-out` and survives both truncation mechanisms. The
 run-logs archive (`gh api repos/.../actions/runs/<id>/logs`) is the second route. And **the seed
 should move into the autopsy block**, so the deciding experiment survives the log it is printed to -
-the seventh sighting has no seed for exactly this reason.
+the seventh sighting was recorded as having no seed for exactly this reason - and that claim was
+itself wrong, which is the sharpest version of the lesson. The seed
+(`4709156528562690268`) had been there all along; the job-log route returned 2207 lines ending at
+05:47 for a job that ran to 05:52, while the archived attempt returns 6266 lines carrying both
+autopsy blocks, `BUILD FAILURE` and all three scenario seeds:
+
+```bash
+gh api repos/astubbs/parallel-consumer/actions/runs/<run-id>/attempts/1/logs
+```
+
+So *"the log is truncated"* was a statement about the retrieval route, not about the run - the same
+error one level up as the false negative above. **And there is a second trap sitting with it: after a
+re-run, the same job id resolves to the latest attempt's window**, so re-running to "get a better
+log" silently changes what the query returns. Name the attempt explicitly.
 
 
 ## Related
