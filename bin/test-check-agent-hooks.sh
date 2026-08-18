@@ -88,9 +88,28 @@ expect DENY  "-t= equals form"                     'gh pr merge 2999 --squash -t
 expect DENY  "-tVALUE attached short form"         'gh pr merge 2999 --squash -tfoo'
 expect ALLOW "-tVALUE attached, with (#N)"         'gh pr merge 2999 --squash -t"foo (#2999)"'
 expect DENY  "(#N) present but not at the END"     'gh pr merge 2999 --squash --subject "port (#2999) to master"'
+
+# Squash-body sign-off guard: a squash body override must carry the Co-authored-by trailer and
+# must not carry a Claude-Session line (docs/merge-checklist.md owns both). Non-squash merges and
+# merges without a body override are out of scope; an unreadable --body-file fails open because
+# gh itself then fails loudly.
+body_ok=$(mktemp); printf '%s\n%s\n' "Real explanation." "Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>" > "$body_ok"
+body_bare=$(mktemp); printf '%s\n' "Real explanation, no trailer." > "$body_bare"
+body_sess=$(mktemp); printf '%s\n%s\n%s\n' "Real explanation." "Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>" "Claude-Session: https://claude.ai/code/session_x" > "$body_sess"
+expect DENY  "squash --body without co-authored trailer"    'gh pr merge 2999 --squash --body "no trailer here"'
+expect ALLOW "squash --body with co-authored trailer"       'gh pr merge 2999 --squash --body "why.
+Co-authored-by: Claude Opus 5 (1M context) <x@y>"'
+expect DENY  "trailer mid-line is not a trailer"            'gh pr merge 2999 --squash --body "why. Co-authored-by: Claude Opus 5 (1M context) <x@y>"'
+expect DENY  "squash body with Claude-Session line"         "gh pr merge 2999 --squash --body-file $body_sess"
+expect ALLOW "squash --body-file with trailer"              "gh pr merge 2999 --squash --body-file $body_ok"
+expect DENY  "squash --body-file without trailer"           "gh pr merge 2999 --squash --body-file $body_bare"
+expect ALLOW "squash --body-file unreadable fails open"     'gh pr merge 2999 --squash --body-file /nonexistent/nope.txt'
+expect ALLOW "non-squash merge body needs no trailer"       'gh pr merge 2999 --merge --body "no trailer needed"'
+rm -f "$body_ok" "$body_bare" "$body_sess"
 expect ALLOW "--subject ending with (#N)"          'gh pr merge 2999 --squash --subject "foo (#2999)"'
 expect ALLOW "-t ending with (#N)"                 'gh pr merge 2999 --squash -t "foo (#2999)"'
-expect ALLOW "--subject mentioned inside --body"   'gh pr merge 2999 --squash --body "why --subject matters"'
+expect ALLOW "--subject mentioned inside --body"   'gh pr merge 2999 --squash --body "why --subject matters
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>"'
 expect ALLOW "escaped apostrophe, number present"  'gh pr merge 2999 --squash --subject '"'"'don'"'"'\'"'"''"'"'t drop it (#2999)'"'"''
 expect ALLOW "--body-file does not touch subject"  'gh pr merge 2999 --squash --body-file b.txt'
 expect ALLOW "no subject override at all"          'gh pr merge 2999 --squash'
