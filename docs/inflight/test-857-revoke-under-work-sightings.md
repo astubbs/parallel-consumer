@@ -125,12 +125,28 @@ bytecode is identical. The same executable passed twice and failed once, which e
 arithmetically rather than by the usual "that branch touches no product code" argument. astubbs#296
 hardens work submission against an already-closed worker pool and is unrelated to the revoke path.
 
-**No replay seed, and that is this entry's real cost.** The seed is printed to the console, and the
-console log for this job was truncated mid-run - it ends at 05:47 for a job that ran to 05:52. So
-this sighting cannot be replayed, which is exactly the deciding experiment every other entry here
-names. **Fix it at the source rather than rediscovering it:** the seed belongs inside the
-`AMBIENT PROBE AUTOPSY` block, which survives into the uploaded artifact, not only on a console line
-that truncation can eat.
+**Replay seed `4709156528562690268`** - the eager `w4` scenario, `cooperative=false`:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4709156528562690268
+
+**Correction, same day: this entry first said the seed was lost, and that was wrong.** It was
+recorded that way because `gh run view --job <id> --log` returned a log ending at 05:47 for a job
+that ran to 05:52, and the seed line was past the cut. The seed was never gone - it is in the
+archived attempt, reachable by a different route:
+
+    gh api repos/astubbs/parallel-consumer/actions/runs/32104058992/attempts/1/logs
+
+That returns **6266 lines** against the 2207 the job-log route gave, and carries both autopsy blocks,
+`BUILD FAILURE`, and all three scenario seeds. **The lesson is about retrieval, not about logging:**
+"the log is truncated" was a statement about the route used, and the fix was to ask for the attempt
+rather than the job. Two traps sit here together - a job-log read is truncated, *and* after a re-run
+the same job id resolves to the latest attempt's window, so a re-run silently changes what that route
+returns. Prefer `/attempts/<n>/logs` whenever the answer matters.
+
+**Still worth doing at the source:** the seed belongs inside the `AMBIENT PROBE AUTOPSY` block, which
+travels in the uploaded artifact. Recovering it took a second retrieval route and knowing to try it;
+in the block it would have arrived with the violation.
 
 **It does, however, confirm the third sighting's own advice.** That entry says to check the surefire
 XML rather than the console log. Here the console returned **zero** matches for
