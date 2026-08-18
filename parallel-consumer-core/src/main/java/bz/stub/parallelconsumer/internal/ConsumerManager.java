@@ -64,9 +64,20 @@ public class ConsumerManager<K, V> {
      * Since Kakfa 2.7, multi-threaded access to consumer group metadata was blocked, so before and after polling, save
      * a copy of the metadata.
      *
+     * <p>
+     * <b>volatile</b> because it is written by the poll thread in {@code updateCache()} and read from
+     * other threads via {@code groupMetadata()}, with no other happens-before edge. It carries the
+     * generation and member IDs, which the control thread hands to
+     * {@code producer.sendOffsetsToTransaction(...)}, where the broker uses them to fence zombies - a
+     * stale read is the wrong answer to "is this member still legitimate?". Its two neighbours here
+     * were already volatile; this one was missed because the SpotBugs detector that found them,
+     * {@code AT_STALE_THREAD_WRITE_OF_PRIMITIVE}, cannot fire on an object reference and no
+     * {@code _OF_REFERENCE} variant exists. Safe as a plain reference publish because
+     * {@link ConsumerGroupMetadata} is immutable - all fields final, no setters.
+     *
      * @since 2.7.0
      */
-    private ConsumerGroupMetadata metaCache;
+    private volatile ConsumerGroupMetadata metaCache;
 
     private volatile int pausedPartitionSizeCache = 0;
 

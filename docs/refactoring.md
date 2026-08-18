@@ -212,7 +212,8 @@ cosmetic - see the last bullet.*
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
     be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
     `ConsumerManager.commitRequested`, `RetryQueue.closed`.
-  - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on:**
+  - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
+    on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
     thread in `updateCache()` and read from other threads via `groupMetadata()`, with **no `volatile`
     and no other happens-before edge**. Its two neighbours in the same class *are* volatile

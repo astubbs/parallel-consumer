@@ -55,12 +55,27 @@ call **declines** (`tryLock`) rather than blocks.
 byte-identical on both arms, `-Dparallel-tests=true` against a shared broker (forking per broker
 removes the window - see `docs/inflight/test-857-parallel-integration-proof.md`):
 
-| Arm | Failures | `Skipping offset commit during partition revocation` |
-|---|---|---|
-| `origin/master` | **20 / 20** - control thread died with `Timeout waiting for commit response`; revoke commit blocked ~6.05s | 0 |
-| astubbs#29 head | **0 / 20** - revoke commit 0-5ms | **21** (>=1 per iteration) |
+| Arm | n | Failures | Probe verdict | `Timeout waiting for commit response` | `Skipping offset commit during partition revocation` |
+|---|---|---|---|---|---|
+| `origin/master` `438b09d9b` | 60 | **60 / 60** | 240x `CONTROL_THREAD_DIED` | 780 | 0 |
+| astubbs#29 `dab691b7f` | 60 | **0 / 60** | 60x `OK` | 0 | **63** |
 
-Box load 2-8 of 32 cores throughout; the forced-window design is load-insensitive.
+Two runs, agreeing. The first was n=20 per arm (20/20 vs 0/20, skip-log 21); the second
+n=60 per arm, **interleaved** A,B,A,B,A,B so neither arm sat in systematically different box
+conditions (load 2-9 of 32 cores throughout). Probe verified byte-identical across arms by
+sha256; no production code touched on either side.
+
+**The skip-log count is what makes the result mean anything.** It is the INFO line on the
+contended `tryLock` branch - the arm that *is* the fix. 63 occurrences on the fixed arm, at the
+same 21-per-20 ratio as the first run, so the fix path demonstrably executed. Zero on master,
+where the code does not exist. A clean fixed arm with a zero skip-count would be
+indistinguishable from a probe that never opened the window, which is exactly how this fix
+looked unproven for four months.
+
+**The second run also covers the branch as it moved.** Arm B carried the tri-state
+`ConsumerOwnership` guard, which touches the shutdown path of every test. It neither
+reintroduced failures nor suppressed the fix path, so the cluster 1 result survives cluster 2's
+rework.
 
 **Scope: `PERIODIC_CONSUMER_SYNC` only.** The cycle's second edge lives in `ConsumerOffsetCommitter`,
 constructed only for the consumer-commit modes, and only the SYNC arm blocks - async falls through to
