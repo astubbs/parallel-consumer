@@ -275,6 +275,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private Duration shutdownTimeout;
 
+    /**
+     * How the user asked us to close. Recorded so the close path can tell whether an uncommitted
+     * offset is the consequence of a choice they can change ({@link DrainingMode#DONT_DRAIN}) or
+     * something that happened despite draining - the difference between advice worth printing and
+     * noise.
+     */
+    private volatile DrainingMode requestedDrainMode = DrainingMode.DONT_DRAIN;
+
     private Duration drainTimeout;
 
     private PCMetrics pcMetrics;
@@ -660,6 +668,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } else {
             log.info("Signaling to close...");
 
+            this.requestedDrainMode = drainMode;
             switch (drainMode) {
                 case DRAIN -> {
                     log.info("Will wait for all in flight to complete before");
@@ -767,14 +776,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 boolean terminationFinishedWithoutTimeout = workerThreadPool.get().awaitTermination(toSeconds(timeout), SECONDS);
                 awaitingInflightCompletion = false;
                 if (!terminationFinishedWithoutTimeout) {
-                    log.warn("Thread execution pool termination await timeout ({})! Were any processing jobs dead locked (test latch locks?) or otherwise stuck? Forcing shutdown of workers.", timeout);
+                    // The user's function is what runs in this pool, so the actionable cause is theirs.
+                    log.warn("User functions did not finish within the shutdown timeout of {} - interrupting them. " +
+                            "Records still in flight will not be committed and will be redelivered on restart.", timeout);
+                    log.debug("Worker pool did not terminate in {}. Active: {}, queued: {}, state: {}. " +
+                                    "A user function blocking uninterruptibly, or a test latch, will do this.",
+                            timeout, workerThreadPool.get().getActiveCount(),
+                            workerThreadPool.get().getQueue().size(), state);
                     //Requesting threads shutdown immediately - inflight threads will be interrupted at this point.
                     workerThreadPool.get().shutdownNow();
                     //Give a second for any interrupt handling / resource cleanup in user functions
                     workerThreadPool.get().awaitTermination(toSeconds(Duration.ofSeconds(1)), SECONDS);
                 }
             } catch (InterruptedException e) {
-                log.error("InterruptedException", e);
+                // Restore the flag - swallowing it here strands anything waiting on this thread.
+                Thread.currentThread().interrupt();
+                log.debug("Interrupted while awaiting worker pool termination; will keep awaiting", e);
                 awaitingInflightCompletion = true;
             }
         }
@@ -790,25 +807,46 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         //
         if (Thread.currentThread().isInterrupted()) {
-            log.warn("control thread interrupted - may lead to issues with transactional commit lock acquisition");
+            log.debug("Control thread carries an interrupt into the close sequence (state: {}, drain mode: {}). " +
+                    "If the transactional commit lock cannot be acquired below, this is the likely reason.",
+                    state, requestedDrainMode);
         }
         try {
             commitOffsetsThatAreReady();
         } catch (Exception e) {
-            log.warn("failed to commit during close sequence", e);
+            // One attempt only: ConsumerManager#commitSync stops retrying once the poll system is
+            // closing ("allow to try to commit at least once during close"), because retrying would
+            // stall shutdown while nothing is polling. Say so, rather than leaving the reader to
+            // wonder whether we gave up early.
+            if (requestedDrainMode == DrainingMode.DONT_DRAIN) {
+                log.warn("Could not commit offsets while closing, and close does not retry - these records " +
+                        "will be redelivered to the next consumer of these partitions. If you need offsets " +
+                        "committed before shutdown, close with closeDrainFirst() (or DrainingMode.DRAIN), " +
+                        "which finishes and commits in-flight work first.", e);
+            } else {
+                log.warn("Could not commit offsets while closing, despite draining first, and close does not " +
+                        "retry - these records will be redelivered to the next consumer of these partitions.", e);
+            }
         }
         // only close consumer once producer has committed it's offsets (tx'l)
         log.debug("Closing and waiting for broker poll system...");
         try {
             brokerPollSubsystem.closeAndWait();
         } catch (Exception e) {
-            log.warn("failed to close brokerPollSubsystem during close sequence", e);
+            // We continue to the consumer close regardless: stopping here would leak the consumer
+            // entirely. But the poll loop may still be running, so the consumer close below may
+            // legitimately refuse - see ThreadConfinedConsumer.
+            log.warn("The broker poll system did not shut down cleanly - the consumer may not be closed, " +
+                    "in which case this member will not leave its consumer group promptly and the group's " +
+                    "next rebalance will be delayed by up to session.timeout.ms.", e);
         }
 
         try {
             maybeCloseConsumer();
         } catch (Exception e) {
-            log.warn("failed to maybeCloseConsumer during close sequence", e);
+            log.warn("Failed to close the Kafka consumer - this member will not send a LeaveGroup request, " +
+                    "so the group's next rebalance will be delayed by up to session.timeout.ms and these " +
+                    "partitions will stay assigned to this dead member until then.", e);
         }
 
         producerManager.ifPresent(x -> x.close(timeout));
