@@ -300,7 +300,7 @@ permanently paused consumption after a cooperative rebalance.
 **Not carried forward:** the branch's `src/test-integration/resources/logback-test.xml` (collides with
 master's `src/test/resources/logback-test.xml` - both copy to the same `target/test-classes/` path,
 making which wins timestamp-dependent, and it raises six per-record loggers to DEBUG module-wide; the
-chaos job log is 126 MB), `docs/BUG_857_INVESTIGATION.md` (superseded, at the wrong path, cites
+chaos job log is 126 MB), `docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)` (superseded, at the wrong path, cites
 `file:line`), `ManagedPCInstanceLifecycleTest` (sleep-driven, tests harness code that astubbs#292
 already fixed better on master), and several dead methods
 (`ConsumerManager.getConsumerClass()`, `ModelUtils.createWorkFor(long,long)`,

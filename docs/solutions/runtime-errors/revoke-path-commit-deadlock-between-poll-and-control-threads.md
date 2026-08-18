@@ -141,7 +141,7 @@ symptom that decomposes is the normal case for concurrency bugs in a two-thread 
 **Also worth stating: the upstream fix that looked adjacent was not this.** confluentinc#882 fixed
 stale work-container cleanup in `ProcessingShard.getWorkIfAvailable()`. It is correct and necessary,
 and it addresses stale containers blocking new work after a *clean* rebalance. It does not touch
-the lock cycle (`docs/BUG_857_INVESTIGATION.md`).
+the lock cycle (`docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)`).
 
 **Making the test suite green by isolating the tests.** astubbs#68 reworked integration testing to
 fork one JVM (and one TestContainers broker) per fork, `-DforkCount=4`

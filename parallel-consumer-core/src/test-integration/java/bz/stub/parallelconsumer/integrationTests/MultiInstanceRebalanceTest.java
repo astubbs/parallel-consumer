@@ -118,7 +118,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * </ul>
      * <p>
      * For the full investigation history, see branch {@code bugs/857-paused-consumption-multi-consumers-bug}
-     * and {@code docs/BUG_857_INVESTIGATION.md}.
+     * and {@code docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)}.
      *
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>
      */

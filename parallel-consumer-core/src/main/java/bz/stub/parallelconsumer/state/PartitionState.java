@@ -296,7 +296,7 @@ public class PartitionState<K, V> {
             //
             // It was briefly a WARN calling itself "the primary suspect for the silent stall". The
             // same investigation disproved that (see "Verified: epoch mismatch is NOT the cause" in
-            // docs/BUG_857_INVESTIGATION.md), and the 2026-08-18 A/B soak established the commit-path
+            // docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)), and the 2026-08-18 A/B soak established the commit-path
             // deadlock as the cause instead. A WARN on every rebalance buries the lines worth acting on.
             log.debug("Inbound record of work has epoch ({}) not matching currently assigned epoch for the applicable partition ({}), skipping",
                     recordsAndEpoch.getEpochOfPartitionAtPoll(), getPartitionsAssignmentEpoch());

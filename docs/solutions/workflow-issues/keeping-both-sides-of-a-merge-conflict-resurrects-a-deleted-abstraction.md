@@ -302,7 +302,7 @@ failing. Two defects on the branch remain open:
   poll thread (`BrokerPollSystem.java:146`), so a close arriving on any other thread throws
   `IllegalStateException`. The guard is doing its job; what it guards is not yet correct.
 - **`numberRecordsOutForProcessing` double-decrement.** The counter drift analysed in
-  `docs/BUG_857_INVESTIGATION.md` ("Bug 2: Silent Stall") is not resolved on this branch.
+  `docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)` ("Bug 2: Silent Stall") is not resolved on this branch.
 
 Verified state after the merge: the branch compiles across main, test and test-integration sources,
 and the local unit suite passed. The retarget off `master-confluent` is **done** - astubbs#29 now

@@ -59,7 +59,7 @@ only branch-added lines and - correctly - reused the gate's own exported `stripQ
 sweep and CI agreed on what "unqualified" means.
 
 27 of the 28 were genuine references and were rewritten correctly. **One was not a reference at
-all.** Inside `docs/BUG_857_INVESTIGATION.md`, a fenced code block quoted a real diagnostic log line
+all.** Inside `docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)`, a fenced code block quoted a real diagnostic log line
 emitted during the stall:
 
 <!-- issue-refs: exempt-begin -->
