@@ -44,7 +44,11 @@ ifdef::env-github[]
 :warning-caption: :warning:
 endif::[]
 
-image:https://maven-badges.herokuapp.com/maven-central/bz.stub.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/bz.stub.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
+// Served by shields.io, not maven-badges.herokuapp.com: that host died with Heroku's free tier and now
+// 404s for EVERY artifact, published or not, so it cannot recover when a release lands. shields.io reads
+// Maven Central live, so this badge self-heals the moment 0.6.0.0 publishes - until then it renders
+// "not found", which is accurate rather than broken.
+image:https://img.shields.io/maven-central/v/bz.stub.parallelconsumer/parallel-consumer-parent?label=maven-central[link=https://mvnrepository.com/artifact/bz.stub.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
 
 image:https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml/badge.svg?branch=master[link=https://github.com/astubbs/parallel-consumer/actions/workflows/maven.yml,Build and Test]
 
@@ -490,7 +494,7 @@ Where `${project.version}` is the version to be used:
 
 * group ID: `bz.stub.parallelconsumer`
 * artifact ID: `parallel-consumer-core`
-* version: image:https://maven-badges.herokuapp.com/maven-central/bz.stub.parallelconsumer/parallel-consumer-parent/badge.svg?style=flat[link=https://mvnrepository.com/artifact/bz.stub.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
+* version: image:https://img.shields.io/maven-central/v/bz.stub.parallelconsumer/parallel-consumer-parent?label=maven-central[link=https://mvnrepository.com/artifact/bz.stub.parallelconsumer/parallel-consumer-parent,Latest Parallel Consumer on Maven Central]
 
 .Core Module Dependency
 [source,xml,indent=0]
