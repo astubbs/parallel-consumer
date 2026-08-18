@@ -36,6 +36,16 @@ parameters are simply past what Kafka converges at. If it does not, the residual
 Until then the javadoc should say the claim is unverified rather than state it as fact - and it now
 does.
 
+**Update 2026-08-18: the capacity profiles now take a scale factor**, `-Dperf.scale=<n>`, which makes
+a cheaper version of that control arm available before anyone builds a bare-consumer harness. If the
+residual is the coordinator failing to converge at this churn rate, the failure rate should move with
+scale; if it is a PC defect, a defect does not care how many partitions there are. That is weaker
+than the bare-consumer arm and does not replace it - a rate that moves with scale is consistent with
+both a coordinator limit and a load-sensitive PC bug - but a rate that does NOT move with scale is
+hard to explain as "Kafka cannot converge at this size", and it costs one flag rather than a new
+harness. Correctness profiles deliberately cannot read the factor, and a guard enforces it
+(`onlyCapacityProfilesMayScale`).
+
 ## Related
 
 - `docs/solutions/workflow-issues/prove-the-problem-exists-before-writing-the-fix.md`

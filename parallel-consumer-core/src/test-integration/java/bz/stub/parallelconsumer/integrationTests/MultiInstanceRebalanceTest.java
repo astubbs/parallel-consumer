@@ -79,6 +79,99 @@ import static org.awaitility.Awaitility.waitAtMost;
 @Slf4j
 public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, String> {
 
+    /**
+     * Capacity-profile scale, overridable from the command line so the measurement can be dialled to the
+     * hardware without editing Java. The capacity profiles are a <em>measurement</em>, and a measurement
+     * whose scale is welded to a literal can only be run at the size someone once had a box for - too big
+     * for a laptop, too small for the 32-core runner, and in both cases silently the wrong experiment.
+     * <p>
+     * Each profile multiplies its own baseline by {@link #capacityScale()}, so relative proportions
+     * between the profiles are preserved and one flag moves all of them:
+     * <pre>
+     *   bin/performance-test.sh -Dperf.scale=0.25   # laptop
+     *   bin/performance-test.sh -Dperf.scale=4      # the highcpu runner
+     * </pre>
+     * <b>Correctness profiles deliberately do not read this.</b> The gating test's numbers are part of
+     * its determinism argument - a scale factor is exactly the probabilistic ingredient that split was
+     * made to remove - so scaling it would reintroduce, by the back door, the property the split exists
+     * to guarantee. Scale the capacity arm; never the gate.
+     * <p>
+     * Defaults to 1.0, so an unflagged run reproduces the historical numbers exactly.
+     */
+    static final String PERF_SCALE_PROPERTY = "perf.scale";
+
+    /** Scale factor for capacity profiles only - see {@link #PERF_SCALE_PROPERTY}. */
+    static double capacityScale() {
+        assertCallerIsACapacityProfile();
+        double scale = Double.parseDouble(System.getProperty(PERF_SCALE_PROPERTY, "1.0"));
+        if (scale <= 0) {
+            throw new IllegalArgumentException(PERF_SCALE_PROPERTY + " must be > 0, got " + scale);
+        }
+        return scale;
+    }
+
+    /**
+     * Enforces the one rule {@link #PERF_SCALE_PROPERTY} depends on: only capacity profiles may scale.
+     * <p>
+     * Written as a check rather than the javadoc note it replaces, because the failure it guards is
+     * silent. A future edit that scales a correctness profile would not break a build - it would
+     * quietly make the deterministic gate scale-dependent, and the split that produced that gate
+     * exists precisely to keep a probabilistic ingredient out of it. The gating lane never sets the
+     * property, so the damage would sit dormant until someone ran the gate scaled and read the
+     * resulting failure as a product regression.
+     * <p>
+     * Fails on the calling TEST method's own annotations, so it cannot be satisfied by a helper in
+     * between: the first frame back in this class that is a test method must carry
+     * {@code @Tag("performance")}.
+     */
+    private static void assertCallerIsACapacityProfile() {
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            if (!MultiInstanceRebalanceTest.class.getName().equals(frame.getClassName())) {
+                continue;
+            }
+            Boolean verdict = capacityProfileVerdict(frame.getMethodName());
+            if (verdict == null) {
+                continue; // not a test method - keep walking out to the one that is
+            }
+            if (!verdict) {
+                throw new AssertionError(String.format(
+                        "%s() read %s, but only capacity profiles (@Tag(\"performance\")) may scale. "
+                                + "Correctness profiles are deterministic by construction and their "
+                                + "numbers are part of that argument - scale the capacity arm instead.",
+                        frame.getMethodName(), PERF_SCALE_PROPERTY));
+            }
+            return;
+        }
+    }
+
+    /**
+     * The guard's decision, split out from the stack walk so it can be asserted directly against real
+     * method names rather than only observed through a thrown error.
+     *
+     * @return {@code null} if the name is not a test method at all, otherwise whether it is a capacity
+     * profile and so permitted to scale.
+     */
+    static Boolean capacityProfileVerdict(String methodName) {
+        for (java.lang.reflect.Method m : MultiInstanceRebalanceTest.class.getDeclaredMethods()) {
+            if (!m.getName().equals(methodName)) {
+                continue;
+            }
+            boolean isTest = m.isAnnotationPresent(Test.class)
+                    || m.isAnnotationPresent(ParameterizedTest.class);
+            if (!isTest) {
+                continue;
+            }
+            Tag tag = m.getAnnotation(Tag.class);
+            return tag != null && "performance".equals(tag.value());
+        }
+        return null;
+    }
+
+    /** Scales a capacity-profile dimension, never below 1 - a scaled-down profile must still run. */
+    static int scaled(int baseline) {
+        return Math.max(1, (int) Math.round(baseline * capacityScale()));
+    }
+
     static final int DEFAULT_MAX_POLL = 500;
     public static final int DEFAULT_CHAOS_FREQUENCY = 500;
     public static final int DEFAULT_POLL_DELAY = 150;
@@ -156,6 +249,35 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         /** How long PC-0 gets to consume its first records (group formation + initial fetch). */
         @Builder.Default
         final Duration initialConsumeWindow = ofSeconds(10);
+    }
+
+    /**
+     * Proves the capacity-scale guard in both directions, because a guard that cannot fire is worse
+     * than none - it reads as protection while permitting exactly what it names.
+     * <p>
+     * Untagged deliberately, so it runs in the gating lane on every integration build: the invariant
+     * it protects is a property of the gating profiles, and checking it only in the performance lane
+     * would leave it unchecked precisely where it matters. Needs no broker work of its own.
+     */
+    @Test
+    void onlyCapacityProfilesMayScale() {
+        // Permitted: the capacity profiles, which exist to be dialled to the hardware.
+        assertThat(capacityProfileVerdict("largeNumberOfInstances")).isTrue();
+        assertThat(capacityProfileVerdict("cooperativeStickyRebalanceShouldNotStall")).isTrue();
+        assertThat(capacityProfileVerdict("gentleChaosRebalance")).isTrue();
+
+        // Refused: the deterministic gate, whose numbers are part of its determinism argument.
+        assertThat(capacityProfileVerdict("scriptedChurnRoundsCompleteWithoutStall")).isFalse();
+        assertThat(capacityProfileVerdict("consumeWithMultipleInstancesPeriodicConsumerSync")).isFalse();
+
+        // Not a test method at all - the walk must keep going rather than decide on a helper.
+        assertThat(capacityProfileVerdict("runScenario")).isNull();
+
+        // And end to end: reading the scale from THIS method - an untagged test - actually throws.
+        Assertions.assertThatThrownBy(() -> scaled(10))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining(PERF_SCALE_PROPERTY)
+                .hasMessageContaining("only capacity profiles");
     }
 
     @ParameterizedTest
@@ -296,7 +418,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Test
     void largeNumberOfInstances() {
 
-        numPartitions = 80;
+        numPartitions = scaled(80);
         // Use CooperativeStickyAssignor — under the eager (Range) protocol, rapid membership
         // changes restart the JoinGroup phase from scratch, leaving all consumers with
         // assignment=[] indefinitely. Cooperative rebalancing lets consumers keep their
@@ -304,8 +426,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         runScenario(Scenario.builder()
                 .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
                 .order(UNORDERED)
-                .messageCount(500000)
-                .instances(12)
+                .messageCount(scaled(500_000))
+                .instances(scaled(12))
                 .preProduceFraction(0.3)
                 .pollDelayMs(1)
                 .cooperativeAssignor(true)
@@ -323,12 +445,12 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Test
     void cooperativeStickyRebalanceShouldNotStall() {
 
-        numPartitions = 30;
+        numPartitions = scaled(30);
         runScenario(Scenario.builder()
                 .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
                 .order(UNORDERED)
-                .messageCount(100_000)
-                .instances(4)
+                .messageCount(scaled(100_000))
+                .instances(scaled(4))
                 .preProduceFraction(0.3)
                 .pollDelayMs(1)
                 .cooperativeAssignor(true)
@@ -348,12 +470,12 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Test
     void gentleChaosRebalance() {
 
-        numPartitions = 30;
+        numPartitions = scaled(30);
         runScenario(Scenario.builder()
                 .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
                 .order(UNORDERED)
-                .messageCount(200_000)
-                .instances(6)
+                .messageCount(scaled(200_000))
+                .instances(scaled(6))
                 .preProduceFraction(0.5)
                 .pollDelayMs(1)
                 .chaosFrequencyMs(3000) // 3 seconds between chaos rounds — lets the group settle
