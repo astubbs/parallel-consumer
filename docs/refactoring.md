@@ -59,11 +59,19 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ## Breaking changes queued for next major version
 
-API/behaviour changes that are ready in principle but must wait for a major-version
-bump (current line is 0.6.x). Unlike the internal refactors below - which are
-non-breaking and can land any time - these change the public, user-visible surface,
-so they are **release-gated**: do not fold them into a minor/patch. Collected here
-so a major-release prep can action them in one pass.
+**The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
+cut right now.** It already carries a `=== Breaking` section in `CHANGELOG.adoc` (the `bz.stub`
+package rename), so the items below are **not** waiting for some future bump - this is the pass they
+were collected for, and work that lands now lands in the right release.
+
+Do not read "queued for next major" as "not yet". Check
+[`CHANGELOG.adoc`](../CHANGELOG.adoc) for whether the top section is still marked `(unreleased)`
+before deciding a breaking change must wait: while it is, the gate is open. It closes when 0.6.0.0
+ships, and then this section starts accruing for the release after it.
+
+These change the public, user-visible surface, so they still may not be folded into a **minor or
+patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
+refactors below, which are non-breaking and can land at any point in any line.
 
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
