@@ -41,6 +41,13 @@ deadlock, either of which alone is sufficient:
 The `tryLock()` contended arm has never been observed executing: its INFO skip-log appears **zero**
 times in the 741,161-line CI log of the run meant to prove it.
 
+## Cluster decomposition and the A/B result
+
+astubbs#29's production diff is four independent changes in one April commit. The decomposition, the
+2026-08-18 A/B soak that measured the deadlock fix (master 20/20 fail vs branch 0/20), and the order
+to take them are in
+`docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`.
+
 ## The sightings, split out by mode
 
 One file per item, per this directory's rules:
