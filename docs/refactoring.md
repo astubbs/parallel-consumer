@@ -212,6 +212,22 @@ cosmetic - see the last bullet.*
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
     be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
     `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+  - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on:**
+    `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
+    thread in `updateCache()` and read from other threads via `groupMetadata()`, with **no `volatile`
+    and no other happens-before edge**. Its two neighbours in the same class *are* volatile
+    (`pausedPartitionSizeCache`, and `assignmentSizeCache` which astubbs#29 adds), so the omission
+    reads as an oversight rather than a decision. The SpotBugs entry above is
+    `AT_STALE_THREAD_WRITE_OF_**PRIMITIVE**`, which cannot fire on an object reference - which is
+    exactly why this one was never listed.
+    **Why it matters more than the primitives:** `ConsumerGroupMetadata` carries the generation and
+    member IDs, and the control thread passes it to `producer.sendOffsetsToTransaction(...)`, where
+    the broker uses it for **zombie fencing**. A stale generation is the wrong answer to "is this
+    member still legitimate?". In practice the two threads synchronise incidentally through the
+    commit queues and locks, so an edge usually exists - but it is not guaranteed by design.
+    Pre-existing on `master` (from `a3378ed58`, 2021, the AK 2.7 concurrent-access fix); **not**
+    introduced by astubbs#29. Fix is one `volatile`; worth its own small change rather than riding
+    an unrelated PR.
 - Fix = `AtomicInteger`/`AtomicLong` for the counters and `volatile` for the flags -
   **or** let the thread-model rework above absorb them, since several sit in exactly
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
