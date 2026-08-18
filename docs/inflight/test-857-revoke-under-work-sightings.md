@@ -9,10 +9,75 @@ close** - the cycle's second edge lives in `ConsumerOffsetCommitter`, constructe
 consumer-commit modes, and among those only the *sync* arm blocks. The scenario's own javadoc says
 the mode was chosen to maximise revoke-path vs commit-path lock contention.
 
-Mode-compatible is not the same as attributed. **No seed here has ever been replayed** - of five
-sightings four now carry a reproducer, and not one has been run. The third sighting has no probe
+Mode-compatible is not the same as attributed. **Two seeds have now been replayed, and the result
+is bad for astubbs#29: the fix does not close this stall** - see "The first replays" below. Of five
+sightings four carry a reproducer; two of those four have been run. The third sighting has no probe
 verdict at all; the fourth's seed was recorded as lost and then recovered, see its own correction. Compare `test-857-churn-storm-async-stalls.md`, whose
 sightings are in a mode where the cycle cannot close.
+
+## The first replays, 2026-08-18 - both seeds reproduce on BOTH arms
+
+**Headline: the astubbs#29 deadlock fix does not close this failure.** 16 local runs of
+`ChaosRevokeUnderWorkIT` (eager, `PERIODIC_CONSUMER_SYNC`), arms interleaved, chaos test sources
+byte-identical across arms so only main code differs:
+
+- DEFECT = `origin/master` @ `438b09d9b`; FIXED = this branch @ `b8a335b05`.
+
+| Cell | Attempts | Reproduced | Violations per run |
+|---|---|---|---|
+| Seed A `4734674029169027864` x DEFECT | 3 | 3 | 25, 31, 32 |
+| Seed A `4734674029169027864` x FIXED | 3 | **3** | 42, 44, 35 |
+| Seed B `4709156528562690268` x DEFECT | 3 | 2 | 2, **pass**, 2 |
+| Seed B `4709156528562690268` x FIXED | 3 | **3** | 5, 1, 6 |
+| Fresh random seed x DEFECT (control) | 2 | 0 | clean, clean |
+| Fresh random seed x FIXED (control) | 2 | **1** | clean, **`CLASS2_STALL`** |
+
+Every failure carried an explicit `CLASS2_STALL/LAG_STAGNATION` verdict and every pass an explicit
+`probe violations=[]`; no verdict-less run. Seed B reproduced its CI sighting **to the digit** -
+partition 22, lag 3010, committed offset stagnant at 173, matching job 95609956596's autopsy.
+
+**Why this is the strong direction.** The documented asymmetry says reproduction is strong evidence
+and non-reproduction weak - and reproduction is what happened, 11 of 12 seeded attempts, including
+**6 of 6 on the arm carrying the fix**. The single seeded pass (DEFECT, seed B) is the expected
+behaviour of a seed that fixes the scenario but not the interleaving, not a contradiction.
+
+**The control is what makes this more than a replay artefact.** Fresh random seeds passed 3 of 4 in
+the same wall-clock window, so the recorded seeds are genuinely enriched (11/12 vs 1/4) rather than
+the box simply being unable to run the scenario. But the one control failure is itself a finding: a
+**fresh** seed drew the same stall on the FIXED arm, confirming the fixed code still reaches
+`CLASS2_STALL` with no replay machinery involved at all.
+
+**What this does NOT establish.** That the residual stall is astubbs#29's AB-BA cycle. It
+establishes only that the fix does not remove the stall. The cleanest failing run (FIXED, seed B,
+one violation) is the one to attribute from: the storm ended at 51:38.997 and the probe fired at
+53:18.953, so partition 22 sat committed-frozen for **100s of the quiet phase** - group STABLE,
+heartbeats flowing - against the scenario's own ~40s worst-case legitimate recovery arithmetic. A
+genuine anomaly by the test's own calibration, mechanism unattributed. **Next experiment: a
+FIXED-arm failing run with periodic thread dumps.**
+
+**Do the two seeds behave the same? Same class, materially different severity.** Both give
+`CLASS2_STALL/LAG_STAGNATION` at ~154s - and that ~154s is bound-150s plus probe poll cadence, an
+artefact of the detector, **not a defect fingerprint**. Seed A fails violently (25-44 frozen
+partitions), seed B narrowly (1-6, matching its CI sighting's 4), consistently across both arms.
+Recurring per-partition fingerprints (partition 22 lag=3010 stagnant@173; partition 21 lag=2974
+stagnant@91) appear under **both** seeds, **both** arms and the fresh-seed control, because record
+placement is workload-determined (`HEAVY_EVERY=2000`, 250k records, 80 partitions). **Do not read
+fingerprint identity as seed identity.**
+
+**Confounds, recorded rather than resolved:**
+
+- This box exports `-XX:ActiveProcessorCount=8` (of 32 cores), so every test JVM saw 8 processors.
+  Likely inflates severity - seed A's 25-44 violations against CI's 5-6 - though the controls
+  passing under the same cap argue it does not manufacture the stall.
+- Concurrent agent load ranged 1.98-11.62 (1-min), recorded per run. Outcome did not track it:
+  runs failed at load ~2, and the sole seeded pass happened at ~6.8.
+- **Invocation deviated from the replay command above**: `-Dit.test=ChaosRevokeUnderWorkIT` ran the
+  eager scenario alone, where CI runs the whole chaos group in one JVM. Sequencing effects from
+  sibling chaos tests were not replayed.
+
+**Evidence**, outside the repo because it is 96MB compressed: `/home/astubbs/pc/evidence/857-replay-2026-08-18/`
+- `results.log` (the ledger), `autopsy-blocks.txt` (226 extracted verdicts), `reports/` (gzipped
+  failsafe XMLs), and the driver scripts so the experiment can be re-run.
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
