@@ -132,8 +132,31 @@ Do not start one casually.
   (extract-controller's base - MockConsumer-with-PC demonstration; missed by every earlier
   catalogue, added by the 2026-08-17 branch audit), `origin/refactor/infinite-retry` @80feb470
   (move timeout-retry into the controller; poller just forwards the error),
-  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
+  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt),
+  `origin/move-cons-to-pc` @9dc92e51c ("Move consumer back to PC wrapped for thread safety, so commits
+  are in line with control" - 2020-12-03, **the earliest attempt**, three weeks after the mode split;
+  comments out `BrokerPollSystem`'s `committer`, `maybeCloseConsumer` and `isResponsibleForCommits` so
+  control commits directly. Surfaced by the 2026-08-18 archaeology; missed by the 2026-08-17 branch
+  audit. The record does not say why it stopped).
   Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
+
+### Name the implicit commit-mode XOR instead of leaving it to archaeology (SMALL, do any time)
+*Independent of the thread-model work below/above - this is naming only, no behaviour change.*
+- `isResponsibleForCommits()` exists on **both** `BrokerPollSystem` and
+  `AbstractParallelEoSStreamProcessor`, with identical javadoc, and they are an **XOR over commit
+  mode**: `committer.isPresent()` is true iff consumer-commit mode, `committer instanceof
+  ProducerManager` is true iff transactional. Exactly one thread closes the consumer.
+- One name on two classes reads as one question with one answer. It is two questions - "do I commit
+  via the *consumer*, and therefore close it?" vs "do I commit via the *producer*, and therefore close
+  it?" - and nothing in the code says they are halves of one decision. A 2026 investigation read them
+  as contradictory and proposed "reconciling" them; they have never disagreed and neither has been
+  edited since 2020.
+- Fix: rename each to say which side and which mode it answers for (e.g.
+  `closesConsumerBecauseItCommitsViaConsumer()` / `...ViaProducer()`), and/or introduce one named
+  concept both sides consult so the either/or is visible rather than implicit. Same treatment for any
+  other mode-keyed pair found alongside.
+- Background and the full commit record:
+  `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
