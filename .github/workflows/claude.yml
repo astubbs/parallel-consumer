@@ -95,8 +95,14 @@ jobs:
       # this line the instruction would be a dead letter telling the reviewer to run something it
       # gets refused for. Read-only, and it mutates nothing.
       #
+      # `bin/todo-index.sh` IS GRANTED ONLY WITH `--check`, EXACTLY - the absence of `:*` is the
+      # point, not an oversight, and a wildcard here reopens a tree-rewrite hole. Do not "tidy" it
+      # to match its wildcard-bearing neighbours. WHY, in full: the header comment of
+      # bin/todo-index.sh, which owns this and is the parser that enforces it. Pinned by
+      # bin/test-todo-index.sh.
+      #
       # KEEP IN SYNC with `--allowedTools` in claude-code-review-dispatch.yml.
-      REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git rev-parse:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-*.sh:*),Bash(./bin/check-*.sh:*),Bash(bin/test-check-*.sh:*),Bash(./bin/test-check-*.sh:*),Bash(bin/todo-index.sh:*),Bash(./bin/todo-index.sh:*),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
+      REVIEW_TOOL_ALLOWLIST: 'mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git rev-parse:*),Bash(bin/ci-unit-test.sh:*),Bash(./bin/ci-unit-test.sh:*),Bash(bin/ci-integration-test.sh:*),Bash(./bin/ci-integration-test.sh:*),Bash(bin/check-*.sh:*),Bash(./bin/check-*.sh:*),Bash(bin/test-check-*.sh:*),Bash(./bin/test-check-*.sh:*),Bash(bin/todo-index.sh --check),Bash(./bin/todo-index.sh --check),Bash(node .github/scripts/issue-ref-gate.test.js:*),Bash(node .github/scripts/changelog-ref-gate.test.js:*),Bash(gh run view:*),Bash(gh run list:*),Bash(actionlint:*),Bash(./mvnw:*),Bash(mvnw:*)'
     permissions:
       contents: read
       pull-requests: read
