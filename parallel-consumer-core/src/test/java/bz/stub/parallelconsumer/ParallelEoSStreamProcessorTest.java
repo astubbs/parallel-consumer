@@ -831,6 +831,77 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 .that(shortestGap).isAtLeast(500L);
     }
 
+    /**
+     * One record's bookkeeping failing must not strand the rest of its batch.
+     *
+     * <p>{@code onUserFunctionFailure} runs user code - the {@code retryDelayProvider}, via
+     * {@code updateFailureHistory} - so in a batch of N, record 2 throwing used to abort the whole loop: records 3
+     * onward never reached {@code addToMailbox} and stayed in flight forever. Each iteration is now independent.
+     *
+     * <p>The provider throws for exactly ONE offset, so a passing run means the containers on either side of it
+     * were still processed. Asserting every record comes back - not merely that some did - is what makes the
+     * middle position meaningful.
+     *
+     * <p><b>This test does NOT discriminate the per-container guard, and that is worth knowing.</b> Ablated three
+     * ways - loop guard reverted, {@code WorkContainer.onUserFunctionFailure}'s {@code finally} reverted, and both
+     * reverted - it passes every time. So redelivery here does not depend on either: the mailbox is a
+     * notification channel, not the only route back, and something downstream recovers the container regardless.
+     *
+     * <p>That contradicts the premise both the review round and this PR's own commit messages argued from -
+     * "records stay in flight forever". <b>Unproven</b> for the batch loop. What IS proven, by tests that fail
+     * when reverted, is narrower: the {@code runUserFunction} reorder (a throwing render skipped the bookkeeping),
+     * and the {@code retryDelayProvider} return-value validation (a hot retry loop with no backoff).
+     *
+     * <p>The loop guards were kept anyway - cheap, correct, and consistent across four engines - but they are
+     * defence-in-depth rather than a demonstrated fix, and this javadoc says so rather than letting a green test
+     * imply otherwise. What this test genuinely pins is the batch-wide CONTRACT: whatever layer delivers it, one
+     * record's bookkeeping failing must never cost its neighbours.
+     */
+    @Test
+    @Timeout(value = 60, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void oneRecordsBookkeepingFailingDoesNotStrandTheRestOfTheBatch() {
+        final long poisonOffset = 1L;
+        var seen = ConcurrentHashMap.<Long>newKeySet();
+        var redelivered = ConcurrentHashMap.<Long>newKeySet();
+        var poisonFired = new AtomicInteger();
+
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .ordering(UNORDERED)
+                .batchSize(3)
+                .retryDelayProvider(rc -> {
+                    if (rc.getRecordId().getOffset() == poisonOffset) {
+                        poisonFired.incrementAndGet();
+                        throw new FakeRuntimeException("provider broken for offset " + poisonOffset);
+                    }
+                    return ofSeconds(1);
+                })
+                .build());
+
+        consumerSpy.addRecord(ktu.makeRecord("k0", "v0"));
+        consumerSpy.addRecord(ktu.makeRecord("k1", "v1"));
+        consumerSpy.addRecord(ktu.makeRecord("k2", "v2"));
+
+        parallelConsumer.poll(context -> {
+            context.getConsumerRecordsFlattened().forEach(cr -> {
+                if (!seen.add(cr.offset())) {
+                    redelivered.add(cr.offset());
+                }
+            });
+            throw new RuntimeException("whole batch fails");
+        });
+
+        await().atMost(ofSeconds(40))
+                .untilAsserted(() -> assertWithMessage("every record in the batch comes back, including the ones "
+                        + "after the offset whose bookkeeping threw")
+                        .that(redelivered).containsAtLeast(0L, 1L, 2L));
+
+        assertWithMessage("the scenario actually happened - the poison provider fired. Without this the assertion "
+                + "above could pass while never exercising a bookkeeping failure at all")
+                .that(poisonFired.get()).isAtLeast(1);
+    }
+
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {
