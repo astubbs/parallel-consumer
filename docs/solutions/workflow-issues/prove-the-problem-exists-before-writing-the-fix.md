@@ -94,6 +94,43 @@ fix. The check is the same both times: run the instrument on both arms before tr
 An instrument that cannot go red on the defect, or cannot stay green on the fix, is not measuring
 the defect.
 
+### Getting the defect arm: a hardcoded boolean beats reverting the commit
+
+The obvious way to build the defect arm - `git revert` the fix - fails exactly when you most want
+the answer, and the failure is confusing rather than obvious.
+
+**It breaks when the tests call API the fix introduced.** Nine tests were written for a three-state
+ownership guard, and every one of them calls `releaseOwnership()` or `tryClaimOwnership()`. Revert
+the fix and those methods do not exist, so the arm does not compile, so the tests cannot be run
+against it at all. The conclusion looks like "these tests cannot be red-black verified", which is
+the wrong conclusion.
+
+**It also drags in unrelated breakage.** Reverting a production change can cascade into call sites,
+stale generated sources and build plugins - a Truth-assertion generator failing on a type the revert
+removed reads as a test failure if you are not watching closely, and one such red bar was misread
+as `0/3 passing` when nothing had run.
+
+**Instead, disable the fix in place behind a hardcoded flag:**
+
+```java
+/** RED-BLACK SWITCH (temporary): false = pre-fix behaviour. */
+private static final boolean TRI_STATE_ENABLED = false;
+
+boolean isReleased() {
+    return TRI_STATE_ENABLED && phase == Phase.RELEASED;
+}
+```
+
+Both arms then compile identically, the tests are byte-for-byte the same on each, and the only
+variable is the flag. In the case above this immediately gave the answer reverting could not:
+**2 of the 9 tests failed** - precisely the two written for the new behaviour - while the other
+seven kept passing, because they cover behaviour that survives the switch. That per-test resolution
+is itself useful: it says which tests guard the fix and which were already passing anyway.
+
+Put the flag at the narrowest point that changes behaviour, not at the call site, so the arms differ
+by one expression. Delete it afterwards - it is scaffolding for one experiment, not a feature
+toggle, and a flag left in the tree becomes a second code path nobody tests.
+
 ## Why This Matters
 
 An unmeasured fix is not neutral-until-proven. Both of these were *active* defects: one corrupted a
