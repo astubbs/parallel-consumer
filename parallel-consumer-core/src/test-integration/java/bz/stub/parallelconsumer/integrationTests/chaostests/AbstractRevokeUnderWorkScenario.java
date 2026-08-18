@@ -77,10 +77,9 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected abstract String scenarioLabel();
 
     protected void runRevokeUnderWorkScenario() throws Exception {
-        long seed = resolveSeed();
-        String replayCmd = replayCommand(seed);
+        ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
-                scenarioLabel(), useCooperativeAssignor(), seed, replayCmd);
+                scenarioLabel(), useCooperativeAssignor(), seed.getValue(), seed.replayCommand());
 
         String topic = getClass().getSimpleName() + "-" + scenarioLabel() + "-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS);
@@ -112,7 +111,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 .withNoProgressWindow(Duration.ofSeconds(60));
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
-                .seed(seed)
+                .seed(seed.getValue())
                 // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
                 .minTick(Duration.ofMillis(300))
                 .maxTick(Duration.ofMillis(1000))
@@ -144,6 +143,6 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
             settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
-        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
+        assertScenarioSlos(probe, conductor, seed.replayCommand(), expectedKeys, allConsumed);
     }
 }

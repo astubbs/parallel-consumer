@@ -78,9 +78,8 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
 
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
-        long seed = resolveSeed();
-        String replayCmd = replayCommand(seed);
-        log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed, replayCmd);
+        ChaosSeed seed = resolveSeed();
+        log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed.getValue(), seed.replayCommand());
 
         String topic = getClass().getSimpleName() + "-w1-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS); // explicit partition count (base numPartitions is package-private)
@@ -101,7 +100,7 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         ProgressProbe probe = fleet.getProbe();
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
-                .seed(seed)
+                .seed(seed.getValue())
                 .minTick(Duration.ofMillis(500))
                 .maxTick(Duration.ofMillis(1500))
                 .joinAfterDrainBias(0.9)
@@ -121,6 +120,6 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
             settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
-        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
+        assertScenarioSlos(probe, conductor, seed.replayCommand(), expectedKeys, allConsumed);
     }
 }
