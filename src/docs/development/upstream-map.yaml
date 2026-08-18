@@ -436,7 +436,7 @@ entries:
   - id: sweep-2023-retry-lifecycle
     group: features
     summary: Retry expiry, stall detection and scheduled retry -- the unfinished half of the retry epic
-    fork: {branches: [features/retry-dlq, docs/310-dlq-brainstorm], prs: [8], fork_issues: [239, 231, 234, 149, 141], status: requirements-in-progress}
+    fork: {branches: [features/retry-dlq, docs/310-dlq-brainstorm], prs: [8, 313], fork_issues: [239, 231, 234, 149, 141], status: requirements-in-progress}
     upstream: {repo: confluentinc/parallel-consumer, issues: [65, 34, 48], prs: [366], related: [196, 310, 71, 82, 92, 197, 242], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >

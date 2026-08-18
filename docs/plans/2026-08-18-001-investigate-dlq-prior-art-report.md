@@ -1,7 +1,7 @@
 # Dead letter queue (DLQ): prior-art report
 
-**Status:** brainstorm in progress. This document is the research record; the requirements plan will
-follow it in a separate dated document on the same branch.
+**Status:** brainstorm in progress, bound to draft PR astubbs#313. This document is the research
+record; the requirements plan will follow it in a separate dated document on the same branch.
 **Written:** 2026-08-18 (research run 2026-08-17)
 **Tracking:** astubbs#149 (mirror of confluentinc#310)
 **Deliberate decision:** astubbs#8 (`features/retry-dlq`, 2022) stays open, referenced from here, and
