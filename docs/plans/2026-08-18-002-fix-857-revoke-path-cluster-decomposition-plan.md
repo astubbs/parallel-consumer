@@ -27,7 +27,7 @@ files. They can move independently. The only shared file is
 | 1 | Commit-path deadlock fix | ~20 lines | `AbstractParallelEoSStreamProcessor` | **Proven** |
 | 2 | `ThreadConfinedConsumer` | ~290 lines | + `ConsumerManager`, `PCModule`, `BrokerPollSystem`, `ArchitectureTest` | **Net-negative** |
 | 3 | Counter adjustment on revoke | ~42 lines | `WorkManager`, `ShardManager` | **Half a fix** |
-| 4 | `pausedForThrottling` reset | ~15 lines | `BrokerPollSystem` | **Suspected regression** |
+| 4 | `pausedForThrottling` reset | ~15 lines | `BrokerPollSystem` | **Confirmed regression** under cooperative |
 
 ### How they relate
 
@@ -134,8 +134,46 @@ their consumer-side pause, and `onPartitionsAssigned` fires with only the *added
 **That is this PR's own symptom - paused consumption after a rebalance - introduced by this PR**, and
 it lands precisely where the branch advertises new cooperative support.
 
-**Unverified link:** Kafka's own retention semantics for retained partitions across a cooperative
-rebalance were read from API behaviour, not executed. Settle that before deciding.
+**Confirmed against Kafka's source, 2026-08-18** (kafka-clients 3.9.2), which settles the question the
+comment gets wrong. `ConsumerCoordinator.onJoinPrepare`:
+
+```java
+case EAGER:
+    revokedPartitions.addAll(subscriptions.assignedPartitions());
+    invokePartitionsRevoked(revokedPartitions);
+    subscriptions.assignFromSubscribed(Collections.emptySet());   // wipes the map
+
+case COOPERATIVE:
+    // only revoke those partitions that are not in the subscription anymore
+    if (!revokedPartitions.isEmpty()) {
+        ownedPartitions.removeAll(revokedPartitions);
+        subscriptions.assignFromSubscribed(ownedPartitions);      // retained partitions passed through
+    }
+```
+
+and `SubscriptionState.assignFromSubscribed` reuses the existing per-partition state object rather
+than making a new one:
+
+```java
+TopicPartitionState state = this.assignment.stateValue(tp);
+if (state == null)
+    state = new TopicPartitionState();
+assignedPartitionStates.put(tp, state);
+```
+
+`TopicPartitionState` holds `private boolean paused`. So:
+
+- **Eager: the comment is right.** `assignFromSubscribed(emptySet())` destroys every state object, so
+  every partition returns with `paused = false`. Clearing PC's flag matches reality.
+- **Cooperative: the comment is wrong.** Retained partitions keep their state object and stay paused
+  at the Kafka level. And when `revokedPartitions` is empty, `assignFromSubscribed` is not called at
+  all, so nothing is touched.
+
+PC pauses at the Kafka level (`doPause()` -> `consumerManager.pause(assignment)`), so this is exactly
+the state that survives, while `resumeIfPaused()` - gated on the cleared flag - never resumes it.
+
+**Verdict: drop it, or reset the flag only under the eager protocol.** As written it introduces
+permanently paused consumption after a cooperative rebalance.
 
 ## Order of work
 
@@ -144,8 +182,9 @@ rebalance were read from API behaviour, not executed. Settle that before decidin
    regresses silently. While extracting: rename `commitLock` (the file already has an unrelated
    `maybeAcquireCommitLock()` for the producer transaction lock ~800 lines away), keep acquired-path
    commit failures loud rather than warn-swallowed, and restore the interrupt flag in the catch.
-2. **Cluster 4, next** - it is 15 lines and the question is a yes/no on Kafka semantics. If confirmed,
-   drop it; it is a regression, not a fix.
+2. **Cluster 4, next** - the Kafka question is now settled from source (above): it is a regression
+   under the cooperative protocol, not a fix. Drop it, or gate the reset on the eager protocol. No
+   decision outstanding.
 3. **Cluster 3** - finish it or drop it. Do not land it in its current shape.
 4. **Cluster 2, last and separately** - it is the largest, it is currently the reason the branch is
    red, and its fix is a design decision about consumer ownership rather than a patch.
