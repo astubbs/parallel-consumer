@@ -77,11 +77,22 @@ They are an **XOR over commit mode**:
 Exactly one is true. Exactly one thread closes the consumer. Neither predicate has been edited since
 2020.
 
-**The trap is the shared name.** One name on two classes reads as one question with one answer. It is
-two different questions - "do I commit via the *consumer*, and therefore close it?" versus "do I
-commit via the *producer*, and therefore close it?" - whose answers are complementary by
-construction. Nothing in the code says "these two are halves of one decision", so a reader who finds
-both concludes they disagree.
+**The trap is that the relationship is implicit, not that the name is wrong.** Both methods ask the
+*same* question - "am I the component that commits, and therefore the one that closes the consumer?" -
+and the shared javadoc says so. Only the answer differs, per component, per mode. That is
+polymorphism, and it is not expressed as such: there is no shared type, no stated invariant, and
+nothing that says these two are halves of one decision. A reader who finds both concludes they
+disagree.
+
+**This is a correction to an earlier draft of this document**, which described them as two different
+questions with a badly overloaded name. That was wrong in a way worth recording, because it is the
+mistake the code invites: differing *implementations* were read as differing *questions*.
+
+**The fix is an interface, not a rename.** Give the two a common type - one method, one javadoc, two
+implementors - so the polymorphism is official. That also makes the XOR **statable and checkable**:
+"exactly one implementor returns true for a given configuration" is an invariant nobody can express
+today and which can be asserted at construction, rather than left for the next archaeologist to
+rediscover. Renaming alone only documents the trap more loudly.
 
 ## Why transactional mode is where things break
 
@@ -140,6 +151,14 @@ Derived from what the history punished, not from first principles:
   reason for "the committer closes". Any confinement scheme therefore needs ownership *transfer* -
   `ThreadConfinedConsumer.claimOwnership()` is claim-only, with no release or handover - or close must
   be routed to the owning thread.
+- **A confinement guard must test whether anyone is still *using* the consumer, not thread identity.**
+  In `innerDoClose`, `brokerPollSubsystem.closeAndWait()` returns *before* `maybeCloseConsumer()` runs,
+  so at the moment the guard fires the poll loop has already finished and there is no concurrency at
+  all. The guard rejects the call because the pooled `pc-broker-poll` thread object still exists and
+  still holds the claim - identity, not usage. This is also why roughly three quarters of observed
+  cases report a *live* owner: a pooled thread outlives the task that claimed ownership. Close is a
+  clean sequential handoff point; releasing ownership when the poll loop exits makes the guard assert
+  what it actually means.
 - **`consumer.wakeup()` is the only thread-safe consumer call, and it is aimed poorly.** The
   `pollingBroker` guard and the `WakeupException` retry loops in `ConsumerManager` exist because a
   wakeup meant for `poll()` can land on `commitSync()`. Any design keeping cross-thread wakeups keeps

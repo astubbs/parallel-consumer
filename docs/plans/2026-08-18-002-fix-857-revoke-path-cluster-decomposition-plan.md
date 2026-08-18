@@ -109,7 +109,18 @@ never closed, no LeaveGroup is sent, and the group waits out the session timeout
 one CI run**, with a cascade of 5 failures and 11 errors in the integration lane
 (`CloseAndOpenOffsetTest`: 10 errors of 14).
 
-The guard is doing its job; what it guards is a rule this codebase never adopted. Roughly a quarter
+The guard is a deliberate programming-error catcher and worth keeping in principle; what it asserts is
+a rule this codebase never adopted, and **it asserts it with the wrong test**. In `innerDoClose`,
+`brokerPollSubsystem.closeAndWait()` returns *before* `maybeCloseConsumer()` runs - so when the guard
+fires, the poll loop has finished and nothing is using the consumer concurrently. The guard compares
+*thread identity*, and the pooled `pc-broker-poll` thread object still exists and still holds the
+claim. That is also why roughly three quarters of cases report a live owner: a pooled thread outlives
+its task.
+
+So the smallest correct fix is not to drop the wrapper but to give it the missing half - release
+ownership when the poll loop exits, and let the closing thread claim it - so it asserts "nobody else
+is using this" rather than "the same Thread object is calling". Close is already a clean sequential
+handoff point, so this legalises nothing that was not already safe. Roughly a quarter
 of observed cases have a dead owner thread, so tolerating a dead owner addresses the minority case
 only.
 

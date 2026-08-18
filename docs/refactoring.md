@@ -140,21 +140,25 @@ Do not start one casually.
   audit. The record does not say why it stopped).
   Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
 
-### Name the implicit commit-mode XOR instead of leaving it to archaeology (SMALL, do any time)
-*Independent of the thread-model work below/above - this is naming only, no behaviour change.*
+### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
+*Independent of the thread-model work below/above. No behaviour change, but do not file this as
+cosmetic - see the last bullet.*
 - `isResponsibleForCommits()` exists on **both** `BrokerPollSystem` and
   `AbstractParallelEoSStreamProcessor`, with identical javadoc, and they are an **XOR over commit
   mode**: `committer.isPresent()` is true iff consumer-commit mode, `committer instanceof
   ProducerManager` is true iff transactional. Exactly one thread closes the consumer.
-- One name on two classes reads as one question with one answer. It is two questions - "do I commit
-  via the *consumer*, and therefore close it?" vs "do I commit via the *producer*, and therefore close
-  it?" - and nothing in the code says they are halves of one decision. A 2026 investigation read them
-  as contradictory and proposed "reconciling" them; they have never disagreed and neither has been
-  edited since 2020.
-- Fix: rename each to say which side and which mode it answers for (e.g.
-  `closesConsumerBecauseItCommitsViaConsumer()` / `...ViaProducer()`), and/or introduce one named
-  concept both sides consult so the either/or is visible rather than implicit. Same treatment for any
-  other mode-keyed pair found alongside.
+- **Both ask the same question** - "am I the component that commits, and therefore closes the
+  consumer?" - and only the answer differs per component. That is polymorphism, expressed as two
+  unrelated private methods that happen to share a name. Nothing declares them halves of one decision.
+- **Fix: give them a common interface** - one method, one javadoc, two implementors - so the
+  relationship is declared rather than inferred. A rename alone only documents the trap more loudly.
+- **Then enforce the invariant instead of describing it**: with a shared type, "exactly one
+  implementor returns true for a given configuration" becomes assertable at construction. Today it is
+  a property nobody can state, which is precisely how it survived unexamined since 2020.
+- **Why this is not cosmetic.** A 2026 investigation read the two as contradictory, concluded the
+  subsystems disagreed, and proposed "reconciling" them - a fix to a non-bug. They have never
+  disagreed and neither has been edited since 2020. Names are the interface that humans *and coding
+  agents* read to infer intent; a misleading one produced a wrong plan before any code was touched.
 - Background and the full commit record:
   `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
