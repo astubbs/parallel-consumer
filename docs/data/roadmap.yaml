@@ -203,6 +203,95 @@ entries:
     tracking: astubbs#139
     related: astubbs#158
 
+  - id: language-proxy-sidecar
+    title: Key-ordered concurrency for non-JVM languages, through a sidecar
+    serves: [flexibility, usability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      The engine's guarantees are locked to the JVM today. A sidecar speaking a frozen protocol makes
+      them a capability any language can adopt, and the conformance suite makes every client answer to
+      one definition of correct instead of eleven.
+    done_when: >-
+      The sidecar and its frozen v1 protocol ship as an opt-in module, with language clients validated
+      by the shared conformance suite rather than by their own tests.
+    tracking: astubbs#242
+    pull_request: astubbs#293
+    caveat: At-least-once through the proxy in v1; transactional produce stays JVM-only until lifted.
+
+  - id: polyglot-proof-demo
+    title: Prove the language story in one view
+    serves: [usability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      Eleven clients that each pass privately is a claim; all of them visibly reading the same records
+      at once is a proof, and the conformance runners already speak the grammar the demo needs.
+    done_when: >-
+      One command runs every language binding against the same topic and a machine-checked view shows
+      they converged - not a human eyeballing logs.
+    tracking: astubbs#242
+
+  - id: performance-comparison-matrix
+    title: Measured performance, per scenario and per language, published as data
+    serves: [performance, usability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      The README's performance story is hand-pasted charts from a spreadsheet. Scenarios, arms and
+      languages measured in the conformance harness make the claim reproducible - and the attribution
+      ladder separates engine cost from protocol cost from language runtime cost.
+    done_when: >-
+      Blessed runs are committed as data behind the docs-data gate, the README chart is generated from
+      them, and a fairness charter forbids the language-vs-language leaderboard.
+    tracking: astubbs#242
+
+  - id: distributed-throttling
+    title: Respect a downstream budget across the whole consumer group
+    serves: [flexibility, reliability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      N instances each assuming they own the whole budget overload the downstream by a factor of N, and
+      the maxConcurrency javadoc has pointed at this gap for years. The consumer group itself can divide
+      the budget - no coordination service required for the first version.
+    done_when: >-
+      A configured group-wide rate is respected across instances and rebalances, throttling defers work
+      rather than erroring it, and liveness outranks the limit.
+    tracking: astubbs#228
+
+  - id: self-tuning-concurrency
+    title: Discover sustainable concurrency instead of asking for a guess
+    serves: [performance, reliability]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      Deploy-time configuration guesses runtime-dependent quantities and is wrong in both directions.
+      The engine already measures what it needs to decide for itself; STRATEGY.md carries this as the
+      self-tuning bet. Promoted from the backlog 2026-08-18.
+    done_when: >-
+      An instance converges on a sustainable concurrency it discovered, and the discovered-vs-configured
+      gap is visible in the metrics.
+    tracking: astubbs#227
+    related: astubbs#228
+
+  - id: batch-composition-settlement
+    title: Decide batch composition once, before the second batching option ships
+    serves: [flexibility, performance]
+    horizon: next-0x
+    blocks_1_0: false
+    why_now: >-
+      Batch composition today is emergent, not designed, and the upstream batch-strategy proposal
+      (confluentinc#915) would freeze a shape into the options API. Choosing the shape deliberately -
+      with batch ordering, telemetry and validation underneath it - is one deprecation cycle instead of
+      four.
+    done_when: >-
+      One chosen composition API answers same-key batching (astubbs#145, confluentinc#266) and the
+      strategy proposal, batches hand records over in offset order, and batch composition is observable
+      in the metrics.
+    related: astubbs#165
+    tracking: astubbs#145
+
 not_planned:
   note: Decided against, with the reason. Not a backlog.
   entries:
@@ -229,12 +318,29 @@ backlog:
         Someday, and its deprecation is proposed separately. Nothing to do with Kafka Streams: these
         are the JStream processors that hand back a JDK Stream of produce results.
       tracking: astubbs#116
-    - subject: Dynamic concurrency control using flow-control theory
-      status: Undecided. Architectural rather than incremental.
-      tracking: astubbs#227
     - subject: Backpressure per partition rather than across the whole assignment
       status: Undecided. Architectural rather than incremental.
       tracking: astubbs#160
+    - subject: An HTTP dialect for the proxy, and a Confluent REST Proxy compatible gateway
+      status: >-
+        Demand-gated - nobody has asked yet. Feasibility is settled compatible-and-beneficial: REST
+        Proxy v2's progress unit is the per-partition watermark the engine already computes, so existing
+        REST Proxy users would gain beyond-partition concurrency by changing a hostname. The ideation
+        rides astubbs#293.
+      tracking: astubbs#242
+    - subject: A Dapr pluggable pub/sub component backed by the engine
+      status: >-
+        Demand-gated behind the sidecar landing, and probe-gated before that: whether the Dapr sidecar
+        serializes delivery to the app decides whether the benefit survives the extra hop. The probe and
+        positioning are banked in docs/inflight/next-dapr-adapter.md.
+      tracking: astubbs#242
+    - subject: Reviving the actor/IPC family from the 2022 branches
+      status: >-
+        Direction undecided - measure the mailbox against the poll/control deadlock, or land the
+        thread-ownership seams first. The one-day falsification probe and the async-produce promotion
+        (astubbs#230, confluentinc#356) come first either way; the ideation records why the "too stale"
+        verdict is under test.
+      tracking: astubbs#230
 
 one_point_zero:
   meaning: >-
