@@ -84,8 +84,11 @@ sources is how you end up believing there are more unguarded sites than there ar
 Every other one of the ~90 raw-throwable log calls in main renders a Kafka or PC-internal
 exception - library classes with ordinary cause chains and no overridden `getCause`. Not
 *guaranteed* safe in the abstract, but not adversarial either, which is the property that matters.
-They were never at risk, so they are not "sites needing an exemption". astubbs#267 guards the sites
-these doors actually reach, plus the control loop and the close path.
+They were never at risk, so they are not "sites needing an exemption". The sites these doors actually
+reach are guarded: astubbs#267 covers the control loop, `waitForClose`, `doClose`, both
+`BrokerPollSystem` rethrow blocks and the four user-function/async render sites; astubbs#29 covers the
+revoke path and the three `innerDoClose` warns, taking `logWithoutEscaping` and
+`describeWithRootCause` from astubbs#267 rather than reinventing them.
 
 **One known instance of the shape, deliberately left**: `ParallelEoSStreamProcessor` logs
 `Closing parallel Consumer due to InvalidPidMappingException` and only then calls
@@ -132,9 +135,6 @@ Superseded by the decision above. The one thing still worth watching: if the gua
 copied to a ninth site, that is the signal the door count is growing and the trade-off should be
 re-costed.
 
-Related: [`bug-close-path-warns-cannot-be-acted-on.md`](bug-close-path-warns-cannot-be-acted-on.md)
-records three sites deliberately left unguarded - that note's classification question stands on its
-own and is unaffected by the decision here.
-[`test-archunit-does-not-cover-main-code.md`](test-archunit-does-not-cover-main-code.md) lists the
+Related: [`test-archunit-does-not-cover-main-code.md`](test-archunit-does-not-cover-main-code.md) lists the
 "no raw Throwable to a Logger" rule as a candidate and points back here for why it is not worth
 writing.
