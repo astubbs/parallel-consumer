@@ -153,7 +153,10 @@ fixtures.
 **Four opt-out scopes - reach for the narrowest that fits.** The in-file ones are written in
 whatever comment syntax the file already has - `// ...` in code, `<!-- ... -->` in markdown/HTML,
 where they are invisible when rendered - and because they live in the file they keep holding:
-future PRs touching the text, and local runs on branches with no PR yet. They are the tool for the
+future PRs touching the text, and local runs on branches with no PR yet. **Mention is not use:**
+a marker quoted in a backtick code span - as every mention in this section is - is documentation
+and activates nothing. Write marker names in backticks whenever writing ABOUT them; an unquoted
+prose mention is indistinguishable from use and will be treated as one. They are the tool for the
 ref that genuinely must stay bare - above all **quoted source material**, where qualifying the
 number would edit the quotation. (A backslash escape was considered and rejected for that job -
 the design comment above `LINE_OPT_OUT` in `.github/scripts/issue-ref-gate.js` owns the why.)
@@ -165,7 +168,11 @@ the design comment above `LINE_OPT_OUT` in `.github/scripts/issue-ref-gate.js` o
   run of quoted lines too dense to mark individually. The markers govern added lines in the same
   patch, so they cover the paste they arrive with; a later lone edit inside an old block carries
   its own marker. An unclosed `exempt-begin` swallows the rest of the file's added lines,
-  deliberately - the same direction an unclosed fence fails in.
+  deliberately - the same direction an unclosed fence fails in. In a PR body, **a code fence
+  closes any open block**: fenced content is already skipped wholesale, and an end marker placed
+  inside a fence would otherwise be invisible to the gate, leaving the block open forever - so
+  the block ends at the fence and anything the author meant to exempt after it gets flagged,
+  seen, and re-marked.
 - **A file: put `issue-refs: exempt-file` anywhere in it** - for a file legitimately full of bare
   refs (a generated document, an imported archive). This one is judged against the file's
   **content**, not the patch - locally from disk, in CI via the contents API, fetched only for

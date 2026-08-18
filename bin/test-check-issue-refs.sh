@@ -111,12 +111,21 @@ check "clean diff and clean body pass, and the success line says the body was ch
       0 "PR 42's body"
 
 # --- the guidance survives truncation to the tail -------------------------------------------------
+# The trailer formatFailure emits is four lines, led by "Fix: qualify each ref" - so the tail width
+# must cover all four, and the assertion must include the LEAD line: tail -3 passed for months
+# while provably cutting the very sentence the trailer exists to deliver.
 export GH_STUB_JSON='{"number":42,"body":"This fixes #858 for good."}' # issue-refs: exempt - fixture
-out="$(bash bin/check-issue-refs.sh master 2>&1 | tail -3)"
-case "$out" in
-    *"issue-refs: N/A"*) echo "ok:   the last three lines of a failure still name the opt-out" ;;
-    *) echo "FAIL: the opt-out reminder did not survive | tail -3"; echo "$out" | sed 's/^/      /'; fails=$((fails + 1)) ;;
-esac
+out="$(bash bin/check-issue-refs.sh master 2>&1 | tail -4)"
+tail_ok=1
+case "$out" in *"Fix: qualify each ref"*) ;; *) tail_ok=0 ;; esac
+case "$out" in *"issue-refs: N/A"*) ;; *) tail_ok=0 ;; esac
+if [ "$tail_ok" = 1 ]; then
+    echo "ok:   the last four lines of a failure carry the whole fix/opt-out reminder"
+else
+    echo "FAIL: the fix/opt-out reminder did not survive | tail -4 intact"
+    echo "$out" | sed 's/^/      /'
+    fails=$((fails + 1))
+fi
 
 if [ "$fails" -gt 0 ]; then
     echo "$fails case(s) failed"

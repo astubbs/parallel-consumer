@@ -117,7 +117,8 @@ check("exempts the files where a bare number means upstream", () => {
   for (const p of ["CHANGELOG.adoc",
                    "src/docs/development/upstream-map.yaml",
                    "src/docs/development/upstream-pr-analysis.adoc",
-                   ".github/scripts/issue-ref-gate.test.js"]) {
+                   ".github/scripts/issue-ref-gate.test.js",
+                   "bin/test-check-issue-refs.sh"]) {
     assert.ok(isExempt(p), p + " should be exempt");
     assert.deepStrictEqual(suspectRefs(file(p, "fix: something (#857)")), []);
   }
@@ -446,9 +447,60 @@ check("hasFileOptOut finds the file marker in any comment syntax, and not its ab
   assert.strictEqual(hasFileOptOut(null), false);
 });
 
+// MENTION IS NOT USE. Before span-stripping, this review round's own docs made five files -
+// including docs/issue-references.md, the convention's defining doc - permanently self-exempt,
+// because documenting a marker in backticks activated it. These pin the fix.
+check("a file marker quoted in a backtick span is a mention, not a use", () => {
+  assert.strictEqual(hasFileOptOut("put `issue-refs: exempt-file` anywhere in the file"), false);
+  assert.strictEqual(hasFileOptOut("real marker below\nissue-refs: exempt-file"), true,
+    "an unquoted marker still counts - only backtick spans are inert");
+});
+
+check("a line marker quoted in a backtick span neither exempts its line nor blocks anything", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    'append `issue-refs: exempt` to the flagged line, e.g. for #857'));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#857"],
+    "the quoting line's own bare ref must still be flagged");
+});
+
+check("a line QUOTING the block markers does not open a block - the doc-section shape", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "wrap it in `issue-refs: exempt-begin` / `issue-refs: exempt-end` markers",
+    "and a bare #57 after it must still be flagged"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#57"]);
+});
+
+check("an unquoted line carrying BOTH block markers changes no state", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "use issue-refs: exempt-begin and issue-refs: exempt-end around it",
+    "bare #58 after the discussing line is still flagged"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#58"]);
+});
+
+check("a fence in the PR body closes any open exempt block - fail closed, not open", () => {
+  // The end marker sits INSIDE the fence, where prBodyEntry blanks it; before the synthetic
+  // fence-close rule, the block never ended and #200 silently escaped.
+  const hits = suspectRefs(body(
+    "before #100",
+    "<!-- issue-refs: exempt-begin -->",
+    "```",
+    "quoted #857",
+    "<!-- issue-refs: exempt-end -->",
+    "```",
+    "after #200"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100", "#200"],
+    "#100 before the block and #200 after the fence must both flag; only the fenced quote is spared");
+});
+
+check("a fence with no open block stays a plain fence - synthetic close is a no-op", () => {
+  const hits = suspectRefs(body("real text #100", "```", "fenced #857", "```", "tail #200"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100", "#200"]);
+});
+
 // dropFileOptedOutHits is the shared control flow both callers run (local script and CI step),
-// each supplying only its reader - so the drift-prone part is pinned here, once.
-(async () => {
+// each supplying only its reader - so the drift-prone part is pinned here, once. The block is
+// captured and awaited before the summary line prints, so the count and ordering stay honest.
+const asyncChecks = (async () => {
   const HITS3 = [
     { file: "docs/a.md", ref: "#857", text: "a" },
     { file: "docs/a.md", ref: "#858", text: "a2" },
@@ -508,4 +560,4 @@ check("every hit is listed, with its count in the first line", () => {
   assert.ok(msg.includes("  a.md: #29  and #29"));
 });
 
-console.log("\n" + run + " assertions passed");
+asyncChecks.then(() => console.log("\n" + run + " assertions passed"));
