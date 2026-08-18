@@ -17,7 +17,7 @@ Survivors, one line each (the doc carries the substance - read it before picking
 2. Un-bundle the family - async-produce (confluentinc#356, manifest `sweep-2023-async-produce`) is
    Group B "throughput-critical", not architecture; split `docs/refactoring.md`'s blanket gate
 3. Controlled experiment on the confluentinc#857 commit path - mailbox arm vs astubbs#29's lock
-   arm, judged by the recorded chaos replay seeds (`docs/inflight/bug-857-family.md`)
+   arm, judged by the recorded chaos replay seeds (`docs/inflight/test-857-revoke-under-work-sightings.md`, `docs/inflight/test-857-churn-storm-async-stalls.md`)
 4. Accession & graded register - DONE 2026-08-17 for the manifest half (astubbs#305); per-branch
    readiness grades still open
 5. Skeleton-first strangler - land the six thread-ownership interfaces as a pure refactor; the

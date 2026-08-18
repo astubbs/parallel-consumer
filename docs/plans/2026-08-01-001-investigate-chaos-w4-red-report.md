@@ -31,7 +31,7 @@ watching that PR's CI). **Updated the same day** after the investigation ran to 
 > (`git log --diff-filter=D -- docs/inflight.md`). Read it as it stood while this report was written
 > with `git show 0de96fc^:docs/inflight.md`. The live successors to this entry are
 > [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md) (Class 2 hunt status) and
-> [`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md) (the confluentinc#857 family,
+> [`docs/inflight/test-857-revoke-under-work-sightings.md`](../inflight/test-857-revoke-under-work-sightings.md) (the confluentinc#857 family,
 > including the RED-side occurrence this report predicted). Every `docs/inflight.md` named below is
 > that pre-split single file, as it was on the dates given.
 
@@ -363,7 +363,7 @@ This is exactly the confluentinc#857-family behaviour the Class 2 probe was buil
 records the probe as "a calibrated TRIPWIRE - RED-side awaiting a real-world/CI occurrence" (`git
 show 0de96fc^:docs/inflight.md`, grep `calibrated TRIPWIRE`). That was the stance when this was
 written and no live note inherits it: the RED side has since had a real occurrence, recorded in
-[`docs/inflight/bug-857-family.md`](../inflight/bug-857-family.md), so the same wording surviving in
+[`docs/inflight/test-857-revoke-under-work-sightings.md`](../inflight/test-857-revoke-under-work-sightings.md), so the same wording surviving in
 [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md) is stale rather than a
 successor. If the
 load hypotheses are falsified, H2 is the live explanation and this is PC's first RED-side hit - a

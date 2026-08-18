@@ -152,7 +152,7 @@ each test an uncontended broker removes the window, so the test goes green **wit
 fixed**. The repo's own ledger states this plainly:
 
 > "astubbs#68 made the integration suite reliable by *forking* per broker (`forkCount=4`), which
-> sidesteps the deadlock rather than proving it gone" - `docs/inflight/bug-857-family.md`
+> sidesteps the deadlock rather than proving it gone" - `docs/inflight/test-857-parallel-integration-proof.md`
 
 Note the honest tension in the record: the CI config comment at `.github/workflows/maven.yml:82-85`
 argues the opposite, "without masking anything (each test runs on an uncontended broker)". Both were
