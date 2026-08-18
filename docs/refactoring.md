@@ -228,6 +228,19 @@ cosmetic - see the last bullet.*
     Pre-existing on `master` (from `a3378ed58`, 2021, the AK 2.7 concurrent-access fix); **not**
     introduced by astubbs#29. Fix is one `volatile`; worth its own small change rather than riding
     an unrelated PR.
+  - **No SpotBugs rule can be turned on to catch the object-reference case - checked, not assumed.**
+    The full `AT_*` family in spotbugs 4.10.3 is `AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE`,
+    `AT_OPERATION_SEQUENCE_ON_CONCURRENT_ABSTRACTION`, `AT_UNSAFE_RESOURCE_ACCESS_IN_THREAD` and
+    `AT_STALE_THREAD_WRITE_OF_PRIMITIVE`; there is no `..._OF_REFERENCE`. `IS2_INCONSISTENT_SYNC`
+    needs the field to be synchronised *some* of the time (it never is here, so there is no
+    inconsistency to find) and `UG_SYNC_SET_UNSYNC_GET` needs a synchronised setter. Raising
+    `<threshold>` from `Medium` to `Low` cannot surface a detector that does not exist, and
+    `<effort>` is already `Max`. For object references SpotBugs cannot separate "shared across
+    threads, unsynchronised" from an ordinary single-threaded field without escape analysis.
+    **Enforcement option that would work here: an ArchUnit rule** - e.g. every non-final instance
+    field of a class whose values are published for cross-thread reads must be `volatile`, `final`,
+    or an atomic type. The repo already runs ArchUnit (`ArchitectureTest`, `TestConventionRules`), so
+    this is the cheap way to make the invariant fire instead of documenting it.
 - Fix = `AtomicInteger`/`AtomicLong` for the counters and `volatile` for the flags -
   **or** let the thread-model rework above absorb them, since several sit in exactly
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
