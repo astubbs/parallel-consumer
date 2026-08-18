@@ -1,0 +1,408 @@
+<!-- Extracted from `origin/docs/ideate-batching-enhancements` @98a5ea8f5, `docs/ideation/2026-08-17-batching-enhancements-ideation.html`. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Batching Enhancements — Parallel Consumer</title>
+<style>
+  :root {
+    --bg: #faf9f7; --ink: #1f2430; --muted: #5c6470; --line: #e3e0da;
+    --accent: #0f6bb3; --accent-soft: #e8f2fa; --accent-text: #0b5490;
+    --warn-soft: #fdf0e3; --warn-text: #8a4b0f;
+    --good-soft: #e9f5ec; --good-text: #1f6b3a;
+    --bad-soft: #faeaea; --bad-text: #8f2626;
+    --card: #ffffff; --code-bg: #f1efe9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.6 "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .page { max-width: 920px; margin-inline: auto; padding: 2.5rem 1.5rem 4rem; }
+  p, li, dd { max-width: 72ch; }
+  h1 { font-size: 1.75rem; line-height: 1.25; margin: .2rem 0 .4rem; }
+  h2 { font-size: 1.3rem; margin: 2.6rem 0 .8rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.08rem; margin: 0 0 .5rem; }
+  code { background: var(--code-bg); padding: .08em .35em; border-radius: 4px;
+         font: .87em/1.5 "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; }
+  pre { background: var(--code-bg); padding: .8rem 1rem; border-radius: 8px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); }
+  .eyebrow { font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .meta { display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; margin: .6rem 0 0; padding: 0; list-style: none;
+          font-size: .85rem; color: var(--muted); }
+  .meta strong { color: var(--ink); font-weight: 600; }
+  .stats { display: flex; flex-wrap: wrap; gap: .8rem; margin: 1.4rem 0 0; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .55rem 1rem; }
+  .stat .n { font-size: 1.25rem; font-weight: 700; display: block; line-height: 1.2; }
+  .stat .l { font-size: .74rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .jump { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .8rem 1.1rem; margin: 1rem 0 1.6rem; }
+  .jump ol { margin: .3rem 0 0 1.2rem; padding: 0; }
+  .jump li { margin: .15rem 0; }
+  article.idea { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+                 padding: 1.3rem 1.5rem; margin: 1.2rem 0; }
+  .idea-head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; }
+  .chip { display: inline-block; border-radius: 999px; padding: .12em .75em; font-size: .74rem; font-weight: 600; }
+  .chip.rank { background: var(--accent-soft); color: var(--accent-text); }
+  .chip.axis { background: var(--code-bg); color: var(--muted); }
+  .chip.conf-high { background: var(--good-soft); color: var(--good-text); }
+  .chip.conf-med  { background: var(--warn-soft); color: var(--warn-text); }
+  .chip.cx { background: var(--code-bg); color: var(--muted); }
+  dl.fields { margin: .9rem 0 0; }
+  dl.fields dt { font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+                 font-weight: 700; margin-top: .8rem; }
+  dl.fields dd { margin: .25rem 0 0 0; }
+  .callout { border-radius: 10px; padding: .7rem 1rem; margin: .9rem 0; font-size: .92rem; }
+  .callout.warn { background: var(--warn-soft); color: var(--warn-text); }
+  .callout.good { background: var(--good-soft); color: var(--good-text); }
+  figure { margin: 1.1rem 0; }
+  figure svg { max-width: 100%; height: auto; }
+  figcaption { font-size: .8rem; color: var(--muted); margin-top: .3rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .74rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  footer.composition-signal { margin-top: 3.5rem; padding-top: 1rem; border-top: 1px solid var(--line);
+                              font-size: .78rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <span class="eyebrow">Ideation</span>
+  <h1>Batching Enhancements — composition policies, triggering, failure semantics, and the config surface</h1>
+  <ul class="meta">
+    <li><strong>Date:</strong> 2026-08-17</li>
+    <li><strong>Topic:</strong> batching-enhancements</li>
+    <li><strong>Focus:</strong> enhancements to existing batching — batch composition (e.g. “10 records, always distinct keys”) and its configuration; existing PRs and issues in scope</li>
+    <li><strong>Mode:</strong> repo-grounded</li>
+  </ul>
+  <div class="stats">
+    <div class="stat"><span class="n">46</span><span class="l">raw ideas</span></div>
+    <div class="stat"><span class="n">7</span><span class="l">survivors</span></div>
+    <div class="stat"><span class="n">5</span><span class="l">axes covered</span></div>
+    <div class="stat"><span class="n">1</span><span class="l">confirmed bug found</span></div>
+    <div class="stat"><span class="n">2</span><span class="l">bases refuted</span></div>
+  </div>
+</header>
+
+<section id="grounding-context">
+<h2>Grounding Context</h2>
+<p><strong>Codebase Context.</strong> Batch composition in the Parallel Consumer is emergent, not designed. Records shard by ordering mode (<a href="https://github.com/astubbs/parallel-consumer/blob/master/parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ShardKey.java"><code>ShardKey.of()</code></a>: KEY → one shard per (partition,&nbsp;key); PARTITION/UNORDERED → one per partition). <code>ShardManager.getWorkIfAvailable</code> round-robins shards with a fairness iterator; <a href="https://github.com/astubbs/parallel-consumer/blob/master/parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ProcessingShard.java"><code>ProcessingShard</code></a> yields <em>at most one record per shard per call</em> in ordered modes (the <code>break</code> at <code>ProcessingShard.java:149-154</code>), then the flat list is chopped shard-blind into <code>batchSize</code> chunks (<code>AbstractParallelEoSStreamProcessor.makeBatches/partition</code>, <code>:1045-1077</code>). Consequences: KEY-mode batches contain distinct keys only by side effect; real batch size is capped by the number of eligible shards; a whole batch fails and retries as a set; <code>PollContext</code> stores records in a <code>HashSet</code> with no order. Config surface: <code>batchSize</code> (default 1, unvalidated), <code>ordering</code>, <code>maxConcurrency</code> (which silently multiplies: in-flight target = <code>maxConcurrency × batchSize</code>). No linger/min-size/bytes axis exists.</p>
+<p><strong>Prior art (trackers).</strong> <a href="https://github.com/confluentinc/parallel-consumer/issues/266">confluentinc#266</a> same-key-only batches (open since 2022, mirrored <a href="https://github.com/astubbs/parallel-consumer/issues/145">astubbs#145</a>); <a href="https://github.com/confluentinc/parallel-consumer/pull/915">PR confluentinc#915</a> <code>batchStrategy</code> enum (SEQUENTIAL / BATCH_MULTIPLEX / BATCH_BY_SHARD — open, unreviewed, flagged in <code>upstream-map.yaml</code> as the most valuable user-facing feature in the queue); <a href="https://github.com/confluentinc/parallel-consumer/issues/560">confluentinc#560</a>/<a href="https://github.com/confluentinc/parallel-consumer/pull/562">confluentinc#562</a> min-batch-size + linger (abandoned 2023 after a test-coverage review); <a href="https://github.com/confluentinc/parallel-consumer/issues/551">confluentinc#551</a>/<a href="https://github.com/confluentinc/parallel-consumer/issues/373">confluentinc#373</a> “batching not working as expected” (root cause: the one-record-per-shard ceiling — “the documentation is the bug”); <a href="https://github.com/confluentinc/parallel-consumer/issues/887">confluentinc#887</a> one bad record fails the whole batch and the identical batch re-forms every retry (no jitter on the static 1s delay).</p>
+<p><strong>External prior art.</strong> Kafka producer <code>batch.size</code>+<code>linger.ms</code> (count/bytes/time race); Kafka Streams <code>Suppressed</code> (KIP-328, per-key conflation); Akka <code>groupedWithin</code>/<code>groupBy</code>; Flink custom <code>Trigger</code> (pluggable-policy escape hatch); AWS Lambda ESM <code>ReportBatchItemFailures</code> (the reference per-record partial-failure design); DynamoDB <code>BatchWriteItem</code> (rejects duplicate keys per batch — the strongest distinct-keys precedent); SQS (count is a best-effort ceiling, not a target).</p>
+<p><strong>Learnings corpus.</strong> No batching-specific learnings exist in <code>docs/solutions/</code> — this is a greenfield design area. Reuse existing vocabulary and instrumentation (Shard, <code>ShardManager.getWorkIfAvailable</code>, the confluentinc#857 under-served diagnostic) rather than inventing parallel concepts.</p>
+<p><strong>Verification.</strong> Every survivor’s <code>direct:</code> basis was spot-checked against the repo by a fresh-context verifier; two candidate clusters were refuted on a mis-identified clock and are recorded in the Rejection Summary.</p>
+</section>
+
+<section id="topic-axes">
+<h2>Topic Axes</h2>
+<ul>
+  <li><strong>composition-policies</strong> — which records may share a batch (distinct keys, same-key-only, per-partition, conflate-per-key)</li>
+  <li><strong>triggering-sizing</strong> — when a batch is submitted: min size, linger/timeout, bytes vs count</li>
+  <li><strong>failure-retry</strong> — whole-batch vs per-record failure, batch re-formation, jitter</li>
+  <li><strong>config-api</strong> — options shape (enum vs strategy interface), validation, ordering-mode interaction rules</li>
+  <li><strong>observability-docs</strong> — metrics, signals, and documentation of batch behavior</li>
+</ul>
+</section>
+
+<section id="ranked-ideas">
+<h2>Ranked Ideas</h2>
+
+<nav class="jump">
+  <span class="eyebrow">Jump to</span>
+  <ol>
+    <li><a href="#idea-1">Settle the composition-API shape before PR confluentinc#915 merges</a></li>
+    <li><a href="#idea-2">PollContext’s HashSet ordering is a confluentinc#915/#266 merge blocker</a></li>
+    <li><a href="#idea-3">Poison-isolation ladder: jitter → bisection → per-record manifest</a></li>
+    <li><a href="#idea-4">Batch telemetry + shortfall attribution — and ship the confirmed over-request bug fix now</a></li>
+    <li><a href="#idea-5">Config interlock: batching-aware validate() and a derived-semantics startup line</a></li>
+    <li><a href="#idea-6">Unblock confluentinc#560 by deleting the knob: achievability-bounded triggering + Nagle self-clocking</a></li>
+    <li><a href="#idea-7">confluentinc#266 has two opposite answers — decide them jointly</a></li>
+  </ol>
+</nav>
+
+<!-- ══════════════════ IDEA 1 ══════════════════ -->
+<article class="idea" id="idea-1">
+  <div class="idea-head">
+    <span class="chip rank">1</span>
+    <h3>Settle the composition-API shape before PR confluentinc#915 merges</h3>
+    <span class="chip axis">config-api</span>
+    <span class="chip conf-high">Confidence 85%</span>
+    <span class="chip cx">Complexity: Medium (a decision, then a refactor)</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>PR <a href="https://github.com/confluentinc/parallel-consumer/pull/915">confluentinc#915</a> proposes a three-value <code>batchStrategy</code> enum, and its author’s own open concerns (UNORDERED+MULTIPLEX semantics; whether shard-yield and batch-grouping should be split) show the shape is unsettled. Five candidate shapes exist on a spectrum from simplest to most general, and choosing among them is a one-way door that determines how confluentinc#266, confluentinc#560, and every future batching ask lands — as a config value, a plugin, or another core PR. The fairness question confluentinc#915 leaves open (“how many records may one shard yield?”) is answered differently by each shape.</dd>
+    <dt>The candidate shapes</dt>
+    <dd>
+      <ul>
+        <li><strong>Single integer</strong> — <code>maxRecordsPerShardPerBatch</code>: 1 = today’s emergent distinct-keys behavior, N = same-key runs of up to N, MAX = today’s UNORDERED drain. Dissolves confluentinc#915’s enum <em>and</em> its UNORDERED-ambiguity question (UNORDERED already <em>is</em> the value ∞). Smallest test matrix.</li>
+        <li><strong>confluentinc#915’s enum as-is</strong> — three named strategies; simplest to review, but each future ask adds a fourth value.</li>
+        <li><strong>Declarative batch spec</strong> — <code>maxRecords / minRecords / maxRecordsPerKey / maxDistinctKeys / maxBytes</code>: the user’s literal “10 records, always distinct keys” is <code>maxRecords=10, maxRecordsPerKey=1</code>; confluentinc#266 is <code>maxDistinctKeys=1</code>; a bytes cap (Kafka-producer precedent) is one more field, not a new feature.</li>
+        <li><strong>Compatibility relation</strong> — a user-supplied predicate/grouping key over records (default: shard identity), the freight-consolidation model. Covers the <em>real</em> ask behind confluentinc#266 (destination affinity — one DB per account — which correlates with key but isn’t a key rule) and tenant grouping, without the enum ever growing.</li>
+        <li><strong>Two-stage factoring</strong> — an explicit shard-yield policy × batch-grouping policy split, directly answering confluentinc#915’s open architectural question; a per-shard fairness-debt quota (CFS-style) supplies the missing “how many per shard” rule.</li>
+      </ul>
+    </dd>
+    <dt>Basis</dt>
+    <dd><code>direct:</code> <code>ProcessingShard.java:149-154</code> — <code>if (isOrderRestricted()) { /* can't take any more work from this shard, due to ordering restrictions */ break; }</code> (verified); <code>ParallelConsumerOptions.java:451</code> — <code>batchSize</code> is the sole batching knob, entirely primitive/enum-typed. PR confluentinc#915’s author-flagged open concerns, quoted in the PR body. <code>external:</code> Flink’s <code>GlobalWindows</code> + custom <code>Trigger</code> as the pluggable-escape-hatch precedent; Kafka Streams <code>Suppressed</code> as strategy-object config precedent.</dd>
+    <dt>Rationale</dt>
+    <dd>The project is about to add its second batching option with two more queued behind it (confluentinc#560’s min/linger, confluentinc#266’s composition ask). Deciding the shape once — before confluentinc#915’s architectural review, which the fork’s own <code>upstream-map.yaml</code> says it needs — is the difference between one deprecation cycle and four. Every other survivor in this document either feeds this decision or depends on it.</dd>
+    <dt>Downsides</dt>
+    <dd>A shape decision delays merging confluentinc#915 as-is; the more general shapes (predicate, two-stage) enlarge the test matrix that rkolesnev’s <a href="https://github.com/confluentinc/parallel-consumer/pull/562">confluentinc#562</a> review already flagged (transactional × all orderings × non-reactor). The integer shape is cheapest but can’t express byte caps or min-size — those would still need the spec shape later.</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 840 210" role="img" aria-label="Spectrum of five API shapes from simplest to most general">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5c6470"/></marker></defs>
+      <line x1="30" y1="60" x2="810" y2="60" stroke="#5c6470" stroke-width="1.5" marker-end="url(#arr)"/>
+      <text x="30" y="40" font-size="12" fill="#5c6470">simpler · smaller test matrix</text>
+      <text x="810" y="40" font-size="12" fill="#5c6470" text-anchor="end">more general · plugins not PRs</text>
+      <g font-size="12.5" fill="#1f2430" text-anchor="middle">
+        <rect x="40"  y="80" width="130" height="52" rx="8" fill="#e8f2fa" stroke="#0f6bb3"/>
+        <text x="105" y="102" font-weight="600">integer</text>
+        <text x="105" y="119" font-size="11" fill="#5c6470">maxRecords/shard</text>
+        <rect x="196" y="80" width="130" height="52" rx="8" fill="#ffffff" stroke="#b9b4ac"/>
+        <text x="261" y="102" font-weight="600">enum (confluentinc#915)</text>
+        <text x="261" y="119" font-size="11" fill="#5c6470">3 strategies</text>
+        <rect x="352" y="80" width="140" height="52" rx="8" fill="#ffffff" stroke="#b9b4ac"/>
+        <text x="422" y="102" font-weight="600">declarative spec</text>
+        <text x="422" y="119" font-size="11" fill="#5c6470">maxPerKey, maxBytes…</text>
+        <rect x="518" y="80" width="140" height="52" rx="8" fill="#ffffff" stroke="#b9b4ac"/>
+        <text x="588" y="102" font-weight="600">predicate</text>
+        <text x="588" y="119" font-size="11" fill="#5c6470">compatibility relation</text>
+        <rect x="684" y="80" width="130" height="52" rx="8" fill="#e8f2fa" stroke="#0f6bb3"/>
+        <text x="749" y="102" font-weight="600">two-stage</text>
+        <text x="749" y="119" font-size="11" fill="#5c6470">yield × grouping</text>
+      </g>
+      <text x="105" y="160" font-size="11" fill="#1f6b3a" text-anchor="middle">answers confluentinc#915’s enum ambiguity</text>
+      <text x="422" y="160" font-size="11" fill="#5c6470" text-anchor="middle">“10 records, distinct keys” = 2 fields</text>
+      <text x="749" y="160" font-size="11" fill="#1f6b3a" text-anchor="middle">answers confluentinc#915’s open question</text>
+    </svg>
+    <figcaption>Five candidate shapes for the same one-way door. Highlighted: the two that directly resolve confluentinc#915’s own open concerns.</figcaption>
+  </figure>
+</article>
+
+<!-- ══════════════════ IDEA 2 ══════════════════ -->
+<article class="idea" id="idea-2">
+  <div class="idea-head">
+    <span class="chip rank">2</span>
+    <h3>PollContext’s HashSet ordering is a confluentinc#915/#266 merge blocker</h3>
+    <span class="chip axis">composition-policies</span>
+    <span class="chip conf-high">Confidence 90%</span>
+    <span class="chip cx">Complexity: Low–Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><code>PollContext</code> hands the user’s batch as <code>Map&lt;TopicPartition, HashSet&lt;…&gt;&gt;</code> — no offset order survives. Today that is nearly invisible because ordered modes yield one record per shard per batch. The moment same-shard batching ships (confluentinc#266 / confluentinc#915’s <code>BATCH_BY_SHARD</code>), a user gets five versions of one account’s record <em>in hash order</em> — KEY ordering broken not by a race but by a hash bucket, and a batched DB upsert applied in that order is last-write-wins on the wrong write. Fix first: an offset-ordered, shard-keyed batch structure (e.g. <code>Map&lt;ShardKey, List&lt;RecordContext&gt;&gt;</code> + an order-preserving <code>stream()</code>), a documented ordering guarantee, and ordering assertions in the batch tests.</dd>
+    <dt>Basis</dt>
+    <dd><code>direct:</code> <code>PollContext.java:45,50</code> — <code>Map&lt;TopicPartition, Set&lt;RecordContextInternal&lt;K,V&gt;&gt;&gt; records = new HashMap&lt;&gt;()</code> / <code>new HashSet&lt;&gt;()</code> (verified verbatim). <code>BatchTestMethods.java</code> — assertions use <code>hasSize(...)</code> and AssertJ’s order-independent <code>hasSameElementsAs</code>; no ordering assertion exists anywhere in the batch tests (verified). <code>external:</code> CPU write-combining buffers — merging stores into one burst is only correct because program order within the line is preserved; the same invariant applies to merging same-key records into one batch.</dd>
+    <dt>Rationale</dt>
+    <dd>Any same-key batching feature is unshippable on an unordered container, which makes this a <em>prerequisite</em> for the most-wanted feature in the queue, not a cleanup. It is cheap to fix before the composition work and a breaking change after. Nobody has raised it on the PR.</dd>
+    <dt>Downsides</dt>
+    <dd>Changing the observable iteration order of <code>PollContext</code> is itself a subtle behavior change for existing users (though moving from “arbitrary” to “offset order” is strictly less surprising); touching the type signature may need a deprecation path for <code>getByTopicPartitionMap()</code>.</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 840 190" role="img" aria-label="Hash order versus offset order in a same-key batch">
+      <g font-size="12.5">
+        <text x="40" y="30" font-weight="700" fill="#8f2626">Today: HashSet — same-key batch arrives in hash order</text>
+        <g text-anchor="middle">
+          <rect x="40"  y="45" width="80" height="36" rx="6" fill="#faeaea" stroke="#8f2626"/><text x="80"  y="67">k1 · off 9</text>
+          <rect x="130" y="45" width="80" height="36" rx="6" fill="#faeaea" stroke="#8f2626"/><text x="170" y="67">k1 · off 3</text>
+          <rect x="220" y="45" width="80" height="36" rx="6" fill="#faeaea" stroke="#8f2626"/><text x="260" y="67">k1 · off 7</text>
+        </g>
+        <text x="320" y="67" fill="#8f2626" font-size="11.5">→ batched upsert = wrong final value</text>
+        <text x="40" y="125" font-weight="700" fill="#1f6b3a">Prerequisite: offset-ordered, shard-keyed batch</text>
+        <g text-anchor="middle">
+          <rect x="40"  y="140" width="80" height="36" rx="6" fill="#e9f5ec" stroke="#1f6b3a"/><text x="80"  y="162">k1 · off 3</text>
+          <rect x="130" y="140" width="80" height="36" rx="6" fill="#e9f5ec" stroke="#1f6b3a"/><text x="170" y="162">k1 · off 7</text>
+          <rect x="220" y="140" width="80" height="36" rx="6" fill="#e9f5ec" stroke="#1f6b3a"/><text x="260" y="162">k1 · off 9</text>
+        </g>
+        <text x="320" y="162" fill="#1f6b3a" font-size="11.5">→ last write is the latest write; KEY ordering holds inside the batch</text>
+      </g>
+    </svg>
+    <figcaption>Why same-shard batching (confluentinc#266 / BATCH_BY_SHARD) cannot ship on today’s container.</figcaption>
+  </figure>
+</article>
+
+<!-- ══════════════════ IDEA 3 ══════════════════ -->
+<article class="idea" id="idea-3">
+  <div class="idea-head">
+    <span class="chip rank">3</span>
+    <h3>Poison-isolation ladder: jitter → bisection → per-record manifest</h3>
+    <span class="chip axis">failure-retry</span>
+    <span class="chip conf-high">Confidence 85%</span>
+    <span class="chip cx">Complexity: Low → Medium → High (three rungs)</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>A staged roadmap that closes <a href="https://github.com/confluentinc/parallel-consumer/issues/887">confluentinc#887</a> at three depths. <strong>Rung 1 — default-on retry jitter</strong>: <code>DEFAULT_STATIC_RETRY_DELAY</code> is a fixed 1s with no randomisation, so a failed batch re-forms identically forever; a small per-record jitter (derivable from retry count / key hash) is nearly free and the <code>retryDelayProvider</code> workaround proves it works. <strong>Rung 2 — poison-batch bisection</strong>: on failure, retry the batch as two halves, then quarters — a poison record is isolated in log₂(N) rounds while every innocent sibling makes progress, with <em>no user-API change</em> (Dorfman pooled testing; AWS Lambda ships this as <code>BisectBatchOnFunctionError</code>). <strong>Rung 3 — per-record failure manifest</strong>: let the batch function report which records failed (AWS <code>ReportBatchItemFailures</code> shape); only those re-enter retry, so the “same bad batch” can’t re-form by construction. Bisection remains the fallback for functions that report nothing.</dd>
+    <dt>Basis</dt>
+    <dd><code>direct:</code> <code>ParallelConsumerOptions.java:329</code> — <code>DEFAULT_STATIC_RETRY_DELAY = Duration.ofSeconds(1)</code>, and <code>WorkContainer.java:221</code> — <code>retryDueAt = lastFailedAt.plus(retryDelay)</code>, no jitter (verified). The decisive find, verified verbatim: <code>AbstractParallelEoSStreamProcessor.java:1403-1416</code> — <code>runUserFunctionInternal</code> declares <code>intermediateResults</code>, comments <em>“capture each result, against the input record”</em>, never populates it, and returns it empty. Batch atomicity is an <em>unfinished feature, not a design invariant</em> — the per-record correlation was started and abandoned. Also <code>:1338-1341</code>: the batch already splits into two outcome groups (stale vs active) and routes them separately. <code>external:</code> AWS Lambda ESM <code>ReportBatchItemFailures</code>; <code>BisectBatchOnFunctionError</code> (note: AWS offers it for Kinesis/DynamoDB stream sources, not Kafka ESM — the technique transfers, the citation is inspiration rather than a Kafka-native precedent).</dd>
+    <dt>Rationale</dt>
+    <dd>The dead <code>intermediateResults</code> code changes the cost estimate that killed the confluentinc#561/#562 class of work: the manifest is “finish an existing seam”, not “deep hot-path surgery”. Jitter alone only randomises which innocents suffer; bisection bounds their suffering at log₂(N) retries; the manifest ends it. Shipping the rungs in order gives users relief at each step while the deeper work proceeds, and the doc’s current weasel clause (“no guarantee they will all be in the same batch again”) becomes a designed guarantee: they deliberately will not be.</dd>
+    <dt>Downsides</dt>
+    <dd>Rung 1 changes default retry timing for existing deployments (needs a go/no-go, not silent shipping). Rung 2 interacts with ordering guarantees when splitting (halves must respect shard boundaries). Rung 3 is a public-API addition to the batch contract and needs the full ordering × transactional × adapter test matrix.</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 840 240" role="img" aria-label="Bisection isolating a poison record in log2 N rounds">
+      <defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5c6470"/></marker></defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="330" y="20" width="180" height="34" rx="6" fill="#faeaea" stroke="#8f2626"/>
+        <text x="420" y="41">batch of 8 · ☠ hidden · FAILS</text>
+        <line x1="420" y1="54" x2="270" y2="86" stroke="#5c6470" marker-end="url(#arr2)"/>
+        <line x1="420" y1="54" x2="570" y2="86" stroke="#5c6470" marker-end="url(#arr2)"/>
+        <rect x="180" y="90" width="180" height="34" rx="6" fill="#e9f5ec" stroke="#1f6b3a"/>
+        <text x="270" y="111">4 records · ✓ succeed</text>
+        <rect x="480" y="90" width="180" height="34" rx="6" fill="#faeaea" stroke="#8f2626"/>
+        <text x="570" y="111">4 records · ☠ · FAILS</text>
+        <line x1="570" y1="124" x2="470" y2="156" stroke="#5c6470" marker-end="url(#arr2)"/>
+        <line x1="570" y1="124" x2="670" y2="156" stroke="#5c6470" marker-end="url(#arr2)"/>
+        <rect x="380" y="160" width="180" height="34" rx="6" fill="#e9f5ec" stroke="#1f6b3a"/>
+        <text x="470" y="181">2 records · ✓ succeed</text>
+        <rect x="580" y="160" width="180" height="34" rx="6" fill="#faeaea" stroke="#8f2626"/>
+        <text x="670" y="181">2 records · ☠ · FAILS</text>
+        <line x1="670" y1="194" x2="670" y2="214" stroke="#5c6470" marker-end="url(#arr2)"/>
+        <text x="670" y="230" fill="#8a4b0f" font-weight="600">☠ isolated alone → retry/DLQ just this one</text>
+        <text x="120" y="41" fill="#5c6470" font-size="11" text-anchor="start">today: all 8 retry together, forever</text>
+      </g>
+    </svg>
+    <figcaption>Rung 2: bisection isolates a poison record in log₂(N) rounds with no user-API change. Rung 3 (the manifest) skips the search entirely.</figcaption>
+  </figure>
+</article>
+
+<!-- ══════════════════ IDEA 4 ══════════════════ -->
+<article class="idea" id="idea-4">
+  <div class="idea-head">
+    <span class="chip rank">4</span>
+    <h3>Batch telemetry + shortfall attribution — and ship the confirmed over-request bug fix now</h3>
+    <span class="chip axis">observability-docs</span>
+    <span class="chip conf-high">Confidence 90%</span>
+    <span class="chip cx">Complexity: Low (bug fix) / Medium (telemetry)</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Batches are invisible in production: every metric in <code>PCMetricsDef</code> is per-record; batch sizes are computed and discarded in a DEBUG log (<code>:1070-1074</code>); a batch’s only “identity” is the first record’s offset stuffed into MDC (<code>:1330</code>). Add batch identity, a realised-vs-configured size histogram, distinct-shards-per-batch, partial-batch rate, and <strong>shortfall attribution</strong> — when a batch is short, say why (the four causes are enumerable in code: order-restriction break, <code>couldBeTakenAsWork</code> false, retry delay pending, queue empty), reusing the confluentinc#857 under-served diagnostic (<code>ShardManager.java:279-296</code>) that already computes most of it at DEBUG. That converts the recurring <a href="https://github.com/confluentinc/parallel-consumer/issues/551">confluentinc#551</a>/<a href="https://github.com/confluentinc/parallel-consumer/issues/373">confluentinc#373</a> “batching not working” report into a log line users read on first run.</dd>
+    <dt>The confirmed bug (ship independently)</dt>
+    <dd>This ideation’s verification pass confirmed a real arithmetic defect in <code>calculateQuantityToRequest</code> (<code>AbstractParallelEoSStreamProcessor.java:1093</code>): the round-up uses <code>target − modulo</code> where filling the last batch needs <code>batchSize − modulo</code>. Worked example (verified): target=100, batchSize=30, delta=70 → modulo=10 → code requests <strong>160</strong>; correct round-up is <strong>90</strong> — roughly a 2× over-request whenever the deficit isn’t a batch multiple. It survived because the only witness is a DEBUG log — which is the argument for the telemetry in one sentence.</dd>
+    <dt>Basis</dt>
+    <dd><code>direct:</code> all verified by fresh-context spot-checks: the <code>target - modulo</code> arithmetic at <code>:1091-1094</code> with concrete numbers; <code>PCMetricsDef.java:23-61</code> per-record-only metrics with two batching-adjacent TODOs; the DEBUG-gated under-served diagnostic at <code>ShardManager.java:279-296</code>; MDC pseudo-identity at <code>:1330</code>.</dd>
+    <dt>Rationale</dt>
+    <dd>Every composition or triggering change in this document needs this signal to be judged: self-tuning needs fill rate, yield policies need shards-per-batch, and confluentinc#915’s review needs before/after evidence. Building telemetry first turns the API-shape debate (idea 1) from opinion into measurement — and the bug is immediate, shippable value found by looking.</dd>
+    <dt>Downsides</dt>
+    <dd>Metric cardinality needs care (histograms, not per-key labels); the bug fix changes request pacing, so throughput-sensitive deployments should see it called out in release notes.</dd>
+  </dl>
+</article>
+
+<!-- ══════════════════ IDEA 5 ══════════════════ -->
+<article class="idea" id="idea-5">
+  <div class="idea-head">
+    <span class="chip rank">5</span>
+    <h3>Config interlock: batching-aware <code>validate()</code> and a derived-semantics startup line</h3>
+    <span class="chip axis">config-api</span>
+    <span class="chip conf-high">Confidence 90%</span>
+    <span class="chip cx">Complexity: Low</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><code>validate()</code> checks nothing about batching. Verified end-to-end: <code>batchSize=0</code> makes <code>getTargetAmountOfRecordsInFlight()</code> return 0, so <code>WorkManager.getWorkIfAvailable(0)</code> early-returns forever — a config typo produces a healthy-looking consumer that processes nothing (the same silent-stall symptom class as confluentinc#857, reachable from configuration). Add an interlock table: reject <code>batchSize &lt; 1</code>; warn on structurally-futile combinations (PARTITION ordering with <code>batchSize &gt; 1</code> is a no-op the test suite itself encodes); and print one derived-semantics line at startup — <em>“KEY ordering, batchSize 10, maxConcurrency 16 → at most one record per key per batch; in-flight ceiling 160.”</em> Fold in the verified javadoc contradiction: <code>ParallelConsumerOptions.java:304-310</code> claims 2×3 → “at most 15 records”; the code computes 6.</dd>
+    <dt>Basis</dt>
+    <dd><code>direct:</code> <code>ParallelConsumerOptions.java:473-477</code> — <code>validate()</code> is <code>requireNonNull(consumer)</code> + <code>transactionsValidation()</code> only (verified); the zero-throughput path through <code>WorkManager.java:143</code> (verified); <code>transactionsValidation()</code> is the in-repo precedent for combination-rejection with a message naming both fields. <code>external:</code> takeoff-configuration warning systems — refuse the illegal state at the moment of commitment, not in a manual.</dd>
+    <dt>Rationale</dt>
+    <dd>confluentinc#551 was root-caused as “the documentation is the bug”; an interlock plus a startup line reaches users where the README did not. confluentinc#915 multiplies the option matrix, so the ruleset for illegal combinations has to exist <em>before</em> the matrix grows — and the silent-stall footgun is a production incident waiting on a typo.</dd>
+    <dt>Downsides</dt>
+    <dd>Rejecting previously-accepted (if nonsensical) configs is technically breaking; needs a clear error message and release note. The startup line must stay one line — verbose startup banners get ignored.</dd>
+  </dl>
+</article>
+
+<!-- ══════════════════ IDEA 6 ══════════════════ -->
+<article class="idea" id="idea-6">
+  <div class="idea-head">
+    <span class="chip rank">6</span>
+    <h3>Unblock confluentinc#560 by deleting the knob: achievability-bounded triggering + Nagle self-clocking</h3>
+    <span class="chip axis">triggering-sizing</span>
+    <span class="chip conf-med">Confidence 70%</span>
+    <span class="chip cx">Complexity: Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><a href="https://github.com/confluentinc/parallel-consumer/issues/560">confluentinc#560</a> stalled in 2022 on rkolesnev’s question: “does minimum batch size add any value over just adding Linger?” The code contains the answer neither side gave: under ordered modes the achievable batch size is capped by the number of eligible shards — the test suite itself encodes it (<code>BatchTestMethods.java:155</code>: <em>“partition ordering restricts the batch sizes to a single element…”</em>, verified verbatim) — so a plain linger would wait out its full timeout on every batch and deliver nothing. Two knob-free mechanisms follow: (a) <strong>achievability bound</strong> — compute <code>maxAchievableBatchSize</code> from eligible-shard count and stop waiting the moment a batch cannot grow; (b) <strong>Nagle self-clocking</strong> — submit a partial batch only when the worker pool would otherwise idle; when all workers are busy, hold and let it fill, because waiting is free while the user function is the bottleneck. Both signals already exist in the control loop (<code>lastWorkRequestWasFulfilled</code> at <code>:980</code> drives real control-flow; <code>getActiveCount()</code> is already read). No timer, no new config to mistune.</dd>
+    <dt>Basis</dt>
+    <dd><code>direct:</code> the BatchTestMethods comment and PARTITION no-op behavior (verified); <code>lastWorkRequestWasFulfilled</code> → <code>checkPipelinePressure()</code> → <code>dynamicExtraLoadFactor.maybeStepUp()</code> (verified as control-flow, not just logging) — the self-tuning precedent is already accepted in this hot path. <code>external:</code> Nagle’s algorithm (RFC 896) — batching clocked by acknowledgements needs no timer and degenerates to send-immediately when idle.</dd>
+    <dt>Rationale</dt>
+    <dd>This closes a three-year-old stalled feature by answering the exact review question that stalled it — and by <em>removing</em> the choice the reviewer didn’t want users to have to make. It also sidesteps the reason confluentinc#561/#562 died: no new option to validate across the transactional × ordering × adapter matrix.</dd>
+    <dt>Downsides</dt>
+    <dd>Verifier caveat (important): <code>thresholdForTimeSpendInQueueWarning</code> / <code>addToSlowWorkMaybe</code> measures time since <em>last dispatch</em>, only for already-dispatched work — it is <strong>not</strong> a pre-batch queue-dwell clock, so any residual linger semantics need a new clock, not a promotion of that one. Self-clocking changes latency behavior under load and needs benchmark evidence (which idea 4’s telemetry provides).</dd>
+    </dl>
+</article>
+
+<!-- ══════════════════ IDEA 7 ══════════════════ -->
+<article class="idea" id="idea-7">
+  <div class="idea-head">
+    <span class="chip rank">7</span>
+    <h3>confluentinc#266 has two opposite answers — decide them jointly</h3>
+    <span class="chip axis">composition-policies</span>
+    <span class="chip conf-med">Confidence 70%</span>
+    <span class="chip cx">Complexity: Medium–High</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>The workload behind <a href="https://github.com/confluentinc/parallel-consumer/issues/266">confluentinc#266</a> (“one DB per account — batch-insert per account”) has two structurally different solutions. <strong>Batch the same-key records</strong>: confluentinc#915’s <code>BATCH_BY_SHARD</code> — all N records for the account arrive in one batch, one DB round-trip. <strong>Don’t process most of them at all</strong>: conflate-per-key (Kafka Streams <code>Suppressed</code> / DynamoDB <code>overwrite_by_pkeys</code> semantics) — for last-write-wins state, only the newest record per key survives into the batch; superseded records auto-complete (offsets commit, side effects skipped). The seam is verified-local: <code>ProcessingShard</code> iterates its <code>ConcurrentSkipListMap</code> in ascending offset order and takes the <em>first</em> available container — taking the <em>last</em> (and completing the rest) is a change at the same point. For CDC/state-update streams the second answer is an order-of-magnitude larger win than the first; for append-semantics workloads only the first is correct. Choosing between them (or offering both) should happen with both on the table.</dd>
+    <dt>Basis</dt>
+    <dd><code>direct:</code> confluentinc#266’s maintainer question (“new ordering mode, or an option enabled with key ordering mode”); <code>ProcessingShard.entries</code> as <code>NavigableMap</code>/ascending-offset iteration (verified). <code>external:</code> Kafka Streams KIP-328 per-key conflation; DynamoDB <code>BatchWriteItem</code> duplicate-key rejection plus boto3’s conflate-by-key mitigation — the industry pattern pair matching these two answers.</dd>
+    <dt>Rationale</dt>
+    <dd>confluentinc#266 is the oldest open batching ask (2022, still upvoted in 2026). Answering it with BATCH_BY_SHARD alone would ship the smaller win to the users whose real problem is redundant same-key work. Deciding jointly costs one design discussion; deciding serially costs a second multi-month cycle.</dd>
+    <dt>Downsides</dt>
+    <dd>Conflation skips user side effects for superseded records — safe only under a mode the user explicitly opts into and reasoned through (exactly-what-semantics needs care with transactions). It also interacts with retention/replay expectations, and both answers depend on idea 2 (ordering) landing first.</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 840 200" role="img" aria-label="Two answers to issue 266: batch same-key records versus conflate per key">
+      <g font-size="12.5">
+        <text x="40" y="28" font-weight="700">Shard k1 backlog: v1 → v2 → v3 → v4 (offset order)</text>
+        <g text-anchor="middle">
+          <text x="220" y="66" font-weight="600" fill="#0b5490">Answer A · BATCH_BY_SHARD (confluentinc#915)</text>
+          <rect x="60"  y="78" width="70" height="32" rx="6" fill="#e8f2fa" stroke="#0f6bb3"/><text x="95"  y="98">v1</text>
+          <rect x="140" y="78" width="70" height="32" rx="6" fill="#e8f2fa" stroke="#0f6bb3"/><text x="175" y="98">v2</text>
+          <rect x="220" y="78" width="70" height="32" rx="6" fill="#e8f2fa" stroke="#0f6bb3"/><text x="255" y="98">v3</text>
+          <rect x="300" y="78" width="70" height="32" rx="6" fill="#e8f2fa" stroke="#0f6bb3"/><text x="335" y="98">v4</text>
+          <text x="220" y="140" fill="#5c6470" font-size="11.5">one batch, one DB round-trip — all 4 processed</text>
+          <text x="620" y="66" font-weight="600" fill="#1f6b3a">Answer B · conflate-per-key</text>
+          <rect x="470" y="78" width="70" height="32" rx="6" fill="#f1efe9" stroke="#b9b4ac" stroke-dasharray="4 3"/><text x="505" y="98" fill="#5c6470">v1</text>
+          <rect x="550" y="78" width="70" height="32" rx="6" fill="#f1efe9" stroke="#b9b4ac" stroke-dasharray="4 3"/><text x="585" y="98" fill="#5c6470">v2</text>
+          <rect x="630" y="78" width="70" height="32" rx="6" fill="#f1efe9" stroke="#b9b4ac" stroke-dasharray="4 3"/><text x="665" y="98" fill="#5c6470">v3</text>
+          <rect x="710" y="78" width="70" height="32" rx="6" fill="#e9f5ec" stroke="#1f6b3a"/><text x="745" y="98">v4</text>
+          <text x="620" y="140" fill="#5c6470" font-size="11.5">v1–v3 auto-complete (offsets commit, side effects skipped)</text>
+          <text x="620" y="158" fill="#5c6470" font-size="11.5">only v4 processed — work removed, not repackaged</text>
+        </g>
+      </g>
+    </svg>
+    <figcaption>Same workload, opposite directions: batch the redundant work, or skip it. Both hinge on idea 2’s ordering fix.</figcaption>
+  </figure>
+</article>
+
+<div class="callout good"><strong>Sequencing note (from the cross-cutting synthesis):</strong> ideas 2 (ordering), 4 (telemetry), and 5 (interlock) are the floor that makes confluentinc#915’s architectural review measurable rather than opinion-based; idea 1 is the decision that review exists to make; ideas 3, 6, and 7 build on the settled floor. The one-line over-request fix in idea 4 is shippable today.</div>
+</section>
+
+<section id="rejection-summary">
+<h2>Rejection Summary</h2>
+<table>
+  <thead><tr><th>#</th><th>Idea</th><th>Reason rejected</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Linger built on the <code>thresholdForTimeSpendInQueueWarning</code> seam</td><td>Basis refuted by verification: that clock measures time since last dispatch, only for already-dispatched work — a fresh record never touches it; a linger needs a new clock.</td></tr>
+    <tr><td>2</td><td>Growable in-queue batches (batches absorb records while queued)</td><td>Weak: rests on the same mis-identified clock as above; the design could stand alone but its “records already sit and wait” evidence doesn’t show what it claims.</td></tr>
+    <tr><td>3</td><td>Formalize the emergent distinct-keys behavior as a tested contract</td><td>Folded into idea 1 — the shape decision determines whether the contract is guaranteed, disclaimed, or parameterized (<code>maxRecordsPerKey=1</code>).</td></tr>
+    <tr><td>4</td><td>Bytes-based batch cap</td><td>Folded into idea 1’s declarative-spec shape (<code>maxBytes</code> is a field there, not a separate feature).</td></tr>
+    <tr><td>5</td><td>Adaptive linger from observed arrival rate; hill-climbing <code>batchSize</code></td><td>Sound but speculative; better as brainstorm variants of idea 6 once its simpler mechanisms are judged.</td></tr>
+    <tr><td>6</td><td>Per-shard fairness-debt yield quota (CFS-style)</td><td>Folded into idea 1 — it is the “how many per shard” rule the two-stage shape needs.</td></tr>
+    <tr><td>7</td><td>Per-batch veto / non-punitive rejection (<code>context.reject()</code>)</td><td>Precedent claim refuted: <code>PCRetriableException</code> only changes log level and does not skip failure counts — no non-punitive path exists to extend. Survives only as a brainstorm variant.</td></tr>
+    <tr><td>8</td><td>Single derived in-flight budget replacing <code>maxConcurrency × batchSize</code></td><td>Doc-mismatch fix folded into idea 5; the full redesign is crowded out — revisit alongside idea 1’s shape decision.</td></tr>
+    <tr><td>9</td><td>Shortfall attribution as a standalone item</td><td>Duplicates a stronger idea — merged into idea 4.</td></tr>
+    <tr><td>10</td><td>“Make confluentinc#915 reviewable” bundle as its own survivor</td><td>Kept as the sequencing note above rather than a separate ranked idea.</td></tr>
+  </tbody>
+</table>
+<p style="font-size:.85rem;color:var(--muted)">Axis coverage: all five axes have at least one survivor; no deliberate gaps.</p>
+</section>
+
+<footer class="composition-signal">Composed 2026-08-17 by ce-ideate (repo-grounded run; grounding: codebase scan, tracker prior-art sweep across astubbs/parallel-consumer and confluentinc/parallel-consumer, learnings search, external research; 5-frame ideation fleet; fresh-context basis verification with repo spot-checks).</footer>
+
+</div>
+</body>
+</html>

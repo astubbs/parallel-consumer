@@ -5,6 +5,9 @@ Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full v
 
 - **`confluentinc#912` vertx leak** - branch done, needs rebase + PR (`branch-912-vertx-leak.md`). Best
   immediate pick.
+- **Auto-scaling (astubbs#227)** - runtime-discovered per-instance concurrency; candidate killer
+  feature alongside key ordering, priority raised 2026-08-18 (`next-auto-scaling.md`). Spec
+  stage; two bitrotted prototypes to mine; async-timing metrics fix is the prerequisite.
 - **Logging-verbosity cleanup** - batch `confluentinc#629` / `#631` / `#640` into one PR
   (`ConsumerOffsetCommitter`, `RemovedPartitionState`, `AbstractParallelEoSStreamProcessor`). Low
   effort, high return.

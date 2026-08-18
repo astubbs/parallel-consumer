@@ -32,6 +32,12 @@ The unit of ordering. Records are distributed to shards by key or by partition d
 configured ordering, and a shard processes its records in order while different shards run in
 parallel. This is how the project gets concurrency without adding partitions.
 
+**Admission target**
+The number of records the engine allows in flight at once — the control variable that governs
+concurrency. Today it is derived statically from the user's configured concurrency limit; the self-scaling
+work makes it adaptive. Distinct from thread count: threads are capacity, admission is the throttle, so the same
+mechanism governs the thread-pool and async engines alike.
+
 **In-flight work**
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
 merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
@@ -108,6 +114,14 @@ The always-on recorder attached to broker integration tests, which annotates a f
 consumer-group progress evidence so the contention-versus-product-bug question is answered before
 manual diagnosis starts. Its verdict is only informative when its detectors could have fired for the
 test in question — a short, low-volume test cannot trip them, and a clean reading there means nothing.
+
+**Red-proof**
+The verification that a new or extended test fails against the code as it was before the fix it
+guards — a regression test that has never failed proves nothing.
+
+The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
+both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
+first evidence against the method, not for the code.
 
 ## Flagged ambiguities
 

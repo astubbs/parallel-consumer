@@ -27,8 +27,8 @@ import org.apache.kafka.common.errors.RebalanceInProgressException;
  * {@code docs/plans/2026-08-01-001-investigate-chaos-w4-red-report.md}; cooperative rebalancing makes
  * it far likelier, because members keep committing <i>during</i> rebalances by design.
  * <p>
- * Mirrors {@link MockConsumerTestWithCommitTimeoutException} and
- * {@link MockConsumerTestWithSaslAuthenticationException}, which pin the other rungs of the ladder.
+ * Mirrors {@link MockConsumerCommitTimeoutTest} and {@link MockConsumerSaslAuthenticationTest}, which pin the
+ * other rungs of the ladder.
  * The scenario itself lives in {@link CommitRejectionTestBase}, shared with
  * {@link MockConsumerCommitFailedTest}.
  */

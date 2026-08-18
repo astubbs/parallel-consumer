@@ -81,7 +81,19 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
+| [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
+| [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
+| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+
+**A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
+there, not after review catches you.** The table above routes the ones that exist today; `find . -name
+AGENTS.md` is the check that it is still complete. This rule is here because the routing was complete
+and got missed anyway: astubbs#206 added a `docs/inflight/` note describing work that PR itself landed,
+which the directory's first rule - track only what is currently OPEN - forbids. Routing is necessary
+but not sufficient: the nested `CLAUDE.md` bridges described in
+[`docs/agent-harness.md`](docs/agent-harness.md) are what make a directory's `AGENTS.md` arrive when
+a file in it is touched, rather than waiting to be opened.
 
 **Where work and knowledge are recorded:**
 
@@ -347,7 +359,8 @@ flip - `#29` and `#114` mean different things in each repo.
   than a broken one**. Cite both numbers, fork first: `(astubbs#119, confluentinc#857)`.
 - **`Fixes astubbs#167` closes nothing** - closing keywords need `astubbs/parallel-consumer#167`.
 - **Run `bin/check-issue-refs.sh` before you push.** It calls the same gate module CI does, so the
-  rule cannot drift; a red run is always real. CI additionally scans the PR body.
+  rule cannot drift; a red run is always real. Both scan the PR body when one is reachable; before
+  a PR exists, the body stays CI's to catch.
 
 [`docs/issue-references.md`](docs/issue-references.md) **owns this topic** - the threshold, the
 exemptions, the reasoning - and wins where the two disagree.
@@ -382,24 +395,13 @@ Nothing lints commit messages, so all of this is on you.
   reading if it says where you looked, and ruling one out is a real result (astubbs#220 is the
   worked example). Do this at merge prep, once the class is understood; doing it mid-diagnosis just
   widens the investigation.
-- **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates fix-ups
-  nobody wants in the permanent log, but usually also two or three genuinely separate pieces of
-  work. Do not default; look at the actual commits:
-  - **Re-cut the commits** - `git reset --mixed <merge-base>`, restage into a handful of atomic
-    commits, rebase-merge - when the branch holds distinct workstreams someone will later want to
-    bisect to or revert independently. The test for "atomic" is whether the message needs an "and
-    also". **`git fetch origin master` first, every time**, and reset to the **merge-base**, not to
-    `origin/master`: a stale ref or the wrong base silently reverts whatever master gained
-    meanwhile, and the tell is files appearing in the staged set that the branch never touched.
-    Verify with `git diff <old-tip> HEAD` - it must be empty, proving history changed and content
-    did not.
-  - **Squash-merge** when the branch is one idea and the intermediate commits are noise. If you
-    recommend this, **write the suggested squash message out in full** - it becomes the permanent
-    record, and the default concatenation of every subject is unreadable.
-  - **Rebase-merge as-is** only when the existing commits are already clean and atomic.
-
-  Release notes are generated from the commit log, so this choice decides what a future changelog
-  has to work with.
+- **Before merging, recommend a merge strategy - and say why**, and **offer** to write the squash
+  message and to re-cut the commits into atomic units rather than doing either silently. Keep the
+  recommendation to a line or two: write the squash message where it is used, not into the
+  conversation, unless asked for it.
+  [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
+  generated release notes, the three strategies and when each applies, and the reset-to-merge-base
+  trap that silently reverts master.
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they know about, and a one-way link strands the other half. If the successor does
