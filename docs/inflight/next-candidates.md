@@ -18,5 +18,8 @@ Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full v
   classes (test-only; the duplication bot keeps flagging them).
 - **`confluentinc#915` batch construction strategy** - cherry-pick, closes the 4-year-old
   `confluentinc#266`. Medium effort.
+- **Point ArchUnit at main code** (`next-archunit-main-code-rules.md`) - the harness is already
+  wired into all four modules with a shared rule library, but polices only three test conventions.
+  Post-v6: it is what would hold the boundaries the God-class decomposition creates.
 - **DLQ** (`confluentinc#310`, or revive `confluentinc#366`) - the most-demanded missing feature. Large, and
   spec-stage only.
