@@ -876,7 +876,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void maybeCloseConsumer() {
         if (isResponsibleForCommits()) {
-            consumerManager.close(Duration.ofSeconds(10));
+            // shutdownTimeout, not a literal: the user configures how long close may take, and a
+            // hardcoded 10s both ignored a shorter budget and capped a longer one. master called
+            // consumer.close() with no timeout at all, so this is also the first time the value is
+            // the user's to set.
+            consumerManager.close(shutdownTimeout);
         }
     }
 

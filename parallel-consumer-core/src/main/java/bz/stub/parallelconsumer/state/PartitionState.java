@@ -290,14 +290,16 @@ public class PartitionState<K, V> {
 
     public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         if (epochIsStale(recordsAndEpoch)) {
-            // confluentinc#857: upgraded from debug to warn — this is the primary suspect for the silent stall.
-            // Records polled from the broker are being dropped because the epoch captured at poll
-            // time doesn't match the current partition state epoch. This happens when a rebalance
-            // occurs between poll() and registration on the control thread.
-            log.warn("Dropping polled records — epoch mismatch: poll epoch={}, partition epoch={}, " +
-                            "partition={}, records count={}. This may cause consumption stall if persistent. See confluentinc#857.",
-                    recordsAndEpoch.getEpochOfPartitionAtPoll(), getPartitionsAssignmentEpoch(),
-                    recordsAndEpoch.getTopicPartition(), recordsAndEpoch.getRecords().size());
+            // Expected during any rebalance: a rebalance between poll() and registration means these
+            // records belong to an assignment we no longer hold, and their new owner will receive
+            // them. This is the epoch fencing working as designed, so it stays at debug.
+            //
+            // It was briefly a WARN calling itself "the primary suspect for the silent stall". The
+            // same investigation disproved that (see "Verified: epoch mismatch is NOT the cause" in
+            // docs/BUG_857_INVESTIGATION.md), and the 2026-08-18 A/B soak established the commit-path
+            // deadlock as the cause instead. A WARN on every rebalance buries the lines worth acting on.
+            log.debug("Inbound record of work has epoch ({}) not matching currently assigned epoch for the applicable partition ({}), skipping",
+                    recordsAndEpoch.getEpochOfPartitionAtPoll(), getPartitionsAssignmentEpoch());
             return;
         }
 
