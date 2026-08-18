@@ -136,7 +136,14 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
             log.error(msg);
             throw new IllegalStateException(msg);
         }
-        log.trace("Consumer.{}() on thread '{}' (ownership: {})", methodName, current.getName(), witness);
+        // Guarded because this runs on EVERY delegated consumer call, poll() included. Three
+        // arguments means SLF4J's varargs overload, which allocates an Object[] per call even with
+        // trace disabled - the one place this guard's "costs nothing when it never fires" is not
+        // literally true. The check itself is a currentThread(), an AtomicReference read and two
+        // comparisons, which is noise against any real consumer call.
+        if (log.isTraceEnabled()) {
+            log.trace("Consumer.{}() on thread '{}' (ownership: {})", methodName, current.getName(), witness);
+        }
     }
 
     // --- Thread-unsafe method overrides (all check thread before delegating) ---

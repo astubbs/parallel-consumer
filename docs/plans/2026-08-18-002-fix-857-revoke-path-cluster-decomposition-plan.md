@@ -25,7 +25,7 @@ files. They can move independently. The only shared file is
 | # | Cluster | Size | Files | State |
 |---|---|---|---|---|
 | 1 | Commit-path deadlock fix | ~20 lines | `AbstractParallelEoSStreamProcessor` | **Proven** |
-| 2 | `ThreadConfinedConsumer` | ~290 lines | + `ConsumerManager`, `PCModule`, `BrokerPollSystem`, `ArchitectureTest` | **Net-negative** |
+| 2 | `ThreadConfinedConsumer` | ~290 lines | + `ConsumerManager`, `PCModule`, `BrokerPollSystem`, `ArchitectureTest` | **Fixed and kept, in production** |
 | 3 | Counter adjustment on revoke | ~42 lines | `WorkManager`, `ShardManager` | **Half a fix** |
 | 4 | `pausedForThrottling` reset | ~15 lines | `BrokerPollSystem` | **Confirmed regression** under cooperative |
 
@@ -192,6 +192,30 @@ would be to eliminate the separate poller thread"*), fork mirror astubbs#142, st
 
 `ArchitectureTest`, `getAssignmentSize()` and the `MultiInstanceRebalanceTest` state dump ride with
 this cluster.
+
+### Decision: the guard stays enabled in production
+
+Settled 2026-08-18. The alternative was test-only, on the grounds that a runtime assertion which
+*throws* is a liability in a user's application.
+
+**Kept, because it has already earned it twice inside one branch.** It found the close-time ownership
+defect (88 occurrences, 16 integration tests red, consumer never closed, no LeaveGroup sent), and
+then it caught a fresh cross-thread bug introduced *while fixing cluster 4* - a live
+`consumer.paused()` call routed onto the control thread - which surfaced as 10 unit errors naming the
+offending thread, immediately, and would otherwise have been a rare production race.
+
+**Cost, measured against what it protects:** `checkThread` is a `Thread.currentThread()`, one
+`AtomicReference` read and two comparisons, on a path that is about to make a Kafka consumer call.
+The one real cost was the unconditional `log.trace` with three arguments - SLF4J's varargs overload,
+allocating an `Object[]` per call even with trace disabled - now guarded by `isTraceEnabled()`.
+
+**The risk that makes this a decision rather than an obvious yes** is a false positive: the guard
+throws, and during close `innerDoClose` swallows it to a warning, so a wrong predicate degrades
+silently rather than loudly. That is exactly what happened for 88 occurrences. It is mitigated, not
+eliminated: the predicate is now three-state and pinned by nine unit tests, including the case where
+it must still refuse (a close racing a live poll loop). If it ever fires in production on a path we
+believe is legal, the predicate is wrong and it should be fixed - not relaxed, and not moved to
+test-only, because the poll thread genuinely must be the only thread touching the consumer.
 
 ## Cluster 3 - the counter adjustment. Half a fix.
 
