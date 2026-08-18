@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 /**
@@ -25,8 +26,17 @@ import java.util.regex.Pattern;
  * don't explicitly override. We override all thread-unsafe methods with a {@link #checkThread}
  * guard. {@link #wakeup()} is left to the delegate (thread-safe per Kafka API).
  * <p>
- * Call {@link #claimOwnership()} from the poll thread before first use. Before ownership is
- * claimed, all methods are allowed (for init-time calls like subscribe).
+ * Ownership is a full lifecycle, not a one-shot: the poll thread calls {@link #claimOwnership()}
+ * before first use, and {@link #releaseOwnership()} when its loop exits and it will never touch
+ * the consumer again. A thread that closes the consumer afterwards (the control thread, in
+ * transactional mode) takes over with {@link #tryClaimOwnership()}, which never steals - it
+ * succeeds only when the consumer is unclaimed or already owned by the caller. The guard
+ * therefore asserts "no <i>other</i> thread currently owns this consumer", which is the property
+ * Kafka's single-threaded consumer contract actually requires; comparing raw thread identity
+ * forever would (and did) reject the legal sequential ownership handoff at close time, while a
+ * guard that let close bypass the check would legalise closing mid-poll. While unclaimed
+ * (before start, and between release and takeover during the strictly sequential close path),
+ * all methods are allowed - init-time calls like subscribe need this.
  * <p>
  * Pattern follows {@link ProducerWrapper} which uses the same Lombok delegate approach.
  *
@@ -36,7 +46,7 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
 
-    private volatile Thread ownerThread;
+    private final AtomicReference<Thread> ownerThread = new AtomicReference<>();
 
     @NonNull
     @Delegate(excludes = ThreadUnsafeMethods.class)
@@ -47,13 +57,67 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
      * (except wakeup) called from a different thread will throw IllegalStateException.
      */
     void claimOwnership() {
-        this.ownerThread = Thread.currentThread();
-        log.debug("Consumer ownership claimed by thread: {}", ownerThread.getName());
+        Thread current = Thread.currentThread();
+        Thread previousOwner = ownerThread.getAndSet(current);
+        if (previousOwner != null && previousOwner != current) {
+            // claimOwnership is the poll thread's start-of-life claim; a live previous owner here
+            // means two poll loops share one consumer, which the guard exists to catch. Log loudly
+            // rather than throw: throwing here would kill the new loop, not the misuse.
+            log.warn("Consumer ownership claimed by thread '{}' but was still held by thread '{}' (alive:{}) - " +
+                            "two components polling one consumer? See confluentinc#857.",
+                    current.getName(), previousOwner.getName(), previousOwner.isAlive());
+        } else {
+            log.debug("Consumer ownership claimed by thread: {}", current.getName());
+        }
+    }
+
+    /**
+     * Release ownership. Called by the owning thread once it has permanently finished with the
+     * consumer (poll loop exit - normal or by exception), making the consumer claimable by the
+     * thread that performs the final {@link #close()}. No-op with a warning if the caller is not
+     * the owner: releasing on another thread's behalf would silently disarm the guard.
+     */
+    void releaseOwnership() {
+        Thread current = Thread.currentThread();
+        if (ownerThread.compareAndSet(current, null)) {
+            log.debug("Consumer ownership released by thread: {}", current.getName());
+        } else {
+            log.warn("Thread '{}' tried to release consumer ownership it does not hold (owner: {})",
+                    current.getName(), describeOwner(ownerThread.get()));
+        }
+    }
+
+    /**
+     * Attempt to claim ownership for the current thread <b>without stealing</b>: succeeds only when
+     * the consumer is unclaimed, or the caller already owns it. Used by the closing thread after
+     * the poll loop has released - if the poll loop is still running (e.g. {@code closeAndWait}
+     * timed out and close proceeded anyway), the claim fails and the subsequent guarded call
+     * throws, exactly as before this method existed.
+     *
+     * @return true if the current thread owns the consumer after this call
+     */
+    boolean tryClaimOwnership() {
+        Thread current = Thread.currentThread();
+        if (ownerThread.compareAndSet(null, current)) {
+            log.debug("Consumer ownership taken over by thread: {}", current.getName());
+            return true;
+        }
+        boolean alreadyOwner = ownerThread.get() == current;
+        if (!alreadyOwner) {
+            log.debug("Thread '{}' could not take over consumer ownership - still held by {}",
+                    current.getName(), describeOwner(ownerThread.get()));
+        }
+        return alreadyOwner;
+    }
+
+    private static String describeOwner(Thread owner) {
+        return owner == null ? "unclaimed"
+                : "'" + owner.getName() + "' (id:" + owner.getId() + ", alive:" + owner.isAlive() + ")";
     }
 
     private void checkThread(String methodName) {
         Thread current = Thread.currentThread();
-        Thread owner = this.ownerThread;
+        Thread owner = this.ownerThread.get();
         if (owner != null && current != owner) {
             String msg = "Consumer." + methodName + "() called from thread '" +
                     current.getName() + "' (id:" + current.getId() +

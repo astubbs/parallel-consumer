@@ -165,6 +165,14 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         } catch (Exception e) {
             log.error("Unknown error", e);
             throw e;
+        } finally {
+            // This thread will never touch the consumer again - release ownership so the thread
+            // that performs the final consumer close (pc-control, in transactional mode) can take
+            // over via tryClaimOwnership(). Must be in a finally: a poll loop that dies by
+            // exception must also hand over, or the consumer can never be closed and no
+            // LeaveGroup is ever sent. The release happens-before closeAndWait()'s Future.get()
+            // returns, so the takeover is strictly sequential. See confluentinc#857.
+            consumerManager.releaseConsumerOwnership();
         }
     }
 

@@ -289,6 +289,15 @@ public class ConsumerManager<K, V> {
         consumer.claimOwnership();
     }
 
+    /**
+     * Release the poll thread's claim on the underlying consumer. Called from the poll loop's
+     * finally block once that thread will never touch the consumer again, so the closing thread
+     * can take over. See {@link ThreadConfinedConsumer#releaseOwnership()}.
+     */
+    void releaseConsumerOwnership() {
+        consumer.releaseOwnership();
+    }
+
     public void close(final Duration defaultTimeout) {
         long deadline = System.currentTimeMillis() + defaultTimeout.toMillis();
         log.debug("Consumer Manager Closing...");
@@ -303,6 +312,12 @@ public class ConsumerManager<K, V> {
             }
         }
         log.debug("ConsumerManager close wait completed.");
+        // Take over ownership for the final close. Non-stealing: succeeds only if the poll loop
+        // has released (its loop exited - normally or by exception) or this IS the poll thread.
+        // If the poll loop is somehow still live (closeAndWait timed out and the close sequence
+        // proceeded anyway), the claim fails and the guarded close below throws - closing a
+        // consumer another thread is actively using must never be legalised.
+        consumer.tryClaimOwnership();
         consumer.close(defaultTimeout);
         log.debug("ConsumerManager closed");
     }
