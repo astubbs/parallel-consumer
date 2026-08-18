@@ -11,7 +11,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
-import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.hasCauseOfType;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -177,19 +176,6 @@ class ThrowableUtilsTest {
                 .contains("ThrowableUtilsTest");
     }
 
-    @Test
-    void findsTheTypeWrappedAtAnyDepth() {
-        var buried = new IllegalStateException("buried",
-                new RuntimeException("outer wrapper",
-                        new UnsupportedOperationException("inner wrapper")));
-
-        // the depth is the point: an "is it retriable?" check that only reads the top answers no here, which is how
-        // an expected failure gets logged as an error
-        assertThat(hasCauseOfType(buried, UnsupportedOperationException.class)).isTrue();
-        assertWithMessage("the throwable itself counts")
-                .that(hasCauseOfType(buried, IllegalStateException.class)).isTrue();
-        assertThat(hasCauseOfType(buried, NumberFormatException.class)).isFalse();
-    }
 
     /**
      * A chain that never repeats and never ends.
@@ -209,12 +195,6 @@ class ThrowableUtilsTest {
         EndlessCause.hops.set(0);
         assertThat(describeWithRootCause(new EndlessCause())).isNotNull();
         assertWithMessage("hops taken while describing an endless chain")
-                .that(EndlessCause.hops.get())
-                .isAtMost(HOP_CEILING);
-
-        EndlessCause.hops.set(0);
-        assertThat(hasCauseOfType(new EndlessCause(), NumberFormatException.class)).isFalse();
-        assertWithMessage("hops taken while searching an endless chain")
                 .that(EndlessCause.hops.get())
                 .isAtMost(HOP_CEILING);
     }
@@ -259,43 +239,9 @@ class ThrowableUtilsTest {
         assertThat(describeWithRootCause(null)).isEqualTo("null");
     }
 
-    @Test
-    void subtypesCount() {
-        // isInstance, not equals: PCRetriableException is extended by users
-        assertThat(hasCauseOfType(new IllegalStateException(), RuntimeException.class)).isTrue();
-    }
 
-    @Test
-    void aNullThrowableIsNotAMatch() {
-        assertThat(hasCauseOfType(null, RuntimeException.class)).isFalse();
-    }
 
-    @Test
-    @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void searchingACyclicChainTerminates() {
-        var head = new RuntimeException("head");
-        var tail = new RuntimeException("tail", head);
-        head.initCause(tail);
 
-        assertThat(hasCauseOfType(head, RuntimeException.class)).isTrue();
-        assertWithMessage("absent, and the walk still ends")
-                .that(hasCauseOfType(head, NumberFormatException.class)).isFalse();
-    }
-
-    @Test
-    @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void aThrowingGetCauseAnswersFalseRatherThanEscaping() {
-        var hostile = new RuntimeException("hostile") {
-            @Override
-            public synchronized Throwable getCause() {
-                throw new UnsupportedOperationException("no cause for you");
-            }
-        };
-
-        assertWithMessage("an unreadable chain answers false rather than replacing one failure with another")
-                .that(hasCauseOfType(hostile, NumberFormatException.class))
-                .isFalse();
-    }
 
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)

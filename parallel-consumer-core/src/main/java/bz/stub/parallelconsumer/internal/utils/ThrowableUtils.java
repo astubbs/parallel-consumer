@@ -63,7 +63,7 @@ public class ThrowableUtils {
      */
     public static String describeWithRootCause(Throwable t) {
         if (t == null) {
-            // degrades rather than throwing, as hasCauseOfType does for the same argument. A null here is a caller
+            // degrades rather than throwing. A null here is a caller
             // bug, but this method's whole contract is that it does not add a second failure to the one being
             // described - and the fallback below dereferences t, so it cannot be the null handler.
             return "null";
@@ -164,35 +164,6 @@ public class ThrowableUtils {
     }
 
     /**
-     * Whether the throwable, or anything in its cause chain, is of the given type.
-     * <p>
-     * Presence anywhere in the chain - useful for "did this happen at all", not for "what is this failure".
-     * <p>
-     * <b>Never throws</b>, for the same reason as {@link #describeWithRootCause}: callers use this on the failure
-     * path. An unreadable chain answers {@code false} rather than replacing one failure with another.
-     * <p>
-     * <b>A match anywhere decides the answer for the whole failure</b>, so this is the wrong question when the caller
-     * means "what IS this failure" - a genuinely different exception carrying this type further down would be
-     * classified by the buried match. Callers wanting identity rather than presence use
-     * {@link #unwrapTransparentWrappers} instead; {@code PCRetriableException.isPresentIn} does.
-     *
-     * @param t    the throwable to search; null answers false
-     * @param type the type to look for
-     */
-    public static boolean hasCauseOfType(Throwable t, Class<? extends Throwable> type) {
-        try {
-            var found = new boolean[1];
-            walkCauseChain(t, link -> {
-                found[0] = type.isInstance(link);
-                return !found[0]; // stop at the first match
-            });
-            return found[0];
-        } catch (Throwable searchingItFailed) {
-            return false;
-        }
-    }
-
-    /**
      * Peels the wrappers PC itself adds, and stops at the first thing that is not one.
      * <p>
      * Not a search of the whole chain: the question a caller asks of the result is "what IS this failure", and a
@@ -238,7 +209,7 @@ public class ThrowableUtils {
      * {@code "Error producing result message"}, {@code "Too many attempts taking commit responses"} - so peeling it
      * would let a retriable cause speak for a failure that is not retriable at all, and an offset-encoding error
      * carrying one would be demoted to DEBUG. That is the same "a buried match decides the whole failure" mistake
-     * {@link #hasCauseOfType} warns about, which is what this method exists to avoid. Its one cause-only site wraps a
+     * a whole-chain search would make - letting a buried match speak for the whole failure. Its one cause-only site wraps a
      * {@code ProducerFencedException}, which is likewise a different failure rather than a pass-through.
      */
     private static boolean isTransparentWrapper(Throwable t) {

@@ -45,7 +45,15 @@ class MutinyRetriableClassificationTest {
 
     /**
      * The shape that actually reaches the engine: PC's own wrapper around the user's retriable. The engine's
-     * classifier peels that itself, so this pins the end-to-end answer rather than only the framework's half.
+     * classifier peels that itself, so classification is correct for this shape.
+     * <p>
+     * <b>What this does NOT establish.</b> The failure is pushed through a bare
+     * {@code Uni.createFrom().failure(...)}, not the engine's actual pipeline - {@code deferred(...)},
+     * {@code onItem().transformToMulti(...)}, {@code runSubscriptionOn(executor)}. If any of those operators
+     * repackaged a failure, or a {@code CompositeException} arrived from several at once, this test would not see
+     * it. Mutiny is not known to do either, which is why {@code MutinyProcessor.onError} has no unwrap step - but
+     * that is an argument from Mutiny's documented behaviour, not something measured here. Earning the stronger
+     * claim needs a failure driven through the real subscription.
      */
     @Test
     void aRetriableSurvivingMutinysFailurePathIsStillClassifiedExpected() {
