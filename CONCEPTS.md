@@ -34,8 +34,8 @@ parallel. This is how the project gets concurrency without adding partitions.
 
 **Admission target**
 The number of records the engine allows in flight at once — the control variable that governs
-concurrency. Today it is derived statically from `maxConcurrency`; the self-scaling work makes it
-adaptive. Distinct from thread count: threads are capacity, admission is the throttle, so the same
+concurrency. Today it is derived statically from the user's configured concurrency limit; the self-scaling
+work makes it adaptive. Distinct from thread count: threads are capacity, admission is the throttle, so the same
 mechanism governs the thread-pool and async engines alike.
 
 **In-flight work**
