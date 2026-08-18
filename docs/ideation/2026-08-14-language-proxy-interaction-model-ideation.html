@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ideation: Language Proxy — Interaction Model &amp; Polyglot Demo</title>
+<title>Ideation: Language-Proxy Interaction Model</title>
 <style>
   :root {
     --bg: #fbfaf8; --fg: #1a1a1a; --muted: #5c5c5c; --rule: #e0dcd6;
@@ -61,35 +61,30 @@
           padding: 1rem 1.25rem; margin: 1.5rem 0; }
   ul { margin: 0 0 .85rem; padding-left: 1.2rem; } li { margin-bottom: .35rem; }
   .axis-note { color: var(--muted); font-size: .88rem; font-style: italic; }
-  .partnav { display: flex; gap: .6rem; flex-wrap: wrap; margin: 1.2rem 0 0; }
-  .partnav a { font-size: .85rem; text-decoration: none; color: var(--accent); background: var(--accent-bg);
-               border: 1px solid var(--rule); border-radius: 999px; padding: .25em .85em; }
-  .part-divider { margin: 4rem 0 0; border-top: 3px double var(--rule); padding-top: 2.5rem; }
+  .jump { font-size: .88rem; margin: 0 0 1.4rem; padding: .7rem 1rem; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; }
+  .jump a { color: var(--accent); text-decoration: none; }
+  .jump a:hover { text-decoration: underline; }
+  figure { margin: 1rem 0; }
+  figcaption { font-size: .82rem; color: var(--muted); margin-top: .3rem; }
   .jump { font-size: .88rem; margin: 0 0 1.4rem; padding-left: 1.2rem; }
   .jump a { color: var(--accent); text-decoration: none; }
   .diagram { margin: .9rem 0; overflow-x: auto; }
   .diagram svg { display: block; max-width: 100%; height: auto; }
   .diagram-caption { color: var(--muted); font-size: .82rem; font-style: italic; margin-top: .2rem; }
-  footer.composition-signal { max-width: 62rem; margin: 3rem auto 0; color: var(--muted); font-size: .78rem;
-                              border-top: 1px solid var(--rule); padding-top: .8rem; }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<h1>Ideation: Language Proxy — Interaction Model &amp; Polyglot Demo</h1>
+<h1>Ideation: Language-Proxy Interaction Model</h1>
 <p class="sub">
-  Two runs in one document · repo-grounded · branch <code>feats/proxy-requirements</code> · <code>astubbs/parallel-consumer#242</code>
-</p>
-<nav class="partnav">
-  <a href="#part-interaction-model">Part 1 · Interaction model (2026-08-14)</a>
-  <a href="#part-polyglot-demo">Part 2 · Polyglot demo app (2026-08-17)</a>
-</nav>
-
-<section id="part-interaction-model">
-<h1 style="font-size:1.45rem; margin-top:2.2rem">Part 1 · Interaction Model</h1>
-<p class="sub">
-  2026-08-14 · 27 raw candidates → 16 after merge → <strong>6 survivors: 3 settled, 3 open</strong> · 5 axes · repo-grounded
+  2026-08-14 · <code>astubbs/parallel-consumer#242</code> · branch <code>feats/proxy-requirements</code><br>
+  27 raw candidates → 16 after merge → <strong>6 survivors: 3 settled, 3 open</strong> · 5 axes · repo-grounded<br>
+  <strong>Continued 2026-08-17</strong> · <a href="#native-bindings">native direct bindings — no sidecar</a> ·
+  45 raw candidates → 22 after merge → <strong>7 survivors (ideas 7–13)</strong> · 5 new axes<br>
+  <strong>Continued 2026-08-17</strong> · <a href="#http-strategy">HTTP dialect, generated clients, REST Proxy compatibility</a> · 44 raw candidates → 35 after merge → <strong>7 survivors (ideas 14–20)</strong> · 5 new axes<br>
+  <strong>Continued 2026-08-17–18</strong> · <a href="#polyglot-demo">the polyglot demo app — all eleven at once</a> · 40 raw candidates → 28 after merge → <strong>7 survivors (ideas 21–27)</strong> · 5 new axes
 </p>
 
 <p class="lede">
@@ -337,7 +332,11 @@ decision rather than patch that seam again — which is what this whole exercise
 <table>
   <tr><th>Candidate</th><th>Verdict</th><th>Reason</th></tr>
   <tr><td><strong>Compile PC as a native shared library</strong> (C-ABI via <code>native-image --shared</code>, so threaded languages run the engine in-process with no protocol)</td><td>Dead end</td>
-      <td><strong>Never proposed — an agent's extrapolation, ranked first in the original draft and wrongly attributed to the user.</strong> Rejected on direction. Two things undercut it on its own terms, recorded so it is not re-proposed: the cleared native-image gate produced an <em>executable</em>, not a <code>--shared</code> export (different entry-point surface, isolate and thread-attach semantics, GC coexistence with a foreign runtime, callbacks re-entering from foreign threads — none tested); and Temporal's Go and Java SDKs are independent implementations, not bindings over its shared core, so the usual precedent is thinnest exactly where the idea was boldest.</td></tr>
+      <td><strong>Never proposed — an agent's extrapolation, ranked first in the original draft and wrongly attributed to the user.</strong> Rejected on direction. Two things undercut it on its own terms, recorded so it is not re-proposed: the cleared native-image gate produced an <em>executable</em>, not a <code>--shared</code> export (different entry-point surface, isolate and thread-attach semantics, GC coexistence with a foreign runtime, callbacks re-entering from foreign threads — none tested); and Temporal's Go and Java SDKs are independent implementations, not bindings over its shared core, so the usual precedent is thinnest exactly where the idea was boldest.
+      <br><strong>Superseded 2026-08-17:</strong> the user has now explicitly proposed this direction, which dissolves the
+      rejection's basis (it was rejected on direction, not on a failed experiment). The two technical caveats survive as
+      the load-bearing open questions and became Probe&nbsp;0 of idea 10 in the
+      <a href="#native-bindings">native-bindings continuation</a> below.</td></tr>
   <tr><td>Derive, never accumulate (in-flight as set cardinality)</td><td>Folded in</td>
       <td>Sound, but already an adopted principle rather than a new idea — retained as a design rule across survivors 4 and 7, not ranked separately.</td></tr>
   <tr><td>Abandoned-by-default at dispatch</td><td>Rejected</td>
@@ -382,7 +381,9 @@ decision rather than patch that seam again — which is what this whole exercise
       to withdraw it were both wrong.</li>
   <li><strong>App shutdown shuts down the sidecar.</strong> Drain within the bounded timeout, commit, leave
       the group. Plus a parent-death backstop for SIGKILL.</li>
-  <li><strong>Native shared library: dead end.</strong> See the rejection table.</li>
+  <li><strong>Native shared library: dead end.</strong> See the rejection table.
+      <em>Superseded 2026-08-17 — re-opened on the user's explicit request; see the
+      <a href="#native-bindings">continuation</a>.</em></li>
 </ul>
 
 <h2>Requirements this moves</h2>
@@ -424,15 +425,1035 @@ credit ledger were live. Beyond that supersession, these move:</p>
       <code>docs/inflight/next-connect-connectors-in-foreign-languages.md</code>. Unread:
       <code>feats/connect-on-pc-spike</code> may already assume a shape.</li>
 </ul>
-</section>
 
-<section id="part-polyglot-demo" class="part-divider">
-<h1 style="font-size:1.45rem">Part 2 · Polyglot Demo App</h1>
+<hr style="border:none;border-top:2px solid var(--rule);margin:4rem 0 0">
+
+<h1 id="native-bindings" style="margin-top:3rem">Continuation: Native Direct Bindings — No Sidecar</h1>
 <p class="sub">
-  2026-08-17, extended 2026-08-18 · topic <code>polyglot-demo-app</code> · repo-grounded ·
-  40 raw candidates → 28 after merge → <strong>7 survivors</strong> · 5 axes<br>
-  Focus: run all 11 language bindings simultaneously (each demo dockerized), collect their output
-  together, and prove in a single view that they all read the same records.
+  2026-08-17 · continues the run above · focus: <em>"look into adding native direct bindings — so no sidecar needed"</em><br>
+  45 raw candidates → 22 after merge → <strong>7 survivors (ideas 7–13)</strong> · 5 axes · repo-grounded
+</p>
+
+<p class="lede">
+  The subject is embedding the PC engine <em>inside</em> the non-JVM application's process — the way
+  <code>parallel-consumer-proxy-client-java-direct</code> already does for Java — so no separate sidecar
+  process exists. The first run recorded this as a dead end; that rejection was on <em>direction</em>
+  ("never proposed — an agent's extrapolation"), and the user has now proposed it. Its two technical
+  caveats are this run's load-bearing questions, not its verdict.
+</p>
+
+<div class="flag">
+  <h3 style="margin-top:0">Read this first: the question was already half-answered on 2026-08-15</h3>
+  <p style="margin-bottom:0">
+    <code>docs/inflight/parked-a-c-client-and-the-ffi-question.md</code> — surfaced independently by four of the
+    five ideation agents — already contains an owner-endorsed version of this direction: a per-language
+    callback-difficulty table ("Rust first"), a designed crossover experiment with its AOT/JIT confound named,
+    kill-criterion discipline ("write the kill criterion before building"), and four named costs (crash
+    isolation lost, Kafka-version coupling, the platform rebuild matrix, debuggability). Everything below
+    builds forward from that note rather than re-deriving it — and idea 7 overturns the one assumption its
+    difficulty table rests on. That file is deleted when its inflight item closes, so its table should be
+    promoted to a durable doc (recorded as an action item in the rejection table below).
+  </p>
+</div>
+
+<div class="flag">
+  <h3 style="margin-top:0">The frame: the direct dialect is the sidecar minus the wire</h3>
+  <p>
+    The engine's transport boundary already exists and is already transport-free:
+    <code>DispatchSink.dispatch(Dispatch)</code> / <code>ProxyProcessor.report(Report)</code> — verified this
+    run by reading the source. The <code>engine</code> package imports no gRPC class; its javadoc says
+    "the engine is built against this pair only - it never imports a transport class". A native binding is a
+    <em>second front-end</em> onto that same pair, with the wire hop collapsed to a function call — the same
+    frozen contract, minus gRPC. This extends run 1's "the wrapper is the layer" frame one level down.
+  </p>
+  <p style="margin-bottom:0">
+    <strong>One nuance the verifier insisted on:</strong> the seam is protobuf-<em>typed</em>, not
+    protocol-free — <code>Dispatch</code> and <code>Report</code> are generated protobuf classes, so an FFI
+    front-end still constructs real protobuf objects Java-side from the bytes crossing the C boundary. That is
+    a cost idea 8 turns into the design.
+  </p>
+</div>
+
+<svg viewBox="0 0 880 330" role="img" aria-label="Sidecar deployment versus direct binding: the same layers, with the wire replaced by a function call" style="width:100%;height:auto;margin:1.5rem 0">
+  <text x="220" y="24" text-anchor="middle" font-size="15" font-weight="700" fill="var(--fg)">Sidecar (today)</text>
+  <text x="660" y="24" text-anchor="middle" font-size="15" font-weight="700" fill="var(--fg)">Direct binding (this run)</text>
+  <!-- sidecar: app process -->
+  <rect x="40" y="40" width="360" height="110" rx="10" fill="var(--card)" stroke="var(--rule)" stroke-width="1.5"/>
+  <text x="56" y="62" font-size="12" fill="var(--muted)">APP PROCESS (Go / Python / Rust …)</text>
+  <rect x="60" y="74" width="320" height="30" rx="6" fill="var(--accent-bg)" stroke="var(--accent)"/>
+  <text x="220" y="94" text-anchor="middle" font-size="13" fill="var(--fg)">client wrapper (user's API)</text>
+  <rect x="60" y="110" width="320" height="28" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+  <text x="220" y="129" text-anchor="middle" font-size="13" fill="var(--fg)">gRPC stream · protobuf frames</text>
+  <!-- wire -->
+  <line x1="220" y1="150" x2="220" y2="190" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="232" y="174" font-size="12" fill="var(--accent)">loopback wire</text>
+  <!-- sidecar process -->
+  <rect x="40" y="190" width="360" height="110" rx="10" fill="var(--card)" stroke="var(--rule)" stroke-width="1.5"/>
+  <text x="56" y="212" font-size="12" fill="var(--muted)">SIDECAR PROCESS (JVM or native-image)</text>
+  <rect x="60" y="224" width="320" height="28" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+  <text x="220" y="243" text-anchor="middle" font-size="13" fill="var(--fg)">gRPC transport shell</text>
+  <rect x="60" y="258" width="320" height="30" rx="6" fill="var(--accent-bg)" stroke="var(--accent)"/>
+  <text x="220" y="278" text-anchor="middle" font-size="13" fill="var(--fg)">session core (DispatchSink · report) → PC engine</text>
+  <!-- direct: one process -->
+  <rect x="480" y="40" width="360" height="260" rx="10" fill="var(--card)" stroke="var(--rule)" stroke-width="1.5"/>
+  <text x="496" y="62" font-size="12" fill="var(--muted)">ONE APP PROCESS</text>
+  <rect x="500" y="74" width="320" height="30" rx="6" fill="var(--accent-bg)" stroke="var(--accent)"/>
+  <text x="660" y="94" text-anchor="middle" font-size="13" fill="var(--fg)">client wrapper (same user API)</text>
+  <rect x="500" y="116" width="320" height="28" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+  <text x="660" y="135" text-anchor="middle" font-size="13" fill="var(--fg)">C ABI (~5 fns) · same protobuf frames</text>
+  <line x1="660" y1="144" x2="660" y2="170" stroke="var(--ok)" stroke-width="2"/>
+  <text x="672" y="162" font-size="12" fill="var(--ok)">function call</text>
+  <rect x="500" y="170" width="320" height="118" rx="8" fill="var(--bg)" stroke="var(--rule)" stroke-dasharray="4 3"/>
+  <text x="516" y="190" font-size="12" fill="var(--muted)">GRAALVM ISOLATE (own heap, own GC)</text>
+  <rect x="516" y="200" width="288" height="28" rx="6" fill="var(--code-bg)" stroke="var(--rule)"/>
+  <text x="660" y="219" text-anchor="middle" font-size="13" fill="var(--fg)">FFI front-end (@CEntryPoint)</text>
+  <rect x="516" y="234" width="288" height="30" rx="6" fill="var(--accent-bg)" stroke="var(--accent)"/>
+  <text x="660" y="254" text-anchor="middle" font-size="13" fill="var(--fg)">same session core → same PC engine</text>
+</svg>
+<p class="axis-note">The same layers appear on both sides; only the transport between wrapper and session core
+changes. A reader who ignores the picture loses nothing — it restates the frame above.</p>
+
+<h2>Grounding Context</h2>
+<p><strong>Codebase (verified this run, with a fresh-context verifier pass over every survivor's citations):</strong></p>
+<ul>
+  <li><code>DirectParallelConsumerClient</code> proves the no-sidecar path for Java — bound straight to core,
+      "no IPC, no serialization … no protocol anywhere beneath it", with <code>bannedDependencies</code>
+      keeping protobuf and gRPC off its classpath. But it is <em>synchronous</em>: its own javadoc concedes
+      "the asynchronous form buys nothing" because a core worker thread is held for the user function's full
+      duration — which is exactly the wrong shape for an FFI boundary (see idea 9).</li>
+  <li><code>ProxyProcessor</code> extends <code>ExternalEngine</code>; completion is the withheld-mailbox
+      sentinel pattern, per record, so an external caller reporting later is the <em>designed</em> path.
+      <code>ExternalEngine.setupWorkerPool</code> unconditionally forces pool size 1 — one dispatcher thread
+      (a caveat idea 9 carries).</li>
+  <li>Native-image status on this branch: R25 cleared the sidecar as a 45MB <code>--no-fallback</code>
+      <em>executable</em>; the protobuf reflection metadata (<code>reflect-config.json</code> for each message
+      class and its <code>$Builder</code>) is built and measured. R51/KTD13: dual-ship, native default, JVM
+      opt-in, "this doubles the verification surface". A <code>--shared</code> export has never been probed.</li>
+  <li>Nine non-JVM client modules exist with opt-in foreign-toolchain Maven builds
+      (<code>-Dpc.foreignClients</code>); the conformance suite runs one scenario set against multiple
+      bindings with <code>CoreBinding</code> as the control arm. No native or per-language CI lanes exist yet.</li>
+  <li>Build constraints: Jabel Java-17-source / Java-8-bytecode repo-wide; the Mutiny module is the precedent
+      for a per-module Java-17 floor. Institutional defect class: checks that report success without running —
+      every new lane must be shown red on a broken tree before its green counts.</li>
+</ul>
+<p><strong>External prior art</strong> — Oracle Database MLE (GraalJS/GraalPy shipped as a native-image
+<em>shared library</em> inside the DB process — production proof the isolate model embeds) · libgraal (the JIT
+itself as a <code>--shared</code> lib in HotSpot) · GraalVM C API (<code>graal_attach_thread</code> idempotent
+from any foreign thread; signal handlers off in shared libs; <strong>documented gap oracle/graal#730</strong>:
+callbacks into Java from unattached foreign threads not fully supported) · isolate heap is separate from the
+host heap — two GCs, two memory accountings, no shared visibility · Temporal sdk-core (Rust core; PyO3 /
+neon / C-bridge bindings — and Go/Java <em>reimplement</em>: even the best shared core gets 2–3 first-class
+bindings) · librdkafka (pass-through config is why bindings survive core evolution; documented fork-unsafe) ·
+DuckDB/SQLite (a stable <em>tiny</em> C surface is the success factor) · Arrow C Data Interface (data-only
+ABIs succeed; lifecycle-bearing ones struggle) · JPype (production JNI-embedded JVM in Python; JNI allows one
+VM per process — isolates don't have that limit) · WASM ruled out for 2026 (WASI threads/sockets unresolved).</p>
+<p><strong>Market signal:</strong> no non-JVM library offers per-key intra-partition ordered parallelism —
+goka and Quix Streams parallelize at partition level only. The gap is concentrated in Go and Python, exactly
+the languages the parked note's callback model ranked medium/hard — which is what makes idea 7 load-bearing.</p>
+
+<h2>Topic Axes</h2>
+<div class="scroll">
+<table>
+  <tr><th>Axis</th><th>Question it holds</th><th>Survivors</th></tr>
+  <tr><td>Binding substrate</td><td>What artifact gets embedded — isolate lib, embedded JVM, vendored executable</td><td>10, 11</td></tr>
+  <tr><td>FFI boundary</td><td>What crosses the C ABI — payload shape, call direction, memory ownership</td><td>7, 8</td></tr>
+  <tr><td>Engine seam</td><td>Where the binding attaches in the Java layering; how much is reused</td><td>9</td></tr>
+  <tr><td>Packaging &amp; CI</td><td>Per-platform artifacts, language package managers, fail-closed native lanes</td><td>13</td></tr>
+  <tr><td>Runtime coexistence</td><td>GC/threads/signals/memory in a foreign process; blast radius; operability</td><td>12</td></tr>
+</table>
+</div>
+<p class="axis-note">Every axis carries at least one survivor; no deliberate gaps.</p>
+
+<h2>Ranked Ideas</h2>
+<p class="axis-note">Numbering continues from run 1 (ideas 1–6 above). Jump to:
+<a href="#idea7">7 pull-only boundary</a> · <a href="#idea8">8 frames as the ABI</a> ·
+<a href="#idea9">9 session-core seam</a> · <a href="#idea10">10 probe ladder</a> ·
+<a href="#idea11">11 invisible sidecar</a> · <a href="#idea12">12 coexistence contract</a> ·
+<a href="#idea13">13 cold-chain packaging</a></p>
+
+<div class="card" id="idea7">
+  <div class="rank"><span class="num">7</span><h3>Pull-only boundary — the engine never calls out</h3></div>
+  <div class="tags"><span class="tag">ffi boundary</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">external + direct</span></div>
+  <p>No Java→foreign function pointers exist anywhere in the ABI. The host language spawns its own workers in
+     its own idiom — goroutines, Python threads, tokio tasks — and each one attaches
+     (<code>graal_attach_thread</code>, idempotent) and <em>calls in</em>: <code>pc_next()</code> parks on the
+     engine's wave queue; <code>pc_report()</code> completes a record. The engine's threads never cross the
+     boundary outward. This inverts the assumption underneath the parked note's entire difficulty table, which
+     rated languages by how hard it is for Java to call <em>out</em> into them.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>external:</code> oracle/graal#730 — callbacks into Java via function pointer from an unattached
+    foreign thread are documented as not fully supported; the pull model makes the gap unreachable rather than
+    worked-around. Same law in unrelated domains: SGX "switchless calls" (calls-out were the expensive fraught
+    direction; the fix was host threads calling in and staying), CLAP/VST thread contracts (the host's threads
+    enter the plugin; the plugin never invades the host), librdkafka's poll model.
+    <code>direct:</code> the parked note's premise, quoted: "the engine must call <em>out</em> of native-image
+    Java, on many threads at once, into the host runtime" — every "hard" rating downstream of it.
+  </div></div>
+  <div class="field"><b>Why it matters — this re-ranks the languages</b>
+    A Python thread blocked in a C call releases the GIL for free — no <code>PyGILState</code> choreography;
+    a blocking cgo call is idiomatic Go; a Node worker_thread pumps and posts to the loop. The languages the
+    callback table ranked medium/hard are the languages where the market gap lives. The pull boundary also
+    mirrors the existing client shape exactly — gRPC clients already pull dispatches off a stream — so client
+    code structure is unchanged between dialects.</div>
+  <div class="field"><b>Verifier</b>
+    "Sound, and the strongest candidate here" — composes with the session core's existing async-sentinel wave
+    queue rather than requiring new machinery.</div>
+</div>
+
+<svg viewBox="0 0 880 240" role="img" aria-label="Callback model versus pull model at the FFI boundary" style="width:100%;height:auto;margin:0 0 1.5rem">
+  <text x="220" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="var(--bad)">Callback model — rejected</text>
+  <text x="660" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ok)">Pull model — idea 7</text>
+  <!-- left panel -->
+  <rect x="40" y="40" width="150" height="170" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+  <text x="115" y="62" text-anchor="middle" font-size="12" fill="var(--muted)">isolate (Java)</text>
+  <rect x="250" y="40" width="150" height="170" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+  <text x="325" y="62" text-anchor="middle" font-size="12" fill="var(--muted)">host runtime</text>
+  <line x1="190" y1="100" x2="250" y2="100" stroke="var(--bad)" stroke-width="2"/>
+  <polygon points="250,100 240,95 240,105" fill="var(--bad)"/>
+  <text x="220" y="88" text-anchor="middle" font-size="11" fill="var(--bad)">calls out per record</text>
+  <text x="220" y="140" text-anchor="middle" font-size="11" fill="var(--bad)">unattached-thread</text>
+  <text x="220" y="154" text-anchor="middle" font-size="11" fill="var(--bad)">re-entry: graal#730</text>
+  <text x="220" y="168" text-anchor="middle" font-size="11" fill="var(--bad)">GIL / event-loop pain</text>
+  <!-- right panel -->
+  <rect x="480" y="40" width="150" height="170" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+  <text x="555" y="62" text-anchor="middle" font-size="12" fill="var(--muted)">isolate (Java)</text>
+  <rect x="690" y="40" width="150" height="170" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+  <text x="765" y="62" text-anchor="middle" font-size="12" fill="var(--muted)">host runtime</text>
+  <line x1="690" y1="100" x2="630" y2="100" stroke="var(--ok)" stroke-width="2"/>
+  <polygon points="630,100 640,95 640,105" fill="var(--ok)"/>
+  <text x="660" y="88" text-anchor="middle" font-size="11" fill="var(--ok)">pc_next() parks, pulls</text>
+  <line x1="690" y1="160" x2="630" y2="160" stroke="var(--ok)" stroke-width="2"/>
+  <polygon points="630,160 640,155 640,165" fill="var(--ok)"/>
+  <text x="660" y="148" text-anchor="middle" font-size="11" fill="var(--ok)">pc_report() completes</text>
+  <text x="660" y="196" text-anchor="middle" font-size="11" fill="var(--muted)">host owns all worker threads</text>
+</svg>
+
+<div class="card" id="idea8">
+  <div class="rank"><span class="num">8</span><h3>The frozen protocol's frames are the C ABI</h3></div>
+  <div class="tags"><span class="tag">ffi boundary</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>The C surface is ~5 functions — create, next, report, metrics, close — and everything crossing it is a
+     length-delimited <code>ClientMessage</code>/<code>ProxyMessage</code>, exactly the bytes the wire carries.
+     Every language reuses its already-generated protobuf parser; the golden-bytes fixture becomes the ABI
+     conformance fixture verbatim; <code>buf breaking</code> already gates ABI evolution; the capability list —
+     the protocol's only versioning mechanism — versions the binding for free. The direct dialect simply never
+     negotiates the tokens that only make sense across a process boundary.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> protocol-specification.md: golden bytes are "the cross-language fixed point"; the
+    capability list is "the protocol's only versioning mechanism", and an empty list is legal v1. The token
+    rule already fits an FFI: opaque, never parsed, "echoed byte-identically".
+    <code>external:</code> librdkafka — pass-through content is why its bindings survive core evolution;
+    DuckDB/SQLite — the success factor is a stable, tiny C surface; Arrow — what crosses is data only.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    It converts the first run's decisive rejection ground — "its failures are segfaults … where gRPC and
+    protobuf fail legibly" — into a non-issue: a malformed message across this boundary fails as a protobuf
+    parse error in the language's own exception system. It also collapses the marginal cost of a binding from
+    "design and maintain an FFI object model" to "swap the transport under the existing client", and memory
+    ownership becomes trivial: bytes are copied at the border, each side frees its own, no cross-heap
+    references for two GCs to disagree about.</div>
+  <div class="field"><b>Honest cost, and the flagged experiment</b>
+    Per-record serialize/parse may eat exactly the win embedding promises for fast records. A zero-copy
+    variant (Arrow-style record views into the isolate heap) was proposed and <strong>downgraded by the
+    verifier</strong> — as stated it omits GC pinning (<code>PinnedObject</code>), without which the isolate's
+    collector can move the bytes under the host's pointer. It survives only as an experimental arm of the
+    crossover experiment (idea 10), not as the v1 boundary.</div>
+</div>
+
+<div class="card" id="idea9">
+  <div class="rank"><span class="num">9</span><h3>Bind at the session core, not the direct client</h3></div>
+  <div class="tags"><span class="tag">engine seam</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct</span></div>
+  <p>The FFI front-end is a second shell over <code>ProxyProcessor</code>/<code>DispatchSink</code> — the same
+     session core the gRPC transport drives. <code>pc_next</code> drains the same wave assembler the stream
+     reader drains; <code>pc_report</code> calls the same one-and-only completion path. Epoch fencing, leases,
+     wave assembly, the produce-completion lane and <code>returnToScheduling</code> are reused verbatim, so
+     the sidecar and the binding cannot drift semantically — there is one implementation of the semantics.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> DispatchSink javadoc: "The engine is built against this pair only - it never imports a
+    transport class" — and zero <code>io.grpc</code> imports in the engine package, verified by grep this run.
+    ProxyProcessor javadoc: report "later calls the container's success/failure hook and then addToMailbox -
+    the one and only completion path, so ordering and retry are core's, untouched."
+  </div></div>
+  <div class="field"><b>The alternative, rejected on its own javadoc</b>
+    Wrapping <code>DirectParallelConsumerClient</code> was proposed as the reuse-first path (fewest new lines
+    on the segfault path). The verifier adjudicated against it: that client runs the user function
+    synchronously on core's worker threads — its own javadoc says the async form "buys nothing" there — so an
+    FFI wrap would hold a core thread hostage for every foreign call and cannot compose with the pull model at
+    all. The DRY instinct behind the proposal survives in this idea; the attach point does not.</div>
+  <div class="field"><b>Caveat to carry into the experiment</b>
+    <code>ExternalEngine</code> pins the dispatch pool to one thread. The embedded path's headline win is
+    therefore <em>latency</em> (real — the hop is gone); the <em>throughput</em> win is unproven until the
+    crossover experiment separates dispatch-side single-threading from wire cost.</div>
+</div>
+
+<div class="card" id="idea10">
+  <div class="rank"><span class="num">10</span><h3>The probe ladder: qualification → Rust substrate → Python market</h3></div>
+  <div class="tags"><span class="tag">binding substrate</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct</span></div>
+  <p><strong>Probe 0 — qualification.</strong> Re-fly the exact hand-out loop R25 cleared, compiled
+     <code>--shared</code>, driven from a small C harness. Five pass/fail items, each demonstrated <em>able to
+     fail</em> before its pass counts: entry-point surface; isolate/thread-attach; GC coexistence under host
+     malloc pressure; foreign-thread callback re-entry (probed even though idea 7's design avoids it); and the
+     <strong>single-artifact hypothesis</strong> — whether one build can serve as both the sidecar executable
+     and the loadable library (GraalVM documents that <code>--shared</code> exposes a <code>main</code> entry
+     point; whether that yields one dual-role artifact is unverified, and the verifier flagged it as a
+     hypothesis, not a fact).
+     <strong>Probe 1 — Rust.</strong> A second backend behind an opt-in Cargo feature in the existing Rust
+     client — one crate, two backends, same conformance rows — run as the missing third arm of the R31 latency
+     experiment (sidecar arm run <em>native</em> to kill the AOT-vs-JIT confound). Output: the crossover
+     number — the per-record processing time below which embedding earns its cost.
+     <strong>Probe 2 — Python.</strong> Under the pull boundary, the market probe: the demand gap lives there.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> parked note: "If this is ever attempted, <strong>Rust first</strong> - trivial
+    callbacks, true parallelism, and a population that actually wants an in-process engine"; "Write the kill
+    criterion before building: what result deletes the embedded backend rather than fixing it." R25/R29 set
+    the branch's precedent: feasibility is earned by a measured throwaway probe, not desk research.
+    <code>direct:</code> module-maturity.yaml: an experimental module "never borrows" the reliability claim —
+    the formal home for a pre-written exit gate each language inherits.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    It separates the two questions this discussion keeps conflating: <em>does the binding work</em> (Rust
+    answers it, cheaply, against a control arm that already exists) and <em>does anyone want it enough</em>
+    (Python answers it, where goka and Quix Streams left per-key parallelism unclaimed). Each probe carries
+    its own kill criterion written before code exists, so an experiment cannot silently become a product.</div>
+  <div class="field"><b>Revised in discussion (2026-08-17)</b><div class="basis">
+    The per-language partition recorded under idea 11 narrows this ladder: the FFI track's constituency is
+    Rust + C++ + the edge, so <strong>probe 2 as a Python <em>embedding</em> probe is retired</strong> —
+    Python demand is evidence for the sidecar, and Python's market question is answered by shipping the
+    invisible sidecar there, not by a binding experiment. The ladder becomes: probe 0 (qualification),
+    probe 1 (Rust, against the <em>invisible</em>-sidecar control arm), and the edge/long-tail case as the
+    standing reason the FFI track exists even if the crossover number is unimpressive.</div></div>
+</div>
+
+<div class="card" id="idea11">
+  <div class="rank"><span class="num">11</span><h3>The invisible sidecar — vendor the executable that already cleared</h3></div>
+  <div class="tags"><span class="tag">binding substrate</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag">direct + external</span></div>
+  <p>"No sidecar needed" may mean "no <em>managed</em> process", not "no second process". Each language
+     package vendors the R25-cleared 45MB native executable as a package resource; the client library spawns
+     it invisibly on first poll, supervises it via the already-designed parent-death pipe, and connects over
+     loopback. The user never names, installs, deploys or operates a process — the API is indistinguishable
+     from an embedded engine.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> parked note: "<strong>No process to operate</strong>, which is the single biggest
+    adoption objection to the sidecar" — this answers that objection with zero new native-image risk; every
+    gate this path needs is already cleared. R52: the proxy exits when its parent dies, including SIGKILL.
+    <code>external:</code> puppeteer vendors Chromium; embedded-postgres vendors a database; Temporal's test
+    server ships inside its SDKs.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    Shippable in weeks per language, retains the crash isolation that is the process boundary's one decisive
+    win, and becomes the control arm every FFI binding must beat. If probe 0's single-artifact hypothesis
+    holds, upgrading a deployment from invisible-sidecar to in-process later is a backend flag, not a
+    migration — and if it does not hold, this path still stands on its own.</div>
+  <div class="field"><b>Meeting question — resolved 2026-08-17</b><div class="basis">
+    The question was: is the complaint process <em>existence</em> or process <em>management</em>? The owner's
+    answer: <strong>management</strong> — the goal was eliminating the gRPC hoops and reliability surface;
+    performance is secondary. That resolution promotes this idea to <strong>the recommended first move</strong>:
+    it delivers the operational simplicity that was the actual complaint at zero native-image risk, while the
+    FFI path (ideas 7–9) stays gated behind the probe ladder (10) and must beat this as the control arm on the
+    crossover number to justify idea 12's coexistence costs.
+    <br><strong>Stronger than resolved — this is the original intent, recovered.</strong> On walking through
+    the mechanics, the owner confirmed the invisible sidecar is how they had always pictured the product being
+    built — "I didn't know the words". The FFI reading of "native direct bindings, no sidecar" was an artifact
+    of missing vocabulary, not the request. Idea 11 is therefore not a reframe of the ask; it <em>is</em> the
+    ask, and the in-process path is the optimization track beyond it.</div></div>
+  <div class="field"><b>The reduced local dialect — invisible, and (almost) no heartbeat</b><div class="basis">
+    The capability-token system already legalizes a leaner dialect for a supervised local child: the
+    reconnect grace window and manifest exist for <em>network</em> blips, but over a local socket to a child
+    you spawned, connection death ≈ process death — so the local dialect drops the reconnect machinery
+    outright, and the parent-death pipe covers lifetime in both directions. What survives is the liveness
+    lease against a <em>hung worker</em> — and its heartbeats were never user-facing: the client library sends
+    them as internal plumbing. The user's experience is install, write a function, run.</div></div>
+  <div class="field"><b>Visible vs invisible — one product, two ways of finding the socket</b><div class="basis">
+    The visible (explicitly deployed) sidecar is not a competing product but a supported <em>mode</em>: the
+    library either spawns the vendored binary and connects (invisible, the default) or is handed an address
+    and just connects (visible). Same binary, same protocol; the marginal cost of offering both is a
+    constructor option, documentation, and a CI row — the Dapr precedent (platform-injected in Kubernetes,
+    self-spawned in dev) and librdkafka's bundled-vs-system choice.
+    What the visible mode is <em>for</em> is operational control, not correctness: its own container with its
+    own resource limits, log stream, metrics target and security profile; fleet-wide engine patching without
+    re-releasing language packages (the trade against invisible's pinned-version skew safety); process models
+    the 1:1 spawn cannot serve (gunicorn-style prefork wants one shared per-pod sidecar, not eight invisible
+    children = eight group members); and platforms that forbid executing a package-vendored binary
+    (read-only/noexec filesystems, distroless images).
+    Language fit tracks deployment culture more than language: Python/Node/Ruby/.NET are invisible-natural
+    (their package managers already ship fat native artifacts); Go and Rust are mixed (single-static-binary
+    culture resists a 45MB vendored helper, and those communities run the platforms where a visible sidecar
+    container is unremarkable); edge and embedded targets fit <em>neither</em> mode — which is the cleanest
+    statement of what the FFI track (ideas 7–9) is actually for.
+    Dialects differ per mode and the capability tokens carry it: invisible runs the reduced local dialect;
+    a visible sidecar in a separate container can restart independently of the app, so the reconnect grace
+    window and manifest earn their place there. Same frozen protocol, different negotiated capabilities.</div></div>
+  <div class="field"><b>Per-language: sidecar vs true in-process embedding (settled in discussion, 2026-08-17)</b><div class="basis">
+    <p style="margin-bottom:.6rem">Idea 7's pull model killed the <em>callback</em> difficulty ranking, but a
+    second independent ranking — <strong>runtime coexistence</strong> — reproduces nearly the same language
+    order. The hard languages stay hard, for different reasons; the parked note's "different defaults per
+    language" end state survives with its mechanism corrected.</p>
+    <div class="scroll"><table>
+      <tr><th>Language</th><th>Better served by</th><th>Deciding factor</th></tr>
+      <tr><td>Rust, C++</td><td>Embedding</td><td>No GC/runtime to coexist with; the population that wants
+          in-process lives here — why probe 1 is Rust</td></tr>
+      <tr><td>Go</td><td>Sidecar</td><td>cgo, not callbacks: linking a C library forfeits
+          <code>CGO_ENABLED=0</code> static cross-compilation and fights the scheduler; a vendored binary is
+          data, not a link dependency — Go's demand is met without touching its build culture</td></tr>
+      <tr><td>Python, Ruby</td><td>Sidecar (visible mode for prefork)</td><td>fork() kills isolate threads in
+          every gunicorn/Puma child, and the isolate heap is invisible to memory tooling; the GIL was never
+          the real issue under the pull model. Prefork also breaks the <em>invisible</em> 1:1 spawn — the
+          shared per-pod visible sidecar is the answer for that shape</td></tr>
+      <tr><td>Node</td><td>Sidecar</td><td>Event-loop integration is ordinary pain, but a native addon
+          rebuilds per Node ABI version (<code>NODE_MODULE_VERSION</code>), multiplying the release matrix;
+          the sidecar binary doesn't care which Node spawned it</td></tr>
+      <tr><td>.NET, Swift</td><td>Either; sidecar default</td><td>Embedding works (mature C interop) but two
+          GCs in one address space is cost without a driver</td></tr>
+      <tr><td>Java / Kotlin / Scala</td><td>Neither</td><td>The true in-process client already exists
+          (java-direct)</td></tr>
+      <tr><td>Edge / long tail (Lua, R, embedded)</td><td>Embedding only</td><td>No process to spare or no
+          gRPC stack — the C shim over protocol frames is the only reach mechanism</td></tr>
+    </table></div>
+    <p style="margin:.6rem 0 0">Consequence: the FFI track's real constituency is
+    <strong>Rust + C++ + the edge</strong>; the sidecar serves everyone else better. The two tracks partition
+    the languages rather than competing — which narrows what probe 2 (the Python market probe, idea 10) should
+    test: Python demand is evidence for the <em>sidecar</em>, not for embedding.</p></div></div>
+</div>
+
+<div class="card" id="idea12">
+  <div class="rank"><span class="num">12</span><h3>The coexistence contract — what dies with the boundary, what it reveals, what v1 must expose</h3></div>
+  <div class="tags"><span class="tag">runtime coexistence</span><span class="tag conf-med">Confidence: Med</span><span class="tag">Complexity: M</span><span class="tag">direct + reasoned</span></div>
+  <p>Removing the process boundary deletes a whole chromosome of two-process survival machinery — the
+     parent-death pipe, connection-loss grace window and manifest reconnect, heartbeat-extended leases,
+     WorkerDied — every one a solution to "the other process died / the pipe broke", which can no longer
+     occur. Enumerate that as a design artifact (large negative scope), then write down what removal
+     <em>reveals</em> rather than discovers in production:</p>
+  <ul>
+    <li><strong>A hung foreign thread</strong> silently holding a record forever — the lease survives, scoped
+        to a thread instead of a connection.</li>
+    <li><strong>Shutdown</strong> — fate is shared, so drain must be hooked into the host's exit path per
+        language (a Go <code>os.Exit</code> skips defers; an atexit story is part of the binding's contract).</li>
+    <li><strong>Engine restart without process management</strong> — <code>graal_tear_down_isolate</code> plus
+        a fresh isolate, with the already-specified manifest-reconnect protocol reused verbatim as the
+        recovery story; only a hard segfault still takes the host.</li>
+    <li><strong>Memory</strong> — the isolate heap is invisible to the host's tooling, so the max-heap is a
+        <em>required</em> field at create time (config-is-code extended to creation), and engine metrics plus
+        isolate heap stats export through the host language's own registry. Signal handlers built out.</li>
+    <li><strong>fork()</strong> — Python's default deployment shape preforks; an isolate's threads do not
+        survive fork. <code>pthread_atfork</code> poisons the child handle to a legible error
+        (librdkafka's documented fork-unsafety is the precedent — verified independently this run), and the
+        conformance lane tests it.</li>
+  </ul>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> the R52/KTD19 pipe, R46 lease and R42/43 manifest wording all verified in the plan;
+    PCMetrics gauges already exist at the right layer.
+    <code>external:</code> isolate heap "no shared visibility" and signal-handler guidance per GraalVM docs;
+    endosymbiosis as the structural analogy — organelles shed the genes whose problems the host now owns.
+    <code>reasoned:</code> in-process, worker liveness and engine liveness are the same event <em>except for
+    hangs</em> — which is why the lease survives when everything around it goes extinct.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    These are the failure modes that surface six months post-GA as unreproducible hangs and container OOM
+    kills. Every one is cheap as API design now and expensive as retrofit — and the enumeration itself is
+    mostly <em>negative</em> scope, the cheapest kind to settle.</div>
+</div>
+
+<div class="card" id="idea13">
+  <div class="rank"><span class="num">13</span><h3>Cold-chain packaging — decouple the lib from nine thin packages, and build the fail-closed lane first</h3></div>
+  <div class="tags"><span class="tag">packaging &amp; ci</span><span class="tag conf-med">Confidence: Med</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Ship <code>libparallelconsumer</code> as a per-platform artifact family (the netty-tcnative classifier
+     pattern, ~5 platforms), and make the nine language packages <em>thin</em>: they pin a minimum lib version
+     and locate it — bundled like confluent-kafka-python's wheels, or system-resolved like librdkafka — rather
+     than compiling it in. A Kafka bump then re-releases the lib family while zero language packages change
+     (the frames-as-ABI choice in idea 8 is what makes that possible). Build the CI lane <em>before</em> the
+     binding: every language lane runs the golden-bytes session through the FFI, <code>pc_build_info()</code>
+     echoes the git SHA so a stale or stubbed lib fails loudly, and each lane is demonstrated red on a
+     deliberately broken tree before its green is trusted.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> the parked note's decisive cost, quoted: "a version bump goes from a dependency
+    change to a rebuild and re-release of every platform binary and every language package that vendors one" —
+    this idea is aimed squarely at that sentence. Evidence pass: no native or per-language CI lanes exist
+    today; the repo's most recurrent tooling defect is checks that report success without running.
+    <code>external:</code> netty-tcnative per-platform classifier jars; confluent-kafka-python
+    bundled-vs-system librdkafka.
+  </div></div>
+  <div class="field"><b>Why it matters</b>
+    If the matrix lane exists, is fail-closed and is push-button, the parked note's strongest recorded cost
+    collapses from an architecture-level currency penalty to CI minutes — which changes the embedded-engine
+    decision itself. The lane also de-risks ideas 10 and 11, which need the identical matrix.</div>
+</div>
+
+<h2>Rejection Summary</h2>
+<p class="axis-note">This run's cuts only; run 1's table above is unchanged. Verdicts from the fresh-context
+verifier, arbitrated with reasons where overruled.</p>
+<div class="scroll">
+<table>
+  <tr><th>Candidate</th><th>Verdict</th><th>Reason</th></tr>
+  <tr><td>Wrap <code>DirectParallelConsumerClient</code> in <code>@CEntryPoint</code> (reuse-first)</td><td>Rejected</td>
+      <td>Its own javadoc warns the async form "buys nothing" — synchronous core-thread-holding is exactly the
+      shape an FFI must avoid, and it cannot compose with the pull model. The DRY instinct survives inside
+      idea 9's session-core reuse.</td></tr>
+  <tr><td>Zero-copy record views (Arrow-style pointers into the isolate heap)</td><td>Downgraded</td>
+      <td>Verifier: omits GC pinning (<code>PinnedObject</code>) — incomplete as proposed, the collector can
+      move bytes under the host's pointer. Survives only as an experimental arm of idea 10's crossover
+      experiment.</td></tr>
+  <tr><td>One artifact serving as both sidecar executable and shared library</td><td>Hypothesis, not premise</td>
+      <td><code>--shared</code> exposing a <code>main</code> entry point is documented; a single dual-role
+      artifact is confirmed nowhere. Folded into probe 0 as its fifth check; no plan may assume it.</td></tr>
+  <tr><td>Dual substrate: libjvm (<code>JNI_CreateJavaVM</code>) debug arm behind the same C surface</td><td>Deferred</td>
+      <td>Sound (JPype precedent; would answer the agentic-debuggability objection with real stack traces and
+      JFR) but a whole second backend's verification surface. Revisit if probe failures prove illegible —
+      the conformance control arm and the sidecar dialect already form a partial debuggability ladder.</td></tr>
+  <tr><td>Every language ships the Java triad (api / direct / grpc) from day one</td><td>Folded in</td>
+      <td>Restates the settled transport-free client API with a third backend appended; per-language default
+      choice already covered by the parked note's "different defaults per language". Lives inside ideas 10–11
+      rather than ranking separately.</td></tr>
+  <tr><td>Threadless engine — <code>pc_tick()</code> step function</td><td>Deferred spike</td>
+      <td>A real flip (librdkafka's served-by-app-thread model; the control loop is already tick-shaped per
+      pass) but a deep core refactor for bounded insight. Keep the one-day spike question: how far is
+      <code>BrokerPollSystem</code> from a step function — it bounds how much coexistence pain is
+      thread-caused.</td></tr>
+  <tr><td>Promote the parked note's callback-difficulty table to a durable doc</td><td>Action item</td>
+      <td>Factually right — inflight files are deleted when their item closes, and the table answers every
+      future "why not language X" — but housekeeping, not an idea warranting discussion. Do it when the
+      inflight item next moves.</td></tr>
+  <tr><td>"Upgrade from invisible sidecar to in-process is a flag flip"</td><td>Conditional</td>
+      <td>True only if probe 0's single-artifact hypothesis holds; recorded inside idea 11 with the
+      condition attached rather than as its own claim.</td></tr>
+</table>
+</div>
+
+<h2>What this continuation settles, and what it does not</h2>
+<ul>
+  <li><strong>The dead-end verdict is superseded, on the record.</strong> Run 1's rejection was on direction;
+      the direction is now the user's. Its technical caveats were promoted to probe 0 rather than quietly
+      dropped.</li>
+  <li><strong>The composed architecture is coherent and verifier-corroborated in code:</strong> pull-only
+      boundary (7) × frames as the ABI (8) × session-core seam (9) is "the sidecar minus the wire" — one
+      frozen contract, one semantics implementation, transport collapsed to a function call. These three are
+      separable decisions, but they were independently converged on by multiple generation frames and they
+      reinforce each other.</li>
+  <li><strong>Settled in discussion (2026-08-17): the complaint is process management, not process
+      existence.</strong> The owner's goal was removing the gRPC hoops and reliability surface; performance is
+      secondary. The invisible sidecar (11) is therefore the recommended first move, running the reduced local
+      dialect (no reconnect machinery; library-internal heartbeats only).</li>
+  <li><strong>Not settled: whether to build the FFI path at all.</strong> That is what the probe ladder (10)
+      exists to answer cheaply, with kill criteria written first — and it must now beat the invisible sidecar,
+      not the managed sidecar, as its control arm.</li>
+  <li><strong>Not settled: the crossover number</strong> — the per-record processing time below which
+      embedding beats the loopback hop. Idea 10's experiment produces it; until then every throughput claim
+      for the embedded path is a hypothesis (and the single-threaded dispatcher caveat in idea 9 applies to
+      both dialects equally).</li>
+  <li><strong>Requirements this moves if adopted:</strong> R51/KTD13's dual-ship would gain a third artifact
+      (or not — probe 0 decides); the coexistence contract (12) adds creation-time required config that R9's
+      connect-time wording does not yet cover; nothing in the frozen protocol changes — the direct dialect is
+      a capability-token subset, which is the strongest evidence the freeze was drawn in the right place.</li>
+</ul>
+
+<h1 id="http-strategy" style="margin-top:3rem">Continuation: HTTP Dialect, Generated Clients, REST Proxy Compatibility</h1>
+<p class="sub">
+  2026-08-17 · continues the runs above · focus: <em>"add an HTTP server with multi-lingual clients generated from the HTTP API, with a Confluent REST Proxy compatible API"</em><br>
+  44 raw candidates → 35 after merge → <strong>7 survivors (ideas 14–20)</strong> · 5 axes · repo-grounded
+</p>
+
+<p class="lede">
+  The subject is the HTTP strategy: a native HTTP dialect of the frozen protocol, clients
+  <em>generated</em> from an HTTP specification rather than hand-written, and a
+  <strong>Confluent REST Proxy compatible</strong> surface. This is the "proper ideation pass" that
+  <code>docs/inflight/next-http-strategy-ideas.md</code> says it is owed — the seed notes' option space is
+  the starting line, and every idea below is held to advancing beyond it. 44 raw candidates from five
+  frames → merged and adversarially verified → 7 survivors.
+</p>
+
+<div class="flag">
+  <h3 style="margin-top:0">The run's headline: the REST Proxy feasibility unknown is settled — compatible-and-beneficial</h3>
+  <p style="margin-bottom:.5rem">
+    The seed notes parked compatibility on one unknown: <em>"if their endpoint hands out one message per
+    partition assignment, a compatible implementation may be unable to hand out several from one partition
+    … compatibility without the concurrency benefit, i.e. pointless. Read their API before believing either
+    way."</em> This run read the primary sources (Confluent's v2 API reference, the kafka-rest
+    New-Consumer-API-Design wiki, the v3 <code>openapi.yaml</code>).
+  </p>
+  <p style="margin-bottom:0">
+    <strong>Verdict: the contract has room.</strong> v2's only client-visible unit of progress is a
+    <em>cumulative per-partition offset watermark</em> (<code>POST …/offsets</code>, same shape as
+    <code>commitSync</code>) — exactly what Parallel Consumer already computes internally from its offset
+    map. No per-record ack exists in their contract, so beyond-partition concurrency is purely server-side
+    scheduling, invisible to a well-behaved client. Two obligations: records within one
+    <code>/records</code> reply must arrive in offset order, and auto-commit must mean "commit the
+    internally-verified-safe watermark". One caveat: <strong>v3 has no consumer data plane at all</strong>
+    (monitoring/admin only) — "REST Proxy compatible" necessarily means emulating v2.
+  </p>
+</div>
+
+<div class="flag">
+  <h3 style="margin-top:0">Reconciled at merge (2026-08-18): KTD41 landed in parallel</h3>
+  <p style="margin-bottom:0">
+    While this run was in flight, the native-bindings continuation above settled KTD41: every language
+    package vendors the sidecar and spawns it invisibly as a child — and a spawned local child negotiates
+    no reconnect or manifest capabilities, because connection death is process death. That narrows, but does
+    not undo, two ideas below: the session-scoped lease (16) and the continuity secret (half of 19) matter
+    for <em>attach-mode</em> sessions — the preforking shared-sidecar and forbidden-exec deployments KTD41
+    keeps as the escape hatch, which are exactly the deployments an HTTP dialect serves. The
+    inherited-socketpair half of idea 19 is <em>strengthened</em>: spawn-as-child is now the confirmed
+    default, and fd inheritance is its natural admission model. KTD41 also resolves KTD11's binary-location
+    gap; the <code>kafka_properties</code> allowlist (idea 20) remains open and unaffected.
+  </p>
+</div>
+
+<h2>Grounding Context</h2>
+<p><strong>Codebase and branch state (verified this run):</strong></p>
+<ul>
+  <li>The protocol is <strong>frozen</strong> (<code>bin/check-proto-breaking.sh</code>: "after the freeze
+      the wire may only GAIN"); 11 language clients and a 13-binding conformance suite exist, keyed by
+      <em>(language, dialect)</em> with a control-arm ladder: <code>core</code> → <code>java-direct</code> →
+      <code>java-grpc</code>.</li>
+  <li>The engine seam is <code>ProxyProcessor extends ExternalEngine</code>; admission is
+      <code>SingleConnectionGuard</code> (one connection, generation counter) +
+      <code>AuthorityAllowlistInterceptor</code>; the session already outlives connections
+      (<code>ConfigureHandler</code> re-routes dispatch at whichever stream holds the session).</li>
+  <li><code>protocol-specification.md</code> states <em>"the lease is connection-scoped"</em> — load-bearing
+      for this continuation's survivor 16.</li>
+  <li><code>KafkaClientFactory</code> copies <code>kafka_properties</code> with <strong>zero key
+      filtering</strong> (verified in code) — the plan's recorded, unactioned escalation gap.</li>
+  <li>Seed notes: <code>parked-http-dialect-and-generated-clients.md</code> (SSE+POST shape, gateway-inside-
+      the-sidecar, controller-vs-transport split, UDS as first seam proof) and
+      <code>next-http-strategy-ideas.md</code> (compat surfaces, Dapr, multi-entry-point 4e/4f, demand-decides,
+      sidecar-vs-server fork).</li>
+</ul>
+<p><strong>External prior art (fresh research, primary sources):</strong> Confluent REST Proxy v2 contract
+(above) · Strimzi HTTP Bridge and kafka-rest#1057/#212 — both converged on session-pinned consumer
+instances; affinity is the load-bearing hazard of "Kafka over HTTP" · Karapace targets 1:1 REST Proxy
+compatibility (the wire format is a de facto standard) · kafka-pixy (dual gRPC+REST, REST second-class;
+abandoned) · gRPC↔REST bridging tiers: grpc-gateway / Envoy transcoding / Connect RPC · Temporal exposes
+HTTP for admin but keeps worker dispatch gRPC-only · Dapr steers pub/sub to gRPC streaming, HTTP as the
+reach tier · no major OpenAPI generator treats SSE/long-poll as first-class — streaming client generation
+is a genuine gap · JDK 16+ ships native cross-platform Unix-domain-socket support
+(<code>UnixDomainSocketAddress</code>), independent of netty's platform transports.</p>
+
+<h2>Topic Axes</h2>
+<div class="scroll">
+<table>
+  <tr><th>Axis</th><th>Question it holds</th><th>Survivors</th></tr>
+  <tr><td>Native dialect wire shape</td><td>SSE+POST vs WebSocket vs GET/PUT; preserving push; framing, termination, reconnect, leases</td><td>16</td></tr>
+  <tr><td>REST Proxy compat</td><td>What a v2-compatible surface must honor; what it buys; pull-shim boundaries</td><td>14</td></tr>
+  <tr><td>Client generation</td><td>OpenAPI as a second contract; generated surface vs hand-written controller; conformance rows</td><td>15, 17</td></tr>
+  <tr><td>Entry points &amp; session</td><td>One listener or two; dashboard sharing; admission; "which client owns this session"</td><td>18</td></tr>
+  <tr><td>Security posture</td><td>Loopback opt-in, browser origins, UDS, credentials on the wire</td><td>19, 20</td></tr>
+</table>
+</div>
+<p class="axis-note">Every axis carries at least one survivor; no deliberate gaps.</p>
+
+<h2>Ranked Ideas</h2>
+<div class="jump"><strong>Jump to:</strong>
+  <a href="#i14">14 Watermark compat</a> ·
+  <a href="#i15">15 Compat is the generated-client story</a> ·
+  <a href="#i16">16 Session-scoped lease</a> ·
+  <a href="#i17">17 Derive, don't author</a> ·
+  <a href="#i18">18 Control/observation planes</a> ·
+  <a href="#i19">19 Admission identity</a> ·
+  <a href="#i20">20 kafka_properties allowlist</a>
+</div>
+
+<div class="card" id="i14">
+  <div class="rank"><span class="num">14</span><h3>REST Proxy v2 compat is real: one gateway, one conformance row, proven with their own tooling</h3></div>
+  <div class="tags"><span class="tag">rest-proxy-compat</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Build the v2-compatible consumer surface as a gateway that is a <em>client of the native engine seam</em>
+     (the XWayland rule: the legacy protocol lives entirely outside the core, with no private hooks — its
+     existence proves the seam sufficient). <code>GET …/records</code> long-polls the engine's push buffer and
+     replies in offset order; <code>POST …/offsets</code> with watermark X becomes per-record success for
+     fetched records ≤ X; auto-commit commits the internally-verified-safe watermark. Prove the compatibility
+     claim the pgwire way: drive the conformance row with Confluent's own v2 client, and run the same
+     scenarios <em>differentially</em> against a real REST Proxy container — the divergence report <strong>is</strong>
+     the compatibility claim, datable and falsifiable.</p>
+  <figure>
+  <svg viewBox="0 0 720 200" role="img" aria-label="Compat gateway maps v2 pull clients onto the push engine via the watermark" style="max-width:100%;height:auto">
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    <rect x="10" y="30" width="170" height="120" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="95" y="52" text-anchor="middle" font-size="12" fill="var(--muted)">EXISTING v2 CLIENTS</text>
+    <text x="95" y="76" text-anchor="middle" font-size="13" fill="var(--fg)">curl · any language</text>
+    <text x="95" y="96" text-anchor="middle" font-size="13" fill="var(--fg)">REST Proxy users</text>
+    <text x="95" y="116" text-anchor="middle" font-size="12" fill="var(--muted)">(no new client code)</text>
+    <rect x="260" y="30" width="190" height="120" rx="8" fill="var(--accent-bg)" stroke="var(--accent)"/>
+    <text x="355" y="52" text-anchor="middle" font-size="12" fill="var(--accent)">COMPAT GATEWAY</text>
+    <text x="355" y="76" text-anchor="middle" font-size="13" fill="var(--fg)">pull shim: GET/POST</text>
+    <text x="355" y="96" text-anchor="middle" font-size="13" fill="var(--fg)">client of the seam</text>
+    <text x="355" y="116" text-anchor="middle" font-size="12" fill="var(--muted)">no private hooks</text>
+    <rect x="530" y="30" width="180" height="120" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="620" y="52" text-anchor="middle" font-size="12" fill="var(--muted)">ONE ENGINE</text>
+    <text x="620" y="76" text-anchor="middle" font-size="13" fill="var(--fg)">push · per-record acks</text>
+    <text x="620" y="96" text-anchor="middle" font-size="13" fill="var(--fg)">offset map →</text>
+    <text x="620" y="116" text-anchor="middle" font-size="13" fill="var(--fg)">safe watermark</text>
+    <line x1="180" y1="70" x2="255" y2="70" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="217" y="60" text-anchor="middle" font-size="11" fill="var(--muted)">GET /records</text>
+    <line x1="255" y1="110" x2="180" y2="110" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="217" y="130" text-anchor="middle" font-size="11" fill="var(--muted)">offset order</text>
+    <line x1="450" y1="70" x2="525" y2="70" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="487" y="60" text-anchor="middle" font-size="11" fill="var(--muted)">seam calls</text>
+    <line x1="525" y1="110" x2="450" y2="110" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <text x="487" y="130" text-anchor="middle" font-size="11" fill="var(--muted)">watermark</text>
+    <text x="360" y="180" text-anchor="middle" font-size="12" fill="var(--muted)">beyond-partition concurrency happens inside the engine — invisible to the v2 wire contract</text>
+  </svg>
+  <figcaption>The v2 contract's only progress unit is the cumulative watermark, so the engine's internal per-record scheduling never leaks.</figcaption>
+  </figure>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> Primary-source contract read (this run): v2 <code>POST …/offsets</code> commits a
+    cumulative per-partition watermark, "identical in shape to <code>commitSync</code>"; no per-record ack
+    exists; v3 ships no consumer data plane. Sources: docs.confluent.io kafka-rest API reference;
+    kafka-rest New-Consumer-API-Design wiki; kafka-rest <code>api/v3/openapi.yaml</code>.
+    <code>external:</code> CockroachDB's Postgres-compat program (run the incumbent's tests, publish a
+    feature matrix, fail loudly on unsupported features); Karapace already treats the v2 wire format as a
+    standard worth cloning 1:1.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    This flips the seed's recorded "possibly pointless" unknown into "provably beneficial with almost no new
+    logic": the hardest-looking piece — reconciling out-of-order per-record completion into a single number
+    an offset-committing client understands — is the offset map PC already maintains. And the sidecar's
+    single-instance shape makes REST Proxy's most-cited operational hazard (sticky instance affinity,
+    kafka-rest#1057/#212, Strimzi's multi-replica warning) <em>impossible by construction</em>: there is
+    nothing to pin. A migrating user changes a hostname and gains key-ordered concurrency beyond partitions.</div>
+  <div class="field"><b>Downsides</b>
+    It is a pull shim, and it must stay one — quarantined in its own module so pull semantics never leak
+    into the native dialect (the recorded concession). Long-poll latency is inherent to the v2 shape.
+    "Run their tests" may need harness adaptation; the differential container run stands on its own if so.
+    A lagging record caps the advertised watermark for its partition — standard cumulative-commit behaviour,
+    but worth documenting for migrants expecting REST Proxy's simpler internals.</div>
+</div>
+
+<div class="card" id="i15">
+  <div class="rank"><span class="num">15</span><h3>Compat is where "generated clients" lives — the codegen ask lands on the pull surface, by design</h3></div>
+  <div class="tags"><span class="tag">client-generation</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag">direct + external</span></div>
+  <p>The ask behind this run — clients <em>generated</em> from the HTTP API — splits cleanly once the codegen
+     landscape is faced honestly: OpenAPI generators produce excellent request/response clients and
+     essentially no streaming ones (no major generator treats SSE or long-poll as first-class). A GET/PUT
+     resource surface is almost entirely generatable; an SSE push surface is mostly not. So put the
+     generated-multilingual-clients story where generation actually works — the compat/resource surface —
+     and keep the native dialect's per-language surface deliberately thin: a small hand-written SSE transport
+     feeding the shared, dialect-agnostic controller. State this scope split up front, before anyone
+     estimates "generate 11 HTTP clients" as one line item.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> The seed's own caveat — "OpenAPI describes request/response well and streaming
+    poorly … the dispatch stream is the part a generator will not give you" — and its corollary: "a GET/PUT
+    resource model is almost entirely generatable … the generator gets the boring half, which is exactly the
+    half compatibility needs" (<code>next-http-strategy-ideas.md</code> §4b).
+    <code>external:</code> Speakeasy/Fern/Stainless/Kiota comparisons (this run): none claims first-class
+    SSE/long-poll generation.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    This dissolves the apparent conflict between the user's ask and the settled push model. Nothing pull-shaped
+    becomes native — the pull surface exists anyway for compatibility, and it happens to be the one place the
+    generated-client promise is fully keepable. The native dialect keeps the controller (the hard,
+    correctness-bearing part — "every client that went wrong in this project went wrong exactly there")
+    hand-written and shared, exactly as the gRPC clients do today.</div>
+  <div class="field"><b>Downsides</b>
+    "Generated clients" becomes a nuanced claim rather than a slogan — the docs must say which surface
+    generates fully. Languages wanting native-dialect HTTP still hand-write the SSE consumption. If a
+    streaming-capable generator matures (Connect RPC's coverage grows, or OpenAPI's SSE story improves),
+    the split should be revisited.</div>
+</div>
+
+<div class="card" id="i16">
+  <div class="rank"><span class="num">16</span><h3>Session-scoped lease + one termination vocabulary — the re-spec that blocks every HTTP wire shape</h3></div>
+  <div class="tags"><span class="tag">native-dialect-wire-shape</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>The frozen spec says <em>"the lease is connection-scoped"</em> — a definition with no referent once
+     dispatch (SSE) and reports (POSTs) travel different connections, which the seed already flags: "the two
+     halves can disagree about liveness." Adopt the transponder rule from aviation's lost-comms doctrine:
+     contact on <em>any</em> channel is proof of life. Redefine the lease as <strong>session-scoped</strong> —
+     any authenticated session traffic (a report POST counts) extends it; a dead SSE stream with live POSTs
+     is a reconnect-the-push-channel event, not session death — and gRPC's connection-scoped lease becomes
+     the degenerate case. Pair it with one dialect-neutral termination taxonomy (who ended the session, why,
+     is reconnect legal) that each transport maps its native signals into. Prove it with a
+     <code>java-http</code> conformance row extending the existing control-arm ladder
+     (<code>core</code> → <code>java-direct</code> → <code>java-grpc</code> → <code>java-http</code>: transport
+     isolated from language by construction), and a <code>curl-shell</code> binding as a falsifiable
+     simplicity ceiling — if ~100 lines of shell cannot pass the scenarios, the wire is too complex.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> <code>protocol-specification.md</code>: "the lease is connection-scoped" (verified
+    this run); <code>parked-http-dialect-and-generated-clients.md</code>: "dispatch and reports are separate,
+    so the two halves can disagree about liveness" and "Termination must normalise … it needs one vocabulary
+    behind it."
+    <code>external:</code> Aviation lost-communications doctrine — voice and transponder are separate
+    channels; either one is proof of life, and only total silence triggers the protection procedure.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    This is the one place the frozen protocol's vocabulary literally cannot survive transliteration to HTTP,
+    and it touches the protocol's most safety-critical semantics — premature record reclamation on one side,
+    zombie sessions on the other. Deciding the liveness unit before the first HTTP client exists prevents the
+    two dialects diverging where divergence hurts most. It also cheapens clients: a reporting worker needs no
+    separate heartbeat timer. The session already outlives connections (<code>ConfigureHandler</code>'s
+    routing) — the lease vocabulary just hasn't caught up with the protocol's own reconnect design.</div>
+  <div class="field"><b>Downsides</b>
+    Amends documented semantics of the frozen spec — additive in wire terms (no message changes required for
+    gRPC) but a real semantic re-spec that existing bindings must re-verify against. The transponder rule
+    makes lease expiry marginally slower to detect for a client whose only live channel is reports (by
+    design). The curl-shell binding is a maintenance commitment.</div>
+</div>
+
+<div class="card" id="i17">
+  <div class="rank"><span class="num">17</span><h3>Derive, don't author: one frozen contract, N derived encodings</h3></div>
+  <div class="tags"><span class="tag">client-generation</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Never hand-author a second frozen contract. Derive the OpenAPI document from the already-frozen
+     <code>.proto</code> — transcoding annotations (grpc-gateway / Connect style <code>google.api.http</code>)
+     for paths, proto3's canonical JSON mapping for bodies — and commit it as a <em>build artifact</em>: the
+     generated document regenerating differently is a build failure, not a review comment.
+     <code>bin/check-proto-breaking.sh</code> remains the single freeze gate; the existing capability-versioning
+     rule automatically governs the HTTP contract too. Zero new governance surface for the second dialect.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> <code>bin/check-proto-breaking.sh</code>: "after the freeze the wire may only GAIN,
+    never change" (verified this run) — the discipline exists once and should not be re-implemented for a
+    sibling document.
+    <code>external:</code> ASN.1's encoding rules (X.690/691/693): one schema, multiple wire encodings derived
+    by published rule, so encodings cannot drift — and proto3's canonical JSON mapping is the same construct
+    already standardized for this schema language. Envoy/grpc-gateway transcoding derives REST + OpenAPI from
+    annotated protos in production systems today.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    The freeze discipline exists because a moving spec makes ten clients diverge ten ways; a second
+    <em>hand-frozen</em> spec reintroduces that hazard as slow drift between two frozen documents with two
+    gates — drift neither gate can see. Deriving mechanically means there is nothing new to govern, and the
+    annotations do not touch wire bytes, so the frozen-wire rule is respected.</div>
+  <div class="field"><b>Downsides / alternatives recorded</b>
+    Transcoding annotations constrain URL/verb design to what the mapping can express — a REST-Proxy-shaped
+    compat surface (survivor 14) stays a separately-described emulation, since its wire is Confluent's, not
+    ours. Two alternatives were weighed: a transport-neutral core spec with per-dialect binding chapters
+    (sound, heavier restructuring of the frozen document), and adopting Connect RPC wholesale (verified this
+    run: official codegen covers roughly five of the eleven target languages — real, but overstated as a
+    full answer; recorded as a partial option, not the default).</div>
+</div>
+
+<div class="card" id="i18">
+  <div class="rank"><span class="num">18</span><h3>Control plane / observation plane — one ruling that settles the listener, the dashboard, and the browser</h3></div>
+  <div class="tags"><span class="tag">entry-points-session</span><span class="tag conf-med">Confidence: Med</span><span class="tag">Complexity: L</span><span class="tag">direct + reasoned</span></div>
+  <p>Split every HTTP surface into two planes with independent postures, decided once. The
+     <strong>control plane</strong> (Configure, dispatch, reports) is never browser-reachable — ideally not
+     even TCP: bind it to a Unix domain socket (<code>curl --unix-socket</code>; the Docker API precedent),
+     where filesystem permissions are kernel-enforced authorization. The <strong>observation plane</strong>
+     (session state, offset frontier, in-flight-per-key as SSE, health) is read-only, carries no credentials,
+     and is designed for a browser deliberately — CORS and origin rules answered once. The parked dashboard
+     becomes the observation plane's first client, dogfooding the HTTP dialect daily; a
+     <code>/.well-known</code> descriptor enumerating the surfaces and their postures gives discovery a
+     single home. This answers "one listener, two purposes — decide before either is built" with a ruling
+     both parked workstreams can build on, and gives the browser its first safe rung without touching the
+     recorded "never a control default" guidance.</p>
+  <figure>
+  <svg viewBox="0 0 720 210" role="img" aria-label="Control plane on a unix socket, observation plane read-only over TCP" style="max-width:100%;height:auto">
+    <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    <rect x="270" y="20" width="180" height="170" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="360" y="42" text-anchor="middle" font-size="12" fill="var(--muted)">SIDECAR</text>
+    <rect x="290" y="55" width="140" height="55" rx="6" fill="var(--accent-bg)" stroke="var(--accent)"/>
+    <text x="360" y="78" text-anchor="middle" font-size="12" fill="var(--accent)">CONTROL PLANE</text>
+    <text x="360" y="96" text-anchor="middle" font-size="11" fill="var(--fg)">configure · dispatch · report</text>
+    <rect x="290" y="122" width="140" height="55" rx="6" fill="none" stroke="var(--rule)"/>
+    <text x="360" y="145" text-anchor="middle" font-size="12" fill="var(--muted)">OBSERVATION PLANE</text>
+    <text x="360" y="163" text-anchor="middle" font-size="11" fill="var(--fg)">read-only state · SSE · health</text>
+    <rect x="20" y="55" width="160" height="55" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="100" y="78" text-anchor="middle" font-size="13" fill="var(--fg)">app + client library</text>
+    <text x="100" y="96" text-anchor="middle" font-size="11" fill="var(--muted)">the one session owner</text>
+    <line x1="180" y1="82" x2="285" y2="82" stroke="var(--muted)" marker-end="url(#ah2)"/>
+    <text x="232" y="72" text-anchor="middle" font-size="11" fill="var(--muted)">unix socket</text>
+    <text x="232" y="100" text-anchor="middle" font-size="10" fill="var(--muted)">kernel-enforced perms</text>
+    <rect x="540" y="55" width="160" height="55" rx="8" fill="none" stroke="var(--rule)"/>
+    <text x="620" y="78" text-anchor="middle" font-size="13" fill="var(--fg)">operator's browser</text>
+    <text x="620" y="96" text-anchor="middle" font-size="11" fill="var(--muted)">dashboard = first client</text>
+    <line x1="540" y1="150" x2="435" y2="150" stroke="var(--muted)" marker-end="url(#ah2)"/>
+    <text x="487" y="140" text-anchor="middle" font-size="11" fill="var(--muted)">TCP · read-only</text>
+    <text x="487" y="168" text-anchor="middle" font-size="10" fill="var(--muted)">CORS designed once</text>
+  </svg>
+  <figcaption>Exposure is asymmetric by construction: nothing that mutates is reachable from anything a browser can touch.</figcaption>
+  </figure>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> "One listener, two purposes — decide that before either is built, not after" and the
+    browser-surface warning that it "breaks completely" the four load-bearing sidecar constraints
+    (<code>next-http-strategy-ideas.md</code> §4e/§4f; <code>parked-sidecar-embeds-web-gui.md</code>).
+    <code>direct:</code> JDK 16+ <code>UnixDomainSocketAddress</code> is cross-platform in <code>java.nio</code>
+    — independent of netty's transports, so a plain HTTP server dodges the netty-kqueue gap that blocks
+    gRPC-over-UDS on macOS (verified this run; macOS peer credentials via <code>LOCAL_PEERCRED</code> rather
+    than Linux's <code>SO_PEERCRED</code>).
+    <code>external:</code> Docker's API on a unix socket; CUPS serving IPP and a web UI from one loopback
+    daemon for 25 years with Host-header validation — the same authority-allowlist posture this project built.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    The multi-entry-point questions (§4e/§4f) are the design work this branch says is "more interesting than
+    any individual dialect" — and one asymmetric ruling answers most of them: the plane a surface belongs to
+    determines its posture, its listener, and whether it may ever own the session. The UDS control plane
+    upgrades the same-host security story (kernel-verified peer identity where the TCP allowlist trusts the
+    client's self-report), and a UDS-only <code>/debug/session</code> endpoint gives operators the curl-able
+    incident view they currently lack without widening the TCP surface.</div>
+  <div class="field"><b>Downsides</b>
+    The largest design surface in the set — two postures to specify and keep honest, and the observation
+    plane's browser exposure still owes the CORS/DNS-rebinding write-up before anything binds off loopback.
+    Windows UDS support (AF_UNIX exists since 2018) needs verifying for the control plane's default there.
+    Med confidence: the plane split is well-grounded; "control on UDS by default" needs a spike.</div>
+</div>
+
+<div class="card" id="i19">
+  <div class="rank"><span class="num">19</span><h3>Admission gets a real identity: a session secret on the wire, an inherited socket underneath</h3></div>
+  <div class="tags"><span class="tag">security-posture</span><span class="tag">entry-points-session</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: M</span><span class="tag">direct + external</span></div>
+  <p>Two complementary mechanisms, both additive. (a) <strong>Session-continuity secret:</strong>
+     <code>Configured</code> returns a random bearer token; manifests, reports and heartbeats present it;
+     reconnect without it is refused. HTTP needs a session identifier anyway — separate requests must name
+     their session — so mint it as a capability and backport it to gRPC, closing the recorded KTD11
+     reconnect falsifier ("R41 hands the admission slot back on every reconnect, and nothing re-authenticates
+     the peer"). It is also the answer to "which client owns this session" once entry points multiply: the
+     owner is the bearer, not whoever holds a connection. (b) <strong>Admission by inheritance:</strong> the
+     spawner creates a connected socketpair and passes one end to the sidecar as an inherited fd (the
+     LSP-stdio / inetd / systemd socket-activation model). No listener ever exists, so the first-vs-parent
+     race — the half of KTD11 no allowlist can close — cannot occur; "only my parent can reach me" becomes a
+     property of the kernel's fd table.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> The plan's own KTD11 falsifier, verified this run: over loopback TCP "there is no
+    peer-credential mechanism at all … any local process that connects before the spawning application does is
+    indistinguishable from it", and reconnect re-opens the window for the process lifetime.
+    <code>external:</code> LSP's default stdio transport and inetd/systemd fd passing — decades-old
+    sidecar-shaped systems whose admission model is inheritance, not racing to a port.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    One small wire addition and one transport mode close both halves of the only recorded unmitigated gap in
+    the security posture — and they are exactly the primitives the HTTP dialect and the multi-entry-point
+    future need anyway (session affinity for split channels; an ownership token for survivor 18's planes).
+    The engine-puppeteers-client-spawns decision already establishes the parent relationship that inheritance
+    authenticates.</div>
+  <div class="field"><b>Downsides</b>
+    The secret protects reconnect, not first admission (that is what inheritance is for) — the two must ship
+    as a pair to close the gap fully, and the doc must not claim either alone suffices. Inherited-fd mode
+    changes the spawn contract per language (fd passing is awkward in some runtimes) — it should be the
+    default where cheap, an option elsewhere, and the socketpair mode needs a Windows story
+    (named-pipe inheritance) before it is claimed cross-platform.</div>
+</div>
+
+<div class="card" id="i20">
+  <div class="rank"><span class="num">20</span><h3>kafka_properties key allowlist — escalate regardless of the HTTP decision</h3></div>
+  <div class="tags"><span class="tag">security-posture</span><span class="tag conf-high">Confidence: High</span><span class="tag">Complexity: S</span><span class="tag" style="background:var(--warn);color:var(--bg)">ESCALATE</span></div>
+  <p>The plan records it, and this run verified it live in code: <code>KafkaClientFactory</code> copies the
+     client-supplied <code>kafka_properties</code> map with zero key filtering, and Kafka instantiates
+     class-valued properties reflectively (<code>interceptor.classes</code>, <code>metric.reporters</code>,
+     the <code>LoginModule</code> inside <code>sasl.jaas.config</code>) — so capturing the admission slot
+     escalates from credential theft to arbitrary class instantiation inside the sidecar JVM. Fix it once at
+     the <code>Configure → KafkaClientFactory</code> seam, now, while only gRPC reaches it: every future
+     entry point — native HTTP, compat gateway, anything — inherits the allowlist automatically instead of
+     each dialect's author having to remember it. Per-surface credential policy follows: the HTTP dialect
+     should carry no credentials at all (env/file at spawn), recorded as a first-class row in the spec.</p>
+  <div class="field"><b>Basis</b><div class="basis">
+    <code>direct:</code> Plan: "the Kafka client property map arrives over the same socket with no key
+    allowlist … escalates to arbitrary class instantiation inside the sidecar JVM" — marked
+    <em>unactioned, and the more serious of the two</em>. Verified this run against the live code:
+    <code>KafkaClientFactory.production()</code> does <code>new HashMap&lt;&gt;(kafkaProperties)</code> with
+    no filtering.
+  </div></div>
+  <div class="field"><b>Rationale</b>
+    Like run 1's reconnect-manifest finding (idea 1), this is not a preference between directions — it is a recorded,
+    verified defect whose cheapest fix window is before a second surface multiplies the exposure. It sits at
+    the one seam every dialect must pass through, which is what makes fixing it now compounding rather than
+    merely prudent.</div>
+  <div class="field"><b>Downsides</b>
+    An allowlist must be curated — legitimate advanced properties (custom partitioners, metric reporters the
+    operator actually wants) need an explicit opt-in path or the proxy breaks real configurations. Small,
+    bounded work; the cost is deciding the list, not writing the code.</div>
+</div>
+
+<h2>Rejection Summary</h2>
+<div class="scroll">
+<table>
+  <tr><th>Candidate</th><th>Verdict</th><th>Reason</th></tr>
+  <tr><td><strong>Zero-client dialect: per-executor hanging-GET work channels</strong> (controller evaporates into the engine; dozen-line workers in any language)</td><td>Refuted</td>
+      <td>The fresh-context verifier's argument is accepted: N open hanging GETs <em>is</em> a credit ledger of
+      granularity 1 — the client supplies the in-flight ceiling by choosing how many GETs to hold open, and
+      wave dispatch (the point of push) is lost. The rejected pull model relabeled, proposed for the
+      <em>native</em> dialect where the settled rule forbids it. The kernel survives legitimately as the
+      compat shim's delivery mechanism (survivor 14) and the curl-shell conformance row (survivor 16).</td></tr>
+  <tr><td>Browser-only design center (TypeScript-in-a-browser as the only first-class native-HTTP client)</td><td>Refuted</td>
+      <td>Contradicts the recorded guidance — "treat 'the browser can be a worker' as an interesting demo …
+      never as a default" — while the browser security posture is still unanswered, and is dominated by
+      survivor 18's observation plane, which gives the browser a safe rung without making it the design center.</td></tr>
+  <tr><td>Adopt Connect RPC wholesale as the native HTTP dialect</td><td>Downgraded</td>
+      <td>Verified this run: official codegen covers roughly five of the eleven target languages — real
+      leverage, overstated as a whole answer. Recorded as a partial alternative under survivor 17.</td></tr>
+  <tr><td>JMAP (RFC 8620) transliteration for the HTTP framing</td><td>Downgraded</td>
+      <td>The prior art is real (session document at a well-known URL, SSE push, opaque state tokens) but its
+      push is notify-then-fetch — the SSE event carries a state change, not the payload — structurally closer
+      to pull than this protocol's payload-carrying push. The discovery-document piece folds into survivor 18.</td></tr>
+  <tr><td>Author and freeze OpenAPI as a second contract with its own gate</td><td>Rejected</td>
+      <td>Loses to derive-don't-author (survivor 17): two frozen documents drift in a way neither gate can see.</td></tr>
+  <tr><td>Dapr pluggable-component adapter as the third encoding proving the dialect seam</td><td>Deferred</td>
+      <td>Rests on the recorded, still-unresolved unknown — whether Dapr's broker-agnostic contract is
+      work-shaped enough to express per-key ordering and per-record acks. "Read their contract" is still owed;
+      until then the adapter cannot be scoped honestly.</td></tr>
+  <tr><td>Every non-native surface is a network client; listener questions dissolve</td><td>Superseded</td>
+      <td>Quietly redefines "embed the dashboard" (the parked decision) as "dashboard connects over the
+      network" without arguing for the change. Survivor 18's plane split answers the same questions while
+      keeping the embedding decision intact.</td></tr>
+  <tr><td>UDS-before-HTTP as the transport-seam proof</td><td>Already settled</td>
+      <td>Restates the parked owner decision of 2026-08-15 rather than advancing it. Its substance rides in
+      survivor 18 (UDS control plane) instead.</td></tr>
+  <tr><td>UDS-only <code>/debug/session</code> introspection endpoint</td><td>Folded in</td>
+      <td>Good and small — absorbed into survivor 18 as an observation-plane feature rather than ranked alone.</td></tr>
+  <tr><td>Tenancy by socket: one node-local daemon, N unix sockets, kernel permissions as tenant isolation</td><td>Deferred</td>
+      <td>A genuinely new answer to the "middle rung nobody has costed" in the sidecar-vs-server fork — but that
+      fork is a different decision than this run's, and it should not be settled as a side effect. Recorded for
+      the fork discussion.</td></tr>
+  <tr><td>Generator scoreboard (candidate OpenAPI generators as competing conformance rows, wpt.fyi-style)</td><td>Deferred</td>
+      <td>Right method, wrong moment: valuable once survivors 15 and 17 have decided what is generated at all.</td></tr>
+  <tr><td>Conformance cost meter (per-binding defect/time/flake scoreboard feeding demand-decides calls)</td><td>Deferred</td>
+      <td>Operationalizes a real recorded concern (decision throughput, support cost per surface) but is
+      process instrumentation, not an HTTP-direction decision. Worth raising when the dialect count actually grows.</td></tr>
+  <tr><td>Pure-userspace stdlib-HTTP escape hatch for gRPC-hostile packaging (musl/Alpine)</td><td>Parked with trigger</td>
+      <td>Real failure mode (gRPC native transports vs musl images) distinct from the network-reach arguments,
+      but demand-decides applies: build it when a musl build-failure report exists — that report is the
+      trigger, defined in advance.</td></tr>
+  <tr><td>Sticky-affinity marketing angle; pgwire their-tests harness; SessionRouter ownership SPI; composite-device descriptor; HTTP-carries-no-credentials</td><td>Folded in</td>
+      <td>Absorbed into survivors 14, 14, 19, 18 and 20 respectively — properties of stronger ideas rather than competitors.</td></tr>
+</table>
+</div>
+
+<h2>Settled during this run</h2>
+<ul>
+  <li><strong>The REST Proxy compatibility unknown is settled: compatible-and-beneficial.</strong> v2's
+      cumulative watermark is the engine's own offset-map product; beyond-partition concurrency is invisible
+      to the wire contract. v3 has no consumer data plane, so compat means v2. (Primary sources read this
+      run; the seed's "read their API before believing either way" is discharged.)</li>
+  <li><strong>The generated-clients ask splits by surface.</strong> Fully generatable where the surface is
+      request/response (compat); thin hand-written transport + shared controller where it streams (native
+      dialect). No generator does SSE first-class — verified across the major vendors.</li>
+  <li><strong>Pull stays quarantined.</strong> The hanging-GET native dialect was tested against the settled
+      push rule and refuted — pull exists only behind the compat boundary.</li>
+  <li><strong>A plain HTTP server can reach a Unix socket on macOS.</strong> JDK 16+
+      <code>UnixDomainSocketAddress</code> is netty-independent — the parked gRPC-UDS macOS blocker does not
+      transfer to the HTTP dialect.</li>
+</ul>
+
+<h2>Requirements this moves</h2>
+<div class="scroll">
+<table>
+  <tr><th>Item</th><th>Currently says</th><th>Now</th></tr>
+  <tr><td>Protocol spec (lease)</td><td>"The lease is connection-scoped"</td>
+      <td>Survivor 16: session-scoped, extended by any authenticated session traffic; connection-scoped is the
+          gRPC degenerate case. Semantic amendment; no wire change for gRPC.</td></tr>
+  <tr><td>KTD11 (admission)</td><td>Falsifier recorded: reconnect re-admission and first-vs-parent both open</td>
+      <td>Survivor 19: bearer secret (reconnect half, additive capability) + inherited socketpair (first-vs-parent
+          half). Ship as a pair.</td></tr>
+  <tr><td>Plan (kafka_properties)</td><td>"No key allowlist … unactioned"</td>
+      <td>Survivor 20: allowlist at the one seam every dialect passes through, before a second surface ships.</td></tr>
+  <tr><td><code>next-http-strategy-ideas.md</code></td><td>"A proper ideation pass is owed; this is the seed for it"</td>
+      <td>This document is that pass — the note should point here once this lands, and its §2 feasibility
+          unknown is resolved (see Settled).</td></tr>
+  <tr><td><code>parked-sidecar-embeds-web-gui.md</code></td><td>Dashboard parked post-v6; listener sharing undecided</td>
+      <td>Survivor 18 proposes the ruling: the dashboard is the observation plane's first client.</td></tr>
+</table>
+</div>
+
+<h2>What this set does not settle</h2>
+<ul>
+  <li><strong>Priority between the compat surface and the native HTTP dialect.</strong> Survivor 14 is the
+      cheapest reach play (zero new clients); survivor 16 is the prerequisite for any native dialect. Demand
+      decides — and currently no one has asked for either. The set defines both well enough to scope; it does
+      not choose.</li>
+  <li><strong>The browser security write-up.</strong> Survivor 18 bounds the browser to a read-only plane, but
+      CORS, origin rules and the DNS-rebinding class still owe their own KTD before anything binds off
+      loopback.</li>
+  <li><strong>The sidecar-vs-server fork.</strong> Untouched by design; the tenancy-by-socket idea is
+      recorded for that discussion, not this one.</li>
+  <li><strong>Windows.</strong> Both UDS mechanisms (AF_UNIX, socketpair inheritance) need a Windows story
+      before any "cross-platform" claim.</li>
+</ul>
+
+<h1 id="polyglot-demo" style="margin-top:3rem">Continuation: The Polyglot Demo App — All Eleven at Once</h1>
+<p class="sub">
+  2026-08-17–18 · continues the runs above · focus: <em>"a demo app path that shows all the language bindings running at the same time … run each client demo as dockers that can run easily and show all their read records in a single UI"</em><br>
+  40 raw candidates → 28 after merge → <strong>7 survivors (ideas 21–27)</strong> · 5 axes · repo-grounded
 </p>
 
 <p class="lede">
@@ -491,28 +1512,28 @@ mode.</p>
 <div class="scroll">
 <table>
   <tr><th>Axis</th><th>Question it holds</th><th>Survivors</th></tr>
-  <tr><td>Orchestration &amp; launch</td><td>How broker + sidecars + N docker clients come up with one command</td><td>4</td></tr>
-  <tr><td>Proving sameness</td><td>What "they all read the same records" means, and who checks it</td><td>1, 2</td></tr>
-  <tr><td>Aggregation &amp; UI</td><td>How per-client output funnels into one view</td><td>1, 5</td></tr>
-  <tr><td>Per-language demo clients</td><td>What each language's demo app is; identical UX across eleven</td><td>3, 4, 6</td></tr>
-  <tr><td>Distribution &amp; reach</td><td>How the demo ships and gets seen</td><td>1, 5, 7</td></tr>
+  <tr><td>Orchestration &amp; launch</td><td>How broker + sidecars + N docker clients come up with one command</td><td>24</td></tr>
+  <tr><td>Proving sameness</td><td>What "they all read the same records" means, and who checks it</td><td>21, 22</td></tr>
+  <tr><td>Aggregation &amp; UI</td><td>How per-client output funnels into one view</td><td>21, 25</td></tr>
+  <tr><td>Per-language demo clients</td><td>What each language's demo app is; identical UX across eleven</td><td>23, 24, 26</td></tr>
+  <tr><td>Distribution &amp; reach</td><td>How the demo ships and gets seen</td><td>21, 25, 27</td></tr>
 </table>
 </div>
 <p class="axis-note">Every axis carries at least one survivor; no deliberate gaps.</p>
 
 <h2>Ranked Ideas</h2>
 <ul class="jump">
-  <li><a href="#d1">1. The skateboard stack — runners in costume, receipts over the produce path, one TUI, a recorded cast</a></li>
-  <li><a href="#d2">2. The two-act show with a chaos finale — one consumer group across eleven runtimes</a></li>
-  <li><a href="#d7">3. The bring-your-own-topic what-if machine — your topic, your latency, your failure rate, live</a></li>
-  <li><a href="#d3">4. The demo is conformance infrastructure — golden transcript, generated compose, one launch path</a></li>
-  <li><a href="#d4">5. The live performance show — single-clock scoreboard, streaming plots, and the story page</a></li>
-  <li><a href="#d5">6. The template flywheel — Rosetta panel, scaffold kit, mock-first authoring</a></li>
-  <li><a href="#d6">7. The polyglot mega-image — the whole thing fits in a tweet</a></li>
+  <li><a href="#i21">21. The skateboard stack — runners in costume, receipts over the produce path, one TUI, a recorded cast</a></li>
+  <li><a href="#i22">22. The two-act show with a chaos finale — one consumer group across eleven runtimes</a></li>
+  <li><a href="#i23">23. The bring-your-own-topic what-if machine — your topic, your latency, your failure rate, live</a></li>
+  <li><a href="#i24">24. The demo is conformance infrastructure — golden transcript, generated compose, one launch path</a></li>
+  <li><a href="#i25">25. The live performance show — single-clock scoreboard, streaming plots, and the story page</a></li>
+  <li><a href="#i26">26. The template flywheel — Rosetta panel, scaffold kit, mock-first authoring</a></li>
+  <li><a href="#i27">27. The polyglot mega-image — the whole thing fits in a tweet</a></li>
 </ul>
 
-<article class="card" id="d1">
-  <div class="rank"><span class="num">1</span><h3>The skateboard stack: conformance runners in demo costume, receipts over the produce path, one TUI, a recorded cast</h3></div>
+<article class="card" id="i21">
+  <div class="rank"><span class="num">21</span><h3>The skateboard stack: conformance runners in demo costume, receipts over the produce path, one TUI, a recorded cast</h3></div>
   <div class="tags"><span class="tag">proving sameness</span><span class="tag">aggregation &amp; ui</span><span class="tag">distribution</span><span class="tag conf-high">Confidence: 85%</span><span class="tag">Complexity: Medium</span></div>
   <div class="field"><b>Description</b>
     <p>Four existing assets compose into the end-to-end demo with almost no new code. (1) Each language's
@@ -583,8 +1604,8 @@ mode.</p>
   </div>
 </article>
 
-<article class="card" id="d2">
-  <div class="rank"><span class="num">2</span><h3>The two-act show with a chaos finale: one consumer group across eleven runtimes</h3></div>
+<article class="card" id="i22">
+  <div class="rank"><span class="num">22</span><h3>The two-act show with a chaos finale: one consumer group across eleven runtimes</h3></div>
   <div class="tags"><span class="tag">proving sameness</span><span class="tag conf-high">Confidence: 80%</span><span class="tag">Complexity: Medium–Large</span></div>
   <div class="field"><b>Description</b>
     <p>"They all read the same records" is ambiguous, and the demo should exploit that instead of picking
@@ -616,7 +1637,7 @@ mode.</p>
   </div>
   <div class="field"><b>Basis</b>
     <div class="basis">
-      <code>direct:</code> Part 1's settled model — "the protocol permits exactly one connection per
+      <code>direct:</code> the original run's settled model — "the protocol permits exactly one connection per
       application" with one sidecar per app — plus the plan's statement that the Kafka cluster "sees an
       ordinary consumer group member": eleven apps in one group are just eleven ordinary members.
       <em>Verifier note: sound as architecture, but inferred — no requirement writes the shared-group demo
@@ -642,8 +1663,8 @@ mode.</p>
   </div>
 </article>
 
-<article class="card" id="d7">
-  <div class="rank"><span class="num">3</span><h3>The bring-your-own-topic what-if machine: your topic, your latency, your failure rate, live</h3></div>
+<article class="card" id="i23">
+  <div class="rank"><span class="num">23</span><h3>The bring-your-own-topic what-if machine: your topic, your latency, your failure rate, live</h3></div>
   <div class="tags"><span class="tag">per-language clients</span><span class="tag conf-high">Confidence: 80%</span><span class="tag">Complexity: Medium–Large</span></div>
   <div class="field"><b>Description</b>
     <p>Turn the demo from a show into <strong>the evaluator's own experiment</strong>. Point it at a real
@@ -679,8 +1700,8 @@ mode.</p>
     <p>This is the strongest adoption artifact in the whole set: it converts an evaluator's private question
     into a five-minute experiment on their own data, produces the "we watched it eat our topic eleven ways"
     moment no slide deck can, and doubles as a sizing calculator — the concurrency and ordering knobs show
-    what the user's partition count <em>doesn't</em> have to be. It reuses survivor 1's stack (runners,
-    receipts, aggregator) and survivor 5's display seam; the only genuinely new surface is the parameter
+    what the user's partition count <em>doesn't</em> have to be. It reuses idea 21's stack (runners,
+    receipts, aggregator) and idea 25's display seam; the only genuinely new surface is the parameter
     panel and the plain-consumer comparison arm, which the perf track's arm design already defines.</p>
   </div>
   <div class="field"><b>Downsides</b>
@@ -702,8 +1723,8 @@ mode.</p>
   </div>
 </article>
 
-<article class="card" id="d3">
-  <div class="rank"><span class="num">4</span><h3>The demo is conformance infrastructure: golden transcript, generated compose, one launch path, go/no-go roll call</h3></div>
+<article class="card" id="i24">
+  <div class="rank"><span class="num">24</span><h3>The demo is conformance infrastructure: golden transcript, generated compose, one launch path, go/no-go roll call</h3></div>
   <div class="tags"><span class="tag">orchestration</span><span class="tag">per-language clients</span><span class="tag conf-high">Confidence: 85%</span><span class="tag">Complexity: Medium</span></div>
   <div class="field"><b>Description</b>
     <p>Treat the demo layer with the same discipline the wire already gets, four moves. (1) <strong>Golden
@@ -746,8 +1767,8 @@ mode.</p>
   </div>
 </article>
 
-<article class="card" id="d4">
-  <div class="rank"><span class="num">5</span><h3>The live performance show: single-clock scoreboard, streaming plots, and the story page</h3></div>
+<article class="card" id="i25">
+  <div class="rank"><span class="num">25</span><h3>The live performance show: single-clock scoreboard, streaming plots, and the story page</h3></div>
   <div class="tags"><span class="tag">aggregation &amp; ui</span><span class="tag">distribution</span><span class="tag conf-high">Confidence: 80%</span><span class="tag">Complexity: Medium–Large</span></div>
   <div class="field"><b>Description</b>
     <p>Don't just publish the performance numbers — <strong>run the performance test live inside the demo and
@@ -834,8 +1855,8 @@ mode.</p>
   </div>
 </article>
 
-<article class="card" id="d5">
-  <div class="rank"><span class="num">6</span><h3>The template flywheel: Rosetta panel, scaffold kit, mock-first authoring</h3></div>
+<article class="card" id="i26">
+  <div class="rank"><span class="num">26</span><h3>The template flywheel: Rosetta panel, scaffold kit, mock-first authoring</h3></div>
   <div class="tags"><span class="tag">per-language clients</span><span class="tag conf-med">Confidence: 70%</span><span class="tag">Complexity: Medium</span></div>
   <div class="field"><b>Description</b>
     <p>The demo doubles as the onboarding surface, three moves. (1) <strong>Rosetta panel:</strong> each lane
@@ -868,8 +1889,8 @@ mode.</p>
   </div>
 </article>
 
-<article class="card" id="d6">
-  <div class="rank"><span class="num">7</span><h3>The polyglot mega-image: the whole thing fits in a tweet</h3></div>
+<article class="card" id="i27">
+  <div class="rank"><span class="num">27</span><h3>The polyglot mega-image: the whole thing fits in a tweet</h3></div>
   <div class="tags"><span class="tag">distribution</span><span class="tag conf-med">Confidence: 60%</span><span class="tag">Complexity: Medium</span></div>
   <div class="field"><b>Description</b>
     <p><code>docker run -it stub.bz/pc-polyglot</code> — one image assembled <code>COPY --from</code> the
@@ -887,7 +1908,7 @@ mode.</p>
   </div></div>
   <div class="field"><b>Rationale</b>
     <p>Distribution reach with zero hosting: the mega-image rides artifacts the plan already requires and
-    gives the project its most quotable invocation. It composes with idea 1 (the TUI is PID 1) and idea 4
+    gives the project its most quotable invocation. It composes with idea 21 (the TUI is PID 1) and idea 24
     (the image is assembled from gate-verified per-language images).</p>
   </div>
   <div class="field"><b>Downsides</b>
@@ -908,33 +1929,33 @@ mode.</p>
       the sidecar. Viable only after redesign (pre-canned replayed actions) or an explicit re-litigation of
       that posture — neither belongs inside the demo track.</td></tr>
   <tr><td>Codegen the ten mirrored demos' CLI/mode/sampling logic from one declarative spec</td><td>Rejected</td>
-      <td>Duplicates survivor 3's drift control at higher cost: the plan's "copy a written rule" approach
+      <td>Duplicates idea 24's drift control at higher cost: the plan's "copy a written rule" approach
       plus a golden-transcript CI diff achieves the same guarantee without inventing a per-language code
       generator. Revisit only if transcript-diffing proves insufficient in practice.</td></tr>
   <tr><td>UN interpreting-booth UI (record-centric single-speaker layout)</td><td>Folded in</td>
       <td>Strong layout insight — one event, eleven renderings, not eleven independent feeds — absorbed as
-      Act 1's optional rendering inside survivor 2 rather than ranked separately.</td></tr>
+      Act 1's optional rendering inside idea 22 rather than ranked separately.</td></tr>
   <tr><td>Machine-checked convergence line ("11/11 converged at offset N")</td><td>Folded in</td>
-      <td>Absorbed as the TUI's assertion duty in survivor 1 — the principle (the demo asserts, the viewer
+      <td>Absorbed as the TUI's assertion duty in idea 21 — the principle (the demo asserts, the viewer
       does not eyeball) rather than a separate idea.</td></tr>
   <tr><td>Grafana-over-Micrometer discarded during generation citing R10</td><td>Overruled</td>
       <td>One generation agent discarded the metrics plane claiming R10 forbids it; the verifier read R10:
       it blocks passing MeterRegistry <em>objects</em> over the wire, not a proxy-local scrape endpoint. The
-      idea survives inside survivor 4 — recorded here so the misreading is not re-derived.</td></tr>
+      idea survives inside idea 25 — recorded here so the misreading is not re-derived.</td></tr>
   <tr><td>Two-act framing as its own ranked idea</td><td>Folded in</td>
-      <td>A naming device, not an agenda item — became survivor 2's structure.</td></tr>
+      <td>A naming device, not an agenda item — became idea 22's structure.</td></tr>
   <tr><td>Live performance show (owner's follow-on idea, 2026-08-17: run the perf tests live, web dashboard
       plotting as results arrive, story + marketing page + doc links)</td><td>Folded in</td>
-      <td>Merged into survivor 5, which was already its seed — same measurement seam, same UI surface. Carries
+      <td>Merged into idea 25, which was already its seed — same measurement seam, same UI surface. Carries
       the recorded constraints: per-language-vs-Java hop cost only (never a language race), two-shapes
       story including the expected-loss case, single-run figures are not evidence. Measurement design stays
       with the concurrent perf-comparison session; this doc owns the presentation layer.</td></tr>
   <tr><td>Web-GUI seam design (R77 output behind a clean interface)</td><td>Folded in</td>
-      <td>A design constraint, not a direction — carried as survivor 1's residual so the parked dashboard
+      <td>A design constraint, not a direction — carried as idea 21's residual so the parked dashboard
       lands later as a dependency, not a rewrite.</td></tr>
   <tr><td>Nightly mock-mode boot canary; roll-call barrier; subset flag; registry-generated compose;
       run.sh-as-CI-test; golden transcript</td><td>Merged</td>
-      <td>Six orchestration/anti-rot candidates from three frames merged into survivor 4 — same underlying
+      <td>Six orchestration/anti-rot candidates from three frames merged into idea 24 — same underlying
       move: extend the conformance layer's epistemology to the demo layer.</td></tr>
   <tr><td>Plain swim-lane log tail as the UI</td><td>Rejected (in-frame)</td>
       <td>The prior-art baseline the market-gap analysis dismisses — Temporal Polyglot already ends there.</td></tr>
@@ -947,15 +1968,15 @@ mode.</p>
 </table>
 </div>
 
-<h2>What Part 2 does not settle</h2>
+<h2>What this continuation does not settle</h2>
 <ul>
   <li><strong>Subset default vs full eleven</strong> — R20's singular wording leaves the eleven-at-once
-      launch genuinely unspecified; survivor 4 proposes subset-default + <code>--languages=all</code>, but
+      launch genuinely unspecified; idea 24 proposes subset-default + <code>--languages=all</code>, but
       the default is a product call.</li>
   <li><strong>Shared-group demo (Act 2) is inferred-legal, not written down</strong> — eleven apps in one
       consumer group violates nothing, but no requirement records it; if adopted, write it into the plan as
       a requirement so the conformance layer can eventually cover it.</li>
-  <li><strong>Sequencing against U25/U35</strong> — survivor 1 can ship before any per-language demo exists
+  <li><strong>Sequencing against U25/U35</strong> — idea 21 can ship before any per-language demo exists
       (runners in costume); the R72-R77 demo containers then upgrade the show lane by lane. Whether that
       ordering is adopted belongs to planning, not ideation.</li>
   <li><strong>The KTD5 citation drift</strong> in <code>parked-sidecar-embeds-web-gui.md</code> — a one-line
@@ -965,7 +1986,7 @@ mode.</p>
       <code>2026-08-17-perf-comparison-matrix-ideation.html</code>) owns workload definitions, measurement
       semantics and the blessed-numbers pipeline. The shared contract is (a) the R77 stats stream each demo
       emits and (b) the scenario definitions; timing is engine-side in both designs ("runners measure
-      nothing"). The stats stream and survivor 1's observation-receipts topic are to be designed as
+      nothing"). The stats stream and idea 21's observation-receipts topic are to be designed as
       <strong>one shape, not two transports</strong>: the R77 trio (per-window consumed count, processing
       rate, per-key/per-partition spread) plus provenance on anything leaving the process (scenario id +
       version, arm id, config fingerprint, hardware class) — so a live stream sample and a blessed
@@ -973,9 +1994,19 @@ mode.</p>
       concrete field list is the perf track's brainstorm/plan-stage decision; nothing is schema-settled yet.</li>
 </ul>
 
-</section>
+
+<footer class="composition-signal" style="margin-top:3rem;color:var(--muted);font-size:.85rem;border-top:1px solid var(--rule);padding-top:1rem">
+  Composed 2026-08-14 by ce-ideate (interaction model, ideas 1–6); continued 2026-08-17 by ce-ideate
+  (native direct bindings, ideas 7–13) from branch <code>feats/proxy-requirements</code>, grounded in
+  <code>docs/inflight/parked-a-c-client-and-the-ffi-question.md</code>, the evidence dossiers of run
+  <code>cbfdb640</code>, and a fresh-context verification pass; continued 2026-08-17 by ce-ideate (HTTP strategy, ideas 14–20)
+  from <code>docs/inflight/next-http-strategy-ideas.md</code> and
+  <code>docs/inflight/parked-http-dialect-and-generated-clients.md</code>, the evidence dossiers of run
+  <code>78c27fe2</code>, and a fresh-context verification pass; continued 2026-08-17–18 by ce-ideate (the polyglot demo app, ideas 21–27) from the owner's
+  demo-app prompt, the evidence dossiers of run <code>b2581237</code>, a fresh-context verification pass, and
+  live coordination with the perf-comparison-matrix ideation track; reconciled at merge 2026-08-18.
+</footer>
 
 </div>
-<footer class="composition-signal">Composed 2026-08-14, extended 2026-08-17 by ce-ideate · Part 2 grounding: <code>docs/plans/2026-08-14-001-feat-language-proxy-plan.md</code>, conformance suite READMEs, <code>docs/inflight/parked-*.md</code>, <code>STRATEGY.md</code> · branch <code>docs/ideate-polyglot-demo</code> off <code>feats/proxy-requirements</code></footer>
 </body>
 </html>

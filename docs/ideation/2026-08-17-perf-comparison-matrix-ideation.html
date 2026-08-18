@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Cross-Language Performance Comparison Matrix</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --accent: #2a78d6;
+    --accent-soft: #eaf2fc;
+    --warn-soft: #fdf3e7;
+    --warn-text: #8a5410;
+    --s1: #2a78d6; /* blue */
+    --s2: #eb6834; /* orange */
+    --s3: #1baf7a; /* aqua */
+    --s4: #eda100; /* yellow */
+    --s5: #e87ba4; /* magenta */
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .container { max-width: 920px; margin-inline: auto; padding: 2.5rem 1.5rem 4rem; }
+  .prose, p, li, dd { max-width: 72ch; }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: 0.3rem 0 0.6rem; }
+  h2 { font-size: 1.25rem; margin: 2.6rem 0 0.8rem; padding-top: 1rem; border-top: 1px solid var(--grid); }
+  h3 { font-size: 1.05rem; margin: 1.8rem 0 0.5rem; }
+  .eyebrow { font-size: 0.72rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; margin: 0.6rem 0 0; color: var(--ink-2); font-size: 0.85rem; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .stats { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 1.4rem 0 0; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.9rem; }
+  .stat .n { font-size: 1.25rem; font-weight: 700; display: block; }
+  .stat .l { font-size: 0.75rem; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; background: #f0efec; border-radius: 4px; padding: 0.08em 0.35em; }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.1rem 1.3rem 1.2rem; margin: 1.1rem 0;
+  }
+  .card h3 { margin-top: 0.1rem; }
+  .chiprow { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.35rem 0 0.8rem; }
+  .chip { font-size: 0.72rem; font-weight: 600; border-radius: 999px; padding: 0.18rem 0.65rem; border: 1px solid var(--border); background: #f0efec; color: var(--ink-2); }
+  .chip.axis { background: var(--accent-soft); color: #1c5cab; }
+  .chip.rank { background: var(--ink); color: #fff; }
+  dl.fields { margin: 0.6rem 0 0; }
+  dl.fields dt { font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin-top: 0.75rem; }
+  dl.fields dd { margin: 0.15rem 0 0; }
+  blockquote { margin: 0.4rem 0; padding: 0.4rem 0.9rem; border-left: 3px solid var(--grid); color: var(--ink-2); font-style: italic; }
+  table { border-collapse: collapse; width: 100%; margin: 0.8rem 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { font-size: 0.74rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  ul.jump { list-style: none; padding: 0.8rem 1rem; margin: 1rem 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; columns: 1; }
+  ul.jump li { margin: 0.25rem 0; }
+  figure { margin: 1.1rem 0 0.4rem; background: var(--surface); border: 1px solid var(--grid); border-radius: 8px; padding: 0.8rem; overflow-x: auto; }
+  figcaption { font-size: 0.78rem; color: var(--muted); margin-top: 0.5rem; max-width: 72ch; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin: 1rem 0 0.4rem; }
+  @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+  .lane { border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem 1rem; background: var(--accent-soft); }
+  .lane.alt { background: var(--warn-soft); }
+  .lane .eyebrow { color: #1c5cab; }
+  .lane.alt .eyebrow { color: var(--warn-text); }
+  .lane ul { margin: 0.4rem 0 0; padding-left: 1.1rem; }
+  .lane li { font-size: 0.88rem; margin: 0.25rem 0; }
+  footer.composition-signal { margin-top: 3.5rem; padding-top: 1rem; border-top: 1px solid var(--grid); font-size: 0.78rem; color: var(--muted); }
+  svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<span class="eyebrow">ce-ideate · discovery document</span>
+<h1>Ideation: Cross-Language Performance Comparison Matrix</h1>
+<div class="meta">
+  <span><b>date</b> 2026-08-17</span>
+  <span><b>topic</b> perf-comparison-matrix</span>
+  <span><b>mode</b> repo-grounded</span>
+</div>
+<p class="meta" style="margin-top:0.5rem"><b>focus</b>&nbsp; Automated performance comparison matrix as a stacked PR on <a href="https://github.com/astubbs/parallel-consumer/pull/293">PR #293</a> (<code>feats/proxy-requirements</code>): the classic README intro performance test running in each proxy language — the double-click demo wanted before merge. Scenarios: big data replay · slow process stage · augment-and-republish from a Kafka Streams store. Arms: plain KafkaConsumer · plain Kafka Streams · PC core · PC+KS · proxy clients.</p>
+
+<div class="stats">
+  <div class="stat"><span class="n">48</span><span class="l">raw ideas, 5 frames</span></div>
+  <div class="stat"><span class="n">21</span><span class="l">merged &amp; verified</span></div>
+  <div class="stat"><span class="n">8</span><span class="l">survivors</span></div>
+  <div class="stat"><span class="n">5/5</span><span class="l">axes covered</span></div>
+</div>
+
+<section id="grounding-context">
+<h2>Grounding Context</h2>
+<p><strong>Codebase Context.</strong> The "classic intro performance test" is the README's <em>Illustrative Performance Example</em>, backed by <code>VeryLargeMessageVolumeTest</code>: high message volume, 0–5&nbsp;ms random processing time, and the famous throughput-by-key-space chart — currently three hand-maintained Google Sheets embeds in the generated <code>README.adoc</code>. The proxy branch carries 15 client modules (cpp, dotnet, go, java-api, java-direct, java-grpc, java-harness, kotlin, python, ruby, rust, scala, swift, typescript) plus a conformance suite: a Java harness drives dumb language runners from a <code>LanguageRunners</code> registry via ProcessBuilder, the engine binding runs as control arm in every selection, <code>ScenarioCoverageTest</code> fails the build on unbound scenarios, and <code>clients.yml</code> gates deferred modules as green-as-skipped-with-reason, never silently green. An in-JVM mock-Kafka harness (<code>ProxyHarness</code>) runs real gRPC transport with no Docker at sub-10-second speed.</p>
+<p><strong>The decisive prior art is in-repo.</strong> <code>docs/inflight/parked-testing-as-a-feature-for-the-clients.md</code> (2026-08-15, owner-authored) is a ready-made fairness charter for exactly this matrix: compare each language against in-process Java, <em>not languages against each other</em>; report the sidecar hop honestly; publish a case we expect to lose; single-run figures are not evidence. Sibling parked notes cover batching-vs-plain-consumer (sweep, publish the crossover) and native-client comparisons. A documented measurement-contamination incident (core's <code>junit-platform.properties</code> leaking <code>factor=20</code> into eight modules) already invalidated numbers on two branches.</p>
+<p><strong>Institutional learnings</strong> (<code>docs/solutions/</code>): broker-per-fork process isolation is the only proven fix for concurrent-Kafka-test flakiness; absolute wall-clock throughput assertions are the first casualty on 2-core runners; CI retries hide flakes and were removed project-wide; every matrix cell needs a three-state outcome (ran+measured / ran+found-problem / could-not-run) that fails closed; a stalled consumer at 0 records/sec must read as <em>broken</em>, not <em>slow</em>.</p>
+<p><strong>External context</strong> (web research, high value): gRPC's own cross-language benchmark (central driver + per-language WorkerService, proxy workers for languages that can't self-host) and OpenMessaging Benchmark (Java driver-api, YAML workloads, interval metrics) are close structural analogs. wrk2's fixed-rate open-loop load is the standard fix for coordinated omission. The franz-go vs librdkafka controversy (a <code>linger.ms</code> 0-vs-5&nbsp;ms default confound) is the canonical config-parity failure. Continuous benchmarking tooling: github-action-benchmark, Bencher.dev, Conbench. Containerized CI numbers are for relative regression detection; headline numbers need pinned hardware.</p>
+<p><strong>Evidence layer:</strong> five scout dossiers (scenarios, comparison-arms, harness, ci-integrity, demo-presentation) under the run scratch directory; all load-bearing quotes were re-verified against <code>origin/feats/proxy-requirements</code> by a fresh-context verifier (18 sound / 3 weak / 0 refuted outright).</p>
+</section>
+
+<section id="topic-axes">
+<h2>Topic Axes</h2>
+<ul>
+  <li><strong>workload-scenarios</strong> — the benchmark stories: big data replay, slow process stage, KS-store augment-and-republish; workload definition and config</li>
+  <li><strong>comparison-arms</strong> — the five arms, config parity, sidecar overhead attribution</li>
+  <li><strong>harness-orchestration</strong> — driver/worker architecture, conformance-suite reuse, broker isolation</li>
+  <li><strong>ci-integrity</strong> — matrix jobs in CI, silent-green guards, noise and regression handling</li>
+  <li><strong>demo-presentation</strong> — the double-click demo: charts, README/docs surfaces, per-language runnability</li>
+</ul>
+</section>
+
+<section id="ranked-ideas">
+<h2>Ranked Ideas</h2>
+<ul class="jump">
+  <li><a href="#idea-1">1. Perf is the fifth conformance scenario — one harness, engine-owned stopwatch</a></li>
+  <li><a href="#idea-2">2. Charter-first: the fairness constitution is already written — adopt it</a></li>
+  <li><a href="#idea-3">3. The keyspace-sweep spec workload — the classic chart, five lines, three parameterizations</a></li>
+  <li><a href="#idea-4">4. The attribution ladder — java-direct → java-grpc → foreign as a measuring instrument</a></li>
+  <li><a href="#idea-5">5. The double-click demo surface — docs-as-data results, per-language facts panels, one-command reproduction</a></li>
+  <li><a href="#idea-6">6. The live polyglot performance loop — all clients running, realtime results, on repeat</a></li>
+  <li><a href="#idea-7">7. The trust architecture — config fingerprint, provenance stamp, saboteur cell</a></li>
+  <li><a href="#idea-8">8. Two-tier measurement — ratio-gated PR lane, pinned-hardware headline lane</a></li>
+</ul>
+
+<article class="card" id="idea-1">
+<div class="chiprow"><span class="chip rank">1</span><span class="chip axis">harness-orchestration</span><span class="chip">Confidence 85%</span><span class="chip">Complexity Medium</span></div>
+<h3>Perf is the fifth conformance scenario — one harness, engine-owned stopwatch</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>Do not build a benchmark codebase. Build the matrix as a new scenario family inside the existing conformance harness: the <code>LanguageRunners</code> registry already knows every language's build command and binary path, <code>ConformanceDriver</code> already orchestrates concurrent runners, and the engine binding already runs as control arm. A perf scenario is a conformance scenario with a bigger seed list and a stopwatch — and the stopwatch lives <em>engine-side</em>: all throughput/latency timestamps are taken identically in the sidecar's gRPC layer for all 13 languages, so runners measure nothing (they already assert nothing). Arms become pluggable invocation strategies over one workload definition, exactly the refactor <code>next-reuse-integration-tests-for-conformance.md</code> already prescribes. Cell admission is fail-closed by construction: a perf cell may only exist for a (language, scenario) pair whose matching conformance scenario is green, enforced through <code>ScenarioCoverageTest</code> and the deferred-wave gating <code>clients.yml</code> already applies (green-as-skipped-with-reason, never silent green). Implementation note carried from review: new test classes extend <code>BrokerIntegrationTest</code>, never <code>LoadTest</code>/<code>DbTest</code>, whose static Postgres container is a documented flake tax.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> conformance README — "Runners assert NOTHING deliberately; Java harness owns what 'correct' looks like"; <code>LanguageRunners.java</code> registry (module path, build command, binary path per language); <code>ScenarioCoverageTest</code> fails the build on scenarios no client drives; <code>next-reuse-integration-tests-for-conformance.md</code> — "separate what is asserted … from how the user function is invoked (parameterise: in-process Java, proxy + Java client, proxy + a foreign runner)". <code>external:</code> gRPC's cross-language benchmark uses the same central-driver / dumb-worker split. All quotes verifier-confirmed verbatim.</dd>
+<dt>Rationale</dt>
+<dd>The repo's own diagnosed failure mode is duplicated per-language setup logic drifting into flakes. A second orchestrator would pre-commit that mistake at 13-language scale. Reusing the registry means every future language client inherits the matrix for free, and engine-side timing makes every cell's instrument identical — a language cannot mis-measure itself, which is TechEmpower's known gamed-cell failure inverted into structure.</dd>
+<dt>Downsides</dt>
+<dd>Couples the perf matrix to the conformance suite's release cadence and possibly widens the frozen proto surface if timing echoes need a new field (additions are allowed by the buf gate). The conformance module gains a second responsibility, which needs clear internal boundaries.</dd>
+</dl>
+<figure>
+<svg viewBox="0 0 840 300" role="img" aria-label="One Java driver drives five arm types; timing is taken inside the engine sidecar; language runners stay dumb.">
+  <text x="20" y="28" font-size="13" font-weight="600" fill="#0b0b0b">One harness, five invocation strategies</text>
+  <rect x="20" y="60" width="180" height="86" rx="8" fill="#eaf2fc" stroke="#2a78d6"/>
+  <text x="110" y="94" font-size="12.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">Java perf driver</text>
+  <text x="110" y="112" font-size="11" fill="#52514e" text-anchor="middle">conformance harness +</text>
+  <text x="110" y="127" font-size="11" fill="#52514e" text-anchor="middle">LanguageRunners registry</text>
+  <line x1="200" y1="103" x2="260" y2="103" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr)"/>
+  <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c3c2b7"/></marker></defs>
+  <rect x="260" y="48" width="250" height="110" rx="8" fill="#fcfcfb" stroke="#2a78d6" stroke-width="1.5"/>
+  <text x="385" y="72" font-size="12.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">Engine sidecar</text>
+  <rect x="278" y="84" width="214" height="26" rx="13" fill="#eaf2fc"/>
+  <text x="385" y="101" font-size="11" fill="#1c5cab" text-anchor="middle">⏱ all timestamps taken here</text>
+  <text x="385" y="132" font-size="11" fill="#52514e" text-anchor="middle">identical instrument for all 13 languages</text>
+  <line x1="510" y1="80" x2="580" y2="80" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="510" y1="126" x2="580" y2="126" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="580" y="60" width="240" height="40" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="700" y="85" font-size="11.5" fill="#0b0b0b" text-anchor="middle">dumb language runners ×13</text>
+  <rect x="580" y="108" width="240" height="40" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="700" y="133" font-size="11.5" fill="#0b0b0b" text-anchor="middle">engine control arm (java-direct)</text>
+  <line x1="110" y1="146" x2="110" y2="200" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="20" y="200" width="800" height="72" rx="8" fill="#fcfcfb" stroke="#c3c2b7" stroke-dasharray="5 4"/>
+  <text x="40" y="224" font-size="11.5" font-weight="600" fill="#52514e">non-proxy arms, same workload definition:</text>
+  <text x="40" y="248" font-size="11.5" fill="#52514e">plain KafkaConsumer · plain Kafka Streams · PC core · PC+KS — each an invocation strategy, never a forked assertion</text>
+</svg>
+<figcaption>Illustrative sketch of the direction — one driver, engine-owned timing, arms as strategies. Not an architecture spec.</figcaption>
+</figure>
+</article>
+
+<article class="card" id="idea-2">
+<div class="chiprow"><span class="chip rank">2</span><span class="chip axis">comparison-arms</span><span class="chip">Confidence 90%</span><span class="chip">Complexity Low</span></div>
+<h3>Charter-first: the fairness constitution is already written — adopt it</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>Make <code>docs/inflight/parked-testing-as-a-feature-for-the-clients.md</code> the stacked PR's normative anchor and cite it in the PR body, the harness docs, and the chart captions, rather than rediscovering its rules mid-review. Its three binding rules for this matrix: <em>(a)</em> no language-vs-language axis of merit — each language's cells are normalized against its own serial baseline and against in-process Java, so the matrix publishes no cross-language throughput ranking; <em>(b)</em> the sidecar hop is reported as a first-class cost, never engineered out; <em>(c)</em> the no-ordering big-data-replay column where the plain consumer wins stays in the matrix permanently — publishing the case we expect to lose is what makes the favourable numbers credible. Single-run figures are not evidence.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> <code>parked-testing-as-a-feature-for-the-clients.md</code> (2026-08-15) — "Not languages against each other. A slow language looks bad for reasons that have nothing to do with this project… The number that matters is what the sidecar hop costs relative to in-process Java, per language" and "publishing a case we expect to lose. That is what makes the favourable numbers credible rather than selected". Verifier confirmed both verbatim.</dd>
+<dt>Rationale</dt>
+<dd>Every other survivor's design choices (ladder decomposition, ratio gating, losing-case column) are consequences of these rules. Anchoring the PR on the charter costs a paragraph and prevents the two failure modes external prior art warns about: a language shootout that generates flame wars (TechEmpower) and a config-confounded number that retroactively discredits the whole matrix (franz-go).</dd>
+<dt>Downsides</dt>
+<dd>Almost none — the charter constrains presentation, which forecloses a viral-but-toxic "fastest language" headline some audiences would engage with. That is the point.</dd>
+</dl>
+</article>
+
+<article class="card" id="idea-3">
+<div class="chiprow"><span class="chip rank">3</span><span class="chip axis">workload-scenarios</span><span class="chip">Confidence 80%</span><span class="chip">Complexity Medium</span></div>
+<h3>The keyspace-sweep spec workload — the classic chart, five lines, three parameterizations</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>Canonicalize the README's single-partition keyspace sweep as <em>the</em> spec workload — one named, versioned workload definition, three parameterizations, five arms, thirteen languages. The README already states the design rationale: a single partition makes plain arms structurally capped (~1×) while PC arms scale with keyspace, so the flat lines are the control that proves the sweep measures <em>ordering</em>, not I/O. The three scenarios are variants of one definition: <strong>big data replay</strong> = 0&nbsp;ms delay at <code>VeryLargeMessageVolumeTest</code> volume (the honest losing case); <strong>slow process stage</strong> = 0–5&nbsp;ms work driven at a <em>fixed arrival rate</em>, open-loop, with latency measured from intended send time (wrk2 discipline, so coordinated omission can't flatter concurrent arms); <strong>KS augment-and-republish</strong> = the existing <code>StreamsApp</code> two-stage shape measured end-to-end. Critically, both KS arms derive from <em>one</em> topology — <code>StreamsApp</code> already implements KS-preprocess-then-PC-consume, so "core KS" is the same topology with the slow stage inline and the PC stage a toggle; there is no dependency on the unlanded <code>ks-on-pc-spike</code> branch. The guarantee asymmetry (PC+KS runs outside the topology's exactly-once boundary) is encoded in the scenario schema and rendered on every chart, never a bare bar. The workload schema accepts only sweep ranges for batch size and commit mode — no single-value field exists to cherry-pick.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> <code>README_TEMPLATE.adoc</code> — "A single partition (simplifies comparison - a topic with 5 partitions is the same as 1 partition with a keyspace of 5)"; <code>StreamsApp.java</code> (<code>parallel-consumer-examples/parallel-consumer-example-streams</code>) — <code>preprocess()</code> then <code>concurrentProcess()</code> on one topology; <code>kafka-streams-integration.yaml</code> — "outside the topology's exactly-once boundary and state stores"; <code>parked-perf-batching-vs-plain-consumer.md</code> — "sweep batch sizes rather than picking a flattering one… publish the point where the curves meet — or do not meet". <code>external:</code> wrk2 / Gil Tene on coordinated omission; YCSB workload-as-config.</dd>
+<dt>Rationale</dt>
+<dd>This resolves the parked note's "naive throughput comparison is close to meaningless" objection without inventing anything: the project's five-year-old headline chart already <em>is</em> the ordering-constrained workload the fairness doc demands. One spec file generates the entire matrix, and the sweep-only schema makes the cherry-picked flattering number structurally impossible rather than merely discouraged.</dd>
+<dt>Downsides</dt>
+<dd>Fixed-rate open-loop injection is new harness machinery (the existing tests are closed-loop). Deriving both KS arms from one topology requires refactoring the example app into the harness. Sweeps multiply cell count — budget control comes from idea 8's tiering.</dd>
+</dl>
+<figure>
+<svg viewBox="0 0 840 360" role="img" aria-label="Conceptual sketch: throughput versus key-space size; plain consumer and plain Kafka Streams stay flat, PC core and PC plus KS rise, proxy client tracks PC core with a visible sidecar gap.">
+  <text x="20" y="24" font-size="13" font-weight="600" fill="#0b0b0b">The headline chart, conceptually: throughput vs key-space size (single partition)</text>
+  <!-- plot area -->
+  <line x1="70" y1="60" x2="70" y2="290" stroke="#c3c2b7" stroke-width="1.5"/>
+  <line x1="70" y1="290" x2="640" y2="290" stroke="#c3c2b7" stroke-width="1.5"/>
+  <line x1="70" y1="175" x2="640" y2="175" stroke="#e1e0d9" stroke-width="1"/>
+  <line x1="70" y1="118" x2="640" y2="118" stroke="#e1e0d9" stroke-width="1"/>
+  <line x1="70" y1="232" x2="640" y2="232" stroke="#e1e0d9" stroke-width="1"/>
+  <text x="60" y="70" font-size="10.5" fill="#898781" text-anchor="end">high</text>
+  <text x="60" y="293" font-size="10.5" fill="#898781" text-anchor="end">low</text>
+  <text x="355" y="316" font-size="10.5" fill="#898781" text-anchor="middle">key-space size →  (1 … 10,000 keys)</text>
+  <text x="36" y="180" font-size="10.5" fill="#898781" text-anchor="middle" transform="rotate(-90 36 180)">throughput</text>
+  <!-- flat arms -->
+  <path d="M70,262 C200,260 480,259 640,258" fill="none" stroke="#eda100" stroke-width="2"/>
+  <path d="M70,274 C200,273 480,272 640,271" fill="none" stroke="#e87ba4" stroke-width="2"/>
+  <!-- rising arms -->
+  <path d="M70,272 C220,220 420,110 640,78" fill="none" stroke="#2a78d6" stroke-width="2"/>
+  <path d="M70,274 C220,232 420,132 640,102" fill="none" stroke="#1baf7a" stroke-width="2"/>
+  <path d="M70,276 C220,244 420,152 640,124" fill="none" stroke="#eb6834" stroke-width="2"/>
+  <!-- sidecar gap annotation -->
+  <line x1="596" y1="83" x2="596" y2="120" stroke="#898781" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="584" y="66" font-size="10" fill="#52514e" text-anchor="end" style="paint-order: stroke fill" stroke="#fcfcfb" stroke-width="3">sidecar gap — published, not hidden</text>
+  <line x1="588" y1="70" x2="595" y2="82" stroke="#898781" stroke-width="1"/>
+  <!-- direct labels: text ink with colored dash -->
+  <g font-size="11" fill="#52514e">
+    <line x1="648" y1="74" x2="662" y2="74" stroke="#2a78d6" stroke-width="3"/><text x="668" y="78">PC core</text>
+    <line x1="648" y1="100" x2="662" y2="100" stroke="#1baf7a" stroke-width="3"/><text x="668" y="104">PC + Kafka Streams</text>
+    <line x1="648" y1="124" x2="662" y2="124" stroke="#eb6834" stroke-width="3"/><text x="668" y="128">proxy client (per language)</text>
+    <line x1="648" y1="256" x2="662" y2="256" stroke="#eda100" stroke-width="3"/><text x="668" y="260">plain KafkaConsumer</text>
+    <line x1="648" y1="272" x2="662" y2="272" stroke="#e87ba4" stroke-width="3"/><text x="668" y="276">plain Kafka Streams</text>
+  </g>
+  <text x="70" y="345" font-size="10.5" fill="#898781">flat lines are the control: one partition caps consumer-per-partition arms by design — the sweep measures ordering, not I/O</text>
+</svg>
+<figcaption>Illustrative shape only — no measured data. The five-line version of the README's classic chart, repeated per language; the replay scenario is the same sweep at 0 ms delay, where the flat arms win and that column is published anyway.</figcaption>
+</figure>
+</article>
+
+<article class="card" id="idea-4">
+<div class="chiprow"><span class="chip rank">4</span><span class="chip axis">comparison-arms</span><span class="chip">Confidence 85%</span><span class="chip">Complexity Medium</span></div>
+<h3>The attribution ladder — java-direct → java-grpc → foreign as a measuring instrument</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>The client table already contains a deliberately built differential probe that nobody has run as one: <code>java-direct</code> ("never speaks the protocol" — the engine in-process) isolates the engine; <code>java-grpc</code> ("owns no sidecar spawn" — same JVM, speaks the wire) adds only the protocol; each foreign client adds only its runtime. Publish every language's result as a stacked decomposition — engine cost + protocol cost (java-grpc − java-direct) + language/runtime cost (language − java-grpc) — so sidecar overhead is a first-class column computed by the harness on every run, never a footnote someone remembers to write. Kotlin and Scala wrap java-grpc, giving a fourth rung (wrapper cost) for free.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> <code>parallel-consumer-proxy-clients/README.md</code> — java-direct "<strong>Never speaks the protocol</strong> - the engine in-process… the control arm for the shared API"; java-grpc "<strong>Owns no sidecar spawn</strong>"; <code>parked-perf-against-native-kafka-clients.md</code> — "Report the sidecar's cost honestly as part of the result rather than engineering it out of the benchmark. A number that hides the hop is not reproducible in a user's system." All verifier-confirmed verbatim.</dd>
+<dt>Rationale</dt>
+<dd>This answers the question every non-JVM adopter will actually ask PR astubbs#293 — "what does the sidecar cost me, separately from what my language costs me?" — and it satisfies the charter's honesty rule structurally. It also keeps cross-language comparison fair under idea 2: languages compete only on the component they control.</dd>
+<dt>Downsides</dt>
+<dd>Decomposition by subtraction assumes the rungs are additive; contention effects can make components interact, so the ladder needs an honesty note of its own. Requires the engine-side timing from idea 1 to be trustworthy at each rung.</dd>
+</dl>
+<figure>
+<svg viewBox="0 0 840 240" role="img" aria-label="Three horizontal bars: java-direct shows engine cost only; java-grpc adds a protocol segment; a foreign client adds a runtime segment. Each added segment is the published attribution.">
+  <text x="20" y="24" font-size="13" font-weight="600" fill="#0b0b0b">Blank subtraction: each rung adds exactly one cost</text>
+  <g font-size="11.5" fill="#52514e">
+    <text x="150" y="76" text-anchor="end">java-direct</text>
+    <text x="150" y="128" text-anchor="end">java-grpc</text>
+    <text x="150" y="180" text-anchor="end">go / python / …</text>
+  </g>
+  <!-- bars: 2px gaps between segments, rounded right ends -->
+  <rect x="160" y="60" width="180" height="24" rx="4" fill="#2a78d6"/>
+  <rect x="160" y="112" width="180" height="24" rx="0" fill="#2a78d6"/>
+  <rect x="344" y="112" width="120" height="24" rx="4" fill="#eb6834"/>
+  <rect x="160" y="164" width="180" height="24" rx="0" fill="#2a78d6"/>
+  <rect x="344" y="164" width="120" height="24" rx="0" fill="#eb6834"/>
+  <rect x="468" y="164" width="92" height="24" rx="4" fill="#1baf7a"/>
+  <!-- deltas -->
+  <text x="475" y="128" font-size="10.5" fill="#52514e">= protocol cost, published</text>
+  <text x="572" y="180" font-size="10.5" fill="#52514e">= runtime cost, published</text>
+  <!-- legend -->
+  <g font-size="11" fill="#52514e">
+    <rect x="160" y="208" width="12" height="12" rx="3" fill="#2a78d6"/><text x="178" y="218">engine (PC core work)</text>
+    <rect x="340" y="208" width="12" height="12" rx="3" fill="#eb6834"/><text x="358" y="218">protocol / sidecar hop</text>
+    <rect x="540" y="208" width="12" height="12" rx="3" fill="#1baf7a"/><text x="558" y="218">language runtime</text>
+  </g>
+</svg>
+<figcaption>Illustrative sketch — segment widths are not data. The two Java proxy clients exist on the branch precisely to make this subtraction possible.</figcaption>
+</figure>
+</article>
+
+<article class="card" id="idea-5">
+<div class="chiprow"><span class="chip rank">5</span><span class="chip axis">demo-presentation</span><span class="chip">Confidence 80%</span><span class="chip">Complexity Medium</span></div>
+<h3>The double-click demo surface — docs-as-data results, per-language facts panels, one-command reproduction</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>Blessed runs commit their results as <code>docs/data/performance-profile.d/&lt;module&gt;.yaml</code> fragments — the same one-module-one-file convention <code>module-maturity.d/</code> and <code>testing-evidence.d/</code> already use, validated by <code>bin/check-docs-data.sh</code>. The README's chart and a standardized "performance facts" panel in each of the 13 client READMEs are generated from those fragments at <code>process-sources</code> time, retiring the three hand-pasted Google Sheets embeds. The panel is an energy-label: throughput ratio vs plain consumer, p99 at fixed rate, sidecar-hop cost, config fingerprint, hardware class, liveness verdict — identical format across languages so comparison happens on the reader's terms. A Go developer lands on the Go client README and sees the classic PC chart <em>for Go</em>. Reproduction is one command: <code>bin/perf-matrix.sh</code> with seed, arm/language selection, and self-classifying exit codes, modeled on the web-gui branch's <code>dashboard-demo.sh</code> contract (pattern, not shared code — that branch is unmerged). Chart captions say "reproduce with bin/perf-matrix.sh". The fragments migrate untouched to the parked <a href="https://github.com/astubbs/parallel-consumer/issues/208">#208</a> docs site later.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> <code>docs/data/README.md</code> — "the canonical, renderer-independent data for release documentation… <code>bin/check-docs-data.sh</code> validates the structure"; <code>README_TEMPLATE.adoc</code> hardcoded <code>pubchart</code> URLs (three confirmed); 11 per-language <code>module-maturity.d</code> files as the proven pattern; <code>parked-perf-against-native-kafka-clients.md</code> — "Reproducible means re-runnable by a sceptic… A benchmark nobody can re-run is quoted forever and corrected never."</dd>
+<dt>Rationale</dt>
+<dd>This is the user's actual ask — the double-click demo in each language — built on machinery the repo already trusts. Checked-in YAML makes every published number diffable in PR review, makes a missing or stale cell a build error instead of a silent gap, and the one-command script makes the skeptic-reproducibility requirement a shipped entry point instead of a doc footnote.</dd>
+<dt>Downsides</dt>
+<dd>Committed numbers go stale between blessed runs and need a staleness policy (scenario-version field). Chart generation at build time is new tooling in the README pipeline. The laptop script's numbers will differ from pinned-hardware numbers — the facts panel must print its hardware class prominently.</dd>
+</dl>
+<figure>
+<svg viewBox="0 0 840 170" role="img" aria-label="Pipeline: a blessed benchmark run writes YAML fragments; the build validates them and generates the README chart, thirteen client README panels, and later the docs site.">
+  <rect x="20" y="55" width="150" height="60" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="95" y="81" font-size="11.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">blessed run</text>
+  <text x="95" y="98" font-size="10.5" fill="#52514e" text-anchor="middle">bin/perf-matrix.sh</text>
+  <line x1="170" y1="85" x2="222" y2="85" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr2)"/>
+  <defs><marker id="arr2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c3c2b7"/></marker></defs>
+  <rect x="222" y="45" width="210" height="80" rx="8" fill="#eaf2fc" stroke="#2a78d6"/>
+  <text x="327" y="72" font-size="11.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">performance-profile.d/*.yaml</text>
+  <text x="327" y="90" font-size="10.5" fill="#52514e" text-anchor="middle">diffable · validated by</text>
+  <text x="327" y="105" font-size="10.5" fill="#52514e" text-anchor="middle">bin/check-docs-data.sh</text>
+  <line x1="432" y1="65" x2="490" y2="45" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr2)"/>
+  <line x1="432" y1="85" x2="490" y2="85" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr2)"/>
+  <line x1="432" y1="105" x2="490" y2="125" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr2)"/>
+  <rect x="490" y="25" width="330" height="34" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="655" y="47" font-size="11" fill="#0b0b0b" text-anchor="middle">README chart (generated, Sheets embeds retired)</text>
+  <rect x="490" y="68" width="330" height="34" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="655" y="90" font-size="11" fill="#0b0b0b" text-anchor="middle">13 × client README "performance facts" panels</text>
+  <rect x="490" y="111" width="330" height="34" rx="8" fill="#fcfcfb" stroke="#c3c2b7" stroke-dasharray="5 4"/>
+  <text x="655" y="133" font-size="11" fill="#52514e" text-anchor="middle">astubbs#208 docs site (later, fragments unchanged)</text>
+</svg>
+<figcaption>Illustrative flow — the docs-as-data machinery already exists; performance becomes its first quantitative tenant.</figcaption>
+</figure>
+</article>
+
+<article class="card" id="idea-6">
+<div class="chiprow"><span class="chip rank">6</span><span class="chip axis">demo-presentation</span><span class="chip">Confidence 70%</span><span class="chip">Complexity High</span></div>
+<h3>The live polyglot performance loop — all clients running, realtime results, on repeat</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>Turn the matrix into a running application, not only a document: every language's demo container boots (mock mode by default, real broker or the user's own cluster on request), each already emitting reading statistics, and a web-dashboard aggregates those streams into one realtime view that cycles the three matrix scenarios — big data replay, slow process stage, KS augment-and-republish — and restarts in a loop. Attract mode for the proxy. This is composition, not construction: the language-proxy plan already commits every client to a containerized demo (R72) with three identical modes including mock (R73), already requires every demo to print records consumed, processing rate, and per-key spread (R77), and already requires proxy-vs-in-process latency to be measured and reported (R31); the <code>feats/web-gui</code> branch already has an embedded dashboard and a one-command <code>dashboard-demo.sh</code> that boots a broker, workload, and consumer fleet. The display honors the charter (idea 2) by never rendering an absolute records/sec leaderboard: each language races <em>its own</em> serial baseline, with the live sidecar-hop decomposition from idea 4 beside it. Contention (the repo's proven CPU-starvation failure mode) is handled by running all clients in parallel against mocks, or by a carousel spotlight that measures one language at a time while the rest tick over — the loop structure the idea wants anyway. Ships local-first as a <code>bin/</code> app with the stacked PR; when the docs site (astubbs#208) unparks, this becomes the parked demo gallery's payload. The demo-app UI itself is owned by the parallel polyglot-demo ideation track (<code>docs/ideate-polyglot-demo</code>); this idea contributes the performance story, workload definitions, and fairness constraints.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> language-proxy plan (<code>docs/plans/2026-08-14-001-feat-language-proxy-plan.md</code>) — R72 "the demo ships as a container so anyone can run any language's demo"; R73 three-mode contract with mock; R77 "Every demo prints reading statistics - records consumed, processing rate, and per-key or per-partition spread"; R31 proxy-vs-in-process latency "reports both"; <code>docs/inflight/parked-demo-gallery.md</code> — "the gallery is deployment work over demos that already exist, not demo work"; <code>feats/web-gui:bin/dashboard-demo.sh</code>. (Added in discussion after the verification pass; these quotes were read directly from the plan and parked note this session, not through the run's verifier.)</dd>
+<dt>Rationale</dt>
+<dd>This may be the strongest possible answer to the actual ask — the double-click demo per language before merging PR astubbs#293 — because it demonstrates instead of reporting: a visitor watches eleven languages doing key-ordered concurrency with live numbers, rather than reading a chart about it. Every constituent is an existing commitment or branch, so the marginal build is the aggregating view and the loop driver — and it gives the liked-but-parked gallery idea the payload that was missing when it was parked.</dd>
+<dt>Downsides</dt>
+<dd>Head-on charter tension if the display drifts toward a language leaderboard — the fairness framing must be designed in, not bolted on. Parallel contention corrupts numbers on one machine (mock mode or carousel is mandatory, and mock-mode numbers must be labeled for what they are). Live on-screen figures get screenshotted and quoted — render ratios and shapes with the hardware class printed, and leave absolutes to the blessed docs-as-data pipeline (idea 5). Highest coordination cost of the set: spans this track, the polyglot-demo track, and the unmerged web-gui branch.</dd>
+</dl>
+<figure>
+<svg viewBox="0 0 840 200" role="img" aria-label="Thirteen demo containers in mock mode stream their R77 statistics into one aggregating dashboard, which loops through the three scenarios and restarts.">
+  <rect x="20" y="40" width="200" height="110" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="120" y="64" font-size="11.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">demo containers ×13</text>
+  <text x="120" y="82" font-size="10.5" fill="#52514e" text-anchor="middle">R72 · one per language</text>
+  <text x="120" y="98" font-size="10.5" fill="#52514e" text-anchor="middle">mock / broker / own cluster (R73)</text>
+  <text x="120" y="114" font-size="10.5" fill="#52514e" text-anchor="middle">each emits rate + spread (R77)</text>
+  <line x1="220" y1="95" x2="290" y2="95" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr6)"/>
+  <defs><marker id="arr6" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c3c2b7"/></marker></defs>
+  <text x="255" y="86" font-size="10" fill="#52514e" text-anchor="middle">stats streams</text>
+  <rect x="290" y="40" width="250" height="110" rx="8" fill="#eaf2fc" stroke="#2a78d6"/>
+  <text x="415" y="66" font-size="11.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">live dashboard (web-gui shape)</text>
+  <text x="415" y="86" font-size="10.5" fill="#52514e" text-anchor="middle">each language vs its own baseline</text>
+  <text x="415" y="102" font-size="10.5" fill="#52514e" text-anchor="middle">sidecar-hop decomposition live</text>
+  <text x="415" y="118" font-size="10.5" fill="#52514e" text-anchor="middle">never an absolute leaderboard</text>
+  <line x1="540" y1="95" x2="610" y2="95" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr6)"/>
+  <rect x="610" y="40" width="210" height="110" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="715" y="66" font-size="11.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">scenario loop</text>
+  <text x="715" y="86" font-size="10.5" fill="#52514e" text-anchor="middle">replay → slow stage → KS augment</text>
+  <text x="715" y="102" font-size="10.5" fill="#52514e" text-anchor="middle">restart · attract mode</text>
+  <path d="M715,115 C760,140 660,140 705,118" fill="none" stroke="#898781" stroke-width="1.5" marker-end="url(#arr6)"/>
+  <text x="420" y="180" font-size="10.5" fill="#898781" text-anchor="middle">every box is an existing commitment (R72/R73/R77) or branch (web-gui) — the new build is the aggregation and the loop</text>
+</svg>
+<figcaption>Illustrative composition — the demo-app UI belongs to the polyglot-demo track; this idea supplies the performance story and its fairness constraints.</figcaption>
+</figure>
+</article>
+
+<article class="card" id="idea-7">
+<div class="chiprow"><span class="chip rank">7</span><span class="chip axis">ci-integrity</span><span class="chip">Confidence 75%</span><span class="chip">Complexity Medium</span></div>
+<h3>The trust architecture — config fingerprint, provenance stamp, saboteur cell</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>Three mechanisms that make every published number machine-attested. <strong>Parc fermé:</strong> one canonical scenario definition generates every arm's effective config; before a cell records anything, the harness collects each arm's <em>resolved</em> config (the proxy's negotiated intersection, the built <code>ParallelConsumerOptions</code>, raw consumer props), canonicalizes the shared knobs, and hashes a fingerprint — mismatched fingerprints void the cell, and the fingerprint is published beside the number. <strong>Provenance:</strong> every result row records effective JUnit parallelism factor, forkCount, hardware class, git SHA, scenario version, and config hash, and the harness asserts its own isolation before publishing — the <code>junit-platform.properties</code> leak silently ran eight modules at factor=20 and invalidated two branches' measurements. <strong>Saboteur:</strong> every full run includes a deliberately degraded arm that must measurably lose and a stall-rigged cell the pipeline must report as "stalled" (per-10-second progress windows distinguish slow from dead); if the saboteur passes, the run is void.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> proxy <code>Configure</code> proto (27 fields) with defaults diverging from core (proxy UNSPECIFIED = "proxy picks" vs core KEY ordering / 16 threads / 5 s commit); <code>branch-parallel-measurement-contamination.md</code> — "ran at factor=20 regardless of their own ${parallel-tests} setting"; <code>HarnessScenario.java</code> — "A harness that goes green when the client is broken would go green for ten languages at once"; the conformance suite's negative-control race was "found by actual sabotage testing". <code>external:</code> franz-go's <code>linger.ms</code> confound; motorsport parc fermé and railway dead-man's-vigilance as structural analogies.</dd>
+<dt>Rationale</dt>
+<dd>With 27 tunables × 5 arms × 13 languages, an unpinned config divergence is a certainty, not a risk — and one confound retroactively discredits the entire matrix. The repo has already paid for both other failure modes (contaminated measurements, silent stalls); this bakes their prevention into the schema on day one instead of retrofitting after the first hidden failure.</dd>
+<dt>Downsides</dt>
+<dd>Fingerprinting three different config surfaces into one canonical form is fiddly and needs maintenance as knobs are added. The saboteur cell adds permanent run cost. Voiding cells on mismatch can block publication on a technicality — needs a clear override-with-disclosure path.</dd>
+</dl>
+<figure>
+<svg viewBox="0 0 840 150" role="img" aria-label="Gate sequence: scenario definition generates arm configs, a fingerprint check gates the run, results carry a provenance stamp; a parallel saboteur cell must fail or the run is void.">
+  <rect x="20" y="30" width="150" height="48" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="95" y="50" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">scenario definition</text>
+  <text x="95" y="66" font-size="10.5" fill="#52514e" text-anchor="middle">generates arm configs</text>
+  <line x1="170" y1="54" x2="222" y2="54" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr3)"/>
+  <defs><marker id="arr3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c3c2b7"/></marker></defs>
+  <path d="M290,30 L358,54 L290,78 L222,54 z" fill="#eaf2fc" stroke="#2a78d6"/>
+  <text x="290" y="51" font-size="10.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">fingerprint</text>
+  <text x="290" y="65" font-size="10.5" fill="#52514e" text-anchor="middle">match?</text>
+  <line x1="358" y1="54" x2="410" y2="54" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr3)"/>
+  <text x="384" y="46" font-size="10" fill="#52514e" text-anchor="middle">yes</text>
+  <line x1="290" y1="78" x2="290" y2="112" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr3)"/>
+  <text x="302" y="100" font-size="10" fill="#52514e">no → cell voided</text>
+  <rect x="410" y="30" width="170" height="48" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="495" y="50" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">run + liveness windows</text>
+  <text x="495" y="66" font-size="10.5" fill="#52514e" text-anchor="middle">stalled ≠ slow</text>
+  <line x1="580" y1="54" x2="632" y2="54" stroke="#c3c2b7" stroke-width="2" marker-end="url(#arr3)"/>
+  <rect x="632" y="30" width="188" height="48" rx="8" fill="#fcfcfb" stroke="#c3c2b7"/>
+  <text x="726" y="50" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">provenance-stamped result</text>
+  <text x="726" y="66" font-size="10.5" fill="#52514e" text-anchor="middle">factor · forkCount · SHA · config hash</text>
+  <rect x="410" y="100" width="170" height="36" rx="8" fill="#fdf3e7" stroke="#eda100"/>
+  <text x="495" y="116" font-size="10.5" font-weight="600" fill="#8a5410" text-anchor="middle">saboteur cell (parallel)</text>
+  <text x="495" y="129" font-size="10" fill="#8a5410" text-anchor="middle">must fail, or the run is void</text>
+</svg>
+<figcaption>Illustrative gate sequence — the three attestation mechanisms as one flow; details belong to a later plan.</figcaption>
+</figure>
+</article>
+
+<article class="card" id="idea-8">
+<div class="chiprow"><span class="chip rank">8</span><span class="chip axis">ci-integrity</span><span class="chip">Confidence 65%</span><span class="chip">Complexity High</span></div>
+<h3>Two-tier measurement — ratio-gated PR lane, pinned-hardware headline lane</h3>
+<dl class="fields">
+<dt>Description</dt>
+<dd>Split the matrix into two lanes with different physics. The <strong>PR lane</strong> runs on shared runners and therefore gates only on <em>ratios</em>: the plain-consumer arm is co-scheduled inside every cell's job as a standard candle, and assertions are "speedup vs serial ≥ floor" / "sidecar tax ≤ ceiling" — both arms see the same noisy machine, so the quotient is stable where the absolute number never is. Cheap relative-regression signal can come from the mock-Kafka <code>ProxyHarness</code> path (no Docker, sub-10&nbsp;s). The <strong>headline lane</strong> produces the absolute numbers for the README/demo on pinned hardware (the self-hosted 16-core runner or nightly cron), appending to a trend view; only its blessed results feed <code>performance-profile.d</code>. A nightly full 5×3×13 run plus touched-cells-only on PRs (reusing the deferred-wave gating) keeps cost bounded.</dd>
+<dt>Basis</dt>
+<dd><code>direct:</code> <code>pr-highcpu-fast-feedback.yml</code> — "accurate benchmarking belongs in a separate isolated/on-demand run" (verifier-confirmed verbatim; this <em>corrects</em> the generation-time claim that the perf lane is excluded from CI — it is in fact a required PR gate today, which strengthens the case for separating gating from measuring); <code>ProxyHarness</code> — "no broker, no Docker, sub-10-second unit-test speed"; learnings — absolute wall-clock assertions are the first thing to break on 2-core runners; the no-retry policy. <code>external:</code> containerization measurably distorts absolute numbers (CI = relative regression only); github-action-benchmark / Conbench for trend dashboards; astronomy's standard-candle pattern.</dd>
+<dt>Rationale</dt>
+<dd>This is the only assertion shape that survives shared-runner noise under the repo's no-retry discipline — an absolute gate would either flake constantly or get quietly loosened until meaningless. It also honors the external consensus that CI numbers and headline numbers are different products.</dd>
+<dt>Downsides</dt>
+<dd>Largest infrastructure footprint of the set: nightly cron, trend storage, and a pinned-hardware lane the team must own. Mock-Kafka regression signal doesn't exercise the real broker path, so it can miss broker-coupled regressions. Ratio floors still need calibration to avoid their own flakiness. Confidence is Medium because the two-lane split reshapes existing required checks, which is a team-level CI decision.</dd>
+</dl>
+<div class="cols">
+  <div class="lane">
+    <span class="eyebrow">PR lane — every push</span>
+    <ul>
+      <li>shared runners; mock-Kafka fast path</li>
+      <li>plain-consumer candle co-scheduled per cell</li>
+      <li>gates on <strong>ratios</strong> only; no retries</li>
+      <li>touched cells only; deferred rows skip with reason</li>
+    </ul>
+  </div>
+  <div class="lane alt">
+    <span class="eyebrow">Headline lane — nightly / on demand</span>
+    <ul>
+      <li>pinned hardware (16-core self-hosted)</li>
+      <li>full 5 arms × 3 scenarios × 13 languages</li>
+      <li>absolute numbers; trend dashboard</li>
+      <li>blessed results → <code>performance-profile.d</code></li>
+    </ul>
+  </div>
+</div>
+</article>
+</section>
+
+<section id="rejection-summary">
+<h2>Rejection Summary</h2>
+<p>48 raw ideas plus 4 cross-cutting syntheses merged to 21 verified candidates; the fresh-context verifier returned 18 sound / 3 weak / 0 refuted. Idea 6 (the live polyglot performance loop) was added after the run, during discussion on 2026-08-17 — its quoted bases were read directly from the language-proxy plan and parked notes in the <code>polyglot-demo-ideation</code> worktree, but did not pass through the run's verifier. Rejections and merges:</p>
+<table>
+<thead><tr><th>#</th><th>Idea</th><th>Reason rejected or merged</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Extend BrokerIntegrationTest, never DbTest (Postgres tax)</td><td>Real and verified, but below the meeting-test — a base-class choice, not a team decision; carried as an implementation note inside idea 1.</td></tr>
+<tr><td>2</td><td>Publish-the-losing-case as a standalone item</td><td>Sub-feature of the charter; merged into idea 2 (verifier concurred).</td></tr>
+<tr><td>3</td><td>"Performance lane is excluded from regular CI" basis</td><td>Refuted by verification — the perf suite is a required PR gate in <code>maven.yml</code> today; idea 7 re-based on <code>pr-highcpu-fast-feedback.yml</code>'s own separate-run statement.</td></tr>
+<tr><td>4</td><td>Conformance-green prerequisite ("type rating") as standalone</td><td>Folded into idea 1's admission gates; identical machinery (<code>ScenarioCoverageTest</code> + registry).</td></tr>
+<tr><td>5</td><td>Engine-side timing as standalone</td><td>Folded into idea 1 — it is the measurement half of the same architecture decision.</td></tr>
+<tr><td>6</td><td>Keyspace sweep, sweep-only schema, open-loop rate, one-topology KS arms (4 separate candidates)</td><td>Merged into idea 3 — one workload-schema decision, per verifier's overlap flag.</td></tr>
+<tr><td>7</td><td>Parity gate / parc fermé / lockfile (3 variants), provenance stamp, saboteur (3 variants)</td><td>Merged into idea 6 — one trust-architecture decision.</td></tr>
+<tr><td>8</td><td>Docs-as-data results (5 frame-variants), energy label, one-command script</td><td>Merged into idea 5 — one publication-pipeline decision.</td></tr>
+<tr><td>9</td><td>Ratio/candle gating, two-tier lanes (5 variants), nightly cron</td><td>Merged into idea 7.</td></tr>
+<tr><td>10</td><td>gRPC-dashboard-style continuous GKE deployment; generic PR-comment regression bot; OMB-style YAML DSL as separate items</td><td>Cut by generating agents as warm-ups: already present in grounding as prior art or subsumed by ideas 3, 5 and 7.</td></tr>
+<tr><td>11</td><td>StreamsApp path citation</td><td>Correction, not rejection: the example lives at <code>parallel-consumer-examples/parallel-consumer-example-streams/…</code> (an evidence dossier cited a wrong path).</td></tr>
+</tbody>
+</table>
+<p>No axis ended with zero survivors; no recovery dispatch was needed.</p>
+</section>
+
+<footer class="composition-signal">Composed 2026-08-17 by ce-ideate (repo-grounded run 34db8c31) from the user's focus prompt on <code>feats/proxy-requirements</code> / PR astubbs#293 · grounding: 5 evidence dossiers, learnings corpus, external web research · verification: fresh-context basis check, 21 candidates · updated 2026-08-17: idea 6 added in discussion (live polyglot performance loop)</footer>
+
+</div>
+</body>
+</html>
