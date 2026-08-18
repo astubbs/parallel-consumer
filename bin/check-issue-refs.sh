@@ -86,9 +86,12 @@ try {
 
 // Mirror CI's body handling whenever a body is reachable: honour the opt-out, scan the body.
 // `gh pr view` resolves the PR from the current branch; ANY failure (no PR yet, gh missing,
-// offline, or the 3s timeout - this runs inside the pre-commit hook, whose whole budget is
-// ~1.5s, so a hung network call must be bounded) degrades to the body-less behaviour, and the
-// failure message says which run this was.
+// offline, or the timeout) degrades to the body-less behaviour, and the failure message says
+// which run this was. The timeout is 1000ms because this script is one of SIX sequential gates
+// in .githooks/pre-commit, whose stated budget is ~1.5s TOTAL - a slower-than-that gh answer
+// must lose to the hook staying fast, or the hook gets --no-verify'd by habit and protects
+// nothing. A body the pre-commit run missed is still caught at CI, so the cost of a timeout
+// here is a deferred check, never a lost one.
 let prBody = null, prNumber = null;
 try {
   // The branch is passed explicitly because `gh pr view` REFUSES to infer it when -R is given
@@ -98,7 +101,7 @@ try {
   if (branch === "HEAD") throw new Error("detached HEAD - no branch to resolve a PR from");
   const pr = JSON.parse(execFileSync("gh",
     ["pr", "view", branch, ...(repo ? ["-R", repo] : []), "--json", "number,body"],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000 }));
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1000 }));
   prBody = pr.body || "";
   prNumber = pr.number;
 } catch { /* body unreadable this run */ }
