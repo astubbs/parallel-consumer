@@ -21,10 +21,14 @@ refactoring.md, or record it as dead. Do NOT delete any of these before that loo
 
 Observability cohort (plausibly one work group):
 
-- `feature/auto-tuning-pressure`
 - `feature/progress-monitoring`
 - `feature/health-metrics`
 - `feature/micrometer` (basename-only reference; confirm what tracks it)
+
+Resolved since the audit: `feature/auto-tuning-pressure` is NOT observability - its commits ("Wip!
+Experiments in self tuning", reworking WorkManager/backpressure) make it the hand-rolled twin of
+`features/dynamic-concurrency-control`, i.e. the astubbs#227 flow-control family. Catalogued in
+`docs/refactoring.md` (Flow control / self-tuning) and tracked by `next-auto-scaling.md`.
 
 Defect / correctness cohort:
 

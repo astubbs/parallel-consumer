@@ -13,6 +13,7 @@ their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
+| `ReactorBatchTest.simpleBatchTest(ProcessingOrder)[3]` | 1 seen (2026-08-18) | Not from the original scan - found while babysitting astubbs#308 (docs-only branch, head `d930ca98d`). Awaitility `ConditionTimeout`, alias 'expected number of batches' (30s), in the shared `BatchTestMethods` lambda; passed on re-run at `bb5799df0`. UNDIAGNOSED - classify (contention vs product) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
