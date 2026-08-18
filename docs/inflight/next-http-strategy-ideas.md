@@ -1,8 +1,11 @@
 # HTTP strategy: dialects, compatibility surfaces, and adapters
 
 Captured 2026-08-15 while the thinking was fresh. **Ideas, not decisions** — the point is to get the
-option space down before it evaporates, and to name what would settle each choice. A proper ideation
-pass is owed; this is the seed for it.
+option space down before it evaporates, and to name what would settle each choice. The ideation pass
+this seeded has now run (2026-08-17):
+[`../ideation/2026-08-14-language-proxy-interaction-model-ideation.html`](../ideation/2026-08-14-language-proxy-interaction-model-ideation.html),
+the HTTP-strategy continuation (ideas 14–20) — it discharges §2's REST-Proxy feasibility unknown (compatible-and-beneficial, v2 only) and
+refutes the pull-shaped native dialect; read it before extending this note.
 
 The frame that makes the rest coherent: **one set of semantics, many encodings.** The engine and its
 meaning stay single-sourced; what varies is how a client speaks to it. Everything below is an
