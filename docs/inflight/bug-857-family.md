@@ -28,6 +28,25 @@ that cannot occur in that mode. Mode is the discriminator:
 **Record the commit mode with every future sighting.** It is one line and it is what makes a sighting
 decidable.
 
+## A fourth open item: an eager stall the astubbs#29 fix does not close
+
+Added 2026-08-18, from the first seed replays (`test-857-revoke-under-work-sightings.md` holds the
+grid and the confounds). Mode-compatibility was the best evidence this file had for attributing the
+eager `ChaosRevokeUnderWorkIT` sightings to astubbs#29's cycle. **The replay spends that evidence:**
+two recorded seeds reproduced `CLASS2_STALL/LAG_STAGNATION` six times out of six on the arm carrying
+the fix, and a *fresh* seed did the same on that arm with no replay machinery involved.
+
+So the count in this file's opening line is now a floor, not a total. What remains unattributed is a
+protocol-invisible stall in `PERIODIC_CONSUMER_SYNC`: group STABLE, heartbeats flowing, and a
+partition committed-frozen for 100s of the *quiet* phase against ~40s of legitimate recovery.
+
+**This does not weaken the case for astubbs#29's fix**, which is proven on its own instrument
+(60/60 failing before, 0/60 after). It removes a symptom that fix was never shown to own.
+
+**The mode table above still stands** - it says which defect *can* explain a sighting, and the
+replay changes nothing about the code paths. What the replay establishes is that "can" was doing
+work it could not support: mode-compatibility narrows the candidates and never attributes.
+
 ## astubbs#29's own reproducer cannot currently settle anything
 
 `RebalanceEoSDeadlockTest` fails 5/5 in CI on that branch for two reasons independent of the

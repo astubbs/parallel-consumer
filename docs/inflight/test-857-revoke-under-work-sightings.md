@@ -183,6 +183,14 @@ arm, same `CLASS2_STALL/LAG_STAGNATION`, and the same 154s against a 150s bound.
 occurrences seven weeks apart, in the only mode where astubbs#29's cycle can close, is the strongest
 evidence this file holds that the second sighting was not a one-off interleaving.
 
+> **Corrected 2026-08-18 by the replay above, in two directions.** The 154s is **not** a shared
+> fingerprint - it is the 150s bound plus the probe's poll cadence, so every stall of this class
+> reports ~154s and the agreement is the detector's, not the defect's. What still holds is the
+> weaker and sufficient claim: same test, same eager arm, same violation class, plus that
+> arithmetic control arm. And "the only mode where astubbs#29's cycle can close" is a statement
+> about *possibility* that the replay has now cashed out - the stall reproduces six times out of
+> six **with the fix applied**, so mode-compatibility must no longer be read as attribution.
+
 **The control arm is unusually strong, and needs no replay to hold.** The same lane passed on the two
 immediately preceding heads of that branch, `87152f7b4` and `a1db0f109`. The diff from `a1db0f109` to
 `151d86202` contains **zero non-comment Java lines** - comments, javadoc and markdown only, so the
