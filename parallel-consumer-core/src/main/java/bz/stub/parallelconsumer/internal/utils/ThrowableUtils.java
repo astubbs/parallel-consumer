@@ -105,8 +105,10 @@ public class ThrowableUtils {
                 try {
                     reported.addSuppressed(loggingItFailed);
                 } catch (Throwable evenThatFailed) {
-                    // addSuppressed runs no user code, but a throwable built with suppression disabled ignores it
-                    // and a subclass may override it. Nothing left to do but not make it worse.
+                    // addSuppressed is final and checks its own null/identity preconditions, so it cannot be
+                    // overridden and no throw is constructible here - a throwable built with suppression disabled
+                    // silently ignores the call rather than failing. Kept as a belt-and-braces catch on the one
+                    // path whose entire contract is "never add a second failure to the one being reported".
                 }
             }
         }

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 
 /**
  * Overrides key aspects required in common for other threading engines like Vert.x and Reactor
@@ -91,5 +92,37 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      */
     // TODO: Now that the modules don't use the internal threading systems at all, is this method redundant as all work from a module extension would return true
     protected abstract boolean isAsyncFutureWork(List<?> resultsFromUserFunction);
+
+    /**
+     * Records an async failure against every container in the batch and returns each to the mailbox - each container
+     * independent of the others, and all of it before the failure is rendered anywhere.
+     * <p>
+     * Record BEFORE rendering, because {@code throwable} is the user's own async failure: logging it runs their
+     * {@code getCause}/{@code getMessage} inside the logging binding's stack-trace walk, and if that throws, any
+     * container not yet completed stays marked in flight forever - the failure is the thing that must be recorded,
+     * the log line is the thing that can be lost. So callers log their fail signal AFTER this returns, guarded with
+     * {@link bz.stub.parallelconsumer.internal.utils.ThrowableUtils#logWithoutEscaping}.
+     * <p>
+     * Per container, independent of the others - the same shape core's {@code runUserFunction} loop uses, and for
+     * the same reason. {@link WorkContainer#onUserFunctionFailure} runs USER code (the retryDelayProvider, via
+     * updateFailureHistory), so one container's failure must not stop the batch: every container after it would
+     * then never reach {@link #addToMailbox} and would stay in flight forever.
+     */
+    protected void recordFailureAndReturnBatchToMailbox(PollContextInternal<K, V> pollContext, Throwable throwable) {
+        pollContext.streamWorkContainers().forEach(wc -> {
+            try {
+                wc.onUserFunctionFailure(throwable);
+            } catch (Throwable bookkeepingThrew) {
+                log.error("Failed to record the user function failure against {} - the record is still returned to " +
+                        "the mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
+            }
+            try {
+                addToMailbox(pollContext, wc);
+            } catch (Throwable mailboxingThrew) {
+                log.error("Failed to return {} to the mailbox - it may stay in flight. Cause: {}", wc,
+                        describeWithRootCause(mailboxingThrew));
+            }
+        });
+    }
 
 }

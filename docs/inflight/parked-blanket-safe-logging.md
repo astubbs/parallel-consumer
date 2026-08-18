@@ -86,9 +86,16 @@ exception - library classes with ordinary cause chains and no overridden `getCau
 *guaranteed* safe in the abstract, but not adversarial either, which is the property that matters.
 They were never at risk, so they are not "sites needing an exemption". The sites these doors actually
 reach are guarded: astubbs#267 covers the control loop, `waitForClose`, `doClose`, both
-`BrokerPollSystem` rethrow blocks and the four user-function/async render sites; astubbs#29 covers the
-revoke path and the three `innerDoClose` warns, taking `logWithoutEscaping` and
-`describeWithRootCause` from astubbs#267 rather than reinventing them.
+`BrokerPollSystem` rethrow blocks, `runUserFunction`, and all three engines' fail-signal renders -
+Reactor and Mutiny via `ExternalEngine.recordFailureAndReturnBatchToMailbox`, vert.x in its own
+`send.onFailure`. astubbs#29 covers the revoke path and the three `innerDoClose` warns, taking
+`logWithoutEscaping` and `describeWithRootCause` from astubbs#267 rather than reinventing them.
+
+**Vert.x was the last one, and it was missed four review rounds running** - the engine got the
+record-before-render reorder but not the guard on the render itself, and this note asserted the whole
+set was covered before it was. It is worth naming because the same site was missed the same way each
+time: sweeping by *module* keeps finding the engines that look alike, and vert.x does not - it handles
+one container per failure rather than a batch, so it falls out of every batch-shaped grep.
 
 **One known instance of the shape, deliberately left**: `ParallelEoSStreamProcessor` logs
 `Closing parallel Consumer due to InvalidPidMappingException` and only then calls

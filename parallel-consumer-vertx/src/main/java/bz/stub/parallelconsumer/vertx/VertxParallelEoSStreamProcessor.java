@@ -40,6 +40,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 
 /**
@@ -218,17 +220,36 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 // skipped here is the work container's own completion: the record would stay marked in flight
                 // forever, stalling ordering and draining. The failure is the thing that must be recorded; the
                 // log line is the thing that can be lost.
-                wc.onUserFunctionFailure(h);
-                addToMailbox(context, wc);
+                // Each step guarded separately, because vert.x will NOT contain a throw for us: FutureImpl's
+                // listener array iterates its listeners with no per-listener try/catch, so anything escaping this
+                // handler skips every remaining listener - including the sibling containers' own handlers, which
+                // strands their records in flight forever. Core, Reactor and Mutiny all guard this; this was the
+                // last engine that did not.
+                try {
+                    wc.onUserFunctionFailure(h);
+                } catch (Throwable bookkeepingThrew) {
+                    // user code - the retryDelayProvider, via updateFailureHistory
+                    log.error("Failed to record the send failure against {} - the record is still returned to the " +
+                            "mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
+                }
+                try {
+                    addToMailbox(context, wc);
+                } catch (Throwable mailboxingThrew) {
+                    log.error("Failed to return {} to the mailbox - it may stay in flight. Cause: {}", wc,
+                            describeWithRootCause(mailboxingThrew));
+                }
 
                 // the throwable rather than its message: this is the only record of why a send failed, and
                 // getMessage() alone drops the type, the cause chain and the stack - and reads "fail: null"
-                // for anything thrown without a message
-                if (PCRetriableException.isPresentIn(h)) {
-                    log.debug("Vert.x Vertical fail", h);
-                } else {
-                    log.error("Vert.x Vertical fail", h);
-                }
+                // for anything thrown without a message. Guarded, because h is the user's throwable and the
+                // logging binding walks its cause chain unbounded.
+                logWithoutEscaping(h, () -> {
+                    if (PCRetriableException.isPresentIn(h)) {
+                        log.debug("Vert.x Vertical fail", h);
+                    } else {
+                        log.error("Vert.x Vertical fail", h);
+                    }
+                });
             });
 
             // add plugin callback hook

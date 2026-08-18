@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
@@ -778,6 +779,56 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         await().atMost(ofSeconds(20))
                 .untilAsserted(() -> assertWithMessage("redelivered, so the container was mailboxed despite the "
                         + "provider throwing").that(attempts.get()).isAtLeast(2));
+    }
+
+    /**
+     * A provider that RETURNS something unusable is worse than one that throws, so it gets its own coverage.
+     *
+     * <p>A throwing provider is caught. A provider that returns {@code null}, a negative delay, or one so large
+     * that {@code Instant.plus} overflows fails <em>after</em> that guard, in the arithmetic. The container
+     * survives - but {@code retryDueAt} is left unset, and unset reads as {@link java.time.Instant#MIN}, meaning
+     * "due now". The record is then retried immediately and forever, with no backoff and no warning: a hot loop
+     * against exactly the thing the user wrote a provider to back off from.
+     *
+     * <p>Asserted as an interval rather than a count: "it was retried" passes in the broken case too, because the
+     * broken case retries constantly. The distinguishing signal is that the retries are SPACED.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "negative", "overflow"})
+    @Timeout(value = 60, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aRetryDelayProviderReturningRubbishStillBacksOff(String shape) {
+        var attemptTimes = new ConcurrentLinkedQueue<Long>();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .defaultMessageRetryDelay(ofSeconds(1))
+                .retryDelayProvider(ignored -> {
+                    switch (shape) {
+                        case "null":
+                            return null;
+                        case "negative":
+                            return ofSeconds(-5);
+                        default:
+                            return Duration.ofSeconds(Long.MAX_VALUE / 2); // Instant.plus cannot represent this
+                    }
+                })
+                .build());
+        primeFirstRecord();
+
+        parallelConsumer.poll(context -> {
+            attemptTimes.add(System.currentTimeMillis());
+            throw new RuntimeException("ordinary user failure");
+        });
+
+        await().atMost(ofSeconds(30)).until(() -> attemptTimes.size() >= 3);
+
+        var times = new ArrayList<>(attemptTimes);
+        long shortestGap = Long.MAX_VALUE;
+        for (int i = 1; i < times.size(); i++) {
+            shortestGap = Math.min(shortestGap, times.get(i) - times.get(i - 1));
+        }
+        assertWithMessage("retries are spaced by the fallback delay, not hot-looping (shape: %s)", shape)
+                .that(shortestGap).isAtLeast(500L);
     }
 
     @ParameterizedTest

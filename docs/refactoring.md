@@ -65,6 +65,15 @@ non-breaking and can land any time - these change the public, user-visible surfa
 so they are **release-gated**: do not fold them into a minor/patch. Collected here
 so a major-release prep can action them in one pass.
 
+- **ALREADY REMOVED, recorded late - `public List<Consumer<WorkContainer<K, V>>> getSuccessfulWorkListeners()`**
+  on `state/WorkManager.java`. Replaced by `addSuccessfulWorkListener` in astubbs#267, because handing
+  out the mutable list let a caller register from any thread onto a collection the control loop
+  iterates every cycle - the `ConcurrentModificationException` that silently stopped the consumer, and
+  the defect that PR exists to fix. The encapsulation is right and the getter had no in-tree caller,
+  but it was public on a Maven-Central artefact, so an external caller cannot be ruled out by grep.
+  **Listed here for the major-version release notes rather than as work to do** - this one is already
+  done, and the entry exists so the bump does not ship an unannounced removal.
+
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**

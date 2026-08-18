@@ -143,6 +143,28 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     /**
      * @return the delay between retries e.g. retry after 1 second
      */
+    /**
+     * When this record next becomes eligible, defended against every shape a user's provider can hand back.
+     * <p>
+     * Guarding only the provider that <em>throws</em> was not enough, and the gap was worse than the hole it
+     * left: a provider returning {@code null}, a negative {@code Duration}, or one large enough to overflow
+     * {@link Instant#plus} throws <b>after</b> that guard, from the arithmetic here. The caller's own guards then
+     * catch it and the container survives - but {@code retryDueAt} is left unset, and unset reads as
+     * {@link Instant#MIN}, which means "due now". The record is retried immediately, forever, with no backoff and
+     * no warning: a hot loop against whatever the user was trying to back off from.
+     */
+    private Instant computeRetryDueAt(Instant failedAt) {
+        Duration delay = getRetryDelayConfig(); // never throws
+        try {
+            return failedAt.plus(delay);
+        } catch (RuntimeException notRepresentable) {
+            // a Duration large enough that failedAt + it falls outside Instant's range
+            warnBrokenRetryDelayProvider("returned a delay that cannot be applied (" + delay + ")",
+                    notRepresentable);
+            return failedAt.plus(module.options().getDefaultMessageRetryDelay());
+        }
+    }
+
     public Duration getRetryDelayConfig() {
         var options = module.options();
         var retryDelayProvider = options.getRetryDelayProvider();
@@ -150,31 +172,50 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             return options.getDefaultMessageRetryDelay();
         }
         try {
-            return retryDelayProvider.apply(new RecordContext<>(this));
+            Duration theirs = retryDelayProvider.apply(new RecordContext<>(this));
+            if (theirs == null) {
+                warnBrokenRetryDelayProvider("returned null", null);
+                return options.getDefaultMessageRetryDelay();
+            }
+            if (theirs.isNegative()) {
+                // would make the record due before it failed - same hot-retry outcome as an unset retryDueAt
+                warnBrokenRetryDelayProvider("returned a negative delay (" + theirs + ")", null);
+                return options.getDefaultMessageRetryDelay();
+            }
+            return theirs;
         } catch (Throwable theirProviderThrew) {
-            // The user's provider runs in the MIDDLE of this container's failure bookkeeping - via
-            // updateFailureHistory, from onUserFunctionFailure - and letting it escape left the container half
-            // transitioned: maybeUserFunctionSucceeded never set, so isUserFunctionComplete stayed false and the
-            // record was never retried, never released, and never redelivered. A permanent stall, caused by a
-            // user function that only wanted a different retry delay.
-            //
-            // Falling back to the configured default keeps the transition total. Logged rather than swallowed,
-            // and guarded because this is the failure path and the throwable is theirs.
-            // Rate limited, because this is a CODING error: a provider that throws once almost certainly throws
-            // every time, and this runs per failed record per attempt - so an unlimited warn turns one broken
-            // lambda into thousands of identical lines, burying the very message that explains them.
-            module.brokenRetryDelayProviderWarnLimiter().performIfNotLimited(() ->
-                    ThrowableUtils.logWithoutEscaping(theirProviderThrew, () ->
-                            log.warn("Your retryDelayProvider threw - falling back to defaultMessageRetryDelay ({}) " +
-                                            "while it keeps failing. Records are unaffected and still retried, but " +
-                                            "your intended backoff is NOT being applied, so a struggling downstream " +
-                                            "will be retried harder than you configured. Fix the provider. " +
-                                            "This warning is rate limited to once per {}. First seen on {}. Cause: {}",
-                                    options.getDefaultMessageRetryDelay(), module.brokenRetryDelayProviderWarnLimiter().getRate(),
-                                    this, ThrowableUtils.describeWithRootCause(theirProviderThrew),
-                                    theirProviderThrew)));
+            warnBrokenRetryDelayProvider("threw", theirProviderThrew);
             return options.getDefaultMessageRetryDelay();
         }
+    }
+
+    /**
+     * One message for every way a {@code retryDelayProvider} can be broken, because they all cost the same thing.
+     * <p>
+     * The provider runs in the MIDDLE of this container's failure bookkeeping - via {@code updateFailureHistory},
+     * from {@link #onUserFunctionFailure}. Whatever it does wrong, PC falls back to the configured default so the
+     * transition stays total and the record keeps moving; what the user loses is the backoff they asked for.
+     * <p>
+     * <b>Rate limited</b>, because this is a CODING error rather than a transient: a provider broken once is
+     * almost certainly broken every time, and this runs per failed record per attempt - so an unlimited warning
+     * turns one bad lambda into thousands of identical lines, burying the message that explains them.
+     *
+     * @param whatItDid  the shape of the breakage, completing "Your retryDelayProvider ..."
+     * @param theirs     the throwable if it threw, otherwise null - it returned something unusable instead
+     */
+    private void warnBrokenRetryDelayProvider(String whatItDid, Throwable theirs) {
+        var options = module.options();
+        var limiter = module.brokenRetryDelayProviderWarnLimiter();
+        limiter.performIfNotLimited(() ->
+                ThrowableUtils.logWithoutEscaping(theirs, () ->
+                        log.warn("Your retryDelayProvider {} - falling back to defaultMessageRetryDelay ({}) while " +
+                                        "it keeps happening. Records are unaffected and still retried, but your " +
+                                        "intended backoff is NOT being applied, so a struggling downstream will be " +
+                                        "retried harder than you configured. Fix the provider. This warning is rate " +
+                                        "limited to once per {}. First seen on {}.{}",
+                                whatItDid, options.getDefaultMessageRetryDelay(), limiter.getRate(), this,
+                                theirs == null ? "" : " Cause: " + ThrowableUtils.describeWithRootCause(theirs),
+                                theirs)));
     }
 
     @Override
@@ -253,8 +294,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         numberOfFailedAttempts++;
         lastFailedAt = of(Instant.now(module.clock()));
         lastFailureReason = Optional.ofNullable(cause);
-        Duration retryDelay = getRetryDelayConfig();
-        retryDueAt = of(lastFailedAt.get().plus(retryDelay));
+        retryDueAt = of(computeRetryDueAt(lastFailedAt.get()));
     }
 
     public boolean isUserFunctionComplete() {
