@@ -34,6 +34,34 @@ Perl, R, older runtimes — then a small C shim over the protocol becomes the re
 FFI argument is the right one. That is a decision about serving a long tail, and it should be taken
 on evidence that the tail exists rather than on symmetry with librdkafka.
 
+## SUPERSEDED BY KTD41, 2026-08-18 - read this before the rest of the file
+
+**The rejection recorded below no longer stands, and the section headed "PRIOR ART FOUND LATE" is the
+part that went stale.** KTD41 (`96131dd6d`, session-settled, user-directed) supersedes the
+shared-library dead end **on direction** in both the plan and the branch ledger: the owner proposed
+the direction, so the rejection half dissolves. What survives is the untested caveats, now recast as a
+**qualification probe's checklist** rather than as reasons not to look.
+
+**Two things KTD41 settles that this file predates:**
+
+- **The FFI track is re-scoped to Rust, C++ and edge targets.** Go, Python, Ruby, Node and .NET stay
+  on the sidecar, for reasons a better FFI design does not remove. That is the same place the
+  per-language callback breakdown below arrived at independently - difficulty and demand rank together
+  - with one owner's correction: .NET moves to the sidecar side.
+- **The sidecar becomes invisible rather than operated.** Every language package vendors the
+  platform-matched binary and spawns it on first use; attaching to a supplied address is the escape
+  hatch for preforking process models and platforms that forbid executing a vendored binary. That
+  changes the comparison this file was making, because the thing FFI was competing against - "a second
+  process the user must operate" - largely stops existing.
+
+**The probe is gated: kill criterion first, measured against KTD41's invisible-sidecar control arm.**
+So the experiment framing recorded further down survives; only the verdict it was arguing against has
+changed.
+
+**The plan owns this now.** Read `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` - KTD41, its
+Scope Boundaries entry and its Dead ends section - before acting on anything below. What is kept here
+is the per-language callback evidence, which nothing else records.
+
 ## PRIOR ART FOUND LATE: the plan already rejected this, and already measures the hop
 
 Recorded 2026-08-15 as a correction. The section below was written and discussed **without checking
