@@ -772,6 +772,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.debug("Awaiting worker pool termination...");
         awaitingInflightProcessingCompletionOnShutdown.getAndSet(true);
         boolean awaitingInflightCompletion = true;
+        boolean interruptedWhileAwaitingTermination = false;
         while (awaitingInflightCompletion) {
             log.debug("Still awaiting completion of inflight work");
             try {
@@ -791,11 +792,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     workerThreadPool.get().awaitTermination(toSeconds(Duration.ofSeconds(1)), SECONDS);
                 }
             } catch (InterruptedException e) {
-                // Restore the flag - swallowing it here strands anything waiting on this thread.
-                Thread.currentThread().interrupt();
+                // Do NOT restore the flag here: awaitTermination throws IMMEDIATELY while the flag is
+                // set, so restoring it inside this retry loop turns the loop into a 100% CPU livelock
+                // that never reaches shutdownNow() - the user function is never interrupted, the pool
+                // never terminates, and close() times out (executorThreadsInterruptedOnShutdownTimeout,
+                // ~24s, any commit mode, under parallel-suite load). The throw has already cleared the
+                // flag, so the retry below waits normally. Remember the interrupt and restore it once,
+                // after the loop, so callers of this thread still observe it.
+                interruptedWhileAwaitingTermination = true;
                 log.debug("Interrupted while awaiting worker pool termination; will keep awaiting", e);
                 awaitingInflightCompletion = true;
             }
+        }
+        if (interruptedWhileAwaitingTermination) {
+            // Restore the flag - swallowing it entirely strands anything waiting on this thread.
+            Thread.currentThread().interrupt();
         }
         awaitingInflightProcessingCompletionOnShutdown.getAndSet(false);
 
