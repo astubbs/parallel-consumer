@@ -193,3 +193,6 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap -
   Testcontainers on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than
   a misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
+- **The `@claude` trigger fires on prose about it**, so a comment merely discussing the mechanism
+  starts a billed job. Own note, since it is a distinct open defect:
+  [`ci-claude-trigger-fires-on-prose.md`](ci-claude-trigger-fires-on-prose.md).

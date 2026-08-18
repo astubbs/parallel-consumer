@@ -312,6 +312,21 @@ leaves all six fork-only tags unavailable. Verifying
 the tags still exist needs no fetch at all: `git ls-remote --tags origin 'archive/upstream-pr-*'`
 asks the remote directly.
 
+**The same pass, run over branch tips instead of swept PR heads (2026-08-17):** every
+`upstream/*` branch tip was checked for containment in any origin branch *or tag* (the tag half is
+what the 2026-08-14 command missed - `git branch -r --contains` cannot see the archive tags, so
+re-running it verbatim would report four already-preserved heads as lost). Ten non-bot tips were
+reachable from nothing on this fork and are now pinned as `archive/upstream-branch/<name>` annotated
+tags: the release-line branches (`0.5.3.x`, `v0.5.2.x-dev`, `v0.6.x`), upstream's final `master`,
+`docs/back-pressure` (the swept confluentinc#508 head, out of the 2026-08-14 pass's scope),
+`features/batching`, `PL-176/DontDrainIssue` (content unassessed - flagged in
+`docs/inflight/next-branch-audit-orphans.md`), `python-cd-pipeline`, `correct-failing-license-check`,
+and `DP-12547` (already ruled out as content below; pinned so the ruling stays checkable). The 18
+dependabot/renovate/chore branches were deliberately not preserved - recreatable version bumps, not
+work. Tag names, SHAs and check date live only in `preserved_branch_tips` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), same contract as
+`preserved_heads`.
+
 **Re-running this is not yet automated.** Branches get deleted, so a head safe today can be orphaned
 tomorrow - but no script checks it: `--audit` covers tracking and mirroring, not reachability, and
 would report clean with every tag above deleted. Until a containment check is wired into

@@ -115,6 +115,14 @@ consumer-group progress evidence so the contention-versus-product-bug question i
 manual diagnosis starts. Its verdict is only informative when its detectors could have fired for the
 test in question — a short, low-volume test cannot trip them, and a clean reading there means nothing.
 
+**Red-proof**
+The verification that a new or extended test fails against the code as it was before the fix it
+guards — a regression test that has never failed proves nothing.
+
+The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
+both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
+first evidence against the method, not for the code.
+
 ## Flagged ambiguities
 
 - **"Stall", "load-tightness flake" and "unforceable trigger" had been used loosely for the same red
