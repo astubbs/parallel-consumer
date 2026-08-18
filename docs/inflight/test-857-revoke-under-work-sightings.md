@@ -9,9 +9,9 @@ close** - the cycle's second edge lives in `ConsumerOffsetCommitter`, constructe
 consumer-commit modes, and among those only the *sync* arm blocks. The scenario's own javadoc says
 the mode was chosen to maximise revoke-path vs commit-path lock contention.
 
-Mode-compatible is not the same as attributed. **No seed here has ever been replayed**, the third
-sighting has no probe verdict at all, and the fourth has no seed to replay - so of four sightings,
-two carry a reproducer and neither has been run. Compare `test-857-churn-storm-async-stalls.md`, whose
+Mode-compatible is not the same as attributed. **No seed here has ever been replayed** - of five
+sightings four now carry a reproducer, and not one has been run. The third sighting has no probe
+verdict at all; the fourth's seed was recorded as lost and then recovered, see its own correction. Compare `test-857-churn-storm-async-stalls.md`, whose
 sightings are in a mode where the cycle cannot close.
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
@@ -154,3 +154,80 @@ XML rather than the console log. Here the console returned **zero** matches for
 run - while the artifact's failsafe XML carried the violation, the autopsy and the frozen-partition
 table above. The advice was written from a case where the log carried no verdict either way; this is
 a case where it carried a false *negative*, which is worse, and the same check caught it.
+
+
+**Fifth sighting, 2026-08-18 - the same signature a third time, ten times as wide, and the first one
+whose seed arrived with the violation.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest`
+- the **eager** variant again - killed by `ProgressProbe` on
+[job 95879300043](https://github.com/astubbs/parallel-consumer/actions/runs/32189088516), at head
+`53d4b8bbe` on astubbs#296, sixteen hours after the fourth and on the same branch. **Commit mode
+`PERIODIC_CONSUMER_SYNC`**, verified in source at `AbstractRevokeUnderWorkScenario`'s
+`.commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)`:
+
+```
+=== AMBIENT PROBE AUTOPSY (test failed): revokeUnderWorkStaysProtocolHonest() ===
+failure: TerminalFailureException: probe violation
+chaos seed: 9082185140923636480
+violations (37):
+  - CLASS2_STALL/LAG_STAGNATION: partition ChaosRevokeUnderWorkIT-w4-2065844453-3 lag=3042 with
+    committed offset stagnant at 65 for 154s (bound 150s) - protocol-invisible stall:
+    group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere
+```
+
+All 37 violations are `CLASS2_STALL/LAG_STAGNATION`, and every one of them reads 154s against the
+150s bound; lags run 587-3121. The autopsy's frozen-partition table lists 52 entries; peaks
+`rebalanceDwell=7685ms`, `lagStagnation=154313ms`.
+
+**Replay seed `9082185140923636480`** - the eager `w4` scenario, `cooperative=false`:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=9082185140923636480
+
+**37 simultaneous violations is the widest instance the family holds - and that is a fact about
+breadth, not about severity trending.** The second sighting named six partitions, the fourth four.
+This one stalls 37 of the topic's 80, with 52 in the frozen table: most of the assignment, not a
+corner of it. It is still **one seed**. Three numbers - 6, 4, 37 - are three draws from a randomised
+conductor, so nothing here says the defect is worsening, and reading a trend into them would be
+reading noise. What is not noise is that the *stagnation figure is identical*: 154s against a 150s
+bound, exactly as in the second and the fourth. Breadth varies with the interleaving; the bound is
+where the probe fires. That the widest and the narrowest instances stop at the same number is what
+makes these one signature rather than three separate incidents.
+
+**The seed arrived inside the autopsy for the first time, and that is machinery rather than luck.**
+The fourth sighting above spends a paragraph recovering its seed by a second retrieval route, and
+closes by saying the seed belongs inside the `AMBIENT PROBE AUTOPSY` block. It now is - astubbs#296
+commit `742b9821d`, *"test(chaos) confluentinc#857: carry the replay seed inside the autopsy
+block"*, which threads a `ChaosSeed` through to the `chaos seed: ` and `chaos replay: ` lines in
+`AmbientProbeExtension`. The autopsy travels in the failsafe XML that is uploaded as an artifact, so
+the seed now sits where console truncation cannot reach it. This is the first sighting captured
+after that change and the first whose seed needed no second route: it was read straight out of the
+block above. Those anchors resolve on astubbs#296's branch, not on this one - neither `ChaosSeed`
+nor the `chaos seed: ` line exists here yet.
+
+**The branch is not a suspect, and the control arm is stronger than the fourth sighting's.**
+astubbs#296 hardens work submission against an already-closed worker pool, which is not the revoke
+path. Beyond that argument, `git log --oneline 151d86202..53d4b8bbe` is six commits - five
+documentation, and `742b9821d`, which is test-harness only. The range's diff touches `docs/`,
+`docs/testing.md`, three chaos test classes, `AmbientProbeExtension` and its unit test: **no
+main-source file at all.** So the eager arm has now failed, on first attempt, at two of this
+branch's three heads - `151d86202` (the fourth sighting) and `53d4b8bbe` (this one) - with no
+production code differing between them. n=3 heads is too small to quote as a rate, but it is the
+opposite of a branch-specific explanation.
+
+**The re-run went green, and it settles nothing, because it drew a different seed.** Run
+32189088516 was re-run after this failure; attempt 2's `Chaos Pain Suite` passed. Its eager scenario
+ran `seed=7455570399125658252`, not `9082185140923636480` - the suite draws fresh per run, so the
+re-run is a different experiment, not a retraction of this one. **The only result that would retract
+it is replaying `9082185140923636480` and watching it pass.** Read the run's overall conclusion with
+that in mind: `gh run list` now reports run 32189088516 as `success`, and reports the fourth
+sighting's run 32104058992 as `success` too - that one was also re-run into green. Both failures
+live in **attempt 1**, reachable only as `/attempts/1/logs`, exactly as the fourth sighting's
+correction warns.
+
+**The cooperative arm passed in the same attempt, as it did in the two earlier eager reds.** Here
+`ChaosRevokeUnderWorkCooperativeIT` ran clean on seed `8367488744993533060`, and `ChaosChurnStormIT`
+on `7750587486126758074`. Checking attempt 1 of the fourth sighting's run shows the same shape: the
+eager arm errored, the cooperative arm passed. All three confirmed eager stalls therefore sit beside
+a green cooperative arm in the same run, which is the second sighting's "eager-protocol-specific"
+reading holding across three independent occurrences. The third sighting is still the only
+cooperative red, and still unconfirmed as a stall, so it still does not overturn that reading.
