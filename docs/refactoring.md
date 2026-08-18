@@ -156,6 +156,18 @@ Do not start one casually.
   lambda-actor-bus's `Actor`/`ActorImpl`; its commit d391398f1 records the unification as unfinished).
   Only meaningful as part of the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) rework.
   Registered in the manifest as `sweep-2023-actor-ipc` (this doc stays the editorial owner).
+- **A concrete, already-costed first slice: stop signalling the control thread by interrupting it.**
+  `Thread#interrupt` has no payload, so the one bit currently carries four meanings - wake up, stop
+  blocking, shut down, and "your next commit-lock acquisition will throw". Receivers cannot tell
+  which, so the class has accumulated four hand-clears instead of a fix, one of which does not clear
+  and merely warns that it cannot tell. astubbs#296 hit it by adding an ordinary state transition and
+  inheriting a shutdown hazard from a wakeup.
+  `ControllerEventMessage` is already an actor message in all but name and the loop already blocks on
+  its mailbox, so the first slice is small: a payload-free nudge variant, shutdown as a message, and
+  coalescing on an `AtomicBoolean` (clear **before** draining, or a nudge arriving mid-processing is
+  lost). Full design, including which of the five blocking sites a message cannot reach, in
+  [`docs/solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md`](solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md).
+  Belongs with the God-class decomposition above, not before it.
 
 ### Remove static state (unblocks parallel test execution)
 *Mirror: [#131](https://github.com/astubbs/parallel-consumer/issues/131).*

@@ -23,7 +23,11 @@ Survivors, one line each (the doc carries the substance - read it before picking
 5. Skeleton-first strangler - land the six thread-ownership interfaces as a pure refactor; the
    mailbox becomes a per-seam swap
 6. Concurrency mass budget - ArchUnit ratchet on primitive counts; conversions graded on locks
-   removed
+   removed. **One reading already taken**, if a starting instrument is wanted: the control thread's
+   interrupt flag carries four unrelated meanings and has accrued four hand-clears, one of which does
+   not clear and only warns that it cannot tell which meaning it got -
+   [`waking-a-thread-by-interrupting-it-2026-08-17.md`](../solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md)
+   has the count, the failure it caused in astubbs#296, and why a local clear can never hold
 
 Key facts the ideation verified (so nobody re-derives them): the framework proper is 537 lines in
 4 files coupled to PC by one 16-line marker interface; the two 2022 actor bases were never unified
