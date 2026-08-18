@@ -72,6 +72,43 @@ GATES=(
     "check-action-versions.sh:"
 )
 
+# FIRST, AND BEFORE ANY CONTENT GATE: are we committing in the MAIN checkout?
+#
+# AGENTS.md's rule is "Never do any work in the main checkout. Every task gets a worktree", because
+# several agent sessions share this clone at once - its HEAD can move between two of your OWN
+# commands. The failure this catches is not carelessness, it is a `cd` that outlived its command:
+# one `cd` inside a compound command (to unzip something, to run a tool) and every later command in
+# the session runs somewhere else while still looking right - same branch names, same-looking
+# paths, clean `git status`. It stays invisible until a commit lands with the wrong parent.
+#
+# This runs FIRST and exits immediately: it is a question about WHERE you are, not about what you
+# are committing, and there is no point spending the gate budget on content headed somewhere wrong.
+#
+# THE TEST: a linked worktree's --git-dir is .git/worktrees/<name> while its --git-common-dir is
+# .git; in the main checkout the two are identical. That is the only reliable distinction - branch,
+# path and status all look normal from either side.
+#
+# SCOPED so it cannot block someone who does not use worktrees: it fires only when this clone HAS
+# linked worktrees, i.e. the workflow is actually in use. A plain contributor clone or a CI checkout
+# is untouched. Drop the `worktree list` condition to make it absolute.
+#
+# BYPASS: `git commit --no-verify`, same as every other gate here, for the same reason.
+if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] \
+        && [ "$(git worktree list | wc -l)" -gt 1 ]; then
+    printf '\n'
+    printf 'pre-commit: REFUSING - this is the MAIN checkout, not a worktree.\n\n'
+    printf "  About to commit to '%s' in %s\n" "$(git rev-parse --abbrev-ref HEAD)" "$(git rev-parse --show-toplevel)"
+    printf '  This clone has %s linked worktree(s), so the work belongs in one of them.\n\n' "$(( $(git worktree list | wc -l) - 1 ))"
+    printf '  Several sessions share this checkout, so its HEAD moves under you. The usual cause is\n'
+    printf '  a `cd` in an earlier command that outlived it - everything since has run here.\n\n'
+    printf '  Check where you are, then work in the right worktree:\n'
+    printf '      git worktree list\n'
+    printf '      bin/worktree-status.sh          # who owns what\n'
+    printf '      git -C <worktree> commit ...    # -C beats cd - it cannot leak into the next command\n\n'
+    printf '  Deliberate? Re-run with --no-verify.\n\n'
+    exit 1
+fi
+
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
