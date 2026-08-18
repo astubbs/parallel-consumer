@@ -6,9 +6,9 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
 
 import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -37,7 +37,7 @@ import static org.awaitility.Awaitility.await;
  * owns the mechanics every scenario shares, so scenarios can't drift apart on them.
  */
 @Slf4j
-abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
+abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> implements ChaosSeed.Holder {
 
     /**
      * A processing function with a heavy tail: every {@code heavyEvery}-th record dwells
@@ -118,18 +118,21 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> {
         }
     }
 
-    /** Resolve the run's schedule seed: {@code -Dchaos.seed=<long>} replays a schedule; unset = random
-     * seed (always logged via {@link #replayCommand}). */
-    protected static long resolveSeed() {
-        String seedProp = System.getProperty("chaos.seed");
-        return seedProp == null ? RandomUtils.nextLong() : Long.parseLong(seedProp);
-    }
+    /**
+     * The seed this run is replayable from - {@code null} until {@link #resolveSeed()} runs inside the
+     * test method. Held on the instance, not just logged, so {@code AmbientProbeExtension} can lift it
+     * into the failure autopsy: the run-start console line carrying it does not survive a truncated CI
+     * log, and the autopsy travels in the uploaded failsafe XML instead
+     * ({@code docs/solutions/workflow-issues/gh-run-view-log-truncation.md}).
+     */
+    @Getter
+    private ChaosSeed chaosSeed;
 
-    /** The FULL replay invocation, not just the seed - a raw CI log must be self-sufficient to
-     * reproduce (the chaos tag is excluded by default, so the seed alone is not enough). */
-    protected static String replayCommand(long seed) {
-        return "./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true"
-                + " -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=" + seed;
+    /** Resolve AND record the run's schedule seed - see {@link #getChaosSeed()} for why recording it
+     * matters. {@code -Dchaos.seed=<long>} replays a schedule; unset = random. */
+    protected ChaosSeed resolveSeed() {
+        this.chaosSeed = ChaosSeed.resolve();
+        return chaosSeed;
     }
 
     /**
