@@ -127,6 +127,16 @@ coexistence with a foreign runtime, callbacks re-entering from foreign threads �
 Temporal precedent usually cited for it is narrower than it looks, since Temporal's Go and Java SDKs
 are independent implementations rather than bindings over its shared core.
 
+**Superseded 2026-08-17.** The rejection above was on direction, and the owner has now proposed the
+direction — which dissolves that half while the untested caveats stand as a qualification probe's
+checklist. The worked continuation lives in
+`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html` (the `native-bindings`
+section): the FFI track is re-scoped to Rust, C++ and edge targets; Go, Python, Ruby, Node and .NET
+are better served by the sidecar; and the run's larger outcome is KTD41 in the plan — the invisible
+sidecar (each language package vendors and spawns the cleared native executable; attach is the escape
+hatch) is the product's recovered original intent. The plan's Scope Boundaries and KTD11 carry the
+matching updates.
+
 ## Owed: the data records, and not before the module exists
 
 A new user-visible module needs three YAML records, and all three must land in the PR that lands
