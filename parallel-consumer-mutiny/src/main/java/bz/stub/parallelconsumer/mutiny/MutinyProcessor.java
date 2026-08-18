@@ -28,6 +28,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
@@ -144,9 +145,23 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
         // failure, so logging it runs their getCause/getMessage inside the logging binding's stack-trace walk. If
         // that throws, the containers below are never completed and stay marked in flight forever - the failure is
         // the thing that must be recorded, the log line is the thing that can be lost.
+        // Per container, independent of the others - the same shape core's runUserFunction loop uses, and for the
+        // same reason. onUserFunctionFailure runs USER code (the retryDelayProvider, via updateFailureHistory), so
+        // one container's failure must not stop the stream: every container after it would then never reach
+        // addToMailbox and would stay in flight forever.
         pollContext.streamWorkContainers().forEach(wc -> {
-            wc.onUserFunctionFailure(throwable);
-            addToMailbox(pollContext, wc);
+            try {
+                wc.onUserFunctionFailure(throwable);
+            } catch (Throwable bookkeepingThrew) {
+                log.error("Failed to record the user function failure against {} - the record is still returned to " +
+                        "the mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
+            }
+            try {
+                addToMailbox(pollContext, wc);
+            } catch (Throwable mailboxingThrew) {
+                log.error("Failed to return {} to the mailbox - it may stay in flight. Cause: {}", wc,
+                        describeWithRootCause(mailboxingThrew));
+            }
         });
         logWithoutEscaping(throwable, () -> {
             if (PCRetriableException.isPresentIn(throwable)) {

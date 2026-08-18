@@ -34,6 +34,22 @@ public class PCModule<K, V> {
         this.optionsInstance = options;
     }
 
+    /**
+     * Rate limits the "your retryDelayProvider threw" warning.
+     * <p>
+     * Per PC instance rather than static, so one instance's broken provider cannot silence a DIFFERENT instance's
+     * independently broken one - which is the case where the warning matters most, and where a JVM-wide limiter
+     * would hide a second, unrelated misconfiguration behind the first.
+     * <p>
+     * Not thread-safe, deliberately: the worst a race costs is one extra log line, the same trade the queue-stats
+     * limiter makes.
+     */
+    private final RateLimiter brokenRetryDelayProviderWarnLimiter = new RateLimiter(30);
+
+    public RateLimiter brokenRetryDelayProviderWarnLimiter() {
+        return brokenRetryDelayProviderWarnLimiter;
+    }
+
     public ParallelConsumerOptions<K, V> options() {
         return optionsInstance;
     }

@@ -1404,11 +1404,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 try {
                     wc.onUserFunctionFailure(e);
                 } catch (Throwable userCodeThrew) {
-                    if (bookkeepingFailed == null) {
-                        bookkeepingFailed = userCodeThrew;
-                    }
-                } finally {
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, userCodeThrew);
+                }
+                try {
                     addToMailbox(context, wc); // always add on error
+                } catch (Throwable mailboxingThrew) {
+                    // NOT a finally around the call above: an exception from a finally supersedes everything and
+                    // propagates straight out of this loop, so a single failure here would strand every container
+                    // AFTER it - reintroducing exactly the bug this loop is shaped to prevent. This is PC's own
+                    // code rather than the user's, so a throw is our bug, which is a reason to surface it, not a
+                    // reason to let it take the rest of the batch with it.
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, mailboxingThrew);
                 }
             }
             // attached rather than thrown: the user's own failure is what the caller needs to see, and
@@ -1430,6 +1436,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } finally {
             cleanUpContext(context);
         }
+    }
+
+    /**
+     * Keeps the first failure and attaches every later one to it, so a second container failing the same way is not
+     * dropped without trace - which is what keeping only the first, on its own, would do.
+     */
+    private static Throwable firstOrSuppress(Throwable first, Throwable next) {
+        if (first == null) {
+            return next;
+        }
+        if (first != next) {
+            try {
+                first.addSuppressed(next);
+            } catch (Throwable ignored) {
+                // suppression disabled, or an override; nothing further to do
+            }
+        }
+        return first;
     }
 
     /**

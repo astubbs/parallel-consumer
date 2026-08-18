@@ -6,7 +6,6 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.PollContextInternal;
-import bz.stub.parallelconsumer.internal.RateLimiter;
 import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -89,13 +88,6 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     private Optional<Long> timeTakenAsWorkMs = Optional.empty();
 
-    /**
-     * Shared by every container, because it limits a message about a MISCONFIGURATION rather than about any one
-     * record - static is the point, not a shortcut. Not thread-safe, deliberately: the worst a race costs is an
-     * extra log line, which is the same trade the existing queue-stats limiter makes.
-     */
-    private static final RateLimiter BROKEN_RETRY_DELAY_PROVIDER_WARN = new RateLimiter(30);
-
     private Optional<Instant> retryDueAt = Optional.empty();
 
     private Comparator<WorkContainer<?, ?>> comparator = Comparator
@@ -171,14 +163,14 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             // Rate limited, because this is a CODING error: a provider that throws once almost certainly throws
             // every time, and this runs per failed record per attempt - so an unlimited warn turns one broken
             // lambda into thousands of identical lines, burying the very message that explains them.
-            BROKEN_RETRY_DELAY_PROVIDER_WARN.performIfNotLimited(() ->
+            module.brokenRetryDelayProviderWarnLimiter().performIfNotLimited(() ->
                     ThrowableUtils.logWithoutEscaping(theirProviderThrew, () ->
                             log.warn("Your retryDelayProvider threw - falling back to defaultMessageRetryDelay ({}) " +
                                             "while it keeps failing. Records are unaffected and still retried, but " +
                                             "your intended backoff is NOT being applied, so a struggling downstream " +
                                             "will be retried harder than you configured. Fix the provider. " +
                                             "This warning is rate limited to once per {}. First seen on {}. Cause: {}",
-                                    options.getDefaultMessageRetryDelay(), BROKEN_RETRY_DELAY_PROVIDER_WARN.getRate(),
+                                    options.getDefaultMessageRetryDelay(), module.brokenRetryDelayProviderWarnLimiter().getRate(),
                                     this, ThrowableUtils.describeWithRootCause(theirProviderThrew),
                                     theirProviderThrew)));
             return options.getDefaultMessageRetryDelay();
@@ -241,9 +233,20 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     public void onUserFunctionFailure(Throwable cause) {
         log.trace("Failing {}", this);
 
-        updateFailureHistory(cause);
-
-        this.maybeUserFunctionSucceeded = of(false);
+        try {
+            updateFailureHistory(cause);
+        } finally {
+            // In a finally so the transition is TOTAL - not because one specific line was found to throw, but
+            // because this method must never leave the container half transitioned. isUserFunctionComplete tests
+            // this field, so a container that misses it is never retried, never released and never redelivered: a
+            // permanent stall, and a silent one.
+            //
+            // Guarding the individual known hazards instead was tried and is not enough: a user retryDelayProvider
+            // that THROWS was one route here, and a provider that legitimately RETURNS an enormous Duration is
+            // another, because Instant.plus overflows. Enumerating them means being right about every future line
+            // added above; this does not.
+            this.maybeUserFunctionSucceeded = of(false);
+        }
     }
 
     private void updateFailureHistory(Throwable cause) {
