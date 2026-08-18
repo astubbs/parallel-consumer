@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ProducerManager;
@@ -145,9 +146,25 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     public Duration getRetryDelayConfig() {
         var options = module.options();
         var retryDelayProvider = options.getRetryDelayProvider();
-        if (retryDelayProvider != null) {
+        if (retryDelayProvider == null) {
+            return options.getDefaultMessageRetryDelay();
+        }
+        try {
             return retryDelayProvider.apply(new RecordContext<>(this));
-        } else {
+        } catch (Throwable theirProviderThrew) {
+            // The user's provider runs in the MIDDLE of this container's failure bookkeeping - via
+            // updateFailureHistory, from onUserFunctionFailure - and letting it escape left the container half
+            // transitioned: maybeUserFunctionSucceeded never set, so isUserFunctionComplete stayed false and the
+            // record was never retried, never released, and never redelivered. A permanent stall, caused by a
+            // user function that only wanted a different retry delay.
+            //
+            // Falling back to the configured default keeps the transition total. Logged rather than swallowed,
+            // and guarded because this is the failure path and the throwable is theirs.
+            ThrowableUtils.logWithoutEscaping(theirProviderThrew, () ->
+                    log.warn("Your retryDelayProvider threw for {} - using defaultMessageRetryDelay ({}) for this " +
+                                    "attempt instead. The record is unaffected and will still be retried. Cause: {}",
+                            this, options.getDefaultMessageRetryDelay(),
+                            ThrowableUtils.describeWithRootCause(theirProviderThrew), theirProviderThrew));
             return options.getDefaultMessageRetryDelay();
         }
     }

@@ -1393,9 +1393,28 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // throws, the loop below never runs: the batch is never marked failed and never returns to the
             // mailbox, so those records stay in flight forever - one stalls its shard under KEY ordering, and
             // maxConcurrency of them stall the consumer. Nothing is logged, because logging is what failed.
+            // Per container, and each independent of the others. onUserFunctionFailure runs USER code -
+            // updateFailureHistory asks getRetryDelayConfig, which calls the user's retryDelayProvider
+            // unguarded - so one container's provider throwing used to abort this loop and strand every
+            // container after it in flight forever. That is the same stall this batch is being mailboxed
+            // to avoid, reached through a different door. addToMailbox is in a finally for the same
+            // reason: returning the record is the part that must happen.
+            Throwable bookkeepingFailed = null;
             for (var wc : workContainerBatch) {
-                wc.onUserFunctionFailure(e);
-                addToMailbox(context, wc); // always add on error
+                try {
+                    wc.onUserFunctionFailure(e);
+                } catch (Throwable userCodeThrew) {
+                    if (bookkeepingFailed == null) {
+                        bookkeepingFailed = userCodeThrew;
+                    }
+                } finally {
+                    addToMailbox(context, wc); // always add on error
+                }
+            }
+            // attached rather than thrown: the user's own failure is what the caller needs to see, and
+            // it is already on its way out below. Nothing is swallowed - it travels with e.
+            if (bookkeepingFailed != null && bookkeepingFailed != e) {
+                e.addSuppressed(bookkeepingFailed);
             }
 
             logWithoutEscaping(e, () -> {

@@ -747,6 +747,39 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                         .that(attempts.get()).isAtLeast(2));
     }
 
+    /**
+     * A user-supplied {@code retryDelayProvider} that throws must not strand the record it is asked about.
+     *
+     * <p>{@code onUserFunctionFailure} calls {@code updateFailureHistory}, which asks
+     * {@code getRetryDelayConfig}, which calls the user's {@code retryDelayProvider} <b>unguarded</b>. That is user
+     * code running inside the failure bookkeeping, so it can throw - and it used to abort the whole batch loop,
+     * leaving every container after it with no {@code addToMailbox} and therefore in flight forever.
+     *
+     * <p>The same permanent stall the batch is being mailboxed to avoid, reached through a different door.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aThrowingRetryDelayProviderStillReturnsTheRecordToTheMailbox() {
+        var attempts = new AtomicInteger();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .retryDelayProvider(ignored -> {
+                    throw new FakeRuntimeException("your retry delay provider is broken");
+                })
+                .build());
+        primeFirstRecord(); // setupParallelConsumerInstance builds new clients, so the primed record is gone
+
+        parallelConsumer.poll(context -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("ordinary user failure");
+        });
+
+        await().atMost(ofSeconds(20))
+                .untilAsserted(() -> assertWithMessage("redelivered, so the container was mailboxed despite the "
+                        + "provider throwing").that(attempts.get()).isAtLeast(2));
+    }
+
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {
