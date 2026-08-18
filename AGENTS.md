@@ -359,7 +359,8 @@ flip - `#29` and `#114` mean different things in each repo.
   than a broken one**. Cite both numbers, fork first: `(astubbs#119, confluentinc#857)`.
 - **`Fixes astubbs#167` closes nothing** - closing keywords need `astubbs/parallel-consumer#167`.
 - **Run `bin/check-issue-refs.sh` before you push.** It calls the same gate module CI does, so the
-  rule cannot drift; a red run is always real. CI additionally scans the PR body.
+  rule cannot drift; a red run is always real. Both scan the PR body when one is reachable; before
+  a PR exists, the body stays CI's to catch.
 
 [`docs/issue-references.md`](docs/issue-references.md) **owns this topic** - the threshold, the
 exemptions, the reasoning - and wins where the two disagree.

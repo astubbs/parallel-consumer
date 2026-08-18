@@ -111,13 +111,20 @@ drift from CI. It judges the working tree, like `bin/check-copyright-headers.sh`
 edits are caught too. Only lines you *add* are scanned; pre-existing bare refs in a file you touch
 are fine.
 
-The check is purely textual - no API calls, so it cannot race issue creation.
+The matching is purely textual and cannot race issue creation; the script's one network read is
+`gh pr view`, fetching the current branch's PR body so the body is judged - and the
+`issue-refs: N/A` opt-out honoured - by the same rules CI applies. Before the script read bodies,
+the opt-out was one-sided: CI accepted it while every local run stayed red on the opted-out file
+forever. Any failure of that read (no PR yet, no `gh`, offline) degrades to a body-less check, and
+the failure message says so.
 
 The *inputs* differ from CI in two narrow ways. CI reads patches from GitHub's `pulls.listFiles`,
 which omits `patch` for a very large diff, and the gate skips a file it cannot see - while the local
-script builds its own patch with `git diff` and still checks it. And CI additionally scans the **PR
-body**, which does not exist when you run the script. So a green local run promises neither that CI
-looked at every file nor that the description passes; a red one is always real.
+script builds its own patch with `git diff` and still checks it. And when no PR exists yet there is
+no **PR body** to read, so a bare ref destined for the description - or an opt-out you are only
+planning to write - waits for CI, or for a re-run once the PR is open. So a green local run promises
+neither that CI looked at every file nor that a description you have not written yet will pass; a
+red one is always real.
 
 **When a PR serves an issue, the body's FIRST LINE links to it.** `Closes
 astubbs/parallel-consumer#155.` or `Part of astubbs/parallel-consumer#197.`, above everything else.
@@ -141,9 +148,40 @@ Editing the body re-runs the job, so a fix there needs no push.
 
 The files listed in `EXEMPT_PATHS` are exempt, because a bare number legitimately means upstream in
 them: `CHANGELOG.adoc`, `upstream-map.yaml`, `upstream-pr-analysis.adoc`, and the gate's own test
-fixtures - plus `docs/solutions/workflow-issues/mechanical-issue-ref-sweep-falsified-a-verbatim-log-quote.md`,
-whose remaining bare refs are the matcher's own quoted inputs and outputs: qualifying them would
-rewrite the demonstration into a false one, which is the failure that document records. If a flagged reference really is fork-local, put `issue-refs: N/A - <reason>` on its own
-line in the PR body - which skips the body's own references along with everything else.
+fixtures.
 
-Logic and tests live in `.github/scripts/issue-ref-gate.js` and `issue-ref-gate.test.js`.
+**Four opt-out scopes - reach for the narrowest that fits.** The in-file ones are written in
+whatever comment syntax the file already has - `// ...` in code, `<!-- ... -->` in markdown/HTML,
+where they are invisible when rendered - and because they live in the file they keep holding:
+future PRs touching the text, and local runs on branches with no PR yet. **Mention is not use:**
+a marker quoted in a backtick code span - as every mention in this section is - is documentation
+and activates nothing. Write marker names in backticks whenever writing ABOUT them; an unquoted
+prose mention is indistinguishable from use and will be treated as one. They are the tool for the
+ref that genuinely must stay bare - above all **quoted source material**, where qualifying the
+number would edit the quotation. (A backslash escape was considered and rejected for that job -
+the design comment above `LINE_OPT_OUT` in `.github/scripts/issue-ref-gate.js` owns the why.)
+
+- **One line: append `issue-refs: exempt` to the flagged line.** Same-line by necessity, not
+  taste: the gate judges added patch lines, and a marker on the previous line is not in the patch
+  when only the ref's line changed.
+- **A block: wrap it in `issue-refs: exempt-begin` / `issue-refs: exempt-end`** - for a pasted
+  run of quoted lines too dense to mark individually. The markers govern added lines in the same
+  patch, so they cover the paste they arrive with; a later lone edit inside an old block carries
+  its own marker. An unclosed `exempt-begin` swallows the rest of the file's added lines,
+  deliberately - the same direction an unclosed fence fails in. In a PR body, **a code fence
+  closes any open block**: fenced content is already skipped wholesale, and an end marker placed
+  inside a fence would otherwise be invisible to the gate, leaving the block open forever - so
+  the block ends at the fence and anything the author meant to exempt after it gets flagged,
+  seen, and re-marked.
+- **A file: put `issue-refs: exempt-file` anywhere in it** - for a file legitimately full of bare
+  refs (a generated document, an imported archive). This one is judged against the file's
+  **content**, not the patch - locally from disk, in CI via the contents API, fetched only for
+  files with hits - so it holds however small the diff. It is the in-file equivalent of an
+  `EXEMPT_PATHS` entry, without editing the gate.
+- **Whole PR: put `issue-refs: N/A - <reason>` on its own line in the PR body** - which skips
+  every file and the body's own references in one stroke, for this PR only. The big hammer;
+  reason mandatory.
+
+Logic and tests live in `.github/scripts/issue-ref-gate.js` and `issue-ref-gate.test.js`; the
+local script's body-fetch plumbing has its own self-test, `bin/test-check-issue-refs.sh`, run by
+the same workflow.

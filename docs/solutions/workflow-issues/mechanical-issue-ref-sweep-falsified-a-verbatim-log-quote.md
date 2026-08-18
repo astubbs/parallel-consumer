@@ -62,7 +62,9 @@ sweep and CI agreed on what "unqualified" means.
 all.** Inside `docs/BUG_857_INVESTIGATION.md`, a fenced code block quoted a real diagnostic log line
 emitted during the stall:
 
-    `#857-poll: runState=RUNNING, pausedForThrottling=false, assignment=0`
+<!-- issue-refs: exempt-begin -->
+    #857-poll: runState=RUNNING, pausedForThrottling=false, assignment=0
+<!-- issue-refs: exempt-end -->
 
 The script rewrote it to `confluentinc#857-poll: ...` - a string no program has ever emitted. The
 `#857-poll` tag was temporary instrumentation that has since been removed from the code
@@ -188,10 +190,12 @@ the reading pass afterwards, not about abandoning automation.
 
 Before the sweep - a fenced block in `docs/BUG_857_INVESTIGATION.md` quoting real output:
 
+<!-- issue-refs: exempt-begin -->
     Diagnostic logging in the poll loop during the aggressive test stall:
     ```
     #857-poll: runState=RUNNING, pausedForThrottling=false, assignment=0
     ```
+<!-- issue-refs: exempt-end -->
 
 What the script produced - the gate is satisfied, the artifact is a forgery:
 
@@ -208,15 +212,19 @@ the gate wanted supplied by the prose around it:
 Verified against the gate at the current tree - fenced is flagged and would be rewritten, inline is
 stripped at `issue-ref-gate.js:76`:
 
+<!-- issue-refs: exempt-begin -->
     "#857-poll: runState=RUNNING, ..."      => ["#857"]
     "`#857-poll: runState=RUNNING, ...`"    => []
+<!-- issue-refs: exempt-end -->
 
 ### The reference the gate cannot see
 
 `MultiInstanceRebalanceTest.java` carried `Originally created for #188/#189, ...`. Running the
 gate's own matcher over that line:
 
+<!-- issue-refs: exempt-begin -->
     "Originally created for #188/#189, re-enabled for #857 investigation."  => ["#188", "#857"]
+<!-- issue-refs: exempt-end -->
 
 `#189` is **absent**. This is not, as first believed, a case of qualifying `#188` and thereby hiding
 its neighbour: `#189` was never visible to the gate at all, and qualifying `#188` would have left a
