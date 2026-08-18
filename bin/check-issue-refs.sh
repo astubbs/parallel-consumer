@@ -68,10 +68,13 @@ fi
 
 node - "$MERGE_BASE" <<'NODE'
 const { execFileSync } = require("child_process");
+const fs = require("fs");
 const gate = require("./.github/scripts/issue-ref-gate.js");
 
 const base = process.argv[2];
 const git = (args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+
+(async () => {
 
 // owner/name from origin, so the gh call and the mirror-lookup hint name the repo being checked
 // rather than assuming the fork (AGENTS.md: qualify gh in anything written down).
@@ -83,12 +86,19 @@ try {
 
 // Mirror CI's body handling whenever a body is reachable: honour the opt-out, scan the body.
 // `gh pr view` resolves the PR from the current branch; ANY failure (no PR yet, gh missing,
-// offline) degrades to the body-less behaviour, and the failure message says which run this was.
+// offline, or the 3s timeout - this runs inside the pre-commit hook, whose whole budget is
+// ~1.5s, so a hung network call must be bounded) degrades to the body-less behaviour, and the
+// failure message says which run this was.
 let prBody = null, prNumber = null;
 try {
+  // The branch is passed explicitly because `gh pr view` REFUSES to infer it when -R is given
+  // ("argument required when using the --repo flag") - and the self-test's stubbed gh cannot
+  // catch that contract, so it is pinned here in prose instead.
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+  if (branch === "HEAD") throw new Error("detached HEAD - no branch to resolve a PR from");
   const pr = JSON.parse(execFileSync("gh",
-    ["pr", "view", ...(repo ? ["-R", repo] : []), "--json", "number,body"],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    ["pr", "view", branch, ...(repo ? ["-R", repo] : []), "--json", "number,body"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000 }));
   prBody = pr.body || "";
   prNumber = pr.number;
 } catch { /* body unreadable this run */ }
@@ -110,16 +120,10 @@ if (prBody !== null) files.push(gate.prBodyEntry(prBody));
 let hits = gate.suspectRefs(files);
 
 // File-scoped opt-out (`issue-refs: exempt-file`) is judged against file CONTENT, not the patch,
-// so it holds however small the diff. Only files that actually have hits are read.
-const fs = require("fs");
-for (const path of [...new Set(hits.map((h) => h.file))]) {
-  if (path === gate.PR_BODY_LABEL) continue;
-  try {
-    if (gate.hasFileOptOut(fs.readFileSync(path, "utf8"))) {
-      hits = hits.filter((h) => h.file !== path);
-    }
-  } catch { /* deleted or unreadable - nothing to exempt */ }
-}
+// so it holds however small the diff. The control flow lives in the gate module (NO SECOND COPY
+// OF THE RULE); this caller supplies only the reader. Silent on drops, matching the rest of this
+// script's output discipline.
+hits = await gate.dropFileOptedOutHits(hits, (path) => fs.readFileSync(path, "utf8"));
 
 if (hits.length === 0) {
   const bodyNote = prBody !== null ? ` and PR ${prNumber}'s body` : "";
@@ -134,4 +138,5 @@ const opts = repo ? { repo } : {};
 if (prBody === null) opts.readsPrBody = false;
 console.error(gate.formatFailure(hits, opts));
 process.exit(1);
+})();
 NODE

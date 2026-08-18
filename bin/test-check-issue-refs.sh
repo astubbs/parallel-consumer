@@ -91,9 +91,6 @@ git add docs/note.md
 check "no PR: issue-refs: exempt-file exempts the whole file, judged from disk content" \
       0 "changed file(s)"
 
-echo "See astubbs#857 for details" > docs/note.md
-git add docs/note.md
-
 # --- PR exists, body carries the opt-out ----------------------------------------------------------
 export GH_STUB_JSON='{"number":42,"body":"Explanation.\nissue-refs: N/A - refs occur inside quoted source material\n"}'
 echo "See #857 for details" > docs/note.md # issue-refs: exempt - fixture

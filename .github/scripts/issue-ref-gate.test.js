@@ -446,6 +446,44 @@ check("hasFileOptOut finds the file marker in any comment syntax, and not its ab
   assert.strictEqual(hasFileOptOut(null), false);
 });
 
+// dropFileOptedOutHits is the shared control flow both callers run (local script and CI step),
+// each supplying only its reader - so the drift-prone part is pinned here, once.
+(async () => {
+  const HITS3 = [
+    { file: "docs/a.md", ref: "#857", text: "a" },
+    { file: "docs/a.md", ref: "#858", text: "a2" },
+    { file: "docs/b.md", ref: "#859", text: "b" },
+    { file: PR_BODY_LABEL, ref: "#860", text: "body" },
+  ];
+
+  await (async () => {
+    const reads = [];
+    const dropped = [];
+    const out = await require("./issue-ref-gate.js").dropFileOptedOutHits(HITS3, async (p) => {
+      reads.push(p);
+      return p === "docs/a.md" ? "<!-- issue-refs: exempt-file -->" : "plain";
+    }, { onDrop: (p) => dropped.push(p) });
+    assert.deepStrictEqual(out.map((h) => h.ref), ["#859", "#860"],
+      "marked file's hits drop; other file and PR body survive");
+    assert.deepStrictEqual(reads, ["docs/a.md", "docs/b.md"],
+      "each file read once (deduped), PR body never read");
+    assert.deepStrictEqual(dropped, ["docs/a.md"], "onDrop fires per dropped file");
+    console.log("  ok  dropFileOptedOutHits drops the marked file's hits, deduped, skipping the body");
+    run++;
+  })();
+
+  await (async () => {
+    const errors = [];
+    const out = await require("./issue-ref-gate.js").dropFileOptedOutHits(HITS3,
+      async () => { throw new Error("unreadable"); },
+      { onError: (p) => errors.push(p) });
+    assert.deepStrictEqual(out, HITS3, "a read failure keeps the hits - the gate must not fail open");
+    assert.deepStrictEqual(errors, ["docs/a.md", "docs/b.md"], "onError fires per unreadable file");
+    console.log("  ok  dropFileOptedOutHits keeps hits when the reader throws");
+    run++;
+  })();
+})();
+
 check("a body hit reads as the body in the failure listing", () => {
   const msg = formatFailure([{ file: PR_BODY_LABEL, ref: "#857", text: "Fixes #857" }]);
   assert.ok(msg.includes(`  ${PR_BODY_LABEL}: #857  Fixes #857`), msg);

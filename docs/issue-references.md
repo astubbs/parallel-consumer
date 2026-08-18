@@ -155,9 +155,8 @@ whatever comment syntax the file already has - `// ...` in code, `<!-- ... -->` 
 where they are invisible when rendered - and because they live in the file they keep holding:
 future PRs touching the text, and local runs on branches with no PR yet. They are the tool for the
 ref that genuinely must stay bare - above all **quoted source material**, where qualifying the
-number would edit the quotation. (A backslash escape was rejected for that job: `\#857` edits the
-text it is meant to preserve, renders visibly outside markdown, and is an illegal escape in a Java
-string literal.)
+number would edit the quotation. (A backslash escape was considered and rejected for that job -
+the design comment above `LINE_OPT_OUT` in `.github/scripts/issue-ref-gate.js` owns the why.)
 
 - **One line: append `issue-refs: exempt` to the flagged line.** Same-line by necessity, not
   taste: the gate judges added patch lines, and a marker on the previous line is not in the patch

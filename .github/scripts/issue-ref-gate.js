@@ -88,6 +88,34 @@ function hasFileOptOut(text) {
   return FILE_OPT_OUT.test(text || "");
 }
 
+/**
+ * Drops every hit belonging to a file whose CONTENT carries the file-scope opt-out. The control
+ * flow lives here so the two callers cannot drift - NO SECOND COPY OF THE RULE - and each caller
+ * supplies only what genuinely differs: how a file is read (local disk vs the contents API) and
+ * whether outcomes are logged. Read failures keep the hit (fail open here would let an unreadable
+ * file silently pass, the wrong direction for a gate) and are reported via onError when given.
+ *
+ * @param hits      [{ file, ref, text }] from suspectRefs
+ * @param readFile  async (path) => file text; may throw / reject
+ * @param opts      { onDrop(path), onError(path, err) } - optional, for caller-side logging
+ * @returns the hits that survive
+ */
+async function dropFileOptedOutHits(hits, readFile, opts = {}) {
+  let out = hits;
+  for (const path of [...new Set(hits.map((h) => h.file))]) {
+    if (path === PR_BODY_LABEL) continue;
+    try {
+      if (hasFileOptOut(await readFile(path))) {
+        out = out.filter((h) => h.file !== path);
+        opts.onDrop?.(path);
+      }
+    } catch (e) {
+      opts.onError?.(path, e);
+    }
+  }
+  return out;
+}
+
 function isExempt(path) {
   return EXEMPT_PATHS.some((re) => re.test(path));
 }
@@ -295,6 +323,7 @@ function formatFailure(hits, opts = {}) {
 }
 
 module.exports = {
-  suspectRefs, findOptOut, hasFileOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
-  EXEMPT_PATHS, QUALIFY_BELOW, PR_BODY_LABEL, LINE_OPT_OUT, FILE_OPT_OUT,
+  suspectRefs, findOptOut, hasFileOptOut, dropFileOptedOutHits, isExempt, stripQualified,
+  formatFailure, prBodyEntry,
+  EXEMPT_PATHS, QUALIFY_BELOW, PR_BODY_LABEL,
 };
