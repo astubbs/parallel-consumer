@@ -306,14 +306,14 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private final RateLimiter pauseLimiter = new RateLimiter(1);
 
-    private void doPauseMaybe() {
+    private void doPauseMaybe(Set<TopicPartition> pausedNow) {
         // idempotent
-        if (subscriptionsArePausedForBackPressure()) {
+        if (!pausedNow.isEmpty()) {
             log.trace("Already paused");
         } else {
             if (pauseLimiter.couldPerform()) {
                 pauseLimiter.performIfNotLimited(() -> {
-                    doPause();
+                    doPause(pausedNow);
                 });
             } else {
                 if (log.isDebugEnabled()) {
@@ -328,8 +328,17 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     /**
      * Pause all assignments
      */
+    /**
+     * For callers outside the throttle loop - drain and close - which have no pass-scoped view to
+     * hand down. They run once per lifecycle rather than once per iteration, so fetching here costs
+     * nothing; only the hot path threads its already-read set through.
+     */
     private void doPause() {
-        if (!subscriptionsArePausedForBackPressure()) {
+        doPause(consumerManager.paused());
+    }
+
+    private void doPause(Set<TopicPartition> pausedNow) {
+        if (pausedNow.isEmpty()) {
             log.debug("Pausing subs");
             Set<TopicPartition> assignment = consumerManager.assignment();
             consumerManager.pause(assignment);
@@ -385,27 +394,37 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * make sure we maintain the keep alive with the broker so as not to cause a rebalance.
      */
     private void managePauseOfSubscription() {
+        // Read Kafka's pause state ONCE per pass and hand it down, rather than each check asking
+        // again. Deriving the answer from the consumer instead of mirroring it in a field is what
+        // makes the rebalance protocols irrelevant (see subscriptionsArePausedForBackPressure), but
+        // consumer.paused() is a real call on the poll thread's hot path, and this method plus the
+        // three below were making three to five of them per loop iteration.
+        //
+        // A PARAMETER rather than a field on purpose: a local cannot outlive the pass, so there is
+        // no invalidation to get wrong and nothing that can go stale between iterations - which is
+        // exactly the failure mode of the mirror this replaced. It is also strictly fewer calls than
+        // before in the resume path, which used to fetch the set a second time to act on it.
+        Set<TopicPartition> pausedNow = consumerManager.paused();
         boolean throttle = shouldThrottle();
         if (log.isTraceEnabled()) {
-            log.trace("Need to throttle: {}, pausedForBackPressure={}, assignment={}", throttle, subscriptionsArePausedForBackPressure(), consumerManager.getAssignmentSize());
+            log.trace("Need to throttle: {}, pausedForBackPressure={}, assignment={}", throttle, !pausedNow.isEmpty(), consumerManager.getAssignmentSize());
         }
         if (throttle) {
-            doPauseMaybe();
+            doPauseMaybe(pausedNow);
         } else {
-            resumeIfPaused();
+            resumeIfPaused(pausedNow);
         }
     }
 
     /**
      * Has no flap limit, always resume if we need to
      */
-    private void resumeIfPaused() {
+    private void resumeIfPaused(Set<TopicPartition> pausedNow) {
         // idempotent, and self-correcting: whatever Kafka still has paused is what gets resumed,
         // whether we paused it or it survived a cooperative rebalance.
-        Set<TopicPartition> pausedTopics = consumerManager.paused();
-        if (!pausedTopics.isEmpty()) {
+        if (!pausedNow.isEmpty()) {
             log.debug("Resuming consumer, waking up");
-            consumerManager.resume(pausedTopics);
+            consumerManager.resume(pausedNow);
             // trigger consumer to perform a new poll without the assignments paused, otherwise it will continue to long poll on nothing
             consumerManager.wakeup();
         }

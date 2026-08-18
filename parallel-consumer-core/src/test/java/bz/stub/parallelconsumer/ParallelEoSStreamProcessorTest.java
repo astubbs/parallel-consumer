@@ -770,8 +770,16 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // wait cycles to make sure
         awaitForOneLoopCycle();
 
-        //
-        assertThat(polled).as("sanity check input data").hasSameSizeAs(locks);
+        // Wait for the DATA, not for a cycle count. `polled` is filled by the POLL thread (the
+        // doAnswer on consumerSpy.poll), while awaitForOneLoopCycle() counts CONTROL thread loop
+        // cycles - nothing orders the two. The control loop turns roughly every 100ms whether or not
+        // the poll thread has ever completed a poll, so under CPU oversubscription a freshly started
+        // pc-broker-poll can wait seconds to be scheduled, the loop turns, and this assertion saw
+        // exactly 0 records. Measured at 5 failures in 31 runs on a loaded box, 0 on master, always
+        // this same all-or-nothing signature because the MockConsumer hands over the whole batch at
+        // once. Same defect class as the other assert-after-N-cycles waits in this suite.
+        await().untilAsserted(() ->
+                assertThat(polled).as("sanity check input data").hasSameSizeAs(locks));
 
         //
         assertThat(processedState.get(1))
