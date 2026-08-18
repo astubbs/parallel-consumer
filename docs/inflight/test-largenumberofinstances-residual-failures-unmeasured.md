@@ -1,0 +1,38 @@
+# `largeNumberOfInstances`: the claim that the residual failures are Kafka's has never been measured
+
+## The claim
+
+`MultiInstanceRebalanceTest.largeNumberOfInstances` documents its own acceptance as *80%+ pass rate
+(currently ~90%)*, and its javadoc attributes the residual failures to the broker rather than to PC:
+
+> the remaining ~10% failure is the Kafka consumer group protocol under extreme membership churn
+> (`assignedPartitions=0`), not a PC bug
+
+## Why that needs settling before the rate is tuned
+
+**It is asserted, never measured.** No experiment separates "the group coordinator cannot converge at
+this churn rate" from "PC has a defect that only appears at this churn rate", and the two produce the
+same visible outcome: instances alive, assignment empty, no progress.
+
+That matters more than it looks, because the obvious response to a flaky stress test is to back the
+parameters off until it passes - and if any part of the residual is PC's, backing off **hides a real
+defect** rather than removing a confound. That is precisely the shape that let the confluentinc#857
+deadlock survive four months: astubbs/parallel-consumer#68 gave every test an uncontended broker, the
+suite went green, and the defect was untouched.
+
+## What would settle it
+
+A control arm. Same churn against a plain `KafkaConsumer` group with no PC in the path, or PC
+instrumented to distinguish "coordinator never assigned us partitions" from "we were assigned and
+made no progress". If the bare consumer group fails at the same rate, the claim holds and the
+parameters are simply past what Kafka converges at. If it does not, the residual is ours.
+
+Until then the javadoc should say the claim is unverified rather than state it as fact - and it now
+does.
+
+## Related
+
+- `docs/solutions/workflow-issues/prove-the-problem-exists-before-writing-the-fix.md`
+- `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md` -
+  the astubbs/parallel-consumer#68 precedent, where an infrastructure change made a suite green
+  without fixing anything

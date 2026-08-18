@@ -107,6 +107,19 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * If the pass rate drops below 80%, reassess: the test parameters may need backing off,
      * or a new PC bug may have been introduced.
      * <p>
+     * <b>Corollary, and read it before backing the parameters off: the paragraph above is asserted,
+     * never measured.</b> No experiment separates "the group coordinator cannot converge at this
+     * churn rate" from "PC has a defect that only appears at this churn rate" — both look identical
+     * from outside, as instances alive with an empty assignment and no progress. That matters
+     * because the obvious response to a flaky stress test is to reduce the churn until it passes,
+     * and if any part of the residual is PC's, that <em>hides</em> a defect rather than removing a
+     * confound. It is the same shape that let the confluentinc#857 deadlock survive four months:
+     * astubbs#68 gave every test an uncontended broker, the suite went green, and the defect was
+     * untouched. What would settle it is a control arm — the same churn against a plain
+     * KafkaConsumer group with no PC in the path.
+     * TODO(refactor): settle the residual-failure attribution — see
+     * docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md
+     * <p>
      * <b>Fixes applied (from confluentinc#857 investigation):</b>
      * <ul>
      *   <li>commitCommand deadlock — ReentrantLock.tryLock() in onPartitionsRevoked</li>
