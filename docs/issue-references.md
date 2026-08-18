@@ -141,7 +141,9 @@ Editing the body re-runs the job, so a fix there needs no push.
 
 The files listed in `EXEMPT_PATHS` are exempt, because a bare number legitimately means upstream in
 them: `CHANGELOG.adoc`, `upstream-map.yaml`, `upstream-pr-analysis.adoc`, and the gate's own test
-fixtures. If a flagged reference really is fork-local, put `issue-refs: N/A - <reason>` on its own
+fixtures - plus `docs/solutions/workflow-issues/mechanical-issue-ref-sweep-falsified-a-verbatim-log-quote.md`,
+whose remaining bare refs are the matcher's own quoted inputs and outputs: qualifying them would
+rewrite the demonstration into a false one, which is the failure that document records. If a flagged reference really is fork-local, put `issue-refs: N/A - <reason>` on its own
 line in the PR body - which skips the body's own references along with everything else.
 
 Logic and tests live in `.github/scripts/issue-ref-gate.js` and `issue-ref-gate.test.js`.

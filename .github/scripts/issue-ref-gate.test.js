@@ -123,6 +123,16 @@ check("exempts the files where a bare number means upstream", () => {
   }
 });
 
+check("exempts the write-up whose bare refs are this matcher's own quoted output", () => {
+  const p = "docs/solutions/workflow-issues/mechanical-issue-ref-sweep-falsified-a-verbatim-log-quote.md";
+  assert.ok(isExempt(p), p + " should be exempt");
+  // the shape that cannot be qualified without falsifying the demonstration it is part of
+  assert.deepStrictEqual(suspectRefs(file(p, '    "#857-poll: runState=RUNNING, ..."      => ["#857"]')), []);
+  // the exemption is anchored to that file, not to the directory it sits in
+  assert.ok(!isExempt("docs/solutions/workflow-issues/some-other-learning.md"),
+            "sibling learnings must stay checked");
+});
+
 check("the threshold is overridable, so it can be tightened without editing tests", () => {
   assert.deepStrictEqual(suspectRefs(file("docs/x.md", "#1042"), { qualifyBelow: 2000 })
                            .map((h) => h.ref), ["#1042"]);

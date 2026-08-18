@@ -39,6 +39,10 @@ const EXEMPT_PATHS = [
   /(^|\/)src\/docs\/development\/upstream-pr-analysis\.adoc$/,
   // this gate's own fixtures are deliberately full of unqualified refs
   /(^|\/)\.github\/scripts\/issue-ref-gate\.test\.js$/,
+  // the write-up of the sweep that falsified a log quote: its remaining bare refs are the matcher's
+  // own inputs and outputs, quoted to demonstrate what it does and does not see. Qualifying them
+  // rewrites the demonstration into a false one - the exact failure the document exists to record.
+  /(^|\/)docs\/solutions\/workflow-issues\/mechanical-issue-ref-sweep-falsified-a-verbatim-log-quote\.md$/,
 ];
 
 // Constructs that look like a ref but are not one.
