@@ -2,7 +2,9 @@
 
 How to prove a cause rather than accept a fix that appears to work. AGENTS.md carries the prior-art
 checks you run *before* forming a hypothesis, because an agent mid-debug will not think to open a
-document about investigating. This is the method for what comes after.
+document about investigating. This is the method for what comes after. One step earlier still -
+proving the problem exists at all before a fix is written for it - is owned by
+[`prove-the-problem-exists-before-writing-the-fix.md`](solutions/workflow-issues/prove-the-problem-exists-before-writing-the-fix.md).
 
 Promoted here from
 [`docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md`](plans/2026-08-03-001-investigate-transactional-commit-flake.md)
