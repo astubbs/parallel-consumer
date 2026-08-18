@@ -71,6 +71,36 @@ only appear when the retry re-ran a test and it then passed. This one failed the
 left no marker and no scan would have found it. Flakes now get quarantined as they are met, rather
 than waiting for a sweep.
 
+### `ParallelEoSStreamProcessorTest.processInKeyOrder` - fails its own INPUT sanity check, undiagnosed
+
+Seen once, 2026-08-18, on astubbs/parallel-consumer#29's branch, in a full unit-suite run - two
+parameterised cases at once (`[2]` and `[3]`, ~1.87s each), while `[1]` passed:
+
+```
+java.lang.AssertionError:
+[sanity check input data]
+Actual and expected should have same size but actual size is: 0
+```
+
+**The failing assertion is on the test's own input, before the behaviour under test.** The priming
+step produced zero records, so nothing about key-ordered processing was actually exercised - which
+makes this a test-infrastructure fault rather than evidence about the product, unless the priming
+path itself is racing something real.
+
+**What rules out the branch it appeared on.** That run's only uncommitted change was a
+`log.isTraceEnabled()` guard in `ThreadConfinedConsumer` plus a markdown file. Neither can affect test
+input. The suite passed 2/2 immediately after on the same tree, and the test passes 3/3 in isolation
+(`-Dtest='ParallelEoSStreamProcessorTest#processInKeyOrder'`).
+
+**Not yet established:** whether it reproduces on `master`, which is what decides PR-state versus
+master-state and therefore who owns it. Nobody has run that comparison. Do that before quarantining -
+quarantine needs a diagnosis, and "the input primer occasionally yields nothing under load" is a
+hypothesis, not one.
+
+**Why two cases and not one** is the most promising thread: `[2]` and `[3]` failing together while
+`[1]` passed suggests shared setup state rather than independent bad luck, which points at the
+harness's record priming rather than at timing.
+
 ### Controls for these flakes - the void one, and the one that works
 
 Method for the two tests still open, not a diagnosis of any one of them. It is written from a
