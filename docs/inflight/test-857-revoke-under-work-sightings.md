@@ -9,8 +9,9 @@ close** - the cycle's second edge lives in `ConsumerOffsetCommitter`, constructe
 consumer-commit modes, and among those only the *sync* arm blocks. The scenario's own javadoc says
 the mode was chosen to maximise revoke-path vs commit-path lock contention.
 
-Mode-compatible is not the same as attributed. **Neither seed has been replayed**, and the third
-sighting below has no probe verdict at all. Compare `test-857-churn-storm-async-stalls.md`, whose
+Mode-compatible is not the same as attributed. **No seed here has ever been replayed**, the third
+sighting has no probe verdict at all, and the fourth has no seed to replay - so of four sightings,
+two carry a reproducer and neither has been run. Compare `test-857-churn-storm-async-stalls.md`, whose
 sightings are in a mode where the cycle cannot close.
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
@@ -94,3 +95,46 @@ verdict-less red, and `ci-disabled-jobs-and-runner-load.md` records the highcpu 
 mid-step with no verdict (re-confirmed 2026-08-17). The entry above offers two explanations; this is
 a third, and it is the one most consistent with "no probe verdict could be extracted from the log at
 all".
+
+
+**Fourth sighting, 2026-08-18 - the second live confirmation reproduced, same test, same bound,
+seven weeks later.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` - the **eager**
+variant again - killed by `ProgressProbe` on
+[job 95609956596](https://github.com/astubbs/parallel-consumer/actions/runs/32104058992), at head
+`151d86202` on astubbs#296. **Commit mode `PERIODIC_CONSUMER_SYNC`**, verified in source at
+`AbstractRevokeUnderWorkScenario`'s `.commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)`:
+
+```
+CLASS2_STALL/LAG_STAGNATION: partition ChaosRevokeUnderWorkIT-w4-1440515387-22 lag=3010 with
+committed offset stagnant at 173 for 154s (bound 150s) - protocol-invisible stall:
+group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere
+```
+
+Three further frozen partitions (stagnant 20s, 25s, 119s); peaks `rebalanceDwell=9908ms`,
+`lagStagnation=154358ms`.
+
+**This is the second live confirmation's signature, not merely its family.** Same test, same eager
+arm, same `CLASS2_STALL/LAG_STAGNATION`, and the same 154s against a 150s bound. Two independent
+occurrences seven weeks apart, in the only mode where astubbs#29's cycle can close, is the strongest
+evidence this file holds that the second sighting was not a one-off interleaving.
+
+**The control arm is unusually strong, and needs no replay to hold.** The same lane passed on the two
+immediately preceding heads of that branch, `87152f7b4` and `a1db0f109`. The diff from `a1db0f109` to
+`151d86202` contains **zero non-comment Java lines** - comments, javadoc and markdown only, so the
+bytecode is identical. The same executable passed twice and failed once, which excludes the branch
+arithmetically rather than by the usual "that branch touches no product code" argument. astubbs#296
+hardens work submission against an already-closed worker pool and is unrelated to the revoke path.
+
+**No replay seed, and that is this entry's real cost.** The seed is printed to the console, and the
+console log for this job was truncated mid-run - it ends at 05:47 for a job that ran to 05:52. So
+this sighting cannot be replayed, which is exactly the deciding experiment every other entry here
+names. **Fix it at the source rather than rediscovering it:** the seed belongs inside the
+`AMBIENT PROBE AUTOPSY` block, which survives into the uploaded artifact, not only on a console line
+that truncation can eat.
+
+**It does, however, confirm the third sighting's own advice.** That entry says to check the surefire
+XML rather than the console log. Here the console returned **zero** matches for
+`AMBIENT PROBE AUTOPSY` and parsed as `tests=0 failures=0 errors=0` - indistinguishable from a clean
+run - while the artifact's failsafe XML carried the violation, the autopsy and the frozen-partition
+table above. The advice was written from a case where the log carried no verdict either way; this is
+a case where it carried a false *negative*, which is worse, and the same check caught it.
