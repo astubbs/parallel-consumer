@@ -179,6 +179,203 @@ Derived from what the history punished, not from first principles:
   just makes the 2020 design's deliberate violations throw** - which is what
   astubbs/parallel-consumer#29's `ThreadConfinedConsumer` does, 88 times in one CI run.
 
+## What astubbs/parallel-consumer#29 established, 2026-08-18
+
+The branch's entire production diff was a single April 2026 commit bundling **four independent
+changes**. Nobody had written the decomposition down, so every prior assessment judged the branch as
+one thing - and the one thing was red, which made the only provable change look as doubtful as the
+three around it.
+
+| # | Change | Outcome |
+|---|---|---|
+| 1 | `commitLock` + `tryCommitOffsetsOnRevoke` - the deadlock fix | **Proven.** Kept |
+| 2 | `ThreadConfinedConsumer` - runtime thread-confinement guard | **Kept, after fixing its predicate.** It rejected a legal handoff |
+| 3 | `adjustOutForProcessingOnRevoke` + `countInflightForPartitions` | **Deleted.** The drift it targeted does not exist; it caused drift itself |
+| 4 | `pausedForThrottling` reset on assignment | **Deleted and replaced.** It reintroduced this issue's own symptom |
+
+### 1. The deadlock fix - measured twice
+
+A purpose-built probe forces the revoke-during-commit overlap deterministically in
+`PERIODIC_CONSUMER_SYNC`, byte-identical on both arms, against a shared broker (forking one broker
+per fork removes the window - that is how the suite went green while the deadlock sat untouched):
+
+| Arm | n | Failures | `Skipping offset commit during partition revocation` |
+|---|---|---|---|
+| `origin/master` | 20, then 60 | **20/20**, then **60/60** | 0 |
+| fix head | 20, then 60 | **0/20**, then **0/60** | 21, then **63** |
+
+The skip-log count is what makes the result mean anything: it is the INFO line on the contended
+`tryLock` branch, so a nonzero count proves the fix path executed. **A clean fixed arm with a zero
+skip-count is indistinguishable from a probe that never opened the window** - which is exactly how
+this fix looked unproven for four months. The second run interleaved the arms (A,B,A,B,A,B) so
+neither sat in different box conditions.
+
+**The reproducer that shipped with the fix could not observe it**, on two independent counts: it runs
+`PERIODIC_TRANSACTIONAL_PRODUCER`, two modes from the cycle, and it counts a latch by overriding
+`commitOffsetsThatAreReady()`, which the fixed revoke path no longer calls. Measured: it passes 5/5
+on the **defect** arm and fails 5/5 on the **fixed** arm. It reports the fix as a regression.
+
+### 2. The confinement guard was testing thread identity, not usage
+
+`ThreadConfinedConsumer` threw 88 times in one CI run - every one `Consumer.close()` from
+`pc-control` against an owner of `pc-broker-poll` - and `innerDoClose` swallowed each to a warning,
+so the consumer was never closed, no LeaveGroup was sent, and the group waited out its session
+timeout. That cascaded into 16 failing integration tests.
+
+Every one of those fired **after** `closeAndWait()` had returned, i.e. after the poll task had
+provably completed. The guard was comparing `Thread` identity while a pooled thread outlives its
+task, so it rejected a legal sequential handoff.
+
+**The fix is not to relax it.** Ownership is now three-state - `UNCLAIMED` (pre-start, allow all, so
+init-time `subscribe` works), `OWNED`, and `RELEASED` (admits no direct use; only a claim). The poll
+loop releases **as its own last act inside the poll task**, and the closer takes over with a
+non-stealing CAS. That ordering matters: `closeAndWait()` throws on timeout and `innerDoClose`
+proceeds to close the consumer **anyway**, so there is one path where the control thread closes a
+consumer the poll loop may still be using. Releasing at the *closer's* request would legalise exactly
+that path; releasing from inside the poll task leaves it still throwing, correctly.
+
+### 3. The counter drift was never an accounting bug
+
+`WorkManager.numberRecordsOutForProcessing` feeds `isSufficientlyLoaded()`, which gates the poller's
+pause/resume. Master's own comment there names the failure mode: *"A high outForProcessing with no
+awaitingSelection and no real progress is the counter-drift signature."*
+
+Measured with a deterministic probe (real engine on a `MockConsumer`, user function gated so records
+are genuinely out with the pool, revoke driven through the engine's own listener, then quiesce and
+compare against ground truth):
+
+| | counter at quiesce, 5 revoke+reassign cycles | truth |
+|---|---|---|
+| master | **0, 0, 0, 0, 0** | 0 |
+| with the April fix | **-8, -16, -20, -20, -20** | 0 |
+
+So the fix corrupted the counter *downward* - the over-fetch direction - and by cycles 3-4 it read
+**0 while 4 records were genuinely in flight**. It also made a single-threaded counter cross-thread:
+every other mutation runs on the control thread, that one from `onPartitionsRevoked` on the poll
+thread, on a plain `int`.
+
+**Why the drift is not real:** every worker-side exit returns the container to the mailbox and every
+mailbox branch decrements - including the stale branch, which has decremented since upstream
+confluentinc#549 (`fdd245edc`, 2023-02-21), three years before the fix was written. The accounting
+was already balanced. The most consistent reading of the original observation is that the counter was
+**truthfully** high, because in-flight work never returned - user functions wedged behind the
+commit-path deadlock. astubbs/parallel-consumer#100 removed that. **The "counter-drift signature"
+describes a symptom whose only known cause was the deadlock**, which is why one April session saw
+both.
+
+`OutForProcessingCounterDriftProbeTest` is kept as the regression test - the only thing in the repo
+that can tell the counter from reality.
+
+### 4. Mirroring Kafka's pause state cannot work
+
+The reset of `pausedForThrottling` on assignment was correct for the **eager** protocol, where
+`assignFromSubscribed` replaces the assignment map and clears every partition's pause, and wrong for
+**cooperative**, where partitions retained across a rebalance keep theirs. `resumeIfPaused()` was
+gated on the flag, so the two disagreeing meant nothing ever resumed: **paused consumption after a
+rebalance, this issue's own symptom, introduced by the code meant to fix it.**
+
+Replaced by asking Kafka - `consumer.paused()` - which makes the protocol irrelevant and the logic
+self-correcting, and needs no reset hook at all. The constraint that makes this non-trivial is the
+one running through this whole document: `paused()` is a consumer call, so only the **poll** thread
+may make it. The control thread reads a per-poll cache, which is safe only because its callers are
+heuristics where a spurious wakeup costs nothing.
+
+## The close path: warnings a user cannot act on
+
+Seven WARN/ERROR lines fired during close. A WARN addresses the operator, but by then they have
+already asked us to stop - so each was one of three things, and the split is the useful part:
+
+- **A bug wearing a warning's clothes.** `failed to maybeCloseConsumer` fired 88 times and meant *"no
+  LeaveGroup was sent, your group stalls for the session timeout"*. The right response was never to
+  reword it. Fixing the handoff took it to zero.
+- **A note to the developer, at the user's log level.** One asked *"test latch locks?"* in a
+  production log; another said an interrupt *"may lead to issues"*. Both are DEBUG, and only useful
+  with the state that would actually help - active count, queue depth, run state.
+- **A real consequence stated as internals.** A close-time commit failure means *offsets were not
+  committed and these records will be redelivered*, and close makes **exactly one attempt** by design
+  (`commitSync`'s retry loop stops once the poll system is closing, because retrying stalls shutdown
+  while nothing polls). The remedy is `closeDrainFirst()`, and the message now says so - but only
+  when the user did not already drain.
+
+**Logging a throwable is running its author's code.** `getMessage()` and `getCause()` are overridable,
+and Logback's `ThrowableProxy` calls `getCause()` directly - so on a failure path the log call can
+throw and the caller sees the logger's failure instead of the one being reported. `ThrowableUtils`
+(from astubbs/parallel-consumer#267) exists for this: `describeWithRootCause` never throws, and
+`logWithoutEscaping` guarantees the log call cannot become the failure.
+
+<!-- issue-refs: exempt-begin - the bare #N below are row labels for this document's own sighting
+     table, not issue references. Genuine issue refs inside this block are written qualified. -->
+
+## The sightings: what was observed, and what can still be replayed
+
+Six chaos sightings plus one unit-level failure, 2026-07-30 to 2026-08-18. **The ledger recorded a
+commit mode for none of them**, which is how a transactional-mode failure came to be logged as "live
+confirmation" of a cycle that cannot occur in that mode. Mode is the discriminator; it is listed here
+because without it a sighting cannot be attributed at all.
+
+| # | Date | Test / arm | Mode | Signature | Failing seed |
+|---|---|---|---|---|---|
+| 1 | 07-30 | `RebalanceEoSDeadlockTest`, 1 of 20, local stress | `TRANSACTIONAL_PRODUCER` | test latch timeout | none captured |
+| 2 | 08-11 | `ChaosRevokeUnderWorkIT` (eager) | `CONSUMER_SYNC` | `CLASS2_STALL/LAG_STAGNATION`, 154s vs 150s bound | `4734674029169027864` |
+| 3 | 08-12 | `ChaosRevokeUnderWorkCooperativeIT` | `CONSUMER_SYNC` | **no probe verdict**; shutdown timeout only | `3986919097693415295` |
+| 4 | 08-12 | `ChaosChurnStormIT` | `CONSUMER_ASYNCHRONOUS` | `ZOMBIE_MEMBER/REBALANCE_BLOCKED`, dwell 15426ms | `7731567379755737438` |
+| 5 | 08-18 | `ChaosChurnStormIT` | `CONSUMER_ASYNCHRONOUS` | `NO_PROGRESS`, fleet stuck 98150/100000 | `3086917415748208232` |
+| 6 | 08-17 | `ChaosChurnStormIT` | `CONSUMER_ASYNCHRONOUS` | `NO_PROGRESS`, fleet stuck 95382/100000 | `8603691233664838594` |
+| 7 | 08-18 | `ChaosRevokeUnderWorkIT` (eager) | `CONSUMER_SYNC` | same as #2: `CLASS2_STALL`, 154s vs 150s | **none** - console truncated |
+
+Replay any seed with:
+
+```bash
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+  -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=<seed>
+```
+
+**None of these seeds has ever been replayed.** Each entry names replay as its own deciding
+experiment, and it remains the family's cheapest open work.
+
+**Do not replay these expecting a failure** - they are *passing control arms*, and one was circulated
+as a failure by a handoff written from a truncated log: `4087023100803854645`, `6926127865194591503`,
+`5980280513720170608`, `334227014609238766`, `642714983109785585`, `374908783265204320`.
+
+**What the record deliberately does not claim.** Sightings 3-6 decline attribution outright - *"Do not
+read this entry as identifying either. It records a signature and a replayable seed; which defect it
+belongs to, if any, is what the replay is for."* Only #1 broke that discipline, and #1 is the one
+since shown to be misattributed.
+
+**Two things the sightings settle regardless of the deadlock:**
+
+- **#2 and #7 are the same failure seven weeks apart** - same test, same eager arm, same signature,
+  same 154s against a 150s bound, in the only mode where the AB-BA cycle can close. #7's control arm
+  needs no replay: the same lane passed on the two preceding heads of that branch, and the diff to the
+  failing head contains **zero non-comment Java lines**, so the bytecode is identical. The same
+  executable passed twice and failed once.
+- **#4, #5 and #6 are in `PERIODIC_CONSUMER_ASYNCHRONOUS`, where no known defect can operate** - the
+  AB-BA cycle cannot close (`commit()` falls through to `requestCommitInternal()` and never blocks),
+  the transactional revoke wait cannot run, and astubbs/parallel-consumer#100 and
+  astubbs/parallel-consumer#80 have landed.
+  Either a fourth defect or the chaos harness's own teardown races. Nobody had said this out loud,
+  because modes were never recorded.
+
+<!-- issue-refs: exempt-end -->
+
+### Retrieving the evidence is itself a trap
+
+Three times in one day, console logs destroyed the evidence:
+
+- `gh run view --job <id> --log` **silently truncated** a 5948-line log to 1654 lines, mid-phase. A
+  handoff written from it named the wrong test and circulated a passing arm's seed.
+- GitHub truncated a log **stream** server-side, so the `=== AMBIENT PROBE AUTOPSY ===` block was in
+  neither `--log` nor `--log-failed`.
+- One run's console parsed as `tests=0 failures=0 errors=0` - **indistinguishable from a clean run** -
+  while the uploaded artifact carried the violation. A false negative, which is worse than an absence.
+
+Go to the **uploaded test-report artifact** first for any chaos or broker failure; the autopsy is
+embedded in the failsafe XML's captured `system-out` and survives both truncation mechanisms. The
+run-logs archive (`gh api repos/.../actions/runs/<id>/logs`) is the second route. And **the seed
+should move into the autopsy block**, so the deciding experiment survives the log it is printed to -
+the seventh sighting has no seed for exactly this reason.
+
+
 ## Related
 
 - [`a-query-must-never-mutate-derive-thread-safety-from-callers.md`](a-query-must-never-mutate-derive-thread-safety-from-callers.md) -
