@@ -69,6 +69,19 @@ import java.util.stream.Collectors;
  * failure. Scenarios that make no ordering claim (UNORDERED processing) must not record at all rather
  * than record a history this would call vacuous.
  *
+ * <h2>Prior art, and why it is not extended</h2>
+ * The one existing per-key ordering assertion in the repo is
+ * {@code KafkaTestUtils.checkExactOrdering}, called only by
+ * {@code ParallelEoSStreamProcessorTest.lessKeysThanThreads}. It has NO window, because it cannot need
+ * one: a {@code MockConsumer}, one instance, no rebalance, drained before the check - so no record can
+ * be redelivered. In that world it can assert something strictly stronger than this class does (a
+ * gapless {@code +1} value sequence of exactly the produced size), which doubles as a loss/duplicate
+ * check. Scoping it to a window would weaken it for its own caller, and it fails on the first duplicate
+ * under churn, so the two are kept separate and cross-referenced rather than merged. The unit-level
+ * assertions in {@code WorkManagerTest} ({@code orderedByKeyParallel},
+ * {@code testOrderedInFlightShouldBlockQueue}) check the same guarantee one layer down - that a shard
+ * hands out one record at a time in offset order - also with no epochs in play.
+ *
  * @see ProgressProbe#ledger the loss / bounded-duplicate half of the same end-of-run ledger
  */
 @Slf4j

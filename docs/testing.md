@@ -89,11 +89,20 @@ with `bin/quarantined-test.sh`.
 ## Chaos Pain Suite (on-demand bug detector - never gates)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
-`ChaosScenarioBase`, plus scenarios `ChaosChurnStormIT` W1 and `ChaosRevokeUnderWorkIT` W4) that
-hunts the "alive but not progressing" bug class: rebalance-dwell zombies, protocol-invisible
-per-partition lag stagnation (Class 2, W4's prey), drain overruns, and record loss or duplication.
-Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
-`excluded.groups` default.
+`ChaosScenarioBase`, plus scenarios `ChaosChurnStormIT` W1, `ChaosRevokeUnderWorkIT` W4 and
+`ChaosKeyOrderIT` W5) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,
+protocol-invisible per-partition lag stagnation (Class 2, W4's prey), drain overruns, and record
+loss or duplication. Tagged `@Tag("chaos")` and excluded from all default and gating suites via
+`pom.xml`'s `excluded.groups` default.
+
+The end-of-run **correctness ledger** has two halves, both asserted through `assertScenarioSlos`:
+`ProgressProbe.ledger` (no loss ever, duplicates bounded per disturbance) and `KeyOrderLedger`
+(per-key ordering), which only W5 claims - W1 and W4 run `UNORDERED` over a unique key per record, so
+they make no ordering claim and record no history. `KeyOrderLedger`'s own javadoc **owns** the
+guarantee it asserts and the window it holds in (one PC incarnation, partition, assignment epoch and
+key), including why a naive per-key offset-monotonicity check false-positives on legitimate
+redelivery. `KafkaTestUtils.checkExactOrdering` is the no-redelivery equivalent for mock-consumer
+tests and must not be reached for from a rebalance test.
 
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups=`
@@ -114,6 +123,12 @@ Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.
 - **A RED run is investigation food, not flake noise.** The probes are calibrated against the real
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
+- **A workload artifact reads exactly like a defect, and the tuning is the finding.** W5's calibration
+  produced a 154s `CLASS2_STALL/LAG_STAGNATION` that was neither a stall nor probe noise: its heavy
+  tail is spaced on the record index, so with `HEAVY_EVERY` a multiple of `KEY_SPACE` every heavy
+  record landed on one key, and KEY ordering serialised the whole tail onto one shard. Its scenario
+  javadoc carries the arithmetic, and `heavyRecordsMustNotAllShareOneKey` is the check - the pattern to
+  copy is turning the conclusion into an assertion rather than a comment.
 
 ## Mutation-check every new assertion, not just the risky-looking ones
 

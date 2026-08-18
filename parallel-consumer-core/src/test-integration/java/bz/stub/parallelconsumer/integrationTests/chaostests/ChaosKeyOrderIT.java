@@ -163,9 +163,9 @@ class ChaosKeyOrderIT extends ChaosScenarioBase {
 
     @Test
     void perKeyOrderSurvivesChurn() throws Exception {
-        long seed = resolveSeed();
-        String replayCmd = replayCommand(seed);
-        log.info("=== CHAOS W5 key order: seed={} (replay: {}) ===", seed, replayCmd);
+        ChaosSeed seed = resolveSeed();
+        String replayCmd = seed.replayCommand();
+        log.info("=== CHAOS W5 key order: seed={} (replay: {}) ===", seed.getValue(), replayCmd);
 
         String topic = getClass().getSimpleName() + "-w5-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS);
@@ -187,7 +187,7 @@ class ChaosKeyOrderIT extends ChaosScenarioBase {
         ProgressProbe probe = fleet.getProbe();
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
-                .seed(seed)
+                .seed(seed.getValue())
                 // slower than W1's 500-1500ms, and the ONE thing that has to be different about this
                 // scenario's churn: at W1's rate membership changes arrive faster than an EAGER rebalance
                 // can complete, so the group never returns to Stable and ProgressProbe's CONTINUOUS
