@@ -79,6 +79,18 @@ Bug squashing, with a bias to the correctness bugs: stalls, rebalance handling, 
 _Why it serves the approach:_ This bet asks users to trust a library with delivery semantics the
 broker normally owns, and every lost-record bug is a withdrawal from that one account.
 
+**How the bugs stay fixed: prefer an executable invariant to a written one.** The correctness bugs
+here recur at the same seams - confluentinc#548 and confluentinc#857 are one defect three years
+apart, both a rebalance callback waiting on the control thread, and both "fixed" with the rule
+written into a document afterwards. A document fires when someone chooses to read it. So where an
+invariant can be stated mechanically it becomes a check that runs: an ArchUnit rule, a gate, a probe
+that can tell an internal counter from the truth. Where it cannot, that is worth knowing too, and
+saying so beats pretending a paragraph will hold.
+
+_Why it serves the approach:_ a claim about delivery semantics is only as good as what re-tests it,
+and this project's own history is the evidence - a fix nobody could prove worked sat for four months
+because the test written to prove it could not observe it.
+
 ### Observability
 
 Metrics that actually exist end-to-end, plus a web GUI to see inside a running PC.
