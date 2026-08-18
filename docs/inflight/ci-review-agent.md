@@ -101,12 +101,13 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   comment route completes end-to-end - which is the evidence behind "ask by comment" being routing
   advice rather than a preference.
 
-  **Whether it opens inline review threads is still UNEXERCISED - not answered, and not refuted.**
-  That run raised no blocking finding, so it had no occasion to open one; astubbs#297 has zero
-  review threads from any author. Answering it needs a PR where the reviewer actually has
-  something blocking to say. Do not read this entry as evidence that the route *cannot* - the
-  mechanism (an entity event, so the inline-comment MCP server is installed) is in the
-  inline-comment entry above, and it is the reason to prefer this route in the first place.
+  **ANSWERED 2026-08-17 on astubbs#267: it does open inline review threads.** The entry above asked
+  for a PR where the reviewer actually had something blocking to say, because astubbs#297 raised no
+  blocking finding and so had no occasion to open one. astubbs#267 was that PR. `@claude review this`
+  opened **10** inline threads on one head and **2** more on re-review after the head moved - real
+  file-and-line threads that `resolveReviewThread` then closed, not a summary comment. So the
+  inline-thread mechanism named in the entry above is confirmed end-to-end, and the case for
+  preferring this route is no longer inference from the event type.
 - **The duplication scanners are pointed away from where agents duplicate.** `dups: clones` and
   `dups: similarity` scan `parallel-consumer-*/src` only, and the similarity job additionally
   filters `file_extensions: 'java'` - so `docs/`, `.github/`, `bin/` and `AGENTS.md` are scanned by
