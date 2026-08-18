@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.internal.utils.SupplierUtils;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.*;
@@ -496,7 +497,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // "...: null" - the exact complaint behind astubbs#177. When
                 // ThrowableUtils.describeWithRootCause lands with astubbs#267, interpolate that
                 // alongside, so a description survives even if the trace is elided.
-                log.warn("Failed to commit offsets during revoke", e);
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Failed to commit offsets during revoke: {}",
+                                ThrowableUtils.describeWithRootCause(e), e));
             } finally {
                 commitLock.unlock();
             }
@@ -819,13 +822,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // stall shutdown while nothing is polling. Say so, rather than leaving the reader to
             // wonder whether we gave up early.
             if (requestedDrainMode == DrainingMode.DONT_DRAIN) {
-                log.warn("Could not commit offsets while closing, and close does not retry - these records " +
-                        "will be redelivered to the next consumer of these partitions. If you need offsets " +
-                        "committed before shutdown, close with closeDrainFirst() (or DrainingMode.DRAIN), " +
-                        "which finishes and commits in-flight work first.", e);
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Could not commit offsets while closing, and close does not retry - these records " +
+                                "will be redelivered to the next consumer of these partitions. If you need offsets " +
+                                "committed before shutdown, close with closeDrainFirst() (or DrainingMode.DRAIN), " +
+                                "which finishes and commits in-flight work first. Cause: {}",
+                                ThrowableUtils.describeWithRootCause(e), e));
             } else {
-                log.warn("Could not commit offsets while closing, despite draining first, and close does not " +
-                        "retry - these records will be redelivered to the next consumer of these partitions.", e);
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Could not commit offsets while closing, despite draining first, and close does not " +
+                                "retry - these records will be redelivered to the next consumer of these " +
+                                "partitions. Cause: {}", ThrowableUtils.describeWithRootCause(e), e));
             }
         }
         // only close consumer once producer has committed it's offsets (tx'l)
@@ -836,17 +843,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // We continue to the consumer close regardless: stopping here would leak the consumer
             // entirely. But the poll loop may still be running, so the consumer close below may
             // legitimately refuse - see ThreadConfinedConsumer.
-            log.warn("The broker poll system did not shut down cleanly - the consumer may not be closed, " +
-                    "in which case this member will not leave its consumer group promptly and the group's " +
-                    "next rebalance will be delayed by up to session.timeout.ms.", e);
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("The broker poll system did not shut down cleanly - the consumer may not be closed, " +
+                            "in which case this member will not leave its consumer group promptly and the group's " +
+                            "next rebalance will be delayed by up to session.timeout.ms. Cause: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
         }
 
         try {
             maybeCloseConsumer();
         } catch (Exception e) {
-            log.warn("Failed to close the Kafka consumer - this member will not send a LeaveGroup request, " +
-                    "so the group's next rebalance will be delayed by up to session.timeout.ms and these " +
-                    "partitions will stay assigned to this dead member until then.", e);
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("Failed to close the Kafka consumer - this member will not send a LeaveGroup request, " +
+                            "so the group's next rebalance will be delayed by up to session.timeout.ms and these " +
+                            "partitions will stay assigned to this dead member until then. Cause: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
         }
 
         producerManager.ifPresent(x -> x.close(timeout));
