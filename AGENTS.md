@@ -288,7 +288,7 @@ chaos suite, the ambient probe - and wins where the two disagree. Four rules bin
   test an uncontended broker: passes → contention; still fails → investigate the code, do not mask
   it. Say in the commit/PR which cause you established and how. Loosening deadlines to go green
   hides exactly the bugs this library exists to prevent. **When a broker integration test fails,
-  read its `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing by hand** - and check the
+  read its `AMBIENT PROBE AUTOPSY` block before diagnosing by hand** - and check the
   probe's thresholds before believing a clean one.
 - **A flake fails the build - there is no retry, deliberately.** The CI scripts no longer pass
   `-Dsurefire.rerunFailingTestsCount=2`: it retried failures into green runs and hid three flakes no

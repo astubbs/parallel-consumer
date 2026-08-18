@@ -13,7 +13,9 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   PR. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
-- **The DISPATCHED reviewer cannot open inline review comments; the comment route can.** The
+- **The DISPATCHED reviewer cannot open inline review comments; the comment route can** - read off
+  the action's entity-event handling below, not off an observed thread; see the measured note linked
+  further down for what has and has not actually been seen. The
   action installs the inline-comment MCP server only for an *entity* event. `workflow_dispatch` is
   not one, so on a dispatch the tool does not exist and the grant was removed rather than left
   inert - blocking findings arrive as a marked section in the summary comment, and
@@ -90,10 +92,14 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   **The comment route is no better off, for a different reason.** It looks testable - just comment
   on a PR - but `issue_comment` workflows always run the **default branch's** copy, so a comment
   exercises master's `claude.yml`, never the one on your branch. The tool grants and the
-  `refresh-gate` added there are unverified in exactly the same way. The dispatch half of that
-  exercise is now done and is the entry above; **the comment route is still unexercised** - the
-  open questions are whether it really does open an inline thread, and whether `claude-review`
-  clears itself afterwards.
+  `refresh-gate` added there are unverified in exactly the same way.
+
+  **Both routes have since been exercised and measured**, and the result is closed, so it lives in
+  [`docs/solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md`](../solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md)
+  rather than here. The short version: the comment route posts, at both ends; the dispatch route can
+  run for nine minutes, conclude success, and post nothing, leaving `claude-review` green on an older
+  comment. **What is still open is only the inline thread** - neither run had a blocking finding, so
+  neither had occasion to open one, and deciding it needs a PR that does.
 - **The duplication scanners are pointed away from where agents duplicate.** `dups: clones` and
   `dups: similarity` scan `parallel-consumer-*/src` only, and the similarity job additionally
   filters `file_extensions: 'java'` - so `docs/`, `.github/`, `bin/` and `AGENTS.md` are scanned by

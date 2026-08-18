@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosSeed;
 import bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -72,6 +73,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
     private static final ExtensionContext.Namespace NAMESPACE =
             ExtensionContext.Namespace.create(AmbientProbeExtension.class);
     private static final String PROBE_KEY = "ambientProbe";
+    private static final String CHAOS_SEED_KEY = "chaosSeed";
 
     @Override
     public void beforeEach(ExtensionContext context) {
@@ -104,7 +106,33 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
      */
     @Override
     public void afterTestExecution(ExtensionContext context) {
+        captureChaosSeed(context);
         stopProbe(context);
+    }
+
+    /**
+     * Copy a chaos run's seed into the per-test store, so {@link #buildAutopsy} can print it.
+     * <p>
+     * The seed is the only handle that replays a chaos failure, and the scenario otherwise announces it
+     * on a single console line at run start - which is exactly what a truncated CI log costs you
+     * ({@code docs/solutions/workflow-issues/gh-run-view-log-truncation.md}, whose retrieval note
+     * records the autopsy surviving in the uploaded failsafe XML after the console stream was cut).
+     * The autopsy is captured as {@code system-out} inside that XML, so the seed rides out with it.
+     * <p>
+     * Captured HERE rather than in {@link #testFailed}: an {@code AfterTestExecutionCallback} still has
+     * the live test instance, and the store is the same channel the probe already survives teardown on.
+     * The seed is read off per-test instance state, so nothing is shared between the chaos classes
+     * JUnit may be running concurrently.
+     */
+    private static void captureChaosSeed(ExtensionContext context) {
+        try {
+            context.getTestInstance()
+                    .filter(ChaosSeed.Holder.class::isInstance)
+                    .map(instance -> ((ChaosSeed.Holder) instance).getChaosSeed()) // null before the test resolved one
+                    .ifPresent(seed -> context.getStore(NAMESPACE).put(CHAOS_SEED_KEY, seed));
+        } catch (Exception e) {
+            log.debug("[ambient-probe] could not capture the chaos seed: {}", e.getMessage());
+        }
     }
 
     /**
@@ -172,6 +200,11 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         return context.getStore(NAMESPACE).get(PROBE_KEY, ProgressProbe.class);
     }
 
+    /** {@code null} for every test that is not a seeded chaos scenario - see {@link #captureChaosSeed}. */
+    private static ChaosSeed chaosSeedOf(ExtensionContext context) {
+        return context.getStore(NAMESPACE).get(CHAOS_SEED_KEY, ChaosSeed.class);
+    }
+
     /** Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. */
     public static String buildAutopsy(ExtensionContext context, ProgressProbe probe, Throwable cause) {
         List<String> violations = new ArrayList<>(probe.getViolations());
@@ -180,6 +213,13 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         var sb = new StringBuilder(512);
         sb.append("\n=== AMBIENT PROBE AUTOPSY (test failed): ").append(context.getDisplayName()).append(" ===\n");
         sb.append("failure: ").append(describe(cause)).append('\n');
+        // ready to paste: a truncated console log takes the run-start seed line with it, so the only
+        // surviving copy has to be self-sufficient - see captureChaosSeed()
+        ChaosSeed chaosSeed = chaosSeedOf(context);
+        if (chaosSeed != null) {
+            sb.append("chaos seed: ").append(chaosSeed.getValue()).append('\n');
+            sb.append("chaos replay: ").append(chaosSeed.replayCommand()).append('\n');
+        }
         boolean nothingObserved = violations.isEmpty() && frozen.isEmpty()
                 && probe.getPeakRebalanceDwellMs() == 0 && probe.getPeakLagStagnationMs() == 0;
         if (nothingObserved) {

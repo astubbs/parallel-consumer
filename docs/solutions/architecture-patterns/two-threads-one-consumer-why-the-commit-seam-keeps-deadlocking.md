@@ -349,6 +349,11 @@ since shown to be misattributed.
   needs no replay: the same lane passed on the two preceding heads of that branch, and the diff to the
   failing head contains **zero non-comment Java lines**, so the bytecode is identical. The same
   executable passed twice and failed once.
+  **Corrected 2026-08-18:** the shared "154s" is the bound plus the probe's poll cadence, an artefact
+  of the detector rather than a fingerprint, so it carries no weight toward sameness - the claim now
+  rests on same-test/same-arm/same-violation-class plus the control. And the mode clause is now
+  cashed out: two seeds replayed 6-for-6 on the arm carrying the fix, so this failure is **not**
+  attributable to the AB-BA cycle, whatever the mode permits.
 - **#4, #5 and #6 are in `PERIODIC_CONSUMER_ASYNCHRONOUS`, where no known defect can operate** - the
   AB-BA cycle cannot close (`commit()` falls through to `requestCommitInternal()` and never blocks),
   the transactional revoke wait cannot run, and astubbs/parallel-consumer#100 and

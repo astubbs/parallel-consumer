@@ -36,6 +36,53 @@ None of these has an issue of its own - they were found by reading code to diagn
   that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
   `README.adoc` regenerated.
 
+## Breaking changes that have already landed
+
+Two, both from astubbs#296 (`fix(core) astubbs#209`, commit `79a7b6c62`, whose body carries the full
+reasoning). They are written down here because `CHANGELOG.adoc`'s `=== Breaking` section is
+regenerated from the commit log when the tag is cut - until then the log is the only record, and a
+release note is not something to discover by reading commits.
+
+These are **not** items from [`docs/refactoring.md`](../refactoring.md)'s *Breaking changes queued for
+next major version*. That section is the queue of removals still to be done; these two are done. What
+they share is the gate: that section explains why it is currently OPEN, which is what let them land
+now rather than wait.
+
+Both narrow a `protected`/subclass surface on `internal/AbstractParallelEoSStreamProcessor.java`. **A
+user of `ParallelStreamProcessor` is not affected, and neither is a subclass that leaves both alone** -
+the population is people extending the internal controller. Say that plainly in the notes: an
+unqualified "breaking" on a stability release will cost more upgrade hesitancy than these two are
+worth.
+
+- **A subclass overriding `setupWorkerPool` must now return a pool whose `RejectedExecutionHandler` is
+  a `ThreadPoolExecutor.AbortPolicy`** (a subclass of `AbortPolicy` counts - the requirement is the
+  throw). Anything else, and construction throws `IllegalArgumentException` with a message naming the
+  handler it got. Previously such a pool was accepted and **silently lost records**: with a
+  non-throwing handler `submit()` returns a `Future` that never completes, so the containers stay in
+  flight, `numberRecordsOutForProcessing` is inflated for the life of the instance, and their offsets
+  are never committed - no exception, nothing in the logs. **What to do:** build the pool with
+  `AbortPolicy`, or delegate to `super.setupWorkerPool` and adjust the pool it returns; if the pool
+  then rejects work, its queue is too small for the configured `maxConcurrency`, which is now visible
+  rather than absorbed. In-repo subclasses are unaffected - `VertxParallelEoSStreamProcessor` and
+  `ExternalEngine` both `return super.setupWorkerPool(1)`. The named guard this release's condition
+  asks for is `requireRejectionIsVisible`, pinned by `AbstractParallelEoSStreamProcessorConfigurationTest`
+  (`aPoolThatSilentlyDiscardsRejectedWorkIsRefusedAtSetup` and its three siblings, plus
+  `theDefaultPoolIsAcceptedUnchanged` against over-reach).
+
+- **`setState` is no longer callable from outside its own package.** The `private State state` field
+  carried a bare Lombok `@Setter`, so `setState` was public and reachable from any subclass - including
+  the cross-module `VertxParallelEoSStreamProcessor`, `MutinyProcessor` and `ReactorProcessor`. It is
+  now `@Setter(AccessLevel.PACKAGE)`, because this is the controller's own state machine and a subclass
+  driving it arbitrarily is the shape of bug astubbs#296 exists to prevent. **Who is affected: only
+  code that actually called it**, and nothing outside this package's own tests did, on either side of
+  the fork. There is deliberately no replacement for the write. A `protected getState` arrives in the
+  same change - new, not narrowed, since the field had no getter at all before - so a subclass that
+  only wanted to know whether it is still running is better off than it was.
+
+At release, when the changelog section is regenerated, check both survived into `=== Breaking`:
+generation reads the commit log, so they are only as findable as those commit bodies. The rename side
+of that same check is in [`release-0600-blockers.md`](release-0600-blockers.md).
+
 ## Release gate: no disabled tests
 
 **0.6.0.0 does not ship while any test is disabled.** Tests currently carrying `@Disabled`:

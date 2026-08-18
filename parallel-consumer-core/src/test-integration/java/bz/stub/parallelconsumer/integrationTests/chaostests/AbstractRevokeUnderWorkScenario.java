@@ -57,6 +57,35 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     /** Quiet-phase cap: must exceed LAG_STAGNATION_BOUND (150s) by margin so a stall wedged late in the
      * storm still has time to trip the Class 2 probe before the await gives up. */
     protected static final Duration QUIET_CAP = Duration.ofMinutes(5);
+
+    /**
+     * <b>Diagnostic only - never a way to make this test pass.</b> Set {@code -Dchaos.diagnoseStallRecovery=true}
+     * to answer the one question the gating configuration structurally cannot: when a Class 2 stall
+     * fires, does the frozen partition <b>ever</b> recover, or is it wedged forever?
+     * <p>
+     * The scenario's own arithmetic above asserts that "a REAL Class 2 stall is unbounded", and the
+     * probe's javadoc records RED calibration as still open. Neither has been tested, because the
+     * gating run destroys the evidence at the moment of detection: {@code failFast} aborts the wait on
+     * the first violation and {@code QUIET_CAP} gives up at 5 minutes, so every observation to date
+     * ends the instant the stall is confirmed. Unbounded and merely-slow are indistinguishable from
+     * that data.
+     * <p>
+     * In this mode the quiet phase does not bail on a violation and waits {@link #DIAGNOSTIC_QUIET_CAP}
+     * instead, logging consumption progress each poll. The discriminator is which way the wait ends:
+     * the backlog drains (the stall was bounded - a starvation or fairness defect) or it times out with
+     * consumption flat (unbounded - lost state, a partition paused and never resumed, or a lost wakeup).
+     * <p>
+     * <b>It cannot turn a red run green.</b> {@code assertScenarioSlos} still asserts the probe's
+     * violations are empty after the wait, whichever way the wait ended, so a run that trips the probe
+     * still fails - it just fails having recorded what happened next. Off by default; the gating
+     * configuration is byte-for-byte unchanged when the property is absent.
+     */
+    private static final boolean DIAGNOSE_STALL_RECOVERY = Boolean.getBoolean("chaos.diagnoseStallRecovery");
+
+    /** Quiet cap in {@link #DIAGNOSE_STALL_RECOVERY} mode - long enough that "never recovered" means
+     * something. Override with {@code -Dchaos.diagnosticQuietCapMinutes=<n>}. */
+    private static final Duration DIAGNOSTIC_QUIET_CAP =
+            Duration.ofMinutes(Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
     /** Low eviction horizon: a storm-wedged (deadlocked) member stops polling and gets evicted ~30s
      * later, letting pending rebalances resolve and the group re-stabilize for the quiet phase. */
     protected static final int MAX_POLL_INTERVAL_MS = 30_000;
@@ -77,10 +106,9 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected abstract String scenarioLabel();
 
     protected void runRevokeUnderWorkScenario() throws Exception {
-        long seed = resolveSeed();
-        String replayCmd = replayCommand(seed);
+        ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
-                scenarioLabel(), useCooperativeAssignor(), seed, replayCmd);
+                scenarioLabel(), useCooperativeAssignor(), seed.getValue(), seed.replayCommand());
 
         String topic = getClass().getSimpleName() + "-" + scenarioLabel() + "-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS);
@@ -112,7 +140,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 .withNoProgressWindow(Duration.ofSeconds(60));
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
-                .seed(seed)
+                .seed(seed.getValue())
                 // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
                 .minTick(Duration.ofMillis(300))
                 .maxTick(Duration.ofMillis(1000))
@@ -134,16 +162,32 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
 
             // Phase 2 - quiet observation: group must settle, evict any storm-wedged member, and FINISH.
             // The only defect signal that can fire here is the protocol-invisible kind - exactly Class 2.
-            await().alias("backlog drained after the storm settles (quiet phase)")
-                    .atMost(QUIET_CAP)
-                    .pollInterval(Duration.ofSeconds(2))
-                    .failFast("probe violation", probe::hasViolations)
-                    .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
-                            && allConsumedCovers(expectedKeys, allConsumed));
+            org.awaitility.core.ConditionFactory quiet =
+                    await().alias("backlog drained after the storm settles (quiet phase)")
+                            .pollInterval(Duration.ofSeconds(2));
+            if (DIAGNOSE_STALL_RECOVERY) {
+                // Deliberately no failFast: the whole point is to keep watching AFTER the violation.
+                log.warn("=== chaos.diagnoseStallRecovery ACTIVE - quiet cap {} and no fail-fast. " +
+                        "This is a DIAGNOSTIC run: violations are still asserted at the end, so this " +
+                        "cannot make the test pass. ===", DIAGNOSTIC_QUIET_CAP);
+                quiet = quiet.atMost(DIAGNOSTIC_QUIET_CAP);
+            } else {
+                quiet = quiet.atMost(QUIET_CAP).failFast("probe violation", probe::hasViolations);
+            }
+            quiet.until(() -> {
+                boolean done = totalConsumed.get() >= EXPECTED_MESSAGES
+                        && allConsumedCovers(expectedKeys, allConsumed);
+                if (DIAGNOSE_STALL_RECOVERY) {
+                    // The recovery curve is the measurement - flat means wedged, creeping means bounded.
+                    log.info("[diagnose] quiet phase: consumed={}/{} violations={} done={}",
+                            totalConsumed.get(), EXPECTED_MESSAGES, probe.getViolations().size(), done);
+                }
+                return done;
+            });
         } finally {
             settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
-        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
+        assertScenarioSlos(probe, conductor, seed.replayCommand(), expectedKeys, allConsumed);
     }
 }
