@@ -1,0 +1,42 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Kafka Connect experimental module
+category: integration
+module: parallel-consumer-connect
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - This alpha artifact ships in 0.6.0.0 as directed; its final module documentation must verify its configuration and dependency boundary.
+summary: >-
+  An alpha module for running Kafka Connect sink-task work through Parallel Consumer while preserving the Connect task contract.
+use_this_when:
+  - You need a supported Kafka Connect sink connector to process work through Parallel Consumer.
+  - You can validate lifecycle, offset, rebalance and recovery behavior for the connector and workload you use.
+setup:
+  maven:
+    group_id: bz.stub.parallelconsumer
+    artifact_id: parallel-consumer-connect
+    version: 0.6.0.0
+  connector_inputs:
+    - Supply the connector class and its configuration through the module's verified release API.
+    - Treat any configuration not explicitly documented by the final module as unsupported rather than silently assumed.
+opt_in:
+  mechanism: Add the parallel-consumer-connect artifact.
+  isolated_from_stable_modules: true
+  explanation: An application without this artifact has no Connect runtime or patched Connect classes on its classpath.
+boundaries:
+  - This is an alpha integration, not a blanket maturity claim for Kafka Connect or Parallel Consumer.
+  - Do not assume that a Connector framework feature is supported until the module documents it and its behavior is tested.
+  - The final module must reject, rather than silently ignore, unsupported connector configuration.
+  - Its API and behavior can change.
+  - Keep the conventional Connect deployment available until the experiment earns a broader maturity claim.
+validation:
+  - Verify the connector's task lifecycle, offsets, rebalance behavior and recovery against the module's release tests.
+  - Verify the built artifact remains an opt-in leaf: stable Parallel Consumer artifacts must not depend on it.
+references:
+  - label: Kafka Connect sink integration background
+    url: https://github.com/astubbs/parallel-consumer/issues/240
