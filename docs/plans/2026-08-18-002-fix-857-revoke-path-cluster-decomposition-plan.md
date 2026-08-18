@@ -86,21 +86,55 @@ regression test - it needs a tag, a runtime budget and a review before it belong
 ## Cluster 2 - `ThreadConfinedConsumer`. Do not land as-is.
 
 Ownership is claimed by the poll thread (`BrokerPollSystem.claimConsumerOwnership()`), but in
-transactional mode the **control** thread closes the consumer, because the two subsystems disagree
-about who is responsible for commits: `BrokerPollSystem.isResponsibleForCommits()` is
-`committer.isPresent()` (false in transactional mode) while
-`AbstractParallelEoSStreamProcessor.isResponsibleForCommits()` is `committer instanceof
-ProducerManager` (true).
+transactional mode the **control** thread closes the consumer.
+
+**Correction, 2026-08-18 — this is not two subsystems disagreeing.** An earlier draft of this
+document said the two `isResponsibleForCommits()` definitions contradict each other and should be
+reconciled. Archaeology disproves that. Both were created in the same commit (`60e398102`,
+2020-11-23, *"Choose between Consumer commit or Producer transactional commits"*), both carry the
+**identical javadoc** - *"To keep things simple, make sure the correct thread which can make a
+commit, is the one to close the consumer. This way, if partitions are revoked, the commit can be made
+inline."* - and they are an **XOR over commit mode**: `committer.isPresent()` (poll side) is true iff
+consumer-commit mode; `committer instanceof ProducerManager` (control side) is true iff
+transactional. Exactly one closes the consumer. Neither predicate has been edited since 2020.
+
+So the collision is between astubbs#29's **new** invariant - whole-consumer poll-thread confinement -
+and a **2020 invariant it replaced without noticing**: the *committing* thread owns the close, and
+which thread that is varies by mode. Control closing the consumer in transactional mode is original,
+deliberate design. There is nothing to reconcile; the question is whether PC wants whole-consumer
+confinement at all.
 
 The guard throws `IllegalStateException`, `innerDoClose` swallows it to a `log.warn`, the consumer is
 never closed, no LeaveGroup is sent, and the group waits out the session timeout. **88 occurrences in
 one CI run**, with a cascade of 5 failures and 11 errors in the integration lane
 (`CloseAndOpenOffsetTest`: 10 errors of 14).
 
-The guard is doing its job; what it guards is wrong. **The fix is to reconcile
-`isResponsibleForCommits()` across the two classes, or hand ownership over at close time.** Roughly a
-quarter of observed cases have a dead owner thread, so tolerating a dead owner addresses the minority
-case only - both arms need handling.
+The guard is doing its job; what it guards is a rule this codebase never adopted. Roughly a quarter
+of observed cases have a dead owner thread, so tolerating a dead owner addresses the minority case
+only.
+
+**History constrains the options, and it is not a two-line fix:**
+
+- **Poll-thread ownership was never chosen.** `af1fa5de4` (2020-06) extracted the blocking poll into
+  its own thread and the consumer went with it. No commit states the decision.
+- **Moving the consumer to control was attempted and abandoned** three weeks after the mode split:
+  `9dc92e51c` (2020-12-03, branch `move-cons-to-pc`) comments out `BrokerPollSystem`'s `committer`,
+  `maybeCloseConsumer` and `isResponsibleForCommits` so control commits directly. Never merged; the
+  record does not say why.
+- **Four incidents at this seam, none restructured**: confluentinc#25, the AK 2.7 `groupMetadata`
+  collision (fixed with the `metaCache` still in `ConsumerManager`), confluentinc#548 (fixed with
+  `isRebalanceInProgress` and the `Thread.sleep(100)` spin that is now the transactional revoke
+  wait), and confluentinc#857.
+- **The fatal edge survives every mechanism change.** "Control blocks on something only the poll
+  thread produces" outlived the 2020 lock/Condition scheme, its 2020 queue rewrite, and the 2022
+  actor draft (which swapped queues for `Future.get()` and kept the edge). Only moving ownership
+  removes it.
+- **Any confinement scheme needs ownership *transfer*.** `ThreadConfinedConsumer.claimOwnership()` is
+  claim-only; nothing expresses release or handover, and whoever closes the consumer triggers revoke
+  callbacks on the closing thread - which is why "the committer closes" existed in the first place.
+
+The canonical tracker for the underlying redesign is confluentinc#200 (*"the ultimate simplification
+would be to eliminate the separate poller thread"*), fork mirror astubbs#142, still open.
 
 `ArchitectureTest`, `getAssignmentSize()` and the `MultiInstanceRebalanceTest` state dump ride with
 this cluster.
