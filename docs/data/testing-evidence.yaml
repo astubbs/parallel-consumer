@@ -267,11 +267,17 @@ quarantine:
   # The registry states its own rules and is the source for them. Do not restate them here; they
   # would drift, and this file would then contradict the document it is citing as evidence.
   rules: ../quarantined-tests.md
-  current_status: Empty - no test carries the annotation, and the registry records why the last two were re-enabled.
+  # DELIBERATELY NOT A STATE ASSERTION - not a count, and not "empty"/"non-empty" either. "Empty" was
+  # written when it was true and was still here after two tests were quarantined, contradicting the
+  # registry this file cites as its own evidence. Nothing validates this field, so ANY assertion about
+  # the registry's contents rots the same way the moment the registry changes; "non-empty" would go
+  # stale on the next re-enable exactly as "empty" did on the next quarantine. The only value that
+  # cannot drift is the one that names where the state is actually held.
+  current_status: Held in the registry linked above, which is the live list; this file deliberately does not restate it.
   verification:
     - bin/check-quarantine-registry.sh
     - bin/check-quarantine-owners.sh
-  meaning: A mechanism that exists, is enforced, and is currently unused is a different claim from having no mechanism.
+  meaning: A mechanism that exists and is enforced is a different claim from having no mechanism. What is held out of the gates at any moment is the registry's to state, not this file's.
 transparency:
   solved: ../solutions/
   open: ../inflight/

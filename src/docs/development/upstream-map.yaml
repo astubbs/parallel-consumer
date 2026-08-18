@@ -63,6 +63,28 @@ last_swept: 2026-08-06
 upstream_repo: confluentinc/parallel-consumer
 fork_repo: astubbs/parallel-consumer
 
+# Upstream BRANCH tips reachable from nothing on this fork (no origin branch, no tag),
+# pinned as annotated tags 2026-08-17 -- the branch-tip counterpart of
+# sweep-2023-admin-closure.preserved_heads, which covers swept PR heads. Same contract:
+# SHAs recorded here so the containment check can be redone without re-querying
+# upstream; a missing tag, or one no longer pointing at its SHA, means the copy is
+# gone. Re-verify with:
+#   git ls-remote --tags origin 'archive/upstream-branch/*'
+# Deliberately excluded: 18 dependabot/renovate/chore bot branches (recreatable
+# version bumps, not work) and upstream/HEAD (duplicates master).
+preserved_branch_tips:
+  - {branch: 0.5.3.x, sha: c097a3745, tag: archive/upstream-branch/0.5.3.x}
+  - {branch: DP-12547, sha: 87cdcf48c, tag: archive/upstream-branch/DP-12547}
+  - {branch: PL-176/DontDrainIssue, sha: 4869ccf65, tag: archive/upstream-branch/PL-176/DontDrainIssue}
+  - {branch: correct-failing-license-check, sha: e8c6ff5fa, tag: archive/upstream-branch/correct-failing-license-check}
+  - {branch: docs/back-pressure, sha: 50cd1cf01, tag: archive/upstream-branch/docs/back-pressure}
+  - {branch: features/batching, sha: 7e2607560, tag: archive/upstream-branch/features/batching}
+  - {branch: master, sha: 9b582c246, tag: archive/upstream-branch/master}
+  - {branch: python-cd-pipeline, sha: c3796a2fd, tag: archive/upstream-branch/python-cd-pipeline}
+  - {branch: v0.5.2.x-dev, sha: 5f5de9154, tag: archive/upstream-branch/v0.5.2.x-dev}
+  - {branch: v0.6.x, sha: 58159a0b9, tag: archive/upstream-branch/v0.6.x}
+preserved_branch_tips_checked: 2026-08-17
+
 entries:
 
   # ---------------------------------------------------------------------------
@@ -416,7 +438,7 @@ entries:
   - id: sweep-2023-retry-lifecycle
     group: features
     summary: Retry expiry, stall detection and scheduled retry -- the unfinished half of the retry epic
-    fork: {branches: [], prs: [], fork_issues: [239, 231, 234], status: none}
+    fork: {branches: [features/retry-dlq], prs: [], fork_issues: [239, 231, 234], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [65, 34, 48], prs: [366], related: [196, 310, 71, 82, 92, 197, 242], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -479,7 +501,7 @@ entries:
   - id: sweep-2023-async-produce
     group: features
     summary: Consume-process-produce still blocks on producer acks
-    fork: {branches: [], prs: [], fork_issues: [230], status: none}
+    fork: {branches: [improvements/async-process-send-results-using-actor], prs: [], fork_issues: [230], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [29], prs: [356], related: [], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -488,13 +510,80 @@ entries:
       naming PR #356 is still in the tree. Needs work-unit limbo state + back pressure
       so producer timeouts do not feed themselves. Interacts with the produce lock in
       PERIODIC_TRANSACTIONAL_PRODUCER: async produce changes when a commit cycle may
-      safely begin. Draft: PR #356 astubbs/improvements/async-process-send-results
-      @a89f0bce2.
+      safely begin. Draft: PR confluentinc#356, branch
+      improvements/async-process-send-results-using-actor @00f350166 (2026-08-17: the
+      2026-08-07 note recorded the branch name without its -using-actor suffix and a
+      SHA, a89f0bce2, that is not the tip; corrected against origin). The conversion
+      is built on the actor framework -- see sweep-2023-actor-ipc.
+
+  - id: sweep-2023-actor-ipc
+    group: rebalance-stability
+    summary: "Micro actor / mailbox IPC framework and its call-site conversions (2022 drafts, swept 2023-06-15)"
+    fork:
+      branches: [improvements/lambda-actor-bus, improvements/commit-command-actor,
+                 improvements/poller-bus-actor, improvements/actor-scheduled,
+                 improvements/transactions-dont-block, improvements/scheduled-commit,
+                 improvements/remove-commit-queue]
+      prs: []
+      status: none
+    upstream:
+      repo: confluentinc/parallel-consumer
+      prs: [325, 524]
+      related: [356, 200, 488]
+      status: closed
+      last_checked: 2026-08-17
+    adoc_anchor: null
+    notes: >
+      Added 2026-08-17: until this entry, confluentinc#325/confluentinc#524 appeared
+      only inside sweep-2023-admin-closure's bulk PR list, so the branch family was
+      invisible to every audit. The framework proper (Actor/ActorImpl +
+      FunctionWithException + Interruptible, io.confluent.csid.actors) is 537 lines
+      across 4 files whose only PC coupling is the 16-line MultithreadingAPI marker
+      interface -- structurally separable from the God-class rewiring the branches
+      also carry. Two unreconciled actor bases exist (poller-bus-actor commit
+      d391398f1: "needs unifying of the two actor classes"); lambda-actor-bus's
+      interface is a strict superset of poller-bus-actor's, verified by diffing both
+      2026-08-17. The async-produce conversion branch is tracked by
+      sweep-2023-async-produce; transactions-dont-block depends on this framework.
+      Editorial verdicts under review: docs/refactoring.md "Actor / IPC message bus"
+      section and upstream-pr-analysis.adoc Group C. upstream remote also carries
+      refactor/actor-base-fixes (review fixes on the wiring, no csid/actors files;
+      content contained in origin refs).
+
+  - id: refactor-thread-model-god-class
+    group: rebalance-stability
+    summary: "Shared-nothing thread model (confluentinc#200) and God-class decomposition (confluentinc#488) -- the branch graveyard, registered"
+    fork:
+      branches: [massive-refactor, refactor/state-machine, refactor/extract-controller,
+                 refactor/controller-extract-base, refactor/control-loop,
+                 refactor/infinite-retry, refactor/function-runner,
+                 improvements/interrupt-reason, improvements/rebalance-messages]
+      prs: []
+      fork_issue: 142
+      status: none
+    upstream:
+      repo: confluentinc/parallel-consumer
+      issues: [200]
+      prs: [488, 270, 271]
+      related: [186]
+      status: mixed
+      last_checked: 2026-08-17
+    adoc_anchor: null
+    notes: >
+      Added 2026-08-17 by the same branch audit as sweep-2023-actor-ipc: the work
+      group existed only in docs/refactoring.md (which stays the editorial owner --
+      this entry is the fork<->upstream registration). confluentinc#200 and
+      confluentinc#186 verified still OPEN upstream 2026-08-17; PRs
+      confluentinc#488/confluentinc#270/confluentinc#271 closed unmerged in the
+      2023-06-15 sweep. refactor/controller-extract-base @540b0b9a5 was in no
+      tracking doc at all until this entry (its sibling refactor/extract-controller
+      was). Killing the poll/control split would remove the confluentinc#857
+      deadlock class -- see bug-857-stall-after-rebalance.
 
   - id: sweep-2023-tx-failure-taxonomy
     group: rebalance-stability
     summary: ProducerManager retries every transaction commit failure identically
-    fork: {branches: [], prs: [], fork_issues: [241], status: none}
+    fork: {branches: [tx-commit-failure], prs: [], fork_issues: [241], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [144], prs: [], related: [112], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -526,7 +615,7 @@ entries:
   - id: sweep-2023-topic-priority
     group: features
     summary: Prioritise some subscribed topics over others via reserved concurrency shares
-    fork: {branches: [], prs: [], fork_issues: [236], status: none}
+    fork: {branches: [features/queue-priority], prs: [], fork_issues: [236], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [50], prs: [441], related: [372], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -554,15 +643,22 @@ entries:
   - id: sweep-2023-long-tail
     group: features
     summary: "Swept issues tracked but not scheduled: tracing, dynamic concurrency, rate limiting, proxy, Connect, multi-cluster, per-record tx, drain-to-plain-offsets, vertx verticle"
-    fork: {branches: [], prs: [], fork_issues: [227, 228, 229, 232, 235, 240, 242, 249, 253], status: none}
+    fork: {branches: [features/dynamic-concurrency-control, features/rate-limiting, features/connect-in-pc, features/multi-cluster], prs: [], fork_issues: [227, 228, 229, 232, 235, 240, 242, 249, 253], status: none}
     upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 40, 49, 119, 154, 205, 320], prs: [22, 204, 443], related: [], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
-      All verified absent from fork source 2026-08-07. #28 tracing: re-scope to
+      All verified absent from fork source 2026-08-07. Branch drafts back-filled
+      2026-08-17 (found by branch audit; fork branches carry per-item drafts:
+      dynamic-concurrency confluentinc#21/confluentinc#22, rate-limiting
+      confluentinc#24, connect-in-pc confluentinc#119, multi-cluster
+      confluentinc#320). #28 tracing: re-scope to
       OpenTelemetry (OpenTracing archived 2022); PC is a strong candidate because it
       reorders work, which logs cannot show. #21 dynamic concurrency: distinct from
       DynamicLoadFactor, which sizes the buffer feeding a fixed pool, not the pool
-      (draft PR #22 @ba6b71f10). #24 distributed rate limiting: note internal.RateLimiter
+      (draft PR #22 @ba6b71f10 -- NB that SHA is the UPSTREAM branch tip; the fork's
+      same-named branch features/dynamic-concurrency-control @6f85eac41 has DIVERGED
+      from it and the upstream side is not preserved on origin -- see
+      docs/inflight/next-branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
       is unrelated (throttles status logging in tests). #119 Connect: reporter offered
       to do the work and was told there was no demand; maintainer later had working
       hacks both directions and judged "Connect sinks inside PC" publishable -- that

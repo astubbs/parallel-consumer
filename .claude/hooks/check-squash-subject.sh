@@ -28,6 +28,15 @@
 # is worse than no guard, because it looks present. Note the program cannot simply read stdin
 # instead: stdin is where the heredoc delivers the program.
 #
+# THE BODY IS GUARDED TOO, for squash merges. A squash body override (--body/-b/--body-file/-F)
+# must carry a `Co-authored-by:` trailer - any merge performed through this harness is
+# agent-assisted by definition, and the sign-off is the convention master's squash commits carry -
+# and must NOT carry a `Claude-Session:` line, which belongs on ordinary commits only
+# (docs/merge-checklist.md owns both rules). A --body-file is read when it is a readable file;
+# when it is not (process substitution not yet materialised, typo), the hook fails open because
+# `gh` itself will then fail loudly on the missing file - a guard needs no teeth where the tool
+# already bites.
+#
 # FAILS OPEN otherwise, deliberately: unparseable JSON, unbalanced quotes, no python3. A hook that
 # blocks on its own bug jams the tool call shut, and docs/merge-checklist.md still carries the rule
 # for anyone merging by hand.
@@ -81,28 +90,90 @@ for start, end in zip(starts, starts[1:] + [len(cmd)]):
                 break
         i += 1
 
-    if subject is None:
-        continue                         # no override - GitHub appends the number itself
-    if re.search(r"\(#\d+\)\s*$", subject):
-        continue                         # ends with the number, which is the whole rule
+    def deny(reason):
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason + " See docs/merge-checklist.md.",
+            }
+        }))
 
     pr = next((t for t in tokens[tokens.index("merge") + 1:] if t.isdigit()), None) \
         if "merge" in tokens else None
     hint = f"(#{pr})" if pr else "(#<pr>)"
 
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                f"This --subject does not end with {hint}. Overriding the subject suppresses the "
-                "PR number GitHub would otherwise append, so the commit lands out of step with "
-                "every neighbour on master - and that is not fixable afterwards without rewriting "
-                f"a pushed commit (astubbs#206). End the subject with ' {hint}', or drop the flag "
-                "and let the PR title be used. --body/--body-file do not affect the subject. "
-                "See docs/merge-checklist.md."
-            ),
-        }
-    }))
-    break
+    if subject is not None and not re.search(r"\(#\d+\)\s*$", subject):
+        deny(
+            f"This --subject does not end with {hint}. Overriding the subject suppresses the "
+            "PR number GitHub would otherwise append, so the commit lands out of step with "
+            "every neighbour on master - and that is not fixable afterwards without rewriting "
+            f"a pushed commit (astubbs#206). End the subject with ' {hint}', or drop the flag "
+            "and let the PR title be used. --body/--body-file do not affect the subject."
+        )
+        break
+
+    # Squash-body sign-off: same token walk as the subject, for the body flags.
+    if "--squash" not in tokens and "-s" not in tokens:
+        continue
+    body = None
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t in ("--body", "-b") and i + 1 < len(tokens):
+            body, i = tokens[i + 1], i + 2
+            continue
+        if t in ("--body-file", "-F") and i + 1 < len(tokens):
+            path = tokens[i + 1]
+            i += 2
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    body = fh.read()
+            except OSError:
+                body = None              # gh will fail loudly on it; nothing to guard
+            continue
+        for flag in ("--body", "--body-file"):
+            if t.startswith(flag + "="):
+                val = t[len(flag) + 1:]
+                if flag == "--body":
+                    body = val
+                else:
+                    try:
+                        with open(val, encoding="utf-8") as fh:
+                            body = fh.read()
+                    except OSError:
+                        body = None
+                break
+        else:
+            for flag in ("-b", "-F"):
+                if t.startswith(flag) and len(t) > 2:
+                    val = t[2:]
+                    if flag == "-b":
+                        body = val
+                    else:
+                        try:
+                            with open(val, encoding="utf-8") as fh:
+                                body = fh.read()
+                        except OSError:
+                            body = None
+                    break
+        i += 1
+
+    if body is None:
+        continue                         # no override, or unreadable file gh will reject itself
+    if not re.search(r"^co-authored-by:", body, re.I | re.M):
+        deny(
+            "This squash --body carries no Co-authored-by trailer. A merge performed through "
+            "this harness is agent-assisted, and master's squash commits carry exactly one "
+            "sign-off line: 'Co-authored-by: Claude <model> (1M context) <noreply@anthropic.com>'. "
+            "Add it as the body's final line."
+        )
+        break
+    if re.search(r"^claude-session:", body, re.I | re.M):
+        deny(
+            "This squash --body carries a Claude-Session: line. Squash-merge commits on master "
+            "carry only the Co-authored-by trailer; the session link belongs on ordinary "
+            "branch commits, not the permanent squash record. Remove the Claude-Session line."
+        )
+        break
 PY

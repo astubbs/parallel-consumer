@@ -145,7 +145,72 @@ exist. This generalises beyond the entry - it belongs in the ambient-probe secti
 `docs/testing.md`, which currently states that every broker integration test failure *log* includes
 the block, and that file was owned by another branch when this was written.
 
-**Fifth sighting, 2026-08-17 - the eager `CLASS2_STALL` again, and it reproduces the second sighting
+**Fifth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
+and the sixth below share a signature).** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`
+was killed fail-fast by `ProgressProbe` on
+[job 95579861648](https://github.com/astubbs/parallel-consumer/actions/runs/32093367999/job/95579861648),
+2026-08-18T02:52Z, on the astubbs#310 branch (docs+hooks only; since merged, branch deleted - the
+run record survives):
+
+```
+NO_PROGRESS: fleet consumed count stuck at 98150/100000 for 30s (bound 30s)
+```
+
+Autopsy: 26 frozen partitions, committed stagnant 50-55s with live lag (56-1132); peaks
+`rebalanceDwell=6644ms`, `lagStagnation=55152ms`. The fleet-level detector fired on its own terms -
+98150 of 100000 consumed, then nothing for the full 30s bound - so the vacuity caveat does not
+apply. **Replay seed `3086917415748208232`** - the part no command can recover once the log
+expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=3086917415748208232
+
+**Control arm from the same run:** both revoke-under-work variants PASSED with
+`probe violations=[]` - cooperative on seed `4087023100803854645`, eager on `334227014609238766`.
+Same runner, same broker, same hour.
+
+**Correction worth recording: a truncated log misattributed this sighting before it was written.**
+The `gh run view --job <id> --log` route returned 1654 lines and cut off inside the cooperative
+revoke phase, whose (expected, non-fatal) `RebalanceInProgressException` churn then read as the
+failure - a handoff circulated citing the cooperative test and seed `4087023100803854645`, which is
+in fact the PASSING control arm. Do not replay that seed expecting a failure. The full 5948-line
+log came from the run-logs archive
+(`gh api repos/.../actions/runs/<run-id>/logs`, or `.../attempts/<n>/logs` for a re-run's earlier
+attempt) - a second retrieval route alongside the fourth sighting's report-artifact note, and the
+console-log truncation trap is the same one recorded there.
+
+**Sixth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by the same fleet detector on
+[job 95584026682's run, attempt at head d96375053](https://github.com/astubbs/parallel-consumer/actions/runs/32078875110)
+(2026-08-17T23:04Z), on astubbs#308 - a docs-only branch (ideation/strategy/ledger files, zero
+product code), so the branch is not a suspect:
+
+```
+NO_PROGRESS: fleet consumed count stuck at 95382/100000 for 30s (bound 30s)
+```
+
+Autopsy: 28 frozen partitions; peaks `rebalanceDwell=3345ms`, `lagStagnation=82777ms`; run settled
+at consumed=95667. **Replay seed `8603691233664838594`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8603691233664838594
+
+**Control arm, same run:** cooperative passed on seed `6926127865194591503`, eager on
+`5980280513720170608`. The suite re-ran green on the same branch at head `bb5799df0` five hours
+later - consistent with every prior sighting: seed-dependent, not branch-dependent.
+
+**What two same-night `NO_PROGRESS` kills add up to.** This arm differs from the second sighting's
+`CLASS2_STALL/LAG_STAGNATION` (per-partition stagnation, eager revoke) and the fourth's
+`ZOMBIE_MEMBER/REBALANCE_BLOCKED` (member unresponsive to rebalance): here the *fleet-wide*
+consumed count freezes outright with the group ostensibly live, under churn-storm weights
+(`STOP_DRAIN`-heavy, high `joinAfterDrainBias`) rather than revoke-under-work. Both kills landed on
+`ChaosChurnStormIT` - as did the fourth - so the churn-storm scenario is now the family's most
+productive trap. Two replayable seeds with the same signature within four hours is the strongest
+single-arm evidence the ledger holds; whichever defect they belong to, the replays are now the
+cheapest next experiment the family has.
+
+**Seventh sighting, 2026-08-17 - the eager `CLASS2_STALL` again, and a DIFFERENT arm from the
+fleet `NO_PROGRESS` pair above, and it reproduces the second sighting
 almost exactly.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed fail-fast by
 `ProgressProbe` on
 [job 95331078881](https://github.com/astubbs/parallel-consumer/actions/runs/32011246250/job/95331078881),

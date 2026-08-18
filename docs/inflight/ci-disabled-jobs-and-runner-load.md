@@ -15,3 +15,19 @@
   runner-lost-communication (3+ times on astubbs#80 alone) and making chaos timing SLOs noisy; **re-check
   whether that still happens** before spending anything on a shared concurrency group. See
   `ci-mutation-testing.md`.
+- **Re-checked 2026-08-17, and it still happens.** Answering the question above with an observation
+  rather than leaving it open. In one ~30-minute window the `highcpu` workflow failed on **three
+  unrelated branches** - `ci/claude-yml-script-grant`, `fix/concurrent-listener-registration` and
+  `docs/inflight-note-currency` - while *succeeding* on two of those same branches minutes either
+  side. Failures on unrelated branches with interleaved successes is master-state under rule 2, not
+  any PR's doing.
+
+  The signature is the one this entry already names, not a test failure: in run
+  [`32010207847`](https://github.com/astubbs/parallel-consumer/actions/runs/32010207847) the
+  `Chaos Pain Suite tests` step logs stop dead at 08:34:16 mid-scenario, the step does not end until
+  08:40:40, and it fails with **no `BUILD FAILURE`, no stack trace and no `##[error]`** - the process
+  was killed, it did not report anything. A reader grepping that log for a failing test finds
+  nothing, which is what makes this class expensive to diagnose twice.
+
+  Context worth keeping with the measurement: several agent sessions were building against the same
+  box concurrently. The load driving it is not only CI's.

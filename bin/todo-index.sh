@@ -34,8 +34,35 @@ cd "$(dirname "$0")/.."
 OUT="docs/todo-index.md"
 SELF="bin/todo-index.sh"
 
+# ARGUMENTS ARE PARSED STRICTLY, AND THAT IS THE SECURITY BOUNDARY - not tidiness. The review agent
+# is granted this script as `Bash(bin/todo-index.sh --check)` precisely so it can ask whether the
+# committed index is stale WITHOUT being able to rewrite the tree it is inspecting.
+#
+# A permissive parser breaks that grant open from the other side. The previous
+# `[[ "${1:-}" == "--check" ]]` silently ignored anything it did not recognise, so
+# `bin/todo-index.sh --check=false` left CHECK_MODE false, fell through to the REWRITE path, and
+# exited 0 - while still matching any prefix-shaped grant of `--check`. Reported by the review agent
+# on astubbs/parallel-consumer#286 and reproduced there.
+#
+# Rejecting unknown arguments keeps the guarantee HERE, where it holds however the caller was
+# granted, instead of resting on an allowlist string in two workflow files getting its wildcard
+# right. Exits 2 on a usage error, leaving 1 to mean "the index is stale".
 CHECK_MODE=false
-[[ "${1:-}" == "--check" ]] && CHECK_MODE=true
+case $# in
+    0) ;;
+    1)
+        if [[ "$1" == "--check" ]]; then
+            CHECK_MODE=true
+        else
+            printf 'usage: %s [--check]\n' "$SELF" >&2
+            exit 2
+        fi
+        ;;
+    *)
+        printf 'usage: %s [--check]\n' "$SELF" >&2
+        exit 2
+        ;;
+esac
 
 # Files worth scanning: source, scripts, build and workflow config. Deliberately excludes build
 # output, the git dir, and agent scratch dirs.

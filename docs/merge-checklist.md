@@ -47,6 +47,12 @@ force-push to master to correct. Simplest is to omit the flag entirely and let t
 `.claude/hooks/check-squash-subject.sh` refuses an override without the suffix for Claude Code; the
 rule binds anyone merging by hand.
 
+**Sign off the squash body, and nothing else.** An agent-assisted squash body ends with exactly one
+trailer - `Co-authored-by: Claude <model> (1M context) <noreply@anthropic.com>` - and carries no
+`Claude-Session:` line: the session link belongs on ordinary branch commits, not the permanent
+squash record master keeps. The same hook enforces both halves for Claude Code when the body is
+overridden (`--body`/`--body-file`); the rule binds anyone merging by hand.
+
 ### Rebase-merge as-is
 
 Only when the existing commits are already clean and atomic.

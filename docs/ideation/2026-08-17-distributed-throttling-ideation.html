@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Distributed Throttling for Parallel Consumer</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --ink: #22242a;
+    --muted: #5c6270;
+    --line: #e3e0da;
+    --card: #ffffff;
+    --accent: #0d5c63;
+    --accent-soft: #e4f0f1;
+    --accent-text: #0a4a50;
+    --warn-soft: #fdf1e3;
+    --warn-text: #8a5a1c;
+    --reject-soft: #f6f0ee;
+    --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .page { max-width: 920px; margin-inline: auto; padding: 3rem 1.5rem 4rem; }
+  p, li, dd { max-width: 72ch; }
+  h1 { font-size: 1.8rem; line-height: 1.25; margin: 0.4rem 0 0.4rem; }
+  h2 { font-size: 1.25rem; margin: 2.6rem 0 0.8rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 0; }
+  .eyebrow {
+    font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-text); font-weight: 600;
+  }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.4rem 1.6rem; margin: 0.8rem 0 0; color: var(--muted); font-size: 0.85rem; }
+  .meta strong { color: var(--ink); font-weight: 600; }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: 0.86em; background: #f0eee9; padding: 0.08em 0.3em; border-radius: 3px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1.4rem 0 0; }
+  .stat {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 0.55rem 0.9rem; font-size: 0.82rem; color: var(--muted);
+  }
+  .stat b { display: block; font-size: 1.15rem; color: var(--ink); }
+  .jump { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1.2rem; margin: 1rem 0 1.6rem; }
+  .jump ol { margin: 0.3rem 0 0; padding-left: 1.3rem; }
+  .jump li { margin: 0.18rem 0; }
+  article.idea {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.3rem 1.5rem 1.2rem; margin: 1.2rem 0;
+  }
+  .idea-head { display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap; }
+  .idchip {
+    font-family: var(--mono); font-size: 0.8rem; font-weight: 700;
+    background: var(--accent-soft); color: var(--accent-text);
+    border-radius: 999px; padding: 0.12rem 0.65rem;
+  }
+  .chips { display: flex; gap: 0.45rem; flex-wrap: wrap; margin: 0.55rem 0 0.9rem; }
+  .chip {
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
+    border-radius: 999px; padding: 0.14rem 0.6rem;
+    background: #eef0f3; color: #4a5160;
+  }
+  .chip.axis { background: var(--accent-soft); color: var(--accent-text); }
+  dl.fields { margin: 0.8rem 0 0; }
+  dl.fields dt {
+    font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin-top: 0.75rem;
+  }
+  dl.fields dd { margin: 0.15rem 0 0; }
+  .basis-tag { font-family: var(--mono); font-size: 0.78rem; font-weight: 700; color: var(--accent-text); }
+  blockquote {
+    margin: 0.4rem 0; padding: 0.4rem 0.9rem; border-left: 3px solid var(--line);
+    color: var(--muted); font-size: 0.92em;
+  }
+  figure { margin: 1.1rem 0 0.4rem; }
+  figcaption { font-size: 0.78rem; color: var(--muted); margin-top: 0.35rem; max-width: 72ch; }
+  svg text { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; margin: 1rem 0; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  tr.gap td { background: var(--warn-soft); }
+  .callout {
+    background: var(--warn-soft); border: 1px solid #edd9bd; border-radius: 8px;
+    padding: 0.8rem 1.1rem; margin: 1.2rem 0; font-size: 0.92rem;
+  }
+  .callout .eyebrow { color: var(--warn-text); }
+  section.ground p, section.ground li { font-size: 0.94rem; }
+  footer.composition-signal {
+    margin-top: 3.5rem; padding-top: 1rem; border-top: 1px solid var(--line);
+    font-size: 0.78rem; color: var(--muted);
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">Ideation &middot; Discovery document</div>
+  <h1>Distributed Throttling for Parallel Consumer</h1>
+  <div class="meta">
+    <span><strong>Date:</strong> <time datetime="2026-08-17">2026-08-17</time></span>
+    <span><strong>Topic:</strong> distributed-throttling</span>
+    <span><strong>Mode:</strong> repo-grounded</span>
+  </div>
+  <div class="meta">
+    <span><strong>Focus:</strong> distributed throttling, anchored on
+      <a href="https://github.com/astubbs/parallel-consumer/issues/228">astubbs#228</a>
+      (mirror of <a href="https://github.com/confluentinc/parallel-consumer/issues/24">confluentinc#24</a>)
+      and linked upstream <a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a></span>
+  </div>
+  <div class="stats">
+    <div class="stat"><b>46</b> raw ideas</div>
+    <div class="stat"><b>17+5</b> clusters + syntheses</div>
+    <div class="stat"><b>8</b> survivors</div>
+    <div class="stat"><b>5</b> axes, all covered</div>
+    <div class="stat"><b>8/8</b> verifier spot-checks held</div>
+  </div>
+</header>
+
+<section class="ground">
+<h2 id="grounding-context">Grounding Context</h2>
+<p><strong>Codebase Context.</strong> The dispatch seam is
+<code>ProcessingShard.getWorkIfAvailable</code>: a tight per-candidate loop where two boolean
+gates — <code>pm.couldBeTakenAsWork(wc)</code> and <code>wc.isAvailableToTakeAsWork()</code>
+(<code>isNotInFlight &amp;&amp; !isUserFunctionSucceeded &amp;&amp; isDelayPassed</code>) — already
+skip records without blocking a worker. Retry deferral sets <code>retryDueAt</code> only on
+failure; the sorted <code>RetryQueue</code> feeds <code>getLowestRetryTime()</code> →
+<code>getTimeToBlockFor()</code>, the control loop's only wakeup calendar. Backpressure is
+separate: <code>WorkManager.isSufficientlyLoaded()</code> against
+<code>targetAmountOfRecordsInFlight × DynamicLoadFactor</code> drives
+<code>BrokerPollSystem</code> pause/resume of the <em>whole</em> assignment.
+<code>ParallelConsumerOptions</code> has exactly one <code>Function</code>-typed policy hook
+(<code>retryDelayProvider</code>); <code>PCModule</code> is the hand-rolled DI container with an
+explicit zero-dependency policy; core's compile deps are kafka-clients, zstd-jni, snappy-java,
+micrometer-core. The name <code>RateLimiter</code> is taken by an internal log-debounce.</p>
+<p><strong>Issue context (directive).</strong>
+<a href="https://github.com/astubbs/parallel-consumer/issues/228">astubbs#228</a> asks for
+cluster-coordinated rate limiting (the failure mode: N instances each assume they own the whole
+budget) and records the objection — a shared cache is a heavy runtime dependency for a
+Kafka-client-only library. Its 2026-08-15 comment argues the limiter belongs <em>at the dispatch
+seam</em>, composing with retry and ordering.
+<a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a> is
+the real-world case: 400K RPS in, 50K RPS downstream capacity, 113 nodes on 100 partitions,
+CPU pinned, uneven load, and the maintainer answer "there is no support for distributed rate
+limiting in Parallel Consumer." It also reports
+<code>pc_user_function_processing_time_seconds</code> is inaccurate under Vert.x.</p>
+<p><strong>Prior art.</strong> The abandoned branch <code>features/rate-limiting</code>
+(<code>e9f49d321</code>, Oct 2021) is one commit: bucket4j wired locally into an example app,
+build-breaking pom properties, an infinite assertion-less test — and it <em>policed</em>
+(returned <code>Mono.error</code>) rather than deferring. Externally: Envoy's two-tier
+local-bucket + global-service split, Doorman leases, Kafka's own KIP-124 broker quotas, Netflix
+concurrency-limits (adaptive), and Karafka Pro — whose throttler is explicitly <em>not</em>
+cluster-coordinated and resets on rebalance. Nobody in the Kafka consumer-framework space
+divides a downstream budget using the consumer group itself.</p>
+<p><strong>Status of the libraries weighed in
+<a href="https://github.com/confluentinc/parallel-consumer/issues/24">confluentinc#24</a></strong>
+(2020's shortlist, re-checked 2026). <strong>bucket4j</strong>: the survivor — actively
+maintained (v8.19), with distributed backends grown well beyond the 2020 state: JCache
+(Hazelcast, Ignite, Infinispan, Coherence), Redis (Redisson/Jedis/Lettuce), JDBC, MongoDB,
+plus a lock-free async API. The operative caveat: every distributed backend costs a network
+round trip per permit unless batched — on an already-saturated fleet (confluentinc#766) a per-record check
+worsens the overload, so any integration must take the Envoy shape (local bucket, slow-cadence
+global sync). <strong>ratelimitj</strong>: dormant for years; out of the race.
+<strong>resilience4j</strong>: the 2020 ruling stands and has hardened —
+<a href="https://github.com/resilience4j/resilience4j/issues/350">resilience4j#350</a> remains
+unresolved and the maintainers treat distributed rate limiting as out of scope; their limiter
+is in-memory by design. The standard JVM resilience library deliberately punting is evidence
+that PC filling the gap is differentiation, not duplication. Also noted (not in the original
+issue): <strong>redis-cell</strong> — a Redis module implementing GCRA with the whole bucket
+state in one key (<code>CL.THROTTLE</code>), a lower-overhead primitive than a DIY counter if a
+Redis-backed plug is ever built.</p>
+</section>
+
+<section>
+<h2 id="topic-axes">Topic Axes</h2>
+<ul>
+  <li><strong>coordination-substrate</strong> — how instances share or divide the budget</li>
+  <li><strong>enforcement-seam</strong> — where the "not yet" decision happens</li>
+  <li><strong>limit-specification</strong> — what the user configures and what it is keyed by</li>
+  <li><strong>failure-dynamics</strong> — rebalance, staleness, offset-map growth, liveness, bursts</li>
+  <li><strong>packaging-observability</strong> — core vs extension module, naming, metrics, docs</li>
+</ul>
+</section>
+
+<section>
+<h2 id="ranked-ideas">Ranked Ideas</h2>
+
+<nav class="jump">
+  <span class="eyebrow">Jump to</span>
+  <ol>
+    <li><a href="#i1">Partition-share budget: distributed limiting with zero new dependencies</a></li>
+    <li><a href="#i2">Dispatch-seam throttle via <code>availableAt</code> deferral — shape, don't police</a></li>
+    <li><a href="#i3">Little's Law controller: an RPS target becomes the in-flight target PC already enforces</a></li>
+    <li><a href="#i4">The throttling constitution: liveness beats the limit, plus two API corrections</a></li>
+    <li><a href="#i5">Socket-and-plug: SPI in core, backends as extension artifacts</a></li>
+    <li><a href="#i6">Adaptive AIMD on rate: no configured number, no coordination</a></li>
+    <li><a href="#i7">Decorrelated jitter for the retry path</a></li>
+    <li><a href="#i8">Self-scaling: one adaptive controller replaces concurrency <em>and</em> rate configuration</a></li>
+  </ol>
+</nav>
+
+<article class="idea" id="i1">
+  <div class="idea-head"><span class="idchip">1</span><h3>Partition-share budget: distributed limiting with zero new dependencies</h3></div>
+  <div class="chips">
+    <span class="chip axis">coordination-substrate</span>
+    <span class="chip">Confidence 85%</span>
+    <span class="chip">Complexity Low</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Each instance derives its share of a global rate budget from consumer-group partition
+    assignment: <code>perInstanceLimit = globalLimit × (myPartitions / totalPartitions)</code>,
+    enforced by a purely local token bucket. <code>numberOfAssignedPartitions</code> is already a
+    public getter updated in the rebalance callbacks PC already implements; total partition count
+    is reachable via the already-wrapped <code>Consumer.partitionsFor(topic)</code> (verified:
+    currently called nowhere in core). The share recomputes automatically on every rebalance —
+    the exact event a shared-cache scheme would need a separate protocol to detect.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> <code>AbstractParallelEoSStreamProcessor</code>
+    carries <code>@Getter private int numberOfAssignedPartitions</code>, maintained in
+    <code>onPartitionsAssigned</code>/<code>onPartitionsRevoked</code>/<code>onPartitionsLost</code>;
+    verifier confirmed <code>partitionsFor</code> is unused-but-reachable.
+    <span class="basis-tag">external:</span> the research digest flags this as an open,
+    PC-shaped gap — no Kafka consumer framework divides a downstream budget by group assignment
+    (Karafka Pro's throttler is local-only and resets on rebalance).</dd>
+    <dt>Rationale</dt>
+    <dd>It answers both recorded blockers at once: the demand signal
+    (<a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a>'s
+    113-nodes-on-100-partitions overload, where per-instance limits are wrong by 113×) and
+    <a href="https://github.com/astubbs/parallel-consumer/issues/228">astubbs#228</a>'s
+    dependency objection — no shared cache, no round trips, no new runtime dependency.
+    Instances with zero partitions correctly get zero budget.</dd>
+    <dt>Downsides</dt>
+    <dd>Partition-count share ≠ demand share: skewed partitions strand budget on lightly-loaded
+    instances. The upgrade path when that bites is a demand-responsive lease allocator riding
+    the group protocol's unused <code>ConsumerPartitionAssignor</code> userData channel
+    (verified unused in core) — deferred because a custom assignor is real adoption friction,
+    not zero-cost (see Rejection Summary).</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 640 170" role="img" aria-label="Global budget divided by partition assignment">
+      <rect x="200" y="10" width="240" height="34" rx="8" fill="#e4f0f1" stroke="#0d5c63"/>
+      <text x="320" y="32" text-anchor="middle" font-size="13" fill="#0a4a50" font-weight="600">Global budget: 50K RPS</text>
+      <line x1="250" y1="44" x2="120" y2="96" stroke="#5c6270" stroke-width="1.4"/>
+      <line x1="320" y1="44" x2="320" y2="96" stroke="#5c6270" stroke-width="1.4"/>
+      <line x1="390" y1="44" x2="520" y2="96" stroke="#5c6270" stroke-width="1.4"/>
+      <rect x="40" y="96" width="160" height="52" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="120" y="117" text-anchor="middle" font-size="12" fill="#22242a">Instance A · 40 partitions</text>
+      <text x="120" y="136" text-anchor="middle" font-size="12" fill="#0a4a50" font-weight="600">→ 20K RPS</text>
+      <rect x="240" y="96" width="160" height="52" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="320" y="117" text-anchor="middle" font-size="12" fill="#22242a">Instance B · 60 partitions</text>
+      <text x="320" y="136" text-anchor="middle" font-size="12" fill="#0a4a50" font-weight="600">→ 30K RPS</text>
+      <rect x="440" y="96" width="160" height="52" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="520" y="117" text-anchor="middle" font-size="12" fill="#22242a">Instance C · 0 partitions</text>
+      <text x="520" y="136" text-anchor="middle" font-size="12" fill="#0a4a50" font-weight="600">→ 0 RPS</text>
+      <text x="320" y="165" text-anchor="middle" font-size="11" fill="#5c6270">shares recompute on every rebalance — no shared cache anywhere</text>
+    </svg>
+    <figcaption>The consumer group's own assignment is the division substrate; a rebalance is the refresh event.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="i2">
+  <div class="idea-head"><span class="idchip">2</span><h3>Dispatch-seam throttle via <code>availableAt</code> deferral — shape, don't police</h3></div>
+  <div class="chips">
+    <span class="chip axis">enforcement-seam</span>
+    <span class="chip">Confidence 85%</span>
+    <span class="chip">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Two changes that only work as a pair. First, a third predicate beside
+    <code>pm.couldBeTakenAsWork(wc)</code> and <code>wc.isAvailableToTakeAsWork()</code> in
+    <code>ProcessingShard.getWorkIfAvailable</code> — a token check that skips without blocking,
+    exactly like today's gates. Second, generalise <code>retryDueAt</code> into
+    <code>availableAt</code> with a reason (<code>RETRY | THROTTLE</code>), settable without
+    recording a failure, so a throttled record parks in the existing sorted
+    <code>RetryQueue</code> and the control loop's wakeup
+    (<code>getLowestRetryTime()</code> → <code>getTimeToBlockFor()</code>) learns exactly when
+    the next token arrives. Network QoS vocabulary: a <em>shaper</em> (delay), not a
+    <em>policer</em> (error) — the dead branch policed
+    (<code>Mono.error(RateLimitExceeded)</code>), which burns a retry attempt and poisons
+    failure metrics.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> <code>isDelayPassed()</code> opens with
+    <code>if (!hasPreviouslyFailed()) return true;</code> — the deferral <em>predicate</em> is
+    already generic; only the <em>setter</em> is failure-coupled (verifier-confirmed:
+    <code>retryDueAt</code> is written only in <code>updateFailureHistory</code>).
+    <span class="basis-tag">reasoned:</span> a gate without a wakeup signal degenerates to the
+    control loop's spin-avoidance floor (<code>Thread.sleep(1)</code>) for the whole throttled
+    period — busy-waiting instead of sleeping until the refill instant.</dd>
+    <dt>Rationale</dt>
+    <dd>This makes <a href="https://github.com/astubbs/parallel-consumer/issues/228">astubbs#228</a>'s
+    "composes with retry — same mechanism retry backoff uses" argument <em>literal</em> at the
+    data-structure level: one sorted calendar, one wakeup path, no second scheduler subsystem,
+    ordering preserved because the shard remains the unit of both ordering and deferral.</dd>
+    <dt>Downsides</dt>
+    <dd>Touches the hottest path in the library; deferral-only throttling is insufficient alone
+    (idea 4 explains why it must also reach the poller); limiter skips must register as a named
+    category in the <a href="https://github.com/confluentinc/parallel-consumer/issues/857">confluentinc#857</a>
+    silent-stall diagnostics or correct throttling reads as a stall bug.</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 640 150" role="img" aria-label="Eligibility gate chain with throttle gate added">
+      <rect x="10" y="55" width="120" height="40" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="70" y="79" text-anchor="middle" font-size="12" fill="#22242a">candidate record</text>
+      <line x1="130" y1="75" x2="162" y2="75" stroke="#5c6270" stroke-width="1.4"/>
+      <polygon points="162,71 170,75 162,79" fill="#5c6270"/>
+      <rect x="172" y="55" width="118" height="40" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="231" y="74" text-anchor="middle" font-size="11" fill="#22242a">couldBeTaken</text>
+      <text x="231" y="88" text-anchor="middle" font-size="11" fill="#22242a">AsWork?</text>
+      <line x1="290" y1="75" x2="322" y2="75" stroke="#5c6270" stroke-width="1.4"/>
+      <polygon points="322,71 330,75 322,79" fill="#5c6270"/>
+      <rect x="332" y="55" width="118" height="40" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="391" y="74" text-anchor="middle" font-size="11" fill="#22242a">isAvailableTo</text>
+      <text x="391" y="88" text-anchor="middle" font-size="11" fill="#22242a">TakeAsWork?</text>
+      <line x1="450" y1="75" x2="482" y2="75" stroke="#5c6270" stroke-width="1.4"/>
+      <polygon points="482,71 490,75 482,79" fill="#5c6270"/>
+      <rect x="492" y="55" width="118" height="40" rx="8" fill="#e4f0f1" stroke="#0d5c63" stroke-dasharray="5 3"/>
+      <text x="551" y="74" text-anchor="middle" font-size="11" fill="#0a4a50" font-weight="600">token</text>
+      <text x="551" y="88" text-anchor="middle" font-size="11" fill="#0a4a50" font-weight="600">available? (new)</text>
+      <line x1="551" y1="95" x2="551" y2="118" stroke="#8a5a1c" stroke-width="1.4"/>
+      <polygon points="547,118 551,126 555,118" fill="#8a5a1c"/>
+      <text x="540" y="140" text-anchor="end" font-size="11" fill="#8a5a1c">no → availableAt = next refill; parks in RetryQueue calendar</text>
+    </svg>
+    <figcaption>A third skip-not-block gate, with the existing retry calendar supplying the wakeup time.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="i3">
+  <div class="idea-head"><span class="idchip">3</span><h3>Little's Law controller: an RPS target becomes the in-flight target PC already enforces</h3></div>
+  <div class="chips">
+    <span class="chip axis">enforcement-seam</span>
+    <span class="chip">Confidence 80%</span>
+    <span class="chip">Complexity Low–Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Don't add a rate gate at all. Since RPS = in-flight ÷ latency, a rate target converts to
+    a concurrency target: <code>targetInFlight = targetRPS × observedServiceTime</code>,
+    recomputed continuously from the <code>USER_FUNCTION_PROCESSING_TIME</code> timer that
+    already exists. The controller writes one integer — the in-flight target — and every
+    existing enforcement mechanism follows: verifier-confirmed, the same value drives both the
+    dispatch quantity calculation (<code>calculateQuantityToRequest</code>) and the broker-poller
+    pause threshold (<code>isSufficientlyLoaded</code>).</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> the <code>maxConcurrency</code> javadoc in
+    <code>ParallelConsumerOptions</code> (verifier-confirmed verbatim): <em>"if your quota is
+    expressed as maximum concurrent calls, this works well. If it's limited in total requests /
+    sec, this may still overload the system. See towards the distributed rate limiting feature
+    for this to be properly addressed"</em> — PC's own docs name the gap, and Little's Law is the
+    conversion between the two dimensions.</dd>
+    <dt>Rationale</dt>
+    <dd>The only candidate whose enforcement reaches <em>both</em> dispatch and poll suppression
+    with no new plumbing — so it cannot produce the unbounded-deferral failure mode (idea 4) by
+    construction. It is also a pure controller: unit-testable without touching
+    <code>ProcessingShard</code>.</dd>
+    <dt>Downsides</dt>
+    <dd>Feedback subtlety flagged by the verifier: under active throttling, observed latency
+    includes queueing time, so a naive controller feeds back on itself — it must use service
+    time, not sojourn time. Granularity is coarser than a per-shard token bucket (no
+    per-key/per-destination limits). Depends on accurate timing, which
+    <a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a>
+    reports is broken under Vert.x — the async-engine metrics fix is a prerequisite.</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i4">
+  <div class="idea-head"><span class="idchip">4</span><h3>The throttling constitution: liveness beats the limit, plus two API corrections</h3></div>
+  <div class="chips">
+    <span class="chip axis">failure-dynamics</span>
+    <span class="chip">Confidence 90%</span>
+    <span class="chip">Complexity Low (design doc)</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>A short, pre-registered design contract that <em>any</em> winning mechanism must satisfy
+    — settled before code, like freeway ramp meters whose queue-override relaxes metering when
+    the ramp spills back onto surface streets. The clauses, each traced to verified code:
+    (1) <strong>the limit is constitutionally soft</strong> — group liveness and offset-map
+    health outrank it, with a metered, alarming breach path (precedent:
+    <code>isBlockingProgress</code> already exempts the record holding up the partition);
+    (2) <strong>the throttle must reach the poller</strong> — deferral-only throttling under a
+    sustained 8× input mismatch grows the incomplete-offset set toward the
+    <code>DefaultMaxMetadataSize</code> hard limit, whose overflow means replay (and there is no
+    max-age detector for a deferred record — verified);
+    (3) <strong>budget state is epoch-fenced</strong> like work is
+    (<code>partitionsAssignmentEpochs</code>), and must step <em>down</em> — noting
+    <code>DynamicLoadFactor</code> has no step-down path at all (verified), a defect class not to
+    inherit; (4) <strong>limiter skips are a named category</strong> in the
+    <a href="https://github.com/confluentinc/parallel-consumer/issues/857">confluentinc#857</a>
+    silent-stall diagnostics; (5) <strong>two API corrections to the anchor issue's own
+    argument</strong> (verified): <code>ShardKey.of</code> sees only topic/partition/key, so
+    per-<em>destination</em> throttling needs a separate key function; and batching runs
+    <em>after</em> work selection, so batch-aware token cost needs reserve-then-settle.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> every clause spot-checked by the fresh-context
+    verifier against the worktree: <code>PartitionState</code>'s
+    <code>isBlockingProgress</code> carve-out and metadata-size pressure branches;
+    <code>BrokerPollSystem</code>'s full-assignment-only pause ("Pause all assignments",
+    asymmetric 1/sec pause limiter vs unlimited resume); no <code>stepDown</code> in
+    <code>DynamicLoadFactor</code>; <code>ShardKey</code> and <code>makeBatches</code> ordering
+    confirmed.</dd>
+    <dt>Rationale</dt>
+    <dd>Everyone designs a rate limiter as if the limit were the outermost contract. In PC it is
+    not — liveness is, and PC has already encoded that precedence once. Writing the constitution
+    first converts four latent production-incident classes into review checkboxes, and corrects
+    the anchor issue's architecture claims <em>before</em> an API commits to them.</dd>
+    <dt>Downsides</dt>
+    <dd>Not independently shippable user value — it is the acceptance criteria for ideas 1–3
+    and 5–6. Clause 2 implies per-partition selective pause, a real prerequisite gap
+    (today's poller can only pause everything).</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i5">
+  <div class="idea-head"><span class="idchip">5</span><h3>Socket-and-plug: SPI in core, backends as extension artifacts</h3></div>
+  <div class="chips">
+    <span class="chip axis">packaging-observability</span>
+    <span class="chip">Confidence 85%</span>
+    <span class="chip">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Core ships one small pluggable seam — the second <code>Function</code>-shaped policy hook
+    after <code>retryDelayProvider</code> — and implementations ship separately: the zero-dep
+    partition-share bucket (idea 1) as the built-in default, bucket4j/Redis/Hazelcast in an
+    optional <code>parallel-consumer-*</code> artifact exactly as
+    <code>-vertx</code>/<code>-reactor</code>/<code>-mutiny</code> isolate their framework
+    dependencies today. Three signature constraints are the actual content: (a)
+    <strong>non-blocking</strong> — <code>Optional&lt;Instant&gt; notBefore(key, cost)</code>,
+    never a blocking <code>tryAcquire()</code> (a backend that blocks the control thread is a
+    liveness hazard); (b) <strong>reserve-then-settle</strong> — batching runs after selection,
+    so a 100-record batch making one downstream call reserves on dispatch and settles actual
+    cost on completion; (c) <strong>not named <code>RateLimiter</code></strong> — that name is
+    taken by the internal log-debounce, and "throttle" already means buffer-driven partition
+    pause in the feature docs.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> <code>docs/features/core-dependency-footprint.yaml</code>:
+    <em>"Adding an integration artifact intentionally adds that integration's dependency
+    surface"</em>; <code>retryDelayProvider</code> confirmed as the only <code>Function</code>-typed
+    option field; <code>PCModule</code>'s zero-dependency comment; the Micrometer
+    <code>meterRegistry</code> is the existing socket-and-plug precedent (core takes the
+    interface, the user brings the backend).</dd>
+    <dt>Rationale</dt>
+    <dd>It resolves <a href="https://github.com/astubbs/parallel-consumer/issues/228">astubbs#228</a>'s
+    recorded open question — "does the fork want this at all, given the dependency?" — by
+    packaging rather than argument, with a pattern this codebase has already applied three
+    times. It also fixes the exact way the 2021 branch died (bucket4j hard-wired into example
+    apps). One interface additionally unifies the three "who owns the number" philosophies —
+    operator-published, downstream-reported (429/<code>Retry-After</code>), and adaptive — as
+    three implementations instead of three competing features.</dd>
+    <dt>Strategy menu (refined 2026-08-18)</dt>
+    <dd>The built-in implementations form a curated menu where each serves a <em>distinct
+    situation</em> rather than being a different way of doing the same thing: partition-share
+    (you know the number and PC is its only consumer), downstream-signal (the service reports —
+    also the only strategy correct when non-PC clients share the budget), adaptive (nobody
+    knows the number, or it shifts — idea 8), BYO bucket4j (exact cross-client enforcement,
+    existing cache). Multiple active strategies compose by taking the <strong>minimum of their
+    emitted ceilings</strong>, so any combination is safe by construction — partition-share as
+    the prior with adaptive trimming below it is the natural stack. The enforcement mechanism
+    (ideas 2/3) is deliberately <em>not</em> on the menu: it is internal plumbing, not user
+    policy, and offering it doubles the maintenance surface.</dd>
+    <dt>Downsides</dt>
+    <dd>Public SPI signatures are one-way doors; the SPI alone delivers no throttling until at
+    least the default impl (idea 1) lands with it. Distributed backends still carry the
+    per-permit round-trip question (the Envoy answer — local bucket, slow-cadence global sync —
+    belongs in the backend artifact's design).</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 640 190" role="img" aria-label="SPI socket in core with pluggable backend artifacts">
+      <rect x="30" y="30" width="250" height="130" rx="10" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="155" y="52" text-anchor="middle" font-size="12" fill="#5c6270" font-weight="600">parallel-consumer-core (deps unchanged)</text>
+      <rect x="55" y="66" width="200" height="74" rx="8" fill="#e4f0f1" stroke="#0d5c63"/>
+      <text x="155" y="90" text-anchor="middle" font-size="12" fill="#0a4a50" font-weight="600">throttle SPI (socket)</text>
+      <text x="155" y="108" text-anchor="middle" font-size="10.5" fill="#0a4a50">Optional&lt;Instant&gt; notBefore(key, cost)</text>
+      <text x="155" y="124" text-anchor="middle" font-size="10.5" fill="#0a4a50">default: partition-share bucket</text>
+      <line x1="280" y1="80" x2="370" y2="60" stroke="#5c6270" stroke-width="1.4"/>
+      <line x1="280" y1="105" x2="370" y2="105" stroke="#5c6270" stroke-width="1.4"/>
+      <line x1="280" y1="130" x2="370" y2="150" stroke="#5c6270" stroke-width="1.4"/>
+      <rect x="372" y="42" width="238" height="36" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="491" y="64" text-anchor="middle" font-size="11.5" fill="#22242a">bucket4j + Redis/Hazelcast artifact (opt-in)</text>
+      <rect x="372" y="87" width="238" height="36" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="491" y="109" text-anchor="middle" font-size="11.5" fill="#22242a">downstream-reported (429 / Retry-After)</text>
+      <rect x="372" y="132" width="238" height="36" rx="8" fill="#ffffff" stroke="#e3e0da"/>
+      <text x="491" y="154" text-anchor="middle" font-size="11.5" fill="#22242a">adaptive AIMD (idea 6)</text>
+    </svg>
+    <figcaption>Core fixes the socket; heavier plugs arrive as separate artifacts, mirroring -vertx / -reactor / -mutiny.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="i6">
+  <div class="idea-head"><span class="idchip">6</span><h3>Adaptive AIMD on rate: no configured number, no coordination</h3></div>
+  <div class="chips">
+    <span class="chip axis">limit-specification</span>
+    <span class="chip">Confidence 65%</span>
+    <span class="chip">Complexity High</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Remove the number entirely. Each instance runs additive-increase / multiplicative-decrease
+    on its own <em>dispatch rate</em>, backing off on downstream congestion signals (429s,
+    timeouts, latency gradient). Chiu &amp; Jain (1989) proved AIMD is the linear control law
+    that converges to both efficiency and fairness among uncoordinated actors sharing a
+    bottleneck — so the fleet divides the downstream's <em>true</em> capacity with zero
+    cross-instance communication. Deliberately AIMD on <strong>rate</strong>, not concurrency:
+    the <code>maxConcurrency</code> javadoc says concurrency is the wrong dimension for rate
+    quotas, and <a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a>
+    already had concurrency capped (800) while overloading its downstream.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">external:</span> Chiu &amp; Jain, "Analysis of the increase and
+    decrease algorithms for congestion avoidance," Computer Networks 1989; Netflix
+    concurrency-limits (Vegas/Gradient) as the JVM prior art, differing on the controlled
+    dimension. <span class="basis-tag">reasoned:</span> it is the only approach that stays
+    correct when downstream capacity changes (deploys, autoscaling, noisy neighbours) and when
+    the downstream is shared with non-PC clients — cases every configured-budget scheme
+    silently gets wrong.</dd>
+    <dt>Rationale</dt>
+    <dd>The confluentinc#766 reporter's "known" limit (50K) coexisted with a pinned-CPU fleet — the
+    configured number is usually wrong. Adaptive limiting is the strongest answer to "what does
+    the user configure": nothing. Natural composition: AIMD as the fast local loop with idea
+    1's share as the slow prior, so instances don't cold-start from zero.</dd>
+    <dt>Downsides</dt>
+    <dd>Loss-based signals arrive <em>after</em> overload; latency-gradient signals need clean
+    timing, and async-engine timing is broken today (confluentinc#766) — that metrics fix is a hard
+    prerequisite. Convergence oscillates (sawtooth); harder to reason about and test than a
+    static bucket; needs the step-<em>down</em> machinery <code>DynamicLoadFactor</code>
+    conspicuously lacks.</dd>
+  </dl>
+</article>
+
+<article class="idea" id="i7">
+  <div class="idea-head"><span class="idchip">7</span><h3>Decorrelated jitter for the retry path</h3></div>
+  <div class="chips">
+    <span class="chip axis">failure-dynamics</span>
+    <span class="chip">Confidence 90%</span>
+    <span class="chip">Complexity Low</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>PC's retry delay is fully deterministic — <code>retryDueAt = lastFailedAt + retryDelay</code>,
+    and a grep for jitter/randomness in the retry path returns nothing (verified). When a shared
+    downstream throttles or fails, every affected record on every instance computes nearly the
+    same due-instant; the <code>RetryQueue</code>'s sorted head then wakes each control loop at
+    that same moment and re-dispatches the whole cohort at once — a synchronized retry storm,
+    within one instance and across the fleet. Add decorrelated jitter (AWS's variant) to the
+    default delay computation.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> verifier-confirmed absence of any
+    <code>Random</code>/jitter in <code>WorkContainer</code> and
+    <code>ParallelConsumerOptions</code>. <span class="basis-tag">external:</span> Brooker,
+    "Exponential Backoff And Jitter" (AWS Architecture Blog, 2015) — decorrelated jitter
+    measurably outperforms plain exponential backoff at high client counts; CSMA/CA's
+    foundational result that deterministic backoff guarantees re-collision.</dd>
+    <dt>Rationale</dt>
+    <dd>The cheapest item on this list, independently shippable, and it improves the
+    <em>currently recommended</em> workaround — the
+    <a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a>
+    maintainer's advice was "let PC's retry/backpressure react to downstream errors," which is
+    precisely the deterministic path that synchronizes today. It helps every user, including
+    those who never adopt a limiter.</dd>
+    <dt>Downsides</dt>
+    <dd>Changes default retry timing (needs a release note); does not by itself address the
+    sustained-overload case — it removes the storm harmonics, not the load.</dd>
+  </dl>
+  <figure>
+    <svg viewBox="0 0 640 170" role="img" aria-label="Deterministic retries cluster into spikes; jittered retries spread out">
+      <text x="20" y="24" font-size="12" fill="#5c6270" font-weight="600">deterministic: cohort re-fires together</text>
+      <line x1="20" y1="70" x2="300" y2="70" stroke="#e3e0da" stroke-width="1.4"/>
+      <rect x="80" y="34" width="7" height="36" fill="#8a5a1c"/>
+      <rect x="89" y="34" width="7" height="36" fill="#8a5a1c"/>
+      <rect x="98" y="34" width="7" height="36" fill="#8a5a1c"/>
+      <rect x="200" y="34" width="7" height="36" fill="#8a5a1c"/>
+      <rect x="209" y="34" width="7" height="36" fill="#8a5a1c"/>
+      <rect x="218" y="34" width="7" height="36" fill="#8a5a1c"/>
+      <text x="20" y="112" font-size="12" fill="#5c6270" font-weight="600">decorrelated jitter: load spreads</text>
+      <line x1="20" y1="158" x2="300" y2="158" stroke="#e3e0da" stroke-width="1.4"/>
+      <rect x="60" y="134" width="7" height="24" fill="#0d5c63"/>
+      <rect x="105" y="134" width="7" height="24" fill="#0d5c63"/>
+      <rect x="138" y="134" width="7" height="24" fill="#0d5c63"/>
+      <rect x="180" y="134" width="7" height="24" fill="#0d5c63"/>
+      <rect x="226" y="134" width="7" height="24" fill="#0d5c63"/>
+      <rect x="262" y="134" width="7" height="24" fill="#0d5c63"/>
+      <text x="360" y="90" font-size="12" fill="#5c6270">time →</text>
+    </svg>
+    <figcaption>Same six retries, two timing policies: deterministic delays recreate the burst that caused the failure.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="i8">
+  <div class="idea-head"><span class="idchip">8</span><h3>Self-scaling: one adaptive controller replaces concurrency <em>and</em> rate configuration</h3></div>
+  <div class="chips">
+    <span class="chip axis">limit-specification</span>
+    <span class="chip">Confidence 70%</span>
+    <span class="chip">Complexity High</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd>Added 2026-08-18, merging this ideation with the fork's oldest open ambition:
+    <a href="https://github.com/astubbs/parallel-consumer/issues/227">astubbs#227</a>
+    (mirror of <a href="https://github.com/confluentinc/parallel-consumer/issues/21">confluentinc#21</a>,
+    "Dynamic concurrency control with flow control or tcp congestion control theory"). Instead of
+    the user pre-selecting <code>maxConcurrency</code> — a number that is wrong in both
+    directions: too <em>low</em> silently leaves throughput on the table (nobody files an issue
+    for wasted headroom), too <em>high</em> floods the downstream (the
+    <a href="https://github.com/confluentinc/parallel-consumer/issues/766">confluentinc#766</a>
+    case), and no static value stays right as conditions shift — one adaptive controller owns
+    the dispatch budget, fed by three signals:
+    <strong>latency gradient</strong> (step concurrency up until job time degrades, then
+    contract), <strong>failures</strong>, and <strong>structured rate-limit feedback</strong> —
+    the user function throws an engine-recognised exception (e.g.
+    <code>RateLimitExceededException(serviceKey, retryAfter)</code>) when a downstream returns
+    429/overloaded, and the engine builds a per-service ceiling from it at runtime. Per-service
+    limits thus <em>materialize from feedback instead of config</em>: a user function may call
+    dozens of services depending on record data, each with its own limit, none declared anywhere.
+    The effective budget is <code>min(hard maxConcurrency cap if configured, configured rate
+    ceilings, discovered per-service ceilings, adaptive capacity estimate)</code>. Off by
+    default (experimental); a user may run self-scaling <em>and</em> a hard upper cap.</dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> astubbs#227 is open, labelled
+    <code>pr-available</code>/<code>next-feature-release</code>, and already distinguishes this
+    from <code>DynamicLoadFactor</code> (which sizes the buffer feeding a fixed pool, not the
+    pool). Two abandoned fork branches hold real prior work:
+    <code>features/dynamic-concurrency-control</code> @6f85eac41 wired Netflix
+    concurrency-limits (<code>Gradient2Limit</code>/<code>SimpleLimiter</code>/<code>BlockingAdaptiveExecutor</code>
+    as the worker pool) with a README section "Automatic Concurrency Scaling (self
+    configuring)" and a mid-extraction to a <code>parallel-consumer-core-auto-scale</code>
+    module honouring the zero-deps policy; <code>feature/auto-tuning-pressure</code> @f4aa09788
+    ("Wip! Experiments in self tuning") hand-rolled the same instinct into the backpressure
+    system. Upstream twin: draft PR
+    <a href="https://github.com/confluentinc/parallel-consumer/pull/22">confluentinc#22</a>
+    @ba6b71f10, closed unmerged in the 2023 sweep.
+    <span class="basis-tag">external:</span> Netflix concurrency-limits
+    (<code>Gradient2Limit</code> has the built-in maximum the hard-cap composition needs).</dd>
+    <dt>Rationale</dt>
+    <dd>This subsumes most of the rate-limiting ask: when the downstream's limit is a
+    <em>capacity</em> limit, adaptive discovery finds it without configuration, exploits bursts
+    a static number would waste, and re-converges automatically when the PC group itself scales
+    up or down (each instance's fair share shrinks or grows with membership — distributed rate
+    limiting as an emergent property, no coordination substrate at all). The structured
+    exception dissolves idea 4's <code>ShardKey</code> correction — the engine <em>learns</em>
+    destinations instead of being configured with them — and its <code>retryAfter</code> feeds
+    idea 2's <code>availableAt</code> deferral directly. Critically, a rate-limit signal is a
+    <em>deferral instruction, not a failure</em>: it must not increment failure history or
+    failure metrics. The one thing self-scaling cannot subsume: a <strong>contractual</strong>
+    quota (a vendor that bills or bans at N RPS) is invisible to latency — a well-provisioned
+    endpoint shows no degradation right up until it rejects you — so explicit ceilings (ideas
+    1/5) remain complements, composed by <code>min()</code>, not rivals.</dd>
+    <dt>Downsides</dt>
+    <dd>Experimental by nature; the old branch's own README warning stands (a contracting pool
+    can strand timed-out jobs as duplicates downstream); requires the async-engine timing fix
+    (confluentinc#766) as signal integrity; both prior WIPs have bitrotted (design references
+    only); and the controller must not fight <code>DynamicLoadFactor</code>/backpressure —
+    they control different variables (pool size vs buffer depth) but share signals, so the
+    boundary needs stating up front.</dd>
+    <dt>Second dimension (2026-08-18)</dt>
+    <dd>Beyond per-instance concurrency lies <em>instance count</em>: PC never spawns instances
+    itself, but can expose a suggested-total-instance-count metric — raised only after a
+    PC-owned cool-down establishes that instance-local concurrency has plateaued while the
+    workload is still behind, capped at partition count, with rebalance as the natural
+    acknowledgement that infrastructure acted. Staged as a follow-on; working design lives in
+    <code>docs/inflight/next-auto-scaling.md</code>.</dd>
+  </dl>
+</article>
+
+<div class="callout">
+  <span class="eyebrow">Recommended build order</span>
+  <p style="margin:0.4rem 0 0;">Skateboard first: <strong>observe-only metrics</strong> (compute
+  and report would-be throttle decisions, fixing the async-engine timing gap confluentinc#766 exposed) →
+  <strong>idea 1</strong> (zero-dep share) enforced through <strong>idea 2 or 3</strong>, under
+  <strong>idea 4</strong>'s constitution — with <strong>idea 5</strong>'s SPI as the escape
+  hatch for bucket4j users and <strong>idea 6</strong> as the later philosophy upgrade.
+  <strong>Idea 7</strong> ships independently, any time.</p>
+</div>
+</section>
+
+<section>
+<h2 id="rejection-summary">Rejection Summary</h2>
+<table>
+  <thead><tr><th>#</th><th>Idea</th><th>Reason rejected</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Assignor-userData lease allocator (Doorman via <code>ConsumerPartitionAssignor</code>)</td>
+      <td>Genuinely novel and verified feasible (userData unused in core), but requiring a custom assignor is real adoption friction the "zero deps" framing hid; kept as the named upgrade path on idea 1.</td></tr>
+    <tr><td>2</td><td>Offset-commit-metadata stigmergy (rate declarations in the commit payload)</td>
+      <td>Real substrate, but contends with an already-near-capacity payload whose overflow causes mass replay; idea 1 is strictly lower risk for the same use case.</td></tr>
+    <tr><td>3</td><td>Downstream-reported limit (429 / <code>Retry-After</code> / <code>X-RateLimit-Remaining</code>)</td>
+      <td>Sound and distinctive — merged into idea 5 as one of the three number-owners its single interface supports.</td></tr>
+    <tr><td>4</td><td>Live limit via <code>Supplier&lt;Rate&gt;</code> / compacted control topic</td>
+      <td>Merged into idea 5 (same interface decision); its cited <code>messageBufferSize</code> footgun analogy was a mismatch per the verifier.</td></tr>
+    <tr><td>5</td><td>Broker-side client quotas (KIP-124) as the limiter</td>
+      <td>Honest null hypothesis, rejected on its own evidence: broker quotas shape Kafka byte/fetch rate, and bytes-in ≠ requests-out is exactly confluentinc#766's mismatch. Worth one docs paragraph.</td></tr>
+    <tr><td>6</td><td>Prior-appropriation budget concentration (full rate to a rotating shard working set)</td>
+      <td>Non-obvious insight (fair-sharing widens the incomplete-offset set and induces PC's own backpressure) but the per-key starvation/tail-latency regression is unanalysed — a brainstorm variant inside ideas 2/4, not a standalone direction.</td></tr>
+    <tr><td>7</td><td>Observe-first dry-run release</td>
+      <td>Rollout sequencing, not a direction — captured as the recommended build order above.</td></tr>
+    <tr><td>8</td><td>"Flagship fork feature" narrative packaging</td>
+      <td>Positioning story wrapping ideas 1/5, not a technical decision needing a card.</td></tr>
+    <tr><td>9</td><td>Throttle-by-pausing-partitions (Karafka-style poller enforcement)</td>
+      <td>Blocked today — the poller can only pause the full assignment; surfaced instead as the per-partition-pause prerequisite inside idea 4's constitution.</td></tr>
+    <tr><td>10</td><td>~29 further raw candidates</td>
+      <td>Deduplicated into the 17 clusters behind the survivors; no basis was refuted by verification — cuts were on duplication, cost/value, or scope.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<footer class="composition-signal">
+  Composed 2026-08-17, updated 2026-08-18 (idea 8, strategy menu) by ce-ideate (repo-grounded) from
+  <code>astubbs#228</code>, <code>confluentinc#24</code>, <code>confluentinc#766</code>,
+  five repo evidence dossiers, and the <code>features/rate-limiting</code> branch autopsy ·
+  46 raw ideas, 5 ideation frames, fresh-context basis verification (8/8 spot-checks confirmed).
+</footer>
+
+</div>
+</body>
+</html>
