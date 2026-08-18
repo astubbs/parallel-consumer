@@ -9,7 +9,13 @@ import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchCondition;
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaMethod;
+import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.lang.ArchRule;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
 import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
 import bz.stub.parallelconsumer.internal.ConsumerManager;
@@ -23,6 +29,7 @@ import java.util.Set;
 import com.tngtech.archunit.core.domain.JavaAccess;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.fields;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
@@ -79,6 +86,106 @@ class ArchitectureTest {
 
     // Future: add rule that ConsumerManager is only constructed by PCModule.
     // Requires DescribedPredicate API which is verbose — defer for now.
+
+
+    /**
+     * Nothing reachable from a Kafka rebalance callback may block.
+     *
+     * <p>A rebalance callback runs on the poll thread <em>inside</em> {@code consumer.poll()}, and the
+     * whole consumer group waits while it runs - overrunning {@code max.poll.interval.ms} evicts the
+     * member. So it is a hot, group-blocking context by definition, and anything it cannot get
+     * immediately it must decline rather than wait for.
+     *
+     * <p><b>This rule exists because the same seam has produced two deadlocks between the same two
+     * threads.</b> confluentinc#548 (2023) and confluentinc#857 both came from a rebalance callback
+     * waiting on something the control thread held. Each was fixed by hand and the invariant was
+     * written down; a rule fires on its own. See
+     * {@code docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md}.
+     *
+     * <p><b>The exemption list is the known-open debt, not a way to pass.</b> Each entry is a real
+     * violation with an owner; adding to it should feel like taking on a defect, because it is.
+     */
+    @ArchTest
+    static final ArchRule rebalanceCallbacksMustNotBlock =
+            methods()
+                    .that(areRebalanceCallbacks())
+                    .should(notReachBlockingCalls())
+                    .as("No method reachable from a rebalance callback may block: it runs inside poll(), " +
+                            "so waiting there burns max.poll.interval.ms and can evict the member. " +
+                            "Decline (tryLock) rather than wait. See confluentinc#857.");
+
+    /** Blocking calls a rebalance callback must never reach, transitively. */
+    private static final Set<String> BLOCKING_CALLS = new HashSet<>(Arrays.asList(
+            "java.lang.Thread.sleep(long)",
+            "java.util.concurrent.locks.Lock.lock()",
+            "java.util.concurrent.locks.Lock.lockInterruptibly()",
+            "java.util.concurrent.locks.ReentrantLock.lock()",
+            "java.util.concurrent.locks.ReentrantLock.lockInterruptibly()",
+            "java.util.concurrent.CountDownLatch.await()"
+    ));
+
+    /**
+     * Known violations, each an open defect rather than an accepted design.
+     *
+     * <p>{@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
+     * Thread.sleep(100)} is unbounded and transactional-mode only. It arrived as confluentinc#548's
+     * fix and is now the defect behind astubbs/parallel-consumer#44 - the only issue upstream ever
+     * labelled a verified bug. Tracked in {@code docs/inflight/bug-857-transactional-revoke-wait.md};
+     * remove this entry when that lands.
+     */
+    private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked(java.util.Collection)"
+    ));
+
+    private static DescribedPredicate<JavaMethod> areRebalanceCallbacks() {
+        return new DescribedPredicate<>("are Kafka rebalance callbacks") {
+            @Override
+            public boolean test(JavaMethod method) {
+                String name = method.getName();
+                return (name.equals("onPartitionsRevoked")
+                        || name.equals("onPartitionsAssigned")
+                        || name.equals("onPartitionsLost"))
+                        && method.getOwner().getPackageName().startsWith("bz.stub.parallelconsumer");
+            }
+        };
+    }
+
+    private static ArchCondition<JavaMethod> notReachBlockingCalls() {
+        return new ArchCondition<>("not reach a blocking call, transitively") {
+            @Override
+            public void check(JavaMethod root, ConditionEvents events) {
+                if (KNOWN_BLOCKING_VIOLATIONS.contains(root.getFullName())) {
+                    return; // open defect, tracked - see KNOWN_BLOCKING_VIOLATIONS
+                }
+                Set<String> visited = new HashSet<>();
+                Deque<JavaMethod> queue = new ArrayDeque<>();
+                queue.add(root);
+                while (!queue.isEmpty()) {
+                    JavaMethod current = queue.poll();
+                    if (!visited.add(current.getFullName())) {
+                        continue;
+                    }
+                    for (JavaMethodCall call : current.getMethodCallsFromSelf()) {
+                        String target = call.getTarget().getFullName();
+                        if (BLOCKING_CALLS.contains(target)) {
+                            events.add(SimpleConditionEvent.violated(root,
+                                    root.getFullName() + " reaches blocking call " + target
+                                            + " via " + current.getFullName()
+                                            + " - a rebalance callback runs inside poll() and must not wait. "
+                                            + "Decline instead (tryLock), or move the work off the poll thread."));
+                        }
+                        // only walk our own code; the JDK and Kafka client are the boundary
+                        call.getTarget().resolveMember().ifPresent(m -> {
+                            if (m instanceof JavaMethod
+                                    && m.getOwner().getPackageName().startsWith("bz.stub.parallelconsumer")) {
+                                queue.add((JavaMethod) m);
+                            }
+                        });
+                    }
+                }
+            }
+        };
+    }
 
     private static ArchCondition<JavaField> beInAllowedClasses(Set<String> allowedClassNames) {
         return new ArchCondition<>("be declared in an allowed class") {
