@@ -13,7 +13,9 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   PR. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
-- **The DISPATCHED reviewer cannot open inline review comments; the comment route can.** The
+- **The DISPATCHED reviewer cannot open inline review comments; the comment route can** - read off
+  the action's entity-event handling below, not off an observed thread; see the measured note linked
+  further down for what has and has not actually been seen. The
   action installs the inline-comment MCP server only for an *entity* event. `workflow_dispatch` is
   not one, so on a dispatch the tool does not exist and the grant was removed rather than left
   inert - blocking findings arrive as a marked section in the summary comment, and
@@ -92,22 +94,15 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   exercises master's `claude.yml`, never the one on your branch. The tool grants and the
   `refresh-gate` added there are unverified in exactly the same way.
 
-- **OBSERVED 2026-08-14, and it worked: the comment route posted, and cleared its own gate.** The
-  other half of the exercise the entry above asks for. `@claude review this` on astubbs#297, run
-  [`31773366411`](https://github.com/astubbs/parallel-consumer/actions/runs/31773366411): a
-  `claude[bot]` comment appeared reporting `finished @astubbs's task in 4m 7s`, both jobs
-  (`claude`, `refresh-gate`) concluded `success`, and `claude-review` went green with **no manual
-  intervention**. So where the dispatch route spent a full billed review and posted nothing, the
-  comment route completes end-to-end - which is the evidence behind "ask by comment" being routing
-  advice rather than a preference.
-
-  **ANSWERED 2026-08-17 on astubbs#267: it does open inline review threads.** The entry above asked
-  for a PR where the reviewer actually had something blocking to say, because astubbs#297 raised no
-  blocking finding and so had no occasion to open one. astubbs#267 was that PR. `@claude review this`
-  opened **10** inline threads on one head and **2** more on re-review after the head moved - real
-  file-and-line threads that `resolveReviewThread` then closed, not a summary comment. So the
-  inline-thread mechanism named in the entry above is confirmed end-to-end, and the case for
-  preferring this route is no longer inference from the event type.
+  **Both routes have since been exercised and measured**, and the result is closed, so it lives in
+  [`docs/solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md`](../solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md)
+  rather than here. The short version: the comment route posts, at both ends; the dispatch route can
+  run for nine minutes, conclude success, and post nothing, leaving `claude-review` green on an older
+  comment. **The inline thread is now settled too**: astubbs#267 was the PR with blocking findings, and
+  `@claude review this` opened **10** inline threads on one head and **2** more on re-review after
+  the head moved - real file-and-line threads that `resolveReviewThread` closed, not a summary
+  comment. So the mechanism the entry above infers from the event type is confirmed by observation,
+  and nothing about the two routes is open.
 - **The duplication scanners are pointed away from where agents duplicate.** `dups: clones` and
   `dups: similarity` scan `parallel-consumer-*/src` only, and the similarity job additionally
   filters `file_extensions: 'java'` - so `docs/`, `.github/`, `bin/` and `AGENTS.md` are scanned by

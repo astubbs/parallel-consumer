@@ -13,7 +13,7 @@ root_cause: assertion_window_raced_the_artificial_block_it_asserted_against
 resolution_type: test_fix_anchor_assertion_to_the_blocked_window
 severity: low
 status: "SOLVED - test-side fix. PC is healthy; no product defect. The ledger's previously-recorded suspect (a lower-base commit splitting offsets 5 and 6) was NOT the mechanism and was never observed in 9 instrumented runs; it remains open by construction and is noted at the trigger site."
-last_updated: 2026-08-13
+last_updated: 2026-08-17
 related_prs:
   - "astubbs#220 - fixed the sibling commitTimeout in this same file, and is where this flake was left on the ledger as unfinished business"
 related:
@@ -70,13 +70,13 @@ Same magnitude, different position, outcome flips - which is what rules out "it 
 load". CPU contention alone does *not* reproduce it: under `SOAK_FREE_CORES=1` the margin stayed at
 504-522 ms across runs, because burners slow both terms together.
 
-**One term in the margin was never isolated.** Both arms placed their 700 ms *around* the send -
-before it, and after it but before the check - so neither placed any between the latch firing and
-the `pollDelay` clock starting. That gap is not zero: `BrokerCommitAsserter#assertConsumedAtMostOffset`
-runs `setup()` - `subscribe` plus `seekToBeginning` - and only then calls `await().pollDelay(delay)`,
-so subscribe and group-join time shifts the whole delay window later while `t=0` stays where it was.
-Against the ~4 s post-fix margin it is very unlikely to matter, and nothing here suggests it does;
-this records what the table decomposes and what it does not, rather than a suspected defect.
+**One term the arms do not isolate**, stated so the table is not read as a complete decomposition.
+Both arms place their latency around the *send*; neither places any between the latch firing and the
+`pollDelay` clock starting. That gap is real: `assertConsumedAtMostOffset` calls `setup(topic, atMost)`
+- `subscribe` plus `seekToBeginning` - **before** `await().pollDelay(delay)`, so its cost lands inside
+the window being measured. It is left un-decomposed rather than measured because `subscribe` is lazy
+and `seekToBeginning` on an empty set defers, making the term realistically sub-millisecond against
+the post-fix ~4 s margin. Recorded for honesty about what was measured, not as a suspected defect.
 
 ## The fix
 

@@ -18,7 +18,7 @@ gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
 ```
 
 Then grep it: `Tests run:`, `<<< FAILURE`, and for broker integration tests the
-`=== AMBIENT PROBE AUTOPSY ===` block, which classifies contention-vs-bug before you start reading
+`AMBIENT PROBE AUTOPSY` block, which classifies contention-vs-bug before you start reading
 stack traces (see [`docs/testing.md`](testing.md)).
 
 ## Workflows

@@ -142,6 +142,6 @@ Superseded by the decision above. The one thing still worth watching: if the gua
 copied to a ninth site, that is the signal the door count is growing and the trade-off should be
 re-costed.
 
-Related: [`test-archunit-does-not-cover-main-code.md`](test-archunit-does-not-cover-main-code.md) lists the
+Related: [`next-archunit-main-code-rules.md`](next-archunit-main-code-rules.md) lists the
 "no raw Throwable to a Logger" rule as a candidate and points back here for why it is not worth
 writing.
