@@ -585,7 +585,7 @@ Cross-cutting above; the rest:
 - `origin/features/least-loaded` @278cc0a5 - incomplete futures as a loading proxy (→ draft
   `confluentinc#473` / issue `confluentinc#394`, least-loaded broker).
 
-**Flow control / self-tuning** → tie to astubbs#227 (confluentinc#21, dynamic concurrency) and
+**Flow control / self-tuning** (manifest: `sweep-2023-long-tail`) → tie to astubbs#227 (confluentinc#21, dynamic concurrency) and
 astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
 `docs/ideation/2026-08-17-distributed-throttling-ideation.html`:
 - `origin/features/dynamic-concurrency-control` @6f85eac41 - Netflix concurrency-limits
