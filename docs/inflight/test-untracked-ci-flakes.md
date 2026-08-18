@@ -5,16 +5,13 @@ and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any
 
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
-which also has the scan method. What is open is the tests themselves - two of the scan's three, plus
-one met later. The scan's third,
-`ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-(3/45), is fixed and gone from this ledger: astubbs#260 established the extra commit was correct
-product behaviour and the assertion was wrong, so no product change was needed.
+which also has the scan method. What is open is the tests themselves - one of the scan's three, plus
+one met later. The other two are fixed and out of this ledger (astubbs#260 and astubbs#265); where
+their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
-| `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined (owner astubbs#265) - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -44,24 +41,40 @@ however long arming plus lambda setup takes. Under load that gap widens past a m
 `isAtLeast` fails a correct implementation. Any test using this helper can show the same signature,
 which is why it is filed against the helper.
 
-**Owned: astubbs#262** stamps `armedAtNanos` immediately before `schedule()` and asserts against that
-instead. Its own comment is honest about the residual: the window measured is now slightly *longer*
-than the true one, so the error is sub-millisecond and in the safe direction - a genuinely early
-return is still caught unless it is early by less than the arming cost.
+**The mechanism above no longer exists, and this entry's open task has changed accordingly.** Two
+PRs proposed different fixes - astubbs#262 stamping `armedAtNanos` just before `schedule()` so the
+measurement is correct, and astubbs#265 deleting the wall-clock assertion outright. This ledger
+predicted the collision and called it a real decision: measure it correctly, or stop measuring it.
+**astubbs#265 landed second and chose to stop measuring it.**
 
-**Note astubbs#265 touches the same line differently**, deleting the assertion along with the sleeps
-it removes. Whichever of the two lands second will conflict here, and the conflict is a real
-decision - measure it correctly, or stop measuring it - not a mechanical merge.
+`BlockedThreadAsserter#assertUnblocksAfter` now asserts an ordering fact - both events take a tick
+from a shared monotonic sequence and the return must come after the unblock - so there is no elapsed
+clock left to be short, and `isAtLeast(unblocksAfter)`/`getElapsed()` are gone from the helper. Its
+javadoc states the new contract: *"That is a causality assertion, so it is asserted as an ordering
+fact rather than as a duration."*
+
+**So the diagnosis this test is quarantined under describes code that is not there.** Measured
+2026-08-17 on `master` merged in: 4 runs, 4 passes, 2.66-4.37s (astubbs#265 reported the same test
+going from 23.06s to 3.32s). Run it with
+`bin/quarantined-test.sh` or `-Dincluded.groups=quarantined` - a plain `-Dtest=` run reports
+`Tests run: 0` because the gating suites exclude it, which is not a pass.
+
+**What is open is the re-enable, not the fix.** Under rule 3 of
+[`docs/quarantined-tests.md`](../quarantined-tests.md) the annotation and the registry entry come out
+together, in the owning change, after merging master. astubbs#262 is still open and still named as
+the owner, but its fix is now redundant - so whoever picks this up should decide whether astubbs#262
+still carries the re-enable or whether it belongs in a change of its own.
 
 **Why it was not in this ledger already.** The 2026-08-07 scan read surefire `Flakes:` markers, which
 only appear when the retry re-ran a test and it then passed. This one failed the run outright, so it
 left no marker and no scan would have found it. Flakes now get quarantined as they are met, rather
 than waiting for a sweep.
 
-### `PCMetricsTest.metricsRegisterBinding` - second sighting, and it is a test defect
+### Controls for these flakes - the void one, and the one that works
 
-Seen again 2026-08-11 on astubbs#286, a PR containing **no Java and no `pom.xml`** - workflow and
-markdown only.
+Method for the two tests still open, not a diagnosis of any one of them. It is written from a
+2026-08-11 sighting on astubbs#286, a PR containing **no Java and no `pom.xml`** - workflow and
+markdown only - which is what made the control question sharp enough to answer.
 
 **Record the control that was tried and was void, because it is the trap next door.** The first
 attempt at one was "`master` at `a797f756`, the exact base commit, passed the same suite 35 minutes
@@ -74,35 +87,8 @@ Anyone reaching for a green master run as a baseline for these tests is holding 
 
 **The control that does work** is other PR runs of the same lane. On 2026-08-11 the unit lane was
 green on eight consecutive `pull_request` runs across three branches - `docs/citation-anchors`,
-`ci/on-demand-code-review`, `docs/v6-release-ideas`, and **this branch's own previous head** - with
-only `821a91af` failing.
-
-```
-[ERROR] PCMetricsTest.metricsRegisterBinding:115
-  expected: 203.0
-   but was: 207.0
-```
-
-The mechanism is visible in the source rather than inferred. The test snapshots a **test-side**
-counter to build its expectations:
-
-```java
-int highestProcessedOffsetP0 = counterP0.get() - 1;      // reads 204 -> expects 203
-...
-assertThat(registeredGaugeValueFor(PARTITION_HIGHEST_COMPLETED_OFFSET, 0))
-        .isEqualTo(highestProcessedOffsetP0);            // gauge has moved on to 207
-```
-
-Two independently-advancing values are sampled at different instants, with nothing holding the system
-still between them. Processing had completed four more records for partition 0 between the counter
-read and the gauge read. Nothing is wrong with the metric - it was **more** current than the
-expectation built to test it.
-
-Same family as the fix in `16ac63b1` ("await the metric, not a counter that leads it"), running the
-other way round: there the counter led the metric, here a stale counter snapshot trails it. The rule
-generalises - **do not compare two moving values; await a quiescent state, then read both.**
-
-Rate is now 2 sightings rather than the 1/45 that could be dismissed.
+`ci/on-demand-code-review`, `docs/v6-release-ideas`, and `ci/claude-yml-script-grant`'s own previous
+head - with only `821a91af` failing.
 
 ### The rerun failed somewhere else - which is weaker evidence than it first looks
 
@@ -119,9 +105,8 @@ that the first did not reproduce. Review caught this; it is exactly the invalid-
 that AGENTS.md warns about, and left standing it would have licensed quarantining a real product bug.
 
 What the rerun **does** establish: the failure is not deterministic, and the unit lane is currently
-producing red from more than one already-tracked test. The load-bearing evidence for the
-`PCMetricsTest` diagnosis is the source-level read above - the counter snapshot and the gauge are
-read at different instants - not the rerun.
+producing red from more than one already-tracked test. What it is *not* is evidence about any one
+test's mechanism - that has always come from a source-level read, never from a rerun's landing spot.
 
 ### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - quarantined anyway, by explicit exception
 
