@@ -11,5 +11,9 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 - **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence, don't parallelise.
 - **File ownership right now:** astubbs#57 owns metrics + partition state, astubbs#106 owns the offset encoders, and
   astubbs#29 will want the poll/lifecycle internals astubbs#80 reshaped. Pick parallel work accordingly.
-- **astubbs#1 (`codeql`, 2026-04) and astubbs#8 (`features/retry-dlq`, 2022) are abandoned drafts**, kept only
-  because astubbs#8 is the sole DLQ code that exists. Close or finish them; they are not in flight.
+- **astubbs#1 (`codeql`, 2026-04) is an abandoned draft** - close or finish it; it is not in flight.
+- **astubbs#8 (`features/retry-dlq`, 2022) is deliberately kept open**: it is the sole DLQ code that
+  exists, and the DLQ brainstorm (branch `docs/310-dlq-brainstorm`, prior-art report in
+  `docs/plans/2026-08-18-001-investigate-dlq-prior-art-report.md`) intends to consume it as the
+  implementation PR once requirements settle. Decision 2026-08-18, superseding the earlier
+  "close or finish" instruction here.

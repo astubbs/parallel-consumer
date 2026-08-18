@@ -436,7 +436,7 @@ entries:
   - id: sweep-2023-retry-lifecycle
     group: features
     summary: Retry expiry, stall detection and scheduled retry -- the unfinished half of the retry epic
-    fork: {branches: [features/retry-dlq], prs: [], fork_issues: [239, 231, 234], status: none}
+    fork: {branches: [features/retry-dlq, docs/310-dlq-brainstorm], prs: [8], fork_issues: [239, 231, 234, 149, 141], status: requirements-in-progress}
     upstream: {repo: confluentinc/parallel-consumer, issues: [65, 34, 48], prs: [366], related: [196, 310, 71, 82, 92, 197, 242], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -447,6 +447,9 @@ entries:
       Duration, so a delay discovered at the throw site cannot be expressed. Decide
       the precedence order (exception > provider > default) ONCE across all four.
       Draft of both remaining children: PR #366 astubbs/features/retry-dlq @e5bf77c9b.
+      2026-08-18: DLQ requirements brainstorm underway on docs/310-dlq-brainstorm
+      (prior-art report in docs/plans/); fork PR #8 deliberately kept open to be
+      consumed as the implementation PR once requirements settle.
 
   - id: sweep-2023-api-shape
     group: features
