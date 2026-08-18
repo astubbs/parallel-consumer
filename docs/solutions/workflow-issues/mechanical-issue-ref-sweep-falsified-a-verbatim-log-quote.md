@@ -98,6 +98,9 @@ gate green while leaving corrupted text in place is exactly the gate-gaming this
 forbid. It also only works in CI - `bin/check-issue-refs.sh` does not read the PR body and will keep
 failing locally.
 
+**Amended 2026-08-18 (see 8): the inline span is not a general remedy.** It is correct where the
+quote sits in prose, and it corrupts the quote where the quote sits in a code block.
+
 **3. When you silence a gate on a quoted artifact, pay the information back in prose.** The gate
 fired for a real reason: a reader seeing `#857` cannot tell which repo it means. Suppressing the
 check does not answer that question - the surrounding prose has to.
@@ -136,6 +139,25 @@ Note which half of that class is larger. `\w` catches far more than `/` does, an
 naive grep for the `/` shape will never surface. Search the mechanism as the regex actually defines
 it, in PCRE rather than ERE: `grep -rnP '[A-Za-z0-9_.-]#[0-9]{1,3}'` alongside
 `grep -rnP '/#[0-9]{1,3}'`. Read the line, not the exit code.
+
+**8. The inline-span remedy in 2 is container-dependent, and inside a code block it reproduces this
+exact failure.** Backticks are literal inside a fenced or indented code block, so wrapping a quoted
+line there does not silence anything - it renders the backticks as part of the quotation. That is a
+smaller copy of the forgery this document records, and it was arrived at by doing it: the extraction
+that brought this file onto master first wrapped the `#857-poll` line in a span while it sat in a
+four-space indented block, producing a rendered log line that no program emitted, now with
+punctuation around it.
+
+The general remedy landed later, at astubbs#307: in-file opt-out markers at line, block and file
+scope, written in the file's own comment syntax and invisible when rendered. **Prefer the block
+markers, `issue-refs: exempt-begin` and `issue-refs: exempt-end`, around quoted material.** They sit
+*outside* the quotation, so every quoted byte survives untouched - which is the property this whole
+document is about, and the one an inline span silently trades away as soon as the quote is displayed
+rather than inline. Reach for the inline span only for a quote in running prose, and for the
+per-line marker only where the flagged line is not itself inside a code block.
+
+Note that mentioning any of those markers in backticks - as this paragraph does - is documentation
+and activates nothing; an unquoted prose mention would be indistinguishable from use.
 
 ## Why This Matters
 
@@ -336,5 +358,7 @@ wrong or risky:
   enforcement"*. That is why a sweep facing a fenced log line had no rule to consult. Worth
   generalising from quoted titles to all verbatim quoted artifacts, and worth promoting out of
   "style".
+- astubbs#307 - added the in-file opt-out markers item 8 recommends, after this document's own
+  extraction demonstrated that the inline span does not generalise.
 - `docs/inflight/next-qualify-remaining-refs.md` - **deleted** at PR astubbs#219; its three-class
   taxonomy is reproduced above.
