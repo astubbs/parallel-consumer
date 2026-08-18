@@ -523,7 +523,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // so our flag must match. Without this, shouldThrottle() may re-pause the new
         // partitions immediately if stale shard counts make it think we're overloaded.
         // See confluentinc#857.
-        brokerPollSubsystem.onPartitionsAssigned();
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
     }
