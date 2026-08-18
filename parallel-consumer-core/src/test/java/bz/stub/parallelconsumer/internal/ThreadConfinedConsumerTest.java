@@ -137,6 +137,40 @@ class ThreadConfinedConsumerTest {
         });
     }
 
+    /**
+     * The hole a two-state guard could not see: after the poll loop releases and before the closing
+     * thread takes over, ownership is RELEASED - not "unclaimed". Direct use in that window is
+     * illegal for <em>every</em> thread, including the thread that used to own it.
+     */
+    @Test
+    void releasedOwnershipDeniesDirectUseByEveryThread() throws Exception {
+        onOtherThread(() -> {
+            confined.claimOwnership();
+            confined.releaseOwnership();
+            // the previous owner has finished with it - it may not carry on using it either
+            assertThrows(IllegalStateException.class, () -> confined.assignment());
+        });
+
+        // ...and no other thread may simply pick it up by calling
+        assertThrows(IllegalStateException.class, () -> confined.assignment());
+    }
+
+    /**
+     * RELEASED admits exactly one move: a claim. This is what separates it from UNCLAIMED, where
+     * every call is allowed so that init-time work (subscribe, etc.) can run before the poll loop.
+     */
+    @Test
+    void releasedOwnershipAdmitsAClaimAndOnlyThenUse() throws Exception {
+        onOtherThread(() -> {
+            confined.claimOwnership();
+            confined.releaseOwnership();
+        });
+
+        assertThrows(IllegalStateException.class, () -> confined.assignment());
+        assertThat(confined.tryClaimOwnership()).isTrue();
+        assertDoesNotThrow(() -> confined.assignment());
+    }
+
     @Test
     void wakeupAllowedFromAnyThread() throws Exception {
         confined.claimOwnership();

@@ -478,7 +478,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 clearCommitCommand();
                 this.lastCommitTime = Instant.now();
             } catch (Exception e) {
-                log.warn("Failed to commit offsets during revoke: {}", e.getMessage());
+                // Restore the flag rather than swallowing the interrupt: this runs inside the poll
+                // thread's rebalance callback, and dropping it strands whatever is waiting on it.
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                // Pass the throwable, never e.getMessage(): the message alone drops the type, the
+                // cause chain and the stack, and an exception thrown without one renders as
+                // "...: null" - the exact complaint behind astubbs#177. When
+                // ThrowableUtils.describeWithRootCause lands with astubbs#267, interpolate that
+                // alongside, so a description survives even if the trace is elided.
+                log.warn("Failed to commit offsets during revoke", e);
             } finally {
                 commitLock.unlock();
             }

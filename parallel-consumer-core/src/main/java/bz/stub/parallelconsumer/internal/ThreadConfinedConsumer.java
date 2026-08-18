@@ -46,7 +46,8 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
 
-    private final AtomicReference<Thread> ownerThread = new AtomicReference<>();
+    private final AtomicReference<ConsumerOwnership> ownership =
+            new AtomicReference<>(ConsumerOwnership.UNCLAIMED);
 
     @NonNull
     @Delegate(excludes = ThreadUnsafeMethods.class)
@@ -58,7 +59,8 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
      */
     void claimOwnership() {
         Thread current = Thread.currentThread();
-        Thread previousOwner = ownerThread.getAndSet(current);
+        ConsumerOwnership previous = ownership.getAndSet(ConsumerOwnership.ownedBy(current));
+        Thread previousOwner = previous.isOwnedBySomeoneOtherThan(current) ? previous.owner() : null;
         if (previousOwner != null && previousOwner != current) {
             // claimOwnership is the poll thread's start-of-life claim; a live previous owner here
             // means two poll loops share one consumer, which the guard exists to catch. Log loudly
@@ -79,11 +81,12 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
      */
     void releaseOwnership() {
         Thread current = Thread.currentThread();
-        if (ownerThread.compareAndSet(current, null)) {
+        ConsumerOwnership witness = ownership.get();
+        if (witness.isOwnedBy(current) && ownership.compareAndSet(witness, ConsumerOwnership.RELEASED)) {
             log.debug("Consumer ownership released by thread: {}", current.getName());
         } else {
             log.warn("Thread '{}' tried to release consumer ownership it does not hold (owner: {})",
-                    current.getName(), describeOwner(ownerThread.get()));
+                    current.getName(), ownership.get());
         }
     }
 
@@ -98,37 +101,42 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
      */
     boolean tryClaimOwnership() {
         Thread current = Thread.currentThread();
-        if (ownerThread.compareAndSet(null, current)) {
-            log.debug("Consumer ownership taken over by thread: {}", current.getName());
-            return true;
+        while (true) {
+            ConsumerOwnership witness = ownership.get();
+            if (!witness.isClaimable()) {
+                if (witness.isOwnedBy(current)) {
+                    return true; // idempotent for the owner
+                }
+                log.debug("Thread '{}' could not take over consumer ownership - still held by {}",
+                        current.getName(), witness);
+                return false; // never steal from a live owner
+            }
+            // UNCLAIMED (never started) or RELEASED (poll loop finished) - both claimable
+            if (ownership.compareAndSet(witness, ConsumerOwnership.ownedBy(current))) {
+                log.debug("Consumer ownership taken over by thread: {}", current.getName());
+                return true;
+            }
+            // lost a race against another claimer; re-read and decide again
         }
-        boolean alreadyOwner = ownerThread.get() == current;
-        if (!alreadyOwner) {
-            log.debug("Thread '{}' could not take over consumer ownership - still held by {}",
-                    current.getName(), describeOwner(ownerThread.get()));
-        }
-        return alreadyOwner;
     }
 
-    private static String describeOwner(Thread owner) {
-        return owner == null ? "unclaimed"
-                : "'" + owner.getName() + "' (id:" + owner.getId() + ", alive:" + owner.isAlive() + ")";
-    }
+
 
     private void checkThread(String methodName) {
         Thread current = Thread.currentThread();
-        Thread owner = this.ownerThread.get();
-        if (owner != null && current != owner) {
+        ConsumerOwnership witness = this.ownership.get();
+        // RELEASED means the previous owner has finished but nobody has taken over yet. Direct use
+        // there is exactly the gap a two-state guard could not see.
+        boolean illegal = witness.isOwnedBySomeoneOtherThan(current) || witness.isReleased();
+        if (illegal) {
             String msg = "Consumer." + methodName + "() called from thread '" +
                     current.getName() + "' (id:" + current.getId() +
-                    ") but consumer is owned by thread '" + owner.getName() +
-                    "' (id:" + owner.getId() + ", alive:" + owner.isAlive() +
-                    "). Only wakeup() is thread-safe. See confluentinc#857.";
+                    ") but consumer ownership is " + witness +
+                    ". Only wakeup() is thread-safe. See confluentinc#857.";
             log.error(msg);
             throw new IllegalStateException(msg);
         }
-        log.trace("Consumer.{}() on thread '{}' (owner: {})", methodName, current.getName(),
-                owner != null ? owner.getName() : "unclaimed");
+        log.trace("Consumer.{}() on thread '{}' (ownership: {})", methodName, current.getName(), witness);
     }
 
     // --- Thread-unsafe method overrides (all check thread before delegating) ---
