@@ -49,7 +49,7 @@ Lower stakes than the classification question above - it is shutdown rather than
 path is already degraded, and the cost is skipped close steps rather than permanently stalled
 records. astubbs#267 guarded the equivalent shape at five hotter sites with
 `ThrowableUtils.logWithoutEscaping` and deliberately left these; see
-[`next-throw-safe-log-adapter.md`](next-throw-safe-log-adapter.md), which would remove the hazard
+[`parked-blanket-safe-logging.md`](parked-blanket-safe-logging.md), which would remove the hazard
 here without touching these lines at all.
 
 **Do the classification first.** If some of these warns should not exist, guarding them is work spent

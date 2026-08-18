@@ -53,7 +53,7 @@ an owner-typed rule excludes it without an exemption.
 
 **2. No raw `Throwable` handed to a `Logger`.** Expressible precisely - match calls whose target owner
 is `Logger` and whose raw parameter types are `(String, Throwable)`. **Not worth it, and possibly
-never**: see [`next-throw-safe-log-adapter.md`](next-throw-safe-log-adapter.md) for why the decision
+never**: see [`parked-blanket-safe-logging.md`](parked-blanket-safe-logging.md) for why the decision
 went the other way. Recorded here only so the next person costing it out finds the answer instead of
 re-deriving it.
 
