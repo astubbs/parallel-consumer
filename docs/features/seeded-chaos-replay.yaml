@@ -41,9 +41,11 @@ boundaries:
     thread interleaving. So a reproduction is strong evidence and a non-reproduction is weak, because
     the replay may simply not have drawn the interleaving on a machine whose contention differs from
     the original. Do not read "did not reproduce" as "the bug is not there".
-  - The ledger checks that no record is lost and that duplicates stay bounded per disturbance; the
-    probes check liveness. Per-key ORDERING is not yet asserted - see
-    docs/inflight/test-chaos-ledger-does-not-check-ordering.md.
+  - The ledger checks that no record is lost, that duplicates stay bounded per disturbance, and - in
+    the one scenario that claims it, ChaosKeyOrderIT - that per-key ordering holds; the probes check
+    liveness. Ordering is asserted only inside the window where PC promises it (one instance, one
+    partition, one assignment epoch, one key), because at-least-once redelivery after a revoke is the
+    contract working - KeyOrderLedger's javadoc owns that definition.
   - A red chaos run is investigation material, not a merge blocker, and never a reason to loosen a
     probe. Thresholds sit in measured gaps against a real historical defect; tune the workload
     instead.
