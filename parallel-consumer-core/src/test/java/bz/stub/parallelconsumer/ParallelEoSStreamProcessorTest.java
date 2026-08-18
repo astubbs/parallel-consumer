@@ -710,6 +710,43 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 .that(message).contains("the failure that actually happened");
     }
 
+    /**
+     * A user failure whose RENDERING throws must still be returned to the mailbox.
+     *
+     * <p>The highest-traffic render of a user-supplied throwable in the library: every user function failure passes
+     * through {@code runUserFunction}'s catch. It logged before marking the batch failed and re-mailboxing it, so a
+     * throwable whose {@code getCause} throws took the log call down and skipped the bookkeeping - the records stayed
+     * in flight forever. Silent, because logging is the thing that failed, and invisible to the future because the
+     * escape lands in the worker task nobody reads.
+     *
+     * <p>Retry is the observable proxy for "the failure was recorded": a container only comes back if
+     * {@code onUserFunctionFailure} and {@code addToMailbox} both ran.
+     *
+     * <p><b>A plain {@link RuntimeException}, deliberately not {@code FakeRuntimeException}.</b> That extends
+     * {@link PCRetriableException}, so it takes the {@code log.debug} branch - which is disabled at the suite's INFO
+     * level and therefore never renders the throwable at all. A hostile-rendering test built on it passes against
+     * the unfixed code while exercising nothing.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aUserFailureThatCannotBeLoggedIsStillReturnedToTheMailbox() {
+        var attempts = new AtomicInteger();
+
+        parallelConsumer.poll(context -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("hostile user failure") {
+                @Override
+                public synchronized Throwable getCause() {
+                    throw new UnsupportedOperationException("rendering me fails");
+                }
+            };
+        });
+
+        await().atMost(ofSeconds(20))
+                .untilAsserted(() -> assertWithMessage("record redelivered, so the failure was recorded before the render")
+                        .that(attempts.get()).isAtLeast(2));
+    }
+
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {

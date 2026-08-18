@@ -28,6 +28,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Adapter for using Mutiny as the asynchronous execution engine.
@@ -139,14 +140,20 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        if (PCRetriableException.isPresentIn(throwable)) {
-            log.debug("Mutiny fail signal", throwable);
-        } else {
-            log.error("Mutiny fail signal", throwable);
-        }
+        // Record the failure BEFORE rendering it, and guard the render. This throwable is the user's own async
+        // failure, so logging it runs their getCause/getMessage inside the logging binding's stack-trace walk. If
+        // that throws, the containers below are never completed and stay marked in flight forever - the failure is
+        // the thing that must be recorded, the log line is the thing that can be lost.
         pollContext.streamWorkContainers().forEach(wc -> {
             wc.onUserFunctionFailure(throwable);
             addToMailbox(pollContext, wc);
+        });
+        logWithoutEscaping(throwable, () -> {
+            if (PCRetriableException.isPresentIn(throwable)) {
+                log.debug("Mutiny fail signal", throwable);
+            } else {
+                log.error("Mutiny fail signal", throwable);
+            }
         });
     }
 }

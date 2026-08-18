@@ -227,8 +227,11 @@ public class ThrowableUtils {
      * A wrapper that means "something below this threw", and nothing else - so the failure it carries is the failure.
      * <p>
      * {@link ExceptionInUserFunctionException} is the only one. It is documented as used <em>only</em> when user code
-     * threw, and {@code UserFunctions.carefullyRun} is the sole construction site, so it adds a name and no failure
-     * semantics of its own.
+     * threw, and <b>every</b> construction site wraps user code and nothing else: the three in
+     * {@code UserFunctions.carefullyRun}, plus the user's rebalance listener in
+     * {@code AbstractParallelEoSStreamProcessor.onPartitionsRevoked}. So it adds a name and no failure semantics of
+     * its own. (Grep {@code new ExceptionInUserFunctionException} before trusting this - the claim is about all
+     * sites, so one new site that wraps something else falsifies it.)
      * <p>
      * <b>{@link InternalRuntimeException} deliberately does NOT qualify</b>, though it reads like a wrapper. Its
      * message is how callers tell distinct internal failures apart - {@code "Error encoding offsets"},

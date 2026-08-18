@@ -1386,19 +1386,27 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
             return Collections.emptyList();
         } catch (Exception e) {
-            // handle fail
-            String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
-                    " mailbox. Context: {}", context, e);
-            if (PCRetriableException.isPresentIn(e)) {
-                log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
-            } else {
-                log.error(msg, e);
-            }
-
+            // Record the failures BEFORE rendering them, and guard the render. This is the highest-traffic render
+            // of a user-supplied throwable in the library - every user function failure passes here - and both
+            // building the message (which interpolates e) and handing e to the logger run the thrower's
+            // getMessage/getCause, the second inside the binding's own unbounded cause-chain walk. If either
+            // throws, the loop below never runs: the batch is never marked failed and never returns to the
+            // mailbox, so those records stay in flight forever - one stalls its shard under KEY ordering, and
+            // maxConcurrency of them stall the consumer. Nothing is logged, because logging is what failed.
             for (var wc : workContainerBatch) {
                 wc.onUserFunctionFailure(e);
                 addToMailbox(context, wc); // always add on error
             }
+
+            logWithoutEscaping(e, () -> {
+                String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
+                        " mailbox. Context: {}", context, e);
+                if (PCRetriableException.isPresentIn(e)) {
+                    log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
+                } else {
+                    log.error(msg, e);
+                }
+            });
             throw e; // trow again to make the future failed
         } finally {
             cleanUpContext(context);

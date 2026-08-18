@@ -30,6 +30,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Adapter for using Project Reactor as the asynchronous execution engine
@@ -121,16 +122,22 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        // Reactor repackages what it propagates, and core cannot name reactor's wrapper types - so unwrap with
-        // reactor's own helper first, then ask whether the failure underneath is one the user marked expected
-        if (PCRetriableException.isPresentIn(Exceptions.unwrap(throwable))) {
-            log.debug("Reactor fail signal", throwable);
-        } else {
-            log.error("Reactor fail signal", throwable);
-        }
+        // Record the failure BEFORE rendering it, and guard the render. This throwable is the user's own async
+        // failure, so logging it runs their getCause/getMessage inside the logging binding's stack-trace walk. If
+        // that throws, the containers below are never completed and stay marked in flight forever - the failure is
+        // the thing that must be recorded, the log line is the thing that can be lost.
         pollContext.streamWorkContainers().forEach(wc -> {
             wc.onUserFunctionFailure(throwable);
             addToMailbox(pollContext, wc);
+        });
+        logWithoutEscaping(throwable, () -> {
+            // Reactor repackages what it propagates, and core cannot name reactor's wrapper types - so unwrap with
+            // reactor's own helper first, then ask whether the failure underneath is one the user marked expected
+            if (PCRetriableException.isPresentIn(Exceptions.unwrap(throwable))) {
+                log.debug("Reactor fail signal", throwable);
+            } else {
+                log.error("Reactor fail signal", throwable);
+            }
         });
     }
 
