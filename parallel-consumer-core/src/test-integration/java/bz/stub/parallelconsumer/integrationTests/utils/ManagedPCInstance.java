@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.integrationTests.utils;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -102,11 +103,37 @@ public class ManagedPCInstance implements Runnable {
     @ToString.Exclude
     private final Queue<String> consumedKeys = new ConcurrentLinkedQueue<>();
 
+    /**
+     * The test's user function. Receives the full {@link PollContext} plus the id of the PC
+     * <em>incarnation</em> running it - see {@link #incarnations} for why the instance id alone is not
+     * enough for anything that must not span two PC lifetimes.
+     */
+    @FunctionalInterface
+    public interface RecordListener {
+        void onRecord(String incarnationId, PollContext<String, String> context);
+    }
+
     /** Callback invoked for each consumed record — lets the test track overall progress */
     @ToString.Exclude
-    private final Consumer<String> onConsumed;
+    private final RecordListener onConsumed;
 
+    /**
+     * Counts the PCs this instance has brought up. A restart builds a <em>new</em>
+     * {@link ParallelEoSStreamProcessor} with a new consumer and, critically, a new partition-assignment
+     * epoch counter starting again at zero - so any test state keyed on "which PC produced this
+     * observation" must key on the incarnation, not on {@link #instanceId}, or two unrelated lifetimes
+     * collide. {@code KeyOrderLedger} is the caller that depends on this.
+     */
+    @ToString.Exclude
+    @Getter(AccessLevel.NONE)
+    private final AtomicInteger incarnations = new AtomicInteger();
+
+    /** Convenience for the common case: a listener that only wants the record's key. */
     public ManagedPCInstance(Config config, KafkaClientUtils kcu, Consumer<String> onConsumed) {
+        this(config, kcu, (incarnationId, context) -> onConsumed.accept(context.key()));
+    }
+
+    public ManagedPCInstance(Config config, KafkaClientUtils kcu, RecordListener onConsumed) {
         this.config = config;
         this.kcu = kcu;
         this.onConsumed = onConsumed;
@@ -188,6 +215,7 @@ public class ManagedPCInstance implements Runnable {
                 return;
             }
 
+            String incarnationId = "PC-" + instanceId + "#" + incarnations.incrementAndGet();
             parallelConsumer.poll(record -> {
                 if (config.pollDelayMs > 0) {
                     try {
@@ -197,7 +225,7 @@ public class ManagedPCInstance implements Runnable {
                     }
                 }
                 consumedKeys.add(record.key());
-                onConsumed.accept(record.key());
+                onConsumed.onRecord(incarnationId, record);
             });
         } finally {
             // release the start window - a further start() may now submit (see startInFlight)
