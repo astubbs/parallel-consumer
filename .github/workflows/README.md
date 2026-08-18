@@ -27,7 +27,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `claude.yml` | Answers `@claude` comments, and reviews when asked to - the only route that can raise inline review threads. |
 | `copyright.yml` | Checks source headers against the fork policy on every push and PR. |
 | `dependency-audit.yml` | Scans the **whole** resolved dependency tree for CVEs - the only place OSS Index is switched on. Per-PR, on demand, and weekly, because a new advisory needs no push to arrive. |
-| `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, dependency scanning. |
+| `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, Java API-compatibility, dependency scanning. |
 | `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep, on demand - too slow for a PR. Self-hosted high-CPU lane. |
 | `pr-checklist.yml` | Makes the PR template binding: the checklist must be present and every box resolved. |
 | `pr-highcpu-fast-feedback.yml` | Fast PR feedback on the self-hosted high-CPU runners, including the per-PR chaos tripwire. |
