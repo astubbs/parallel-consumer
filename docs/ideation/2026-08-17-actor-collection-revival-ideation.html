@@ -317,7 +317,7 @@
   </figure>
 
   <div class="field"><span class="fl">Basis</span>
-  <code>direct:</code> All six interfaces verified as named on the branch and all verified absent from master (no conflicts). The <code>Interruptible</code> wakeup-handle reading is quoted from the source itself ("push an effectively NO-OP message, which would wake it up if it were blocked&hellip; without needed to <code>Thread#interrupt</code> it"), which also carries the author's note "todo removable after actors fully merged?" — verified verbatim. <code>refactoring.md:120-133</code>: eliminating the poller thread "would also kill the confluentinc#857 deadlock class." <code>external:</code> strangler-fig migration; libuv/Win32 message pump; Seastar/Redis single-writer ownership for the shard-seam variant. Delivers the C1/#488 God-class decomposition as a side effect.</div>
+  <code>direct:</code> All six interfaces verified as named on the branch and all verified absent from master (no conflicts). The <code>Interruptible</code> wakeup-handle reading is quoted from the source itself ("push an effectively NO-OP message, which would wake it up if it were blocked&hellip; without needed to <code>Thread#interrupt</code> it"), which also carries the author's note "todo removable after actors fully merged?" — verified verbatim. <code>refactoring.md:120-133</code>: eliminating the poller thread "would also kill the confluentinc#857 deadlock class." <code>external:</code> strangler-fig migration; libuv/Win32 message pump; Seastar/Redis single-writer ownership for the shard-seam variant. Delivers the C1/confluentinc#488 God-class decomposition as a side effect.</div>
 
   <div class="field"><span class="fl">Rationale</span>
   This is the only shape under which the "MASSIVE, UNDECIDED" thread-model rework becomes incremental: each seam converts (or doesn't) on its own evidence, and the delete-only number keeps the goal falsifiable and mechanism-neutral. It also reframes the review question from "adopt an actor framework" to "adopt one event loop," which is decidable on merit.</div>
@@ -376,7 +376,7 @@
 </ul>
 </section>
 
-<footer class="composition-signal">Composed 2026-08-17T21:21 by ce-ideate from the session focus "reviving my micro actor collection of branches" (evidence dossier: <code>/tmp/compound-engineering-501/ce-ideate/a7f3c091/evidence-actor-collection.md</code>)</footer>
+<footer class="composition-signal">Composed 2026-08-17T21:21 by ce-ideate from the session focus "reviving my micro actor collection of branches"</footer>
 
 </div>
 </body>
