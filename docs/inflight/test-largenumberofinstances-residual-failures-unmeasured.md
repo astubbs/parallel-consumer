@@ -2,8 +2,14 @@
 
 ## The claim
 
-`MultiInstanceRebalanceTest.largeNumberOfInstances` documents its own acceptance as *80%+ pass rate
+`MultiInstanceRebalanceTest.largeNumberOfInstances` documented its acceptance as *80%+ pass rate
 (currently ~90%)*, and its javadoc attributes the residual failures to the broker rather than to PC:
+
+*(Update 2026-08-18: the test has since been split - the rate is now explicitly the profile's
+measured OUTPUT rather than an acceptance gate, and a deterministic correctness twin,
+`scriptedChurnRoundsCompleteWithoutStall`, gates in the integration lane. The aggressive profile's
+parameters and churn are unchanged, deliberately, so the residual rate this note is about remains
+the baseline to measure against.)*
 
 > the remaining ~10% failure is the Kafka consumer group protocol under extreme membership churn
 > (`assignedPartitions=0`), not a PC bug
