@@ -159,6 +159,14 @@ Derived from what the history punished, not from first principles:
   cases report a *live* owner: a pooled thread outlives the task that claimed ownership. Close is a
   clean sequential handoff point; releasing ownership when the poll loop exits makes the guard assert
   what it actually means.
+- **...but close is only sequential when it succeeds, and the failure path is a real race.**
+  `closeAndWait()` throws on timeout; `innerDoClose` catches that, downgrades it to a warning, and
+  calls `maybeCloseConsumer()` regardless. So a poll system that failed to shut down still has its
+  consumer closed from another thread - genuine concurrent access to a non-thread-safe client, on
+  `master`, today. Any ownership scheme must therefore release from **inside the poll task as its last
+  act**, never at the closer's request: that way the happy path clears and the failure path still
+  throws. A fix that drives the violation count to zero has disabled the guard rather than fixed the
+  bug.
 - **`consumer.wakeup()` is the only thread-safe consumer call, and it is aimed poorly.** The
   `pollingBroker` guard and the `WakeupException` retry loops in `ConsumerManager` exist because a
   wakeup meant for `poll()` can land on `commitSync()`. Any design keeping cross-thread wakeups keeps

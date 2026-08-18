@@ -117,10 +117,38 @@ fires, the poll loop has finished and nothing is using the consumer concurrently
 claim. That is also why roughly three quarters of cases report a live owner: a pooled thread outlives
 its task.
 
-So the smallest correct fix is not to drop the wrapper but to give it the missing half - release
-ownership when the poll loop exits, and let the closing thread claim it - so it asserts "nobody else
-is using this" rather than "the same Thread object is calling". Close is already a clean sequential
-handoff point, so this legalises nothing that was not already safe. Roughly a quarter
+**But that is only true on the happy path, and the exception is safety-critical.** `closeAndWait()`
+waits on the poll task's `Future`:
+
+```java
+Boolean pollShutdownSuccess = pollControlResult.get(DEFAULT_TIMEOUT.toMillis(), MILLISECONDS);
+...
+} catch (ExecutionException | TimeoutException e) {
+    log.error("Execution or timeout exception waiting for broker poller thread to finish", e);
+    throw e;
+}
+```
+
+On a normal return the poll task really has completed. **On timeout it throws - and `innerDoClose`
+catches that, downgrades it to `log.warn("failed to close brokerPollSubsystem during close
+sequence")`, and calls `maybeCloseConsumer()` anyway.** So there is one path where the control thread
+closes the consumer while the poll loop may still be running. That is a genuine race against a
+client that is not thread-safe, it exists on `master` independently of astubbs#29, and it is
+precisely where the ownership guard is doing real work.
+
+**This rules out the obvious fix.** Releasing or transferring ownership at close time, or letting the
+closing thread claim it, or making the guard permissive for the closer, all legalise that path.
+
+**The correct shape is the inverse: the poll loop releases ownership as its own last act, inside the
+poll task, before that task completes.** Then:
+
+- happy path - ownership was released by the finishing poll loop, so the closer passes cleanly;
+- timeout path - the poll task never reached the release, ownership is still held, and **the guard
+  still throws**, correctly, because that case really is concurrent access.
+
+So the expected result is **not** zero exceptions. The 88 should split into two populations, leaving
+a small residue of genuine races. A drop to exactly zero is evidence the guard was made permissive,
+not evidence the bug was fixed. Roughly a quarter
 of observed cases have a dead owner thread, so tolerating a dead owner addresses the minority case
 only.
 
