@@ -47,7 +47,7 @@ without running the greps `AGENTS.md` requires before investigating anything.
 
 This is a sibling of an earlier trap in the same file's fourth sighting: there, GitHub truncated the
 log **stream** itself server-side, so neither `--log` nor `--log-failed` contained the
-`=== AMBIENT PROBE AUTOPSY ===`  block at all, and the autopsy had to be recovered from the uploaded
+`AMBIENT PROBE AUTOPSY`  block at all, and the autopsy had to be recovered from the uploaded
 test-report artifact (see that entry's `**Retrieval note`). Two different truncation mechanisms,
 same failure mode: a log that looks complete but isn't, feeding a diagnosis that inherits the gap.
 
@@ -118,7 +118,7 @@ wrong.
 - When a job was re-run and you need the failing attempt's log, not the latest (successful) attempt.
 - When `docs/testing.md`'s ambient-probe section is the next thing you'd check for a broker
   integration-test failure. It used to state that every such failure **log** includes the
-  `=== AMBIENT PROBE AUTOPSY ===` block; both truncation incidents in this repo (fourth and fifth sightings
+  `AMBIENT PROBE AUTOPSY` block; both truncation incidents in this repo (fourth and fifth sightings
   of `docs/inflight/bug-857-family.md`) showed that needed a scope correction rather than a
   retraction - the autopsy is reliably **emitted** on failure, but the console **log** you fetch it
   from is not a reliable place to find it; the artifact and archive routes above are. **That
@@ -168,7 +168,7 @@ implicated.
 - [`docs/inflight/bug-857-family.md`](../../inflight/bug-857-family.md) - fourth sighting
   (`**Retrieval note`, server-side stream truncation, artifact recovery) and fifth sighting
   (`**Correction worth recording`, this incident, archive-zip recovery, both seeds).
-- [`docs/testing.md`](../../testing.md) - ambient-probe section (`=== AMBIENT PROBE AUTOPSY ===`), which
+- [`docs/testing.md`](../../testing.md) - ambient-probe section (`AMBIENT PROBE AUTOPSY`), which
   now carries the corrected "emits" wording and points here for the retrieval routes rather than
   restating them.
 - [`docs/ci.md`](../../ci.md) - "Reading a failed job's log", the topic doc for CI log retrieval;

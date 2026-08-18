@@ -152,7 +152,7 @@ branches passing the same day only means their seeds did not draw this interleav
 
 **Retrieval note - the autopsy was NOT in the CI log.** GitHub truncated the job's log stream partway
 through the run, so neither `gh run view --log` nor `--log-failed` contained the
-`=== AMBIENT PROBE AUTOPSY ===` block, and the check-run annotations carried only
+`AMBIENT PROBE AUTOPSY` block, and the check-run annotations carried only
 `Process completed with exit code 1`. The autopsy and all three seeds came from the **uploaded test
 report artifact** (`highcpu-fast-feedback-reports-Chaos Pain Suite-*`), inside the failsafe XML for
 the failing class, where the block is embedded in the captured system-out. Go there first for a

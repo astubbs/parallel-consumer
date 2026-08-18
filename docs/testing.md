@@ -18,7 +18,7 @@ you have read this file.
 
 ## The ambient probe: contention artifact, or genuine bug?
 
-Every broker integration test failure **emits** an `=== AMBIENT PROBE AUTOPSY ===` block (grep for
+Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
 it) with rebalance-dwell and lag-stagnation violations plus per-partition frozen-committed detail.
 It answers the contention-versus-bug question before you start manual diagnosis. Disable it with
 `-Dambient.probe=off` or `@NoAmbientProbe` only when the probe itself is the problem (see
