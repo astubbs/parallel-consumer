@@ -1,7 +1,7 @@
 # Next: the cross-language performance comparison matrix
 
 Candidate work, ranked in full in `docs/ideation/2026-08-17-perf-comparison-matrix-ideation.html`
-(branch `docs/ideate-perf-comparison-matrix`, stacked on `feats/proxy-requirements`, no PR). The ask
+(on `feats/proxy-requirements`, riding astubbs#293). The ask
 it serves: the classic README intro performance test running in each proxy language - the
 double-click demo wanted before astubbs#293 merges - across big-data replay, a slow processing
 stage, and a Kafka Streams augment-and-republish, comparing plain consumer, plain Streams, PC core,
