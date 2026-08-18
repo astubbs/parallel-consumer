@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.state;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.BrokerlessWorkManagerTestBase;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import lombok.extern.slf4j.Slf4j;
@@ -32,24 +33,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * @see PartitionStateManager
  */
 @Slf4j
-class ShardManagerStaleContainerTest {
+class ShardManagerStaleContainerTest extends BrokerlessWorkManagerTestBase {
 
-    ModelUtils mu = new ModelUtils();
-    WorkManager<String, String> wm;
-    ShardManager<String, String> sm;
-    PartitionStateManager<String, String> pm;
-
-    String topic = "topic";
-    TopicPartition tp = new TopicPartition(topic, 0);
-
-    @BeforeEach
-    void setup() {
-        PCModuleTestEnv module = mu.getModule();
-        wm = module.workManager();
-        sm = wm.getSm();
-        pm = wm.getPm();
-
-        // initial assignment at epoch 0
+    @Override
+    protected void assignPartitionsIfWanted() {
+        // initial assignment at epoch 0 - these tests need work to make stale against
         wm.onPartitionsAssigned(UniLists.of(tp));
     }
 

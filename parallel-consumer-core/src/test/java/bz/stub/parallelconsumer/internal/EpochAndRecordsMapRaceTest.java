@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.BrokerlessWorkManagerTestBase;
 import bz.stub.parallelconsumer.state.ModelUtils;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
 import bz.stub.parallelconsumer.state.ShardManager;
@@ -34,24 +35,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * This race is more likely with Kafka 2.x's eager rebalance protocol.
  */
 @Slf4j
-class EpochAndRecordsMapRaceTest {
+class EpochAndRecordsMapRaceTest extends BrokerlessWorkManagerTestBase {
 
-    ModelUtils mu = new ModelUtils();
-    WorkManager<String, String> wm;
-    ShardManager<String, String> sm;
-    PartitionStateManager<String, String> pm;
-
-    String topic = "topic";
-    TopicPartition tp = new TopicPartition(topic, 0);
-
-    @BeforeEach
-    void setup() {
-        PCModuleTestEnv module = mu.getModule();
-        wm = module.workManager();
-        sm = wm.getSm();
-        pm = wm.getPm();
-        // Deliberately NOT calling onPartitionsAssigned — simulating the race
-    }
+    // Deliberately does NOT override assignPartitionsIfWanted(): the race under test is a poll
+    // arriving BEFORE onPartitionsAssigned, so assigning here would remove the thing being tested.
 
     /**
      * Core race scenario: poll returns records before onPartitionsAssigned fires.
