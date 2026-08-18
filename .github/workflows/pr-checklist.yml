@@ -51,6 +51,16 @@ jobs:
       - name: Self-test the local issue-reference checker's body plumbing
         run: bash bin/test-check-issue-refs.sh
 
+      # Runs BEFORE the gate below, per bin/AGENTS.md. It tests the script's ARGUMENT PARSING, which
+      # is a permission boundary rather than a formatting concern: the reviewer is granted
+      # `bin/todo-index.sh --check` exactly so it can ask whether the index is stale without being
+      # able to rewrite the tree it is inspecting, and the grant is only worth its wording while the
+      # script refuses everything else. It also asserts both allowlists still grant the exact command
+      # rather than a `:*` prefix - the form that let `--check=false` through
+      # (astubbs/parallel-consumer#286).
+      - name: Self-test the marker index argument parsing
+        run: bash bin/test-todo-index.sh
+
       # docs/todo-index.md is generated from the markers in the tree, so it can silently stop
       # matching them. Entries are keyed by marker TEXT, not line number, so this only fires when a
       # marker is actually added, removed or reworded - editing above one no longer churns the file.
