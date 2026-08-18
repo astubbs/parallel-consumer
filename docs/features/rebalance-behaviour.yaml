@@ -1,0 +1,64 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Rebalance behaviour and assignor support
+category: operability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: >-
+      Parallel Consumer has participated in consumer-group rebalancing since the initial baseline; it
+      registers its own ConsumerRebalanceListener and tracks a per-partition assignment epoch. This
+      record documents behaviour users already depend on, which had no feature record of its own.
+  milestones:
+    - release: 0.6.0.0
+      basis: >-
+        Correctness work on the revoke path - a commit-path deadlock between the poll and control
+        threads, and pause state that could survive a cooperative rebalance - plus first end-to-end
+        coverage under CooperativeStickyAssignor.
+readme_anchor: ordering-guarantees
+summary: >-
+  Keep a member responsive and its offsets correct while partitions are revoked and reassigned, under
+  either the eager or the cooperative rebalance protocol.
+use_this_when:
+  - Instances scale up and down, or restart, while a consumer group is live.
+  - You are choosing an assignor and need to know what Parallel Consumer guarantees under each.
+setup:
+  configure:
+    - partition.assignment.strategy on the Kafka consumer - both eager and CooperativeStickyAssignor are exercised.
+    - max.poll.interval.ms bounds every rebalance callback, so it bounds revoke-time work.
+  observe:
+    - pc.partitions.paused
+    - pc.inflight.records
+opt_in:
+  mechanism: Automatic. Rebalance handling is part of running a subscribed consumer.
+  isolated_from_stable_modules: false
+boundaries:
+  - Work for revoked partitions is fenced by an assignment epoch captured at poll time. Records whose
+    epoch no longer matches are dropped rather than processed, because their new owner will receive
+    them. This is expected during any rebalance and is logged at debug, not as a warning.
+  - The revoke callback attempts a commit for the partitions being taken away, but declines rather
+    than blocks if the control thread is already committing. Offsets not committed are redelivered to
+    the new owner - the at-least-once contract - and declining is what keeps the callback inside
+    max.poll.interval.ms.
+  - A draining instance keeps polling. Rebalance participation happens inside poll(), so a member that
+    stops polling while draining holds its assignment without consuming, starving its own group.
+  - Every rebalance callback runs on the poll thread inside poll(), so anything slow on the revoke
+    path is charged against max.poll.interval.ms, and overrunning it evicts the member from the group.
+  - In transactional commit mode the revoke path waits for an in-flight transaction to finish, and
+    that wait is currently unbounded. A long transaction can therefore breach max.poll.interval.ms.
+    Tracked as astubbs/parallel-consumer#44 (confluentinc/parallel-consumer#803).
+  - Eager and cooperative differ in what Kafka retains across a rebalance - notably consumer-side
+    pause state, which is discarded for eager and kept for retained partitions under cooperative.
+    State mirrored on top of Kafka's has to model both.
+references:
+  - label: Why the commit seam keeps producing deadlocks - archaeology, evidence and constraints
+    path: docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md
+  - label: Ordering and partition-assignment guidance
+    path: README.adoc#ordering-guarantees

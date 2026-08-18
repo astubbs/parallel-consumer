@@ -76,6 +76,55 @@ They carry horizons in `docs/data/roadmap.yaml`.
 **Not a 1.0 attempt.** Expect one or two more major 0.x releases first. What 1.0 waits on is in the
 roadmap data.
 
+## The confluentinc#857 family: the worked example for the stability claim
+
+Blog and release-note material. This is the clearest evidence for the section above, because it shows
+the machinery doing something a feature release cannot claim: **changing our minds on the basis of
+measurement.**
+
+One user-visible symptom - *consumption stops after a rebalance, no error* - turned out to be **three
+independent defects**. Two landed earlier (astubbs#100, astubbs#80). The third had a fix written in
+**April 2026** that nobody could prove worked, for four months.
+
+**Why it stayed unproven is the interesting part.** The test written to prove it could not observe it,
+on two independent counts: it ran a commit mode in which the deadlock cannot occur, and it counted a
+latch by overriding a method the fix had stopped calling. Measured, it passes **5/5 on the defect
+build and fails 5/5 on the fixed one** - it reported the fix as a regression. Meanwhile the CI logs
+showed the fix's own diagnostic line zero times in 741,000 lines, which read as "the fix never runs"
+and was actually "the tests never create the conditions".
+
+**What settled it was a deterministic instrument and a control arm**, the same method twice:
+
+| | defect build | fixed build |
+|---|---|---|
+| Deadlock probe, 60 iterations per arm, interleaved | **60/60 fail** | **0/60 fail** |
+| Fix's diagnostic line (proves the fixed path executed) | 0 | 63 |
+
+**And measurement went both ways, which is the honest half.** The April commit bundled four
+independent changes. Two survived; two were deleted:
+
+- A counter adjustment "fixing" drift that a probe showed **does not exist** - and that the adjustment
+  itself caused, driving the counter to -20 while records were genuinely in flight. The balancing
+  decrement it duplicated had been in the codebase since 2023.
+- A pause-state reset that was correct for the eager rebalance protocol and **reintroduced this very
+  symptom** under the cooperative one, because Kafka keeps pause state for partitions retained across
+  a cooperative rebalance. Verified in the Kafka client source rather than assumed.
+
+**Machinery that came out of it**, all of which outlives the release:
+
+- Probes that can tell the truth from the bookkeeping - a counter-drift probe and a deadlock probe -
+  kept as regression tests. Neither existed; nothing else in the repo could distinguish "the counter
+  says 0" from "there are 0 records in flight".
+- A runtime thread-confinement guard on the consumer, which during this work caught a genuine
+  cross-thread defect that had not been found any other way.
+- A pre-commit gate that refuses a commit made in the shared main checkout rather than a worktree.
+
+**The sentence for the blog post:** the fix was four months old and looked finished; the work was
+proving it, and two of the four things shipped alongside it turned out to make matters worse.
+
+Full write-up, including every sighting with its commit mode and replay seed:
+`docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
+
 ## Say plainly that the experimental modules cannot affect plain PC
 
 If 0.6.0.0 ships new experimental modules - the Kafka Streams one (astubbs#255) and the Connect one -
