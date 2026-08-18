@@ -2,7 +2,7 @@
 // broken rule fails loudly rather than silently passing - or failing - every PR.
 const assert = require("assert");
 const {
-  suspectRefs, findOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
+  suspectRefs, findOptOut, hasFileOptOut, isExempt, stripQualified, formatFailure, prBodyEntry,
   QUALIFY_BELOW, PR_BODY_LABEL,
 } = require("./issue-ref-gate.js");
 
@@ -117,7 +117,8 @@ check("exempts the files where a bare number means upstream", () => {
   for (const p of ["CHANGELOG.adoc",
                    "src/docs/development/upstream-map.yaml",
                    "src/docs/development/upstream-pr-analysis.adoc",
-                   ".github/scripts/issue-ref-gate.test.js"]) {
+                   ".github/scripts/issue-ref-gate.test.js",
+                   "bin/test-check-issue-refs.sh"]) {
     assert.ok(isExempt(p), p + " should be exempt");
     assert.deepStrictEqual(suspectRefs(file(p, "fix: something (#857)")), []);
   }
@@ -345,14 +346,195 @@ check("formatFailure takes the repo from its caller, and defaults to the fork", 
   assert.ok(formatFailure(HITS).includes("gh issue list -R astubbs/parallel-consumer"));
 });
 
-check("the opt-out tail matches whether the caller can read the PR body", () => {
-  assert.ok(!formatFailure(HITS).includes("does not read the PR body"));
+check("the opt-out tail matches whether the caller could read the PR body", () => {
+  assert.ok(!formatFailure(HITS).includes("could not read the PR body"));
   const local = formatFailure(HITS, { readsPrBody: false });
-  assert.ok(local.includes("does not read the PR body"));
+  assert.ok(local.includes("could not read the PR body"));
   // CI now scans the body as well as honouring the opt-out from it, so a caller with no body is
   // missing both. A tail naming only the opt-out would understate what the local run cannot see.
   assert.ok(local.includes("scans the body itself"), "must say CI reads the body for references too");
 });
+
+check("the fix/opt-out reminder comes AFTER the last hit, where truncated reads still see it", () => {
+  // Readers of a failing tool consume its tail - often literally, via `| tail`. Guidance printed
+  // only above the hits list is invisible to them; this trailer is the copy that survives.
+  const msg = formatFailure(HITS);
+  const lastHit = msg.lastIndexOf("docs/x.md: #857");
+  const trailer = msg.lastIndexOf("issue-refs: N/A - <reason>");
+  assert.ok(lastHit !== -1 && trailer !== -1, "both the hit and the trailer must be present");
+  assert.ok(trailer > lastHit, "the opt-out reminder must follow the hits list");
+  assert.ok(msg.slice(lastHit).includes("Fix: qualify each ref"), "the trailer must lead with the fix");
+  assert.ok(msg.slice(lastHit).includes("issue-refs: exempt"), "the trailer must name the line opt-out too");
+});
+
+// The LINE opt-out: `issue-refs: exempt` on the flagged line itself. It exists for the ref that
+// must stay bare - quoted source material above all, where qualifying the number edits the quote -
+// and unlike the PR-body opt-out it travels with the file, so it holds for future PRs and for
+// local runs on branches that have no PR body to opt out in.
+check("a line carrying issue-refs: exempt is not flagged", () => {
+  const hits = suspectRefs(file("docs/x.md", 'He wrote "see #857 for that" <!-- issue-refs: exempt -->'));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("the line opt-out exempts ONLY its own line", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "See #857 for the stall family.",
+    "And #858 too. <!-- issue-refs: exempt -->"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#857"]);
+});
+
+check("the line opt-out is case-insensitive and comment-syntax-agnostic", () => {
+  const hits = suspectRefs(file("src/X.java", "int x = 857; // was #857 upstream - Issue-Refs: EXEMPT"));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("the line opt-out works in the PR body too - same rule, same adapter", () => {
+  const hits = suspectRefs(body("Quoting the old thread: fixes #858 <!-- issue-refs: exempt -->"));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("issue-refs: exempt without a ref on the line exempts nothing else", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "issue-refs: exempt",
+    "See #857 for the stall family."));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#857"]);
+});
+
+// The BLOCK opt-out: exempt-begin/exempt-end around a pasted run of lines - the tool for quoted
+// material too dense for per-line markers, where marking every line would be a mess in itself.
+check("exempt-begin/exempt-end exempts the lines between, and only those", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "Before the quote: #100 is flagged.",
+    "<!-- issue-refs: exempt-begin -->",
+    "> the old thread said #857 and #858 fix it",
+    "> and #859 was a duplicate",
+    "<!-- issue-refs: exempt-end -->",
+    "After the quote: #200 is flagged again."));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100", "#200"]);
+});
+
+check("an unclosed exempt-begin swallows the rest of the file's added lines, like an unclosed fence", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "<!-- issue-refs: exempt-begin -->",
+    "quoted #857 forever"));
+  assert.deepStrictEqual(hits, []);
+});
+
+check("block state resets between files - one file's begin cannot exempt another file", () => {
+  const hits = suspectRefs([
+    { filename: "docs/a.md", patch: "+<!-- issue-refs: exempt-begin -->\n+quoted #857" },
+    { filename: "docs/b.md", patch: "+plain #858" },
+  ]);
+  assert.deepStrictEqual(hits.map((h) => [h.file, h.ref]), [["docs/b.md", "#858"]]);
+});
+
+check("blocks work in the PR body too - same rule, same adapter", () => {
+  const hits = suspectRefs(body(
+    "Real text, so #100 is flagged.",
+    "<!-- issue-refs: exempt-begin -->",
+    "unfenced paste mentioning #857",
+    "<!-- issue-refs: exempt-end -->"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100"]);
+});
+
+// The FILE opt-out is content-based, applied by the callers via hasFileOptOut - so it holds
+// however small the patch, unlike line/block markers which must be IN the patch to be seen.
+check("hasFileOptOut finds the file marker in any comment syntax, and not its absence", () => {
+  assert.strictEqual(hasFileOptOut("<!-- issue-refs: exempt-file - generated doc -->\ntext"), true);
+  assert.strictEqual(hasFileOptOut("// Issue-Refs: EXEMPT-FILE"), true);
+  assert.strictEqual(hasFileOptOut("issue-refs: exempt on a line is not the file marker"), false);
+  assert.strictEqual(hasFileOptOut(""), false);
+  assert.strictEqual(hasFileOptOut(null), false);
+});
+
+// MENTION IS NOT USE. Before span-stripping, this review round's own docs made five files -
+// including docs/issue-references.md, the convention's defining doc - permanently self-exempt,
+// because documenting a marker in backticks activated it. These pin the fix.
+check("a file marker quoted in a backtick span is a mention, not a use", () => {
+  assert.strictEqual(hasFileOptOut("put `issue-refs: exempt-file` anywhere in the file"), false);
+  assert.strictEqual(hasFileOptOut("real marker below\nissue-refs: exempt-file"), true,
+    "an unquoted marker still counts - only backtick spans are inert");
+});
+
+check("a line marker quoted in a backtick span neither exempts its line nor blocks anything", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    'append `issue-refs: exempt` to the flagged line, e.g. for #857'));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#857"],
+    "the quoting line's own bare ref must still be flagged");
+});
+
+check("a line QUOTING the block markers does not open a block - the doc-section shape", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "wrap it in `issue-refs: exempt-begin` / `issue-refs: exempt-end` markers",
+    "and a bare #57 after it must still be flagged"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#57"]);
+});
+
+check("an unquoted line carrying BOTH block markers changes no state", () => {
+  const hits = suspectRefs(file("docs/x.md",
+    "use issue-refs: exempt-begin and issue-refs: exempt-end around it",
+    "bare #58 after the discussing line is still flagged"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#58"]);
+});
+
+check("a fence in the PR body closes any open exempt block - fail closed, not open", () => {
+  // The end marker sits INSIDE the fence, where prBodyEntry blanks it; before the synthetic
+  // fence-close rule, the block never ended and #200 silently escaped.
+  const hits = suspectRefs(body(
+    "before #100",
+    "<!-- issue-refs: exempt-begin -->",
+    "```",
+    "quoted #857",
+    "<!-- issue-refs: exempt-end -->",
+    "```",
+    "after #200"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100", "#200"],
+    "#100 before the block and #200 after the fence must both flag; only the fenced quote is spared");
+});
+
+check("a fence with no open block stays a plain fence - synthetic close is a no-op", () => {
+  const hits = suspectRefs(body("real text #100", "```", "fenced #857", "```", "tail #200"));
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["#100", "#200"]);
+});
+
+// dropFileOptedOutHits is the shared control flow both callers run (local script and CI step),
+// each supplying only its reader - so the drift-prone part is pinned here, once. The block is
+// captured and awaited before the summary line prints, so the count and ordering stay honest.
+const asyncChecks = (async () => {
+  const HITS3 = [
+    { file: "docs/a.md", ref: "#857", text: "a" },
+    { file: "docs/a.md", ref: "#858", text: "a2" },
+    { file: "docs/b.md", ref: "#859", text: "b" },
+    { file: PR_BODY_LABEL, ref: "#860", text: "body" },
+  ];
+
+  await (async () => {
+    const reads = [];
+    const dropped = [];
+    const out = await require("./issue-ref-gate.js").dropFileOptedOutHits(HITS3, async (p) => {
+      reads.push(p);
+      return p === "docs/a.md" ? "<!-- issue-refs: exempt-file -->" : "plain";
+    }, { onDrop: (p) => dropped.push(p) });
+    assert.deepStrictEqual(out.map((h) => h.ref), ["#859", "#860"],
+      "marked file's hits drop; other file and PR body survive");
+    assert.deepStrictEqual(reads, ["docs/a.md", "docs/b.md"],
+      "each file read once (deduped), PR body never read");
+    assert.deepStrictEqual(dropped, ["docs/a.md"], "onDrop fires per dropped file");
+    console.log("  ok  dropFileOptedOutHits drops the marked file's hits, deduped, skipping the body");
+    run++;
+  })();
+
+  await (async () => {
+    const errors = [];
+    const out = await require("./issue-ref-gate.js").dropFileOptedOutHits(HITS3,
+      async () => { throw new Error("unreadable"); },
+      { onError: (p) => errors.push(p) });
+    assert.deepStrictEqual(out, HITS3, "a read failure keeps the hits - the gate must not fail open");
+    assert.deepStrictEqual(errors, ["docs/a.md", "docs/b.md"], "onError fires per unreadable file");
+    console.log("  ok  dropFileOptedOutHits keeps hits when the reader throws");
+    run++;
+  })();
+})();
 
 check("a body hit reads as the body in the failure listing", () => {
   const msg = formatFailure([{ file: PR_BODY_LABEL, ref: "#857", text: "Fixes #857" }]);
@@ -378,4 +560,4 @@ check("every hit is listed, with its count in the first line", () => {
   assert.ok(msg.includes("  a.md: #29  and #29"));
 });
 
-console.log("\n" + run + " assertions passed");
+asyncChecks.then(() => console.log("\n" + run + " assertions passed"));
