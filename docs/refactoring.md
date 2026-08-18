@@ -128,9 +128,12 @@ Do not start one casually.
   blocking poll when work arrives), `origin/improvements/poller-bus-actor` @b1598f21 (poller
   as an actor), `origin/improvements/rebalance-messages` @49e977bf (rebalance via messages),
   `origin/refactor/control-loop` @c3a0f28a, `origin/refactor/extract-controller` @25db90e3 (extract a
-  `SubscriptionHandler` interface, pull Poll up), `origin/refactor/infinite-retry` @80feb470
+  `SubscriptionHandler` interface, pull Poll up), `origin/refactor/controller-extract-base` @540b0b9a5
+  (extract-controller's base - MockConsumer-with-PC demonstration; missed by every earlier
+  catalogue, added by the 2026-08-17 branch audit), `origin/refactor/infinite-retry` @80feb470
   (move timeout-retry into the controller; poller just forwards the error),
   `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
+  Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
 
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
@@ -147,8 +150,12 @@ Do not start one casually.
   via actor instead of a blocking `future.get` - relates to draft `confluentinc#356`),
   `origin/improvements/transactions-dont-block` @17f019b8 (non-blocking tx, depends on the
   actor system), `origin/improvements/scheduled-commit` @b6f0a542,
-  `origin/improvements/actor-scheduled` @4db0da0f, `origin/improvements/remove-commit-queue` @381d6997.
+  `origin/improvements/actor-scheduled` @4db0da0f, `origin/improvements/remove-commit-queue` @381d6997,
+  `origin/improvements/poller-bus-actor` @b1598f21 (also listed under the thread-model section
+  above - it carries the *second*, unreconciled actor base: `IActor`/`Actor` + `ActorRef`, vs
+  lambda-actor-bus's `Actor`/`ActorImpl`; its commit d391398f1 records the unification as unfinished).
   Only meaningful as part of the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) rework.
+  Registered in the manifest as `sweep-2023-actor-ipc` (this doc stays the editorial owner).
 
 ### Remove static state (unblocks parallel test execution)
 *Mirror: [#131](https://github.com/astubbs/parallel-consumer/issues/131).*
@@ -577,6 +584,20 @@ Cross-cutting above; the rest:
   offset range.
 - `origin/features/least-loaded` @278cc0a5 - incomplete futures as a loading proxy (→ draft
   `confluentinc#473` / issue `confluentinc#394`, least-loaded broker).
+
+**Flow control / self-tuning** (manifest: `sweep-2023-long-tail`) → tie to astubbs#227 (confluentinc#21, dynamic concurrency) and
+astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
+`docs/ideation/2026-08-17-distributed-throttling-ideation.html`:
+- `origin/features/dynamic-concurrency-control` @6f85eac41 - Netflix concurrency-limits
+  (`Gradient2Limit`/`SimpleLimiter`/`BlockingAdaptiveExecutor` as the worker pool), README
+  "Automatic Concurrency Scaling" section, mid-extraction to a `parallel-consumer-core-auto-scale`
+  module for the zero-deps policy. Upstream twin: draft PR `confluentinc#22` @ba6b71f10.
+- `origin/feature/auto-tuning-pressure` @f4aa09788 - "Wip! Experiments in self tuning": hand-rolled
+  self-tuning of the backpressure system (WorkManager, load factor). The
+  `DynamicLoadFactor` no-step-down gap is the fossil of this unfinished work.
+- `origin/features/rate-limiting` @e9f49d321 - bucket4j POC in the Reactor example app; policed
+  (`Mono.error`) instead of deferring, declared-but-unused Hazelcast dep, build-breaking pom
+  properties. Full autopsy in the ideation doc.
 
 **Offset encoding** → relevant to the offsets/*Encoder items above:
 - `origin/refactor/encode-with-incompletes-direct` @fa56ff18 - invoke the encoder with known
