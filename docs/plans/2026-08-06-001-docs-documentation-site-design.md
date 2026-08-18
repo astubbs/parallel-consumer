@@ -2,6 +2,9 @@
 
 **Status:** signed off by the maintainer; phase 1 not yet implemented.
 **Written:** 2026-08-06. **Rewritten:** 2026-08-14, around Starlight.
+**Citations repaired:** 2026-08-18, after ~68 commits of master landed under this branch - addresses
+only, per [`docs/citations.md`](../citations.md). Where a *convention* moved rather than a line number,
+it is flagged beside the original claim (§8) rather than silently rewritten.
 **Issue:** [astubbs#208](https://github.com/astubbs/parallel-consumer/issues/208) - *Publish the docs as a
 versioned documentation site, not one 1578-line README*
 **Parked note superseded:** [`docs/inflight/parked-docs-site.md`](../inflight/parked-docs-site.md), which
@@ -39,7 +42,8 @@ Material team's successor) lost to Starlight on the maintainer's one non-negotia
 ```
 
 Source of truth is `src/docs/README_TEMPLATE.adoc`, rendered to `README.adoc` by
-`asciidoc-template-maven-plugin` 1.0.21 at `process-sources` (`pom.xml:603-623`). It resolves
+`asciidoc-template-maven-plugin` 1.0.21 at `process-sources` (`pom.xml`, grep
+`<templateFile>README_TEMPLATE.adoc</templateFile>`). It resolves
 **19 `include::` directives, 17 distinct file/tag pairs** (verified by `grep -c` and
 `grep -o ... | sort -u`; earlier comments on the issue said 19 distinct, then 14 - both wrong), each
 naming a tagged region of real, compiling code:
@@ -66,7 +70,8 @@ lying about the code, **quietly**. Every §5 decision follows from that.
 Two constraints, pulling against each other.
 
 **`docs/` is occupied.** MkDocs' default `docs_dir` was `docs/`, and this repo's `docs/` is contributor
-scratch - `inflight/`, `plans/`, `solutions/`, `refactoring.md`, `TODO_INDEX.md` - which astubbs#208 puts
+scratch - `inflight/`, `plans/`, `solutions/`, `refactoring.md`, `todo-index.md` (`TODO_INDEX.md` when
+this was written; renamed upstream since) - which astubbs#208 puts
 explicitly **out of scope for publication**, and which `AGENTS.md` devotes its "Where things live" table
 to keeping separate. Publishing it would be wrong; an `exclude:` list would be a tax paid every time
 someone adds an inflight note. That argument survives the generator change intact.
@@ -88,7 +93,8 @@ Found 4 invalid links in 3 files.
 ```
 
 `starlight-links-validator` computes a page's identity by stripping the literal string `content/docs`
-from its path (`libs/markdown.ts:67`, `libs/validation.ts:315`). Relocate the collection and every page
+from its path (`starlight-links-validator` 0.25.3 - grep `'content/docs'` in `libs/markdown.ts` and
+`'content/docs/'` in `libs/validation.ts`). Relocate the collection and every page
 resolves to a slug that does not match the routes Astro actually built, so **a green build becomes
 impossible while the link checker is on**. There is no option to change it - the full option schema is
 `components`, `errorOnFallbackPages`, `errorOnInconsistentLocale`, `errorOnRelativeLinks`,
@@ -117,7 +123,8 @@ running it rather than reasoning about it: `content.config.ts` must move inside 
 specified in the Starlight sidebar config does not exist`), and image assets resolve relative to the new
 `srcDir`.
 
-**Consequences:** `.gitignore` currently ignores only `target` (`.gitignore:92`); it needs `dist/`,
+**Consequences:** `.gitignore` ignores `target` but nothing Node- or Astro-related (grep it for
+`dist`, `node_modules`, `astro`, `starlight` - all absent); it needs `dist/`,
 `node_modules/`, `.astro/` and `.starlight-links-validator/`. Note the output directory is `dist/`, not
 the `site/` the MkDocs-era version of this document said.
 
@@ -201,7 +208,8 @@ This was Starlight's clearest win over Zensical, which cannot read AsciiDoc tags
 dual markers in two files. The maintainer's "the markers will get replaced, not added to" holds for 17 of
 the 19 includes; `tag::example[]` in `CoreApp.java` and `tag::exampleDep[]` in the example `pom.xml`
 **stay**, because the slimmed README still resolves them through the Maven plugin. So the plugin and its
-GitHub-Packages repository (`pom.xml:193`) remain, resolving 2 includes instead of 19.
+GitHub-Packages repository (`pom.xml`, grep `github-asciidoc-template-maven-plugin`) remain, resolving
+2 includes instead of 19.
 
 Retiring the plugin and hand-writing that snippet was considered and rejected: a hand-written quickstart
 in the most-read file in the repo is exactly the drift astubbs#208 exists to prevent.
@@ -229,7 +237,9 @@ Two earlier claims in this document were wrong, and both mattered:
    remainder of the file - measured at **199 lines published, 15 leaked `tag::` markers, exit 0** even
    under `--strict`. The maintainer spotted this before the spike did.
 2. **"Starlight can never fail the build."** Also wrong, and this reversed the recommendation. Astro does
-   swallow content-rendering errors (`astro/dist/content/loaders/glob.js:130-132`, core, not Starlight) -
+   swallow content-rendering errors (`astro/dist/content/loaders/glob.js`, core not Starlight - grep
+   `Error rendering ${entry}`, which logs and continues; re-confirmed on astro 7.2.2, where the line
+   number had already moved) -
    but **`astro:build:done` propagates**. The remark plugin records failures into a shared array; a
    ~26-line integration throws there if it is non-empty.
 
@@ -309,20 +319,36 @@ Not boilerplate - CI gates sit between this work and a merge.
   long-lived **`docs-site`** branch, and one merge flips it live. No window where `master` has less
   documentation than today.
 - **Commit subject** `docs #208: ...` - issue at the **front**. The trailing `(#N)` slot belongs to the PR
-  number, which GitHub appends on squash-merge (`AGENTS.md:402`). No `(scope)`: `AGENTS.md` is explicit
+  number, which GitHub appends on squash-merge (`AGENTS.md`, "Commits", grep `the trailing`). No
+  `(scope)`: `AGENTS.md` is explicit
   that a directory name is not a scope and that plain `docs #208: ...` beats one that adds nothing.
 - **PR body from `.github/PULL_REQUEST_TEMPLATE.md`**, every box ticked or `N/A - <reason>`. The
   `PR Checklist` gate fails on a *missing* checklist as well as an unresolved box, so dropping the
   template is not a bypass.
 - **Issue-ref gate** - fails added lines carrying an unqualified `#NN` below 1000, *even when it resolves*
-  ("resolving is not evidence the reference is right", `issue-ref-gate.test.js:26-31`). The migrated
-  content carries many references, so each needs qualifying as `astubbs#NNN` / `upstream #NNN` and
+  ("Resolving is not evidence the reference is right" - `.github/scripts/issue-ref-gate.test.js`, grep
+  `the old blind spot`). The migrated
+  content carries many references, so each needs qualifying as `astubbs#NNN` / `confluentinc#NNN` and
   **resolved in both repos before choosing the prefix** - the ranges overlap almost entirely, so a wrong
   reference that resolves is worse than a broken one.
+  **Convention change since this was written (2026-08-18):** `upstream #NNN`, which the sentence above
+  originally recommended, is now *flagged* rather than accepted - it names a role, not a repo, and the
+  tolerance was deliberately removed rather than discouraged, "left in, it comes back the moment someone
+  copies old text" (`.github/scripts/issue-ref-gate.js`, grep `named a role rather than a repo`).
+  `docs/issue-references.md` owns the convention.
 - **No `CHANGELOG.adoc` entry** - a PR never adds one; release notes are generated from the commit log.
 - **Delete `docs/inflight/parked-docs-site.md`** when this lands, per the inflight rules.
-- **Fork-PR CI caveat** - self-hosted lanes are skipped for PRs from forks (`AGENTS.md:211`), so a branch
-  on the origin repo gets fuller CI than a fork PR. This bears on the access question in §10.
+- **Fork-PR CI caveat** - self-hosted lanes are skipped for PRs from forks, so a branch on the origin
+  repo gets fuller CI than a fork PR. This bears on the access question in §10.
+  **Sharpened since this was written (2026-08-18), and it is now stronger than a caveat:** a fork PR
+  **cannot turn the required `claude-review` check green at all**. The reviewer refuses any head not in
+  the repo, because reviewing a fork would run untrusted code beside a credential - verified in
+  `.github/workflows/claude-code-review.yml` (grep `Refuse fork heads`) and
+  `claude-code-review-dispatch.yml` (grep `refuse fork heads`), not only in the prose. The two options
+  the repo offers are pushing the same commits to a branch here, or a human merging with the check red;
+  letting a maintainer declare it reviewed is explicitly *not* offered. Owned by `docs/ci.md`, "A fork
+  PR cannot turn the gate green". This directly qualifies the maintainer's "just make a fork, then
+  submit a PR" (§10.1).
 
 ---
 
@@ -338,7 +364,8 @@ content once it merges."*
    the guard's unit test. Developed against 2-3 sample pages; rebased onto (1). Reviewable as *build
    config*.
 3. **README slim-down** - `README_TEMPLATE.adoc` cut to a landing page, `README.adoc` re-rendered, the
-   broken Maven Central badge removed (§10).
+   broken Maven Central badge dealt with - **done ahead of this step**, repointed rather than removed
+   (§10.4).
 4. **Publishing** - the Actions workflow and `wrangler` deploy. Needs the maintainer's secrets (§6).
 
 As many PRs as the work wants; (1) and (2) do not block each other.
@@ -353,14 +380,30 @@ Tracked here so they do not get lost between issue comments.
    (checked ~200 branches), the implementer has no push access (`GET /collaborators` → 403), and no fork
    exists. Either the maintainer creates the branch and adds a collaborator, or the work goes via fork PRs
    - at the cost of the self-hosted CI lanes (§8).
-2. **Cloudflare secrets** - §6.
+   **ANSWERED 2026-08-18: fork and PR.** The maintainer chose the fork route explicitly ("just make a
+   fork, then submit a PR"); `matthall-TM/parallel-consumer` now exists. Note what §8 records about what
+   that costs: it is no longer only the self-hosted lanes, since a fork PR cannot turn the required
+   `claude-review` check green. Worth putting to them, because the answer predates that mechanism.
+2. **Cloudflare secrets** - §6. **ANSWERED 2026-08-18:** after the PR is reviewed, not before.
 3. **Region guard: in-build or separate CI step?** - §5.
-4. **The broken badge** (their side-ask). It is the Maven Central badge,
-   `README_TEMPLATE.adoc:47`, and it is broken twice over: `maven-badges.herokuapp.com` died with Heroku's
-   free tier, **and** nothing is published under `bz.stub.parallelconsumer` yet (`repo1.maven.org` group
-   path → 404; `pom.xml:10-13` is `0.6.0.0-SNAPSHOT`), so *any* badge on *any* service reads "not found"
-   today. Repointing at shields.io returns HTTP 200 and an SVG whose text says `maven-central: not found`
-   - which is why the status code is not the thing to check. **Agreed course:** remove it now, re-add the
+4. **The broken badge** (their side-ask). It is the Maven Central badge in
+   `src/docs/README_TEMPLATE.adoc` (grep `maven-central`), and it is broken twice over:
+   `maven-badges.herokuapp.com` died with Heroku's free tier, **and** nothing is published under
+   `bz.stub.parallelconsumer` yet (`repo1.maven.org` group path → 404; `pom.xml` is
+   `0.6.0.0-SNAPSHOT`), so *any* badge on *any* service reads "not found" today. Repointing at
+   shields.io returns HTTP 200 and an SVG whose text says `maven-central: not found` - which is why the
+   status code is not the thing to check. **Agreed course:** remove it now, re-add the
    link when 0.6.0.0 publishes; the re-add note belongs in
-   [`docs/inflight/release-0.6.0.0.md`](../inflight/release-0.6.0.0.md). The GitHub Actions badge on
-   line 49 is fine (HTTP 200, renders).
+   [`docs/inflight/release-0.6.0.0.md`](../inflight/release-0.6.0.0.md). The GitHub Actions badge beside
+   it is fine (HTTP 200, renders).
+
+   **RESOLVED 2026-08-18, differently from both the above and the maintainer's instruction.** They said
+   to keep it: *"as long as the system still works, it'll just fix itself when the release lands"*. The
+   premise is false - the host is gone, not merely empty. Measured against
+   `io.confluent.parallelconsumer/parallel-consumer-parent`, which **is** published: it 404s identically
+   (548 bytes, Heroku's "No such app" page), so nothing about a release can revive it. shields.io reads
+   Maven Central live - `v0.5.3.3` for that same control, `not found` for the fork's groupId today - so
+   it delivers the *intent* of the instruction, self-healing on publish with no further edit. Repointed
+   rather than removed or kept, in both occurrences; **the deviation from the literal instruction is
+   disclosed to the maintainer rather than left in the diff.** This supersedes the "remove it now,
+   re-add later" course above, which no longer needs a `release-0.6.0.0.md` note at all.
