@@ -209,6 +209,26 @@ they are counted by the revoke adjustment *and* decremented on processing. A per
 path to own the decrement - most plausibly marking containers as already-accounted-for at revoke so
 all three mailbox sites skip them - not adding more clamps.
 
+**Second, separate defect in the same cluster, found 2026-08-18: it makes a single-threaded counter
+cross-thread.** On `master` every mutation of `numberRecordsOutForProcessing` runs on the CONTROL
+thread - `getWorkIfAvailable`, `onSuccessResult`, `onFailureResult`, and the stale branch of
+`handleFutureResult` - so a plain `int` is correct there. This cluster adds a fifth site,
+`adjustOutForProcessingOnRevoke`, called from `onPartitionsRevoked`, which runs on the **poll**
+thread inside the rebalance callback. A non-atomic `int` mutated from two threads has no defined
+visibility, on the very counter whose drift is the silent-stall signature.
+
+*(An earlier draft of this document called that threading problem "pre-existing". It is not - it
+arrives with this cluster, relative to master. Recorded rather than corrected silently, because
+"pre-existing" is exactly the judgement that would have let it land.)*
+
+**What the drift measurement decides.** The symptom this cluster targets - the counter reading higher
+than the records genuinely out with the pool, so `isSufficientlyLoaded()` stays true, the poller
+never resumes and PC stalls (master names this the "counter-drift signature" in
+`WorkManager.isSufficientlyLoaded`) - dates from before astubbs#100, astubbs#80 and
+confluentinc#882 landed. So the open question is not how to fix these two defects, but whether the
+cluster should exist at all: if the drift is gone on current master, delete all 42 lines; if it
+remains, rewrite it with the control thread owning the counter.
+
 ## Cluster 4 - `pausedForThrottling` reset. Probably a regression.
 
 `BrokerPollSystem.onPartitionsAssigned()` clears `pausedForThrottling` on every assignment. Its

@@ -53,12 +53,29 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
 
     /**
-     * While {@link bz.stub.parallelconsumer.internal.State#PAUSED paused} is an externally controlled state that
-     * temporarily stops polling and work registration, the {@code paused} flag is used internally to pause
-     * subscriptions if polling needs to be throttled.
+     * True when <b>we have called {@code consumer.pause(...)} on our own assignment to apply back
+     * pressure</b> - nothing else. Renamed from {@code subscriptionsPausedForBackPressure} because "paused" is
+     * overloaded three ways in this codebase and the wrong reading is easy to reach:
+     * <ol>
+     *   <li><b>This flag</b> - PC asked Kafka to stop returning records for our partitions, because
+     *       the pipeline is full ({@code WorkManager.isSufficientlyLoaded()}). Set only by
+     *       {@link #doPause()}, cleared only by {@link #resumeIfPaused()}, both on the poll thread.</li>
+     *   <li>{@link bz.stub.parallelconsumer.internal.State#PAUSED} - the USER asked PC to stop, via
+     *       {@code pauseIfRunning()}. That stops the poll loop and work registration; it does
+     *       <b>not</b> pause any partition on the consumer. Unrelated to this flag.</li>
+     *   <li>{@code consumer.paused()} - Kafka's own record of which partitions are paused. That is
+     *       the <b>source of truth</b>; this flag is our mirror of it.</li>
+     * </ol>
+     * Being a mirror is the hazard: Kafka can change its side without telling us. It clears pause
+     * state for every partition on an <b>eager</b> rebalance (the assignment map is replaced, see
+     * {@code SubscriptionState.assignFromSubscribed}), but <b>keeps</b> it for partitions retained
+     * across a <b>cooperative</b> one. So the two sides can disagree in either direction, and
+     * {@link #resumeIfPaused()} is gated on this flag - if it says "not paused" while Kafka still
+     * has them paused, nothing ever resumes them and consumption stops silently, which is
+     * confluentinc#857's own symptom.
      */
     @Getter
-    private volatile boolean pausedForThrottling = false;
+    private volatile boolean subscriptionsPausedForBackPressure = false;
 
     private final AbstractParallelEoSStreamProcessor<K, V> pc;
 
@@ -177,16 +194,16 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     private void handlePoll() {
-        log.trace("Loop: Broker poller: ({}), pausedForThrottling={}", runState, pausedForThrottling);
+        log.trace("Loop: Broker poller: ({}), subscriptionsPausedForBackPressure={}", runState, subscriptionsPausedForBackPressure);
         if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
             var polledRecords = pollBrokerForRecords();
             int count = polledRecords.count();
             log.debug("Got {} records in poll result", count);
             if (count == 0) {
-                log.trace("Poll returned 0 records. assignment={}, paused={}, pausedForThrottling={}",
+                log.trace("Poll returned 0 records. assignment={}, paused={}, subscriptionsPausedForBackPressure={}",
                         consumerManager.getAssignmentSize(),
                         consumerManager.getPausedPartitionSize(),
-                        pausedForThrottling);
+                        subscriptionsPausedForBackPressure);
             }
 
             if (count > 0) {
@@ -226,7 +243,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
         checkStateForPausingSubscriptions();
 
-        log.debug("Subscriptions are paused: {}", pausedForThrottling);
+        log.debug("Subscriptions are paused: {}", subscriptionsPausedForBackPressure);
 
         boolean pollTimeoutNormally = runState == RUNNING || runState == DRAINING;
         Duration thisLongPollTimeout = pollTimeoutNormally ? BrokerPollSystem.longPollTimeout
@@ -271,7 +288,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private void doPauseMaybe() {
         // idempotent
-        if (pausedForThrottling) {
+        if (subscriptionsPausedForBackPressure) {
             log.trace("Already paused");
         } else {
             if (pauseLimiter.couldPerform()) {
@@ -292,8 +309,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Pause all assignments
      */
     private void doPause() {
-        if (!pausedForThrottling) {
-            pausedForThrottling = true;
+        if (!subscriptionsPausedForBackPressure) {
+            subscriptionsPausedForBackPressure = true;
             log.debug("Pausing subs");
             Set<TopicPartition> assignment = consumerManager.assignment();
             consumerManager.pause(assignment);
@@ -350,7 +367,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private void managePauseOfSubscription() {
         boolean throttle = shouldThrottle();
-        log.trace("Need to throttle: {}, pausedForThrottling={}, assignment={}", throttle, pausedForThrottling, consumerManager.getAssignmentSize());
+        log.trace("Need to throttle: {}, subscriptionsPausedForBackPressure={}, assignment={}", throttle, subscriptionsPausedForBackPressure, consumerManager.getAssignmentSize());
         if (throttle) {
             doPauseMaybe();
         } else {
@@ -363,13 +380,13 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private void resumeIfPaused() {
         // idempotent
-        if (pausedForThrottling) {
+        if (subscriptionsPausedForBackPressure) {
             log.debug("Resuming consumer, waking up");
             Set<TopicPartition> pausedTopics = consumerManager.paused();
             consumerManager.resume(pausedTopics);
             // trigger consumer to perform a new poll without the assignments paused, otherwise it will continue to long poll on nothing
             consumerManager.wakeup();
-            pausedForThrottling = false;
+            subscriptionsPausedForBackPressure = false;
         }
     }
 
@@ -410,7 +427,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Wakeup if colling the broker
      */
     public void wakeupIfPaused() {
-        if (pausedForThrottling)
+        if (subscriptionsPausedForBackPressure)
             consumerManager.wakeup();
     }
 
@@ -430,9 +447,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>.
      */
     public void onPartitionsAssigned() {
-        if (pausedForThrottling) {
-            log.info("Resetting pausedForThrottling flag on partition assignment (was true)");
-            pausedForThrottling = false;
+        if (subscriptionsPausedForBackPressure) {
+            log.info("Resetting subscriptionsPausedForBackPressure flag on partition assignment (was true)");
+            subscriptionsPausedForBackPressure = false;
         }
     }
 
