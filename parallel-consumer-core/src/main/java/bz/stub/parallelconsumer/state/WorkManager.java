@@ -21,6 +21,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
@@ -77,8 +78,18 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private Gauge waitingRecordsNumberGauge;
     private Gauge inflightRecordsNumberGauge;
-    private Map<TopicPartition, Counter> succeededRecordsCounters = new HashMap<>();
-    private Map<TopicPartition, Counter> failedRecordsCounters = new HashMap<>();
+    /**
+     * Concurrent because the writes and the reads are on different threads: entries are put on partition assignment
+     * and removed on revoke, both of which arrive on the broker-poll thread as rebalance callbacks, while
+     * {@link #incrementCounterIfPresent} reads them on the control thread for every record that completes.
+     * <p>
+     * Not a {@link java.util.ConcurrentModificationException} risk - nothing iterates these. Quieter than that: a
+     * {@code get} racing another thread's resize can miss an entry that is present, so the counter under-counts
+     * during a rebalance. astubbs#267 judged these safe on the iteration argument alone; this is why that was too
+     * narrow.
+     */
+    private final Map<TopicPartition, Counter> succeededRecordsCounters = new ConcurrentHashMap<>();
+    private final Map<TopicPartition, Counter> failedRecordsCounters = new ConcurrentHashMap<>();
 
     private final PCMetrics pcMetrics;
 
@@ -358,12 +369,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private void initTopicPartitionSpecificMetrics(Collection<TopicPartition> partitions) {
         partitions.forEach(topicPartition -> {
-            if (!succeededRecordsCounters.containsKey(topicPartition)) {
-                succeededRecordsCounters.put(topicPartition, pcMetrics.getCounterFromMetricDef(PCMetricsDef.PROCESSED_RECORDS, getWorkManagerCounterTags(topicPartition)));
-            }
-            if (!failedRecordsCounters.containsKey(topicPartition)) {
-                failedRecordsCounters.put(topicPartition, pcMetrics.getCounterFromMetricDef(PCMetricsDef.FAILED_RECORDS, getWorkManagerCounterTags(topicPartition)));
-            }
+            succeededRecordsCounters.computeIfAbsent(topicPartition,
+                    tp -> pcMetrics.getCounterFromMetricDef(PCMetricsDef.PROCESSED_RECORDS, getWorkManagerCounterTags(tp)));
+            failedRecordsCounters.computeIfAbsent(topicPartition,
+                    tp -> pcMetrics.getCounterFromMetricDef(PCMetricsDef.FAILED_RECORDS, getWorkManagerCounterTags(tp)));
         });
     }
 
