@@ -1,0 +1,57 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Seeded chaos scenarios with deterministic replay
+category: observability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.6.0.0
+  evidence:
+    tag: 0.6.0.0
+    path: docs/testing.md
+    basis: >-
+      The chaos suite, its progress probes and the correctness ledger were built during the 0.6.0.0
+      stability work. Every run logs its seed and the exact command to replay it.
+readme_anchor: ordering-guarantees
+summary: >-
+  Every chaos run is driven by a recorded seed, so a failure found once can be re-run as the same
+  scenario - and the run is judged by a correctness ledger and progress probes rather than only by
+  whether it threw.
+use_this_when:
+  - A rebalance or churn failure appeared once in CI and you need the same scenario back to diagnose it.
+  - You are evaluating whether this project's reliability claims are tested or asserted.
+  - You are probing a candidate fix and want the same disturbance before and after it.
+setup:
+  run:
+    - './mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups='
+    - 'Replay a recorded scenario by adding -Dchaos.seed=<seed>; every run prints its own seed and replay command.'
+  observe:
+    - The ProgressProbe verdict - a named violation such as CLASS2_STALL/LAG_STAGNATION or ZOMBIE_MEMBER/REBALANCE_BLOCKED, or an explicit empty list.
+    - The correctness ledger, which must balance.
+    - The AMBIENT PROBE AUTOPSY block, captured in the failsafe XML rather than only on the console.
+opt_in:
+  mechanism: Excluded from default and gating suites by tag; run deliberately, or by the on-demand CI workflow.
+  isolated_from_stable_modules: false
+boundaries:
+  - >-
+    A seed fixes the SCENARIO - the sequence of instance stops and starts, and the workload - not the
+    thread interleaving. So a reproduction is strong evidence and a non-reproduction is weak, because
+    the replay may simply not have drawn the interleaving on a machine whose contention differs from
+    the original. Do not read "did not reproduce" as "the bug is not there".
+  - The ledger checks that no record is lost and that duplicates stay bounded per disturbance; the
+    probes check liveness. Per-key ORDERING is not yet asserted - see
+    docs/inflight/test-chaos-ledger-does-not-check-ordering.md.
+  - A red chaos run is investigation material, not a merge blocker, and never a reason to loosen a
+    probe. Thresholds sit in measured gaps against a real historical defect; tune the workload
+    instead.
+  - Seeds are printed to the run log, and console logs have repeatedly truncated. Read the failsafe
+    XML or the run-logs archive, and name the attempt explicitly - after a re-run, a job id resolves
+    to the latest attempt.
+references:
+  - label: Chaos Pain Suite - how to run, replay and probe a fix
+    path: docs/testing.md
+  - label: Recorded sightings, each with its seed and replay command
+    path: docs/inflight/test-857-revoke-under-work-sightings.md
