@@ -209,7 +209,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     private void handlePoll() {
-        log.trace("Loop: Broker poller: ({}), pausedForBackPressure={}", runState, subscriptionsArePausedForBackPressure());
+        // Guarded: the argument is a live consumer.paused() call now, not a volatile read, so an
+        // unguarded log statement pays for it on every loop iteration whether or not trace is on.
+        if (log.isTraceEnabled()) {
+            log.trace("Loop: Broker poller: ({}), pausedForBackPressure={}", runState, subscriptionsArePausedForBackPressure());
+        }
         if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
             var polledRecords = pollBrokerForRecords();
             int count = polledRecords.count();
@@ -257,7 +261,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
         checkStateForPausingSubscriptions();
 
-        log.debug("Subscriptions are paused: {}", subscriptionsArePausedForBackPressure());
+        if (log.isDebugEnabled()) {
+            log.debug("Subscriptions are paused: {}", subscriptionsArePausedForBackPressure());
+        }
 
         boolean pollTimeoutNormally = runState == RUNNING || runState == DRAINING;
         Duration thisLongPollTimeout = pollTimeoutNormally ? BrokerPollSystem.longPollTimeout
@@ -380,7 +386,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private void managePauseOfSubscription() {
         boolean throttle = shouldThrottle();
-        log.trace("Need to throttle: {}, pausedForBackPressure={}, assignment={}", throttle, subscriptionsArePausedForBackPressure(), consumerManager.getAssignmentSize());
+        if (log.isTraceEnabled()) {
+            log.trace("Need to throttle: {}, pausedForBackPressure={}, assignment={}", throttle, subscriptionsArePausedForBackPressure(), consumerManager.getAssignmentSize());
+        }
         if (throttle) {
             doPauseMaybe();
         } else {
