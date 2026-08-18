@@ -65,20 +65,32 @@ when the optional work cannot fail.
 Costed during astubbs#267 and declined, on two findings that only appeared once the numbers were
 counted rather than estimated.
 
-**The exposure is seven doors, not ninety sites.** A throwable is only dangerous to render if its
-author is the *user*, and user code enters through very few places:
+**The exposure is a handful of render sites, not ninety.** A throwable is only dangerous to render
+if its author is the *user*. User code enters through several doors:
 
-| Entry point | Count |
+| Where a user-authored throwable originates | |
 |---|---|
 | `UserFunctions.carefullyRun` wrap sites | 3 |
 | the user's rebalance listener (`AbstractParallelEoSStreamProcessor.onPartitionsRevoked`) | 1 |
 | async `onError` (reactor, mutiny) | 2 |
 | vert.x send failure (`send.onFailure`) | 1 |
+| a user **serializer**, wrapped at `ParallelEoSStreamProcessor`, grep `Error while waiting for produce results` | 1 |
+
+**Count the render sites, not the doors** - the doors converge. The serializer case is the worked
+example: it is wrapped in an `InternalRuntimeException` and thrown from inside the user function's
+own execution, so it arrives at `runUserFunction`'s catch, which astubbs#267 guards. Enumerating
+sources is how you end up believing there are more unguarded sites than there are.
 
 Every other one of the ~90 raw-throwable log calls in main renders a Kafka or PC-internal
-exception - library classes with ordinary cause chains and no overridden `getCause`. They were never
-at risk, so they are not "sites needing an exemption". astubbs#267 already guards all seven doors
-plus the control loop and the close path, so the exposed set is **covered**.
+exception - library classes with ordinary cause chains and no overridden `getCause`. Not
+*guaranteed* safe in the abstract, but not adversarial either, which is the property that matters.
+They were never at risk, so they are not "sites needing an exemption". astubbs#267 guards the sites
+these doors actually reach, plus the control loop and the close path.
+
+**One known instance of the shape, deliberately left**: `ParallelEoSStreamProcessor` logs
+`Closing parallel Consumer due to InvalidPidMappingException` and only then calls
+`closeOnException(...)` - log before the thing that must happen. The throwable is Kafka-authored, so
+by the reasoning above it does not qualify. Recorded so it is a decision rather than an oversight.
 
 **The evidence does not support the pathological case.** There is no known real hostile throwable in
 this codebase - every demonstration in astubbs#267 was a synthetic test written for the purpose. What
