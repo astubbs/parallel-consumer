@@ -1,8 +1,8 @@
 # Polyglot demo app — ideation done, direction not yet chosen
 
-Branch `docs/ideate-polyglot-demo` (off `feats/proxy-requirements`, astubbs#242) carries the
-polyglot-demo continuation (ideas 21–27) of
-[`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html`](../ideation/2026-08-14-language-proxy-interaction-model-ideation.html):
+The polyglot-demo continuation (ideas 21–27) of
+[`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html`](../ideation/2026-08-14-language-proxy-interaction-model-ideation.html)
+rides this branch (astubbs#242):
 seven ranked directions (six verifier-checked; the seventh, owner-added 2026-08-18) for a demo that
 runs all eleven language bindings at once and proves in one view that they read the same records.
 Read the doc before designing any demo, orchestration, aggregation or perf-display work — it records
