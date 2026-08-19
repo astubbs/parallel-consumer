@@ -345,6 +345,29 @@ reach a running instance. It says nothing about whether the test is fit for the 
 to put a number on the rate. Until someone does that, treat the test as un-quarantined on the strength
 of astubbs#265's fix and one contrary observation, rather than as proven stable.
 
+**SUPERSEDED 2026-08-19 - this sighting is a test defect, and does not belong to the family.**
+The entry above asks for "a full-suite run on a CI runner, repeated enough times to put a number on
+the rate". A mechanism settles it instead, and is recorded in
+[`bug-pcmetrics-committed-offset-vs-completion-count.md`](bug-pcmetrics-committed-offset-vs-completion-count.md):
+`PCMetricsTest.metricsRegisterBinding` asserts that `PARTITION_LAST_COMMITTED_OFFSET` equals a
+**completion counter**, while the suite runs `UNORDERED`. Commits are contiguous and bounded by the
+lowest incomplete offset; completions are not ordered. Workers call `latch.await()` *before*
+`counter.incrementAndGet()`, so a latched worker's offset never completes and the gap is permanent -
+no `atMost` budget can close it.
+
+That explains every observation here without invoking a stall: it fails only under load because
+concurrency is what produces out-of-order completion, it passes in isolation because completions
+then arrive in offset order, and it accounts for both observed gaps - the 2 records here
+(`205.0` vs `203.0`) and the 7 seen later on astubbs/parallel-consumer#322 (`1214.0` vs `1207.0`).
+
+**Do not count this as a family sighting.** It was recorded as "the family's signature" on the
+strength of a shortfall under load, which the family shares with any test that races. Leaving it here
+inflates the ledger with a defect that has nothing to do with the revoke path - the same contamination
+this file already records once, when a transactional-mode failure was logged as confirmation of a
+cycle impossible in that mode. Kept rather than deleted so the reasoning that led here is visible.
+
+The original assessment follows, and is retained deliberately.
+
 **Flake.** The failing run took 137s where the passing ones take 10s, which is load, not logic. Two
 other timing-sensitive tests each failed exactly once across the same session's ~10 heavy runs and
 passed on repeat: `ParallelEoSStreamProcessorTest.processInKeyOrder` and
