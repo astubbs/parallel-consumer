@@ -357,7 +357,44 @@ on its own. A worktree at the pre-change commit, the same command on both, is ch
 turns "probably a flake" into an answer. Do that before attributing - or dismissing - anything with
 this signature, especially on a branch whose subject matter would explain it.
 
-**Eighth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
+**Eighth sighting, 2026-08-17 - the `ZOMBIE_MEMBER` arm again, and its seed replays clean.**
+`ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor` on
+[job 95308176649](https://github.com/astubbs/parallel-consumer/actions/runs/32002566427/job/95308176649),
+on astubbs#204 at head `85a3646d8`. Same arm as the fourth sighting, on the revoke-under-work
+cooperative scenario, and the failing assertion is the scenario SLO rather than a probe fail-fast -
+the probe violation rides along in the autopsy:
+
+```
+no instance may end the run with an unclassified failure cause
+but was: [instance 7: RuntimeException: Error from poll control thread:
+          Timeout waiting for commit response PT10S to request CommitRequest(id=608fa144-...)]
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-122304053' dwelling in PreparingRebalance for 15s
+(bound 15s) - a member is not answering the rebalance (protocol-unresponsive)
+peaks: rebalanceDwell=15465ms lagStagnation=85032ms
+```
+
+Two frozen partitions, stagnant 73-90s, lag 145 and 979. **Replay seed `2966043432903644461`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2966043432903644461
+
+**Replayed, and it does not reproduce.** On the same head, uncontended, all three chaos scenarios
+passed - `ChaosRevokeUnderWorkIT` 135.2s, `ChaosChurnStormIT` 82.8s,
+`ChaosRevokeUnderWorkCooperativeIT` 86.0s. That is the AGENTS.md diagnostic for separating contention
+from a concurrency bug, and it lands on the contention side. It rules out a deterministic defect
+reachable from that seed, and nothing else: a passing replay cannot exclude an interleaving only a
+loaded box reaches.
+
+**Branch context - astubbs#204 rhymes with this failure, which is why it needs naming rather than a
+one-line dismissal.** That PR changes the commit path: `ConsumerManager.commitSync`'s retry budget
+becomes per-call instead of per-attempt, so PC gives up where it previously hung, and the failure
+cause here *is* a commit-response timeout. Against it being the cause: the same lane failed on this
+same branch at `26d2f195`, before that change existed, and
+[`ci-disabled-jobs-and-runner-load.md`](ci-disabled-jobs-and-runner-load.md) records the same window
+killing the `highcpu` lane on three other branches with the no-verdict signature. Unresolved rather
+than cleared - a later sighting on a branch that does not touch the commit path would settle it.
+
+**Ninth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
 and the ninth below share a signature).** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`
 was killed fail-fast by `ProgressProbe` on
 [job 95579861648](https://github.com/astubbs/parallel-consumer/actions/runs/32093367999/job/95579861648),
@@ -391,7 +428,7 @@ log came from the run-logs archive
 attempt) - a second retrieval route alongside the fourth sighting's report-artifact note, and the
 console-log truncation trap is the same one recorded there.
 
-**Ninth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
+**Tenth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by the same fleet detector on
 [job 95584026682's run, attempt at head d96375053](https://github.com/astubbs/parallel-consumer/actions/runs/32078875110)
 (2026-08-17T23:04Z), on astubbs#308 - a docs-only branch (ideation/strategy/ledger files, zero
