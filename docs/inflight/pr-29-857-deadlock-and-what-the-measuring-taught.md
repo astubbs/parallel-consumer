@@ -95,9 +95,27 @@ left the live threads without a home. Append here as you go rather than reconstr
 
 **Merge mechanics not yet done**
 
-- **No review has been requested** - `reviewDecision` is empty. The automated review does not run on
-  push; it needs `@claude review this` on the PR, and a red `claude-review` before that is the
-  expected state. A human LGTM is required regardless of CI.
+- **Review is DEFERRED on purpose, decided 2026-08-19 - do not request it yet.** `reviewDecision` is
+  empty and a red `claude-review` is the expected state meanwhile, not a fault. The merge order is
+  astubbs#204, then astubbs#31, then astubbs#57, then this PR, then astubbs#267, so three PRs land
+  under this branch before it merges; reviewing now spends a review cycle on a tree that is about to
+  change and buys a second one later. **Sequence: let those merge -> merge master here -> re-verify
+  -> then request review** (`@claude review this` on the PR; it does not run on push). A human LGTM
+  is required regardless of CI.
+- **What the re-verification must cover when that happens**, because a clean textual merge proves
+  nothing here: astubbs#31 is "replace a stale container at a reused offset after rebalance", which
+  is this PR's own territory - epoch fencing, revocation, stale work - and astubbs#57 touches
+  `PartitionStateManager`, where a counter has already drifted from ground truth once. Run
+  `Rebalance857CommitSyncDeadlockProbeIT` (the 60/60 to 0/60 proof, 20 tests / ~5.6 min),
+  `ShardManagerStaleContainerTest`, `OutForProcessingCounterDriftProbeTest` and
+  `InstanceStallProbeIT`. Compiling is not evidence that the fencing argument survived.
+- **A roadmap edit falls due at merge, and no gate will ask for it.** `docs/data/roadmap.yaml`'s
+  `known-defects-cleared` entry says the deadlock's "mitigation drafted on astubbs#29", which stops
+  being true when this merges. `roadmap-stage-gate.js` (arrived on master in `a78299794`) only fires
+  for entries carrying a `pull_request:` field, and this entry has none, so it is out of reach by
+  design. `stage` stays `in-progress` - this PR does not clear every known critical - so it is the
+  `stage_detail` wording only, and it must not be edited before the merge, when it would assert
+  something not yet true.
 - **A merge strategy has not been recommended**, and the squash message has not been offered - both
   are owed before merge (`docs/merge-checklist.md`).
 - **Duplicate-code and file-similarity reports** need reading once review runs; clones introduced by
