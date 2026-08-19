@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.util.Optional.empty;
@@ -321,15 +322,21 @@ public class ShardManager<K, V> {
         }
     }
 
+    /** Per-shard queue depths, as a fresh stream. One expression, so the two gauges below cannot drift apart. */
+    private LongStream shardEntryCounts() {
+        return processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked);
+    }
+
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
-                this, shardManager -> shardManager.processingShards.values().stream()
-                        .mapToInt(processingShard -> processingShard.getEntries().size()).sum());
-        // TODO(refactor): re-walks every shard queue, duplicating the SHARDS_SIZE traversal above
-        // (getEntries().size() is O(n)); derive both gauges from one scan. See docs/refactoring.md.
+                this, shardManager -> shardManager.shardEntryCounts().sum());
+        // TODO(refactor): this walks every shard queue, as SHARDS_SIZE above does - and
+        // ConcurrentSkipListMap.size() is O(n), so each is O(total queued records). Micrometer pulls each
+        // gauge independently, so they cannot share one scan without a memoised snapshot; the cheap fix is
+        // an O(1) counter on ProcessingShard, maintained where availableWorkContainerCnt already is. Runs
+        // at scrape frequency on the scrape thread, so this is deferred, not urgent. See docs/refactoring.md.
         shardsMaxSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_MAX_SIZE,
-                this, shardManager -> shardManager.processingShards.values().stream()
-                        .mapToInt(processingShard -> processingShard.getEntries().size()).max().orElse(0));
+                this, shardManager -> shardManager.shardEntryCounts().max().orElse(0));
 
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
                 this, shardManager -> shardManager.processingShards.size());

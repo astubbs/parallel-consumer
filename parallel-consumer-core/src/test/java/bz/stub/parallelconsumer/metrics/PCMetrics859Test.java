@@ -112,9 +112,12 @@ class PCMetrics859Test {
      */
     @Test
     void aThrowingRegistryMustNotStopThePrefixRemovalCleaningTheTrackingSet() {
+        // Override remove(Meter.Id), not remove(Meter): Micrometer's remove(Meter) is a one-line delegate
+        // to it, so the Id overload is the single choke point and intercepts close()'s sweep too. Overriding
+        // the Meter overload would leave the close() path below silently unguarded by this double.
         MeterRegistry throwOnRemove = new SimpleMeterRegistry() {
             @Override
-            public Meter remove(Meter meter) {
+            public Meter remove(Meter.Id id) {
                 throw new IllegalStateException("registry refuses removal");
             }
         };
