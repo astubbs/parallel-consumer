@@ -1,6 +1,6 @@
 # Release 0.6.0.0 - correctness of the artefacts we are about to publish
 
-<!-- inflight-type: task -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
 
 

@@ -1,6 +1,6 @@
 # Flakes CI was hiding, none of them tracked when found
 
-<!-- inflight-type: bug -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: misdirection -->
 
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration

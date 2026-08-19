@@ -1,6 +1,6 @@
 # Dependency upgrades deliberately held back
 
-<!-- inflight-type: task -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: deps-debt -->
 
 

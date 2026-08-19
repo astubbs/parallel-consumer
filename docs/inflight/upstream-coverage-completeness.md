@@ -1,6 +1,6 @@
 # Open obligation: every upstream issue, PR and discussion must be accounted for
 
-<!-- inflight-type: bug -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: blind-spot -->
 
 
