@@ -1,7 +1,6 @@
 # Next: the cross-language performance comparison matrix
 
-<!-- inflight-type: task -->
-<!-- inflight-impact: process -->
+<!-- inflight-type: feature -->
 
 
 > Extracted from `origin/docs/ideate-perf-comparison-matrix` @3dd35926a, `docs/inflight/perf-comparison-matrix.md`.
