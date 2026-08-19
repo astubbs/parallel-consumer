@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Getter;
@@ -31,8 +32,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Shared scaffolding for Chaos Pain Suite scenarios (W1 churn storm, W4 revoke-under-work, ...): the
- * keyed producer, the heavy-tailed NON-interruptible user function, coverage checks, and fleet settling.
+ * Shared scaffolding for Chaos Pain Suite scenarios (W1 churn storm, W4 revoke-under-work, W5 key
+ * order, ...): the keyed producer, the heavy-tailed NON-interruptible user function, coverage checks,
+ * and fleet settling.
  * Scenario classes own their chaos shape (conductor weights/ticks, fleet size, commit mode) - this base
  * owns the mechanics every scenario shares, so scenarios can't drift apart on them.
  */
@@ -48,32 +50,85 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
      */
     protected ManagedPCInstance newInstance(ManagedPCInstance.Config config,
                                             int heavyEvery, Duration heavySleep,
-                                            AtomicLong totalConsumed, Queue<String> allConsumed) {
-        return new ManagedPCInstance(config, getKcu(), key -> {
-            if (isHeavyKey(key, heavyEvery)) {
-                long deadline = System.currentTimeMillis() + heavySleep.toMillis();
-                boolean interrupted = false;
-                long left;
-                while ((left = deadline - System.currentTimeMillis()) > 0) {
-                    try {
-                        Thread.sleep(Math.min(left, 1_000));
-                    } catch (InterruptedException e) {
-                        interrupted = true; // note it, keep dwelling until the deadline
+                                            AtomicLong totalConsumed, AtomicLong totalStarted,
+                                            Queue<String> allConsumed) {
+        KeyOrderLedger.Recorder recorder = orderRecorder();
+        return new ManagedPCInstance(config, getKcu(), (incarnationId, context) -> {
+            // recorded FIRST and released LAST, so the bracket is the user function's real execution
+            // window - what KeyOrderLedger's overlap half is asserting about
+            KeyOrderLedger.Delivery delivery = recorder == null ? null : recorder.started(incarnationId, context);
+            // Counted at ENTRY, where totalConsumed is counted at exit. The pair is the measurement:
+            // a completion counter alone reads a fleet busy inside HEAVY_SLEEP as a flat line, which
+            // is indistinguishable from a fleet that is genuinely stuck. started-minus-consumed is
+            // work in flight, and it separates "nothing is finishing" from "nothing is happening".
+            totalStarted.incrementAndGet();
+            try {
+                String identity = identityOf(context);
+                if (isHeavyKey(identity, heavyEvery)) {
+                    long deadline = System.currentTimeMillis() + heavySleep.toMillis();
+                    boolean interrupted = false;
+                    long left;
+                    while ((left = deadline - System.currentTimeMillis()) > 0) {
+                        try {
+                            Thread.sleep(Math.min(left, 1_000));
+                        } catch (InterruptedException e) {
+                            interrupted = true; // note it, keep dwelling until the deadline
+                        }
+                    }
+                    if (interrupted) {
+                        Thread.currentThread().interrupt();
                     }
                 }
-                if (interrupted) {
-                    Thread.currentThread().interrupt();
+                totalConsumed.incrementAndGet();
+                allConsumed.add(identity);
+            } finally {
+                if (delivery != null) {
+                    recorder.finished(delivery);
                 }
             }
-            totalConsumed.incrementAndGet();
-            allConsumed.add(key);
         });
     }
 
-    /** key format is "key-N"; every heavyEvery-th record is heavy. */
+    /** identity format is "<prefix>-N"; every heavyEvery-th record is heavy. */
     protected static boolean isHeavyKey(String key, int heavyEvery) {
         int n = Integer.parseInt(key.substring(key.indexOf('-') + 1));
         return n > 0 && n % heavyEvery == 0;
+    }
+
+    /**
+     * The RECORD IDENTITY the correctness ledger tracks - unique per produced record, and the value the
+     * heavy tail is spaced on. It is the Kafka key by default because the shared scenarios produce a
+     * unique key per record; a scenario that repeats keys (which is what makes a per-key ordering claim
+     * testable at all) must move the identity into the value and override this trio together.
+     *
+     * @see #keyFor the Kafka record key, which for such a scenario is NOT the identity
+     * @see #identityFor the produce-side half of the same mapping
+     */
+    protected String identityOf(PollContext<String, String> context) {
+        return context.key();
+    }
+
+    /** The Kafka record key for produced record {@code i} - the shard, and so the ordering unit. */
+    protected String keyFor(int i) {
+        return "key-" + i;
+    }
+
+    /** The ledger identity of produced record {@code i} - must agree with {@link #identityOf}. */
+    protected String identityFor(int i) {
+        return keyFor(i);
+    }
+
+    /**
+     * The per-key ordering recorder for this scenario, or {@code null} when the scenario makes NO
+     * ordering claim - which is the correct answer for every {@code UNORDERED} scenario, where PC
+     * promises nothing about per-key order and recording would only produce a history
+     * {@link KeyOrderLedger#check} would rightly call vacuous.
+     * <p>
+     * An overriding scenario must return the SAME recorder every call (a field, not a fresh instance):
+     * every fleet member records into it, and {@link #assertScenarioSlos} replays the one history.
+     */
+    protected KeyOrderLedger.Recorder orderRecorder() {
+        return null;
     }
 
     /** Coverage check is expensive at scale - callers only evaluate once the counter says it's plausible. */
@@ -86,9 +141,8 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
         try (Producer<String, String> producer = getKcu().createNewProducer(false)) {
             List<Future<RecordMetadata>> sends = new ArrayList<>();
             for (int i = fromInclusive; i < toExclusive; i++) {
-                String key = "key-" + i;
-                expectedKeys.add(key);
-                sends.add(producer.send(new ProducerRecord<>(topic, key, "v-" + i)));
+                expectedKeys.add(identityFor(i));
+                sends.add(producer.send(new ProducerRecord<>(topic, keyFor(i), "v-" + i)));
             }
             for (Future<RecordMetadata> send : sends) {
                 send.get();
@@ -145,6 +199,8 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
     protected static class FleetBootstrap {
         ExecutorService pcExecutor;
         AtomicLong totalConsumed;
+        /** Incremented at user-function ENTRY - see {@link #newInstance} for why the pair is needed. */
+        AtomicLong totalStarted;
         Queue<String> allConsumed;
         Set<String> expectedKeys;
         Thread producerThread;
@@ -164,6 +220,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                                             int initialFleetSize, int heavyEvery, Duration heavySleep) {
         // fleet-wide consumption tracking (the probe's watermark + the ledger's evidence)
         AtomicLong totalConsumed = new AtomicLong();
+        AtomicLong totalStarted = new AtomicLong();
         Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
         ExecutorService pcExecutor = Executors.newWorkStealingPool();
 
@@ -174,7 +231,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
         produceRange(topic, 0, preProduce, expectedKeys);
 
         // protected first member - chaos never touches it, so the group always has a healthy survivor
-        ManagedPCInstance pc0 = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+        ManagedPCInstance pc0 = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, totalStarted, allConsumed);
         pc0.start(pcExecutor);
         await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
 
@@ -185,14 +242,14 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
         List<ManagedPCInstance> initialFleet = new ArrayList<>();
         initialFleet.add(pc0);
         for (int i = 1; i < initialFleetSize; i++) {
-            ManagedPCInstance pc = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+            ManagedPCInstance pc = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, totalStarted, allConsumed);
             initialFleet.add(pc);
             pc.start(pcExecutor);
         }
 
         ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
                 totalConsumed::get, expectedMessages);
-        return new FleetBootstrap(pcExecutor, totalConsumed, allConsumed, expectedKeys,
+        return new FleetBootstrap(pcExecutor, totalConsumed, totalStarted, allConsumed, expectedKeys,
                 producerThread, pc0, initialFleet, probe);
     }
 
@@ -209,14 +266,19 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                 .maxFleetSize(maxFleetSize)
                 .pcExecutor(fleet.getPcExecutor())
                 .instanceFactory(() -> newInstance(pcConfig, heavyEvery, heavySleep,
-                        fleet.getTotalConsumed(), fleet.getAllConsumed()))
+                        fleet.getTotalConsumed(), fleet.getTotalStarted(), fleet.getAllConsumed()))
                 .protectedInstance(fleet.getPc0())
                 .initialFleet(fleet.getInitialFleet())
                 .observer(fleet.getProbe());
     }
 
-    /** Arm the probe, then unleash chaos. */
+    /** Arm the probe, then unleash chaos. Wired here (not per-scenario) so every scenario's probe
+     * watches per-instance progress ({@code INSTANCE_STALL/NO_WORK_COMPLETED}) over the conductor's
+     * LIVE fleet view - a supplier, because JOIN_NEW grows the fleet mid-run. */
     protected void startRun(ProgressProbe probe, ChaosConductor conductor) {
+        probe.withInstanceProgress(() -> conductor.getFleet().stream()
+                .map(ProgressProbe.InstanceProgressView::of)
+                .collect(java.util.stream.Collectors.toList()));
         probe.start();
         conductor.start();
     }
@@ -238,8 +300,8 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
     /** The suite-wide verdict, identical for every scenario by design: probes must be violation-free
      * (each violation carries its own diagnosis), every instance's terminal failure cause must be
      * classified, and the correctness ledger must balance - no loss ever, duplicates bounded per
-     * disturbance. Every message carries the full replay command - a raw CI log must be
-     * self-sufficient to reproduce. */
+     * disturbance, and per-key order kept where the scenario claims it ({@link #orderRecorder}). Every
+     * message carries the full replay command - a raw CI log must be self-sufficient to reproduce. */
     protected void assertScenarioSlos(ProgressProbe probe, ChaosConductor conductor, String replayCmd,
                                       Set<String> expectedKeys, Queue<String> allConsumed) {
         assertWithMessage("chaos probes must be violation-free (each violation carries the diagnosis; " +
@@ -261,10 +323,12 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                 replayCmd)
                 .that(unexpectedFailures).isEmpty();
 
-        // correctness ledger: no loss ever; duplicates bounded per disturbance
+        // correctness ledger: no loss ever; duplicates bounded per disturbance; and - for a scenario that
+        // makes the claim - per-key order kept inside every instance+partition+epoch window
         int disturbances = conductor.getDisturbanceCount();
-        List<String> ledgerProblems = ProgressProbe.ledger(expectedKeys, allConsumed,
-                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000);
+        List<String> ledgerProblems = new ArrayList<>(ProgressProbe.ledger(expectedKeys, allConsumed,
+                Math.max(disturbances, 1), /* perDisturbanceAllowance */ 5_000));
+        ledgerProblems.addAll(KeyOrderLedger.checkIfRecording(orderRecorder()));
         assertWithMessage("correctness ledger must balance (replay: %s)", replayCmd)
                 .that(ledgerProblems).isEmpty();
     }
