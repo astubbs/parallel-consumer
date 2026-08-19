@@ -219,6 +219,26 @@ All four now exist as data. Each keeps its planning note, which holds the reason
 
 What does not exist yet is the rendered documentation an agent generates from all of it.
 
+## 0.5.3.3 was never released, by anyone
+
+Worth knowing before writing release copy or triaging a mirror: **`0.5.3.3` exists as a changelog
+section and a tag, and was never published as an artifact.** Upstream's last release on Maven Central
+is `0.5.3.2`; it was abandoned before cutting 0.5.3.3, and this fork has published nothing yet. Check
+with a Maven Central search for `g:io.confluent.parallelconsumer` rather than trusting the changelog,
+which lists 0.5.3.3 like any other section.
+
+Two consequences:
+
+- **Anything labelled `fixed-in/0.5.3.3` is unreachable today.** No user can consume those fixes, so
+  0.6.0.0 is their first delivery - which is why astubbs#182, astubbs#184 and astubbs#188 all carry
+  the `0.6.0.0` label despite naming an earlier fix version. That combination looks like a mistake
+  and is not.
+- **A user on `io.confluent...:0.5.3.2` is further behind than the changelog suggests**, by a whole
+  section's worth of fixes they never had access to.
+
+This is specific to 0.5.3.3. Every other `fixed-in/0.5.x` label names a version that really shipped,
+and those fixes are already in users' hands.
+
 ## Do at release: one sweep over the upstream mirrors
 
 The upstream issues are mirrored here, labelled `upstream-mirror`, and each carries a **Fork status** section

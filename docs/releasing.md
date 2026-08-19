@@ -66,6 +66,36 @@ says what changed and, where it matters to a user, what it changed *for them*; t
 experiment and the rejected alternatives in the body. A good commit message is now doing double
 duty, which is a reason to keep writing them properly rather than a new process.
 
+## Label the issue with the release it ships in
+
+**When work lands, put the release's version label on its issue** - `0.6.0.0` today. Nothing enforces
+this, and the failure is silent: the work ships, the changelog entry gets written from the commit log,
+and only the label is missing, so nothing looks wrong until someone asks the tracker what went into
+the release. astubbs#209 shipped in 0.6.0.0 unlabelled and was caught by hand afterwards.
+
+**The label is the exact version string, not a `v`-prefixed short form.** There is no `v6` label, so
+`gh issue list --label v6` returns nothing - which reads as "no issues in this release" rather than as
+a bad query. The right search is:
+
+```bash
+gh issue list -R astubbs/parallel-consumer --state all --label 0.6.0.0 --limit 200
+gh pr list    -R astubbs/parallel-consumer --state all --label 0.6.0.0 --limit 200
+```
+
+**Two labelling schemes coexist, and they answer different questions.** The version label
+(`0.6.0.0`) says *this is targeted at that release* - that is its own description, and it sits on open
+issues as well as closed ones, so it marks intent rather than delivery. Reconcile it against what
+actually shipped at release time rather than trusting it as a manifest. It is carried by both issues
+and PRs. The relative
+labels (`next-feature-release`, `next-breaking-release`, `next-patch-release`) say *this is queued for
+whichever release comes next* and are used on issues only. Queue with the relative label while the
+work is pending; add the version label when it lands. At release time the version label is the one to
+search - the relative ones move as releases cut, so they cannot tell you what a *past* release
+contained.
+
+This is a convenience, not the record. `CHANGELOG.adoc` and the commit log remain the source of
+truth, and a missing label never makes a release wrong - it makes it harder to audit.
+
 ## At release time
 
 An agent reads `git log <last-tag>..HEAD` - full messages, not just subjects - and drafts the

@@ -35,6 +35,7 @@ kinds:
       - reader_contract
       - concerns
       - horizons
+      - stages
       - entries
       - one_point_zero
       - update_policy
@@ -44,7 +45,9 @@ kinds:
       - backlog
     # An entry is something a reader can watch finish. blocks_1_0 is what separates a 1.0 gate from
     # something merely targeted at it - the distinction the upstream release train drew, and the
-    # reason its checklist stayed workable.
+    # reason its checklist stayed workable. stage/stage_detail are required so no entry can claim a
+    # horizon without saying how real the work behind it is - the PR that advances a track updates
+    # them in the same change.
     item_contracts:
       entry_required: entries
     entry_optional:
@@ -56,12 +59,15 @@ kinds:
       - blocked_by
       - evidence
       - caveat
+      - stage_delivery
     entry_required:
       - id
       - title
       - serves
       - horizon
       - blocks_1_0
+      - stage
+      - stage_detail
       - why_now
       - done_when
   testing-evidence:
