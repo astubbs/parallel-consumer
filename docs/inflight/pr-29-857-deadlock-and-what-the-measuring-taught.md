@@ -42,6 +42,34 @@ throwing. Reading the result would let it log "the poll thread still owns the co
 rather than routing a foreseeable, expected condition through an exception. Same outcome, cheaper,
 and it stops a normal shutdown-race outcome looking like a bug in a stack trace.
 
+## DO NOT merge master until every dependency has landed - decided 2026-08-19
+
+**One merge at the end, not one per dependency.** The order is astubbs#323, astubbs#324,
+astubbs#325, astubbs#57, astubbs#322, astubbs#267, then this branch. Merging master as each lands
+means resolving the same conflicts repeatedly and, worse, resolving them DIFFERENTLY from how the
+still-unmerged PRs resolve them - spending effort to arrive at an answer another branch has already
+got right.
+
+A trial merge on 2026-08-19 was aborted after demonstrating exactly that, twice, and what it found is
+kept here so the real merge does not re-derive it:
+
+- **`ConsumerManagerCommitRetryBudgetTest` will not compile.** It arrived with astubbs#204 and
+  constructs `new ConsumerManager<>(mockConsumer, ...)` at three sites, where this branch changed
+  that first parameter to `ThreadConfinedConsumer<K, V>`. Wrapping it -
+  `new ConsumerManager<>(new ThreadConfinedConsumer<>(mockConsumer), ...)` - compiles and preserves
+  the test's semantics, because an UNCLAIMED consumer admits any thread. **Confirm astubbs#267 has
+  not already changed this** before applying it; that PR touches the same area.
+- **`docs/inflight/bug-857-family.md` conflicts structurally, not textually.** This branch split the
+  ledger by commit mode while master kept appending sightings, so the two diverge across ~340 lines.
+  Take MASTER's side: it carries the tenth and eleventh sightings, and this branch's ledger ends at
+  the ninth. The four-arm conclusion is NOT lost by doing that - it lives in
+  `test-857-revoke-under-work-sightings.md`, which this branch owns. astubbs#323 also touches this
+  file, which is the other reason not to resolve it early.
+
+The cost is honest: the final merge is larger, and a large merge resolved carelessly is worse than
+several small ones. The mitigation is that it is resolved ONCE, deliberately, with the re-verification
+set named above rather than a compile treated as evidence.
+
 ## AT MERGE TIME: take master's PCMetrics, do not keep this branch's
 
 **Instruction from astubbs/parallel-consumer#57's author, 2026-08-19.** This branch's metrics
