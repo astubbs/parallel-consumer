@@ -70,33 +70,75 @@ done <<< "$solutions"
 
 emit ""
 
-# A note carrying `<!-- inflight-priority: high - why -->` is lifted out of the flat list and shown
-# with its reason. The flat list is a shape; these are things you are likely to COLLIDE with without
-# knowing they exist - a live flake ledger being the case that prompted it, met twice on branches
-# containing no Java at all. docs/inflight/AGENTS.md owns what qualifies, and the anti-inflation
-# rule that keeps this block short enough to read.
-priority=$(grep -rl 'inflight-priority:[[:space:]]*high' docs/inflight 2>/dev/null | sort)
+# INFLIGHT, GROUPED BY WHAT IT COSTS YOU TO NOT KNOW - not alphabetically, and not by filename.
+#
+# Three decisions are baked in here, all of them about signal rather than budget (measured: every
+# path under docs/ is ~2.8k tokens, less than the solutions block above, so nothing here is a
+# space saving).
+#
+#   1. TITLES, NOT SLUGS. Sampled across the whole corpus, 66 of 70 titles carry information the
+#      filename does not - and crucially it is STATUS and NEXT ACTION, which a filename structurally
+#      cannot hold: "done, no PR", "one result worth keeping, then delete", "may have a contaminated
+#      control arm". Knowing a note exists is not the same as knowing whether it is still live. The
+#      filename is dropped; grep the title when you want the file.
+#
+#   2. GROUPED BY CATEGORY, because the prefix IS the type field - docs/inflight/AGENTS.md says the
+#      prefix is the point, so listing titles alone would throw that away. The heading restores it.
+#
+#   3. ORDERED BY COST OF NOT KNOWING, high priority first within each group. A known product defect
+#      outranks a candidate idea; parked work is last because it is deferred BY DECISION. An
+#      alphabetical list puts `branch-` above `bug-`, which is exactly backwards.
+#
+# A note marked `<!-- inflight-priority: high - why -->` is lifted to the top of its group with its
+# reason. docs/inflight/AGENTS.md owns what qualifies and the anti-inflation rule that keeps this
+# readable; a marker on everything is a marker on nothing.
+inflight_title() { # <file> -> its heading, else its slug
+    local t
+    t=$(sed -n 's/^# //p' "$1" 2>/dev/null | head -1)
+    [ -n "$t" ] || t=$(basename "$1" .md)
+    printf '%s' "$t"
+}
+
+# The high-priority notes are ALSO lifted into a block of their own, above the groups. They stay
+# marked in place with `!!` so a reader who scans by category still sees which ones they are, but a
+# high-priority note sitting in a low-priority group (a `parked-` item that still binds everyone) is
+# exactly the one a category-ordered list buries. The reason is printed once, here.
+priority=$(grep -rl 'inflight-priority:[[:space:]]*high' docs/inflight --include='*.md' 2>/dev/null \
+             | grep -v 'AGENTS.md' | sort)
 if [ -n "$priority" ]; then
-    emit "**Read these first:**"
+    emit "**Read these first** - they bind work that looks unrelated:"
     while IFS= read -r f; do
         why=$(sed -n 's/.*inflight-priority:[[:space:]]*high[[:space:]]*-[[:space:]]*//p' "$f" \
                 | head -1 | sed 's/[[:space:]]*-->.*//')
-        emit "- \`${f}\` - ${why:-no reason given}"
+        emit "- $(inflight_title "$f") - ${why:-no reason given}  \`${f}\`"
     done <<< "$priority"
     emit ""
 fi
 
-emit "**Everything else open** (\`docs/inflight/\`, one file per item):"
-inflight=$(find docs/inflight -name '*.md' -not -name 'AGENTS.md' -not -name 'CLAUDE.md' \
-             -type f 2>/dev/null | sort | sed 's|docs/inflight/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
-emit "${inflight:-(none)}"
+emit "**Open work** (\`docs/inflight/\`, one file per item) - grouped by what it costs you to not know:"
 emit ""
-# Plans were a COUNT here, which tells you a shelf exists without naming anything on it - so an
-# agent still had to know to run `ls`. The dated slugs are self-describing (date, type, subject), so
-# naming them costs a few hundred tokens and removes the "know to look" step entirely. Measured:
-# every path under docs/ is ~2.8k tokens in total, less than this hook's solutions block alone, so
-# the constraint here is signal, not budget. docs/features/ and docs/data/ are deliberately NOT
-# listed - they are generated catalogues of shipped surface, not prior art for a diagnosis.
+
+# bug first (defects in shipped code), tooling next (fires on everyone), then tests, then
+# cross-branch state, then the long tail, then candidates, and parked last.
+for cat in bug ci test branch pr release deps perf static web next parked; do
+    files=$(find docs/inflight -maxdepth 1 -name "${cat}-*.md" -type f 2>/dev/null | sort)
+    [ -n "$files" ] || continue
+    n=$(printf '%s\n' "$files" | grep -c .)
+    emit "**${cat}** (${n})"
+    # high-priority members first, each with the reason the marker carries
+    while IFS= read -r f; do
+        why=$(sed -n 's/.*inflight-priority:[[:space:]]*high[[:space:]]*-[[:space:]]*//p' "$f" 2>/dev/null \
+                | head -1 | sed 's/[[:space:]]*-->.*//')
+        [ -n "$why" ] || continue
+        emit "- !! $(inflight_title "$f")"
+    done <<< "$files"
+    while IFS= read -r f; do
+        grep -q 'inflight-priority:[[:space:]]*high' "$f" 2>/dev/null && continue
+        emit "- $(inflight_title "$f")"
+    done <<< "$files"
+    emit ""
+done
+
 emit "**Dated plans and investigations** (\`docs/plans/\`) - the method that settled a question of this shape before:"
 plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
 emit "${plans:-(none)}"
