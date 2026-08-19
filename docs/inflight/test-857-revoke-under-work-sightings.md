@@ -61,6 +61,27 @@ uncontended repeat, measuring the legit recovery time rather than adjusting unti
 What is established: on this workload the stall is **bounded**, so "unbounded" can no longer be
 assumed, and the astubbs#29 fix is not implicated by these sightings at all.
 
+## The assignor x stop-mode matrix, complete, 2026-08-19
+
+Seed `4734674029169027864` through all four cells. Every cell **completed with nothing lost**, so by
+the correctness criterion all four pass; the violations column is the 150s timing bound only.
+
+| Assignor | Stops | Violations | Duplicates | Consumed when storm ended | Gate |
+|---|---|---|---|---|---|
+| Eager | no-drain | 53 | 2,421 | 193,715 | fail |
+| Eager | drain-only | 45 | 2,007 | ~193k | fail |
+| Cooperative | no-drain | 0 | 405 | 239,808 | pass |
+| Cooperative | drain-only | 0 | 369 | **249,788** | pass |
+
+**The assignor explains essentially everything; the stop mode is second-order in both rows**
+(2,421 -> 2,007 eager, 405 -> 369 cooperative). Duplicates track the same variable, because they are
+produced by REVOCATION rather than by departure: eager revokes every partition from every member on
+any membership change, so work is abandoned that no departing member could have drained.
+
+The bottom row is the clearest single number in this file: cooperative with draining stops consumed
+**249,788 of 250,000 during the storm itself**, so the same disturbance schedule that leaves the
+eager arm 56,000 records behind barely impedes it.
+
 ## Four arms, one explanation, 2026-08-19: the eager CLASS2_STALL is the detector, not a defect
 
 Seed A, held constant, run through four arms. Each was chosen to kill a different explanation, and
