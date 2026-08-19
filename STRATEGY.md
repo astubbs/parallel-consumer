@@ -31,6 +31,39 @@ configuration used to guess. External autoscalers see a black box and scale on c
 an engine inside the processing loop can tune itself - and tell infrastructure when more of it
 would actually help.
 
+## How it is maintained
+
+A claim about the fork, not the library - and one that decides whether anyone should adopt it.
+Upstream is abandoned. A revived fork is only worth depending on if the revival is more durable than
+the thing it replaced, and "an AI wrote a lot of code quickly" is a reason to trust it *less*, not
+more.
+
+**The bet: every failure is converted into a mechanism, so the fork's reliability compounds instead
+of depending on whoever is paying attention.** A fixed bug that leaves no gate behind is a bug the
+next person re-introduces. So the work is not finished when the tests pass; it is finished when
+someone can name how it would have gone red had it been wrong.
+[`docs/compound-engineering.md`](docs/compound-engineering.md) owns the loop and its worked chain;
+[`docs/agent-harness.md`](docs/agent-harness.md) owns the layer that gives a rule teeth.
+
+What that looks like in practice, and how it would be falsified:
+
+- **Defects arrive with a reproduction that is proven to fail without the fix**, not merely a test
+  that passes with it. Falsified by a regression test that stays green when its fix is reverted -
+  which has happened here and was caught by control arm.
+- **A green check that asserts nothing is treated as an outage.** A mutation lane scoring zero
+  mutants and a self-test suite printing `FAIL` while exiting `0` were both found and fixed;
+  `misdirection` is the highest-ranked class of open work, above data loss, because everything else
+  is measured through the instruments.
+- **What was learned is written where the next agent will meet it**, not where someone would have to
+  know to look. Falsified by a rediscovery - a problem solved twice because its write-up existed and
+  was never opened.
+
+The risk this carries, stated plainly: **volume is not evidence.** The same mechanisation that
+produces a fix, its reproduction, its guard and its write-up in one sitting can produce four
+plausible artefacts built on one wrong premise. The mitigations are the control arm, the negative
+control, and a human who refuses the first confident answer - all three earned their place by
+catching real errors, repeatedly.
+
 ## Who it's for
 
 **Primary:** Teams whose downstream - a service, or just a processing step - scales further
