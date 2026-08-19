@@ -21,6 +21,8 @@ summary: >
   GitHub Issues rather than a mirror of them. Low enough friction that the small true things actually
   get written down, and delivered into an agent's context at session start rather than searched for.
 use_this_when:
+  - You are running agents on a codebase and need them to inherit the unwritten knowledge a team
+    would absorb by osmosis - what was tried, what lies, what must happen first.
   - You are evaluating whether this fork is durably maintained rather than momentarily active.
   - You want to know what is currently broken, deferred or undecided without an account on anything.
   - You are running agents on a codebase and need them to inherit state they did not create.

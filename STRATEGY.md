@@ -45,6 +45,14 @@ someone can name how it would have gone red had it been wrong.
 [`docs/compound-engineering.md`](docs/compound-engineering.md) owns the loop and its worked chain;
 [`docs/agent-harness.md`](docs/agent-harness.md) owns the layer that gives a rule teeth.
 
+**The second half of the bet is about working memory.** Every codebase carries knowledge that is not
+in the code - what was tried and abandoned, which test lies, which branch must not merge before
+something else happens. A team absorbs that by osmosis; an agent arrives with the code and nothing
+else, every session. So the fork treats that knowledge as an artefact rather than a culture:
+`docs/inflight/` is a structured wiki of what is true about the code right now, delivered into an
+agent's context at session start rather than waiting to be searched for. Whether that generalises
+beyond this repo is untested - but a revived fork with no team is the case that most needs it.
+
 What that looks like in practice, and how it would be falsified:
 
 - **Defects arrive with a reproduction that is proven to fail without the fix**, not merely a test

@@ -11,6 +11,17 @@ involves - but most notes have no issue and never will, because they are too sma
 or too specific to a branch to be worth one. Issues are the public, linkable, coarse layer. This is
 the fine-grained layer underneath: what is true about the code *right now*.
 
+**It is where tribal knowledge goes when there is no tribe.** Every codebase carries a body of
+understanding that is not in the code: what was tried and abandoned, which test lies, why that
+option exists, which branch you must not merge before doing something else first. A team absorbs it
+by osmosis - standing next to each other for a year. **An agent gets none of that.** It arrives with
+the code and nothing else, every session, forever, and the most expensive failures come from acting
+confidently on a codebase whose unwritten rules it cannot see.
+
+So the knowledge has to stop being tribal and start being an artefact - not documentation of how the
+system *works*, which the code and the topic docs already carry, but of what is *true about it right
+now*. That is a different thing and it has never had a home. This is that home.
+
 **The point is friction.** Tracking reality only happens if recording it is cheaper than not
 recording it. Opening an issue, choosing labels, and writing for an audience is enough friction that
 the small true things never get written down - and those are exactly the things that cost the next
