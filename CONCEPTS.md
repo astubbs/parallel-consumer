@@ -32,6 +32,12 @@ The unit of ordering. Records are distributed to shards by key or by partition d
 configured ordering, and a shard processes its records in order while different shards run in
 parallel. This is how the project gets concurrency without adding partitions.
 
+**Admission target**
+The number of records the engine allows in flight at once — the control variable that governs
+concurrency. Today it is derived statically from the user's configured concurrency limit; the self-scaling
+work makes it adaptive. Distinct from thread count: threads are capacity, admission is the throttle, so the same
+mechanism governs the thread-pool and async engines alike.
+
 **In-flight work**
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
 merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.

@@ -190,6 +190,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private final AtomicBoolean awaitingInflightProcessingCompletionOnShutdown = new AtomicBoolean();
 
+    /**
+     * Edge trigger for {@link #onPoolGoneWhileStateAllowsWork()}. The condition is sticky - a shut down pool
+     * never comes back, so the disagreement lasts for the rest of this instance's life - and
+     * {@link #retrieveAndDistributeNewWork} is on the
+     * control loop, so an un-gated warn would repeat once per commit check interval forever and bury the signal it
+     * exists to give. The moment the two first disagree is the whole diagnostic; every line after it says the same
+     * thing. Deliberately not a {@link RateLimiter}: that would still repeat a message which can never change. The
+     * {@code queueStatsLimiter} precedent is a periodic debug stat, which this is not.
+     */
+    private final AtomicBoolean handledPoolGoneWhileStateAllowsWork = new AtomicBoolean(false);
+
     private final OffsetCommitter committer;
 
     /**
@@ -206,7 +217,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     /**
      * If the system failed with an exception, it is referenced here.
      */
-    private Exception failureReason;
+    // volatile: the self-close path writes it on the control thread and getFailureCause is read by callers
+    // and by the chaos harness's canary sweep from theirs
+    private volatile Exception failureReason;
 
     /**
      * Time of last successful commit
@@ -236,7 +249,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      *
      * @see State
      */
-    @Setter
+    // Neither half is public. Writing is package-only because this is the controller's own state machine: the
+    // transitions are driven from inside this class, and a subclass setting it arbitrarily is the shape of bug this
+    // class has spent astubbs#296 hardening against. Reading is protected because a subclass may legitimately want
+    // to know whether it is still running. Both are used only by this package's tests today.
+    @Setter(AccessLevel.PACKAGE)
+    @Getter(PROTECTED)
     private State state = State.UNUSED;
 
     /**
@@ -299,7 +317,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
 
-        workerThreadPool = SupplierUtils.memoize(() -> setupWorkerPool(newOptions.getMaxConcurrency()));
+        workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
+        // Resolved here, not left to the first dispatch. The supplier is memoized and therefore lazy, but
+        // #requireRejectionIsVisible is a precondition on a subclass's #setupWorkerPool, and a precondition that only
+        // fires when the first batch is submitted is one a subclass can ship without ever meeting. Construction built
+        // the pool anyway - #initMetrics binds meters to it a few lines below - so this changes no startup behaviour,
+        // it only stops the precondition's timing from depending on that, and moves the failure ahead of the poller
+        // and producer manager, so nothing half built has to be unwound.
+        workerThreadPool.get();
 
         this.wm = module.workManager();
 
@@ -366,6 +391,72 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
         return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
                 namingThreadFactory, rejectionHandler);
+    }
+
+    /**
+     * A worker pool must announce a rejection by throwing, so any pool whose {@link RejectedExecutionHandler} is not an
+     * {@link java.util.concurrent.ThreadPoolExecutor.AbortPolicy} is refused here, where it is built.
+     * <p>
+     * Refused at setup rather than detected later because there is nothing to detect. {@code submit} wraps the task in
+     * a {@code FutureTask}, calls {@code execute}, and hands back that future whatever the handler then does with the
+     * task. {@code DiscardPolicy}'s body is empty, so a discarded batch produces no exception, no log line and a
+     * {@link Future} that simply never completes - at the call site in {@link #submitWorkToPoolInner} that is
+     * indistinguishable from a batch a worker is still running. The pool's configuration is only visible here.
+     * <p>
+     * What each of the JDK's handlers would do to this subsystem:
+     * <ul>
+     *     <li>{@code AbortPolicy} - throws {@link RejectedExecutionException}, which {@code submitWorkToPoolInner}
+     *         catches, hands the batch back for, and either rethrows or logs. Supported.</li>
+     *     <li>{@code CallerRunsPolicy} - loses nothing, but runs the user's function on the caller, which is the
+     *         control thread: polling, committing and work distribution all stop for its duration.</li>
+     *     <li>{@code DiscardPolicy} - the submitted batch is lost, silently.</li>
+     *     <li>{@code DiscardOldestPolicy} - a <em>different</em>, already queued batch is lost, silently.</li>
+     *     <li>a custom handler - unknowable, so not supported.</li>
+     * </ul>
+     * Barring {@code CallerRunsPolicy}, every one of those leaves work that {@link WorkManager#getWorkIfAvailable(int)}
+     * marked in flight and counted with no event that could ever clear it.
+     * <p>
+     * Reachable on this codebase's own default pool, which is why this check is not conditional on the queue.
+     * {@code ThreadPoolExecutor#execute} rejects a task submitted to a **shut down** pool before it ever offers it to
+     * the queue, so an unbounded queue does not make the handler unreachable - it only makes saturation unreachable.
+     * Measured: an unbounded pool with {@code DiscardPolicy}, shut down, accepts {@code submit} without throwing and
+     * returns a {@link Future} that never completes. That is precisely the close-race path
+     * {@link #submitWorkToPoolInner} exists to survive, so narrowing this check to bounded queues would reopen the
+     * hole on the one path that is definitely reached.
+     * <p>
+     * A subclass of {@code AbortPolicy} passes: the requirement is the throw, not the exact class, and a subclass that
+     * logs or counts before calling {@code super} still throws.
+     * <p>
+     * This is a construction-time snapshot, not a lifetime guarantee - {@code setRejectedExecutionHandler} is public,
+     * so a subclass holding the pool can swap the handler afterwards and this would not see it. It narrows
+     * {@code submitWorkToPoolInner}'s catch of {@link RejectedExecutionException} alone from unsound to
+     * unsound-only-under-deliberate-misuse; it does not make it total.
+     *
+     * @return the pool, unaltered - this is a precondition on what {@link #setupWorkerPool} returned, not a chance to
+     *         substitute something else
+     * @throws IllegalArgumentException if the pool would swallow a rejection
+     */
+    private ThreadPoolExecutor requireRejectionIsVisible(ThreadPoolExecutor pool) {
+        RejectedExecutionHandler handler = pool.getRejectedExecutionHandler();
+        if (!(handler instanceof ThreadPoolExecutor.AbortPolicy)) {
+            throw new IllegalArgumentException(msg(
+                    "Unsupported worker pool returned by {}#setupWorkerPool: its rejected execution handler is {}, " +
+                            "but only {} (or a subclass of it) is supported. Rejection is only visible to this " +
+                            "subsystem as a RejectedExecutionException. A handler that does not throw either drops the " +
+                            "batch silently ({}, {}) - submit() still returns a Future, but that Future never " +
+                            "completes, so those records stay in flight, numberRecordsOutForProcessing stays inflated " +
+                            "for the life of this instance, and their offsets are never committed - or runs the user's " +
+                            "function on the calling thread ({}), which is the control thread, stalling polling and " +
+                            "committing while it runs. Return a pool built with AbortPolicy; if that pool then rejects " +
+                            "work, its queue is too small for the configured maxConcurrency.",
+                    getClass().getName(),
+                    handler.getClass().getName(),
+                    ThreadPoolExecutor.AbortPolicy.class.getName(),
+                    ThreadPoolExecutor.DiscardPolicy.class.getSimpleName(),
+                    ThreadPoolExecutor.DiscardOldestPolicy.class.getSimpleName(),
+                    ThreadPoolExecutor.CallerRunsPolicy.class.getSimpleName()));
+        }
+        return pool;
     }
 
     private void checkNotSubscribed(org.apache.kafka.clients.consumer.Consumer<K, V> consumerToCheck) {
@@ -903,6 +994,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 drain();
             }
             case CLOSING -> {
+                // Clear immediately before the close, never earlier. doClose acquires commit locks and an interrupted
+                // flag makes that throw, skipping the final commit - so those offsets go uncommitted and their records
+                // are redelivered. Every route into CLOSING can arrive with the flag set: transitionToClosing wakes
+                // this loop by interrupting it, and so does every other path through notifySomethingToDo. Do not
+                // try to list them: this comment enumerated that set three times and was wrong three times. Every
+                // state transition calls it, BOTH forms of close() reach it via transitionToClosing or
+                // transitionToDraining, the rebalance listener reaches it on the broker poll thread, and the method
+                // is public, so an embedding application can call it directly. The one notable non-source is the
+                // worker threads, worth saying only because they are the first guess: addToMailbox enqueues, it
+                // does not interrupt. Clearing here rather than at each of those sites keeps the window to one
+                // statement, which is the same guarantee supervisorLoop's own pre-doClose clear gives.
+                Thread.interrupted();
                 doClose(shutdownTimeout);
             }
         }
@@ -965,7 +1068,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return shouldTryCommitNow;
     }
 
-    private <R> int retrieveAndDistributeNewWork(final Function<PollContextInternal<K, V>, List<R>> userFunction, final Consumer<R> callback) {
+    <R> int retrieveAndDistributeNewWork(final Function<PollContextInternal<K, V>, List<R>> userFunction, final Consumer<R> callback) {
         // check queue pressure first before addressing it
         checkPipelinePressure();
 
@@ -973,14 +1076,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         //
         if (state == RUNNING || state == DRAINING) {
-            int delta = calculateQuantityToRequest();
-            var records = wm.getWorkIfAvailable(delta);
+            if (isWorkerPoolShutDown()) {
+                // don't take work there is nowhere to run - taking it would only get it dropped at the submit,
+                // uncommitted, for redelivery after rebalance
+                onPoolGoneWhileStateAllowsWork();
+            } else {
+                int delta = calculateQuantityToRequest();
+                var records = wm.getWorkIfAvailable(delta);
 
-            gotWorkCount = records.size();
-            lastWorkRequestWasFulfilled = gotWorkCount >= delta;
+                gotWorkCount = records.size();
+                lastWorkRequestWasFulfilled = gotWorkCount >= delta;
 
-            log.trace("Loop: Submit to pool");
-            submitWorkToPool(userFunction, callback, records);
+                log.trace("Loop: Submit to pool");
+                submitWorkToPool(userFunction, callback, records);
+            }
         }
 
         //
@@ -993,8 +1102,70 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return gotWorkCount;
     }
 
+
+    /**
+     * Whether the worker pool can no longer run anything handed to it. Two places ask - before taking work, and when
+     * a submission is rejected - and both mean the same thing by it: nothing this pool is given from now on will ever
+     * run.
+     */
+    private boolean isWorkerPoolShutDown() {
+        return workerThreadPool.get().isShutdown();
+    }
+
+    /**
+     * The state says work may be submitted, but the pool it would be submitted to is shut down.
+     * <p>
+     * A single control thread cannot produce that on its own: {@link #innerDoClose} is the only caller of
+     * {@code workerThreadPool.shutdown()}, it is only reached from {@link #doClose}, {@code doClose} is only called
+     * from inside the control task, and its {@code finally} sets the state to {@link State#CLOSED} before the loop
+     * guard re-reads it - one thread writes both. So this is defence against the subsystem being misused from
+     * outside: a pool supplied through {@link #setupWorkerPool} and shut down by whoever owns it, or a driver that
+     * gives one instance two control threads.
+     * <p>
+     * It narrows the window, it does not close it - the pool can be shut down just after this check passes - so
+     * {@link #submitWorkToPoolInner} still has to tolerate a rejection for work already taken.
+     */
+    private void onPoolGoneWhileStateAllowsWork() {
+        if (handledPoolGoneWhileStateAllowsWork.compareAndSet(false, true)) {
+            // The condition is sticky - a shut down pool never comes back - so the diagnosis is said once. Only the
+            // log is gated: transitioning is idempotent, and gating that too would spend the trigger on the first
+            // detection and leave a later close(DRAIN) with no way out of DRAINING.
+            log.error("Worker pool is shut down while the state is {}, so this instance can never process another " +
+                        "record. It only shuts its own pool down as part of closing, which also moves the state, so " +
+                        "this pool was shut down from outside. Closing, rather than looping with nothing to run. " +
+                        "Records already taken are not committed, so they are redelivered after rebalance. " +
+                        "Pool stats: {}",
+                    state, workerThreadPool.get());
+        }
+
+        // Record why, even though nothing is thrown. On master a dead pool reached the supervisor catch, which set
+        // this, so a caller could ask getFailureCause() what happened. Closing quietly without it would make a
+        // destroyed pool indistinguishable from an ordinary close - to a user health check, and to the chaos
+        // harness's canary sweep, which reads exactly this field.
+        if (failureReason == null) {
+            failureReason = new IllegalStateException(msg(
+                    "Worker pool is shut down while the state is {} - this instance can never process another record, "
+                            + "so it is closing itself", state));
+        }
+
+        // Closing rather than throwing. The instance is unusable either way, but an orderly close still commits
+        // what completed, releases the group membership and lets close() return normally, where an exception out
+        // of the control thread leaves the caller to discover the corpse. Loud in the log, calm in the shutdown.
+        // The interrupt this causes is cleared where it matters, immediately before doClose in controlLoop's state
+        // switch, not here. Clearing at the point of cause leaves the hooks callback and two log statements between
+        // the clear and the close, and any thread reaching notifySomethingToDo can re-arm the flag in that gap.
+        // Every state transition and both forms of close() reach it, and it is public - so the senders are not an
+        // enumerable set. Worker threads are the exception: addToMailbox only enqueues.
+        transitionToClosing();
+    }
+
     /**
      * Submit a piece of work to the processing pool.
+     * <p>
+     * A batch this method declines to dispatch is dropped. Its containers stay marked in flight and counted against
+     * {@link WorkManager#getNumberRecordsOutForProcessing()}, which would matter on an instance that kept running -
+     * but every path that declines is a closing instance or one whose pool is already dead, and its
+     * {@link WorkManager} does not outlive it. The offsets are not committed, so the records are redelivered.
      *
      * @param workToProcess the polled records to process
      */
@@ -1003,6 +1174,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                         List<WorkContainer<K, V>> workToProcess) {
         if (state.equals(CLOSING) || state.equals(CLOSED)) {
             log.debug("Not submitting new work as Parallel Consumer is in {} state, incoming work: {}, Pool stats: {}", state, workToProcess.size(), workerThreadPool.get());
+            return;
         }
         if (!workToProcess.isEmpty()) {
             log.debug("New work incoming: {}, Pool stats: {}", workToProcess.size(), workerThreadPool.get());
@@ -1022,24 +1194,57 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
             // submit
             for (var batch : batches) {
-                submitWorkToPoolInner(usersFunction, callback, batch);
+                if (!submitWorkToPoolInner(usersFunction, callback, batch)) {
+                    // the pool is gone, so every remaining batch would reject too - and each would log its own
+                    // stack trace. One warning per poll is the useful signal; N of them is noise.
+                    break;
+                }
             }
         }
     }
 
-    private <R> void submitWorkToPoolInner(final Function<PollContextInternal<K, V>, List<R>> usersFunction,
-                                           final Consumer<R> callback,
-                                           final List<WorkContainer<K, V>> batch) {
+    /**
+     * @return false if the pool rejected the batch because it is shut down, in which case the batch is dropped -
+     *         uncommitted, so redelivered after rebalance - and no further batch can be submitted either.
+     * @throws RejectedExecutionException if a live pool rejected the batch, which means saturation rather than
+     *                                    shutdown and is not something this class can absorb
+     */
+    private <R> boolean submitWorkToPoolInner(final Function<PollContextInternal<K, V>, List<R>> usersFunction,
+                                              final Consumer<R> callback,
+                                              final List<WorkContainer<K, V>> batch) {
         // for each record, construct dispatch to the executor and capture a Future
         log.trace("Sending work ({}) to pool", batch);
-        Future outputRecordFuture = workerThreadPool.get().submit(() -> {
-            addInstanceMDC();
-            return runUserFunction(usersFunction, callback, batch);
-        });
+        Future outputRecordFuture;
+        try {
+            outputRecordFuture = workerThreadPool.get().submit(() -> {
+                addInstanceMDC();
+                return runUserFunction(usersFunction, callback, batch);
+            });
+        } catch (RejectedExecutionException e) {
+            // Narrow on purpose, and safe to be: #requireRejectionIsVisible refuses any pool whose handler is not an
+            // AbortPolicy, so RejectedExecutionException is the only thing a rejection here can throw.
+            if (!isWorkerPoolShutDown()) {
+                // A live pool rejected, which means saturation rather than shutdown - #setupWorkerPool's queue is
+                // unbounded, so this takes a subclass that bounds it. Absorbing that would drop work under healthy
+                // load, which is the one thing this catch must never do, so it stays loud.
+                throw e;
+            }
+            // The pool is shut down, so this is the close racing work distribution. The batch is dropped: a closing
+            // instance does not commit these offsets, so the records are redelivered after rebalance.
+            // Warn rather than debug: the state guard above absorbs the ordinary closing case, so reaching
+            // here means the pool died while the state still said otherwise - rare, and worth noticing.
+            // Count and a locator, not the batch itself: rendering the records makes this line grow with batch size
+            // until log tooling truncates it, which is astubbs#169 and astubbs#170's complaint in a third place.
+            var first = batch.get(0);
+            log.warn("Worker pool is shut down, not submitting work ({} record(s), first {}:{}). Records will be redelivered.",
+                    batch.size(), first.getTopicPartition(), first.offset(), e);
+            return false;
+        }
         // for a batch, each message in the batch shares the same result
         for (final WorkContainer<K, V> workContainer : batch) {
             workContainer.setFuture(outputRecordFuture);
         }
+        return true;
     }
 
     private List<List<WorkContainer<K, V>>> makeBatches(List<WorkContainer<K, V>> workToProcess) {

@@ -18,11 +18,26 @@ you have read this file.
 
 ## The ambient probe: contention artifact, or genuine bug?
 
-Every broker integration test failure log includes an `=== AMBIENT PROBE AUTOPSY ===` block (grep
-for it) with rebalance-dwell and lag-stagnation violations plus per-partition frozen-committed
-detail. It answers the contention-versus-bug question before you start manual diagnosis. Disable it
-with `-Dambient.probe=off` or `@NoAmbientProbe` only when the probe itself is the problem (see
+Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
+it) with rebalance-dwell and lag-stagnation violations plus per-partition frozen-committed detail.
+It answers the contention-versus-bug question before you start manual diagnosis. Disable it with
+`-Dambient.probe=off` or `@NoAmbientProbe` only when the probe itself is the problem (see
 `AmbientProbeExtension`'s javadoc).
+
+**Emitted reliably; found reliably only off the console.** The block is captured into the failsafe
+XML that CI uploads, so it survives a truncated console log - and a fetched CI log here has been
+cut mid-job twice, silently, with the autopsy past the cut. Fetch it from a route that cannot
+truncate, and check the log you did fetch is complete before diagnosing from it:
+[`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
+**owns those routes** and the completeness check.
+
+**A failing chaos test's autopsy carries its own replay.** `chaos seed:` and `chaos replay:` sit
+directly under the failure line, the replay command complete - the `chaos` tag is excluded by
+default, so the seed alone does not select the test. **First move on a chaos failure is to run that
+command, not to reason from the log**: the replay is the deciding experiment, and every sighting in
+the confluentinc#857 ledger was settled by one. How the seed reaches the block, and why it lives
+there rather than only in the run-start log line: `ChaosSeed` and `AmbientProbeExtension`'s
+`captureChaosSeed`.
 
 **`probe clean` is only informative when the probe's detectors could have fired.** Lag stagnation
 needs `LAG_STAGNATION_MIN_LAG` (50) of real lag sustained past `LAG_STAGNATION_BOUND` (150s), and
@@ -82,7 +97,8 @@ Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.
 
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups=`
-- **Replay a schedule**: every run logs its seed and the full replay command; add
+- **Replay a schedule**: every run logs its seed and the full replay command, and a failure repeats
+  both inside its autopsy block (above, where truncation cannot reach them); add
   `-Dchaos.seed=<seed>`.
 - **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
   Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via `chaos-pain.yml`, e.g.
@@ -98,6 +114,16 @@ Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.
 - **A RED run is investigation food, not flake noise.** The probes are calibrated against the real
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
+
+## Mutation-check every new assertion, not just the risky-looking ones
+
+Delete the guard an assertion claims to pin, run the test, confirm it fails, restore. An assertion
+that cannot fail is worse than none, because everyone after you counts it as coverage - and reading
+does not find one: three assertions written on astubbs#296 all read as strong, and all passed
+against a deleted guard, the last of them surviving two review rounds. The mechanism (a loop whose
+first pass moved the state out of the branch it was counting), the repair, and the
+counting-assertion heuristics:
+[`docs/solutions/test-flakiness/vacuous-counting-assertion-loop-changed-its-own-precondition-2026-08-18.md`](solutions/test-flakiness/vacuous-counting-assertion-loop-changed-its-own-precondition-2026-08-18.md).
 
 ## Reusing test utilities
 

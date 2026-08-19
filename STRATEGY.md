@@ -1,6 +1,6 @@
 ---
 name: Parallel Consumer
-last_updated: 2026-08-07
+last_updated: 2026-08-18
 ---
 
 # Parallel Consumer Strategy
@@ -13,12 +13,23 @@ still doesn't remove the head-of-line block - and a single-partition topic can't
 all. Share Groups decouple scaling from partitions but deliver out of order, so nothing gives
 low latency and guaranteed per-key ordering at the same time.
 
+And even where parallelism is unlocked, teams must fix concurrency and instance counts at
+deploy time - quantities only the runtime data can answer. The guess is wrong in both
+directions: too low silently leaves throughput on the table, too high floods downstream
+systems - and it goes stale as the workload shifts.
+
 ## Our approach
 
 We win by doing it in the client. Modifying the broker is extremely difficult, politically and
 engineering-wise, and no broker-side answer to high-performance key ordering exists or may ever.
 Parallel Consumer works like a client-side sub-broker: a library you add to a pom, invisible to the
 cluster, needing no broker version, no feature flag, and nobody's permission to deploy.
+
+The client is also where the ground truth lives: per-record timings, failures, key-level
+ordering state. So the second half of the bet: the engine measures and decides at runtime what
+configuration used to guess. External autoscalers see a black box and scale on consumption lag;
+an engine inside the processing loop can tune itself - and tell infrastructure when more of it
+would actually help.
 
 ## Who it's for
 
@@ -34,8 +45,10 @@ have, without giving up the ordering guarantee Kafka gave them.
   on. Derivable today from two existing gauges; not emitted as its own meter.
 - **End-to-end record latency, median and p99** - poll to completion, not just user function
   time. Not measured today - `pc.user.function.processing.time` covers only part of it.
-- **Achieved fan-out vs configured max** - whether the concurrency asked for is the concurrency
-  delivered. Partly derivable from `pc.shards` and `pc.inflight.records`.
+- **Discovered concurrency vs sustainable ceiling** - does the engine find and hold its
+  plateau? Regresses if the controller hunts, oscillates, or undershoots. Until the
+  self-tuning controller ships, read as achieved fan-out vs configured max (partly derivable
+  from `pc.shards` and `pc.inflight.records`).
 - **Production deployments with a public story** - the lagging signal that the library is trusted
   in anger. Counted by hand.
 
@@ -48,6 +61,16 @@ and buffering work that sets the ceiling.
 
 _Why it serves the approach:_ The client-side bet only pays if the client is fast - a sub-broker
 that adds latency has no reason to exist.
+
+### Self-tuning
+
+Priority raised 2026-08-18. The engine discovers its own concurrency from runtime measurement
+and recommends its own instance count to infrastructure - including the signal integrity work
+(accurate timing under every engine) that the controller stands on.
+
+_Why it serves the approach:_ The client-side vantage is the moat here - per-record ground
+truth no external controller can see. Paired with key-ordered concurrency, runtime-discovered
+scaling is the capability nothing else in the ecosystem offers.
 
 ### Reliability
 

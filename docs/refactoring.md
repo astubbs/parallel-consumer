@@ -59,11 +59,19 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ## Breaking changes queued for next major version
 
-API/behaviour changes that are ready in principle but must wait for a major-version
-bump (current line is 0.6.x). Unlike the internal refactors below - which are
-non-breaking and can land any time - these change the public, user-visible surface,
-so they are **release-gated**: do not fold them into a minor/patch. Collected here
-so a major-release prep can action them in one pass.
+**The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
+cut right now.** It already carries a `=== Breaking` section in `CHANGELOG.adoc` (the `bz.stub`
+package rename), so the items below are **not** waiting for some future bump - this is the pass they
+were collected for, and work that lands now lands in the right release.
+
+Do not read "queued for next major" as "not yet". Check
+[`CHANGELOG.adoc`](../CHANGELOG.adoc) for whether the top section is still marked `(unreleased)`
+before deciding a breaking change must wait: while it is, the gate is open. It closes when 0.6.0.0
+ships, and then this section starts accruing for the release after it.
+
+These change the public, user-visible surface, so they still may not be folded into a **minor or
+patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
+refactors below, which are non-breaking and can land at any point in any line.
 
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
@@ -156,6 +164,18 @@ Do not start one casually.
   lambda-actor-bus's `Actor`/`ActorImpl`; its commit d391398f1 records the unification as unfinished).
   Only meaningful as part of the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) rework.
   Registered in the manifest as `sweep-2023-actor-ipc` (this doc stays the editorial owner).
+- **A concrete, already-costed first slice: stop signalling the control thread by interrupting it.**
+  `Thread#interrupt` has no payload, so the one bit currently carries four meanings - wake up, stop
+  blocking, shut down, and "your next commit-lock acquisition will throw". Receivers cannot tell
+  which, so the class has accumulated four hand-clears instead of a fix, one of which does not clear
+  and merely warns that it cannot tell. astubbs#296 hit it by adding an ordinary state transition and
+  inheriting a shutdown hazard from a wakeup.
+  `ControllerEventMessage` is already an actor message in all but name and the loop already blocks on
+  its mailbox, so the first slice is small: a payload-free nudge variant, shutdown as a message, and
+  coalescing on an `AtomicBoolean` (clear **before** draining, or a nudge arriving mid-processing is
+  lost). Full design, including which of the five blocking sites a message cannot reach, in
+  [`docs/solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md`](solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md).
+  Belongs with the God-class decomposition above, not before it.
 
 ### Remove static state (unblocks parallel test execution)
 *Mirror: [#131](https://github.com/astubbs/parallel-consumer/issues/131).*
@@ -584,6 +604,20 @@ Cross-cutting above; the rest:
   offset range.
 - `origin/features/least-loaded` @278cc0a5 - incomplete futures as a loading proxy (→ draft
   `confluentinc#473` / issue `confluentinc#394`, least-loaded broker).
+
+**Flow control / self-tuning** (manifest: `sweep-2023-long-tail`) → tie to astubbs#227 (confluentinc#21, dynamic concurrency) and
+astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
+`docs/ideation/2026-08-17-distributed-throttling-ideation.html`:
+- `origin/features/dynamic-concurrency-control` @6f85eac41 - Netflix concurrency-limits
+  (`Gradient2Limit`/`SimpleLimiter`/`BlockingAdaptiveExecutor` as the worker pool), README
+  "Automatic Concurrency Scaling" section, mid-extraction to a `parallel-consumer-core-auto-scale`
+  module for the zero-deps policy. Upstream twin: draft PR `confluentinc#22` @ba6b71f10.
+- `origin/feature/auto-tuning-pressure` @f4aa09788 - "Wip! Experiments in self tuning": hand-rolled
+  self-tuning of the backpressure system (WorkManager, load factor). The
+  `DynamicLoadFactor` no-step-down gap is the fossil of this unfinished work.
+- `origin/features/rate-limiting` @e9f49d321 - bucket4j POC in the Reactor example app; policed
+  (`Mono.error`) instead of deferring, declared-but-unused Hazelcast dep, build-breaking pom
+  properties. Full autopsy in the ideation doc.
 
 **Offset encoding** → relevant to the offsets/*Encoder items above:
 - `origin/refactor/encode-with-incompletes-direct` @fa56ff18 - invoke the encoder with known
