@@ -172,6 +172,41 @@ for s in "${skipped[@]:-}"; do
     [ -n "$s" ] && printf 'pre-commit: skipped %s\n' "$s" >&2
 done
 
+# --- disk advisory -----------------------------------------------------------------------------
+#
+# Advisory only, and SILENT unless a filesystem is genuinely tight. It never fails the commit: a
+# full disk is not a defect in the change being committed, and a gate that blocks on it would get
+# disabled within a day.
+#
+# WHY A HOOK. An agent cannot notice a filesystem filling up - nothing in its context mentions disk
+# until something fails, and then it fails as a confusing symptom rather than as "you are out of
+# space". On 2026-08-19 /tmp reached 99% on this box; the visible effects were a chaos-test log
+# truncated mid-run (which read as a test ending early and cost real diagnosis time) and another
+# agent's watcher dying on ENOSPC. Both agents were behaving correctly and neither could see the
+# cause. This prints it into their context before it bites, which is the point of the layer.
+#
+# /tmp here is a tmpfs, so what it holds is RAM, not disk - filling it degrades the whole machine,
+# and it is exactly where agent scratchpads and test logs accumulate.
+disk_advisory() {
+    local threshold=75 fs pct avail
+    for fs in /tmp .; do
+        [ -d "$fs" ] || continue
+        # Portable-ish: field 5 is Use%, field 4 is Avail. Failure to read is not an error here.
+        pct=$(df -P "$fs" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
+        avail=$(df -Ph "$fs" 2>/dev/null | awk 'NR==2 {print $4}')
+        [ -n "$pct" ] || continue
+        [ "$pct" -ge "$threshold" ] 2>/dev/null || continue
+        printf '\npre-commit: NOTE - %s is %s%% full (%s free). Not blocking this commit.\n' \
+            "$fs" "$pct" "$avail" >&2
+        printf '  Agent scratchpads and test logs are the usual cause, and they are YOURS to tidy:\n' >&2
+        printf '  clean your own /tmp working files as part of finishing a task, not just the repo.\n' >&2
+        printf '  Find the consumer:  du -sh /tmp/claude-*/*/* 2>/dev/null | sort -h | tail\n' >&2
+        printf '  Keep evidence you still need by copying it OFF /tmp first - on this box /tmp is a\n' >&2
+        printf '  tmpfs, so it is RAM, and it is shared with every other agent session.\n' >&2
+    done
+}
+disk_advisory
+
 if [ ${#failed[@]} -gt 0 ]; then
     printf '\npre-commit: %d gate(s) failed: %s\n' "${#failed[@]}" "${failed[*]}" >&2
     printf 'Fix them, or commit with --no-verify if you have a reason.\n' >&2

@@ -26,6 +26,44 @@ The rule existed, was correct, and was linked from the root `AGENTS.md`. It was 
 The lesson generalises: **if a rule must not be missed, it cannot live only in a doc an agent chooses
 to read.** It needs a layer that fires on its own.
 
+## The same layer carries KNOWLEDGE, not only rules
+
+A rule is the obvious use of a mechanism that fires on its own, and it is not the only one. **Write
+the code so a future agent can use it correctly without doing research**, by having the code say what
+it needs to know at the moment it is used - startup log, failure message, hook output, gate note.
+Where a rule needs a gate that can fail, knowledge needs only delivery, so this is cheaper and
+applies far more widely.
+
+The distinction that makes it worth stating separately: a rule protects the repo from the agent, and
+you can test whether it fires. Knowledge protects the agent from wasted work, and **nothing goes red
+when it fails to arrive** - the cost is silent, paid as an experiment repeated, a constraint
+rediscovered, or a symptom misread. So there is no feedback telling you the delivery was needed. You
+have to decide it in advance, when you write the thing.
+
+Two incidents, one day apart, are the worked examples:
+
+- **Prior art that the documented route could not reach.** `ChaosRevokeUnderWorkIT`'s class javadoc
+  records that a recovery diagnostic was already run at an earlier scenario shape, and what it
+  established. An agent ran all six of `AGENTS.md`'s prior-art checks correctly and still repeated
+  the experiment - because those six search plans, solutions, inflight notes, PRs and issues, and
+  **none of them reaches a class javadoc**. The fix was not "read more carefully": the diagnostic
+  mode now prints the earlier result and the remaining question when it starts, so the prior art
+  arrives at the moment it is about to be repeated.
+- **State no agent can see.** `/tmp` on the dev box reached 99%, and the visible effects were a chaos
+  log truncated mid-run - which read as a test ending early, and cost real diagnosis time - plus
+  another session's watcher dying on ENOSPC. Both agents were behaving correctly and neither had any
+  way to notice. `.githooks/pre-commit` now carries a disk advisory that is silent below 75%.
+
+**Silence below the threshold is part of the design, not a detail.** Advisory output competes for
+attention with every rule in `AGENTS.md`, and the file already warns that attention, not tokens, is
+the scarce resource. A notice that prints on every commit is one an agent learns to skip, which
+costs more than it delivers - so an advisory earns its place by being rare enough that its
+appearance means something.
+
+**When you add a flag, mode, or tool an agent might misuse**, ask what it must know at the moment of
+use, and have the code say it then - rather than only adding a line to a document someone must first
+decide to open.
+
 ## What actually loads, and what does not
 
 Verified against Claude Code **2.1.223**. This is the part most people get wrong:
@@ -150,7 +188,13 @@ as intended, not a hole - see *Known gaps*.
 ## What is wired up today
 
 **`.githooks/pre-commit`** - runs the fast read-only gates (~1.5s total): copyright headers, issue
-references, docs data, shell sigpipe, quarantine registry, action versions. Enable per clone, once:
+references, docs data, shell sigpipe, quarantine registry, action versions. It also carries one
+**advisory** that blocks nothing: a disk check that is silent below 75% and otherwise tells the
+agent which filesystem is tight and that tidying its own `/tmp` scratch files is part of finishing a
+task. That is the layer being used for what it is uniquely good at - not enforcement, but putting a
+fact into an agent's context that nothing else would. An agent cannot notice a filesystem filling
+up; it only meets the consequence, as a truncated log or an ENOSPC in something unrelated. Enable
+per clone, once:
 
 ```
 git config core.hooksPath .githooks
