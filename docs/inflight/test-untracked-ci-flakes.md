@@ -14,11 +14,40 @@ their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `ReactorBatchTest.simpleBatchTest(ProcessingOrder)[3]` | 1 seen (2026-08-18) | Not from the original scan - found while babysitting astubbs#308 (docs-only branch, head `d930ca98d`). Awaitility `ConditionTimeout`, alias 'expected number of batches' (30s), in the shared `BatchTestMethods` lambda; passed on re-run at `bb5799df0`. UNDIAGNOSED - classify (contention vs product) before touching |
+| `simpleBatchTest` in **both** `ReactorBatchTest` and `MutinyBatchTest` | 2 seen (2026-08-18, 2026-08-19) | Not from the original scan - both found while babysitting a **docs-only** branch (astubbs#308 head `d930ca98d`; astubbs#320 head `70a247184`). Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda - see below, the second sighting is what makes it worth diagnosing. UNDIAGNOSED - classify (contention vs product) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `simpleBatchTest` - the second sighting says it is the shared helper, not either wrapper
+
+2026-08-18 it was `ReactorBatchTest`. 2026-08-19 it was `MutinyBatchTest`, on
+astubbs/parallel-consumer#320 - and the failure is the same one, not a similar one: the alias, the
+30-second timeout and the lambda all come from `BatchTestMethods` in **core**, which both wrapper
+modules drive. One sighting looked like a Reactor flake. Two, in different modules, means the
+Reactor and Mutiny wrappers are not the variable.
+
+The 2026-08-19 assertion is the useful part, because it is off by exactly one in the direction that
+matters: **`Expected size: 3 but was: 4`** - grep `BatchTestMethods` for `expected number of
+batches`. The test received the right records in one batch too many, so this is a batch-BOUNDARY
+question, not a lost-work question. Two readings, and they need separating rather than assuming:
+
+- **Contention.** The runner is slow or loaded, so work arrives spread out and the batcher closes a
+  batch early. Test-side, and the honest fix is making the test drive the boundary it asserts
+  instead of racing it.
+- **Product.** The batcher can split a batch under a timing the library is supposed to tolerate,
+  in which case an over-eager boundary is a real defect and the test is right to complain.
+
+**Both sightings are on branches whose diffs contain no Java at all**, which is what rules out "a PR
+broke it" and makes it master state - the same reasoning applied to `ProducerManagerTest` below.
+That is also why neither was quarantined on the branch that met it: quarantine is master-state and
+needs a diagnosis, and neither sighting has one.
+
+The 2026-08-18 sighting passed on re-run. A re-run is diagnosis here, not a way to go green - it
+distinguishes flaky from deterministic - and AGENTS.md's ban is on the automatic
+`surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job to learn
+something.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
