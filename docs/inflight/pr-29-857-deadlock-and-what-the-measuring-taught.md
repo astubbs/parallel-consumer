@@ -25,19 +25,31 @@ did not** - the April investigation log (`docs/BUG_857_INVESTIGATION.md`) was re
 into the solutions write-up and the per-mode inflight split, which kept the SETTLED knowledge and
 left the live threads without a home. Append here as you go rather than reconstructing later.
 
-**In flight right now**
+**Landed 2026-08-19 (was "in flight" above this line's earlier revision)**
 
-- **Shard-granularity progress detector** - the existing `NO_PROGRESS` probe has the right shape
-  ("while work remains, completions must advance") but is fleet-wide, so one wedged shard hides
-  behind seventy-nine healthy ones. Being added as an ADDITIONAL check, not a replacement, against
-  PC's own state (`pc.getWm()` is public). Must stay SILENT on the eager arm, which trips
-  `CLASS2_STALL` 53 times while progressing normally - if it fires there it has reproduced the bug
-  it exists to fix.
-- **Ordering coverage under churn** - the four-cell matrix verified no-loss, bounded duplicates and
-  completion, but NOT ordering: the scenario runs `UNORDERED` with a unique key per record, so
-  ordering is doubly vacuous there. A `KEY`-ordered cell is being added, reusing `KeyOrderLedger`
-  rather than writing a second checker, and as a NEW cell because switching the existing one to
-  `KEY` would serialise per-key work and invalidate today's measurements.
+- **Instance-granularity progress detector** - `INSTANCE_STALL/NO_WORK_COMPLETED` in
+  `ProgressProbe`, wired for every chaos scenario by `ChaosScenarioBase#startRun`. Per INSTANCE,
+  not per shard: which shards hold queued work is `ShardManager`'s private `processingShards`, so
+  shard granularity needs a main-code accessor this deliberately does not add - and per-instance is
+  the confluentinc#857 wedge signature anyway, because completions are counted where
+  `WorkManager#onSuccessResult` runs, PC's CONTROL thread, which is the thread the AB-BA cycle
+  freezes. Additive: no existing probe, bound or assertion changed. Non-vacuity proven both ways:
+  broker-free `InstanceStallProbeIT` (7 tests, gates every integration build) fires on
+  held-work-no-completions and stays silent on advance/idle/stopped/restart, and survived four
+  guard-deletion mutations; live, the eager arm on seed `4734674029169027864` in diagnostic mode
+  tripped `CLASS2_STALL` 55 times while draining fully and the new check fired ZERO times, peak
+  36.4s against the 150s bound. Silent on all five live runs (eager, coop x2, KEY cell x2).
+- **Ordering coverage under churn** - `ChaosRevokeUnderWorkKeyOrderIT` ("w4key"), a NEW eager cell
+  over the shared driver (matrix cells untouched; `processingOrder()`/`heavySleep()`/tick hooks
+  promoted with byte-identical defaults), reusing `KeyOrderLedger`. First run rediscovered W5's tick
+  trap at the matrix cells' 300-1000ms rate - single-delivery windows plus a fake 154s stagnation -
+  so the cell runs W5's 1000-2500ms ticks, with the cost recorded in its `STORM_TICK_MIN` javadoc.
+  Passing run on seed `4734674029169027864`: `comparedDeliveries=244022` of 250,608 (~2.9 epoch
+  windows per key), `orderRegressions=0 overlaps=0`, zero loss, 608 duplicates, zero violations.
+- **Sighting, not retuned**: on today's contended box the COOPERATIVE unordered arm also trips the
+  150s bound (twice: 1 violation each, ~154s, drains fully under
+  `-Dchaos.diagnoseStallRecovery=true`) - where the matrix run recorded 0. More weight behind the
+  recorded decision to stop gating on the bound; nothing was changed to make anything pass.
 
 **Decisions that are the owner's, not an agent's**
 
