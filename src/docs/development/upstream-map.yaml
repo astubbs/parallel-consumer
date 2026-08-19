@@ -170,7 +170,7 @@ entries:
       List -> LinkedHashSet + prune on removal (the reporter's own suggested fix),
       and PartitionStateManager caches the OffsetMapCodecManager instead of a
       throwaway per assignment (also closes #233). Touches PCMetrics.java,
-      PartitionStateManager.java; regression test PCMetricsTest859.java + P1
+      PartitionStateManager.java; regression test PCMetrics859Test.java + P1
       hardening. PR #57 also bundles cherry-picks #893 (PartitionState offset
       accuracy) and #905 (max-shard metric) -- those are NOT part of the leak fix.
       Supersedes closed fork PR #45. confluentinc#892 already fixed the per-commit
@@ -182,18 +182,21 @@ entries:
     fork:
       branches: [cherry-pick/893-offset-reset, upstream-pr-893]
       prs: [57]
+      fork_issue: 121
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [893]
       status: open
-      last_checked: 2026-07-28
+      last_checked: 2026-08-04
     adoc_anchor: part1-group-a-correctness
     notes: >
       Cherry-pick of upstream contributor PR #893 (Martyn Ye) -- fixes offset
       reset / data-loss risk on rebalance. Approved upstream, still OPEN
       (unmerged). Carried downstream, bundled into fork PR #57.
       Applied-Upstream: no (this IS the upstream PR, just not merged there).
+      Issue #894 ("Offset reset when frequent rebalancing") is named in #893's
+      own body; this entry recorded issues: [] until 2026-08-04.
 
   - id: cherry-pick-905-max-shard-metric
     group: metrics-observability

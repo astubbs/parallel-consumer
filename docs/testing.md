@@ -16,6 +16,17 @@ you have read this file.
   surefire and included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
 
+- **A new test class is not running until you have watched it run.** `PCMetricsTest859` matched none of
+  Surefire's include patterns (`Test*`, `*Test`, `*Tests`, `*TestCase` - this repo declares no
+  `<includes>`, so the defaults apply), so its six regression tests were never collected, and sat
+  dormant across four commits while CI stayed green. Put the issue number *before* the suffix:
+  `PCMetrics859Test`. Prove it with `./mvnw -pl <module> -am test -Dtest=<Name> -DfailIfNoTests=true`
+  (which turns "matched nothing" into a failure instead of a silent no-op), or check that
+  `target/surefire-reports/<FQCN>.txt` exists - an absent report means the class never ran, and nothing
+  warns you. `TestConventionRules` now fails the build for this, but it is wired per module by a thin
+  `TestConventionsArchTest`, so **a new module has no guard until you add one**. Integration tests are
+  selected by package instead, so an `*IT` name there is correct.
+
 ## The ambient probe: contention artifact, or genuine bug?
 
 Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for

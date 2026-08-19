@@ -142,7 +142,11 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionStateManager.java`**
 
 - todo remove static
-- OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(module); // todo remove throw away instance creation - confluentinc#233
+- TODO(refactor): decode-only + single-threaded today, so sharing one instance is safe; NOT
+
+**`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java`**
+
+- TODO(refactor): re-walks every shard queue, duplicating the SHARDS_SIZE traversal above
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java`**
 

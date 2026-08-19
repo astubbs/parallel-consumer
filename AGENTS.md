@@ -402,6 +402,16 @@ Nothing lints commit messages, so all of this is on you.
   [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
   generated release notes, the three strategies and when each applies, and the reset-to-merge-base
   trap that silently reverts master.
+- **`--theirs`/`--ours` take the whole file; a conflict is one hunk.** Both flags discard
+  everything else the branch did in that file, and a merge that takes the other side renders as
+  *nothing at all* - there is no removal for diff-vs-base review to show. Prove the branch changed
+  nothing else before using either; afterwards read every removal in
+  `git diff <pre-merge-tip>..HEAD -- <files>`, and audit **every file the merge's conflict list
+  names** rather than stopping when the suite goes green - green only proves the *tested* losses
+  came back. Across a package rename the plain diff reports every file as wholly rewritten, so
+  normalise the namespace on both sides first. Worked incident, including the losses that survived
+  a dozen review rounds because nothing fails when prose vanishes:
+  [`docs/solutions/workflow-issues/theirs-took-the-whole-file-and-the-repair-stopped-at-the-tests-2026-08-18.md`](docs/solutions/workflow-issues/theirs-took-the-whole-file-and-the-repair-stopped-at-the-tests-2026-08-18.md).
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they know about, and a one-way link strands the other half. If the successor does

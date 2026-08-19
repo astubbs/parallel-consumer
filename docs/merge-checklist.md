@@ -30,10 +30,17 @@ title plus every commit subject concatenated - is a log of how the work happened
 explanation of what changed and why, and the PR discussion is not in `git log`, so the squash message
 is all a future reader gets. **Write a real one.**
 
-**Write it where it is used, not into the conversation.** Put it in the merge when you perform it, or
-in the PR body if the author is merging. Do not print it out in chat unless asked - it is long, the
-author is being asked for a decision rather than a proofread, and pasting it makes them scroll past
-the thing they actually have to answer. Say the strategy and why in a line or two; offer the message.
+**Write it where it is used, not into the conversation.** That means the merge itself -
+`gh pr merge --squash --body`, or the merge box. Do not print it out in chat unless asked: it is
+long, the author is being asked for a decision rather than a proofread, and pasting it makes them
+scroll past the thing they actually have to answer. Say the strategy and why in a line or two, and
+offer the message.
+
+**Never put a squash message in the PR description.** A description tells reviewers what the change
+is and is read while the PR is open; a squash message is commit text consumed once, at merge. Parking
+one in the other corrupts the description for every reader before the merge, and leaves it behind as
+noise after. When the author is merging, hand the message over at merge time - post it as a PR
+comment, or give it to them when they ask - and leave the description alone.
 
 That is a delivery rule, not a licence to skip it: the message still gets written, and written
 properly.
