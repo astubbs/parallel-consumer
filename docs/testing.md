@@ -135,8 +135,11 @@ legal and flagged as an advisory, not an error.
 
 Rules:
 
-1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose. The
-   repository owner can grant an explicit, recorded exception - see the registry's rule list.
+1. **No quarantine without evidence** - a diagnosed mechanism *or* a recorded sighting ledger
+   (dates, runs, signature, and what makes it master-state). A hunch is not evidence and one failure
+   is not a ledger. `docs/quarantined-tests.md` owns the full rule, including why it is no longer
+   "no quarantine without *diagnosis*" - that version conflated not knowing the mechanism with not
+   knowing whether the failure is ours, and only the second justifies blocking.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
    merging master, atomically restoring the test to the gating lane. An owning PR is the goal, not

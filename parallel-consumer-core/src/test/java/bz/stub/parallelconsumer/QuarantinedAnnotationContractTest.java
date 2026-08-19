@@ -147,7 +147,7 @@ class QuarantinedAnnotationContractTest {
     }
 
     /**
-     * "No quarantine without diagnosis" is only compiler-enforced as far as the attributes EXISTING -
+     * "No quarantine without evidence" is only compiler-enforced as far as the attributes EXISTING -
      * empty strings compile fine (ce-review P2). Scan compiled test classes reflectively (no static
      * initialization) and reject blank reason/tracking.
      */
@@ -178,7 +178,7 @@ class QuarantinedAnnotationContractTest {
                 }
             }
         }
-        assertWithMessage("blank reason/tracking defeats 'no quarantine without diagnosis'")
+        assertWithMessage("blank reason/tracking defeats 'no quarantine without evidence'")
                 .that(offenders).isEmpty();
     }
 

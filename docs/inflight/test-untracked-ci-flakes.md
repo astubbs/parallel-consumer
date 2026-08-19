@@ -166,12 +166,16 @@ the narrative and found it does not fit:
 
 So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen`
 (actuals vary run to run - 136 and 132 have both been seen against an expected 139), and nothing
-currently explains why. Rule 1 - no quarantine without diagnosis - would keep it in the gating lane,
-but it fails often enough (4/45, the most frequent tracked flake) that leaving it red blocked every
-PR. **The repository owner decided to quarantine it anyway as an explicit rule-1 exception**: the
-registry entry carries no Owner (unowned, flagged advisory by the audit), `flapping = true`, and the
-diagnosis below remains the open task. The exception is a pressure-release, not a resolution - this
-entry stays open until the test is understood and fixed.
+currently explains why.
+
+**This entry is why rule 1 changed.** Under the old wording - *no quarantine without diagnosis* - an
+undiagnosed test stayed in the gating lane, so this one (4/45, the most frequent tracked flake)
+blocked every unrelated PR, and the repository owner had to quarantine it as an explicit
+rule-1 exception. It now qualifies on the rule itself: 4 failures in 45 runs, with the signature and
+runs recorded above, is exactly the *sighting ledger* rule 1 asks for. No exception is needed, and
+the entry is unchanged in every other respect - no Owner (unowned, flagged advisory by the audit),
+`flapping = true`, and the diagnosis below still the open task. Quarantine defers; it does not
+resolve. This entry stays open until the test is understood and fixed.
 
 **The open lead - an UNVERIFIED hypothesis, test it before acting on it.** The test computes
 `expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1`, and
