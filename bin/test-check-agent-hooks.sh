@@ -277,6 +277,40 @@ assert "a 150 KB merge-prep prompt is still injected" YES "$(injected "$big_prom
 
 assert "the preamble points at the doc rather than restating it" pointer_only "$got"
 
+
+# ---------------------------------------------------------------------------
+# after-push-check-ci.sh - fires after a push that moved a ref, silent otherwise.
+#
+# The negative controls matter more than the positive one here: this hook runs on EVERY Bash call
+# (no `if:` matcher, because prefix matching would miss `cd worktree && git push`), so a leak means
+# every unrelated command carries a CI lecture and the reader learns to skim past it.
+# ---------------------------------------------------------------------------
+push_hook() { # <json payload> -> prints injected context, or nothing
+    printf '%s' "$1" | "$HOOKS/after-push-check-ci.sh" 2>/dev/null | tr -d '\n'
+}
+fired() { [ -n "$(push_hook "$1")" ] && echo fired || echo silent; }
+
+assert "a real push injects the CI reminder" fired \
+    "$(fired '{"tool_input":{"command":"git push -q origin b"},"tool_response":{"stderr":"To github.com:a/b.git\n   a1..b2  b -> b"}}')"
+
+assert "a push behind a cd still fires (the prefix trap this hook avoids)" fired \
+    "$(fired '{"tool_input":{"command":"cd /w/t && git push -q origin b"},"tool_response":{"stderr":"   a1..b2  b -> b"}}')"
+
+assert "a non-push Bash call is silent" silent \
+    "$(fired '{"tool_input":{"command":"git status"},"tool_response":{"stdout":"clean"}}')"
+
+assert "a push that moved nothing is silent" silent \
+    "$(fired '{"tool_input":{"command":"git push"},"tool_response":{"stderr":"Everything up-to-date"}}')"
+
+assert "a dry-run push is silent" silent \
+    "$(fired '{"tool_input":{"command":"git push --dry-run origin b"},"tool_response":{"stderr":"To github.com"}}')"
+
+assert "a REJECTED push is silent - no CI started" silent \
+    "$(fired '{"tool_input":{"command":"git push origin b"},"tool_response":{"stderr":" ! [rejected]  b -> b (fetch first)"}}')"
+
+assert "a malformed payload never breaks the tool call" silent \
+    "$(fired 'not json at all')"
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
