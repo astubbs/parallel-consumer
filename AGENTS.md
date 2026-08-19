@@ -114,21 +114,24 @@ a file in it is touched, rather than waiting to be opened.
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
-Rule of thumb - and the axis is **decided vs undecided**, not now vs later:
+Rule of thumb - and the axis is **weight**, not when the work happens:
 
-- **Decided, and tracked** → `docs/inflight/`. Including work decided to be done *later*: a note may
-  carry `inflight-state: deferred - <what it waits on>`, and it stays here. Deferred is a schedule,
-  not an exile.
-- **Code-level tidying nobody has decided on** → `refactoring.md`. An entry there has no owner, no
-  impact and no state; it is a standing observation that something could be better.
-- **Already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+- **A refactor too small to deserve its own note** → [`docs/refactoring.md`](docs/refactoring.md). One
+  or two lines, no owner, no tags, no state. It is a lightweight list of things that should be tidied,
+  and nothing about it says *when*.
+- **Anything needing context, evidence, tracking or a decision** → `docs/inflight/`, one file per item,
+  tagged. Including work decided to happen **later**: a note may carry
+  `inflight-state: deferred - <what it waits on>` and still belongs here. Deferred is a schedule, not
+  an exile - and it is why "later → refactoring.md" was wrong.
+- **Already settled** → [`docs/solutions/`](docs/solutions/) for the knowledge. **Not
+  `CHANGELOG.adoc`** - see [Changelog](#changelog): a PR never adds an entry, the file is generated at
+  release time from commit messages, so "put it in the changelog" is an instruction nobody may follow.
 
-**An item is promoted from `refactoring.md` to `docs/inflight/` when a decision attaches to it** - an
-owner, a blocker, or a judgement someone has to make - and its `refactoring.md` entry is deleted in
-the same commit, because the two must never state it twice. The stale-arrival guard is the worked
-example: it sat in `refactoring.md` as a possible tidy-up until it turned out to be blocked on a
-null-safety decision, at which point it became
-[`docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`](docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md).
+**When a `refactoring.md` line outgrows a line or two - it needs a decision, has a blocker, or has
+evidence worth keeping - promote it to a note and delete the line in the same commit.** Neither file
+may state it twice. The stale-arrival guard is the worked example: a one-line tidy-up in
+`refactoring.md` until it turned out to be blocked on a null-safety decision, at which point it became
+`docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`.
 
 This wording replaces "happening now → inflight; should happen later → refactoring.md", which stopped
 being true the moment `docs/inflight/` gained deferred notes: 34 of them are "later" work and none of
