@@ -88,7 +88,25 @@ fi
 
 emit "**Everything else open** (\`docs/inflight/\`, one file per item):"
 inflight=$(find docs/inflight -name '*.md' -not -name 'AGENTS.md' -not -name 'CLAUDE.md' \
-             -type f 2>/dev/null | sort | sed 's|docs/inflight/||;s|\.md$||' | paste -sd', ')
+             -type f 2>/dev/null | sort | sed 's|docs/inflight/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
 emit "${inflight:-(none)}"
 emit ""
-emit "**Dated plans and investigations** (\`docs/plans/\`): $(find docs/plans -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ') documents - \`ls docs/plans/\` before investigating anything with a history."
+# Plans were a COUNT here, which tells you a shelf exists without naming anything on it - so an
+# agent still had to know to run `ls`. The dated slugs are self-describing (date, type, subject), so
+# naming them costs a few hundred tokens and removes the "know to look" step entirely. Measured:
+# every path under docs/ is ~2.8k tokens in total, less than this hook's solutions block alone, so
+# the constraint here is signal, not budget. docs/features/ and docs/data/ are deliberately NOT
+# listed - they are generated catalogues of shipped surface, not prior art for a diagnosis.
+emit "**Dated plans and investigations** (\`docs/plans/\`) - the method that settled a question of this shape before:"
+plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
+emit "${plans:-(none)}"
+emit ""
+
+# Point-in-time audits of tests that do not run, do not assert, or were never written. Easy to miss
+# precisely because nothing goes red to tell you - which is why AGENTS.md says to read the newest
+# before re-enabling, deleting or rewriting a dark test.
+hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
+if [ -n "$hardening" ]; then
+    emit "**Dated test-hardening audits** (\`docs/test-hardening/\`) - a test that never runs is not a passing test:"
+    emit "${hardening}"
+fi
