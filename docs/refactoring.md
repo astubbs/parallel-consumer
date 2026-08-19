@@ -73,23 +73,6 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
-- **Reject a stale ARRIVAL in `state/ProcessingShard.java`'s `addWorkContainer`, symmetric with the
-  stale-resident check beside it.** Today only the RESIDENT is checked, so old-epoch containers still
-  enter shards whenever a rebalance lands after the once-per-batch `epochIsStale()` guard in
-  `maybeRegisterNewPollBatchAsWork`. They are harmless - `couldBeTakenAsWork` refuses them and
-  `getWorkIfAvailable` removes them inline - but rejecting them at the insert would prevent the churn
-  rather than clean it up, and would shrink the window that astubbs#31 defends.
-  **Not a one-liner, which is why it is here and not in astubbs#31**: the guard runs on *every* add,
-  where the resident check runs only when an entry already exists, so it reaches inputs the current
-  code never evaluates. `PartitionStateManager.getPartitionState` returns `partitionStates.get(tp)`
-  unguarded, and adding the check makes `PartitionStateCommittedOffsetTest` NPE in three tests
-  (`compactedTopic`, `committedOffsetLower`, and one more) because they register polls against a
-  `PartitionState` that was never installed in the manager. Needs a null-safety decision - treat an
-  absent state as not-stale, or make the absence itself an error - plus a judgement on whether those
-  tests encode a real production shape or only a fixture shortcut. **Also note it makes the
-  stale-resident branch unreachable from every public entry point** (verified by experiment: with the
-  arrival guard in place and the resident branch reverted, the other regression tests still pass), so
-  it must land together with the white-box test that plants a resident directly.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
