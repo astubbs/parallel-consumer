@@ -114,8 +114,25 @@ a file in it is touched, rather than waiting to be opened.
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
-Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
-**already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+Rule of thumb - and the axis is **decided vs undecided**, not now vs later:
+
+- **Decided, and tracked** → `docs/inflight/`. Including work decided to be done *later*: a note may
+  carry `inflight-state: deferred - <what it waits on>`, and it stays here. Deferred is a schedule,
+  not an exile.
+- **Code-level tidying nobody has decided on** → `refactoring.md`. An entry there has no owner, no
+  impact and no state; it is a standing observation that something could be better.
+- **Already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+
+**An item is promoted from `refactoring.md` to `docs/inflight/` when a decision attaches to it** - an
+owner, a blocker, or a judgement someone has to make - and its `refactoring.md` entry is deleted in
+the same commit, because the two must never state it twice. The stale-arrival guard is the worked
+example: it sat in `refactoring.md` as a possible tidy-up until it turned out to be blocked on a
+null-safety decision, at which point it became
+[`docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`](docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md).
+
+This wording replaces "happening now → inflight; should happen later → refactoring.md", which stopped
+being true the moment `docs/inflight/` gained deferred notes: 34 of them are "later" work and none of
+them belong in `refactoring.md`.
 
 ### Cite by anchor, never by line number
 
