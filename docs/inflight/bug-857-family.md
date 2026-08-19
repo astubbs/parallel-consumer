@@ -510,3 +510,34 @@ with `-Dit.test=ChaosRevokeUnderWorkIT` needs `-Dfailsafe.failIfNoSpecifiedTests
 `-am` puts the parent module in the reactor and its own failsafe execution then fails the build with
 "No tests matching pattern"; dropping `-am` instead fails the enforcer's `ReactorModuleConvergence`.
 The unnarrowed command above has neither problem.
+
+**Eleventh sighting, 2026-08-19 - the eager `CLASS2_STALL` arm, with astubbs#209's fix already
+merged in.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest`, killed by `ProgressProbe`
+on [job 95906973285](https://github.com/astubbs/parallel-consumer/actions/runs/32198410456/job/95906973285),
+on astubbs#57 at head `5b1e7b099`. **Replay seed `7964289159858266180`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=7964289159858266180
+
+**17 violations, every one `CLASS2_STALL/LAG_STAGNATION`, no zombie arm.** Partitions on topic
+`ChaosRevokeUnderWorkIT-w4-305940738` with lag 1864-3010 and committed offsets frozen for 153-154s
+against the 150s bound, all under "group STABLE + heartbeats flowing". Peaks
+`rebalanceDwell=13269ms`, `lagStagnation=154051ms`; 22 partitions still frozen at autopsy time,
+stagnant 12-24s each.
+
+**What this one adds: the astubbs#209 fix was present and did not prevent it.** `be571a460`
+("a close racing work distribution no longer kills the control thread", astubbs#296) is an ancestor
+of the failing head - checked with `git merge-base --is-ancestor be571a460 5b1e7b099`. The missing
+`return` in `submitWorkToPool`'s `CLOSING`/`CLOSED` guard was a real defect and is fixed, but it is
+not this stall. Anything that reasoned "astubbs#209 probably explains the family" can stop.
+
+**The control arm holds again, for the third time.** `ChaosRevokeUnderWorkCooperativeIT` passed clean
+in 105s and `ChaosChurnStormIT` passed in the same run - same runner, same minute. That is the second
+and sixth sightings' pattern (cooperative green while eager dies) seen a third time, and it remains
+the strongest evidence the residue is eager-protocol-specific.
+
+**Read via the archive endpoint, not `gh run view --log`,** which returned nothing usable here. The
+full job log is 12,015 lines; the truncating route has already misattributed this family once
+([`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](../solutions/workflow-issues/gh-run-view-log-truncation.md)),
+and the cooperative arm's expected rebalance churn is exactly what a truncated read mistakes for the
+failure.
