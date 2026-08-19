@@ -72,7 +72,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 | Document | Read it when |
 |---|---|
-| [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
+| [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, **why a run prints nothing and the flag that fixes it**, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
 | [`docs/compound-engineering.md`](docs/compound-engineering.md) | Asking whether a piece of work is *finished* - the failure-to-mechanism loop, what "done" means beyond green, and the three techniques `investigating.md` does not own |
