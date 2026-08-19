@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, community obligation with no release dependency -->
 
 
 Discussions were a blind spot until 2026-08-07: not in

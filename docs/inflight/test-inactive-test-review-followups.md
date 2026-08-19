@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, follow-ups from work that already landed -->
 
 
 A seven-reviewer pass over astubbs#264 found four P1s, all fixed there (two of them reproduced by *running*

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, rides with the mutation-lane widening -->
 
 
 **Open decision, not a bug.** The lane behaves exactly as designed and says so in its job summary.

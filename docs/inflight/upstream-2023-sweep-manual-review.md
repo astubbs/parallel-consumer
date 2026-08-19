@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
+<!-- inflight-state: deferred - after v6, audit needing human decisions, no release dependency -->
 
 
 The 2023 administrative sweeps are mirrored and mapped (see

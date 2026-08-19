@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, the affected branches are not in the merge order -->
 
 
 `ci/reenable-parallel-tests` and `optimize/unit-gate` both measure JUnit execution parallelism. Any numbers

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: crash -->
+<!-- inflight-state: deferred - after v6, leaks in agent tooling rather than the product -->
 
 
 Found 2026-08-18 while clearing a merged worktree: it could not be removed because a shell from a

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-state: deferred - after v6, nothing breaks by shipping without it -->
 
 
 > Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/inflight/core-recoverable-producer-fencing.md`.

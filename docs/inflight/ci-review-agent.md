@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, affects how we work rather than what ships -->
 
 
 How the reviewer and its gate work, and the contract for asking for a review, are in
