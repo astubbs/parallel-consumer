@@ -1,8 +1,30 @@
 # In-flight & parked work - how this directory works
 
-Shared, cross-branch working notes kept on `master`, so any branch or session can see what is open
-right now. **Not** an issue tracker and **not** a backlog. This doc owns how these notes are
-written; the root AGENTS.md routes here and keeps only what binds every session.
+**This directory is a distributed issue tracker, file-backed in the repository.** One file per item,
+tagged with a type, an impact and a state, and delivered into an agent's context at session start by
+`.claude/hooks/inject-recorded-knowledge.sh`. This doc owns how a note is written; the root
+`AGENTS.md` routes here and keeps only what binds every session.
+
+Being *in the repo* is the whole design, and it buys three things an external tracker cannot:
+
+- **It arrives with the code.** A note is delivered at session start, so an agent inherits state it
+  did not create instead of having to know a search term. The failure this exists to prevent is not
+  misreading a note - it is never learning the note exists.
+- **It branches with the code.** A note travels with the work that produced it, so context that only
+  makes sense on one branch lives there and dies with it.
+- **Nobody needs an account.** It is readable by anything that can read the tree - a fresh agent, a
+  reviewer, a fork.
+
+**It is NOT a mirror of GitHub Issues, and that boundary is load-bearing.** Issues remain the
+public, linkable record. What lives here is what an issue cannot hold: transient cross-branch state,
+and context a `gh` or `git` command cannot answer. **Never write down what a command can tell you** -
+open PRs are `gh pr list`, branch divergence is `git rev-list --left-right --count`, worktrees are
+`bin/worktree-status.sh`. A second copy of an answerable fact is wrong within a day, and a reader
+cannot tell which one is stale.
+
+Distribution is git's, with git's consequences: two branches can disagree about what is open, and a
+note read on a stale branch can describe a world that no longer exists. That is the trade accepted
+in exchange for the three properties above.
 
 This was one file until 2026-08-04. It became a directory because *every* PR edited it - it appeared
 in 26 of the last 30 master commits - so unrelated PRs conflicted with each other constantly, purely

@@ -62,6 +62,15 @@ jobs:
       - name: Self-test the agent hooks
         run: bash bin/test-check-agent-hooks.sh
 
+      # Same sequencing: prove the tag checker can fail, then run it. The session-start index already
+      # LISTS a note no group claimed, but only to whoever starts the next session - which may not be
+      # whoever mistyped the tag, and may be days later. This fails the commit that made the mistake.
+      - name: Self-test the inflight tag checker
+        run: bash bin/test-check-inflight-tags.sh
+
+      - name: Inflight notes carry valid tags
+        run: bash bin/check-inflight-tags.sh
+
   rename:
     name: "tooling: package rename"
     runs-on: ubuntu-latest
