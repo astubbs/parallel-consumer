@@ -31,6 +31,15 @@ truncate, and check the log you did fetch is complete before diagnosing from it:
 [`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
 **owns those routes** and the completeness check.
 
+**Locally there is no artifact, and the confirming re-run destroys the evidence.** CI uploads the
+failsafe XML, so a failure's report survives being looked at; on a developer box the re-run writes
+over `target/*-reports/TEST-<class>.xml` in place, taking the autopsy, the seed and the assertion's
+actual-versus-expected with it. **Copy the report aside before you re-run** - `cp
+parallel-consumer-core/target/*-reports/TEST-<class>.xml /tmp/`. The re-run that proves "it passes in
+isolation" is precisely the one that overwrites the failure it is being compared against: on
+2026-08-19 a `PCMetricsTest` sighting lost its actual-versus-expected that way, leaving only a
+timing the ledger already had, and so could not be told apart from ordinary load.
+
 **A failing chaos test's autopsy carries its own replay.** `chaos seed:` and `chaos replay:` sit
 directly under the failure line, the replay command complete - the `chaos` tag is excluded by
 default, so the seed alone does not select the test. **First move on a chaos failure is to run that
