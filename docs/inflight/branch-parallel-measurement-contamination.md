@@ -5,6 +5,7 @@ they gathered before core stopped configuring the other modules' runners were ta
 was not off everywhere: core's `src/test/resources/junit-platform.properties` was packaged at the root of the
 core **tests** jar, so the eight modules depending on that jar (the four integrations plus every example) ran
 at `factor=20` regardless of their own `${parallel-tests}` setting.
+<!-- file-refs: N/A - describes where the file WAS when it caused the contamination -->
 
 Re-take any measurement from before that, or confirm the arm it used was unaffected. Neither branch had an
 open PR when this was written, which is why the note is here rather than in a review comment.

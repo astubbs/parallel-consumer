@@ -263,6 +263,7 @@ one is a case in that file, and the suite goes red against the old parser.
   hook here runs - and it is a **one-time** hazard: it only bites a clone that predates the change.
   The mitigation is to move anything local into `.claude/settings.local.json`, which stays ignored,
   before pulling; the `.gitignore` comment says so at the point someone reads it.
+  <!-- file-refs: N/A - the file is git-ignored by design, so it is absent from every checkout -->
 
 ## Settled by testing, so nobody re-opens them
 
