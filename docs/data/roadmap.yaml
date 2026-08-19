@@ -54,10 +54,14 @@ stages:
   values:
     idea: Named and argued for; nothing more structured than notes exists yet.
     ideated: A ranked, verified ideation document exists; direction not yet chosen.
-    requirements-drafted: Requirements or brainstorm output exists; the product decisions are being made.
-    planned: A dated implementation plan exists; implementation not started.
-    poc: A limited proof-of-concept runs; stage_detail states its boundaries.
-    implemented: A working implementation exists on an open PR, subject to review and landing.
+    requirements-drafted: The product decisions are drafted - what it must do and why; the how is not yet planned.
+    planned: An implementation design or plan exists - the how; the build has not started.
+    limited-poc: A slice runs, but the central claim is not proven end-to-end; stage_detail says exactly what is missing.
+    poc: A working proof answers the central question within stated boundaries; it is not the shipping implementation.
+    implemented: >-
+      The implementation intended to ship exists and works on an open PR, subject to review. A draft
+      that will be replaced is not implemented - it is at most a poc, and if it is not even the
+      direction that will stay, it does not advance the stage at all.
 
 entries:
   - id: known-defects-cleared
@@ -81,10 +85,11 @@ entries:
     serves: [flexibility, performance]
     horizon: "0.6.0.0"
     blocks_1_0: false
-    stage: poc
+    stage: limited-poc
     stage_detail: >-
-      Measured spike on astubbs#271 - 8x median on the target shape - proven for one partition,
-      one task, one instance, at-least-once, caching off; windowing, joins and EOS out of scope.
+      The spike on astubbs#271 measured 8x median, but only for one partition, one task, one
+      instance, at-least-once, caching off - the general claim is unproven; windowing, joins and
+      EOS out of scope.
     why_now: Streams users hit the same head-of-line blocking, and the idea can be shown to work before it is committed to.
     done_when: An opt-in alpha module exists, isolated from the stable modules, with setup a reader can follow.
     tracking: astubbs#255
@@ -96,10 +101,11 @@ entries:
     serves: [flexibility]
     horizon: "0.6.0.0"
     blocks_1_0: false
-    stage: poc
+    stage: limited-poc
     stage_detail: >-
-      Direction proven on astubbs#269: the patched sink task shadows the stock one and a failing
-      lane no longer stalls the others; the live delivery path is still partial.
+      On astubbs#269 the patched sink task shadows the stock one and a failing lane no longer
+      stalls the others - a slice; the live delivery path is unfinished, so end-to-end sink
+      processing through PC is not yet demonstrated.
     why_now: The same reasoning as the Streams preview, for a different and widely deployed surface.
     done_when: An opt-in alpha module exists, isolated from the stable modules.
     tracking: astubbs#240
@@ -176,10 +182,11 @@ entries:
     serves: [compatibility]
     horizon: next-0x
     blocks_1_0: false
-    stage: poc
+    stage: idea
     stage_detail: >-
-      astubbs#53 compiles the tree at release 17 with zero source changes, Jabel removed; the
-      Kafka 4 client work has not started.
+      astubbs#53 shows the tree compiles at release 17 with Jabel removed, but the target is Java
+      11 with Kafka 4 clients and that work has not started - the draft is exploration, not the
+      implementation.
     why_now: A recent constraint rather than long-standing debt, and one an adopter on a modern JDK hits immediately.
     done_when: The library builds and runs on the current Java LTS and against Kafka 4.x.
     tracking: astubbs#181
@@ -190,9 +197,10 @@ entries:
     serves: [observability, usability]
     horizon: next-0x
     blocks_1_0: false
-    stage: implemented
+    stage: poc
     stage_detail: >-
-      astubbs#226 is review-hardened and carries two breaking changes staged for 0.6.0.0.
+      A working draft on astubbs#226, review-hardened and carrying two staged breaking changes;
+      not yet accepted as the shipping surface.
     why_now: Orchestrators need a liveness answer better than "the process is up".
     done_when: A supported health surface exists on the public interface.
     tracking: astubbs#126
@@ -202,10 +210,10 @@ entries:
     serves: [performance, flexibility]
     horizon: next-0x
     blocks_1_0: false
-    stage: implemented
+    stage: idea
     stage_detail: >-
-      astubbs#51 carries the upstream implementation (confluentinc#908) with its author's concerns
-      unresolved; gated on the Java-baseline decision.
+      The upstream draft (confluentinc#908) rides astubbs#51, but it is not the implementation
+      that will stay; gated on the Java-baseline decision, and no fork design exists yet.
     why_now: Blocking work is the case virtual threads help most, and supporting them removes a reason to reach for an adapter module.
     done_when: A user can run the processing function on virtual threads.
     tracking: astubbs#147
@@ -242,9 +250,10 @@ entries:
     serves: [usability]
     horizon: next-0x
     blocks_1_0: false
-    stage: idea
+    stage: planned
     stage_detail: >-
-      Direction agreed - render the feature data - and nothing renders it yet.
+      The site design is drafted on astubbs#316 - explicitly design only, no site is built there;
+      astubbs#302 holds the intent.
     why_now: >-
       The feature data exists and nothing renders it. Until something does, the README stays the only
       documentation and the data is a second corpus rather than a source.
@@ -349,10 +358,10 @@ entries:
     serves: [performance, reliability]
     horizon: next-0x
     blocks_1_0: false
-    stage: planned
+    stage: requirements-drafted
     stage_detail: >-
-      The self-scaling concurrency plan landed with the strategy bet (astubbs#308); implementation
-      not started.
+      The requirements plan landed with the strategy bet (astubbs#308); it decides the what, not
+      the how - no implementation plan yet.
     why_now: >-
       Deploy-time configuration guesses runtime-dependent quantities and is wrong in both directions.
       The engine already measures what it needs to decide for itself; STRATEGY.md carries this as the
