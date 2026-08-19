@@ -1,30 +1,36 @@
 # In-flight & parked work - how this directory works
 
-**This directory is a distributed issue tracker, file-backed in the repository.** One file per item,
-tagged with a type, an impact and a state, and delivered into an agent's context at session start by
-`.claude/hooks/inject-recorded-knowledge.sh`. This doc owns how a note is written; the root
+**A structured wiki about the code's current situation, kept in the repository.** One file per
+item, tagged with a type, an impact and a state, and delivered into an agent's context at session
+start by `.claude/hooks/inject-recorded-knowledge.sh`. This doc owns how a note is written; the root
 `AGENTS.md` routes here and keeps only what binds every session.
 
-Being *in the repo* is the whole design, and it buys three things an external tracker cannot:
+**It sits one layer DOWN from GitHub Issues, and is not a mirror of them.** A few things have a
+reflection in both - an issue for the public record, a note for what working on it actually
+involves - but most notes have no issue and never will, because they are too small, too transient,
+or too specific to a branch to be worth one. Issues are the public, linkable, coarse layer. This is
+the fine-grained layer underneath: what is true about the code *right now*.
 
-- **It arrives with the code.** A note is delivered at session start, so an agent inherits state it
-  did not create instead of having to know a search term. The failure this exists to prevent is not
-  misreading a note - it is never learning the note exists.
-- **It branches with the code.** A note travels with the work that produced it, so context that only
-  makes sense on one branch lives there and dies with it.
-- **Nobody needs an account.** It is readable by anything that can read the tree - a fresh agent, a
-  reviewer, a fork.
+**The point is friction.** Tracking reality only happens if recording it is cheaper than not
+recording it. Opening an issue, choosing labels, and writing for an audience is enough friction that
+the small true things never get written down - and those are exactly the things that cost the next
+person a day. A file in the tree you are already editing is fast enough to actually do.
 
-**It is NOT a mirror of GitHub Issues, and that boundary is load-bearing.** Issues remain the
-public, linkable record. What lives here is what an issue cannot hold: transient cross-branch state,
-and context a `gh` or `git` command cannot answer. **Never write down what a command can tell you** -
-open PRs are `gh pr list`, branch divergence is `git rev-list --left-right --count`, worktrees are
-`bin/worktree-status.sh`. A second copy of an answerable fact is wrong within a day, and a reader
-cannot tell which one is stale.
+Being in the repo is what makes it track reality rather than describe a past one:
 
-Distribution is git's, with git's consequences: two branches can disagree about what is open, and a
-note read on a stale branch can describe a world that no longer exists. That is the trade accepted
-in exchange for the three properties above.
+- **It shifts as the code shifts.** A note travels on the branch with the work that produced it, so
+  context that is only true on one branch lives there - and stops being true when that branch does.
+- **It arrives with the code.** Delivered at session start, so an agent inherits state it did not
+  create instead of needing to know a search term. The failure this prevents is not misreading a
+  note; it is never learning the note exists.
+- **Nobody needs an account.** Readable by anything that can read the tree.
+
+**Never write down what a command can tell you** - open PRs are `gh pr list`, branch divergence is
+`git rev-list --left-right --count`, worktrees are `bin/worktree-status.sh`. A second copy of an
+answerable fact is wrong within a day, and a reader cannot tell which one is stale.
+
+The trade, stated rather than glossed: distribution is git's, so two branches can disagree about
+what is open, and a note read on a stale branch can describe a world that no longer exists.
 
 This was one file until 2026-08-04. It became a directory because *every* PR edited it - it appeared
 in 26 of the last 30 master commits - so unrelated PRs conflicted with each other constantly, purely

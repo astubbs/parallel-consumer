@@ -2,7 +2,7 @@
 
 schema_version: 1
 kind: feature
-title: Embedded distributed issue tracking, file-backed in the repository
+title: A structured wiki of the code's current situation, kept in the repository
 category: engineering
 module: repository
 maturity: production-use
@@ -17,9 +17,9 @@ availability:
       enforced by convention plus the session-start injector; the split from a single file happened
       on 2026-08-04 after every PR began colliding on it.
 summary: >
-  Open work lives in the repository as one file per item, not in an external tracker - so it arrives
-  with the code, branches with the code, and is delivered into an agent's context at session start
-  rather than waiting to be searched for.
+  What is true about the code right now lives in the repository as one file per item - a layer below
+  GitHub Issues rather than a mirror of them. Low enough friction that the small true things actually
+  get written down, and delivered into an agent's context at session start rather than searched for.
 use_this_when:
   - You are evaluating whether this fork is durably maintained rather than momentarily active.
   - You want to know what is currently broken, deferred or undecided without an account on anything.
