@@ -171,9 +171,15 @@ and the traps that voided earlier experiments.
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
+| **The javadoc of the thing you are about to run or change** | `grep -rn "Calibration status" --include=*.java .` - chaos scenarios record their prior experiments, seeds and verdicts in the class javadoc, nowhere else |
 
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
+- **A test's own javadoc is prior art, and the six commands above will not find it.** The chaos
+  scenarios carry a `Calibration status` block naming the shapes already tried, the seeds, and what
+  each run established - including experiments that were run and are worth not repeating. Running
+  `ChaosRevokeUnderWorkIT`'s recovery diagnostic in August 2026 re-derived a result its own javadoc
+  already recorded from the 90s/45s shape. Read the class before you run it.
 - **`--state open` is a collision check, not a prior-art search.** The PR that already solved
   something in your file is, by definition, merged; the issue documenting it is usually closed.
   Searching only the open list produces false confidence, which is worse than not looking.

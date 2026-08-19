@@ -50,12 +50,18 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
      */
     protected ManagedPCInstance newInstance(ManagedPCInstance.Config config,
                                             int heavyEvery, Duration heavySleep,
-                                            AtomicLong totalConsumed, Queue<String> allConsumed) {
+                                            AtomicLong totalConsumed, AtomicLong totalStarted,
+                                            Queue<String> allConsumed) {
         KeyOrderLedger.Recorder recorder = orderRecorder();
         return new ManagedPCInstance(config, getKcu(), (incarnationId, context) -> {
             // recorded FIRST and released LAST, so the bracket is the user function's real execution
             // window - what KeyOrderLedger's overlap half is asserting about
             KeyOrderLedger.Delivery delivery = recorder == null ? null : recorder.started(incarnationId, context);
+            // Counted at ENTRY, where totalConsumed is counted at exit. The pair is the measurement:
+            // a completion counter alone reads a fleet busy inside HEAVY_SLEEP as a flat line, which
+            // is indistinguishable from a fleet that is genuinely stuck. started-minus-consumed is
+            // work in flight, and it separates "nothing is finishing" from "nothing is happening".
+            totalStarted.incrementAndGet();
             try {
                 String identity = identityOf(context);
                 if (isHeavyKey(identity, heavyEvery)) {
@@ -193,6 +199,8 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
     protected static class FleetBootstrap {
         ExecutorService pcExecutor;
         AtomicLong totalConsumed;
+        /** Incremented at user-function ENTRY - see {@link #newInstance} for why the pair is needed. */
+        AtomicLong totalStarted;
         Queue<String> allConsumed;
         Set<String> expectedKeys;
         Thread producerThread;
@@ -212,6 +220,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                                             int initialFleetSize, int heavyEvery, Duration heavySleep) {
         // fleet-wide consumption tracking (the probe's watermark + the ledger's evidence)
         AtomicLong totalConsumed = new AtomicLong();
+        AtomicLong totalStarted = new AtomicLong();
         Queue<String> allConsumed = new ConcurrentLinkedQueue<>();
         ExecutorService pcExecutor = Executors.newWorkStealingPool();
 
@@ -222,7 +231,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
         produceRange(topic, 0, preProduce, expectedKeys);
 
         // protected first member - chaos never touches it, so the group always has a healthy survivor
-        ManagedPCInstance pc0 = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+        ManagedPCInstance pc0 = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, totalStarted, allConsumed);
         pc0.start(pcExecutor);
         await().atMost(30, SECONDS).until(() -> totalConsumed.get() > 100);
 
@@ -233,14 +242,14 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
         List<ManagedPCInstance> initialFleet = new ArrayList<>();
         initialFleet.add(pc0);
         for (int i = 1; i < initialFleetSize; i++) {
-            ManagedPCInstance pc = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, allConsumed);
+            ManagedPCInstance pc = newInstance(pcConfig, heavyEvery, heavySleep, totalConsumed, totalStarted, allConsumed);
             initialFleet.add(pc);
             pc.start(pcExecutor);
         }
 
         ProgressProbe probe = new ProgressProbe(getKcu(), getKcu().getGroupId(), topic,
                 totalConsumed::get, expectedMessages);
-        return new FleetBootstrap(pcExecutor, totalConsumed, allConsumed, expectedKeys,
+        return new FleetBootstrap(pcExecutor, totalConsumed, totalStarted, allConsumed, expectedKeys,
                 producerThread, pc0, initialFleet, probe);
     }
 
@@ -257,7 +266,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                 .maxFleetSize(maxFleetSize)
                 .pcExecutor(fleet.getPcExecutor())
                 .instanceFactory(() -> newInstance(pcConfig, heavyEvery, heavySleep,
-                        fleet.getTotalConsumed(), fleet.getAllConsumed()))
+                        fleet.getTotalConsumed(), fleet.getTotalStarted(), fleet.getAllConsumed()))
                 .protectedInstance(fleet.getPc0())
                 .initialFleet(fleet.getInitialFleet())
                 .observer(fleet.getProbe());

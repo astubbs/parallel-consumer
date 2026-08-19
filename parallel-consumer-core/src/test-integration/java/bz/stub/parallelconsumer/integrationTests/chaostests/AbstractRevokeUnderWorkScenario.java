@@ -143,6 +143,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
                 INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
         AtomicLong totalConsumed = fleet.getTotalConsumed();
+        AtomicLong totalStarted = fleet.getTotalStarted();
         Queue<String> allConsumed = fleet.getAllConsumed();
         Set<String> expectedKeys = fleet.getExpectedKeys();
         ProgressProbe probe = fleet.getProbe()
@@ -184,6 +185,18 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 log.warn("=== chaos.diagnoseStallRecovery ACTIVE - quiet cap {} and no fail-fast. " +
                         "This is a DIAGNOSTIC run: violations are still asserted at the end, so this " +
                         "cannot make the test pass. ===", DIAGNOSTIC_QUIET_CAP);
+                // The prior art nobody greps, delivered at the moment it is about to be repeated: the
+                // six prior-art checks in AGENTS.md search docs, PRs and issues, and none of them
+                // reaches a class javadoc. This exact experiment was run once before at the 90s/45s
+                // shape and is recorded there, and was re-derived in August 2026 by someone who had
+                // done the documented checks correctly.
+                log.warn("=== BEFORE INTERPRETING THIS RUN, read the scenario class's 'Calibration " +
+                        "status' javadoc. A recovery diagnostic has been run on this family before " +
+                        "and already established that the freeze RESOLVES and the backlog completes " +
+                        "at the pre-2026-07-30 shape. If your result is 'it recovers', you have " +
+                        "reproduced a known result - the NEW question is whether it still recovers " +
+                        "at the current shape, and how long it takes against the {} bound. ===",
+                        ProgressProbe.LAG_STAGNATION_BOUND);
                 quiet = quiet.atMost(DIAGNOSTIC_QUIET_CAP);
             } else {
                 quiet = quiet.atMost(QUIET_CAP).failFast("probe violation", probe::hasViolations);
@@ -192,9 +205,15 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 boolean done = totalConsumed.get() >= EXPECTED_MESSAGES
                         && allConsumedCovers(expectedKeys, allConsumed);
                 if (DIAGNOSE_STALL_RECOVERY) {
-                    // The recovery curve is the measurement - flat means wedged, creeping means bounded.
-                    log.info("[diagnose] quiet phase: consumed={}/{} violations={} done={}",
-                            totalConsumed.get(), EXPECTED_MESSAGES, probe.getViolations().size(), done);
+                    // Both ends of the user function, because a completion counter alone cannot tell
+                    // "nothing is finishing" from "nothing is happening": a fleet all sitting inside
+                    // HEAVY_SLEEP reads as a flat line while it is fully busy. inFlight is the
+                    // difference, and it is what makes a flat consumed count interpretable.
+                    long started = totalStarted.get();
+                    long consumed = totalConsumed.get();
+                    log.info("[diagnose] quiet phase: consumed={}/{} started={} inFlight={} violations={} done={}",
+                            consumed, EXPECTED_MESSAGES, started, started - consumed,
+                            probe.getViolations().size(), done);
                 }
                 return done;
             });
