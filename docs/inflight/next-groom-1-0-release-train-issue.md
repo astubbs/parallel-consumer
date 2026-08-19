@@ -1,6 +1,7 @@
 # Groom the 1.0 release train issue against the roadmap data
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: release-gate -->
+
 
 astubbs#135 (mirroring confluentinc#172) is the 1.0 release train. It has not been groomed in years and
 is now a second, stale account of something `docs/data/roadmap.yaml` owns.

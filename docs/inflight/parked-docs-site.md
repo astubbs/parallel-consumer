@@ -1,6 +1,7 @@
 # Parked: documentation site
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: decided-no -->
+
 
 The docs are heading for a proper generated site rather than one enormous `README.adoc`.
 

@@ -1,6 +1,7 @@
 # Disabled CI jobs, and highcpu runner load
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: coordination -->
+
 
 - **`Kafka Compat (experimental 4.x)` is disabled** (`if: false` in `maven.yml`) - it cannot compile
   under kafka-clients 4.x until the 0.7.x migration. Re-enable with

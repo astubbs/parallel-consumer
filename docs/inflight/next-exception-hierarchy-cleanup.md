@@ -1,6 +1,7 @@
 # PC's exceptions have three roots and no consistent name
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: candidate -->
+
 
 **Priority: high, and easy.** Mechanical, well-bounded, and the major-version gate is open
 (`docs/refactoring.md` - `0.6.0.0` is the major being cut and already carries a `=== Breaking`

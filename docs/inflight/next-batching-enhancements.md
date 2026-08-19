@@ -1,6 +1,7 @@
 # Batching enhancements - ideation done, direction decision pending
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: candidate -->
+
 
 > Extracted from `origin/docs/ideate-batching-enhancements` @98a5ea8f5, `docs/inflight/next-batching-enhancements.md`.
 

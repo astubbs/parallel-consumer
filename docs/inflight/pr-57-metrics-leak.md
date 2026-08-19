@@ -1,6 +1,7 @@
 # astubbs#57 - PCMetrics leak (confluentinc#859) + cherry-picks
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: coordination -->
+
 
 Fixes duplicate Micrometer meter re-registration on assignment/revocation, and bundles the
 `confluentinc#893` (offset accuracy on assignment) and `confluentinc#905` (max-queued-records-per-shard

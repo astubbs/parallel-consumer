@@ -1,6 +1,7 @@
 # Two branches' parallelism measurements may have a contaminated control arm
 
-<!-- inflight-priority: medium -->
+<!-- inflight-class: misdirection -->
+
 
 `ci/reenable-parallel-tests` and `optimize/unit-gate` both measure JUnit execution parallelism. Any numbers
 they gathered before core stopped configuring the other modules' runners were taken against an "off" arm that

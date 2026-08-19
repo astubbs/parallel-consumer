@@ -1,6 +1,7 @@
 # Branch: HTTP-strategy ideation (astubbs#242)
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: stranded-work -->
+
 
 > Extracted from `origin/docs/proxy-http-ideation` @1867d15db, `docs/inflight/branch-proxy-http-ideation.md`.
 > That branch has since been merged into `feats/proxy-requirements` (astubbs/parallel-consumer#293)

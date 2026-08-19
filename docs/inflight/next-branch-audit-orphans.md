@@ -1,6 +1,7 @@
 # Branch audit 2026-08-17: orphans to investigate
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: stranded-work -->
+
 
 A full sweep of all 196 origin branches against the tracking corpus (upstream-map.yaml,
 docs/refactoring.md, upstream-pr-analysis.adoc, docs/inflight/, docs/upstream.md) found the

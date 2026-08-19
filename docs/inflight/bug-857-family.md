@@ -1,6 +1,7 @@
 # The confluentinc#857 family - what is still open
 
-<!-- inflight-priority: high - the fork's longest-running product defect, still open, and new sightings keep landing on unrelated branches -->
+<!-- inflight-class: data-loss -->
+
 
 Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom.
 

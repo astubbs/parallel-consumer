@@ -99,50 +99,42 @@ inflight_title() { # <file> -> its heading, else its slug
     printf '%s' "$t"
 }
 
-# The high-priority notes are ALSO lifted into a block of their own, above the groups. They stay
-# marked in place with `!!` so a reader who scans by category still sees which ones they are, but a
-# high-priority note sitting in a low-priority group (a `parked-` item that still binds everyone) is
-# exactly the one a category-ordered list buries. The reason is printed once, here.
-priority=$(grep -rl 'inflight-priority:[[:space:]]*high' docs/inflight --include='*.md' 2>/dev/null \
-             | grep -v 'AGENTS.md' | sort)
-if [ -n "$priority" ]; then
-    emit "**Read these first** - they bind work that looks unrelated:"
-    while IFS= read -r f; do
-        why=$(sed -n 's/.*inflight-priority:[[:space:]]*high[[:space:]]*-[[:space:]]*//p' "$f" \
-                | head -1 | sed 's/[[:space:]]*-->.*//')
-        emit "- $(inflight_title "$f") - ${why:-no reason given}  \`${f}\`"
-    done <<< "$priority"
-    emit ""
-fi
-
 emit "**Open work** (\`docs/inflight/\`, one file per item) - grouped by what it costs you to not know:"
 emit ""
 
 # bug first (defects in shipped code), tooling next (fires on everyone), then tests, then
 # cross-branch state, then the long tail, then candidates, and parked last.
-for cat in bug ci test branch pr release deps perf static web next parked; do
-    files=$(find docs/inflight -maxdepth 1 -name "${cat}-*.md" -type f 2>/dev/null | sort)
+# GROUPED BY CONSEQUENCE, not by filename prefix. The prefix says what KIND of file it is; the class
+# says what it costs you if you do not know. Those are different questions and the second is the one
+# a reader has. A class also spans prefixes - `misdirection` shows up under ci-, test-, branch-,
+# deps- AND static-, and grouping by prefix scatters that family across five headings.
+#
+# THE ORDER IS THE POINT, and it is not severity. Signal integrity comes FIRST: you cannot judge the
+# state of the code through instruments that lie, and acting on a false green is worse than acting
+# on nothing - which is why `misdirection` outranks `blind-spot`, and both outrank any product
+# defect. docs/inflight/AGENTS.md defines each class.
+for class in misdirection blind-spot data-loss stall security config-lie throughput \
+             release-gate stranded-work coordination deps-debt candidate decided-no; do
+    files=$(grep -rl "inflight-class:[[:space:]]*${class}[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
+              | grep -v 'AGENTS.md' | sort)
     [ -n "$files" ] || continue
     n=$(printf '%s\n' "$files" | grep -c .)
-    emit "**${cat}** (${n})"
-    # Within a group: high, then medium, then low. Group order already ranks CATEGORIES by what it
-    # costs you to not know; this ranks the members against each other, which is the only place a
-    # per-note level earns anything - 21 `next-` candidates in filename order tell you nothing about
-    # which to read. An unmarked note sorts with `low`, so forgetting the marker is quiet rather
-    # than promoting the note.
-    for level in high medium low; do
-        while IFS= read -r f; do
-            noted=$(sed -n 's/.*inflight-priority:[[:space:]]*\([a-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)
-            [ -n "$noted" ] || noted=low
-            [ "$noted" = "$level" ] || continue
-            case "$level" in
-                high) emit "- !! $(inflight_title "$f")" ;;
-                *)    emit "- $(inflight_title "$f")" ;;
-            esac
-        done <<< "$files"
-    done
+    emit "**${class}** (${n})"
+    while IFS= read -r f; do
+        emit "- $(inflight_title "$f")"
+    done <<< "$files"
     emit ""
 done
+
+# Anything unclassified is still listed, because a missing marker must not hide a note.
+unclassified=$(find docs/inflight -maxdepth 1 -name '*.md' -type f 2>/dev/null \
+                 | grep -vE '(AGENTS|CLAUDE)\.md' | sort \
+                 | while IFS= read -r f; do grep -q 'inflight-class:' "$f" || printf '%s\n' "$f"; done)
+if [ -n "$unclassified" ]; then
+    emit "**unclassified** - no \`inflight-class\` marker yet:"
+    while IFS= read -r f; do emit "- $(inflight_title "$f")"; done <<< "$unclassified"
+    emit ""
+fi
 
 emit "**Dated plans and investigations** (\`docs/plans/\`) - the method that settled a question of this shape before:"
 plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')

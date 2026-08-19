@@ -1,6 +1,7 @@
 # Agent polling loops leak, because nothing bounds them
 
-<!-- inflight-priority: medium -->
+<!-- inflight-class: stall -->
+
 
 Found 2026-08-18 while clearing a merged worktree: it could not be removed because a shell from a
 session **five days earlier** still held it as its working directory.

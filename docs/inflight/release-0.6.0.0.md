@@ -1,6 +1,7 @@
 # Release 0.6.0.0
 
-<!-- inflight-priority: medium -->
+<!-- inflight-class: release-gate -->
+
 
 **Tracking issue: astubbs#197.** That issue is the linkable handle - from PRs, from mirrors, from upstream
 comments. This file is the detail behind it. Keep them in step: if a blocker is resolved here, tick it
