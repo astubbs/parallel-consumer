@@ -1,5 +1,11 @@
 # Parked: documentation site
 
+> **Status:** parked. Superseded by [#208 - Publish the docs as a versioned documentation site,
+> not one 1578-line README](https://github.com/astubbs/parallel-consumer/issues/208), which carries
+> the full proposal: splitting quickstart, manual, configuration reference and roadmap out of the
+> 1578-line `README.adoc`, versioned docs for 0.5.x / 0.6.0.0 / 0.7, and search plus navigation that
+> GitHub's Asciidoc rendering cannot provide.
+
 The docs are heading for a proper generated site rather than one enormous `README.adoc`.
 
 **Tracked in [#208](https://github.com/astubbs/parallel-consumer/issues/208)** - options, the
