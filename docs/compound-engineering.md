@@ -37,7 +37,7 @@ before:
 | It merged ~10 min before a background agent closed that gap | `.claude/hooks/check-merge-outstanding-work.sh` - refuses a merge while this session has work in flight |
 | Building the reproduction found a **third precondition** nobody had named | `docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md`, and the retirement of the note that had assumed bad luck |
 | The new guard's own review found it bypassable, and its self-test suite unable to fail | negative controls for every arm; the suite now exits non-zero when a case fails |
-| None of this was findable without knowing to grep | `inflight-class` on all 70 notes, grouped by consequence at session start |
+| None of this was findable without knowing to grep | `inflight-type`/`impact`/`state` on all 71 notes, grouped by consequence at session start, with a gate that rejects a tag the index could not place |
 
 The bug fix is the smallest artefact in that table.
 
