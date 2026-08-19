@@ -327,6 +327,12 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 ## Code Style
 
 - **Lombok** used extensively (builders, getters, logging); IntelliJ Lombok plugin required.
+- **Never discard a return value silently - name it and say why.** `boolean ignoredX = call();` with
+  a one-line comment beats `call();`, because a bare call reads identically whether ignoring the
+  result was a decision or an oversight, and a reader cannot tell which without reconstructing the
+  author's intent. If the value turns out to be worth acting on, act on it and name it for what it
+  is. Found via `ConsumerManager.close()`, which dropped a `tryClaimOwnership()` refusal and let a
+  foreseeable shutdown race surface as a bare guard exception instead of an explained one.
 - **EditorConfig** enforced - 4-space Java indent, 120-char lines.
 - **Google Truth** for test assertions, with JUnit 5 and Mockito.
 - **License headers** are enforced by `bin/check-copyright-headers.sh`, and there is no tool that

@@ -328,7 +328,18 @@ public class ConsumerManager<K, V> {
         // If the poll loop is somehow still live (closeAndWait timed out and the close sequence
         // proceeded anyway), the claim fails and the guarded close below throws - closing a
         // consumer another thread is actively using must never be legalised.
-        consumer.tryClaimOwnership();
+        boolean claimedForClose = consumer.tryClaimOwnership();
+        if (!claimedForClose) {
+            // Named and logged rather than branched on. Skipping the close here would swallow the
+            // report: the guarded close throws, doClose catches it, and THAT is where the user
+            // learns the consequence - no LeaveGroup, so the group's next rebalance waits out
+            // session.timeout.ms. This line only makes the cause legible first, so an expected
+            // shutdown race does not arrive as a bare guard exception that reads like a defect.
+            log.warn("Could not take consumer ownership for the final close - the broker-poll thread " +
+                    "is still alive and holds it, which means an earlier step in the close sequence " +
+                    "did not complete. The close below will refuse; the warning that follows explains " +
+                    "the cost.");
+        }
         consumer.close(defaultTimeout);
         log.debug("ConsumerManager closed");
     }
