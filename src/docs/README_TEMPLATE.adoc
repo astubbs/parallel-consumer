@@ -1520,12 +1520,34 @@ The ordering matters: the assignor is the larger effect by far, because it gover
 | ~0.15%
 |===
 
-CAUTION: These numbers come from this project's *chaos test suite*, which stops and restarts fleet
-members every few hundred milliseconds for a solid minute while deliberately slow records are in
-flight. It is built to be far more hostile than production, precisely so that effects like this are
-visible. *Do not read these as rates you should expect* -- a normally-operating deployment rebalances
-rarely, and would see a small fraction of this. Treat the table as showing the *relative* difference
-between the four configurations, which is the part that carries over.
+CAUTION: *Where these numbers come from, and what they are not.* They were measured on 2026-08-19 by
+this project's *chaos test suite* -- `ChaosRevokeUnderWorkIT` and its cooperative and draining
+variants -- on a single seed, `4734674029169027864`, one run per configuration. That suite stops and
+restarts fleet members every few hundred milliseconds for a solid minute while deliberately slow
+records are in flight, and is built to be far more hostile than production precisely so effects like
+this are visible at all.
++
+So: *do not read these as rates you should expect.* A normally-operating deployment rebalances
+rarely and would see a small fraction of this, and one run per cell is a direction rather than a
+precise figure. The *relative* ordering between the four configurations is the part that carries
+over, and it is large enough that a single run establishes it.
++
+To regenerate them, run the four cells against the same seed and count deliveries beyond the
+expected record total:
++
+[source,bash]
+----
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+  -Dincluded.groups=chaos -Dexcluded.groups= \
+  -Dchaos.seed=4734674029169027864 \
+  -Dit.test='ChaosRevokeUnderWorkIT'                  # eager, close()
+# then ChaosRevokeUnderWorkDrainIT, ChaosRevokeUnderWorkCooperativeIT,
+# ChaosRevokeUnderWorkCooperativeDrainIT for the other three cells
+----
++
+NOTE: A forthcoming demonstration application will supersede this table by running these
+configurations interactively -- against your own topic and your own processing function, which
+answers the question a published table never can.
 
 None of this makes replay impossible, and nothing can: as stated above, replay across failure cannot
 be prevented, so a processing function that must not repeat side effects still needs to be idempotent

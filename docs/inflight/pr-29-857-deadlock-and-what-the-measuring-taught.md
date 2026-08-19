@@ -41,12 +41,26 @@ left the live threads without a home. Append here as you go rather than reconstr
 
 **Decisions that are the owner's, not an agent's**
 
-- **What to do about the 150s `LAG_STAGNATION_BOUND`.** Three honest options, and the evidence does
-  not pick between them: raise it with the multi-restart arithmetic written down, shorten
-  `HEAVY_SLEEP` so redelivery chains cost less, or accept that the eager arm cannot host a Class 2
-  hunt and let the cooperative arm own it. **Not** an option: nudging it until a run goes green -
-  the July recalibration already did that once, from arithmetic that assumed a single restart.
-  Background: `test-class2-probe-asserts-timing-not-correctness.md`.
+- **DECIDED 2026-08-19 by the owner: stop GATING on `LAG_STAGNATION_BOUND`.** The question asked was
+  "shouldn't we just remove it - it isn't testing anything", and it holds up: a genuinely wedged run
+  is already caught twice without it, by the quiet-phase `await()` failing at `QUIET_CAP` and by the
+  scenario's `@Timeout(600)` behind that. The bound's only unique contributions are detecting
+  earlier and naming the partition, bought at the cost of firing on every slow-but-correct run and -
+  through `failFast` - destroying the evidence at the moment of detection.
+  <br>
+  **Keep the measurement, drop the gate.** The peak stagnation figure is worth having in an autopsy;
+  it must not fail a build. `ProgressProbe` already has the mechanism - observer mode records
+  violations without gating - so this is a mode change rather than a deletion, and the peak stays in
+  the autopsy block either way.
+  <br>
+  What takes over as the gate is the shard-progress check: holding work while completing none is a
+  real wedge, and unlike a duration it cannot fire on slowness. **Sequence matters** - land the
+  shard check, prove it fires and stays silent in the right places, and only then stop gating on the
+  bound. Doing it the other way leaves a window with no Class 2 gate at all. The three options
+  previously listed here (raise the bound, shorten `HEAVY_SLEEP`, retire the eager arm) are
+  superseded; the rejected move is unchanged - nudging a threshold until a run goes green, which the
+  July recalibration already did once. Background:
+  `test-class2-probe-asserts-timing-not-correctness.md`.
 - **Whether the ordering ledger should gate.** `ChaosKeyOrderIT` is `@Tag("chaos")`, so ordering
   under real churn runs only on demand; what gates every build is `KeyOrderLedgerIT`, which checks
   the ledger's LOGIC against synthetic histories. So a genuine ordering regression under churn would
@@ -57,9 +71,12 @@ left the live threads without a home. Append here as you go rather than reconstr
 **Evidence gaps, stated rather than hidden**
 
 - **The four-cell matrix is one seed and one run per cell.** The direction is unambiguous (0 vs 53
-  violations, 405 vs 2,421 duplicates) but the numbers are not repeat-measured, and they are now
-  quoted in the README's `reducing-duplicate-replay` table. If that table is to carry weight, the
-  cells want repeating across seeds.
+  violations, 405 vs 2,421 duplicates) but the numbers are not repeat-measured. **Addressed rather
+  than left implicit**: the README table now states the date, the seed, the scenario classes and
+  one-run-per-cell in its caption, and carries the command to regenerate them - so a reader can tell
+  what the numbers are worth and reproduce them. Repeating across seeds would still strengthen it.
+  The owner's note is that the demo app supersedes this table entirely once it can run the
+  configurations against a user's own topic, which is recorded in the caption as a forward pointer.
 - **The drain arm was run twice** because the first run's log was truncated by a full `/tmp`; only
   the second is valid. Any re-measurement should filter maven output at source rather than writing
   raw logs to a shared tmpfs.
