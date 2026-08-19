@@ -267,7 +267,7 @@ entries:
     horizon: next-0x
     blocks_1_0: false
     stage: planned
-    stage_delivery: pending-merge
+    stage_delivery: draft
     stage_detail: >-
       The site design is drafted on astubbs#316 - explicitly design only, no site is built there;
       astubbs#302 holds the intent.
