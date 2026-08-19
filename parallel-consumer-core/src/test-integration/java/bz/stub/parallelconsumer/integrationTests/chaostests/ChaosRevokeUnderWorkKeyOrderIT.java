@@ -38,7 +38,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * and fleet shape are inherited, so the ordering claim is added to the same disturbance the matrix
  * measured.
  *
- * <h2>Two calibration traps, both already paid for in {@link ChaosKeyOrderIT} - do not rediscover</h2>
+ * <h2>Three calibration traps - two already paid for in {@link ChaosKeyOrderIT}, one paid for here</h2>
  * <ul>
  *   <li><b>{@link #KEY_SPACE} must be coprime with {@code HEAVY_EVERY}</b> (2000): the heavy tail is
  *   spaced on the record index, so a common factor lands the entire tail on few keys - in the worst
@@ -52,6 +52,10 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   the legitimate freeze window (60s storm + short chains + commit slack, ~90s) well under the
  *   150s Class 2 bound, while still ~3000x a normal record so revokes genuinely catch work in
  *   flight.</li>
+ *   <li><b>Storm ticks are W5's 1000-2500ms, not the matrix cells' 300-1000ms</b> - eager rebalances
+ *   must COMPLETE between membership changes or every key's sequence splits into single-delivery
+ *   epoch windows and the ordering ledger asserts nothing; see {@link #STORM_TICK_MIN}, whose
+ *   javadoc carries the measured cost of getting this wrong.</li>
  * </ul>
  * <p>
  * ~111 records per key ({@code EXPECTED_MESSAGES} 250k / 2251), so every key's shard holds a real
@@ -78,6 +82,20 @@ class ChaosRevokeUnderWorkKeyOrderIT extends AbstractRevokeUnderWorkScenario {
     /** See the class javadoc's trap list for why this is far below the matrix cells' 20s. */
     private static final Duration HEAVY_SLEEP_KEY = Duration.ofSeconds(3);
 
+    /**
+     * W5's tick range (1000-2500ms), NOT the matrix cells' 300-1000ms - the third trap, and this one
+     * was rediscovered the expensive way before this override existed: at 300-1000ms the first run of
+     * this cell (2026-08-19, seed 4734674029169027864) had eager rebalances arriving faster than they
+     * complete, which under KEY ordering both shreds key sequences into single-delivery epoch windows
+     * (asserting nothing - the vacuity {@code KeyOrderLedger#check} exists to call out) and re-delivers
+     * every revoked shard's queue on each storm tick, pinning two partitions' commit watermarks to a
+     * 154s stagnation against the 150s Class 2 bound. The ordering claim needs windows a rebalance
+     * GAP long; the revoke-under-work collisions it also needs survive at this rate (the storm still
+     * lands ~40 membership actions on heavy in-flight work).
+     */
+    private static final Duration STORM_TICK_MIN = Duration.ofMillis(1_000);
+    private static final Duration STORM_TICK_MAX = Duration.ofMillis(2_500);
+
     /** One recorder for the whole fleet and the whole run - see {@link ChaosScenarioBase#orderRecorder}. */
     private final KeyOrderLedger.Recorder recorder = new KeyOrderLedger.Recorder();
 
@@ -101,6 +119,16 @@ class ChaosRevokeUnderWorkKeyOrderIT extends AbstractRevokeUnderWorkScenario {
     @Override
     protected Duration heavySleep() {
         return HEAVY_SLEEP_KEY;
+    }
+
+    @Override
+    protected Duration minTick() {
+        return STORM_TICK_MIN;
+    }
+
+    @Override
+    protected Duration maxTick() {
+        return STORM_TICK_MAX;
     }
 
     @Override

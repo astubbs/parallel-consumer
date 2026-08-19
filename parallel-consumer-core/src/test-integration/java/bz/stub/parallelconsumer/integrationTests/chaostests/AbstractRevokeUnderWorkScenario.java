@@ -136,6 +136,25 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     }
 
     /**
+     * Storm tick range - 300-1000ms for the matrix cells (more rebalances per run = more
+     * revoke-under-work collisions, the class javadoc's calibration). Promoted for the KEY cell,
+     * which CANNOT run that fast under the eager assignor: {@code ChaosKeyOrderIT}'s
+     * {@code minTick} javadoc records that membership changes arriving faster than an eager
+     * rebalance completes keep the group permanently unstable, which both accrues the Class 1 dwell
+     * clock artificially AND splits every key's sequence into single-delivery assignment-epoch
+     * windows - and a window with one delivery asserts nothing, so the ordering ledger it exists for
+     * would go vacuous ({@code LEDGER_ORDER_VACUOUS}).
+     */
+    protected Duration minTick() {
+        return Duration.ofMillis(300);
+    }
+
+    /** See {@link #minTick}. */
+    protected Duration maxTick() {
+        return Duration.ofMillis(1000);
+    }
+
+    /**
      * The conductor's action mix. Defaults to {@link ChaosConductor#defaultW4Weights()} - <b>no drain
      * stops at all</b>, because a drain opens the Class 1 zombie window and would mask the Class 2
      * mechanism this scenario exists to isolate.
@@ -186,9 +205,10 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, heavySleep(), MAX_FLEET)
                 .seed(seed.getValue())
-                // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
-                .minTick(Duration.ofMillis(300))
-                .maxTick(Duration.ofMillis(1000))
+                // matrix cells: faster ticks than W1 - more rebalances per run = more
+                // revoke-under-work collisions (the KEY cell overrides - see minTick())
+                .minTick(minTick())
+                .maxTick(maxTick())
                 .weights(chaosWeights())
                 .joinAfterDrainBias(0) // no drains to bias after
                 .build();
