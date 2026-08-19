@@ -22,6 +22,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -54,6 +55,25 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * Queue of commit responses, for other threads to block on
      */
     private final BlockingQueue<CommitResponse> commitResponseQueue = new LinkedBlockingQueue<>();
+
+    /**
+     * The exception that killed the broker-poll thread, published by that thread as it dies.
+     * <p>
+     * The poll thread is the <em>only</em> producer of commit responses, so a waiter can never learn
+     * of its death by waiting - waiting is precisely the thing that cannot work. Deriving the
+     * waiter's deadline from the poller's budget so that one expires first would only make the race
+     * usually resolve the right way; being told is the version that is always right. This is the same
+     * move {@link #maybeDoCommit()} already makes for a deferred commit, and the same shape as
+     * {@link ConsumerManager#setCloseInProgressSignal}.
+     */
+    private final AtomicReference<Throwable> pollerDeath = new AtomicReference<>();
+
+    /**
+     * Wake-up token, published once alongside {@link #pollerDeath}. Its request id matches nobody, so
+     * a waiter can only ever act on it through {@code pollerDeath} - its job is to end the blocking
+     * {@code poll()} at the moment of death, not to answer a request.
+     */
+    private static final CommitResponse POLLER_DIED = new CommitResponse(new CommitRequest());
 
     public ConsumerOffsetCommitter(final ConsumerManager<K, V> newConsumer, final WorkManager<K, V> newWorkManager, final ParallelConsumerOptions options) {
         super(newConsumer, newWorkManager);
@@ -138,30 +158,94 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         CommitRequest request;
     }
 
+    /**
+     * Waits for the broker-poll thread to answer a commit request.
+     * <p>
+     * The two ways this does not return normally are now genuinely different things, which is the
+     * point of astubbs#177 / confluentinc#833. A <b>dead</b> poller is an event: it publishes its own
+     * exception through {@link #notifyPollerDied} as it dies and this returns immediately with that
+     * as the cause - it is never waited out. A <b>timeout</b> therefore means what it says: the poller
+     * is alive and has not answered within {@code offsetCommitTimeout}. Neither message guesses at the
+     * other's cause; guessing is what sent users looking in the wrong place for years.
+     */
     private void commitAndWait() {
+        throwIfPollerDied(null);
+
         // request
         CommitRequest commitRequest = requestCommitInternal();
 
-        // wait
-        boolean waitingOnCommitResponse = true;
-        int attempts = 0;
-        while (waitingOnCommitResponse) {
-            if (attempts > ARBITRARY_RETRY_LIMIT)
-                throw new InternalRuntimeException("Too many attempts taking commit responses");
-
+        // wait - the only way out is our own response arriving, a death, or a timeout
+        for (int attempts = 0; attempts <= ARBITRARY_RETRY_LIMIT; attempts++) {
             try {
                 log.debug("Waiting on a commit response");
-                Duration timeout = AbstractParallelEoSStreamProcessor.DEFAULT_TIMEOUT;
                 CommitResponse take = commitResponseQueue.poll(commitTimeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
-                if (take == null) {
-                    throw InternalRuntimeException.msg("Timeout waiting for commit response {} to request {}", timeout, commitRequest);
+                if (take != null && commitRequest.getId().equals(take.getRequest().getId())) {
+                    // Our answer arrived, so this commit HAPPENED - report it as such even if the
+                    // poller died immediately afterwards of something unrelated. Checking the death
+                    // first would report "request X can never be answered" about a request that was
+                    // answered, which is the same kind of unestablished claim this whole change
+                    // exists to remove. The death is not lost: the next commit fails fast on it, and
+                    // the poller's exception still reaches the control thread through
+                    // AbstractParallelEoSStreamProcessor's supervise() backstop.
+                    return;
                 }
-                waitingOnCommitResponse = take.getRequest().getId() != commitRequest.getId();
+                throwIfPollerDied(commitRequest);
+                if (take == null) {
+                    // report the timeout actually waited (offsetCommitTimeout). This used to
+                    // interpolate the unrelated constant DEFAULT_TIMEOUT, so every one of these
+                    // errors claimed PT30S no matter what the option was set to - overstating the
+                    // default by 3x and making the number useless as a diagnostic.
+                    // TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
+                    // see docs/inflight/next-exception-hierarchy-cleanup.md
+                    throw InternalRuntimeException.msg(
+                            "Timeout waiting for commit response {} to request {} - the broker poll thread is the " +
+                                    "only producer of commit responses, and it has not died with an exception, so it is " +
+                                    "not answering: it is blocked or slower than the configured offsetCommitTimeout. Had " +
+                                    "it thrown, that would have been reported here immediately, with its own error as the " +
+                                    "cause. An Error rather than an Exception escapes that path and is reported by " +
+                                    "AbstractParallelEoSStreamProcessor's supervise() backstop instead",
+                            commitTimeout, commitRequest);
+                }
+                // an older request's response, or the wake-up token: keep draining until ours arrives
             } catch (InterruptedException e) {
                 log.debug("Interrupted waiting for commit response", e);
             }
-            attempts++;
         }
+        throw new InternalRuntimeException("Too many attempts taking commit responses");
+    }
+
+    /**
+     * Published by the broker-poll thread from its own exit path as it dies, so that a waiter is
+     * released <em>at that moment</em> rather than after {@code offsetCommitTimeout}.
+     * <p>
+     * Idempotent: only the first death is recorded, and the wake-up token is published only with it.
+     *
+     * @param cause what killed the poll thread - becomes the cause every stranded committer reports
+     */
+    void notifyPollerDied(Throwable cause) {
+        if (pollerDeath.compareAndSet(null, cause)) {
+            log.debug("Broker poll thread died - releasing any waiting committer now, and failing later ones fast", cause);
+            commitResponseQueue.add(POLLER_DIED);
+        }
+    }
+
+    /**
+     * @param commitRequest the request that can no longer be answered, or {@code null} when checking
+     *                      before one has been made
+     */
+    private void throwIfPollerDied(CommitRequest commitRequest) {
+        Throwable death = pollerDeath.get();
+        if (death == null) {
+            return;
+        }
+        String context = commitRequest == null
+                ? "no commit can be requested"
+                : "request " + commitRequest + " can never be answered";
+        // TODO(refactor): a user-facing failure wants a PC-named type - see
+        // docs/inflight/next-exception-hierarchy-cleanup.md
+        throw new InternalRuntimeException(
+                "The broker poll thread has died, so {} - its own error is the cause of this one",
+                death, context);
     }
 
     private CommitRequest requestCommitInternal() {

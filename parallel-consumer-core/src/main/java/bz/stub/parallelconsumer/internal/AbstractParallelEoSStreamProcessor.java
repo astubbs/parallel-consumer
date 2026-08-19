@@ -978,7 +978,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         //
         if (shouldTryCommitNow) {
             // offsets will be committed when the consumer has its partitions revoked
-            commitOffsetsThatAreReady();
+            commitOffsetsReportingPollerDeath();
         }
 
         // distribute more work
@@ -1025,6 +1025,49 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (log.isTraceEnabled()) {
             log.trace("End of control loop, waiting processing {}, remaining in partition queues: {}, out for processing: {}. In state: {}",
                     wm.getNumberOfWorkQueuedInShardsAwaitingSelection(), wm.getNumberOfIncompleteOffsets(), wm.getNumberRecordsOutForProcessing(), state);
+        }
+    }
+
+    /**
+     * Commit, and when that fails, report why the <em>poller</em> died rather than the symptom the
+     * control thread happens to observe.
+     * <p>
+     * The broker-poll thread is the only producer of commit responses, so any exception that escapes
+     * its control loop turns every later sync commit into
+     * {@code "Timeout waiting for commit response"} - a message that names neither the failing
+     * subsystem nor the failure. That symptom is what users report (astubbs#177, confluentinc#833) and it points
+     * nowhere near the cause.
+     * <p>
+     * {@link BrokerPollSystem#supervise()} holds the real exception, but the ordinary call at the end
+     * of {@link #controlLoop} never reaches it in this scenario: the poller dies <em>while servicing
+     * the commit this thread is already blocked on</em>, so the control thread is inside
+     * {@code commitAndWait()} rather than at the top of the loop. Moving that supervise call earlier
+     * in the loop does not help for the same reason - it was tried and measured. Supervising here, on
+     * the failure path, is what actually reaches it.
+     * <p>
+     * When the poller is healthy the commit failure is the whole story and is rethrown untouched. When
+     * it is not, the poller's exception becomes the cause and the commit failure is retained as
+     * suppressed, so neither is lost.
+     * <p>
+     * This is now the <b>backstop</b>, not the primary path. A poller that dies while servicing a
+     * commit publishes its own exception through
+     * {@link ConsumerOffsetCommitter#notifyPollerDied(Throwable)}, which releases the waiter at that
+     * moment with the right cause already attached. What is left for this to catch is a poller that
+     * died without reaching that call - before the committer existed, or through a route that does not
+     * run the poll thread's own exit path - and any commit failure in a mode that has no
+     * {@code ConsumerOffsetCommitter} at all.
+     */
+    private void commitOffsetsReportingPollerDeath() throws TimeoutException, InterruptedException {
+        try {
+            commitOffsetsThatAreReady();
+        } catch (InternalRuntimeException commitFailure) {
+            try {
+                brokerPollSubsystem.supervise();
+            } catch (RuntimeException pollerFailure) {
+                pollerFailure.addSuppressed(commitFailure);
+                throw pollerFailure;
+            }
+            throw commitFailure;
         }
     }
 
