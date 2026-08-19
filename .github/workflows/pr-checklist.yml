@@ -8,8 +8,10 @@
 # Real bot PRs (Dependabot/Renovate etc., GitHub user type "Bot") don't use the template and are
 # exempt entirely. Re-runs on body edits.
 #
-# It then enforces the changelog issue-reference convention on top. That gate's logic lives in
-# .github/scripts/changelog-ref-gate.js so it can be unit tested; this job runs those tests first.
+# It then enforces three citation conventions on top - the changelog's issue references, issue
+# references anywhere in the diff or the PR body, and the existence of cited file paths. Each one's
+# logic lives in its own .github/scripts/*-ref-gate.js module so it can be unit tested; this job runs
+# every one of those test suites before the gates themselves.
 
 name: PR Checklist
 
@@ -44,6 +46,9 @@ jobs:
 
       - name: Self-test the issue-reference gate logic
         run: node .github/scripts/issue-ref-gate.test.js
+
+      - name: Self-test the file-reference gate logic
+        run: node .github/scripts/file-ref-gate.test.js
 
       - name: Self-test the roadmap stage gate logic
         run: node .github/scripts/roadmap-stage-gate.test.js
@@ -186,6 +191,80 @@ jobs:
             core.setFailed(gate.formatFailure(hits, {
               repo: `${context.repo.owner}/${context.repo.repo}`,
             }));
+
+      # AGENTS.md -> "Cite by anchor, never by line number" tells authors to cite a path plus a
+      # greppable string, and to run the grep first. Nothing ran it, and docs/citations.md said so:
+      # "nothing in CI checks any of this". The bill came in as bin/check-review-gate-contract.sh -
+      # cited by docs/ci.md as the check to run, never written, and unnoticed through every review
+      # since. A path that looks right reads as right, which is why review does not catch this class.
+      #
+      # WHOLE TREE, RATCHETED AGAINST THE BASE. Deleting a file does not change one line in the documents
+      # that cite it, so a diff-scoped gate is blind to the commonest way a citation breaks - and
+      # that is not a corner case: two moves account for 59 of the 87 references this repo had to
+      # repair. So this reads every citing file in the checkout, not `pulls.listFiles`, which also
+      # removes the "GitHub omits `patch` on a very large diff" hole its sibling gate has to live
+      # with. It is affordable only because the tree is clean and this gate keeps it clean: a red
+      # result means THIS branch broke something, not that it inherited something.
+      #
+      # The matching lives in the gate module and is unit tested above; what is here is the plumbing
+      # that hands it this tree.
+      - name: Verify cited file paths exist
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const { execFileSync } = require("child_process");
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/file-ref-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - file reference gate skipped.`);
+              return;
+            }
+            if (gate.findOptOut(pr.body || "")) {
+              core.info("file-refs: N/A opt-out present - skipping.");
+              return;
+            }
+
+            const ws = process.env.GITHUB_WORKSPACE;
+            const tracked = execFileSync("git", ["ls-files"], { encoding: "utf8", cwd: ws })
+              .split("\n").filter(Boolean);
+
+            const docs = tracked.filter((f) => gate.CITING_FILE.test(f)).map((filename) => ({
+              filename,
+              lines: fs.readFileSync(`${ws}/${filename}`, "utf8").split("\n"),
+            }));
+
+            // The BASE tree, so this PR is answerable only for what it added. The checkout is
+            // shallow, so fetch the base ref first - one commit is enough, we only read its tree.
+            const base = pr.base.ref;
+            execFileSync("git", ["fetch", "--no-tags", "--depth=1", "origin", base],
+                         { cwd: ws, stdio: "ignore" });
+
+            // Same reader as bin/check-file-refs.sh, from the gate module - the byte-exact
+            // `cat-file --batch` slicing is not something to keep two copies of.
+            const baseTree = gate.readTreeDocs("FETCH_HEAD", (args, opts = {}) =>
+              execFileSync("git", args, {
+                encoding: opts.encoding || "utf8", input: opts.input,
+                cwd: ws, maxBuffer: 512 * 1024 * 1024,
+              }));
+            if (!baseTree) {
+              core.setFailed(`Could not read the base tree (${base}) - cannot tell new findings ` +
+                             "from inherited ones, so this gate is not making a judgement.");
+              return;
+            }
+
+            const inherited = gate.danglingRefs(baseTree.docs, gate.treeFrom(baseTree.names));
+            const dangling = gate.newFindings(gate.danglingRefs(docs, gate.treeFrom(tracked)), inherited);
+
+            if (dangling.length === 0) {
+              core.info(
+                `No new dangling file references (${docs.length} citing file(s), whole tree, ` +
+                `${inherited.length} inherited from ${base} ignored).`);
+              return;
+            }
+
+            core.setFailed(gate.formatFailure(dangling));
 
       - name: Verify new changelog entries cite an issue
         uses: actions/github-script@v7
