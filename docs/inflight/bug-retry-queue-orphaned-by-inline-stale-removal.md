@@ -61,7 +61,7 @@ so the exposure grows with instance uptime and rebalance count. Nobody has measu
 
 `retryQueue` is already a parameter of `getWorkIfAvailable`, so the call itself is trivial. The
 problem is what would be landing it into: **`RetryQueue` has three tests and all three cover
-ordering only** ([[test-retry-queue-behaviour-untested]] has the full gap list - the two-map
+ordering only** ([`test-retry-queue-behaviour-untested.md`](test-retry-queue-behaviour-untested.md) has the full gap list - the two-map
 `unique`/`sorted` invariant, last-write-wins re-add with a changed retry-due time, revoke behaviour,
 and shard/queue consistency after a stale removal by either path). A one-line fix into an untested
 class is how the next defect hides.

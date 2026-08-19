@@ -19,8 +19,9 @@ was asked. Knowledge held only in a conversation does not survive the turn it wa
 
 `docs/merge-checklist.md` was loaded in that very turn, by `inject-merge-checklist.sh`, and did not
 help: a checklist prompts for the things you remember to check against it, not for the thing you
-have forgotten you are waiting on. `.claude/hooks/check-merge-outstanding-work.sh` (astubbs#322)
+have forgotten you are waiting on. `.claude/hooks/check-merge-outstanding-work.sh` (astubbs#324)
 catches the narrow live-background-task case. This proposal is the general form.
+<!-- file-refs: N/A - the hook lands with astubbs#324, the tooling half of the astubbs#322 split -->
 
 ## The mechanism
 
@@ -71,5 +72,6 @@ power meaningful.
 
 ## Related
 
-`.claude/hooks/check-merge-outstanding-work.sh` and `docs/agent-harness.md` (the layers and what each
-can enforce). The incident write-up lives with astubbs/parallel-consumer#322.
+`.claude/hooks/check-merge-outstanding-work.sh` (astubbs#324) and `docs/agent-harness.md` (the
+layers and what each can enforce). The incident write-up lives with astubbs/parallel-consumer#322.
+<!-- file-refs: N/A - the hook lands with astubbs#324, the tooling half of the astubbs#322 split -->
