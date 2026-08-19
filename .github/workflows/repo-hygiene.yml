@@ -71,6 +71,16 @@ jobs:
       - name: Inflight notes carry valid tags
         run: bash bin/check-inflight-tags.sh
 
+      # Same sequencing again. This one guards a default that fails SILENTLY: a logback-test.xml
+      # committed at debug does not go red, it floods the log and slows the run - and the volume alone
+      # broke three tests when measured (see the script header). Nobody attributes a latch timeout to a
+      # logging default, which is why it is a gate and not a note.
+      - name: Self-test the test log config checker
+        run: bash bin/test-check-test-log-config.sh
+
+      - name: Test log config is flag-driven, not edited
+        run: bash bin/check-test-log-config.sh
+
   rename:
     name: "tooling: package rename"
     runs-on: ubuntu-latest

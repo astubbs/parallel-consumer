@@ -16,6 +16,65 @@ you have read this file.
   surefire and included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
 
+## Seeing test output: raise the level with a flag, never by editing the config
+
+**The test harness defaults to `warn`, so a passing-but-silent run is expected, not evidence that
+nothing happened.** Each of the four library modules' `src/test/resources/logback-test.xml` reads the
+`pc.log.level` system property for both the root logger and `bz.stub.parallelconsumer`:
+
+```bash
+./mvnw test -pl :parallel-consumer-core -am -Dpc.log.level=debug -Dtest=TheOneTest
+./mvnw test -pl :parallel-consumer-core -am -Dpc.log.level=trace -Dtest=TheOneTest
+```
+
+Surefire forwards the property into the forked JVM, so nothing needs editing and there is no
+uncommitted local edit to remember to revert. **Editing the default in the file is the thing this
+replaces** - that is how core alone drifted to `root=info` while vertx, reactor and mutiny all sat
+at `warn`.
+
+Measured over the whole core unit suite (387 tests): `info` produced **5,520** lines of Maven output
+and `warn` produces **3,687** - a third less, of which 1,438 were INFO-level lines and **196 were
+repeats of the `ParallelConsumerOptions` toString banner**, one per constructed instance. A third off
+the total is worth having, but the banner count is the real point: reading a *single* failing class
+means scrolling past its own options dump once per test.
+
+- **Narrow `-Dtest=` whenever you raise the level - the volume alone breaks tests.** Measured on
+  `ParallelEoSStreamProcessorTest` (58 tests): `warn` emits 869 lines and passes; `-Dpc.log.level=debug`
+  emits **469,202** and three tests fail on a 30-second loop-cycle latch. The same three pass at
+  `debug` when selected alone (4,586 lines). The console appender is synchronous, so a whole suite
+  at `debug` starves the control loop - a self-inflicted instance of the contention-versus-genuine-bug
+  question below. Do not read those timeouts as a product defect, and do not "fix" them.
+- **The flag is a blunt instrument; the file holds the sharp ones.** For one class, one Kafka
+  internal, or the standing kafka-client bootstrap harness, uncomment the relevant `<logger>` line -
+  `logback-test.xml` carries a commented, annotated switch for each, including the confluentinc#857
+  silent-stall set. Those are deliberate and documented; revert before committing.
+- **Test narration keeps a higher floor than the product** (in core's config, the only module with
+  integration tests). `bz.stub.parallelconsumer.integrationTests` defaults to `info`, not `warn`: what
+  made the old default noisy was product logging, whereas a test that deliberately logs a line is
+  saying something worth reading. It matters most for the chaos
+  suite's run-start banner (`=== CHAOS W1 churn storm: seed=... (replay: ...) ===`), the only copy of
+  the seed on a **passing** run - `buildAutopsy()` reprints it on failure, but a pass you later want to
+  replay has nothing else. It reads `${pc.log.level:-info}`, so the flag still raises it; a hard `info`
+  would have made `-Dpc.log.level=debug` silently skip the integration tests. Integration tests have no
+  `resources` directory of their own, so failsafe reads the **unit** module's `logback-test.xml`.
+- **Two levels are pinned on regardless and must stay that way**:
+  `org.apache.kafka.clients.consumer.internals.SubscriptionState` at `info` (offset-reset decisions -
+  one line each, and the number that settled the `committedOffsetRemoved[latest]` nudge race), and
+  `org.apache.kafka.common.config.AbstractConfig` at `error` (otherwise every client dumps its full
+  config).
+
+**`bin/check-test-log-config.sh` enforces all of the above** (Repo Hygiene, self-tested by
+`bin/test-check-test-log-config.sh`): the four library modules must drive both levels from
+`pc.log.level`, and no logger may be committed switched on at `debug`/`trace`. It exists because
+every failure here is silent - a `debug` default does not go red, it just floods the log, slows the
+run, and can time tests out. `parallel-consumer-examples/*` is deliberately out of scope: those are
+demonstration apps with tiny suites that legitimately run verbose (and `example-core` carries a
+`logback-temp-test.xml` that logback never loads at all).
+
+The autopsy block below is **not** affected by any of this - `AmbientProbeExtension` builds its
+report from state it collects itself and prints it on failure, so a quiet run still gets a full
+autopsy.
+
 ## The ambient probe: contention artifact, or genuine bug?
 
 Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
