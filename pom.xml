@@ -142,6 +142,17 @@
         <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
+
+        <japicmp.version>0.25.7</japicmp.version>
+        <!-- The baseline the api-compat profile compares against. This tracks the CURRENT snapshot
+             deliberately: master's snapshot is republished on every green push, so it answers
+             "does this branch change the published surface?". Change it to a released version
+             (e.g. 0.6.0.0) once one exists and the question becomes "does this release break users?". -->
+        <japicmp.baseline.version>0.6.0.0-SNAPSHOT</japicmp.baseline.version>
+        <!-- Set by bin/check-api-breaking.sh. Empty here so a bare `mvn -Papi-compat japicmp:cmp`
+             fails loudly rather than silently comparing something against itself. -->
+        <japicmp.baseline.jar/>
+        <japicmp.new.jar/>
         <logback.version>1.6.1</logback.version>
         <!-- Held at 1.13.0: keep the micrometer family version-aligned with
              micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
@@ -286,6 +297,80 @@
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
                             <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Java API-compatibility report (spike). Opt-in only: nothing here runs in a normal or CI
+             build unless -Papi-compat is passed. Sibling in intent to the proxy protocol's
+             `proto: breaking` gate (bin/check-proto-breaking.sh) - same problem, different schema
+             language. Reports only; it breaks no build yet, deliberately.
+
+             The baseline is the 0.6.0.0-SNAPSHOT that publish.yml deploys to Maven Central on every
+             green push to master, so the comparison answers "does this working tree change the
+             published surface?" - a question that has an answer today, before any release exists. -->
+        <profile>
+            <id>api-compat</id>
+            <repositories>
+                <repository>
+                    <id>central-snapshots</id>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+                    <releases>
+                        <enabled>false</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </repository>
+            </repositories>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>com.github.siom79.japicmp</groupId>
+                        <artifactId>japicmp-maven-plugin</artifactId>
+                        <version>${japicmp.version}</version>
+                        <configuration>
+                            <!-- BOTH SIDES ARE EXPLICIT FILES, NOT COORDINATES. A coordinate-based
+                                 <oldVersion> cannot express "the one on the remote": master's
+                                 published snapshot carries the SAME version string as the working
+                                 tree (0.6.0.0-SNAPSHOT), so Maven resolves both sides to the local
+                                 reactor/.m2 artifact and japicmp compares the new jar against
+                                 itself - reporting "No changes." green, forever, whatever you break.
+                                 That is the repo's green-without-having-run class:
+                                 docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md
+                                 bin/check-api-breaking.sh resolves the two paths and refuses to run
+                                 when they are the same file. -->
+                            <oldVersion>
+                                <file>
+                                    <path>${japicmp.baseline.jar}</path>
+                                </file>
+                            </oldVersion>
+                            <newVersion>
+                                <file>
+                                    <path>${japicmp.new.jar}</path>
+                                </file>
+                            </newVersion>
+                            <parameter>
+                                <!-- The published surface is everything public outside `.internal`.
+                                     That is the only public/internal boundary the project has today -
+                                     a package name plus one sentence in README.adoc. Naming it here
+                                     makes the build the place it is stated. -->
+                                <excludes>
+                                    <exclude>bz.stub.parallelconsumer.internal</exclude>
+                                </excludes>
+                                <onlyModified>true</onlyModified>
+                                <!-- Report both kinds, break on neither - see the spike's plan doc.
+                                     Binary: can an already-compiled caller still link?
+                                     Source:  can existing caller source still compile? -->
+                                <breakBuildOnBinaryIncompatibleModifications>false</breakBuildOnBinaryIncompatibleModifications>
+                                <breakBuildOnSourceIncompatibleModifications>false</breakBuildOnSourceIncompatibleModifications>
+                                <!-- Third-party types on the API surface (Kafka, SLF4J) are not on
+                                     japicmp's classpath; without this every one is a hard error. -->
+                                <ignoreMissingClasses>true</ignoreMissingClasses>
+                                <skipPomModules>true</skipPomModules>
+                            </parameter>
                         </configuration>
                     </plugin>
                 </plugins>

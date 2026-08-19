@@ -31,7 +31,10 @@ document. This section is the detail behind it.
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
   (`bin/ci-build.sh`). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
-  detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
+  detection, PR-scoped mutation testing (PIT), the `api: breaking` Java API-compatibility gate
+  (`bin/check-api-breaking.sh`, self-tested by `bin/test-check-api-breaking.sh` - **not** a required
+  check yet, see [`docs/inflight/ci-api-compatibility-gate.md`](inflight/ci-api-compatibility-gate.md)),
+  and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
