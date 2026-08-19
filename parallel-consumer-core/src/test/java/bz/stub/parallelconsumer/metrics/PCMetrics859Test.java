@@ -4,6 +4,8 @@ package bz.stub.parallelconsumer.metrics;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -94,6 +96,41 @@ class PCMetrics859Test {
         pcMetrics.close();
 
         assertThat(pcMetrics.registeredMeterCount()).isEqualTo(0);
+    }
+
+    /**
+     * The two halves of this file's history meeting: the confluentinc#859 leak fix made this method
+     * prune {@code registeredMeters}, and the never-throws teardown contract made it survive a
+     * hostile registry. Together they imply a <b>per-meter</b> guard - with the guard around the
+     * loop instead, the first throwing meter aborts the iteration and leaves the tail of the
+     * tracking set un-pruned, which is the leak the first half exists to prevent.
+     *
+     * <p>Neither branch could see this: the never-throws change was written against a
+     * registry-only loop with nothing to prune, and the leak fix against an unguarded one. It is
+     * asserted here because it is a merge-time decision, and an unproven guard is indistinguishable
+     * from a missing one.
+     */
+    @Test
+    void aThrowingRegistryMustNotStopThePrefixRemovalCleaningTheTrackingSet() {
+        MeterRegistry throwOnRemove = new SimpleMeterRegistry() {
+            @Override
+            public Meter remove(Meter meter) {
+                throw new IllegalStateException("registry refuses removal");
+            }
+        };
+        PCMetrics metrics = new PCMetrics(throwOnRemove, Collections.emptyList(), "throwing-instance");
+        try {
+            metrics.getTimerFromMetricDef(PCMetricsDef.OFFSETS_ENCODING_TIME);
+            assertThat(metrics.registeredMeterCount()).isEqualTo(1);
+
+            // must not propagate - teardown is reporting, and cannot be allowed to break shutdown
+            metrics.removeMetersByPrefixAndCommonTags(PCMetricsDef.OFFSETS_ENCODING_TIME.getName());
+
+            // and the tracking set must still be emptied, whatever the registry did
+            assertThat(metrics.registeredMeterCount()).isEqualTo(0);
+        } finally {
+            metrics.close();
+        }
     }
 
     /**
