@@ -1,5 +1,7 @@
 # Parked: the strict, head-fresh review gate
 
+<!-- inflight-priority: low -->
+
 The `claude-review` gate used to require a `claude[bot]` review **newer than the current head**,
 so a push after a review turned it red. It now asks only whether a finished review exists on the
 PR. The current contract is in [`docs/ci.md`](../ci.md) - read it there, not here.

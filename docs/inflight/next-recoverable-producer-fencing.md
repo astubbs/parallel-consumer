@@ -1,5 +1,7 @@
 # Next: make producer fencing recoverable instead of fatal
 
+<!-- inflight-priority: low -->
+
 > Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/inflight/next-recoverable-producer-fencing.md`.
 
 A `ProducerFencedException` during a transactional commit currently kills the PC instance. It should

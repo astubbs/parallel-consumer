@@ -1,5 +1,7 @@
 # A terminally failed send leaves the transaction abortable but unaborted
 
+<!-- inflight-priority: high - EOS correctness - a terminally failed send leaves the transaction abortable but unaborted -->
+
 Opened by astubbs#261, which fixed the data-correctness half of this and deliberately left the
 liveness half. Read that PR's "what this does not fix" section first; this note is the follow-up it
 owes.

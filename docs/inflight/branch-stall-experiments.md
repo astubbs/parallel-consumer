@@ -1,5 +1,7 @@
 # Stall-experiment branches - one result worth keeping, then delete
 
+<!-- inflight-priority: medium -->
+
 `docs/uber-stall-experiment-results`, with the `experiment/stall-uber-fix` / `stall-uber-nofix` arms:
 the composition experiment behind astubbs#80, which has merged.
 

@@ -1,5 +1,7 @@
 # Distributed throttling - ideation done, direction not chosen
 
+<!-- inflight-priority: low -->
+
 The ask is astubbs#228 (mirror of confluentinc#24), with confluentinc#766 as the production
 demand evidence - and it converges with astubbs#227 (mirror of confluentinc#21, dynamic
 concurrency control), the fork's oldest open self-tuning ambition. Ideation ran 2026-08-17,

@@ -1,5 +1,7 @@
 # Next: Dapr adapter — ideation done, probe is the first move
 
+<!-- inflight-priority: low -->
+
 > Extracted from `origin/docs/ideate-dapr-adapter` @d5c8cf1b0, `docs/inflight/next-dapr-adapter.md`.
 
 A full ideation pass on the Dapr adapter (the pluggable pub/sub component backed by this engine,

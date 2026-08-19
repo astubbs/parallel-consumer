@@ -1,5 +1,7 @@
 # Open PRs: what `gh pr list` cannot tell you
 
+<!-- inflight-priority: medium -->
+
 Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` has that, and is right.
 
 - **astubbs#29 and astubbs#31 target `master-confluent`**, the pinned pre-rebrand mirror, so merging either would

@@ -1,5 +1,7 @@
 # ArchUnit is wired up and barely used
 
+<!-- inflight-priority: low -->
+
 Nothing is switched off. There is no `archunit.properties`, no `FreezingArchRule`, no `@Disabled`,
 no `allowEmptyShould` suppression anywhere in the repo. Every rule that exists runs on every PR at
 ArchUnit's defaults, and they pass because the codebase complies.

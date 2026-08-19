@@ -1,5 +1,7 @@
 # Load-tightness flake family (undiagnosed)
 
+<!-- inflight-priority: medium -->
+
 Shared signature: a **fast-failing** assertion or timeout under heavy contention, passing in isolation
 or on rerun. Roster and rates from the 20-run fork16 acceptance hunt on astubbs#80's branch (2026-07-30);
 baseline for comparison is 15/20 runs fully clean, zero stall-class failures.

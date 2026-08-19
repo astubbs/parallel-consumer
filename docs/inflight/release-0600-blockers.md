@@ -1,5 +1,7 @@
 # Release 0.6.0.0 - correctness of the artefacts we are about to publish
 
+<!-- inflight-priority: high - gates what we are about to publish; read before touching anything release-shaped -->
+
 Scope: are the things 0.6.0.0 *publishes* (`CHANGELOG.adoc`, `README.adoc`) true on the day we cut it?
 Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracking issue is astubbs#197.
 
