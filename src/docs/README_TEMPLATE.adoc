@@ -1479,6 +1479,59 @@ CAUTION: Note that Kafka's Exactly Once Semantics (EoS) (transactional processin
 Messages may _still_ be replayed when using `EoS`.
 This is an important consideration when using it, especially when integrating with thrid party systems, which is a very common pattern for utilising this project.
 
+[[reducing-duplicate-replay]]
+==== Reducing duplicate replay: choose the cooperative assignor, and drain on close
+
+Two settings dominate how many messages get replayed when your consumer group changes membership, and
+neither is specific to this library -- they are ordinary Kafka consumer behaviour. They are called out
+here because the effect is large, it is easy to leave on the worse setting by accident, and the cost
+lands as duplicate work in *your* processing function.
+
+. *Use `CooperativeStickyAssignor`.* Under the default eager protocol, *any* membership change revokes
+*every* partition from *every* member, so all in-flight work everywhere is abandoned and redelivered --
+including on members that were not joining or leaving. Cooperative rebalancing keeps existing
+assignments and moves only what must move.
+. *Close by draining* (`closeDrainFirst()`), not `close()`. `close()` is
+`closeDontDrainFirst()`: it abandons in-flight work rather than finishing it, so that work is
+redelivered to whoever picks the partition up. Draining lets it finish and commit first.
+
+The ordering matters: the assignor is the larger effect by far, because it governs work abandoned on
+*every* member, while the close mode only governs the work of the instance actually shutting down.
+
+.Duplicate deliveries under deliberate rebalance churn, 250,000 records
+[cols="2,1,1", options="header"]
+|===
+| Configuration | Duplicates | Share of total
+
+| Eager assignor, `close()`
+| 2,421
+| ~1.0%
+
+| Eager assignor, `closeDrainFirst()`
+| 2,007
+| ~0.8%
+
+| `CooperativeStickyAssignor`, `close()`
+| 405
+| ~0.16%
+
+| `CooperativeStickyAssignor`, `closeDrainFirst()`
+| 369
+| ~0.15%
+|===
+
+CAUTION: These numbers come from this project's *chaos test suite*, which stops and restarts fleet
+members every few hundred milliseconds for a solid minute while deliberately slow records are in
+flight. It is built to be far more hostile than production, precisely so that effects like this are
+visible. *Do not read these as rates you should expect* -- a normally-operating deployment rebalances
+rarely, and would see a small fraction of this. Treat the table as showing the *relative* difference
+between the four configurations, which is the part that carries over.
+
+None of this makes replay impossible, and nothing can: as stated above, replay across failure cannot
+be prevented, so a processing function that must not repeat side effects still needs to be idempotent
+or externally deduplicated. These settings reduce how often you pay that cost, not whether you must
+handle it.
+
 As mentioned previously, offsets are always committed in the correct order and only once all previous messages have been successfully processed; regardless of <<ordering-guarantees,ordering mode>> selected.
 We call this the "highest committable offset".
 

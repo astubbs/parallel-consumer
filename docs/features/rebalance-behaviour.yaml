@@ -57,8 +57,19 @@ boundaries:
   - Eager and cooperative differ in what Kafka retains across a rebalance - notably consumer-side
     pause state, which is discarded for eager and kept for retained partitions under cooperative.
     State mirrored on top of Kafka's has to model both.
+  - The assignor dominates how much duplicate work a rebalance costs, and the close mode is a distant
+    second. Eager revokes EVERY partition from EVERY member on any membership change, so in-flight
+    work is abandoned and redelivered fleet-wide, including on members that neither joined nor left;
+    cooperative moves only what must move. Measured under the chaos suite's deliberate churn over
+    250,000 records - eager with close() 2,421 duplicates, eager draining 2,007, cooperative with
+    close() 405, cooperative draining 369. Those rates are a hostile test, not a production
+    expectation; the relative ordering is the part that carries over.
+  - close() is closeDontDrainFirst(), so it abandons in-flight work rather than finishing it. Prefer
+    closeDrainFirst() where a shutdown can afford to wait - see the draining-shutdown record.
 references:
   - label: Why the commit seam keeps producing deadlocks - archaeology, evidence and constraints
     path: docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md
   - label: Ordering and partition-assignment guidance
     path: README.adoc#ordering-guarantees
+  - label: Reducing duplicate replay - assignor and close-mode guidance, with the measured table
+    path: README.adoc#reducing-duplicate-replay

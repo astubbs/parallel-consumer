@@ -30,3 +30,43 @@ Next step when picked up: choose a survivor (1, the skateboard stack, is the fas
 running; 3, the bring-your-own-topic what-if machine, is the owner's own direction and the strongest
 adoption artifact; 5, the live performance show, is the most fully specified) and take it through
 brainstorm to a plan; the work would land as a stacked PR on astubbs#293.
+
+
+## Owner addition 2026-08-19: the run-mode experiment harness, which is direction 3's engine
+
+Antony, after the confluentinc#857 chaos measurements produced a four-cell assignor x stop-mode
+matrix with live per-poll output: **the demo app should run those experiments and display their
+results in real time.** It lands on direction 3 - the bring-your-own-topic what-if machine - not as
+a new direction but as the thing that makes it concrete, because "what if" needs an experiment to
+run and a result to show.
+
+What the chaos work already built that this would reuse:
+
+- **The run modes are the demo's variables**: assignor (eager vs `CooperativeStickyAssignor`),
+  close mode (`close()` vs `closeDrainFirst()`), commit mode, ordering mode. The matrix run on
+  2026-08-19 shows the payoff - duplicates 2,421 / 2,007 / 405 / 369 across four cells of the same
+  workload, which is the kind of difference a user cannot get from prose.
+- **The chaos harness is toggleable, and should be a switch in the UI, not a fork of the app.**
+  Chaos ON is the dramatic demo; chaos OFF against the user's own topic is the honest one, and it is
+  the same harness either way. `ChaosConductor` is already seed-driven and replayable, so a shown
+  result carries a command that reproduces it.
+- **Live output already exists in the right shape**: the diagnostic mode emits
+  `consumed / started / inFlight / violations` per poll. That is a real-time series a UI can render
+  directly, and `inFlight` is what makes a flat completion count legible - the demo would show
+  *work in progress*, not just a throughput number, which is the whole point of the library.
+
+Two design points from the owner:
+
+- **Parallel or sequential runs, both with live display.** Sequential is the fair comparison, since
+  concurrent cells contend for CPU and broker - a confound already measured in the chaos work.
+  Parallel is faster and better television. The choice must be explicit and its effect on the
+  numbers stated in the UI, not left for the viewer to infer.
+- **Pointing it at a real topic is the differentiator.** A benchmark someone runs on their own
+  cluster, with their own record sizes and their own processing function, answers a question a
+  published table never can.
+
+Boundary against the perf-comparison track, applying the note above: this is the **app** running
+experiments interactively and showing them live. Blessed numbers, workload definitions and
+measurement semantics stay the perf track's. A number shown here is illustrative and must say so -
+the chaos suite's duplicate rates are deliberately hostile and are already captioned that way in the
+README's `reducing-duplicate-replay` section.
