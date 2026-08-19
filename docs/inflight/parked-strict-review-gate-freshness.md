@@ -38,17 +38,31 @@ see the correction below - and it matters here, because it inflates the apparent
 back: restoring strictness buys the guarantee for the price of the timestamp machinery alone, not
 for a new privilege-escalation surface.
 
-## The assumption this rests on - and the trigger to restore
+## The trigger fired on 2026-08-19, and strictness stays parked anyway
 
-**Per-push coverage now comes from the auto-reviewer, not from this gate.** Codex reviews every
-push; the gate's job is to assert that somebody deliberately asked for a Claude review of this
-PR and that it finished.
+This entry used to end by naming a trigger: parking rested on Codex auto-reviewing every push,
+so if that auto-review ever stopped, per-commit coverage would stop coming from anywhere at all
+and nothing would announce it - the gate would keep passing, because "a review exists on this
+PR" is still true.
 
-**If that auto-review ever stops - disabled, unsubscribed, rate-limited, or quietly changed to
-run on fewer events - per-commit coverage stops coming from anywhere at all,** and nothing will
-announce it. The gate will keep passing, because "a review exists on this PR" is still true.
-That is the trigger to restore strictness, and it is the reason this entry exists rather than
-just the tag.
+**It stopped.** Automatic review on every push was turned off in the Codex settings on
+2026-08-19, because reviewing every push spends more than the coverage is worth at current
+prices. Codex still reviews **on request**, by commenting `@codex review` on the PR.
+
+**The decision that follows is to leave strictness parked, and to accept the gap knowingly.**
+Restoring it would make every push want a fresh Claude review, which moves the per-push spend
+onto the more expensive reviewer - the exact cost that both this parking and the reviewer's move
+off `pull_request` were made to remove. The gap is therefore real and stated rather than
+covered: a PR reviewed at commit 1 can merge at commit 20 with commits 2-20 unread.
+
+**What would change the decision is price, not principle.** Strict is still the better guarantee;
+it is unaffordable per push, and nothing else about the trade has moved. If a review ever costs
+around two orders of magnitude less, restore it - the archive above is the implementation, and the
+bill is the timestamp machinery alone. Rediscovering that the gap exists is not a trigger; it is
+written down here on purpose so it does not read as an oversight to the next person who finds it.
+
+Until then the coverage is a person's judgement: ask for a review when the PR is ready, and ask
+again after a push that changes what the reviewer already looked at.
 
 ## One correction to the tag's reasoning
 
