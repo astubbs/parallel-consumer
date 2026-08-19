@@ -75,6 +75,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
+| [`docs/compound-engineering.md`](docs/compound-engineering.md) | Asking whether a piece of work is *finished* - the failure-to-mechanism loop, what "done" means beyond green, and the three techniques `investigating.md` does not own |
 | [`docs/issue-references.md`](docs/issue-references.md) | Writing any reference to an issue or PR - the full convention and the gate |
 | [`docs/citations.md`](docs/citations.md) | Repairing a citation that no longer resolves, in a plan or solution write-up you may not rewrite |
 | [`docs/copyright.md`](docs/copyright.md) | Adding, renaming or extracting a file: which header it gets and why |
