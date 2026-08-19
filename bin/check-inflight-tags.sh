@@ -27,18 +27,35 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 [ -d docs/inflight ] || exit 0
 
 TYPES="bug feature task"
-IMPACTS="misdirection blind-spot data-loss stall security config-lie throughput release-gate coordination stranded-work deps-debt"
+# Partitioned, not one flat set - the index groups bug-impacts and task-impacts separately, so a
+# `bug` carrying `release-gate` passed this gate and then appeared under "unmatched" in the index.
+# Two closed sets in two scripts with no shared source WILL drift; keeping the partition here is what
+# makes the gate reject what the index cannot place.
+BUG_IMPACTS="misdirection blind-spot data-loss stall security config-lie throughput"
+TASK_IMPACTS="release-gate coordination stranded-work deps-debt"
+IMPACTS="$BUG_IMPACTS $TASK_IMPACTS"
 
 problems=0
 note() { printf 'INFLIGHT: %s\n' "$1" >&2; problems=$((problems + 1)); }
 in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# A note in a subdirectory escapes EVERYTHING: this glob is non-recursive and the index's safety net
+# uses -maxdepth 1, while its grouping grep recurses - so a mis-tagged note under docs/inflight/sub/
+# is neither checked nor listed nor grouped. docs/inflight/AGENTS.md forbids subdirectories; this is
+# the line that enforces it.
+while IFS= read -r stray; do
+    [ -n "$stray" ] && note "$stray: notes must be flat in docs/inflight/ - a subdirectory escapes both this gate and the session index"
+done <<< "$(find docs/inflight -mindepth 2 -name '*.md' -type f 2>/dev/null)"
+
 for f in docs/inflight/*.md; do
     base=$(basename "$f")
     case "$base" in AGENTS.md|CLAUDE.md) continue ;; esac
 
-    type=$(sed -n 's/.*inflight-type:[[:space:]]*\([a-z-]*\).*/\1/p' "$f" | head -1)
-    impact=$(sed -n 's/.*inflight-impact:[[:space:]]*\([a-z-]*\).*/\1/p' "$f" | head -1)
+    # THE CLOSING --> IS REQUIRED, because the index's grep requires it. A bare `inflight-type: bug`
+    # with no comment wrapper used to pass here and then land in the index's "unmatched" list -
+    # defeating the whole point of a gate, which is to fail the commit rather than the next session.
+    type=$(sed -n 's/.*inflight-type:[[:space:]]*\([a-z-]*\)[[:space:]]*-->.*/\1/p' "$f" | head -1)
+    impact=$(sed -n 's/.*inflight-impact:[[:space:]]*\([a-z-]*\)[[:space:]]*-->.*/\1/p' "$f" | head -1)
     state=$(sed -n 's/.*inflight-state:[[:space:]]*\(.*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
 
     if [ -z "$type" ]; then
@@ -49,6 +66,10 @@ for f in docs/inflight/*.md; do
 
     if [ -n "$impact" ] && ! in_set "$impact" "$IMPACTS"; then
         note "$f: inflight-impact '$impact' is not one of: $IMPACTS"
+    elif [ -n "$impact" ] && [ "$type" = "bug" ] && ! in_set "$impact" "$BUG_IMPACTS"; then
+        note "$f: impact '$impact' is a task impact, not a bug one. bug takes: $BUG_IMPACTS"
+    elif [ -n "$impact" ] && [ "$type" = "task" ] && ! in_set "$impact" "$TASK_IMPACTS"; then
+        note "$f: impact '$impact' is a bug impact, not a task one. task takes: $TASK_IMPACTS"
     fi
 
     # A bug or a task with no impact says what it IS without saying what it COSTS, which is the

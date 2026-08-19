@@ -90,81 +90,68 @@ is the grouping.
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 
-## Marking a note high priority
+## Tagging a note
 
-Most notes here are looked up when you go looking. A few describe things you will **collide with
-without knowing they exist** - and for those, being findable is not enough. Such a note carries, on
-the line after its heading:
+**This section is the source of truth for the tag vocabulary.** `bin/check-inflight-tags.sh`
+enforces it and names this file when it fails, so a value here and a value there must never
+disagree - change both in the same commit.
+
+Three fields, as HTML comments after the heading. Only `inflight-type` is always required:
 
 ```markdown
-<!-- inflight-class: misdirection -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+<!-- inflight-state: closed - will not do -->
 ```
 
-**Classify by CONSEQUENCE - what it costs someone to not know - not by what kind of file it is.**
-The `<category>-` filename prefix already says the latter. A class answers the question a reader
-actually has, and it spans prefixes: `misdirection` currently covers notes filed under `ci-`,
-`test-`, `branch-`, `deps-` and `static-`.
+- **`inflight-type`** - what KIND of item it is. One of **`bug`**, **`feature`**, **`task`**. This is
+  a tracker, so it uses a tracker's vocabulary.
+- **`inflight-impact`** - what it COSTS you to not know. **Required on `bug` and `task`; forbidden on
+  `feature`** - proposed work has an opportunity, not a consequence.
+- **`inflight-state`** - disposition. **Absent means open**, which is the common case, so most notes
+  carry two fields. When present it must give a reason: `<state> - <why>`.
 
-The classes, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
+**Classify by CONSEQUENCE, not by what kind of file it is.** The `<category>-` filename prefix
+already says the latter. The impact answers the question a reader actually has, and it spans
+prefixes - `misdirection` covers notes filed under `ci-`, `test-`, `branch-`, `deps-` and `static-`.
+
+The impacts, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
 start. **The order is not severity - signal integrity comes first**, because you cannot judge the
 state of the code through instruments that lie, and acting on a false green is worse than acting on
 nothing:
 
-| Class | The consequence |
-|---|---|
-| `misdirection` | the signal is actively WRONG - a green that asserted nothing, a hidden flake, a contaminated control arm, a scanner returning 401 while appearing to scan |
-| `blind-spot` | there is no signal - untested behaviour, unscanned code, an obligation nobody tracks |
-| `data-loss` | a record is dropped or mis-committed |
-| `stall` | something stops making progress and stays stopped |
-| `security` | a grant or permission wider than it should be |
-| `config-lie` | an option does not do what it says |
-| `throughput` | backpressure or fetch behaviour is wrong, with no data risk |
-| `release-gate` | blocks publishing |
-| `stranded-work` | work or knowledge that will be lost if nobody acts |
-| `coordination` | two pieces of work will collide, or one is blocked waiting on another |
-| `deps-debt` | upgrades deliberately held back |
-| `candidate` | proposed work, direction not chosen |
-| `decided-no` | answered and parked, kept so the question is not re-asked |
+| Impact | Valid on | The consequence |
+|---|---|---|
+| `misdirection` | bug | the signal is actively WRONG - a green that asserted nothing, a hidden flake, a contaminated control arm, a scanner returning 401 while appearing to scan |
+| `blind-spot` | bug | there is no signal - untested behaviour, unscanned code, an obligation nobody tracks |
+| `data-loss` | bug | a record is dropped or mis-committed |
+| `stall` | bug | something stops making progress and stays stopped |
+| `security` | bug | a grant or permission wider than it should be |
+| `config-lie` | bug | an option does not do what it says |
+| `throughput` | bug | backpressure or fetch behaviour is wrong, with no data risk |
+| `release-gate` | task | blocks publishing |
+| `coordination` | task | two pieces of work will collide, or one is blocked waiting on another |
+| `stranded-work` | task | work or knowledge that will be lost if nobody acts |
+| `deps-debt` | task | upgrades deliberately held back |
 
-**A class names a CONSEQUENCE, never a state.** "in progress", "standard work", "medium" and the
-like are status labels wearing a class's clothes - they answer "where is this?" when the question is
-"what does it cost me to not know?". An open PR is not its own class: not knowing about it costs you
-a collision, so it is `coordination`. This rule exists because the first draft added an `active-work`
-class and had to remove it.
+**An impact names a CONSEQUENCE, never a state.** "in progress", "standard work", "medium" and the
+like are status labels wearing an impact's clothes - they answer "where is this?" when the question
+is "what does it cost me to not know?". An open PR is not its own impact: not knowing about it costs
+you a collision, so it is `coordination`. This rule exists because the first draft added an
+`active-work` value and had to remove it. `candidate` and `decided-no` were removed for the same
+reason - the first is `type: feature`, the second is a `state`.
 
-**Add a class when the corpus needs one, do not force a note into a poor fit** - the set above was
-derived by reading the notes, not chosen in advance. An unclassified note is still listed at session
-start, under its own heading, so a missing marker is visible rather than silent.
+**Add a value when the corpus needs one, do not force a note into a poor fit** - the set was derived
+by reading the notes, not chosen in advance. Add it to this table AND to `bin/check-inflight-tags.sh`
+in the same commit, and say why. The gate checks SHAPE, never judgement: it cannot tell you that a
+valid impact is the wrong one for that note, and six such corrections were needed when this scheme
+landed.
 
-
-**The test is collision, not importance.** Every note here matters or it would be deleted. What
-earns the marker is that an agent working on something unrelated will otherwise waste the work, or
-repeat it, or draw a wrong conclusion. The first one is
-[`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md), which qualifies exactly that way: a
-red test on a docs-only branch has been diagnosed from scratch twice, on astubbs/parallel-consumer#308
-and astubbs/parallel-consumer#320, while the ledger already held the sighting.
+**A note that no group claims is listed at session start under its own heading**, so a missing or
+misspelt tag is visible rather than silent - and a note carrying a state is excluded from the index
+with a count, never silently.
 
 **If everything is high, nothing is.** The block has to stay short enough that it is read rather
 than skimmed past - so a handful of notes, not a category. When you add one, look at the others and
 ask whether one of them has stopped earning it; a marker is not permanent, and the work landing is
 not the only reason to remove it.
-
-## Reference convention
-
-Below `#1000`, **name the repo**: `astubbs#NNN` for this fork, `confluentinc#NNN` for the original.
-The fork's numbering sits entirely inside upstream's range, so a bare number is a coin flip - and one
-that resolves to the wrong issue looks fine. See
-[`docs/issue-references.md`](../issue-references.md) for the full rule;
-`.github/scripts/issue-ref-gate.js` enforces it on added lines, so a note written the old way fails CI.
-Fork branch names encode the *upstream* number (`bugs/857-...`, `fix/909-...`, `upstream-pr-905`), so
-a number in a branch name is `confluentinc#NNN`, never a fork issue.
-
-## Where other things live
-
-`CHANGELOG.adoc` (what shipped) · PR bodies and commit messages (history) ·
-[`docs/solutions/`](../solutions/) (lessons from solved problems) ·
-[`docs/refactoring.md`](../refactoring.md) (deferred internal work - deliberately still one file, it
-is touched by 2 commits in 30) · [`docs/quarantined-tests.md`](../quarantined-tests.md) (quarantine
-registry) · [`docs/todo-index.md`](../todo-index.md) (code markers) ·
-[`src/docs/development/upstream-map.yaml`](../../src/docs/development/upstream-map.yaml) (the source
-of truth for fork↔upstream mapping - record mappings there, not here).

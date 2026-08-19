@@ -47,9 +47,9 @@ boundaries:
     produced it - but it means a note read on a stale branch can describe a world that no longer
     exists.
   - >
-    Nothing enforces classification or deletion. The session-start injector surfaces unclassified
-    notes under their own heading so a missing marker is visible rather than silent, but a note that
-    should have been deleted will keep appearing until a human removes it.
+    Classification is enforced - bin/check-inflight-tags.sh fails CI on an unknown or mismatched tag -
+    but DELETION is not. A note whose work landed keeps appearing until a human removes it, and no
+    check can tell the difference between a note that is still true and one nobody has retired.
   - >
     The value depends on the notes being written honestly, including what was NOT established. A
     corpus of optimistic notes is worse than none, because it reads as coverage.

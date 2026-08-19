@@ -89,9 +89,8 @@ emit ""
 #      outranks a candidate idea; parked work is last because it is deferred BY DECISION. An
 #      alphabetical list puts `branch-` above `bug-`, which is exactly backwards.
 #
-# A note marked `<!-- inflight-priority: high - why -->` is lifted to the top of its group with its
-# reason. docs/inflight/AGENTS.md owns what qualifies and the anti-inflation rule that keeps this
-# readable; a marker on everything is a marker on nothing.
+# docs/inflight/AGENTS.md owns the tag vocabulary and is named by bin/check-inflight-tags.sh when it
+# fails, so the sets here and there must never disagree.
 inflight_title() { # <file> -> its heading, else its slug
     local t
     t=$(sed -n 's/^# //p' "$1" 2>/dev/null | head -1)
@@ -114,8 +113,12 @@ emit "**Open work** (\`docs/inflight/\`, one file per item) - what it costs you 
 emit ""
 
 emitted=""
-note_field() { sed -n "s/.*inflight-$2:[[:space:]]*\([^-][^>]*\)-->.*/\1/p" "$1" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
-is_open()    { ! grep -q 'inflight-state:' "$1" 2>/dev/null; }
+# REQUIRE THE WHOLE MARKER, not the bare substring. A note that merely MENTIONS
+# `inflight-state:` in its prose - one quoting this convention, or the gate's own output - was
+# read as CLOSED and rolled into the "not shown" count. The note then appeared only as a
+# mislabelled number telling you to delete it, which is exactly the omission this index claims
+# its filters cannot make.
+is_open()    { ! grep -q 'inflight-state:[^>]*-->' "$1" 2>/dev/null; }
 
 emit_group() { # <type> <impact-or-empty> <heading>
     local files hits=""
@@ -151,7 +154,7 @@ unmatched=""
 while IFS= read -r f; do
     [ -n "$f" ] || continue
     grep -q 'inflight-state:' "$f" 2>/dev/null && continue
-    printf '%s' "$emitted" | grep -qxF "$f" && continue
+    grep -qxF "$f" <<<"$emitted" && continue
     unmatched="${unmatched}- $(inflight_title "$f")  \`${f}\`"$'\n'
 done <<< "$(find docs/inflight -maxdepth 1 -name '*.md' -type f 2>/dev/null | grep -vE '(AGENTS|CLAUDE)\.md' | sort)"
 if [ -n "$unmatched" ]; then
@@ -164,8 +167,8 @@ fi
 # open is misdirection by this repo's own taxonomy - but a view that silently shrinks is
 # indistinguishable from one with nothing to hide. One line of count keeps the undone-cleanup backlog
 # visible without letting it occupy the index. Same rule as "no silent caps" for a bounded workflow.
-stated=$(grep -rl 'inflight-state:' docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' | grep -c . || true)
-[ "${stated:-0}" -gt 0 ] && emit "_${stated} note(s) not shown: closed, parked or blocked. Delete or migrate them - \`grep -rl inflight-state: docs/inflight\`._" && emit ""
+stated=$(grep -rl 'inflight-state:[^>]*-->' docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' | grep -c . || true)
+[ "${stated:-0}" -gt 0 ] && emit "_${stated} note(s) not shown: closed, parked or blocked. Delete or migrate them - \`grep -rln inflight-state: docs/inflight\`._" && emit ""
 
 emit "**Dated plans and investigations** (\`docs/plans/\`) - the method that settled a question of this shape before:"
 plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')

@@ -47,6 +47,14 @@ assert "a task with no impact is rejected"    fail '# T\n\n<!-- inflight-type: t
 assert "a feature WITH an impact is rejected" fail '# T\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: stall -->\n'
 assert "a state with no reason is rejected"   fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: coordination -->\n<!-- inflight-state: closed -->\n'
 
+# The shapes where this gate and the session index used to DISAGREE. Each one passed here and then
+# vanished or was mislabelled in the index - a gate that green-lights what the index cannot place is
+# worse than no gate, because the mistake surfaces to whoever starts the next session instead.
+assert "a bare marker with no comment wrapper is rejected" fail '# T\n\ninflight-type: bug\ninflight-impact: stall\n'
+assert "a task impact on a bug is rejected"                fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: release-gate -->\n'
+assert "a bug impact on a task is rejected"                fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: stall -->\n'
+assert "a task with a task impact passes"                  pass '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: stranded-work -->\n'
+
 echo
 if [ "$failures" -eq 0 ]; then echo "All check-inflight-tags self-tests passed"; exit 0; fi
 echo "$failures self-test(s) FAILED"
