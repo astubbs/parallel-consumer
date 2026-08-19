@@ -140,14 +140,6 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        // record first, render after - the reasoning lives on the shared method
-        recordFailureAndReturnBatchToMailbox(pollContext, throwable);
-        logWithoutEscaping(throwable, () -> {
-            if (PCRetriableException.isPresentIn(throwable)) {
-                log.debug("Mutiny fail signal", throwable);
-            } else {
-                log.error("Mutiny fail signal", throwable);
-            }
-        });
+        onAsyncFailure(pollContext, throwable, "Mutiny fail signal");
     }
 }

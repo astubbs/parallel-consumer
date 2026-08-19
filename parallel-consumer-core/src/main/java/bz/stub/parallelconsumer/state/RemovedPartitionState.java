@@ -41,6 +41,22 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
      * Shared by every partition and every PC in the JVM, so it has to actually be immutable - the name is not
      * enforcement.
      */
+    /**
+     * What a <b>removed</b> partition answers when asked which of its offsets are still incomplete: nothing, because
+     * the partition is gone and PC no longer tracks work for it.
+     * <p>
+     * This class is the null-object stand-in installed when a partition is revoked or lost, so every getter here
+     * answers the "there is no state" version of its question rather than making callers null-check. Returning a
+     * shared constant rather than a fresh set per call matters because the offset encoders ask this on the commit
+     * path, per partition.
+     * <p>
+     * <b>Immutable, and that is load-bearing.</b> It was a {@code new TreeSet<>()} - a shared, mutable static
+     * behind a name promising the opposite. One caller mutating what it received would have corrupted what every
+     * other caller sees, for the life of the JVM, with the field name saying that could not happen. Every caller of
+     * {@link #getIncompleteOffsetsBelowHighestSucceeded()} reads only, so making it genuinely immutable changes
+     * nothing today and turns that silent corruption into an immediate {@code UnsupportedOperationException} if a
+     * future one does not.
+     */
     private static final SortedSet<Long> READ_ONLY_EMPTY_SET = Collections.emptySortedSet();
 
     private static final PartitionState singleton = new RemovedPartitionState<>();

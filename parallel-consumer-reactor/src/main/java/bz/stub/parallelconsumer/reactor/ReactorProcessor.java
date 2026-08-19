@@ -122,17 +122,16 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        // record first, render after - the reasoning lives on the shared method
-        recordFailureAndReturnBatchToMailbox(pollContext, throwable);
-        logWithoutEscaping(throwable, () -> {
-            // Reactor repackages what it propagates, and core cannot name reactor's wrapper types - so unwrap with
-            // reactor's own helper first, then ask whether the failure underneath is one the user marked expected
-            if (PCRetriableException.isPresentIn(Exceptions.unwrap(throwable))) {
-                log.debug("Reactor fail signal", throwable);
-            } else {
-                log.error("Reactor fail signal", throwable);
-            }
-        });
+        onAsyncFailure(pollContext, throwable, "Reactor fail signal");
+    }
+
+    /**
+     * Reactor repackages what it propagates, and core cannot name reactor's wrapper types - so peel with reactor's
+     * own helper before the retriable classification looks at what is underneath.
+     */
+    @Override
+    protected Throwable unwrapFrameworkWrapper(Throwable throwable) {
+        return Exceptions.unwrap(throwable);
     }
 
     private Scheduler getScheduler() {

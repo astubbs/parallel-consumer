@@ -54,6 +54,15 @@ the population is people extending the internal controller. Say that plainly in 
 unqualified "breaking" on a stability release will cost more upgrade hesitancy than these two are
 worth.
 
+- **`WorkManager.getSuccessfulWorkListeners()` is gone**, replaced by `addSuccessfulWorkListener` (astubbs#267).
+  **Almost nobody is affected**: it is on `internal`-adjacent state, had no in-tree caller, and a user of
+  `ParallelStreamProcessor` never touches it - but it was `public` on a Maven-Central artefact, so an external
+  caller cannot be ruled out by grep, which is the only reason it is written down. Handing out the mutable list let
+  a caller register from any thread onto a collection the control loop iterates every cycle - the
+  `ConcurrentModificationException` that silently stopped the consumer, and the defect astubbs#267 exists to fix.
+  **What to do:** call `addSuccessfulWorkListener(listener)` instead of mutating the returned list; there is no
+  replacement for *reading* the registered set, which was never a use the API intended to support.
+
 - **A subclass overriding `setupWorkerPool` must now return a pool whose `RejectedExecutionHandler` is
   a `ThreadPoolExecutor.AbortPolicy`** (a subclass of `AbortPolicy` counts - the requirement is the
   throw). Anything else, and construction throws `IllegalArgumentException` with a message naming the

@@ -13,6 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 
+import bz.stub.parallelconsumer.PCRetriableException;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
+
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 
@@ -108,6 +111,42 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      * updateFailureHistory), so one container's failure must not stop the batch: every container after it would
      * then never reach {@link #addToMailbox} and would stay in flight forever.
      */
+    /**
+     * The whole async-failure path for a batch engine: record the failure against every container, then render it.
+     * <p>
+     * Reactor's and Mutiny's versions of this differed only by a log string and whether the framework's own wrapper
+     * needed peeling first, so they are one method with those two seams. Keeping two copies is how the ordering and
+     * the guard drift apart - which is exactly what happened to this code once already, when the record-before-render
+     * fix was applied to one engine and not its siblings.
+     * <p>
+     * Vert.x deliberately does not use this: it handles a single container per failure rather than a batch, so it has
+     * no loop to make independent and its own handler stays separate.
+     *
+     * @param failSignalMessage this engine's log message, passed rather than derived so the strings users may already
+     *                          grep for do not change
+     */
+    protected void onAsyncFailure(PollContextInternal<K, V> pollContext, Throwable throwable, String failSignalMessage) {
+        // record first, render after - the reasoning is on recordFailureAndReturnBatchToMailbox
+        recordFailureAndReturnBatchToMailbox(pollContext, throwable);
+        ThrowableUtils.logWithoutEscaping(throwable, () -> {
+            if (PCRetriableException.isPresentIn(unwrapFrameworkWrapper(throwable))) {
+                log.debug(failSignalMessage, throwable);
+            } else {
+                log.error(failSignalMessage, throwable);
+            }
+        });
+    }
+
+    /**
+     * Peels the framework's own wrapper before asking whether the failure underneath is one the user marked expected.
+     * <p>
+     * Identity by default. An engine whose framework repackages what it propagates overrides this with that
+     * framework's helper - core cannot name those wrapper types, so it cannot do the peeling itself.
+     */
+    protected Throwable unwrapFrameworkWrapper(Throwable throwable) {
+        return throwable;
+    }
+
     protected void recordFailureAndReturnBatchToMailbox(PollContextInternal<K, V> pollContext, Throwable throwable) {
         pollContext.streamWorkContainers().forEach(wc -> {
             try {
