@@ -51,6 +51,33 @@ is the grouping.
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 
+## Marking a note high priority
+
+Most notes here are looked up when you go looking. A few describe things you will **collide with
+without knowing they exist** - and for those, being findable is not enough. Such a note carries, on
+the line after its heading:
+
+```markdown
+<!-- inflight-priority: high - one line saying why, in the imperative -->
+```
+
+`.claude/hooks/inject-recorded-knowledge.sh` lifts every marked note into a **Read these first**
+block at session start, with that reason, above the flat list of everything else. The reason is the
+payload: "live flakes; read this before diagnosing any red test" tells an agent *when* the note
+applies, which a filename cannot.
+
+**The test is collision, not importance.** Every note here matters or it would be deleted. What
+earns the marker is that an agent working on something unrelated will otherwise waste the work, or
+repeat it, or draw a wrong conclusion. The first one is
+[`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md), which qualifies exactly that way: a
+red test on a docs-only branch has been diagnosed from scratch twice, on astubbs/parallel-consumer#308
+and astubbs/parallel-consumer#320, while the ledger already held the sighting.
+
+**If everything is high, nothing is.** The block has to stay short enough that it is read rather
+than skimmed past - so a handful of notes, not a category. When you add one, look at the others and
+ask whether one of them has stopped earning it; a marker is not permanent, and the work landing is
+not the only reason to remove it.
+
 ## Reference convention
 
 Below `#1000`, **name the repo**: `astubbs#NNN` for this fork, `confluentinc#NNN` for the original.
