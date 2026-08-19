@@ -141,7 +141,7 @@ So the two hooks are registered differently, on purpose:
 | Hook | `if` | Why |
 |---|---|---|
 | `check-squash-subject.sh` | **none** - runs on every Bash call | It can only ever allow, or deny a real `gh pr merge`. A `grep` for `merge` in the payload rejects the overwhelming majority before python starts, so the cost is a shell test. |
-| `check-merge-outstanding-work.sh` | **none** - runs on every Bash call | Same reasoning as the squash guard, and the same shapes must reach it: `echo ready && gh pr merge ...` is exactly the case a prefix `if` would miss. It tokenises with `shlex` rather than grepping, so `gh pr comment --body "run gh pr merge later"` is not a merge. |
+| `check-merge-outstanding-work.sh` | **none** - runs on every Bash call | Same reasoning as the squash guard, and the same shapes must reach it: `echo ready && gh pr merge ...` is exactly the case a prefix `if` would miss. A cheap `merge` substring pre-filter skips the interpreter for the overwhelming majority of commands; the *decision* is tokenised with `shlex`, never grepped, so `gh pr comment --body "run gh pr merge later"` is not a merge. |
 | `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`. Firing it on every Bash call is the outage described above - and it must stay prefix-matched anyway, because it gates *the session's* repository, which is only the right one when the command has no `cd` in front of it. |
 
 The `git commit` case that `if` therefore misses (`cd sub && git commit`) is covered by

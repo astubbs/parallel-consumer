@@ -49,6 +49,15 @@ WINDOW_SECONDS="${MERGE_OUTSTANDING_WINDOW_SECONDS:-300}"
 
 payload="$(cat)" || exit 0
 
+# CHEAP PRE-FILTER before the interpreter spawn: a tokenised `gh pr merge` necessarily contains the
+# literal substring "merge" (JSON escaping never rewrites letters), so anything without it can skip
+# the python3 startup this hook would otherwise cost EVERY Bash call. It can only skip work, never
+# decide - the token check below still makes every decision.
+case "$payload" in
+    *merge*) ;;
+    *) exit 0 ;;
+esac
+
 # TOKENS, NOT SUBSTRINGS - the same rule check-squash-subject.sh states, for the same reason. A
 # grep for "gh pr merge" fires on `gh pr comment --body "remember to run gh pr merge later"`, and a
 # guard that blocks ordinary commands gets routed around. shlex splits the command the way the

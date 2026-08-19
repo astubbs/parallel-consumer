@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -89,7 +90,7 @@ public class PausableInsertShardManager extends ShardManager<String, String> {
     }
 
     /** Blocks until the control thread is parked inside the registration loop. */
-    public boolean awaitPausePoint(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
+    public boolean awaitPausePoint(long timeout, TimeUnit unit) throws InterruptedException {
         return reachedPausePoint.await(timeout, unit);
     }
 

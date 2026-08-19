@@ -425,6 +425,9 @@ assert "the explicit override releases the guard" ALLOW "$got"
 rm -rf "/tmp/claude-$(id -u)/selftest/$ow_session"
 
 echo
+# The squash-subject section counts into `fails` (its harness predates `assert`); fold it in so a
+# failure there fails the script rather than printing FAIL and exiting 0.
+failures=$((failures + fails))
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
     exit 0
