@@ -77,3 +77,7 @@ Rewriting history someone else may have pulled is not reversible from inside a P
   by name.
 - **Other instances of the same defect** - `AGENTS.md`, "PR Discipline", owns that rule; it belongs
   at merge prep, once the defect class is understood.
+- **Does this PR advance a roadmap entry?** Then its `stage`/`stage_delivery` in
+  `docs/data/roadmap.yaml` move in the same change - the `stages` block there owns the rule. The
+  roadmap-stage gate enforces it when the entry's `pull_request` names this PR; entries carried by
+  a tracking issue only are on you.

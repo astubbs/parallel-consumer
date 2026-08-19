@@ -10,8 +10,13 @@ copy-pasteable for an artifact that will not resolve. The corpus's own standard,
 work, is not to assert what the tree contradicts.
 
 **When they return.** Whichever PR lands each module restores its record in the same change, with
-`status: published`, a real `since`, and setup that resolves. Recover the drafted content from git
-history rather than rewriting it: they were removed on this branch, and both are good drafts.
+`status: published`, a real `since`, and setup that resolves. Do not rewrite the drafts - but do not
+look for them in master's history either: the astubbs#273 squash-merge made them unreachable from
+here. Where each draft actually is:
+
+- **Streams**: its staged successor already lives at `docs/features/staging/kafka-streams-integration.yaml`.
+- **Connect**: recovered verbatim from the side-line `origin/docs/v6-release-ideas-codex` and
+  committed on the module-landing PR itself (astubbs#269, as `docs/features/staging/kafka-connect-experimental.yaml`).
 
 Tracking: astubbs#255 for Streams, astubbs#240 for Connect.
 

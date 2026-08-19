@@ -45,6 +45,9 @@ jobs:
       - name: Self-test the issue-reference gate logic
         run: node .github/scripts/issue-ref-gate.test.js
 
+      - name: Self-test the roadmap stage gate logic
+        run: node .github/scripts/roadmap-stage-gate.test.js
+
       # The local mirror (bin/check-issue-refs.sh) fetches the PR body via gh to honour the
       # `issue-refs: N/A` opt-out the way this workflow does; that plumbing is shell, not gate
       # logic, so it has its own self-test.
@@ -242,3 +245,68 @@ jobs:
               `Entr${missing.length === 1 ? "y" : "ies"} missing one:\n` +
               missing.map(l => `  ${l.trim().slice(0, 160)}`).join("\n")
             );
+
+      # The roadmap's stage ladder says how real each entry is, and its own rule is that the PR
+      # advancing a track moves the stage in the same change (docs/data/roadmap.yaml, `stages`
+      # block). This step is what catches a miss: when the BASE branch's roadmap names this PR as
+      # an entry's carrier (`pull_request: astubbs#NNN`), that ENTRY's stage block must differ
+      # between base and head - touching the file elsewhere does not count - or the PR opts out
+      # with `roadmap-stage: N/A - <reason>` in its body. Base is read deliberately: master is the
+      # authority on which entries currently claim this PR.
+      - name: Verify a roadmap-carrying PR moves its entry's stage
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/roadmap-stage-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - roadmap stage gate skipped.`);
+              return;
+            }
+            const optOut = gate.findOptOut(pr.body || "");
+            if (optOut) {
+              core.info(`Opted out via PR body: "${optOut}"`);
+              return;
+            }
+
+            const fetchRoadmap = async (ref) => {
+              const res = await github.rest.repos.getContent({
+                ...context.repo, path: gate.ROADMAP_PATH, ref,
+                mediaType: { format: "raw" },
+              });
+              return String(res.data);
+            };
+
+            let baseText = "";
+            try {
+              baseText = await fetchRoadmap(pr.base.sha);
+            } catch (e) {
+              core.info(`No ${gate.ROADMAP_PATH} on the base ref (${e.message}) - nothing to check.`);
+              return;
+            }
+
+            const claims = gate.entriesClaimingPr(baseText, pr.number);
+            if (claims.length === 0) {
+              core.info("No roadmap entry names this PR as its carrier - nothing to check.");
+              return;
+            }
+
+            // A missing head file means the roadmap was deleted or moved - every claiming entry's
+            // snapshot then differs from base, which is the accountable-change signal we want.
+            let headText = "";
+            try {
+              headText = await fetchRoadmap(pr.head.sha);
+            } catch (e) {
+              core.info(`${gate.ROADMAP_PATH} unreadable at head (${e.message}) - treating as changed.`);
+            }
+
+            const unmoved = claims.filter((c) => !gate.stageMoved(baseText, headText, c.id));
+            if (unmoved.length === 0) {
+              core.info(
+                `Roadmap entr${claims.length === 1 ? "y" : "ies"} ` +
+                `${claims.map(c => c.id).join(", ")} name this PR and the stage block moved - OK.`);
+              return;
+            }
+
+            core.setFailed(gate.formatFailure(unmoved, pr.number));
