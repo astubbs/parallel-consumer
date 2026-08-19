@@ -90,7 +90,7 @@ were hidden by the surefire retry until astubbs#224 removed it.
   `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
 
 - [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  **UNDIAGNOSED, quarantined as an explicit rule-1 exception by owner decision**: at 4/45 it is the
+  **UNDIAGNOSED, quarantined on its sighting ledger (rule 1)**: at 4/45 it is the
   most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
   `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
   `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier

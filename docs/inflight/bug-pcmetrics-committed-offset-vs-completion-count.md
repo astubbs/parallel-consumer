@@ -41,8 +41,9 @@ The failure rate is a property of the interleaving, not of load.
 **Not a confluentinc#857 sighting.** Recorded here because it was briefly mis-attributed as one. Every
 sighting in that family is a chaos/rebalance *integration* test with a commit mode and a chaos seed
 (`ChaosRevokeUnderWork*`, `ChaosChurnStormIT`, `RebalanceEoSDeadlockTest`). This is a MockConsumer
-**unit** test with no broker, no rebalance, no revoke path and no commit mode - none of the family's
-discriminators apply. `bug-857-family.md` already records one contamination of exactly this kind (a
+**unit** test with no broker, no rebalance and no revoke path - none of the family's
+discriminators apply. (It does run a commit mode - the base's `PERIODIC_CONSUMER_SYNC`, over a
+MockConsumer - but no real broker commit path is involved.) `bug-857-family.md` already records one contamination of exactly this kind (a
 transactional-mode failure logged as confirmation of a cycle impossible in that mode); this note
 exists so the same mistake is not made a second time.
 

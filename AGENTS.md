@@ -302,8 +302,8 @@ chaos suite, the ambient probe - and wins where the two disagree. Four rules bin
 - **A flake fails the build - there is no retry, deliberately.** The CI scripts no longer pass
   `-Dsurefire.rerunFailingTestsCount=2`: it retried failures into green runs and hid three flakes no
   ledger knew about, one of them a regression of an already-fixed one. **Do not restore it to get a
-  build green** - the lever is `@Quarantined` with a diagnosis
-  ([`docs/testing.md`](docs/testing.md)), which relocates the signal where a retry destroys it, and
+  build green** - the lever is `@Quarantined` with evidence: a diagnosis, or a sighting ledger
+  ([`docs/quarantined-tests.md`](docs/quarantined-tests.md)), which relocates the signal where a retry destroys it, and
   nothing enforces this. Background:
   [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md);
   the flakes it uncovered are open in
