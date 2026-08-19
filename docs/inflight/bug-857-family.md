@@ -357,7 +357,44 @@ on its own. A worktree at the pre-change commit, the same command on both, is ch
 turns "probably a flake" into an answer. Do that before attributing - or dismissing - anything with
 this signature, especially on a branch whose subject matter would explain it.
 
-**Eighth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
+**Eighth sighting, 2026-08-17 - the `ZOMBIE_MEMBER` arm again, and its seed replays clean.**
+`ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor` on
+[job 95308176649](https://github.com/astubbs/parallel-consumer/actions/runs/32002566427/job/95308176649),
+on astubbs#204 at head `85a3646d8`. Same arm as the fourth sighting, on the revoke-under-work
+cooperative scenario, and the failing assertion is the scenario SLO rather than a probe fail-fast -
+the probe violation rides along in the autopsy:
+
+```
+no instance may end the run with an unclassified failure cause
+but was: [instance 7: RuntimeException: Error from poll control thread:
+          Timeout waiting for commit response PT10S to request CommitRequest(id=608fa144-...)]
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-122304053' dwelling in PreparingRebalance for 15s
+(bound 15s) - a member is not answering the rebalance (protocol-unresponsive)
+peaks: rebalanceDwell=15465ms lagStagnation=85032ms
+```
+
+Two frozen partitions, stagnant 73-90s, lag 145 and 979. **Replay seed `2966043432903644461`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2966043432903644461
+
+**Replayed, and it does not reproduce.** On the same head, uncontended, all three chaos scenarios
+passed - `ChaosRevokeUnderWorkIT` 135.2s, `ChaosChurnStormIT` 82.8s,
+`ChaosRevokeUnderWorkCooperativeIT` 86.0s. That is the AGENTS.md diagnostic for separating contention
+from a concurrency bug, and it lands on the contention side. It rules out a deterministic defect
+reachable from that seed, and nothing else: a passing replay cannot exclude an interleaving only a
+loaded box reaches.
+
+**Branch context - astubbs#204 rhymes with this failure, which is why it needs naming rather than a
+one-line dismissal.** That PR changes the commit path: `ConsumerManager.commitSync`'s retry budget
+becomes per-call instead of per-attempt, so PC gives up where it previously hung, and the failure
+cause here *is* a commit-response timeout. Against it being the cause: the same lane failed on this
+same branch at `26d2f195`, before that change existed, and
+[`ci-disabled-jobs-and-runner-load.md`](ci-disabled-jobs-and-runner-load.md) records the same window
+killing the `highcpu` lane on three other branches with the no-verdict signature. Unresolved rather
+than cleared - a later sighting on a branch that does not touch the commit path would settle it.
+
+**Ninth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
 and the ninth below share a signature).** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`
 was killed fail-fast by `ProgressProbe` on
 [job 95579861648](https://github.com/astubbs/parallel-consumer/actions/runs/32093367999/job/95579861648),
@@ -391,7 +428,7 @@ log came from the run-logs archive
 attempt) - a second retrieval route alongside the fourth sighting's report-artifact note, and the
 console-log truncation trap is the same one recorded there.
 
-**Ninth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
+**Tenth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by the same fleet detector on
 [job 95584026682's run, attempt at head d96375053](https://github.com/astubbs/parallel-consumer/actions/runs/32078875110)
 (2026-08-17T23:04Z), on astubbs#308 - a docs-only branch (ideation/strategy/ledger files, zero
@@ -420,3 +457,56 @@ consumed count freezes outright with the group ostensibly live, under churn-stor
 productive trap. Two replayable seeds with the same signature within four hours is the strongest
 single-arm evidence the ledger holds; whichever defect they belong to, the replays are now the
 cheapest next experiment the family has.
+
+**Eleventh sighting, 2026-08-19 - the eager `CLASS2_STALL` again, and the first seed in this family
+that replays RED on demand, with a master control arm proving it is not branch-caused.**
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed by `ProgressProbe` on
+[job 95962195275](https://github.com/astubbs/parallel-consumer/actions/runs/32217696441), at head
+`2b8b89183` on astubbs#204. Seven `CLASS2_STALL/LAG_STAGNATION` violations, lags 587-3010, all
+stagnant 154s against the 150s bound; `peaks: rebalanceDwell=9949ms lagStagnation=154627ms`.
+
+**Replay seed `6825864417772979246`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=6825864417772979246
+
+**What makes this one different: it reproduced, twice, off CI.** Every earlier `CLASS2_STALL` entry
+records a seed that nobody has since replayed red - the eighth sighting's seed explicitly "replays
+clean". This one does not:
+
+| Arm | Head | Verdict | Violations | `lagStagnation` |
+|---|---|---|---|---|
+| CI | `2b8b89183` (astubbs#204) | RED | 7 | 154627ms |
+| Local replay | `2b8b89183` (astubbs#204) | RED | 5 | 154429ms |
+| **Local control** | **`5c377ec04` (master)** | **RED** | **10** | **154387ms** |
+
+**The master arm is the point.** The same seed fails on plain master with no astubbs#204 code in the
+tree, so this is the family's own defect and not something that PR introduced. Two further checks
+agree: astubbs#204's tree at the passing run `45fd8f6f9` and the failing run `6b2d91370` have the
+*identical* tree SHA `e939d33ca` (the run in between was a history-only re-cut), so content cannot
+explain the pass/fail difference; and none of astubbs#204's new failure paths appear anywhere in the
+replay output - no `OffsetCommitBudgetExceededException`, no poller-death handoff. The commit budget
+was never exhausted and the poll thread never died, so the stall happens with every commit
+apparently healthy.
+
+**Control arm, same CI run:** the two sibling chaos tests passed with `probe violations=[]` -
+cooperative on seed `2550023127530143017`, churn storm on `783220268230054177`.
+
+**Same seed, different violation *count* (5 / 7 / 10).** The seed fixes the chaos schedule, not the
+topic name (`ChaosRevokeUnderWorkIT-w4-<random>` differs every run) nor which partitions land on
+which member. So it reproduces the *signature* reliably and the exact frozen-partition set not at
+all. Treat a replay as red/green evidence, never as a per-partition fingerprint to diff.
+
+**Why this is the cheapest next experiment the family has.** A seed that replays red locally in ~3
+minutes on master turns every prior "is it the product or the harness" question into something
+bisectable. The obvious next step is to bisect it against the family's landed fixes, and to attach a
+thread dump at the moment `lagStagnation` crosses ~150s - the probe already knows when that is.
+
+**Two traps for whoever picks this up.** The retrieval note above still holds and cost real time
+here: GitHub served a log with *no* verdict in it at all - no `Tests run:`, no `BUILD`, no autopsy -
+for a step that had genuinely failed a test, and `--log-failed` showed only ordinary INFO. The
+verdict was in the uploaded failsafe XML artifact, as documented. Separately, narrowing the replay
+with `-Dit.test=ChaosRevokeUnderWorkIT` needs `-Dfailsafe.failIfNoSpecifiedTests=false`, because
+`-am` puts the parent module in the reactor and its own failsafe execution then fails the build with
+"No tests matching pattern"; dropping `-am` instead fails the enforcer's `ReactorModuleConvergence`.
+The unnarrowed command above has neither problem.

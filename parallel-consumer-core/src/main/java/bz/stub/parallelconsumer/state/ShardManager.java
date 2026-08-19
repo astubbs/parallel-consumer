@@ -178,7 +178,7 @@ public class ShardManager<K, V> {
 
     }
 
-    public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
+    void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
         var wc = new WorkContainer<>(epochOfInboundRecords, aRecord, module);
         ShardKey shardKey = computeShardKey(wc);
 

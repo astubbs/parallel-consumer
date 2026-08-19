@@ -83,6 +83,36 @@ At release, when the changelog section is regenerated, check both survived into 
 generation reads the commit log, so they are only as findable as those commit bodies. The rename side
 of that same check is in [`release-0600-blockers.md`](release-0600-blockers.md).
 
+## Public API change landing with astubbs#204: the commit give-up exception
+
+Not a breaking change to a *subclass* surface like the two above - this one is visible to every user
+of `PERIODIC_CONSUMER_SYNC`, so it needs its own line in the notes.
+
+**`ConsumerManager.commitSync` no longer rethrows Kafka's bare `TimeoutException` /
+`SaslAuthenticationException` when a commit exhausts its budget.** It throws
+`OffsetCommitBudgetExceededException` (new, in the public `bz.stub.parallelconsumer` package,
+extending `ParallelConsumerException`) with the broker's exception as the **cause**. Anyone catching
+the Kafka type directly around PC's failure surface - `getFailureCause()`, or a supervisor wrapping
+PC - stops matching, and must catch the PC type or unwrap `getCause()`.
+
+Why it earns the break on a stability release: the bare Kafka exception can say a commit timed out
+but not *which of PC's options bounded it*, what that option's relationship to the consumer's own
+timeouts is, or what to do about it. That gap is the whole subject of astubbs#177 /
+confluentinc#833 - two reporters, neither of whom could tell from the message where to look. The new
+message names the budget that ran out, its configured value, the knob to raise, and - when only one
+attempt was made - that `offsetCommitTimeout` is below the consumer's `default.api.timeout.ms`
+(**60000ms** by default, verified in kafka-clients 3.9.2) so no retry was reachable at all.
+
+Two behaviour changes ship alongside it and belong in the same note, because a reader meeting one
+will ask about the others:
+
+- **`offsetCommitTimeout` now bounds the whole commit, not each attempt.** It was captured inside the
+  retry loop, so every attempt reset it and the loop could retry forever. This makes PC give up where
+  it previously hung. Matches Kafka's own two-level model, where `default.api.timeout.ms` bounds a
+  call *including* its retries.
+- **`saslAuthenticationRetryTimeout` is measured from the first SASL failure**, not from the start of
+  the commit call, so a slow commit no longer spends an unrelated option's budget.
+
 ## Release gate: no disabled tests
 
 **0.6.0.0 does not ship while any test is disabled.** Tests currently carrying `@Disabled`:

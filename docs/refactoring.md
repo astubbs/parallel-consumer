@@ -73,6 +73,23 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
+- **Reject a stale ARRIVAL in `state/ProcessingShard.java`'s `addWorkContainer`, symmetric with the
+  stale-resident check beside it.** Today only the RESIDENT is checked, so old-epoch containers still
+  enter shards whenever a rebalance lands after the once-per-batch `epochIsStale()` guard in
+  `maybeRegisterNewPollBatchAsWork`. They are harmless - `couldBeTakenAsWork` refuses them and
+  `getWorkIfAvailable` removes them inline - but rejecting them at the insert would prevent the churn
+  rather than clean it up, and would shrink the window that astubbs#31 defends.
+  **Not a one-liner, which is why it is here and not in astubbs#31**: the guard runs on *every* add,
+  where the resident check runs only when an entry already exists, so it reaches inputs the current
+  code never evaluates. `PartitionStateManager.getPartitionState` returns `partitionStates.get(tp)`
+  unguarded, and adding the check makes `PartitionStateCommittedOffsetTest` NPE in three tests
+  (`compactedTopic`, `committedOffsetLower`, and one more) because they register polls against a
+  `PartitionState` that was never installed in the manager. Needs a null-safety decision - treat an
+  absent state as not-stale, or make the absence itself an error - plus a judgement on whether those
+  tests encode a real production shape or only a fixture shortcut. **Also note it makes the
+  stale-resident branch unreachable from every public entry point** (verified by experiment: with the
+  arrival guard in place and the resident branch reverted, the other regression tests still pass), so
+  it must land together with the white-box test that plants a resident directly.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
@@ -266,6 +283,30 @@ Do not start one casually.
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
+### state/ProcessingShard.java
+
+- **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
+  `iterator.remove()` and decrements the counter, but never calls `retryQueue.remove` - whereas the
+  sweep does both, and says so: `// remove stale containers from both processingShards and retryQueue`
+  in `ShardManager.removeStaleContainers`, which maps `retryQueue::remove` over what the shard
+  returned. If the control thread's inline removal reaches a *failed* (retry-queue-resident) container
+  that has just gone stale before the poll thread's sweep does, that queue entry is orphaned
+  permanently, inflating `getQueueSizeAndNumberReadyToBeRetried` and therefore
+  `getNumberOfWorkQueuedInShardsAwaitingSelection`. Throttle-gate noise and a false "ready to retry"
+  signal - **not record loss**. Pre-existing and independent of astubbs#31.
+  **There is no test that would catch it**: the only retryQueue coverage is `ShardManagerTest`'s
+  `retryQueueOrdering`, `testRetryQueueOrdering` and `testRetryQueueOrderingMultipleTries`, all of
+  which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
+  either path.
+
+### state/ShardKey.java
+
+- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
+  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
+  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
+  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
+  doc fix plus a field rename, not a behaviour change.
+
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
   control/poller threads share state - removed under shared-nothing (confluentinc#200).
@@ -398,6 +439,19 @@ but not this.*
   implement or drop.
 
 ---
+
+### Test infrastructure - `MockConsumerTestBase` assumes one partition and one key
+
+- **Generalise the harness to take a partition count and a key supplier.** `MockConsumerTestBase`
+  hardcodes `new TopicPartition(topic, 0)` and a single record key, which is right for the six
+  scenarios on it today and wrong for any scenario whose subject is ordering or backlog:
+  `CommitResponseTimeoutSymptomTest` reproduces a reported workload of 1000 keys across 4 partitions
+  under `KEY` ordering, so it repeats the manual rebalance dance rather than inheriting it, and its
+  javadoc says why. Two smaller mismatches come with it: options are built once per class in
+  `@BeforeEach`, so a class needing two option sets must split into subclasses, and the teardown
+  asserts a null failure cause, which a scenario that expects PC to die must override. Doing this
+  means re-verifying the six classes already on the base, which is why it is here rather than folded
+  into the PR that noticed it (astubbs#204).
 
 ### Test infrastructure - timing-based waits
 
