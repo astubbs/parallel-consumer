@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static bz.stub.parallelconsumer.state.PausableInsertShardManager.PARK_DEADLINE_SECONDS;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.awaitility.Awaitility.await;
@@ -46,7 +47,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * Deterministic broker-level reproduction of the confluentinc#909 registration race (fork fix:
  * astubbs#31) - the interleaving the Chaos Pain Suite was measured NOT to produce by chance (see
- * {@code docs/inflight/test-909-not-reproducible-by-existing-chaos-scenario.md}): scenario w4 at seed
+ * {@code docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md},
+ * which retired the inflight note that first recorded the measurement): scenario w4 at seed
  * 424242 stayed green with the fix reverted. Building this test established WHY chance never finds it -
  * the loss needs THREE coincidences, not two:
  * <ol>
@@ -164,10 +166,15 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
 
         Set<String> consumedKeys = ConcurrentHashMap.newKeySet();
         AtomicInteger workersInsideGate = new AtomicInteger();
+        AtomicBoolean workerGateTimedOut = new AtomicBoolean(false);
         pc.poll(ctx -> {
             workersInsideGate.incrementAndGet();
             try {
-                if (!processingGate.await(120, SECONDS)) {
+                // derived from the park deadline so the gate always outlasts the park (plus the
+                // registration await that follows release) - a gate timeout de-saturates the pipeline,
+                // which is precondition 3 dying silently, so it is also flagged and asserted on below
+                if (!processingGate.await(PARK_DEADLINE_SECONDS + 60, SECONDS)) {
+                    workerGateTimedOut.set(true);
                     throw new RuntimeException("test wiring failure: processing gate never opened");
                 }
             } catch (InterruptedException e) {
@@ -226,6 +233,10 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
 
         // 5 - release: the rest of the paused batch (offsets 25..49) is now inserted with the OLD epoch -
         //     the stale residents. The re-fetch from offset 0 then collides with them at the defect site.
+        //     The rebalance state is captured first: the validity assertions at the end prove it did not
+        //     move again, because a rebalance AFTER this point sweeps the residents and heals the loss.
+        int assignmentsAtRelease = dataTopicAssignments.get();
+        long rebalanceClockAtRelease = lastRebalanceEventNanos.get();
         pausableSm.get().releaseRegistrationLoop();
 
         // 6 - hold the gate closed until every re-delivered record has REGISTERED (collisions included) -
@@ -244,6 +255,22 @@ class RegistrationRaceStaleResidentIT extends BrokerIntegrationTest<String, Stri
                         "confluentinc#909 signature: a fresh arrival colliding with a stale shard resident "
                                 + "was dropped, and is never re-delivered while the consumer stays up")
                         .that(consumedKeys).containsAtLeastElementsIn(expectedKeys));
+
+        // ANTI-ROT: green above is only evidence if the staged collision actually happened and stayed
+        // unhealed. The quiescence gate at step 4 runs BEFORE release, so a rebalance landing after it
+        // (coordinator move, session-timeout blip) would sweep the stale residents and re-deliver -
+        // and the invariant would then pass on defective code too. A broken run must fail as
+        // "run invalid", never pass.
+        assertWithMessage("run invalid: the data topic was re-assigned after release - the sweep healed "
+                + "the staged collision, so the green result above proves nothing about the defect")
+                .that(dataTopicAssignments.get()).isEqualTo(assignmentsAtRelease);
+        assertWithMessage("run invalid: a rebalance event fired after release - the stale residents may "
+                + "have been swept, so the green result above proves nothing about the defect")
+                .that(lastRebalanceEventNanos.get()).isEqualTo(rebalanceClockAtRelease);
+        assertWithMessage("run invalid: a worker's processing-gate await timed out, de-saturating the "
+                + "pipeline - a take-scan could then have evicted the stale residents (precondition 3) "
+                + "before the fresh arrivals collided with them")
+                .that(workerGateTimedOut.get()).isFalse();
     }
 
     /** Produces offsets [from..to) with per-offset unique keys "k-<i>" - offset<->key correspondence is

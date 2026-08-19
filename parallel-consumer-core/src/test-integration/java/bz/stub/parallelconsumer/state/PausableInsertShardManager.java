@@ -14,8 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.SECONDS;
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
 
 /**
  * Test instrument for the confluentinc#909 registration race (fork fix: astubbs#31): parks the CONTROL
@@ -37,6 +36,16 @@ import static java.util.concurrent.TimeUnit.SECONDS;
  */
 @Slf4j
 public class PausableInsertShardManager extends ShardManager<String, String> {
+
+    /**
+     * Park budget. The clock starts at the pause point, and everything the test does while the control
+     * thread is parked must fit inside it: parking-topic creation plus the rebalance-settle await (itself
+     * up to 60s, and its 5s-quiet condition resets on every rebalance event). At the original 60s the park
+     * could expire INSIDE those budgets on a slow CI box, killing a valid run as a misleading
+     * "wiring failure" - in a repo where a flake fails the build. The test derives its worker-gate budget
+     * from this constant, so the gate always outlasts the park.
+     */
+    public static final int PARK_DEADLINE_SECONDS = 150;
 
     private final long pauseAtOffset;
     private final CountDownLatch reachedPausePoint = new CountDownLatch(1);
@@ -63,22 +72,16 @@ public class PausableInsertShardManager extends ShardManager<String, String> {
             reachedPausePoint.countDown();
             // PC wakes its control thread by INTERRUPTING it (notifySomethingToDo) whenever the poll
             // thread delivers new work - including the rebalance this test triggers on purpose. So the
-            // park must dwell THROUGH interrupts (same idiom as the chaos suite's non-interruptible heavy
-            // sleep), or the wake-up aborts the experiment. The swallowed interrupts are advisory
-            // wake-ups only - the mailbox data they announce is still there when the loop resumes.
-            long deadline = System.currentTimeMillis() + SECONDS.toMillis(60);
-            boolean released = false;
-            while (!released) {
-                long left = deadline - System.currentTimeMillis();
-                if (left <= 0) {
-                    throw new IllegalStateException(
-                            "Test wiring failure: resume latch never released - failing loudly rather than hanging");
-                }
-                try {
-                    released = resume.await(left, MILLISECONDS);
-                } catch (InterruptedException e) {
-                    log.debug("Ignoring control-thread wake-up interrupt while parked at the pause point");
-                }
+            // park must dwell THROUGH interrupts, or the wake-up aborts the experiment - exactly what the
+            // shared awaitLatch does: swallow the interrupt, re-wait, and fail loudly on deadline. The
+            // swallowed interrupts are advisory wake-ups only - the mailbox data they announce is still
+            // there when the loop resumes.
+            try {
+                awaitLatch(resume, PARK_DEADLINE_SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "Test wiring failure: resume latch never released within " + PARK_DEADLINE_SECONDS
+                                + "s - failing loudly rather than hanging", e);
             }
             log.info("Control thread released; completing registration of the now-stale batch (epoch {})",
                     epochOfInboundRecords);
