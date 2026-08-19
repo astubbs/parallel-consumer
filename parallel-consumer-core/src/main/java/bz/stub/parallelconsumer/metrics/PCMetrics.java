@@ -353,12 +353,22 @@ public class PCMetrics {
             log.debug("Trying to remove meters when metrics subsystem is already closed.");
             return;
         }
-        // Per meter, not around the loop: one hostile meter must not stop the rest being untracked -
-        // the confluentinc#859 leak lives in registeredMeters, and a loop-level guard would leave its
-        // tail un-pruned. Neither side of the merge that produced this had both halves.
-        Search.in(meterRegistry).name(name -> name.startsWith(meterNamePrefix))
-                .tags(commonTags).meters()
-                .forEach(meter -> removeAndUntrack(meter.getId(), "removing meters with prefix '" + meterNamePrefix + "'"));
+        // TWO guards, and both are load-bearing. The inner one is per meter, not around the loop, so one
+        // hostile meter cannot stop the rest being untracked - the confluentinc#859 leak lives in
+        // registeredMeters, and a loop-level guard would leave its tail un-pruned. The outer one covers
+        // the parts removeAndUntrack cannot reach: enumerating the registry (getMeters() is the user's
+        // code too) and Meter.getId(). Narrowing to per-meter alone would drop enumeration cover that the
+        // whole-body try/catch this merged from did have.
+        String context = "removing meters with prefix '" + meterNamePrefix + "'";
+        try {
+            Search.in(meterRegistry).name(name -> name.startsWith(meterNamePrefix))
+                    .tags(commonTags).meters()
+                    .forEach(meter -> removeAndUntrack(meter.getId(), context));
+        } catch (Exception e) {
+            log.warn("Failed to enumerate meters while {} - some may be left behind in the registry and " +
+                    "tracked here. Continuing: metrics teardown must not be able to break shutting down. " +
+                    "Cause: {}", context, e.toString(), e);
+        }
     }
 
     /**

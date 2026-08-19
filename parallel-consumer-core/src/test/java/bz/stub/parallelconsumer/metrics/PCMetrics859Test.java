@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
+import java.util.List;
 
 import static com.google.common.truth.Truth.assertThat;
 
@@ -96,6 +97,33 @@ class PCMetrics859Test {
         pcMetrics.close();
 
         assertThat(pcMetrics.registeredMeterCount()).isEqualTo(0);
+    }
+
+    /**
+     * The enumeration half of the never-throws teardown contract. `Search.in(registry)` calls
+     * {@code getMeters()}, which is the user's registry code just as much as {@code remove()} is - so a
+     * registry that refuses to be enumerated must not propagate out of teardown either.
+     *
+     * <p>This is the gap a per-meter-only guard leaves: {@code removeAndUntrack} cannot cover the call
+     * that produces the meters it is handed. Caught in review against the merge parent, which guarded
+     * the whole method body and therefore did cover it.
+     */
+    @Test
+    void aRegistryThatRefusesEnumerationMustNotPropagateOutOfTeardown() {
+        MeterRegistry throwOnEnumerate = new SimpleMeterRegistry() {
+            @Override
+            public List<Meter> getMeters() {
+                throw new IllegalStateException("registry refuses enumeration");
+            }
+        };
+        PCMetrics metrics = new PCMetrics(throwOnEnumerate, Collections.emptyList(), "hostile-enumeration");
+        try {
+            // must not propagate - this runs inside doClose's finally, where an escape would replace the
+            // in-flight exception and skip the state transition to CLOSED
+            metrics.removeMetersByPrefixAndCommonTags(PCMetricsDef.OFFSETS_ENCODING_TIME.getName());
+        } finally {
+            metrics.close();
+        }
     }
 
     /**

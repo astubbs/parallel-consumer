@@ -438,6 +438,17 @@ but not this.*
 - `AVERAGE_USER_PROCESSING_TIME` / `AVERAGE_WAITING_TIME`: two unimplemented metric definitions -
   implement or drop.
 
+### metrics/PCMetrics.java
+- **`metersLock` is held across calls into the user's `MeterRegistry`.** `removeMeter`, `close` and
+  `removeMetersByPrefixAndCommonTags` all call `remove`/`getMeters` with the lock held, so a
+  Micrometer `MeterRegistry` whose listener takes a user lock and separately calls back into
+  `PCMetrics` gives a textbook AB/BA inversion. No such path exists in this codebase or in
+  Micrometer's own registries, and the shapes that would reach it are contrived - which is why this
+  is queued rather than fixed. The fix is to collect the ids under the lock and call the registry
+  outside it; that is a real restructure of all three methods, not a tweak, and it must not undo
+  the never-throws contract those methods now carry (`removeQuietly`, and the two-level guard in
+  `removeMetersByPrefixAndCommonTags`). Raised in review of astubbs#57 and rated theoretical there.
+
 ---
 
 ### Test infrastructure - `MockConsumerTestBase` assumes one partition and one key
