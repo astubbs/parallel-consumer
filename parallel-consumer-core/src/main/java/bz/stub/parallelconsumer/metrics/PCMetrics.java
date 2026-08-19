@@ -208,11 +208,30 @@ public class PCMetrics {
             return;
         }
         log.debug("Closing PCMetrics");
-        // clean up the instance resources
-        this.registeredMeters.forEach(this.meterRegistry::remove);
+        // clean up the instance resources. Same never-throws contract as removeMeter, and it has to
+        // be repeated here because this iterates the registry directly rather than going through it.
+        // Missing this was invisible while the only caller wrapped the call itself: doClose's finally
+        // catches, so the escape only appeared once the fix was lifted onto a branch without that
+        // wrapper. A contract that depends on every caller guarding it is not a contract.
+        this.registeredMeters.forEach(meterId -> {
+            try {
+                this.meterRegistry.remove(meterId);
+            } catch (Exception e) {
+                log.warn("Failed to remove meter {} while closing the metrics subsystem - it may be " +
+                        "left behind in the registry. Continuing: metrics teardown must not be able " +
+                        "to break shutting down. Cause: {}", meterId, e.toString(), e);
+            }
+        });
         this.registeredMeters.clear();
         if (isNoop) {
-            this.meterRegistry.close();
+            // Only ever OUR CompositeMeterRegistry, never the user's - but guarded anyway, because
+            // the reason to guard is the caller's inability to recover, not the callee's identity.
+            try {
+                this.meterRegistry.close();
+            } catch (Exception e) {
+                log.warn("Failed to close the internal no-op meter registry. Continuing. Cause: {}",
+                        e.toString(), e);
+            }
         }
     }
 
@@ -231,6 +250,14 @@ public class PCMetrics {
     }
 
 
+    /**
+     * Removes a meter, and <b>never throws</b> - see the class-level note on why teardown is
+     * best-effort. Guarded HERE rather than at the call sites because there are eleven of them,
+     * across {@link bz.stub.parallelconsumer.state.PartitionState},
+     * {@link bz.stub.parallelconsumer.state.PartitionStateManager} and
+     * {@link bz.stub.parallelconsumer.state.WorkManager}, and one missed site is enough to reproduce
+     * the failure this prevents.
+     */
     private void removeMeter(Meter.Id meterId) {
         if (this.isClosed.get()) {
             //Already closed metrics subsystem - ignore
@@ -238,7 +265,19 @@ public class PCMetrics {
             return;
         }
         log.debug("Removing meter: {}", meterId);
-        this.meterRegistry.remove(meterId);
+        try {
+            this.meterRegistry.remove(meterId);
+        } catch (Exception e) {
+            // The registry is usually the USER'S, so this is third-party code. A throw here escapes
+            // through PartitionState.deregisterMetrics into onPartitionsRevoked, which runs on the
+            // broker-poll thread inside poll() - killing the only producer of commit responses, so
+            // every later commit blocks until it times out. A leaked meter is a far smaller problem.
+            log.warn("Failed to remove meter {} from the registry - it may be left behind there. " +
+                    "Continuing: metrics teardown is reporting, and must not be able to break " +
+                    "consuming or shutting down. Cause: {}", meterId, e.toString(), e);
+        }
+        // Always dropped from OUR map, whatever the registry did, so a failing registry cannot also
+        // grow this collection without bound.
         this.registeredMeters.remove(meterId);
     }
 
@@ -248,7 +287,15 @@ public class PCMetrics {
             log.debug("Trying to remove meters when metrics subsystem is already closed.");
             return;
         }
-        Search.in(meterRegistry).name(name -> name.startsWith(meterNamePrefix))
-                .tags(commonTags).meters().forEach(meterRegistry::remove);
+        try {
+            Search.in(meterRegistry).name(name -> name.startsWith(meterNamePrefix))
+                    .tags(commonTags).meters().forEach(meterRegistry::remove);
+        } catch (Exception e) {
+            // Same contract as removeMeter: never throw. This one runs inside doClose's finally,
+            // where an escape would replace the in-flight exception and skip the state transition.
+            log.warn("Failed to remove meters with prefix '{}' from the registry - they may be left " +
+                    "behind there. Continuing: metrics teardown must not be able to break shutting " +
+                    "down. Cause: {}", meterNamePrefix, e.toString(), e);
+        }
     }
 }
