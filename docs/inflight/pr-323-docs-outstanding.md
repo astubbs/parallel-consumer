@@ -3,8 +3,13 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 
-Middle of the three-PR stack (`split/docs-ledger-and-plans`, base `fix/909-load-reproduction`).
-Documentation only - no product code, no tests, no CI config. Delete this note when it merges.
+**Base `master`, independent of astubbs#322** - it was detached so it can merge first under the agreed
+order (323, 324, 325, 57, 322, 267, 29). astubbs#324 is stacked on it.
+
+Almost documentation-only, and the exception is worth stating rather than glossing: the diff touches
+`ConsumerManager.java`, `ConsumerOffsetCommitter.java` and three workflow files, and **every one of
+those hunks is a comment-only citation repoint** - notes renamed from `next-`/`parked-` to area
+prefixes, and the references to them updated. No behaviour changes. Delete this note when it merges.
 
 ## The one that needs a decision: this PR breaks the session index until astubbs#324 lands
 
