@@ -116,7 +116,7 @@ entries:
     pull_request: astubbs#269
     caveat: Alpha. Depending on the artifact is the entire opt-in.
 
-  - id: running-instance-visibility
+  - id: web-gui
     title: A web view showing what a running instance is actually doing
     serves: [observability, usability]
     horizon: "1.0"
@@ -149,7 +149,7 @@ entries:
       the measures of the whole proposition, and concedes the central ones are not emitted. Until they
       are, no performance claim is checkable, including by this project.
     done_when: Head-of-line blocking avoided, end-to-end record latency and per-shard queue depth are published meters.
-    unblocks: [running-instance-visibility]
+    unblocks: [web-gui]
     tracking: astubbs#222
     evidence: ../features/micrometer-metrics.yaml
 
@@ -257,11 +257,10 @@ entries:
     serves: [usability]
     horizon: next-0x
     blocks_1_0: false
-    stage: limited-poc
-    stage_delivery: draft
+    stage: planned
     stage_detail: >-
-      Actively being implemented in early draft against astubbs#302; the site design is drafted on
-      astubbs#316.
+      The site design is drafted on astubbs#316 - explicitly design only, no site is built there;
+      astubbs#302 holds the intent.
     why_now: >-
       The feature data exists and nothing renders it. Until something does, the README stays the only
       documentation and the data is a second corpus rather than a source.
