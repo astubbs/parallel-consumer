@@ -210,6 +210,23 @@ grants stay in `settings.local.json`, still ignored.
   and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
   it exists to prevent.
 
+- `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
+  every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
+  `docs/plans/`. About 70 lines, once per session, no bodies.
+
+  It exists because the prior-art check in `AGENTS.md` is the one most often skipped, and skipping
+  it is **invisible**: an agent that never learns a document exists cannot notice it is missing, so
+  it rediscovers the problem and the work looks like progress the whole way. That is not
+  hypothetical - astubbs/parallel-consumer#320 spent three rounds designing a fix for the
+  duplication scanners' scope, a week after the diagnosis and the prescribed fix were written into
+  `docs/solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`,
+  which names both CI jobs and the exact config line.
+
+  Titles only, deliberately. The failure is not knowing the document EXISTS; once a title is in
+  context the agent's own grep does the rest, and a hook that injected bodies would cost per session
+  what the whole corpus costs to read. It is the clearest case in this file of the distinction the
+  whole harness turns on: the rule was there, was read, and was not run - so it became a mechanism.
+
 The checklist itself is a plain doc, not embedded in the hook, so Codex and anything else reading
 `AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific - and the
 hook injects the file's bytes with a one-line pointer, not a summary of them, because a summary is a
@@ -263,6 +280,7 @@ one is a case in that file, and the suite goes red against the old parser.
   hook here runs - and it is a **one-time** hazard: it only bites a clone that predates the change.
   The mitigation is to move anything local into `.claude/settings.local.json`, which stays ignored,
   before pulling; the `.gitignore` comment says so at the point someone reads it.
+  <!-- file-refs: N/A - the file is git-ignored by design, so it is absent from every checkout -->
 
 ## Settled by testing, so nobody re-opens them
 

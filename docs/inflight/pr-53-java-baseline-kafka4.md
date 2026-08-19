@@ -18,3 +18,4 @@ bump `kafka.version` 3.9.1 → 4.2.x plus the TestContainers CP image; migrate r
 (`sendOffsetsToTransaction(Map,String)`, `MockConsumer(OffsetResetStrategy)`,
 `new ConsumerGroupMetadata(String)`); downstream module audit; flip `test-kafka-compat` to a blocking
 3.9.1 regression check; docs. Deferred further: `parallel-consumer-share` (KIP-932).
+<!-- file-refs: N/A - the sentence says the plan is on the branch, not on master -->
