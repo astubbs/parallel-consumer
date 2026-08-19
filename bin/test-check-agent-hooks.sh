@@ -61,14 +61,18 @@ echo "--- check-squash-subject.sh ---"
 
 fails=${fails:-0}
 
-verdict() { # <bash-command> -> ALLOW | DENY
+# Which hook verdict()/expect() drive - each section points it at its own hook, so the harness
+# below is written once (it was cloned per hook until review flagged the drift risk).
+HOOK_UNDER_TEST="$HOOKS/check-squash-subject.sh"
+
+verdict() { # <bash-command> -> ALLOW | DENY, from $HOOK_UNDER_TEST
     # The command goes to the JSON builder on STDIN, never argv: one case here is a 150 KB command,
     # and passing that as an argument hits the same E2BIG the case exists to detect - the harness
     # would die and the failure would read as the hook's.
     local out tmp
     tmp=$(mktemp)
     printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
-    out=$("$HOOKS/check-squash-subject.sh" < "$tmp" 2>/dev/null)
+    out=$("$HOOK_UNDER_TEST" < "$tmp" 2>/dev/null)
     rm -f "$tmp"
     case "$out" in
         *'"deny"'*) echo DENY ;;
@@ -373,54 +377,80 @@ echo
 echo "--- check-merge-outstanding-work.sh ---"
 
 OW_HOOK="$HOOKS/check-merge-outstanding-work.sh"
+HOOK_UNDER_TEST="$OW_HOOK"
 
-ow_verdict() { # <bash-command> [session-dir-has-live-task] -> ALLOW | DENY
-    local out tmp
-    tmp=$(mktemp)
-    printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
-    out=$(CLAUDE_CODE_SESSION_ID="${OW_SESSION:-}" "$OW_HOOK" < "$tmp" 2>/dev/null)
-    rm -f "$tmp"
-    case "$out" in
-        *'"deny"'*) echo DENY ;;
-        *)          echo ALLOW ;;
-    esac
-}
-
-ow_expect() { # <expected> <name> <command>
-    local got; got=$(ow_verdict "$3")
-    assert "$2" "$1" "$got"
-}
+# Isolate every case from the machine's REAL state: a genuine maven build running under
+# .claude/worktrees while this suite runs must not flip an ALLOW case to DENY (the seam is the
+# hook's own MERGE_OUTSTANDING_BUILD_PATTERN - the live-build arm is then tested on purpose with a
+# fake pgrep below), and an exported override in the caller's shell must not flip a DENY case.
+export MERGE_OUTSTANDING_BUILD_PATTERN="no-such-build-selftest-$$"
+unset MERGE_DESPITE_OUTSTANDING_WORK
 
 # A session dir holding a task file written just now == background work in flight.
 ow_session="ow-selftest-$$"
 ow_tasks="/tmp/claude-$(id -u)/selftest/$ow_session/tasks"
 mkdir -p "$ow_tasks"
 printf 'still writing\n' > "$ow_tasks/agent-live.output"
+export CLAUDE_CODE_SESSION_ID="$ow_session"
 
-OW_SESSION="$ow_session"
-ow_expect DENY  "a merge is refused while a task is still writing"            'gh pr merge 31 -R astubbs/parallel-consumer --rebase'
-ow_expect DENY  "a merge later in a compound command is still seen"           'echo hi && gh pr merge 31 --squash'
-ow_expect ALLOW "the words gh pr merge inside --body are not a merge"         'gh pr comment 5 --body "remember to run gh pr merge later"'
-ow_expect ALLOW "a non-merge gh command passes"                              'gh pr view 31'
-ow_expect ALLOW "an unrelated command passes"                                'git status'
+expect DENY  "a merge is refused while a task is still writing"            'gh pr merge 31 -R astubbs/parallel-consumer --rebase'
+expect DENY  "a merge later in a compound command is still seen"           'echo hi && gh pr merge 31 --squash'
+expect DENY  "a full-path gh is still a merge"                             '/usr/local/bin/gh pr merge 31 --rebase'
+expect ALLOW "a binary merely ENDING in gh is not gh"                      '/usr/local/bin/sleigh pr merge 31'
+expect ALLOW "the words gh pr merge inside --body are not a merge"         'gh pr comment 5 --body "remember to run gh pr merge later"'
+expect ALLOW "a non-merge gh command passes"                               'gh pr view 31'
+expect ALLOW "an unrelated command passes"                                 'git status'
+
+# THE DOCUMENTED OVERRIDE, delivered the only way an agent can deliver it: as an env-prefix on the
+# merge command, which reaches the hook as command TOKENS - a hook only ever sees the HARNESS's
+# process env. The first version of this suite asserted only the process-env form (kept at the
+# bottom as the human-wrapping-the-harness path), which hid that the in-session route was dead.
+expect ALLOW "env-prefix override on the command releases the guard"       'MERGE_DESPITE_OUTSTANDING_WORK=1 gh pr merge 31 --rebase'
+expect DENY  "an env-prefix set to 0 is not an override"                   'MERGE_DESPITE_OUTSTANDING_WORK=0 gh pr merge 31 --rebase'
+expect DENY  "the override token AFTER the command is not a prefix"        'gh pr merge 31 --body "MERGE_DESPITE_OUTSTANDING_WORK=1"'
 
 # Stale task file == nothing in flight. Proves the window is load-bearing rather than "any file".
 touch -d '@1000000000' "$ow_tasks/agent-live.output"
-ow_expect ALLOW "a task that stopped writing long ago does not block"        'gh pr merge 31 --rebase'
+expect ALLOW "a task that stopped writing long ago does not block"         'gh pr merge 31 --rebase'
+
+# LIVE-BUILD ARM, both directions, via a fake pgrep on PATH. This arm shipped its first bug (pgrep
+# matching the hook's own subshell) with no test to catch it - it was found by accident. The fake
+# output pins the argv[0]-must-be-java awk filter and the worktrees grep; the task file above is
+# stale, so the build arm alone decides these verdicts.
+fake_pgrep_verdict() { # <pgrep-stdout-line> -> ALLOW | DENY
+    local fakebin out
+    fakebin="$TMP/fakebin$RANDOM"
+    mkdir -p "$fakebin"
+    printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$1" > "$fakebin/pgrep"
+    chmod +x "$fakebin/pgrep"
+    out=$(printf '%s' '{"tool_input":{"command":"gh pr merge 31 --rebase"}}' \
+        | PATH="$fakebin:$PATH" "$OW_HOOK" 2>/dev/null)
+    case "$out" in
+        *'"deny"'*) echo DENY ;;
+        *)          echo ALLOW ;;
+    esac
+}
+assert "a live java build under .claude/worktrees blocks the merge" DENY \
+    "$(fake_pgrep_verdict '12345 /usr/lib/jvm/temurin/bin/java -cp x org.apache.maven.wrapper.MavenWrapperMain verify -f /home/u/.claude/worktrees/w/pom.xml')"
+assert "a non-java process MENTIONING the build is not a build" ALLOW \
+    "$(fake_pgrep_verdict '12345 /bin/bash wait-for MavenWrapperMain .claude/worktrees/w')"
+assert "a java build OUTSIDE .claude/worktrees does not block" ALLOW \
+    "$(fake_pgrep_verdict '12345 /usr/lib/jvm/temurin/bin/java -cp x org.apache.maven.wrapper.MavenWrapperMain verify -f /home/u/elsewhere/pom.xml')"
 
 # Fail-open paths. A guard that blocks on its own bug jams the tool call shut.
 printf 'still writing\n' > "$ow_tasks/agent-live.output"
-OW_SESSION=""
-ow_expect ALLOW "no session id fails OPEN"                                   'gh pr merge 31 --rebase'
-OW_SESSION="$ow_session"
-got=$(printf 'not json' | CLAUDE_CODE_SESSION_ID="$ow_session" "$OW_HOOK" 2>/dev/null); \
+export CLAUDE_CODE_SESSION_ID=""
+expect ALLOW "no session id fails OPEN"                                    'gh pr merge 31 --rebase'
+export CLAUDE_CODE_SESSION_ID="$ow_session"
+got=$(printf 'not json' | "$OW_HOOK" 2>/dev/null); \
     case "$got" in *'"deny"'*) got=DENY ;; *) got=ALLOW ;; esac
 assert "unparseable payload fails OPEN" ALLOW "$got"
 
+# The process-env form of the override is kept for a human whose own shell wraps the harness.
 got=$(printf '%s' '{"tool_input":{"command":"gh pr merge 31 --rebase"}}' \
-    | MERGE_DESPITE_OUTSTANDING_WORK=1 CLAUDE_CODE_SESSION_ID="$ow_session" "$OW_HOOK" 2>/dev/null); \
+    | MERGE_DESPITE_OUTSTANDING_WORK=1 "$OW_HOOK" 2>/dev/null); \
     case "$got" in *'"deny"'*) got=DENY ;; *) got=ALLOW ;; esac
-assert "the explicit override releases the guard" ALLOW "$got"
+assert "the process-env override releases the guard" ALLOW "$got"
 
 rm -rf "/tmp/claude-$(id -u)/selftest/$ow_session"
 

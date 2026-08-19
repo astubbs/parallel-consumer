@@ -28,15 +28,21 @@
 # runs. A file touched within the window below means something is still producing output right
 # now. Scoped by session id so a sibling session's work never blocks this one.
 #
-# ITS LIMIT, STATED PLAINLY: a STALLED agent writes nothing and will not be detected. Stalls are
+# ITS LIMITS, STATED PLAINLY. A STALLED agent writes nothing and will not be detected. Stalls are
 # common enough here that this must not be read as proof of quiescence - it catches the live case,
 # which is the one that bit us, and nothing more. `ListAgents` is the check a human should still
-# run when the answer matters.
+# run when the answer matters. And a merge wrapped in another interpreter - `bash -c "gh pr merge
+# ..."` - reaches the token scan below as ONE opaque token and is not seen: shlex cannot unwrap a
+# nested shell without executing it, and the squash guard shares the same gap.
 #
 # ALSO CHECKED: a live maven build under .claude/worktrees, which is the other shape of "the thing
 # that would have changed this PR has not finished yet".
 #
-# THE OVERRIDE IS DELIBERATE AND LOUD. Set MERGE_DESPITE_OUTSTANDING_WORK=1 to proceed. There are
+# THE OVERRIDE IS DELIBERATE AND LOUD. Prefix the merge command itself with
+# MERGE_DESPITE_OUTSTANDING_WORK=1 to proceed. From inside a session that prefix arrives as part
+# of the COMMAND TEXT, never as this hook's environment - hooks run with the harness's own env,
+# which an agent cannot reach - so the token scan below honors the prefix form; the process-env
+# form also works, for a human driving the harness from a shell that exports it. There are
 # legitimate cases - the background work belongs to a different PR, or you have decided to follow
 # up separately - and the point of the guard is that the decision is made rather than skipped.
 #
@@ -62,22 +68,37 @@ esac
 # grep for "gh pr merge" fires on `gh pr comment --body "remember to run gh pr merge later"`, and a
 # guard that blocks ordinary commands gets routed around. shlex splits the command the way the
 # shell would, so the three words must appear as consecutive ARGV tokens; an unbalanced quote makes
-# shlex raise, and that fails open.
+# shlex raise, and that fails open. The gh token is matched by BASENAME - /usr/local/bin/gh is the
+# same binary, and docs/agent-harness.md names that exact shape as one this guard exists for.
 is_merge="$(printf '%s' "$payload" | python3 -c '
-import json, shlex, sys
+import json, re, shlex, sys
 try:
     d = json.load(sys.stdin)
     cmd = (d.get("tool_input") or {}).get("command") or ""
     toks = shlex.split(cmd)
 except Exception:
     sys.exit(0)
+verdict = ""
 for i in range(len(toks) - 2):
-    if toks[i] == "gh" and toks[i + 1] == "pr" and toks[i + 2] == "merge":
-        print("yes")
-        break
+    if toks[i].rsplit("/", 1)[-1] == "gh" and toks[i + 1] == "pr" and toks[i + 2] == "merge":
+        # The documented override, typed as an env prefix on the merge command, arrives HERE - as
+        # command tokens - never in this hook process env (see THE OVERRIDE above). Walk the
+        # NAME=VALUE assignments immediately preceding this gh; anything after it (an option value,
+        # a --body string) is not a prefix and does not count.
+        j = i - 1
+        override = False
+        while j >= 0 and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", toks[j]):
+            if toks[j] == "MERGE_DESPITE_OUTSTANDING_WORK=1":
+                override = True
+            j -= 1
+        if not override:
+            verdict = "merge"
+            break
+        verdict = "override"
+print(verdict)
 ' 2>/dev/null)" || exit 0
 
-[ "$is_merge" = "yes" ] || exit 0
+[ "$is_merge" = "merge" ] || exit 0
 
 [ "${MERGE_DESPITE_OUTSTANDING_WORK:-}" = "1" ] && exit 0
 [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || exit 0
@@ -99,7 +120,11 @@ done < <(find "/tmp/claude-$(id -u)" -maxdepth 4 -path "*/${CLAUDE_CODE_SESSION_
 # for a build. The first draft counted six "live builds" when none were running, which would have
 # denied every merge forever. Requiring argv[0] to be java is what separates a build from a process
 # talking about one; the self-test's stale-task case is the negative control that caught it.
-live_builds="$(pgrep -af 'MavenWrapperMain' 2>/dev/null \
+# The pattern is overridable so the self-test can isolate itself from the machine's REAL process
+# table (a genuine build running during a self-test is not a test failure) and, with a fake pgrep
+# on PATH, pin down the awk/grep pipeline below in both directions.
+BUILD_PATTERN="${MERGE_OUTSTANDING_BUILD_PATTERN:-MavenWrapperMain}"
+live_builds="$(pgrep -af "$BUILD_PATTERN" 2>/dev/null \
     | awk '$2 ~ /(^|\/)java$/' \
     | grep -c '\.claude/worktrees' || true)"
 [ -z "$live_builds" ] && live_builds=0
@@ -111,7 +136,7 @@ if [ -n "$live_tasks" ] || [ "$live_builds" -gt 0 ]; then
     REASON="Background work from this session is still in flight, so this PR may be missing something that belongs in it."
     [ -n "$live_tasks" ] && REASON="$REASON Tasks that wrote output in the last ${WINDOW_SECONDS}s: $(printf '%s' "$live_tasks" | tr -d '\n' | sed 's/^  - //; s/  - /, /g')."
     [ "$live_builds" -gt 0 ] && REASON="$REASON Live maven build(s) under .claude/worktrees: ${live_builds}."
-    REASON="$REASON Work that belongs in this PR cannot be added after the merge - it becomes a second PR, and whatever the description or the inflight notes claimed about it goes stale on master. Establish what each one is doing first. NOTE a stalled agent writes nothing and is not detected here, so this is not proof of quiescence - run ListAgents if the answer matters. If the outstanding work genuinely does not belong in this PR, re-run with MERGE_DESPITE_OUTSTANDING_WORK=1."
+    REASON="$REASON Work that belongs in this PR cannot be added after the merge - it becomes a second PR, and whatever the description or the inflight notes claimed about it goes stale on master. Establish what each one is doing first. NOTE a stalled agent writes nothing and is not detected here, so this is not proof of quiescence - run ListAgents if the answer matters. If the outstanding work genuinely does not belong in this PR, re-run the merge command prefixed with MERGE_DESPITE_OUTSTANDING_WORK=1."
 
     REASON="$REASON" python3 -c '
 import json, os
