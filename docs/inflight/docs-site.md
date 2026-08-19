@@ -1,4 +1,4 @@
-# Parked: documentation site
+# A documentation site - planning draft, direction not chosen
 
 <!-- inflight-type: feature -->
 
