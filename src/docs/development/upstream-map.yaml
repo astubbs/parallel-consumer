@@ -695,7 +695,7 @@ entries:
       (draft PR #22 @ba6b71f10 -- NB that SHA is the UPSTREAM branch tip; the fork's
       same-named branch features/dynamic-concurrency-control @6f85eac41 has DIVERGED
       from it and the upstream side is not preserved on origin -- see
-      docs/inflight/next-branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
+      docs/inflight/branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
       is unrelated (throttles status logging in tests). #119 Connect: reporter offered
       to do the work and was told there was no demand; maintainer later had working
       hacks both directions and judged "Connect sinks inside PC" publishable -- that

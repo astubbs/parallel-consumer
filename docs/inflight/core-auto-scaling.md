@@ -8,7 +8,7 @@ it is wrong in both directions (too low silently wastes headroom, too high flood
 confluentinc#766) and the right value depends on the runtime data in the assigned partitions,
 which is unknowable at compile time. Priority raised 2026-08-18: with key-ordered concurrency,
 this is a candidate killer feature - no known competitor does runtime-discovered, per-instance
-adaptive concurrency. Split from [`next-distributed-throttling.md`](next-distributed-throttling.md)
+adaptive concurrency. Split from [`core-distributed-throttling.md`](core-distributed-throttling.md)
 because the two will likely reach mergeable PRs at different times and carry distinct prototype
 trails; idea 8 in the shared ideation doc
 ([`docs/ideation/2026-08-17-distributed-throttling-ideation.html`](../ideation/2026-08-17-distributed-throttling-ideation.html))

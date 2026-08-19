@@ -407,7 +407,7 @@ that reopens the decision is the price of a review falling by roughly two orders
 the rediscovery that the gap exists. Ask for a review when a PR is ready, and ask again after a
 push that changes what a reviewer already looked at; that judgement is deliberately a person's, not
 a gate's. The reasoning and the archived strict implementation are in
-[`docs/inflight/parked-strict-review-gate-freshness.md`](inflight/parked-strict-review-gate-freshness.md).
+[`docs/inflight/ci-strict-review-gate-freshness.md`](inflight/ci-strict-review-gate-freshness.md).
 Read it before re-proposing strictness; it is a considered trade, not an oversight.
 
 **There is deliberately no skip word, label or "trivial change" escape**, because any such escape

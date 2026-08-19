@@ -32,7 +32,7 @@ Observability cohort (plausibly one work group):
 Resolved since the audit: `feature/auto-tuning-pressure` is NOT observability - its commits ("Wip!
 Experiments in self tuning", reworking WorkManager/backpressure) make it the hand-rolled twin of
 `features/dynamic-concurrency-control`, i.e. the astubbs#227 flow-control family. Catalogued in
-`docs/refactoring.md` (Flow control / self-tuning) and tracked by `next-auto-scaling.md`.
+`docs/refactoring.md` (Flow control / self-tuning) and tracked by `core-auto-scaling.md`.
 
 Defect / correctness cohort:
 

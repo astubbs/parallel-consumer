@@ -261,7 +261,7 @@ public class ConsumerManager<K, V> {
                     // the close path, where the final commit matters most. Fail instead: the close
                     // sequence logs it and shuts down, which is true rather than quietly wrong.
                     // TODO(refactor): a user-facing failure wants a PC-named type - see
-                    // docs/inflight/next-exception-hierarchy-cleanup.md
+                    // docs/inflight/core-exception-hierarchy-cleanup.md
                     throw new InternalRuntimeException(
                             "Offset commit abandoned after {} attempt(s) because close began - these offsets were NOT " +
                                     "committed, so they must not be recorded as successful", null, tryCount);

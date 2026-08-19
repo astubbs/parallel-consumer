@@ -3,7 +3,7 @@
 <!-- inflight-type: feature -->
 
 
-> Extracted from `origin/docs/ideate-batching-enhancements` @98a5ea8f5, `docs/inflight/next-batching-enhancements.md`.
+> Extracted from `origin/docs/ideate-batching-enhancements` @98a5ea8f5, `docs/inflight/core-batching-enhancements.md`.
 
 Full ranked ideation with verified evidence:
 [`docs/ideation/2026-08-17-batching-enhancements-ideation.html`](../ideation/2026-08-17-batching-enhancements-ideation.html)

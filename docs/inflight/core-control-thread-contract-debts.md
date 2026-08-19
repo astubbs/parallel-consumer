@@ -42,7 +42,7 @@ person to send a wakeup near a close reintroduces the same defect - as astubbs#2
 Sketched with the author 2026-08-17 and parked with the decomposition (item 2). Recorded at this
 depth because the design turns on details that are expensive to rediscover.
 
-**Read [`next-actor-revival.md`](next-actor-revival.md) before building any of it.** The 2022
+**Read [`core-actor-revival.md`](core-actor-revival.md) before building any of it.** The 2022
 micro-actor family (`sweep-2023-actor-ipc`) already carries a framework - 537 lines, 4 files, one
 16-line marker interface - and a ranked set of six directions for reviving it. What follows is a
 concrete first slice, not a greenfield design, and survivor 5 (skeleton-first strangler) is the shape

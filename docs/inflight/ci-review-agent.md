@@ -150,7 +150,7 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   rather than a judgement about comment metadata. This is now the single highest-value change left
   in this area. Do not confuse it with restoring head-freshness as a *rule* - that is a separate,
   deliberately parked decision in
-  [`parked-strict-review-gate-freshness.md`](parked-strict-review-gate-freshness.md).
+  [`ci-strict-review-gate-freshness.md`](ci-strict-review-gate-freshness.md).
 - **The gate runs from the PR's own checkout.** A `pull_request` job checks out the PR, so both
   the gate script and the workflow file come from the tree they are policing. Pre-existing and
   repo-wide rather than anything the on-demand split introduced: `copyright`, `shell: sigpipe`,

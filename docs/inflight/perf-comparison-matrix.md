@@ -4,7 +4,7 @@
 <!-- inflight-impact: process -->
 
 
-> Extracted from `origin/docs/ideate-perf-comparison-matrix` @3dd35926a, `docs/inflight/next-perf-comparison-matrix.md`.
+> Extracted from `origin/docs/ideate-perf-comparison-matrix` @3dd35926a, `docs/inflight/perf-comparison-matrix.md`.
 
 Candidate work, ranked in full in `docs/ideation/2026-08-17-perf-comparison-matrix-ideation.html`
 (branch `docs/ideate-perf-comparison-matrix`, stacked on `feats/proxy-requirements`, no PR). The ask

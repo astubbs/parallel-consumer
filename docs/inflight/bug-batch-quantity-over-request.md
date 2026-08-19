@@ -6,7 +6,7 @@
 
 Tracked as astubbs#311. Gated on `isUsingBatching()`, so **a default configuration (`batchSize = 1`)
 is unaffected** - but every configuration that actually uses batching is affected, continuously.
-Surfaced by the batching ideation pass (`next-batching-enhancements.md`) and confirmed by reading
+Surfaced by the batching ideation pass (`core-batching-enhancements.md`) and confirmed by reading
 `master`. The `batchSize` validation gap this note
 originally carried is now [`bug-unvalidated-batchsize.md`](bug-unvalidated-batchsize.md), tracked
 under the same issue; that one needs a caller to pass a bad value, this one is the defect the

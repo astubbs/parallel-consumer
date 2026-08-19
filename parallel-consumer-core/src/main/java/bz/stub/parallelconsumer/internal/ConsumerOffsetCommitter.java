@@ -196,7 +196,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                     // errors claimed PT30S no matter what the option was set to - overstating the
                     // default by 3x and making the number useless as a diagnostic.
                     // TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
-                    // see docs/inflight/next-exception-hierarchy-cleanup.md
+                    // see docs/inflight/core-exception-hierarchy-cleanup.md
                     throw InternalRuntimeException.msg(
                             "Timeout waiting for commit response {} to request {} - the broker poll thread is the " +
                                     "only producer of commit responses, and it has not died with an exception, so it is " +
@@ -242,7 +242,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 ? "no commit can be requested"
                 : "request " + commitRequest + " can never be answered";
         // TODO(refactor): a user-facing failure wants a PC-named type - see
-        // docs/inflight/next-exception-hierarchy-cleanup.md
+        // docs/inflight/core-exception-hierarchy-cleanup.md
         throw new InternalRuntimeException(
                 "The broker poll thread has died, so {} - its own error is the cause of this one",
                 death, context);

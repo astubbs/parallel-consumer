@@ -3,7 +3,7 @@
 <!-- inflight-type: feature -->
 
 
-> Extracted from `origin/docs/ideate-dapr-adapter` @d5c8cf1b0, `docs/inflight/next-dapr-adapter.md`.
+> Extracted from `origin/docs/ideate-dapr-adapter` @d5c8cf1b0, `docs/inflight/core-dapr-adapter.md`.
 
 A full ideation pass on the Dapr adapter (the pluggable pub/sub component backed by this engine,
 raised in the HTTP-strategy notes) ran on 2026-08-17. **The ranked result, its evidence, and the

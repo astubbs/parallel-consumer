@@ -4,7 +4,7 @@
 <!-- inflight-impact: crash -->
 
 
-**Priority: high.** Ranked top of `next-candidates.md`. The demand signal is not a request in a
+**Priority: high.** Ranked top of `process-candidate-ranking.md`. The demand signal is not a request in a
 tracker - it is a user running a **patched build of the library** in production to get this
 behaviour. That is the loudest signal a missing feature can produce, and it is on the record.
 

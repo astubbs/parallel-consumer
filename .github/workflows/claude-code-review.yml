@@ -24,7 +24,7 @@ name: review gate
 #
 # IT NO LONGER ASKS WHETHER THE REVIEW COVERED THE CURRENT HEAD. It used to, and the strict
 # implementation is archived at the tag `archive/review-gate-strict-head-freshness` with the
-# reasoning in docs/inflight/parked-strict-review-gate-freshness.md. Short version: strict is
+# reasoning in docs/inflight/ci-strict-review-gate-freshness.md. Short version: strict is
 # the stronger guarantee, but enforcing it here cost a page of timestamp plumbing, and the
 # per-push coverage it protected came from an auto-reviewer - which was switched off on
 # 2026-08-19 on cost grounds and now runs on request only. The gap that leaves is accepted

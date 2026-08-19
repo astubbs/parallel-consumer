@@ -4,7 +4,7 @@
 <!-- inflight-impact: reliability -->
 
 
-> Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/inflight/next-recoverable-producer-fencing.md`.
+> Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/inflight/core-recoverable-producer-fencing.md`.
 
 A `ProducerFencedException` during a transactional commit currently kills the PC instance. It should
 be treated as "our partitions moved, clean up and rejoin" - which is what Kafka Streams does.

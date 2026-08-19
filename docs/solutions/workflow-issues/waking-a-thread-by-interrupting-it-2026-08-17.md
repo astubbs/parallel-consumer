@@ -155,7 +155,7 @@ survives only as the mechanism for unparking a thread the mailbox cannot reach.
 **Do not start this from scratch.** A 2022 micro-actor branch family already exists - manifest entry
 `sweep-2023-actor-ipc`, editorially owned by `docs/refactoring.md`'s *Actor / IPC message bus*
 section - and it went through a ranked ideation pass on 2026-08-17:
-[`docs/inflight/next-actor-revival.md`](../../inflight/next-actor-revival.md). The framework proper is
+[`docs/inflight/core-actor-revival.md`](../../inflight/core-actor-revival.md). The framework proper is
 537 lines in 4 files, coupled to PC by one 16-line marker interface.
 
 Two of its six survivors bear directly on this write-up. **Survivor 6, the concurrency mass budget**
@@ -165,7 +165,7 @@ the instrument. **Survivor 5, the skeleton-first strangler**, is where a payload
 land as a per-seam swap rather than a rewrite.
 
 The narrow contract debts this sits among are in
-[`docs/inflight/next-control-thread-contract-debts.md`](../../inflight/next-control-thread-contract-debts.md).
+[`docs/inflight/core-control-thread-contract-debts.md`](../../inflight/core-control-thread-contract-debts.md).
 
 ## The transferable shape
 
