@@ -132,10 +132,10 @@ entries:
     group: rebalance-stability
     summary: "\"Timeout waiting for commit response\" is a symptom of a dead broker-poll thread -- report the real cause"
     fork:
-      branches: [test/177-commit-response-timeout]
+      branches: []
       prs: [204]
       fork_issue: 177
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       issues: [833]
@@ -168,7 +168,7 @@ entries:
       branches: [fix/859-metrics-leak-plus-cherrypicks, bugs/859-pcmetrics-leak-v2]
       prs: [57]
       fork_issue: 120
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [892]
@@ -216,7 +216,7 @@ entries:
       branches: [cherry-pick/893-offset-reset, upstream-pr-893]
       prs: [57]
       fork_issue: 121
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [893]
@@ -237,7 +237,7 @@ entries:
     fork:
       branches: [cherry-pick/905-max-shard-metric, upstream-pr-905]
       prs: [57]
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [905]
@@ -255,7 +255,7 @@ entries:
     fork:
       branches: [fix/909-stale-container-replacement]
       prs: [31]
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [909]
@@ -428,7 +428,7 @@ entries:
   - id: sweep-2023-admin-closure
     group: governance
     summary: Two upstream bulk closures (2023-06-15 PRs, 2023-07-07 issues) that closed live work as done
-    fork: {branches: [docs/mirror-2023-admin-sweep], prs: [258], fork_issues: [227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254], status: pr-open}
+    fork: {branches: [docs/mirror-2023-admin-sweep], prs: [258], fork_issues: [227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254], status: merged}
     upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 29, 34, 40, 41, 48, 49, 50, 53, 57, 65, 119, 144, 154, 175, 183, 187, 191, 199, 203, 205, 246, 267, 319, 320, 372], prs: [22, 45, 46, 81, 106, 143, 179, 181, 204, 220, 270, 271, 291, 300, 303, 316, 325, 345, 346, 356, 366, 390, 405, 408, 441, 442, 443, 464, 473, 488, 492, 494, 496, 506, 524], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
     # Swept PR heads that no ref on this fork contained, checked 2026-08-14. Pinned as

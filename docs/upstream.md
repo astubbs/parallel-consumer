@@ -52,6 +52,14 @@ causes it**: opening a PR (`prs:` + `status: pr-open`), finishing on a branch wi
 (`status: ready`), merging (`merged`), releasing (`released`), abandoning
 (`superseded`/`wontfix`).
 
+**For `merged`, write it in the branch and push it *before* you merge.** That reads like claiming
+something untrue and is not: branch content is visible to nobody until it lands, and the moment it
+lands the entry is correct. Leaving it until after the merge is the expensive order - your branch is
+gone, the fix is a commit straight to master, and until someone remembers, the manifest is wrong.
+Three entries were found stale exactly this way (astubbs#204, astubbs#31, astubbs#258 - one of them
+for a week). `.claude/hooks/check-upstream-map-merged.sh` refuses a `gh pr merge` while the entry
+still says `pr-open`, and goes quiet once it does not.
+
 Loose ends do **not** go in this manifest - it has no `todo:` field. Anything a command can answer
 ("how far behind is PR #N?" - `git rev-list --left-right --count`) should be asked of the command
 rather than cached here, where it rots. Record what no command knows in `docs/inflight/`; keep this
