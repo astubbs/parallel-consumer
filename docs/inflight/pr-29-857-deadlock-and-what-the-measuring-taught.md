@@ -18,6 +18,30 @@ can close. **They are not this defect, and probably not any defect.** The eviden
 fix, and the four-cell assignor x stop-mode matrix explains every sighting as eager reassignment
 restarting in-flight heavy work until a commit watermark is legitimately pinned past a 150s bound.
 
+## Interaction with `bug-shutdown-teardown-race.md`, checked 2026-08-19
+
+That note lives on astubbs#57's branch and asks a question addressed to whoever is hardening
+shutdown-under-load - which is this PR. Checked, and the answer is partial:
+
+- **The consumer half is hardened here.** The note's race is teardown running while the broker-poll
+  thread is still alive. Previously the control thread would close a consumer the poll thread was
+  still using, a genuine data race. Now `tryClaimOwnership()` refuses to steal from a live owner, the
+  close fails, and `doClose` catches it and warns with the user-visible cost - no LeaveGroup, so the
+  group's next rebalance is delayed by up to `session.timeout.ms`. The `closeAndWait()` catch above
+  it says the same thing in advance ("the consumer close below may legitimately refuse").
+- **The metrics half is fixed at the metrics end by astubbs#57**, defensively, in `PCMetrics.track()`.
+- **The question the note actually asks is still open**: whether `doClose` must guarantee the poll and
+  worker threads are joined before the `finally` teardown, or whether that teardown should be guarded
+  on join success. Neither PR answers it, and the note is right that it is a sequencing change rather
+  than a local patch. Any teardown in that `finally` is exposed; metrics is simply where it was
+  noticed.
+
+**One small thing worth fixing here while the file is open**: `ConsumerManager.close()` calls
+`tryClaimOwnership()` and discards the boolean, then closes anyway and relies on `checkThread`
+throwing. Reading the result would let it log "the poll thread still owns the consumer" directly
+rather than routing a foreseeable, expected condition through an exception. Same outcome, cheaper,
+and it stops a normal shutdown-race outcome looking like a bug in a stack trace.
+
 ## Still open on this PR, 2026-08-19
 
 Ordered by what blocks a merge. **This file should have existed from the branch's first commit and
