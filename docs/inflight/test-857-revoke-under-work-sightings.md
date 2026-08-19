@@ -61,6 +61,69 @@ uncontended repeat, measuring the legit recovery time rather than adjusting unti
 What is established: on this workload the stall is **bounded**, so "unbounded" can no longer be
 assumed, and the astubbs#29 fix is not implicated by these sightings at all.
 
+## Four arms, one explanation, 2026-08-19: the eager CLASS2_STALL is the detector, not a defect
+
+Seed A, held constant, run through four arms. Each was chosen to kill a different explanation, and
+the survivor is the same one each time.
+
+| Arm | Result | What it rules out |
+|---|---|---|
+| Diagnostic watch, no fail-fast | drains fully in 281s | **unbounded stall** - the probe hunts "unbounded" by its own javadoc |
+| 32 CPUs instead of 8 | 54 violations, 290s | **machine contention** - four times the cores changed nothing |
+| Drain-only stops | 45 violations, drains | **abandoned in-flight work** - draining the leaver's work is nearly irrelevant |
+| **Cooperative assignor** | **0 violations, PASSES** | nothing - this is the arm that identifies the cause |
+
+**The cooperative arm is the one that names it.** Same seed, same workload, same heavy records, same
+churn rate - and the storm phase ended having consumed **239,808 records against the eager arm's
+193,715**. Roughly 46,000 more records completed in the same sixty seconds, because cooperative
+rebalancing keeps assignments while eager revokes ALL partitions from ALL members on every
+membership change, restarting whatever heavy work was in flight.
+
+So the chain is: eager reassignment restarts in-flight heavies on every storm tick -> each restart
+costs another `HEAVY_SLEEP` -> a partition's commit watermark cannot advance past the incomplete
+record -> chain enough links and the watermark is legitimately pinned past the 150s bound. Nothing
+in that sequence is a defect. It is the workload meeting the detector.
+
+**This was already root-caused once, in July, and the fix did not hold.** The scenario javadoc
+records the same diagnosis at the 90s storm / 45s dwell shape, and the response was to retune to
+60s/20s so the arithmetic (60+20+20=100s) sat under the bound. That arithmetic assumes **one**
+restart. The measurements above are what several restarts cost, and 281s is not close to 100s.
+
+**What follows, and what does not.** The eager sightings in this file should no longer be read as
+confluentinc#857 evidence, and astubbs#29 is not implicated by any of them - it was never implicated
+by more than mode-compatibility, and the replay spent that. What is NOT established is that the
+bound should simply be raised: the honest options are to raise it with the measured multi-restart
+arithmetic written down, to lower `HEAVY_SLEEP` so chains cost less, or to accept that the eager arm
+cannot host a Class 2 hunt at all and let the cooperative arm own it. That is a calibration decision
+for the suite's owner, and it must not be made by nudging a threshold until a run goes green.
+
+## The drain control arm, 2026-08-19: draining barely changes anything, and the assignor is why
+
+Same seed A, same scenario, one variable - every stop DRAINS
+(`ChaosRevokeUnderWorkDrainIT`). The prediction was that letting in-flight heavy work finish before
+a member leaves would break the redelivery chain that pins commit watermarks. **It did not.**
+
+| Arm | Violations | Duplicates | Outcome |
+|---|---|---|---|
+| No-drain (the standard W4) | 53 | 2,421 | drained in 281s |
+| Drain-only stops | **45** | **2,007** | drained, `done=true` |
+
+**The refutation is more useful than a confirmation would have been, because it names the real
+driver: the ASSIGNOR, not the stop mode.** This is the eager scenario, where any membership change
+revokes ALL partitions from ALL members. So a chain link is created by every `JOIN_NEW` and
+`RESTART` yanking the whole assignment out from under in-flight work - and draining the *departing*
+member's own work cannot prevent that, which is exactly what the near-identical numbers say. The
+duplicate count barely moving is the same fact from the other side: a draining close should produce
+almost none, and 2,007 remained, so they were never the leaving member's to prevent.
+
+This also disposes of the "abandoned in-flight work" explanation as a complete account of the
+stagnation, while leaving the calibration reading intact and stronger: the legitimate recovery cost
+is intrinsic to eager reassignment over heavy records, not to how members depart.
+
+**The prediction it generates**: the cooperative sibling keeps assignments across rebalances, so it
+should show materially fewer violations and a shorter recovery on the same seed. That is one run
+against a scenario that already exists.
+
 ## The first replays, 2026-08-18 - both seeds reproduce on BOTH arms
 
 **Headline: the astubbs#29 deadlock fix does not close this failure.** 16 local runs of
