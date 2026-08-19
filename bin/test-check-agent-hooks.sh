@@ -277,6 +277,70 @@ assert "a 150 KB merge-prep prompt is still injected" YES "$(injected "$big_prom
 
 assert "the preamble points at the doc rather than restating it" pointer_only "$got"
 
+# ---------------------------------------------------------------------------------------------
+# check-merge-outstanding-work.sh
+#
+# The negative controls matter more than the positive one here. The guard's whole risk is that it
+# either fires on ordinary commands (and gets routed around) or fails to fire when it counts. The
+# substring-vs-token case below is not hypothetical: the first draft grepped for "gh pr merge" and
+# blocked `gh pr comment --body "run gh pr merge later"`.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- check-merge-outstanding-work.sh ---"
+
+OW_HOOK="$HOOKS/check-merge-outstanding-work.sh"
+
+ow_verdict() { # <bash-command> [session-dir-has-live-task] -> ALLOW | DENY
+    local out tmp
+    tmp=$(mktemp)
+    printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
+    out=$(CLAUDE_CODE_SESSION_ID="${OW_SESSION:-}" "$OW_HOOK" < "$tmp" 2>/dev/null)
+    rm -f "$tmp"
+    case "$out" in
+        *'"deny"'*) echo DENY ;;
+        *)          echo ALLOW ;;
+    esac
+}
+
+ow_expect() { # <expected> <name> <command>
+    local got; got=$(ow_verdict "$3")
+    assert "$2" "$1" "$got"
+}
+
+# A session dir holding a task file written just now == background work in flight.
+ow_session="ow-selftest-$$"
+ow_tasks="/tmp/claude-$(id -u)/selftest/$ow_session/tasks"
+mkdir -p "$ow_tasks"
+printf 'still writing\n' > "$ow_tasks/agent-live.output"
+
+OW_SESSION="$ow_session"
+ow_expect DENY  "a merge is refused while a task is still writing"            'gh pr merge 31 -R astubbs/parallel-consumer --rebase'
+ow_expect DENY  "a merge later in a compound command is still seen"           'echo hi && gh pr merge 31 --squash'
+ow_expect ALLOW "the words gh pr merge inside --body are not a merge"         'gh pr comment 5 --body "remember to run gh pr merge later"'
+ow_expect ALLOW "a non-merge gh command passes"                              'gh pr view 31'
+ow_expect ALLOW "an unrelated command passes"                                'git status'
+
+# Stale task file == nothing in flight. Proves the window is load-bearing rather than "any file".
+touch -d '@1000000000' "$ow_tasks/agent-live.output"
+ow_expect ALLOW "a task that stopped writing long ago does not block"        'gh pr merge 31 --rebase'
+
+# Fail-open paths. A guard that blocks on its own bug jams the tool call shut.
+printf 'still writing\n' > "$ow_tasks/agent-live.output"
+OW_SESSION=""
+ow_expect ALLOW "no session id fails OPEN"                                   'gh pr merge 31 --rebase'
+OW_SESSION="$ow_session"
+got=$(printf 'not json' | CLAUDE_CODE_SESSION_ID="$ow_session" "$OW_HOOK" 2>/dev/null); \
+    case "$got" in *'"deny"'*) got=DENY ;; *) got=ALLOW ;; esac
+assert "unparseable payload fails OPEN" ALLOW "$got"
+
+got=$(printf '%s' '{"tool_input":{"command":"gh pr merge 31 --rebase"}}' \
+    | MERGE_DESPITE_OUTSTANDING_WORK=1 CLAUDE_CODE_SESSION_ID="$ow_session" "$OW_HOOK" 2>/dev/null); \
+    case "$got" in *'"deny"'*) got=DENY ;; *) got=ALLOW ;; esac
+assert "the explicit override releases the guard" ALLOW "$got"
+
+rm -rf "/tmp/claude-$(id -u)/selftest/$ow_session"
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
