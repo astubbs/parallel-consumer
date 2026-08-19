@@ -24,8 +24,8 @@ import static org.awaitility.Awaitility.await;
  * The shared two-phase "revoke under work" driver behind the W4 scenario family - see
  * {@link ChaosRevokeUnderWorkIT} (eager assignor; the original, with the full design + calibration
  * javadoc) and {@link ChaosRevokeUnderWorkCooperativeIT} (cooperative-sticky). Variants differ only by
- * the two abstract methods below; the storm/quiet mechanics, probe configuration, and ledger are
- * identical so the assignor is the single experimental variable.
+ * the abstract and overridable hooks below; the storm/quiet mechanics, probe configuration, and
+ * ledger are identical so each variant changes exactly one experimental variable.
  * <p>
  * The {@code protected static final} constants are SHARED fixed calibration values, not per-variant
  * knobs: static field references in the inherited driver resolve at compile time to this class, so a
@@ -129,7 +129,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
      * arithmetic above depends on it. Promoted to an accessor because a KEY-ordered cell CANNOT run
      * 20s dwells: a dwell longer than the gap between storm rebalances chains indefinitely under
      * at-least-once, and KEY ordering pins the whole shard behind it -
-     * {@code ChaosKeyOrderIT#HEAVY_SLEEP} carries the measurement (a 154s stagnation at a 10s dwell).
+     * {@code ChaosKeyOrderIT}'s {@code HEAVY_SLEEP} carries the measurement (a 154s stagnation at a 10s dwell).
      */
     protected Duration heavySleep() {
         return HEAVY_SLEEP;
@@ -162,7 +162,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
                 // sync commits sharpen revoke-vs-commit lock contention - the confluentinc#857 deadlock recipe
                 .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
-                .order(ProcessingOrder.UNORDERED)
+                .order(processingOrder())
                 .inputTopic(topic)
                 .pollDelayMs(1)
                 .maxConcurrency(10)
@@ -171,7 +171,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 .build();
 
         FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
-                INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
+                INITIAL_FLEET, HEAVY_EVERY, heavySleep());
         AtomicLong totalConsumed = fleet.getTotalConsumed();
         AtomicLong totalStarted = fleet.getTotalStarted();
         Queue<String> allConsumed = fleet.getAllConsumed();
@@ -184,7 +184,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 // eviction horizon (all of it, under the eager assignor); widen the watermark beyond it
                 .withNoProgressWindow(Duration.ofSeconds(60));
 
-        ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
+        ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, heavySleep(), MAX_FLEET)
                 .seed(seed.getValue())
                 // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
                 .minTick(Duration.ofMillis(300))
