@@ -14,8 +14,9 @@
 # That is not hypothetical. On 2026-08-19 astubbs#31 merged roughly ten minutes before a spawned
 # agent finished building the broker-level reproduction of confluentinc#909 - the exact gap that
 # PR's own description declared open under "Known gap". The fix and the evidence proving it ended
-# up in different PRs, and docs/inflight/test-909-not-reproducible-by-existing-chaos-scenario.md
-# was stale before anyone read it.
+# up in different PRs, and the inflight note tracking the gap was stale before anyone read it (that
+# note was later retired by the doc that settled it,
+# docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md).
 #
 # WHY A HOOK AND NOT A LINE IN A DOCUMENT. docs/merge-checklist.md already lists what to confirm
 # before merging, and it was loaded - injected into that very turn by inject-merge-checklist.sh.
