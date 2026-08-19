@@ -105,6 +105,20 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     /** Short label for topic names and log lines (e.g. "w4" / "w4coop"). */
     protected abstract String scenarioLabel();
 
+    /**
+     * The conductor's action mix. Defaults to {@link ChaosConductor#defaultW4Weights()} - <b>no drain
+     * stops at all</b>, because a drain opens the Class 1 zombie window and would mask the Class 2
+     * mechanism this scenario exists to isolate.
+     * <p>
+     * A subclass overrides this only to run a deliberate CONTROL ARM against that choice, and owes
+     * the reader why in its own javadoc: inverting it changes which failure class the scenario can
+     * see, so a variant that overrides this is answering a different question, not running the same
+     * test more gently.
+     */
+    protected java.util.Map<ChaosConductor.ChaosAction, Integer> chaosWeights() {
+        return ChaosConductor.defaultW4Weights();
+    }
+
     protected void runRevokeUnderWorkScenario() throws Exception {
         ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
@@ -144,7 +158,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 // faster ticks than W1: more rebalances per run = more revoke-under-work collisions
                 .minTick(Duration.ofMillis(300))
                 .maxTick(Duration.ofMillis(1000))
-                .weights(ChaosConductor.defaultW4Weights()) // NO drain stops - see scenario javadoc
+                .weights(chaosWeights())
                 .joinAfterDrainBias(0) // no drains to bias after
                 .build();
 
