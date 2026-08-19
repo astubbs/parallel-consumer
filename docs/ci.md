@@ -48,8 +48,11 @@ document. This section is the detail behind it.
   See [`docs/testing.md`](testing.md).
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
-  [`docs/releasing.md`](releasing.md)) and the issue-reference gate (`issue-ref-gate.js`, see
-  [`docs/issue-references.md`](issue-references.md)).
+  [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
+  [`docs/issue-references.md`](issue-references.md)) and the file-reference gate
+  (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails a cited repo path that
+  does not exist - whole tree, so a deletion that strands a citation fails the PR that made it. Each gate's logic is a unit-tested module and its self-test runs first, so a
+  broken rule fails loudly rather than passing - or failing - every PR silently.
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -355,7 +358,8 @@ turn the gate green" below.)
 ### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
 
 <!-- CANONICAL: the gate contract. Nowhere else states what satisfies the gate - everything else
-     links here. If you change this paragraph, run bin/check-review-gate-contract.sh. -->
+     links here. Before you change this paragraph, find the mentions that link to it:
+     grep -rn "claude-review" . --exclude-dir=.git --exclude-dir=target -->
 
 **Any finished `claude[bot]` review on the PR satisfies it**, whenever it was posted. A review of
 the first commit therefore vouches for the twentieth, and that is a deliberate reversal of the

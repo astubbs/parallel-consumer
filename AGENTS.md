@@ -124,6 +124,11 @@ checks it. Cite the path plus the smallest distinctive greppable string - an ide
 config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. Run
 the grep before you commit the citation.
 
+**The path half is now enforced: `bin/check-file-refs.sh` fails a cited path that does not exist**,
+across the whole tree, and the `PR Checklist` workflow runs the same module - so deleting a file
+also fails the PR that leaves citations behind. The anchor half is still yours: a gate can only tell
+you the file is there, never that your quoted string is still in it.
+
 Repairing one that has already gone stale in a dated record is its own procedure, because those
 documents may not be rewritten to match today's code - [`docs/citations.md`](docs/citations.md)
 **owns that procedure**.
