@@ -42,12 +42,33 @@ horizons:
     "1.0": Required before 1.0. See one_point_zero.
     backlog: Wanted, undecided, or waiting on a reason to start. Gates nothing.
 
+stages:
+  note: >-
+    How real an entry is right now, separate from where it sits on the horizon - two entries at the
+    same horizon can differ by years of actual work, and a release announcement should be able to say
+    which is which. The ladder is ordered by the most advanced artifact that exists, not by effort
+    spent. stage_detail is one honest line on how far that artifact goes - for a poc, its boundaries.
+    Maintained by the PRs that do the work: a PR that advances a track updates its entry's stage in
+    the same change, from the PR that introduced this field onward. Stage does not wait for release
+    review; a stale stage is a defect in the PR that made it stale.
+  values:
+    idea: Named and argued for; nothing more structured than notes exists yet.
+    ideated: A ranked, verified ideation document exists; direction not yet chosen.
+    requirements-drafted: Requirements or brainstorm output exists; the product decisions are being made.
+    planned: A dated implementation plan exists; implementation not started.
+    poc: A limited proof-of-concept runs; stage_detail states its boundaries.
+    implemented: A working implementation exists on an open PR, subject to review and landing.
+
 entries:
   - id: known-defects-cleared
     title: Every known critical defect resolved, each with a guard that would catch its return
     serves: [reliability]
     horizon: "0.6.0.0"
     blocks_1_0: false
+    stage: implemented
+    stage_detail: >-
+      Fixes land on master continuously, each with a guard; the open critical is the poll/control
+      deadlock (confluentinc#857), mitigation drafted on astubbs#29.
     why_now: The release claim rests on it, and the evidence has to be inspectable rather than asserted.
     done_when: >-
       No known critical defect open in release scope, and each resolution has a named guard that
@@ -60,6 +81,10 @@ entries:
     serves: [flexibility, performance]
     horizon: "0.6.0.0"
     blocks_1_0: false
+    stage: poc
+    stage_detail: >-
+      Measured spike on astubbs#271 - 8x median on the target shape - proven for one partition,
+      one task, one instance, at-least-once, caching off; windowing, joins and EOS out of scope.
     why_now: Streams users hit the same head-of-line blocking, and the idea can be shown to work before it is committed to.
     done_when: An opt-in alpha module exists, isolated from the stable modules, with setup a reader can follow.
     tracking: astubbs#255
@@ -71,6 +96,10 @@ entries:
     serves: [flexibility]
     horizon: "0.6.0.0"
     blocks_1_0: false
+    stage: poc
+    stage_detail: >-
+      Direction proven on astubbs#269: the patched sink task shadows the stock one and a failing
+      lane no longer stalls the others; the live delivery path is still partial.
     why_now: The same reasoning as the Streams preview, for a different and widely deployed surface.
     done_when: An opt-in alpha module exists, isolated from the stable modules.
     tracking: astubbs#240
@@ -83,6 +112,10 @@ entries:
     horizon: "1.0"
     previewed_in: "0.6.0.0"
     blocks_1_0: true
+    stage: implemented
+    stage_detail: >-
+      Phase one of astubbs#268 works and is tested - live page, offset ribbon - blocked on the
+      listener-registration fix (astubbs#267); preview-grade, not the finished surface.
     why_now: >-
       Moving scheduling and offset state into the JVM leaves ordinary broker tooling blind to most of
       what matters. An operator has metrics today and no picture.
@@ -96,6 +129,9 @@ entries:
     serves: [observability, performance]
     horizon: next-0x
     blocks_1_0: false
+    stage: idea
+    stage_detail: >-
+      Named as the strategy's own measures; nothing emits them yet.
     why_now: >-
       STRATEGY.md names head-of-line blocking avoided, end-to-end record latency and achieved fan-out as
       the measures of the whole proposition, and concedes the central ones are not emitted. Until they
@@ -110,6 +146,9 @@ entries:
     serves: [reliability, observability]
     horizon: next-0x
     blocks_1_0: false
+    stage: idea
+    stage_detail: >-
+      Scoped by the streaming-results deprecation reasoning; no design yet.
     why_now: >-
       An unbounded buffer is a memory-safety problem rather than a monitoring gap, and the streaming
       results API is being deprecated for exactly that, so the two are one piece of work.
@@ -122,6 +161,10 @@ entries:
     serves: [reliability]
     horizon: next-0x
     blocks_1_0: false
+    stage: idea
+    stage_detail: >-
+      Mechanism analysis banked in the inflight note - the fatal path and the Kafka Streams
+      precedent are mapped; no design yet.
     why_now: >-
       Fencing is an ordinary consequence of a rebalance under transactions and it currently kills the
       instance. Kafka Streams treats the equivalent as a migrated task and rejoins.
@@ -133,6 +176,10 @@ entries:
     serves: [compatibility]
     horizon: next-0x
     blocks_1_0: false
+    stage: poc
+    stage_detail: >-
+      astubbs#53 compiles the tree at release 17 with zero source changes, Jabel removed; the
+      Kafka 4 client work has not started.
     why_now: A recent constraint rather than long-standing debt, and one an adopter on a modern JDK hits immediately.
     done_when: The library builds and runs on the current Java LTS and against Kafka 4.x.
     tracking: astubbs#181
@@ -143,6 +190,9 @@ entries:
     serves: [observability, usability]
     horizon: next-0x
     blocks_1_0: false
+    stage: implemented
+    stage_detail: >-
+      astubbs#226 is review-hardened and carries two breaking changes staged for 0.6.0.0.
     why_now: Orchestrators need a liveness answer better than "the process is up".
     done_when: A supported health surface exists on the public interface.
     tracking: astubbs#126
@@ -152,6 +202,10 @@ entries:
     serves: [performance, flexibility]
     horizon: next-0x
     blocks_1_0: false
+    stage: implemented
+    stage_detail: >-
+      astubbs#51 carries the upstream implementation (confluentinc#908) with its author's concerns
+      unresolved; gated on the Java-baseline decision.
     why_now: Blocking work is the case virtual threads help most, and supporting them removes a reason to reach for an adapter module.
     done_when: A user can run the processing function on virtual threads.
     tracking: astubbs#147
@@ -161,6 +215,10 @@ entries:
     serves: [performance, flexibility]
     horizon: next-0x
     blocks_1_0: false
+    stage: ideated
+    stage_detail: >-
+      The batching ideation's knob-free triggering direction answers the stalled upstream attempt
+      (confluentinc#560) without adding an option; decision rides the composition settlement.
     why_now: Downstream systems that are cheaper per batch cannot exploit batching without a minimum size and a maximum wait.
     done_when: A batch can be bounded by both a minimum size and a maximum wait.
     tracking: astubbs#165
@@ -171,6 +229,10 @@ entries:
     serves: [reliability, flexibility]
     horizon: next-0x
     blocks_1_0: false
+    stage: requirements-drafted
+    stage_detail: >-
+      Prior-art report and demand ledger on astubbs#313, requirements decisions in progress; the
+      2022 draft (astubbs#8) is the seed implementation.
     why_now: Retrying forever is the only built-in answer today, and it is the wrong one for a poison record.
     done_when: A record that exhausts its retries can be diverted rather than blocking or being dropped silently.
     tracking: astubbs#149
@@ -180,6 +242,9 @@ entries:
     serves: [usability]
     horizon: next-0x
     blocks_1_0: false
+    stage: idea
+    stage_detail: >-
+      Direction agreed - render the feature data - and nothing renders it yet.
     why_now: >-
       The feature data exists and nothing renders it. Until something does, the README stays the only
       documentation and the data is a second corpus rather than a source.
@@ -192,6 +257,9 @@ entries:
     serves: [reliability, flexibility]
     horizon: "1.0"
     blocks_1_0: true
+    stage: idea
+    stage_detail: >-
+      Deliberately not started while known defects gate it.
     why_now: >-
       This is the remaining reason not to call the stable modules 1.0. Reliability is already
       release-gated; the API surface is not settled.
@@ -208,6 +276,11 @@ entries:
     serves: [flexibility, usability]
     horizon: next-0x
     blocks_1_0: false
+    stage: implemented
+    stage_detail: >-
+      astubbs#293 carries the module, the frozen v1 protocol and eleven clients under one
+      conformance suite; every client negotiates only the dispatch capability so far - broad,
+      deliberately shallow.
     why_now: >-
       The engine's guarantees are locked to the JVM today. A sidecar speaking a frozen protocol makes
       them a capability any language can adopt, and the conformance suite makes every client answer to
@@ -224,6 +297,10 @@ entries:
     serves: [usability]
     horizon: next-0x
     blocks_1_0: false
+    stage: ideated
+    stage_detail: >-
+      Ranked directions with a named skateboard - conformance runners in demo costume; direction
+      not chosen.
     why_now: >-
       Eleven clients that each pass privately is a claim; all of them visibly reading the same records
       at once is a proof, and the conformance runners already speak the grammar the demo needs.
@@ -237,6 +314,9 @@ entries:
     serves: [performance, usability]
     horizon: next-0x
     blocks_1_0: false
+    stage: ideated
+    stage_detail: >-
+      Ranked directions and a fairness charter; the harness architecture is the next brainstorm.
     why_now: >-
       The README's performance story is hand-pasted charts from a spreadsheet. Scenarios, arms and
       languages measured in the conformance harness make the claim reproducible - and the attribution
@@ -251,6 +331,10 @@ entries:
     serves: [flexibility, reliability]
     horizon: next-0x
     blocks_1_0: false
+    stage: ideated
+    stage_detail: >-
+      Eight verified directions; the enforcement fork - dispatch-seam gate vs in-flight controller
+      - is the pending decision.
     why_now: >-
       N instances each assuming they own the whole budget overload the downstream by a factor of N, and
       the maxConcurrency javadoc has pointed at this gap for years. The consumer group itself can divide
@@ -265,6 +349,10 @@ entries:
     serves: [performance, reliability]
     horizon: next-0x
     blocks_1_0: false
+    stage: planned
+    stage_detail: >-
+      The self-scaling concurrency plan landed with the strategy bet (astubbs#308); implementation
+      not started.
     why_now: >-
       Deploy-time configuration guesses runtime-dependent quantities and is wrong in both directions.
       The engine already measures what it needs to decide for itself; STRATEGY.md carries this as the
@@ -280,6 +368,10 @@ entries:
     serves: [flexibility, performance]
     horizon: next-0x
     blocks_1_0: false
+    stage: ideated
+    stage_detail: >-
+      Seven verified directions plus two confirmed defect records; the composition-API shape is
+      the pending one-way-door decision.
     why_now: >-
       Batch composition today is emergent, not designed, and the upstream batch-strategy proposal
       (confluentinc#915) would freeze a shape into the options API. Choosing the shape deliberately -
@@ -382,6 +474,7 @@ update_policy:
     - An entry meets its done_when.
     - A release changes the supported module posture.
     - A backlog entry is promoted, or a planned entry is dropped.
+    - A PR advances a track's stage - updated in that PR, not held for release review.
   rule: >-
     Do not copy individual issue state into this document; link readers to the issue tracker instead.
     Entries are big-picture: if one could be closed by a single pull request, it is too small to be here.
