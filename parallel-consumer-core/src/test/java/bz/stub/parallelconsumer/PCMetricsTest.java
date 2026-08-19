@@ -157,6 +157,10 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
 
         assertThat(registeredGaugeValueFor(PCMetricsDef.SHARDS_SIZE))
                 .isEqualTo(remainingP0 + remainingP1);
+        // confluentinc#905 (https://github.com/confluentinc/parallel-consumer/issues/905): max queued records in any single shard - here each partition is its own shard,
+        // so it's the larger of the two per-partition remainders.
+        assertThat(registeredGaugeValueFor(PCMetricsDef.SHARDS_MAX_SIZE))
+                .isEqualTo(Math.max(remainingP0, remainingP1));
         // non partition specific metrics
         assertThat(registeredGaugeValueFor(PCMetricsDef.INCOMPLETE_OFFSETS_TOTAL))
                 .isEqualTo(remainingP0 + remainingP1);

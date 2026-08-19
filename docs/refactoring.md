@@ -236,6 +236,14 @@ Do not start one casually.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
+- **Not thread-safe if encoding is ever parallelised (latent, tied to confluentinc#200).**
+  Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
+  `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
+  decode). That is correct *today* only because encoding runs single-threaded on the control
+  thread: `encodingCounters` is a plain `HashMap` mutated in `getCounterMeterForEncoding` on
+  the encode path. If the confluentinc#200 thread-model refactor ever parallelises encoding it
+  races - make it concurrent, or confine it. Not a bug in the current single-threaded design.
+
 ### offsets/OffsetSimultaneousEncoder.java
 - `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -
   scans could be skipped by passing in the known incompletes map (draft:
