@@ -1,5 +1,7 @@
 # Mutation testing is deliberately narrow - re-widening is tracked here
 
+<!-- inflight-priority: low -->
+
 Shipped in astubbs#111. Recorded because it is a deliberate *reduction* in coverage, which is the kind of
 thing a future session otherwise rediscovers as a bug.
 

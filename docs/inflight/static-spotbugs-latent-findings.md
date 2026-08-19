@@ -1,5 +1,7 @@
 # SpotBugs findings the rename made visible
 
+<!-- inflight-priority: medium -->
+
 **30 findings, surfaced on astubbs#294. None are new, none block anything, and they will go invisible
 again the moment that PR lands.** That last part is why they are written down here: this is a one-time
 window, and closing it without an inventory wastes it.

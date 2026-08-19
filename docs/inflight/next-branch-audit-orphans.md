@@ -1,5 +1,7 @@
 # Branch audit 2026-08-17: orphans to investigate
 
+<!-- inflight-priority: low -->
+
 A full sweep of all 196 origin branches against the tracking corpus (upstream-map.yaml,
 docs/refactoring.md, upstream-pr-analysis.adoc, docs/inflight/, docs/upstream.md) found the
 actor-IPC and thread-model families had no manifest entries (fixed in the same PR as this note).

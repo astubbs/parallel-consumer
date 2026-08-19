@@ -1,5 +1,7 @@
 # astubbs#53 - 0.7.x: Java baseline + Kafka 4
 
+<!-- inflight-priority: low -->
+
 **The only reason to move off Java 8 is Kafka 4.** kafka-clients 4.x needs **Java 11**, so that is the
 target baseline ("don't be stricter than Kafka"). Jabel is what lets `javac` accept Java 17 syntax
 while emitting Java 8 bytecode; the branch holds a provisional state (Jabel removed, `release=17`)

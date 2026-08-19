@@ -1,5 +1,7 @@
 # Parked: documentation site
 
+<!-- inflight-priority: low -->
+
 The docs are heading for a proper generated site rather than one enormous `README.adoc`.
 
 **Tracked in [#208](https://github.com/astubbs/parallel-consumer/issues/208)** - options, the

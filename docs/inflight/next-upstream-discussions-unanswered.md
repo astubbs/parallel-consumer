@@ -1,5 +1,7 @@
 # Upstream Discussions - a content type our tooling never looked at
 
+<!-- inflight-priority: low -->
+
 Discussions were a blind spot until 2026-08-07: not in
 [`upstream-map.yaml`](../../src/docs/development/upstream-map.yaml), not in the mirror set, not in
 any sweep mode. `scripts/upstream-sweep.sh --audit` now lists the zero-reply ones, so run that rather

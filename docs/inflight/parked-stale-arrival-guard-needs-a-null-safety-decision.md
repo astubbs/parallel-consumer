@@ -1,5 +1,7 @@
 # Rejecting a stale ARRIVAL at the shard - blocked on a null-safety decision
 
+<!-- inflight-priority: low -->
+
 **Parked, needing a judgement call rather than more investigation.** The work is understood and was
 prototyped; it is not filed here because it is hard, but because shipping it means deciding
 something only the maintainer should decide.

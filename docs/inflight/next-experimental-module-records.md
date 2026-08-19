@@ -1,5 +1,7 @@
 # Feature records for the experimental modules, held until the modules land
 
+<!-- inflight-priority: low -->
+
 `docs/features/kafka-streams-experimental.yaml` and `kafka-connect-experimental.yaml` were written and
 then removed from the corpus. They are held here until their modules exist.
 <!-- file-refs: N/A - the sentence is about records that were written and then not kept -->

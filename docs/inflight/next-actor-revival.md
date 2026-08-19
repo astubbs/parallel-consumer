@@ -1,5 +1,7 @@
 # Actor-collection revival: ranked candidate directions
 
+<!-- inflight-priority: low -->
+
 The 2022 micro-actor branch family (manifest entry `sweep-2023-actor-ipc` in
 [`upstream-map.yaml`](../../src/docs/development/upstream-map.yaml); editorial owner
 `docs/refactoring.md` "Actor / IPC message bus" section) went through a grounded ideation pass on

@@ -1,5 +1,7 @@
 # Next: the cross-language performance comparison matrix
 
+<!-- inflight-priority: low -->
+
 > Extracted from `origin/docs/ideate-perf-comparison-matrix` @3dd35926a, `docs/inflight/next-perf-comparison-matrix.md`.
 
 Candidate work, ranked in full in `docs/ideation/2026-08-17-perf-comparison-matrix-ideation.html`

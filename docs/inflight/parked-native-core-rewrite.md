@@ -1,5 +1,7 @@
 # Parked: native-core rewrite of the engine
 
+<!-- inflight-priority: low -->
+
 Rewriting the core engine as a native shared core (Rust or C, librdkafka-style) with per-language
 wrappers, deleting the Java engine and keeping only its wrapper.
 

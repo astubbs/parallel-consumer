@@ -1,5 +1,7 @@
 # Auto-scaling - self-discovered concurrency, and instance-count recommendation
 
+<!-- inflight-priority: low -->
+
 The ask is astubbs#227 (mirror of confluentinc#21): stop making users pick `maxConcurrency` -
 it is wrong in both directions (too low silently wastes headroom, too high floods downstreams,
 confluentinc#766) and the right value depends on the runtime data in the assigned partitions,

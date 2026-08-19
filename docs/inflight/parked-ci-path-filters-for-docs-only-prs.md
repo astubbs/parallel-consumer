@@ -1,5 +1,7 @@
 # Skipping CI on docs-only PRs - investigated, parked
 
+<!-- inflight-priority: low -->
+
 **Recommendation: do not do it.** Investigated 2026-08-16/17 and answered, with nothing changed.
 Parked here rather than dropped so the next person asking "why does a markdown-only PR run the whole
 suite?" gets the answer instead of re-deriving it.
