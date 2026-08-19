@@ -98,6 +98,22 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * artifact-free but has not yet reproduced a true unbounded Class 2 stall on master (the confluentinc#857
      * root-cause stall is probabilistic); the probe ships GREEN-calibrated with peaks measured. */
     public static final Duration LAG_STAGNATION_BOUND = Duration.ofSeconds(150);
+    /**
+     * Appended to every Class 2 violation so the interpretation arrives WITH the failure, not in a
+     * document the reader must first decide to open. The gap it closes cost a measured day: three of
+     * four 2026-08-19 arms failed this check while progressing normally, because the natural reading
+     * of the bare message - "the library has stalled" - is wrong.
+     */
+    static final String CLASS2_INTERPRETATION =
+            "NOTE: this bound is a TIMING measurement, not a correctness verdict - a partition's "
+                    + "committed offset cannot advance past one incomplete record, so a slow or "
+                    + "repeatedly-redelivered record pins the watermark while the shard behind it "
+                    + "completes work normally, and exceeding the bound does NOT mean the consumer is "
+                    + "stalled or incorrect. Before concluding a defect, re-run with "
+                    + "-Dchaos.diagnoseStallRecovery=true (keeps the run observing instead of aborting) "
+                    + "and check whether the backlog drains: on seed 4734674029169027864 the eager arm "
+                    + "trips this bound 53 times and still drains completely - see "
+                    + "docs/inflight/test-class2-probe-asserts-timing-not-correctness.md";
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
     public static final long LAG_STAGNATION_MIN_LAG = 50;
     /**
@@ -572,7 +588,8 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 violate("CLASS2_STALL/LAG_STAGNATION: partition " + tp + " lag=" + lag
                         + " with committed offset stagnant at " + committed + " for " + (stagnantMs / 1000)
                         + "s (bound " + LAG_STAGNATION_BOUND.getSeconds() + "s) - protocol-invisible stall: "
-                        + "group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere");
+                        + "group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere. "
+                        + CLASS2_INTERPRETATION);
                 lastCommittedMove.put(tp, now); // re-arm
             }
         }
