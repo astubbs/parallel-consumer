@@ -252,7 +252,7 @@ entries:
     fork:
       branches: [fix/909-stale-container-replacement]
       prs: [31]
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [909]
@@ -264,13 +264,13 @@ entries:
       rejecting new ones, preventing record drops on rebalance. Upstream PR had no
       tests; the fork carry adds four, every one proven RED against the pre-fix
       behaviour, one of them driving the defect through the real registration path
-      rather than around it. Fork PR #31 is open and ready for review against
-      master, with cserspring's authorship preserved on the fix commit; it also
-      narrows both addWorkContainer overloads to package-private and documents the
-      three staleness checkpoints in PartitionState#epochIsStale. No load-level
-      reproduction exists - the existing chaos scenario does not reproduce this
-      defect, recorded in
-      docs/inflight/test-909-not-reproducible-by-existing-chaos-scenario.md.
+      rather than around it. Fork PR #31 merged 2026-08-19, with cserspring's
+      authorship preserved on the fix commit; it also narrows both addWorkContainer
+      overloads to package-private and documents the three staleness checkpoints in
+      PartitionState#epochIsStale. A deterministic broker-level reproduction
+      (RegistrationRaceStaleResidentIT) followed in a separate PR; why chance-based
+      chaos load could never find the race is recorded in
+      docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4
