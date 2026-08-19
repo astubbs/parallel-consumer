@@ -1,6 +1,7 @@
 # Parked: the strict, head-fresh review gate
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
 <!-- inflight-state: parked - deferred -->
 
 

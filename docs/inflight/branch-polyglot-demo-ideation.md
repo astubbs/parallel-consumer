@@ -1,7 +1,6 @@
 # Polyglot demo app — ideation done, direction not yet chosen
 
-<!-- inflight-type: task -->
-<!-- inflight-impact: stranded-work -->
+<!-- inflight-type: feature -->
 
 
 > Extracted from `origin/docs/ideate-polyglot-demo` @205ddacc1, `docs/inflight/branch-polyglot-demo-ideation.md`.

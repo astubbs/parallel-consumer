@@ -1,7 +1,7 @@
 # OSS Index lane - does it still earn its keep?
 
 <!-- inflight-type: task -->
-<!-- inflight-impact: deps-debt -->
+<!-- inflight-impact: ci -->
 
 
 The `deps: whole-tree CVE scan` lane (added by astubbs/parallel-consumer#279) was justified on Dependabot

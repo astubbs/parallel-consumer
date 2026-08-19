@@ -288,5 +288,5 @@ leaves half the table stale.
 - `docs/inflight/release-0600-blockers.md` -- the sibling concern for version claims: "are the things
   0.6.0.0 publishes true on the day we cut it?" Same class (nothing tests prose), different trigger
   (a fact changed underneath static text, rather than text that was under-sourced when written).
-- `docs/inflight/parked-docs-site.md` -- parks the KIP-932 chapter as future work and points at
+- `docs/inflight/next-docs-site.md` -- parks the KIP-932 chapter as future work and points at
   astubbs#208.

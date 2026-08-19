@@ -1,6 +1,7 @@
 # Rejecting a stale ARRIVAL at the shard - blocked on a null-safety decision
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: reliability -->
 <!-- inflight-state: blocked - needs a null-safety decision -->
 
 

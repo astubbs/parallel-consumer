@@ -1,6 +1,7 @@
 # PC's exceptions have three roots and no consistent name
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: refactor -->
 
 
 **Priority: high, and easy.** Mechanical, well-bounded, and the major-version gate is open

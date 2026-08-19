@@ -1,6 +1,7 @@
 # Chaos Pain Suite - Phase 2+ roster
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
 
 
 - **Class 2 RED hunt - stands as a calibrated tripwire.** A true unbounded Class 2 stall has not

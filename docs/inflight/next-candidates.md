@@ -1,6 +1,7 @@
 # Next candidates, ranked
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
 
 
 Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full verdicts live in

@@ -1,7 +1,7 @@
 # Package-rename grand sweep — plan and handoff
 
 <!-- inflight-type: task -->
-<!-- inflight-impact: stranded-work -->
+<!-- inflight-impact: refactor -->
 
 
 **Status: planned, not started.** Two rehearsals are done and green; this is the execution plan for the

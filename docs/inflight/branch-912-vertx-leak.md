@@ -1,7 +1,7 @@
 # `bugs/912-vertx-stream-memory-leak` - done, no PR
 
-<!-- inflight-type: task -->
-<!-- inflight-impact: stranded-work -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: crash -->
 
 
 Clears the JStream deque on close (`confluentinc#912`, a production memory leak), with

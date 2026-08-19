@@ -1,7 +1,7 @@
 # astubbs#57 - PCMetrics leak (confluentinc#859) + cherry-picks
 
-<!-- inflight-type: task -->
-<!-- inflight-impact: coordination -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: crash -->
 
 
 Fixes duplicate Micrometer meter re-registration on assignment/revocation, and bundles the

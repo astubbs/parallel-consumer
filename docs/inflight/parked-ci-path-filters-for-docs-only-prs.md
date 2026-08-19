@@ -1,6 +1,7 @@
 # Skipping CI on docs-only PRs - investigated, parked
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
 <!-- inflight-state: closed - will not do -->
 
 

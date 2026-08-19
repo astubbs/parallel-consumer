@@ -1,6 +1,7 @@
 # Feature records for the experimental modules, held until the modules land
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
 
 
 `docs/features/kafka-streams-experimental.yaml` and `kafka-connect-experimental.yaml` were written and

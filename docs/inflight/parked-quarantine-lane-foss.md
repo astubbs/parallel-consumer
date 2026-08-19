@@ -1,6 +1,7 @@
 # Parked: extract the quarantine lane as its own FOSS project
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
 <!-- inflight-state: parked - deferred -->
 
 

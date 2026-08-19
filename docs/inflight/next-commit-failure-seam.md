@@ -1,6 +1,7 @@
 # A commit-failure seam - astubbs/parallel-consumer#317
 
 <!-- inflight-type: feature -->
+<!-- inflight-impact: crash -->
 
 
 **Priority: high.** Ranked top of `next-candidates.md`. The demand signal is not a request in a

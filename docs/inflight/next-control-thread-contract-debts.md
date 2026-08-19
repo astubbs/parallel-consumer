@@ -1,6 +1,7 @@
 # Control-thread and worker-pool contract debts
 
-<!-- inflight-type: feature -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: reliability -->
 
 
 Four things astubbs#296 surfaced and did not fix. Kept because each is a contract that is currently
