@@ -88,3 +88,26 @@ Rewriting history someone else may have pulled is not reversible from inside a P
   `docs/data/roadmap.yaml` move in the same change - the `stages` block there owns the rule. The
   roadmap-stage gate enforces it when the entry's `pull_request` names this PR; entries carried by
   a tracking issue only are on you.
+
+## Say everything you have to say BEFORE the merge
+
+**Every follow-up, suggestion and learning goes to the author while the PR is still open** - as part
+of answering "is this ready to merge?", not afterwards. That includes the ones it is most tempting
+to defer: a refactor you noticed but did not do, a test you would add next, a rule the work suggests
+changing, and the **compounding run** - the learnings worth capturing from what just happened
+(`ce-compound`, `docs/solutions/`).
+
+**After the merge they are worth a fraction as much, and some are worth nothing.** The branch is
+gone, so anything that belonged *in* this PR now costs a new one. The reviewer's attention is gone.
+The context that made the suggestion obvious is gone, and the person best placed to judge it has
+moved on. A follow-up filed at merge+1 competes for attention with everything else in the backlog;
+the same sentence said at merge-1 gets decided in seconds by someone already holding the problem.
+
+The worked example is astubbs#204: the agent that merged it read the manifest entry during merge
+prep, saw `status: pr-open`, **merged anyway**, and reported the staleness as a follow-up afterwards
+- at which point fixing it needed a fresh branch, a commit straight to master, and a later session
+to notice at all. Said one minute earlier it was a one-line edit to a branch that was still open.
+
+So: when you think you are done, ask what you are holding back, and say it now. "Nothing outstanding"
+is a fine answer and worth stating explicitly - it is the difference between having checked and
+having not thought about it.
