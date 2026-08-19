@@ -541,3 +541,36 @@ full job log is 12,015 lines; the truncating route has already misattributed thi
 ([`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](../solutions/workflow-issues/gh-run-view-log-truncation.md)),
 and the cooperative arm's expected rebalance churn is exactly what a truncated read mistakes for the
 failure.
+
+**Twelfth sighting, 2026-08-19 - same test, same arm, two hours later, and two partitions breached
+at coordinates identical to the eleventh.**
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` again, on
+[job 96004301277](https://github.com/astubbs/parallel-consumer/actions/runs/32232211120/job/96004301277),
+astubbs#57 at head `00ea82325`. **Replay seed `6993732056053195542`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=6993732056053195542
+
+Only **2** violations this time against the eleventh's 17, both `CLASS2_STALL/LAG_STAGNATION`, no
+zombie arm; peaks `rebalanceDwell=7704ms`, `lagStagnation=154093ms`. The control arm held for a
+fourth time - `ChaosRevokeUnderWorkCooperativeIT` (111s) and `ChaosChurnStormIT` (66s) both green in
+the same run.
+
+**Worth one more sample: the two violating partitions match the eleventh exactly, on a different
+seed.**
+
+    eleventh  (seed 7964...6180)   -21 lag=2974 committed=91    -22 lag=3010 committed=173
+    twelfth   (seed 6993...5542)   -21 lag=2974 committed=91    -22 lag=3010 committed=173
+
+That is not simply a deterministic workload replaying. The per-partition `end` offsets *are* fixed
+across runs, but progress is not: of the frozen-partition lines in the two autopsies (28 and 4
+respectively) **none** match, and committed offsets for the same partition differ by thousands
+(`-20`: 1870 against 2580; `-30`: 1282 against 2661). So partitions wedge at different points
+run to run - except these two, which wedged at the same point twice.
+
+Both are also the *lowest* committed offsets in their run by an order of magnitude (91 and 173,
+against thousands elsewhere), so the reading that fits is that `-21`/`-22` wedge very early and stay
+wedged, rather than stalling somewhere random mid-run. **Two samples is not enough to call that**,
+and it is recorded here as the thing to check on the next sighting rather than as a finding. If it
+holds, the seed matters less to this family than the ledger has assumed - which would also explain
+the sightings whose seeds replay clean.
