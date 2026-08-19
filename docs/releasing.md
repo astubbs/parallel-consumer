@@ -83,7 +83,10 @@ gh pr list    -R astubbs/parallel-consumer --state all --label 0.6.0.0 --limit 2
 ```
 
 **Two labelling schemes coexist, and they answer different questions.** The version label
-(`0.6.0.0`) says *this shipped in that release* and is carried by both issues and PRs. The relative
+(`0.6.0.0`) says *this is targeted at that release* - that is its own description, and it sits on open
+issues as well as closed ones, so it marks intent rather than delivery. Reconcile it against what
+actually shipped at release time rather than trusting it as a manifest. It is carried by both issues
+and PRs. The relative
 labels (`next-feature-release`, `next-breaking-release`, `next-patch-release`) say *this is queued for
 whichever release comes next* and are used on issues only. Queue with the relative label while the
 work is pending; add the version label when it lands. At release time the version label is the one to
