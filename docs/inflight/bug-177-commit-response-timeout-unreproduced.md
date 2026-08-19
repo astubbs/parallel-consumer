@@ -26,6 +26,34 @@ called **only** from the poll loop, so ANY reason that loop stops servicing the 
 identical symptom. **A dead poller and a wedged-but-alive poller are indistinguishable from
 outside**, and astubbs#100 only fixed the dead one.
 
+## A THIRD candidate arrived 2026-08-19 - and it is not a fix for these reports
+
+astubbs#29 hardened metrics teardown, which had been able to kill the broker-poll thread: meter
+de-registration runs inside `onPartitionsRevoked`, on the poll thread inside `poll()`, and the meter
+registry is usually the USER'S, so an exception from third-party code escaped the rebalance callback
+and took out the only producer of commit responses. Every later commit then blocks until it times
+out - **the exact symptom these two reports describe**.
+
+**This does not close either report, and must not be recorded as doing so.** The mechanism requires a
+user-supplied `MeterRegistry` that throws on `remove`; PC's default when none is configured is an
+empty `CompositeMeterRegistry`, a no-op that cannot throw. Nothing in either report says the reporter
+configured metrics at all, let alone a registry that failed. Attributing on "the mechanism fits"
+is precisely the error corrected on astubbs/parallel-consumer#44, which sat attributed to
+astubbs/parallel-consumer#29 for months in a commit mode where that fix cannot run.
+
+So the candidate list is now three, all producing one trace:
+
+1. **Poller died** from an unhandled `RebalanceInProgressException` - astubbs#100, landed.
+2. **Poller wedged but alive** - uncharacterised, and still nobody's.
+3. **Poller died from a throwing metrics registry** - fixed on astubbs#29, and only reachable by a
+   user who configured one.
+
+**The useful part is that candidate 3 is self-identifying from now on.** With astubbs#204's change,
+a poller death releases the waiter carrying the poller's own exception - so if this was ever the
+cause, a future occurrence names the metrics failure in the cause chain rather than presenting as a
+bare PT30S timeout. Combined with the fix, that means this candidate should now either disappear or
+announce itself.
+
 ## What would discriminate, and why it is easier now than it was
 
 astubbs/parallel-consumer#204 releases a waiter immediately on poller **death**, with the poller's own
