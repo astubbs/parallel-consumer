@@ -58,7 +58,7 @@ public class ProcessingShard<K, V> {
 
     private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
 
-    public void addWorkContainer(WorkContainer<K, V> wc) {
+    void addWorkContainer(WorkContainer<K, V> wc) {
         long key = wc.offset();
         WorkContainer<K, V> existing = entries.get(key);
         if (existing != null) {
