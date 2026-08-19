@@ -1,6 +1,6 @@
 # Open PRs: what `gh pr list` cannot tell you
 
-<!-- inflight-type: task -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: coordination -->
 
 
