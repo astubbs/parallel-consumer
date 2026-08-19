@@ -217,21 +217,27 @@ entries:
     group: rebalance-stability
     summary: Replace stale work container on rebalance (regression test + carry)
     fork:
-      branches: [fix/909-stale-container-replacement, pr-909-temp]
+      branches: [fix/909-stale-container-replacement]
       prs: [31]
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [909]
       status: open
-      last_checked: 2026-07-28
+      last_checked: 2026-08-19
     adoc_anchor: part1-group-a-correctness
     notes: >
       confluentinc PR #909 (cserspring) replaces stale containers rather than
-      rejecting new ones, preventing record drops on rebalance. Upstream PR had
-      no tests; fork work adds a regression test for stale container at the same
-      offset. High priority but wants tests before merge. Fork PR #31 is open
-      (draft) but targets master-confluent, which is why it read as "no PR".
+      rejecting new ones, preventing record drops on rebalance. Upstream PR had no
+      tests; the fork carry adds four, every one proven RED against the pre-fix
+      behaviour, one of them driving the defect through the real registration path
+      rather than around it. Fork PR #31 is open and ready for review against
+      master, with cserspring's authorship preserved on the fix commit; it also
+      narrows both addWorkContainer overloads to package-private and documents the
+      three staleness checkpoints in PartitionState#epochIsStale. No load-level
+      reproduction exists - the existing chaos scenario does not reproduce this
+      defect, recorded in
+      docs/inflight/test-909-not-reproducible-by-existing-chaos-scenario.md.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4
