@@ -272,8 +272,13 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                 .observer(fleet.getProbe());
     }
 
-    /** Arm the probe, then unleash chaos. */
+    /** Arm the probe, then unleash chaos. Wired here (not per-scenario) so every scenario's probe
+     * watches per-instance progress ({@code INSTANCE_STALL/NO_WORK_COMPLETED}) over the conductor's
+     * LIVE fleet view - a supplier, because JOIN_NEW grows the fleet mid-run. */
     protected void startRun(ProgressProbe probe, ChaosConductor conductor) {
+        probe.withInstanceProgress(() -> conductor.getFleet().stream()
+                .map(ProgressProbe.InstanceProgressView::of)
+                .collect(java.util.stream.Collectors.toList()));
         probe.start();
         conductor.start();
     }

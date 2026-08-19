@@ -1,0 +1,124 @@
+# astubbs#29 - the confluentinc#857 deadlock fix, and what measuring it taught
+
+Context `gh` cannot give you about PR astubbs/parallel-consumer#29
+(`bugs/857-paused-consumption-multi-consumers-bug`). Delete this file when the PR merges, promoting
+anything below that is still wanted into `next-candidates.md`.
+
+## What the PR is, in one line
+
+Fixes the AB-BA deadlock between the poll thread's `onPartitionsRevoked` and the control thread's
+`commitOffsetsThatAreReady`, proven on its own instrument at 60/60 failures before and 0/60 after.
+
+## What the PR is NOT, which took a day to establish
+
+The eager `ChaosRevokeUnderWorkIT` `CLASS2_STALL` sightings were this family's leading candidates for
+this PR, on the strength of `PERIODIC_CONSUMER_SYNC` being the one commit mode where the AB-BA cycle
+can close. **They are not this defect, and probably not any defect.** The evidence is in
+`test-857-revoke-under-work-sightings.md`: two recorded seeds reproduced 6/6 on the arm carrying the
+fix, and the four-cell assignor x stop-mode matrix explains every sighting as eager reassignment
+restarting in-flight heavy work until a commit watermark is legitimately pinned past a 150s bound.
+
+## Still open on this PR, 2026-08-19
+
+Ordered by what blocks a merge. **This file should have existed from the branch's first commit and
+did not** - the April investigation log (`docs/BUG_857_INVESTIGATION.md`) was retired in `69a670de4`
+into the solutions write-up and the per-mode inflight split, which kept the SETTLED knowledge and
+left the live threads without a home. Append here as you go rather than reconstructing later.
+
+**In flight right now**
+
+- **Shard-granularity progress detector** - the existing `NO_PROGRESS` probe has the right shape
+  ("while work remains, completions must advance") but is fleet-wide, so one wedged shard hides
+  behind seventy-nine healthy ones. Being added as an ADDITIONAL check, not a replacement, against
+  PC's own state (`pc.getWm()` is public). Must stay SILENT on the eager arm, which trips
+  `CLASS2_STALL` 53 times while progressing normally - if it fires there it has reproduced the bug
+  it exists to fix.
+- **Ordering coverage under churn** - the four-cell matrix verified no-loss, bounded duplicates and
+  completion, but NOT ordering: the scenario runs `UNORDERED` with a unique key per record, so
+  ordering is doubly vacuous there. A `KEY`-ordered cell is being added, reusing `KeyOrderLedger`
+  rather than writing a second checker, and as a NEW cell because switching the existing one to
+  `KEY` would serialise per-key work and invalidate today's measurements.
+
+**Decisions that are the owner's, not an agent's**
+
+- **What to do about the 150s `LAG_STAGNATION_BOUND`.** Three honest options, and the evidence does
+  not pick between them: raise it with the multi-restart arithmetic written down, shorten
+  `HEAVY_SLEEP` so redelivery chains cost less, or accept that the eager arm cannot host a Class 2
+  hunt and let the cooperative arm own it. **Not** an option: nudging it until a run goes green -
+  the July recalibration already did that once, from arithmetic that assumed a single restart.
+  Background: `test-class2-probe-asserts-timing-not-correctness.md`.
+- **Whether the ordering ledger should gate.** `ChaosKeyOrderIT` is `@Tag("chaos")`, so ordering
+  under real churn runs only on demand; what gates every build is `KeyOrderLedgerIT`, which checks
+  the ledger's LOGIC against synthetic histories. So a genuine ordering regression under churn would
+  not be caught by a normal build. Defensible - chaos runs are long, and a red chaos run is
+  investigation material rather than a merge blocker - but it should be a decision rather than an
+  accident.
+
+**Evidence gaps, stated rather than hidden**
+
+- **The four-cell matrix is one seed and one run per cell.** The direction is unambiguous (0 vs 53
+  violations, 405 vs 2,421 duplicates) but the numbers are not repeat-measured, and they are now
+  quoted in the README's `reducing-duplicate-replay` table. If that table is to carry weight, the
+  cells want repeating across seeds.
+- **The drain arm was run twice** because the first run's log was truncated by a full `/tmp`; only
+  the second is valid. Any re-measurement should filter maven output at source rather than writing
+  raw logs to a shared tmpfs.
+
+**Merge mechanics not yet done**
+
+- **No review has been requested** - `reviewDecision` is empty. The automated review does not run on
+  push; it needs `@claude review this` on the PR, and a red `claude-review` before that is the
+  expected state. A human LGTM is required regardless of CI.
+- **A merge strategy has not been recommended**, and the squash message has not been offered - both
+  are owed before merge (`docs/merge-checklist.md`).
+- **Duplicate-code and file-similarity reports** need reading once review runs; clones introduced by
+  this PR are in scope, pre-existing ones are not.
+
+**Noticed here, not this PR's to fix**
+
+- `AGENTS.md` is ~498 lines against the ~400-line backstop it sets for itself. Pre-existing, and by
+  its own rule that means something situational has crept in and wants relocating to a topic doc.
+
+## Compounding ideas this work produced, 2026-08-19
+
+Kept here rather than in `next-candidates.md` because they belong to this PR until it lands. Each
+came from an INSTRUMENT being wrong rather than the product, which is why they generalise.
+
+Each of these came out of an instrument being wrong rather than the product being wrong, which is
+why they generalise past this investigation.
+
+- **Truth probes for internal state, made routine** (`next-truth-probes-for-internal-state.md` owns
+  this) - the chaos suite judged PC from outside, via committed offsets read by an admin client,
+  while `WorkManager` and `ShardManager` expose the real answer publicly
+  (`getNumberOfWorkQueuedInShardsAwaitingSelection`, `isRecordsAwaitingProcessing`,
+  `isNoRecordsOutForProcessing`, `getNumberOfIncompleteOffsets`, and `pc.getWm()` is public). A test
+  that infers internal state from an external signal will eventually infer it wrongly. Where a
+  component knows the answer, ask it.
+- **Measure both ends of anything you count.** A completion counter alone cannot distinguish
+  "nothing is finishing" from "nothing is happening"; a fleet inside a 20s user function reads as a
+  flat line while fully busy. Counting entry as well as exit made in-flight work visible and turned
+  an apparent stall into an obvious back-pressure pause. Any counter used to judge liveness needs
+  its partner.
+- **Assert the property, report the timing.** A correctness suite gating on a duration turns every
+  slow-but-correct run into a failure and every threshold into an argument
+  (`test-class2-probe-asserts-timing-not-correctness.md`). Gate on completion, loss, duplicates and
+  ordering; publish recovery time and peaks as measurements.
+- **Granularity is part of a liveness check's correctness.** The existing `NO_PROGRESS` probe has
+  the right SHAPE - while work remains, completions must advance - but is fleet-wide, so one wedged
+  shard hides behind seventy-nine healthy ones. A check at the wrong granularity is not a weak check,
+  it is a check for a different property.
+- **A scale knob turns a stress test into an experiment.** `-Dperf.scale` on the capacity profiles
+  exists because a measurement welded to one size can only answer the question that size happens to
+  ask. The same applies to any workload constant that was chosen for one machine.
+- **The harness cannot model a crash** (`parked-chaos-crash-fidelity-variant.md`) - every stop is an
+  orderly close, so the most-reported confluentinc#857 shape is the one no scenario produces.
+- **Run-mode experiments belong in the demo app** (`branch-polyglot-demo-ideation.md`) - the
+  assignor x stop-mode matrix is a user-facing result, and the harness that produced it is a
+  ready-made engine for the bring-your-own-topic direction.
+
+## Related
+
+- `docs/inflight/bug-857-family.md` - which defects sit behind the one upstream symptom
+- `docs/inflight/test-857-revoke-under-work-sightings.md` - the replays, the four arms, the matrix
+- `docs/inflight/test-class2-probe-asserts-timing-not-correctness.md` - the probe critique
+- `docs/inflight/parked-chaos-crash-fidelity-variant.md` - why no scenario can model a crash

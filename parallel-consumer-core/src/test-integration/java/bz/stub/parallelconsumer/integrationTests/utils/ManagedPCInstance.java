@@ -104,6 +104,28 @@ public class ManagedPCInstance implements Runnable {
     private final Queue<String> consumedKeys = new ConcurrentLinkedQueue<>();
 
     /**
+     * Work results this instance's PCs have returned, counted by PC's OWN bookkeeping: a
+     * {@code WorkManager.successfulWorkListeners} listener registered on every incarnation (the same
+     * public testing hook {@code AbstractParallelEoSStreamProcessorTestBase} uses). Monotone across
+     * restarts - never reset, so an observer needs only "did it advance", not incarnation arithmetic.
+     * <p>
+     * Deliberately NOT another count of the test's user-function exits: the listener fires in
+     * {@code WorkManager#onSuccessResult}, which runs on PC's control thread as it processes returned
+     * futures - so a wedged control thread (the confluentinc#857 deadlock family) freezes this counter
+     * even while worker threads keep finishing records. That is the signal
+     * {@code ProgressProbe}'s instance-progress detector samples; a harness-side counter would keep
+     * advancing straight through the exact wedge being hunted.
+     */
+    @Getter(AccessLevel.NONE) // mutable guard - callers get the count via getWorkResultsReturnedCount()
+    @ToString.Exclude
+    private final java.util.concurrent.atomic.AtomicLong workResultsReturned = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Snapshot of {@link #workResultsReturned} - see its javadoc for what a "work result" is here. */
+    public long getWorkResultsReturnedCount() {
+        return workResultsReturned.get();
+    }
+
+    /**
      * The test's user function. Receives the full {@link PollContext} plus the id of the PC
      * <em>incarnation</em> running it - see {@link #incarnations} for why the instance id alone is not
      * enough for anything that must not span two PC lifetimes.
@@ -197,6 +219,11 @@ public class ManagedPCInstance implements Runnable {
                     .commitMode(config.commitMode)
                     .maxConcurrency(config.maxConcurrency)
                     .build());
+
+            // every incarnation gets its own fresh WorkManager, so this never double-registers; the
+            // instance-level counter deliberately spans incarnations (see workResultsReturned)
+            this.parallelConsumer.getWm().getSuccessfulWorkListeners()
+                    .add(wc -> workResultsReturned.incrementAndGet());
 
             this.parallelConsumer.setTimeBetweenCommits(Duration.ofSeconds(1));
             this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));

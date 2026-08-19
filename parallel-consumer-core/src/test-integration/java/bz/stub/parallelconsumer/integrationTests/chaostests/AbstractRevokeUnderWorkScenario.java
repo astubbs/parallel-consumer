@@ -114,6 +114,28 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected abstract String scenarioLabel();
 
     /**
+     * The processing order - {@link ProcessingOrder#UNORDERED} for the assignor/stop-mode matrix
+     * cells, which make no ordering claim (and produce a unique key per record, so a KEY override
+     * without the {@code ChaosScenarioBase} identity-trio overrides would assert nothing). Promoted
+     * to an accessor - per this class's constants rule above - for
+     * {@link ChaosRevokeUnderWorkKeyOrderIT}, the cell that exists to make the ordering claim.
+     */
+    protected ProcessingOrder processingOrder() {
+        return ProcessingOrder.UNORDERED;
+    }
+
+    /**
+     * The heavy-tail dwell - {@link #HEAVY_SLEEP} (20s) for the matrix cells, whose legit-freeze
+     * arithmetic above depends on it. Promoted to an accessor because a KEY-ordered cell CANNOT run
+     * 20s dwells: a dwell longer than the gap between storm rebalances chains indefinitely under
+     * at-least-once, and KEY ordering pins the whole shard behind it -
+     * {@code ChaosKeyOrderIT#HEAVY_SLEEP} carries the measurement (a 154s stagnation at a 10s dwell).
+     */
+    protected Duration heavySleep() {
+        return HEAVY_SLEEP;
+    }
+
+    /**
      * The conductor's action mix. Defaults to {@link ChaosConductor#defaultW4Weights()} - <b>no drain
      * stops at all</b>, because a drain opens the Class 1 zombie window and would mask the Class 2
      * mechanism this scenario exists to isolate.
