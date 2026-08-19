@@ -49,6 +49,18 @@ the failure class this repo has hit most often (a mutation lane scoring zero mut
 suite printing `FAIL` and exiting `0`, a regression test that passed whether the code was fixed or
 broken).
 
+## Never let a filter hide its own omissions
+
+**Anything that hides items must say how many it hid.** A view that filters - closed notes dropped
+from an index, findings capped at ten, a lane skipping a package - reads to everyone downstream as
+*the complete set*, and the omission is invisible precisely because the filter worked. One line of
+count restores it: "6 closed notes not shown; delete or migrate them" costs nothing and keeps the
+backlog of undone cleanups visible without occupying the view.
+
+This is the same failure as a green check that asserted nothing, one level up: silence that reads as
+a result. The repo has met it as a mutation lane skipping every class and exiting 0, and as a
+duplicate-code annotator capped at ten with no mention of the eleventh.
+
 ## Three techniques not owned elsewhere
 
 The investigation techniques live in [`docs/investigating.md`](investigating.md). These three are

@@ -1,6 +1,6 @@
 # Disabled CI jobs, and highcpu runner load
 
-<!-- inflight-class: coordination -->
+<!-- inflight-class: blind-spot -->
 
 
 - **`Kafka Compat (experimental 4.x)` is disabled** (`if: false` in `maven.yml`) - it cannot compile
