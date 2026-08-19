@@ -274,14 +274,6 @@ Do not start one casually.
   which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
   either path.
 
-### state/ShardKey.java
-
-- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
-  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
-  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
-  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
-  doc fix plus a field rename, not a behaviour change.
-
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
   control/poller threads share state - removed under shared-nothing (confluentinc#200).
