@@ -1,6 +1,6 @@
 # Distributed throttling - ideation done, direction not chosen
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 The ask is astubbs#228 (mirror of confluentinc#24), with confluentinc#766 as the production

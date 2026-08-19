@@ -1,6 +1,7 @@
 # The mutation lane's skip renders as a green tick - decision pending
 
-<!-- inflight-class: misdirection -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
 
 
 **Open decision, not a bug.** The lane behaves exactly as designed and says so in its job summary.

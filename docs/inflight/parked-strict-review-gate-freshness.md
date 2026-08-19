@@ -1,6 +1,7 @@
 # Parked: the strict, head-fresh review gate
 
-<!-- inflight-class: decided-no -->
+<!-- inflight-type: feature -->
+<!-- inflight-state: parked - deferred -->
 
 
 The `claude-review` gate used to require a `claude[bot]` review **newer than the current head**,

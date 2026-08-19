@@ -1,6 +1,6 @@
 # Feature records for the experimental modules, held until the modules land
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 `docs/features/kafka-streams-experimental.yaml` and `kafka-connect-experimental.yaml` were written and

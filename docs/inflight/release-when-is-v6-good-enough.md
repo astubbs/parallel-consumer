@@ -1,6 +1,7 @@
 # When do we ship v6? The "enough is enough" decision, not the blocker list
 
-<!-- inflight-class: release-gate -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
 
 **Deliberately its own file, not a section inside
 [`release-0.6.0.0.md`](release-0.6.0.0.md).** A section is invisible until someone opens that file;

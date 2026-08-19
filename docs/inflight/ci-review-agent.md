@@ -1,6 +1,7 @@
 # Automated PR reviewer - gaps that affect what you can trust
 
-<!-- inflight-class: misdirection -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
 
 
 How the reviewer and its gate work, and the contract for asking for a review, are in

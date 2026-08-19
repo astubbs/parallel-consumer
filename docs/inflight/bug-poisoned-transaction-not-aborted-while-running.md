@@ -1,6 +1,7 @@
 # A terminally failed send leaves the transaction abortable but unaborted
 
-<!-- inflight-class: stall -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
 
 
 Opened by astubbs#261, which fixed the data-correctness half of this and deliberately left the

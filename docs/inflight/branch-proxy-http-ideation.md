@@ -1,6 +1,7 @@
 # Branch: HTTP-strategy ideation (astubbs#242)
 
-<!-- inflight-class: stranded-work -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
 
 
 > Extracted from `origin/docs/proxy-http-ideation` @1867d15db, `docs/inflight/branch-proxy-http-ideation.md`.

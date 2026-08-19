@@ -1,6 +1,6 @@
 # Control-thread and worker-pool contract debts
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 Four things astubbs#296 surfaced and did not fix. Kept because each is a contract that is currently

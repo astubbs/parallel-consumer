@@ -1,6 +1,7 @@
 # Review follow-ups left open from the inactive-test work
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 A seven-reviewer pass over astubbs#264 found four P1s, all fixed there (two of them reproduced by *running*

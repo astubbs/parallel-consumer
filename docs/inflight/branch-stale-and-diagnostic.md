@@ -1,6 +1,7 @@
 # Branches safe to delete, and one to salvage
 
-<!-- inflight-class: stranded-work -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
 
 
 **Diagnostic-only, investigations landed:** `debug/committedoffset-firstpoll-stall` and

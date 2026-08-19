@@ -1,6 +1,7 @@
 # What belongs in the required Performance Tests lane
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 `bin/performance-test.sh` is the "Performance Tests" leg of `maven.yml` - **a required check on every PR**,

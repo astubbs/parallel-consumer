@@ -1,6 +1,7 @@
 # Mutation testing is deliberately narrow - re-widening is tracked here
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 Shipped in astubbs#111. Recorded because it is a deliberate *reduction* in coverage, which is the kind of

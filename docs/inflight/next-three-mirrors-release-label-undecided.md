@@ -1,6 +1,7 @@
 # Three closed mirrors that may belong in 0.6.0.0
 
-<!-- inflight-class: release-gate -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
 
 
 astubbs#118, astubbs#233 and astubbs#252 are closed `upstream-mirror` issues carrying no `0.6.0.0`

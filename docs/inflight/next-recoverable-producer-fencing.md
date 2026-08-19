@@ -1,6 +1,6 @@
 # Next: make producer fencing recoverable instead of fatal
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 > Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/inflight/next-recoverable-producer-fencing.md`.

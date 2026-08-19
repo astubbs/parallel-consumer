@@ -1,6 +1,6 @@
 # Next: Dapr adapter — ideation done, probe is the first move
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 > Extracted from `origin/docs/ideate-dapr-adapter` @d5c8cf1b0, `docs/inflight/next-dapr-adapter.md`.

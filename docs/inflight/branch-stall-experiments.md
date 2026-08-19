@@ -1,6 +1,7 @@
 # Stall-experiment branches - one result worth keeping, then delete
 
-<!-- inflight-class: stranded-work -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
 
 
 `docs/uber-stall-experiment-results`, with the `experiment/stall-uber-fix` / `stall-uber-nofix` arms:

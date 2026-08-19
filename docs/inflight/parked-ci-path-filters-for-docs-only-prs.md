@@ -1,6 +1,7 @@
 # Skipping CI on docs-only PRs - investigated, parked
 
-<!-- inflight-class: decided-no -->
+<!-- inflight-type: feature -->
+<!-- inflight-state: closed - will not do -->
 
 
 **Recommendation: do not do it.** Investigated 2026-08-16/17 and answered, with nothing changed.

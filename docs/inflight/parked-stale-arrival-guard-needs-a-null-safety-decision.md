@@ -1,6 +1,7 @@
 # Rejecting a stale ARRIVAL at the shard - blocked on a null-safety decision
 
-<!-- inflight-class: decided-no -->
+<!-- inflight-type: feature -->
+<!-- inflight-state: blocked - needs a null-safety decision -->
 
 
 **Parked, needing a judgement call rather than more investigation.** The work is understood and was

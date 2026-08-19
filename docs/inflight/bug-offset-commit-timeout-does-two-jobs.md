@@ -1,6 +1,7 @@
 # `offsetCommitTimeout` does two jobs, and 10s is wrong for both
 
-<!-- inflight-class: config-lie -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
 
 
 Open after astubbs#204. That PR made the option mean "the whole commit" rather than "one attempt",

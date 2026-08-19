@@ -1,6 +1,7 @@
 # `maxFailureHistory` is settable and does nothing
 
-<!-- inflight-class: config-lie -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
 
 
 `ParallelConsumerOptions.maxFailureHistory` is declared with a default of 10 and is **read nowhere in

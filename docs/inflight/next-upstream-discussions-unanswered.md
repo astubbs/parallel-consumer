@@ -1,6 +1,7 @@
 # Upstream Discussions - a content type our tooling never looked at
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 Discussions were a blind spot until 2026-08-07: not in
