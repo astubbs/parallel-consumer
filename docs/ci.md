@@ -232,6 +232,7 @@ new branch 'ci/ossindex-audit-job'` inside "Run Claude Code". So a `bin/` script
 PR's. What does **not** come from the PR is the workflow file, and therefore the allowlist - see
 "Editing the reviewer". Both routes grant `git rev-parse` so a reviewer can settle which tree it is
 standing in by looking, rather than inferring it from the workflow and getting it backwards.
+<!-- file-refs: N/A - a path inside claude-code-action, not this repo -->
 
 **On a fork PR this route answers but does not run anything** - and "answers" needs one
 qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put

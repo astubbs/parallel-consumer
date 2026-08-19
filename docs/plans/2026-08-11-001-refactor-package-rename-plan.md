@@ -84,6 +84,7 @@ Move `src/main/java/io/confluent/parallelconsumer/…` to `…/bz/stub/parallelc
 upstream-derived file misses that lookup**. Each one falls through to the fork-original branch, where
 its retained Confluent header is a violation rather than a requirement. The scanner does not degrade
 gracefully; it inverts.
+<!-- file-refs: N/A - the pre-rename path is what the sentence is about, not a citation -->
 
 **Measured, not predicted** (2026-08-11, by performing the rename in a throwaway clone and running
 the scanner - the clone was discarded, so re-measure rather than trusting this figure if the tree has
@@ -118,7 +119,7 @@ Everything checked, and what it returned:
 - No `Class.forName`, `ServiceLoader`, `loadClass` or `Proxy` in main source, so no reflective
   name-to-class lookup can go stale.
 - Metrics prefix is the hand-written literal `"pc."`
-  (`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/metrics/PCMetricsDef.java:75`),
+  (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java:75`),
   not derived from the package.
 - MDC keys are hand-written literals `"pcId"` and `"offset"`
   (`…/internal/AbstractParallelEoSStreamProcessor.java:60,66`); thread names are `pc-*`. **No
@@ -213,6 +214,7 @@ Ordered by *how quietly it fails*, not by size. Everything above R5 fails silent
       `**/bz/stub/parallelconsumer/**` back to `**/io/confluent/parallelconsumer/**`, which keeps the
       check a *rule*; (b) `git log --follow` / rename detection against the fork point, which is
       correct but slow and non-deterministic across shallow clones - note the workflow already needs
+      <!-- file-refs: N/A - the option described maps back TO the pre-rename path, by definition -->
       `fetch-depth: 0`; (c) bulk `RENAMED_FROM_UPSTREAM` entries, which is a manifest of ~200 lines
       nobody can review and which the next file move silently invalidates. **(a) is the
       recommendation**; whichever is chosen, write the reasoning into the script's header.
@@ -246,7 +248,7 @@ the script prints `PIT: no core main-source classes changed - nothing to mutate,
 distinguishes that from a real pass. The quarantine one degrades only partially - the fully-qualified
 annotation form stops being detected while the short form still is - and it **is** caught, by
 `QuarantineRegistryScriptTest.fullyQualifiedAnnotationIsDetected`
-(`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/QuarantineRegistryScriptTest.java:91`).
+(`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/QuarantineRegistryScriptTest.java:91`).
 One of the three has a test. Two do not.
 
 ### R3 - Rules that go vacuous rather than red
@@ -254,19 +256,19 @@ One of the three has a test. Two do not.
 ArchUnit pins fully-qualified class and package names as **strings**. A stale string does not fail;
 it selects nothing, and selecting nothing is a pass.
 
-- [ ] **`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/TestConventionRules.java:46`**
+- [ ] **`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/TestConventionRules.java:46`**
       - `.should().beAssignableTo("io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest")`.
       Stale, the condition never matches, so the rule passes while no longer guarding anything. The
       `that()` set stays large, so `failOnEmptyShould` never trips either. The guard it silently stops
       applying is the one that keeps Docker-dependent tests out of surefire.
 - [ ] **The 6 `@AnalyzeClasses(packages = "io.confluent.parallelconsumer…")` declarations.** Stale,
       **zero classes are imported** and every rule in the module evaluates against an empty set:
-      - `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/TestConventionsArchTest.java:15`
-      - `parallel-consumer-vertx/src/test/java/io/confluent/parallelconsumer/vertx/TestConventionsArchTest.java:16`
-      - `parallel-consumer-mutiny/src/test/java/io/confluent/parallelconsumer/mutiny/TestConventionsArchTest.java:16`
-      - `parallel-consumer-reactor/src/test/java/io/confluent/parallelconsumer/reactor/TestConventionsArchTest.java:16`
-      - `parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/io/confluent/parallelconsumer/examples/metrics/TestConventionsArchTest.java:16`
-      - `parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/TestConventionsArchTest.java:16`
+      - `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/TestConventionsArchTest.java:15`
+      - `parallel-consumer-vertx/src/test/java/bz/stub/parallelconsumer/vertx/TestConventionsArchTest.java:16`
+      - `parallel-consumer-mutiny/src/test/java/bz/stub/parallelconsumer/mutiny/TestConventionsArchTest.java:16`
+      - `parallel-consumer-reactor/src/test/java/bz/stub/parallelconsumer/reactor/TestConventionsArchTest.java:16`
+      - `parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/bz/stub/parallelconsumer/examples/metrics/TestConventionsArchTest.java:16`
+      - `parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/bz/stub/parallelconsumer/examples/streams/TestConventionsArchTest.java:16`
 
       `test_classes_must_be_named_so_surefire_collects_them` sets `.allowEmptyShould(true)`
       (`TestConventionRules.java:139`) for a legitimate reason (the example modules really do match
@@ -311,8 +313,13 @@ Each of these needs a human edit; most fail loudly, which is why they rank here.
       silently while reporting itself complete; and `_Tag__transactions__.xml` pinned a test class by
       fully-qualified name in an XML attribute that no compiler and no IDE refactor checks. Both were
       rename traps with no CI consumer, which is the argument against the whole category.
+      <!-- file-refs: N/A - this bullet is about two files it states no longer exist -->
 - [ ] **`parallel-consumer-core/src/test/resources/junit-platform.properties:6`** - commented out,
       referencing `io.confluent.csid.utils.ReplaceCamelCase`. Another `io.confluent.csid` case.
+      The file was deleted by astubbs/parallel-consumer#265 (`15f1ebe23`); read it as this document
+      did with `git show 15f1ebe23^:parallel-consumer-core/src/test/resources/junit-platform.properties`
+      and grep for `ReplaceCamelCase`.
+      <!-- file-refs: N/A - the path names a file this bullet is about, now read via the history above -->
 - [ ] **Prose in `docs/`** - `grep -rn 'io\.confluent\|io/confluent' docs/`. **Dated plan and
       investigation documents are historical records and must not be rewritten** to say something
       they did not say; only live reference prose gets updated. Decide per file, and expect the
