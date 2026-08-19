@@ -1,5 +1,7 @@
 # Package-rename grand sweep — plan and handoff
 
+<!-- inflight-priority: medium -->
+
 **Status: planned, not started.** Two rehearsals are done and green; this is the execution plan for the
 real thing. Written to be picked up by a session with no memory of the rehearsals.
 

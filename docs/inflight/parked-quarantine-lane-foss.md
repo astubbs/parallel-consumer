@@ -1,5 +1,7 @@
 # Parked: extract the quarantine lane as its own FOSS project
 
+<!-- inflight-priority: low -->
+
 The `@Quarantined` lane - annotation, enforced registry, owner-claim verification, non-gating CI job,
 release blocking, self-tests - is generic; nothing in it is parallel-consumer-specific.
 

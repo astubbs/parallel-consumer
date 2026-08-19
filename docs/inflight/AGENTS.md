@@ -59,7 +59,21 @@ the line after its heading:
 
 ```markdown
 <!-- inflight-priority: high - one line saying why, in the imperative -->
+<!-- inflight-priority: medium -->
+<!-- inflight-priority: low -->
 ```
+
+**Three levels, and only `high` has to justify itself.** `high` REQUIRES a reason and stays rare -
+it is the anti-inflation rule that keeps the block worth reading, and a marker on everything is a
+marker on nothing. `medium` and `low` take no reason: they are cheap ordering hints, nothing more,
+and they exist because a category with twenty entries in filename order tells you nothing about
+which to read. An unmarked note sorts as `low`, so forgetting the marker is quiet rather than
+promoting the note.
+
+**The bulk of the levels were assigned in one first-pass triage and are not authoritative.** They
+were set from titles, not from reading every note; treat a `medium` or `low` as a default to correct
+on contact rather than a considered judgement. Correcting one costs a line. `high` is the exception:
+each was set deliberately, with its reason.
 
 `.claude/hooks/inject-recorded-knowledge.sh` lifts every marked note into a **Read these first**
 block at session start, with that reason, above the flat list of everything else. The reason is the

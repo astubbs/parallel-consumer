@@ -125,17 +125,22 @@ for cat in bug ci test branch pr release deps perf static web next parked; do
     [ -n "$files" ] || continue
     n=$(printf '%s\n' "$files" | grep -c .)
     emit "**${cat}** (${n})"
-    # high-priority members first, each with the reason the marker carries
-    while IFS= read -r f; do
-        why=$(sed -n 's/.*inflight-priority:[[:space:]]*high[[:space:]]*-[[:space:]]*//p' "$f" 2>/dev/null \
-                | head -1 | sed 's/[[:space:]]*-->.*//')
-        [ -n "$why" ] || continue
-        emit "- !! $(inflight_title "$f")"
-    done <<< "$files"
-    while IFS= read -r f; do
-        grep -q 'inflight-priority:[[:space:]]*high' "$f" 2>/dev/null && continue
-        emit "- $(inflight_title "$f")"
-    done <<< "$files"
+    # Within a group: high, then medium, then low. Group order already ranks CATEGORIES by what it
+    # costs you to not know; this ranks the members against each other, which is the only place a
+    # per-note level earns anything - 21 `next-` candidates in filename order tell you nothing about
+    # which to read. An unmarked note sorts with `low`, so forgetting the marker is quiet rather
+    # than promoting the note.
+    for level in high medium low; do
+        while IFS= read -r f; do
+            noted=$(sed -n 's/.*inflight-priority:[[:space:]]*\([a-z]*\).*/\1/p' "$f" 2>/dev/null | head -1)
+            [ -n "$noted" ] || noted=low
+            [ "$noted" = "$level" ] || continue
+            case "$level" in
+                high) emit "- !! $(inflight_title "$f")" ;;
+                *)    emit "- $(inflight_title "$f")" ;;
+            esac
+        done <<< "$files"
+    done
     emit ""
 done
 

@@ -1,5 +1,7 @@
 # Automated PR reviewer - gaps that affect what you can trust
 
+<!-- inflight-priority: medium -->
+
 How the reviewer and its gate work, and the contract for asking for a review, are in
 [`docs/ci.md`](../ci.md). This file is only the open gaps.
 

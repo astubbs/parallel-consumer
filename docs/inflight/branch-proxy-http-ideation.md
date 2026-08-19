@@ -1,5 +1,7 @@
 # Branch: HTTP-strategy ideation (astubbs#242)
 
+<!-- inflight-priority: low -->
+
 > Extracted from `origin/docs/proxy-http-ideation` @1867d15db, `docs/inflight/branch-proxy-http-ideation.md`.
 > That branch has since been merged into `feats/proxy-requirements` (astubbs/parallel-consumer#293)
 > and deleted, so the body's "no PR yet" framing is out of date: the ideation content now rides on

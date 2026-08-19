@@ -1,5 +1,7 @@
 # Upstream closure audit - what still needs a human decision
 
+<!-- inflight-priority: low -->
+
 The 2023 administrative sweeps are mirrored and mapped (see
 [`upstream-map.yaml`](../../src/docs/development/upstream-map.yaml), entries `sweep-2023-*`, fork
 mirrors astubbs#227-254 under label `upstream-admin-closed`). `scripts/upstream-sweep.sh --audit`

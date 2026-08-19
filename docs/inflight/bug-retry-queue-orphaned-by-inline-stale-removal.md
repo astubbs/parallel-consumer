@@ -1,5 +1,7 @@
 # `getWorkIfAvailable`'s inline stale removal orphans the retry-queue entry
 
+<!-- inflight-priority: medium -->
+
 **Known defect in product code. Not data loss - it inflates the counter that gates the poller
 throttle.** Surfaced while reviewing astubbs/parallel-consumer#31; pre-existing and independent of it.
 

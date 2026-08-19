@@ -1,5 +1,7 @@
 # `RetryQueue` behaviour is essentially untested - could be hiding bugs
 
+<!-- inflight-priority: medium -->
+
 The only coverage is three tests in `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/state/ShardManagerTest.java`:
 `retryQueueOrdering`, `testRetryQueueOrdering`, `testRetryQueueOrderingMultipleTries`. All three test
 **ordering only**. Nothing tests the queue's consistency with the shard it mirrors.

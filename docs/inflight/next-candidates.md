@@ -1,5 +1,7 @@
 # Next candidates, ranked
 
+<!-- inflight-priority: low -->
+
 Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full verdicts live in
 `src/docs/development/upstream-pr-analysis.adoc`; these are the ready picks:
 

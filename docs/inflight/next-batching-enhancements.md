@@ -1,5 +1,7 @@
 # Batching enhancements - ideation done, direction decision pending
 
+<!-- inflight-priority: low -->
+
 > Extracted from `origin/docs/ideate-batching-enhancements` @98a5ea8f5, `docs/inflight/next-batching-enhancements.md`.
 
 Full ranked ideation with verified evidence:
