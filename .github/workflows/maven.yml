@@ -237,12 +237,58 @@ jobs:
       - uses: astubbs/duplicate-code-cross-check@c828d78862927d89f6b851a7b0fdba9af6875b3b # v1 + astubbs/duplicate-code-cross-check#8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          directories: 'parallel-consumer-core/src parallel-consumer-vertx/src parallel-consumer-reactor/src parallel-consumer-mutiny/src'
-          cpd-max-duplication: '5'
-          # Absolute cap set to 5% (matching PMD CPD). The repo baseline is already ~4.2% jscpd,
-          # so a 4% cap fails on every PR (including the base branch itself) regardless of the change.
-          # The real regression guard is the per-engine "max increase vs base" check (+0.1%).
-          jscpd-max-duplication: '5'
+          # SCAN EVERYTHING. There is nothing here to exclude, and three earlier attempts at a
+          # whitelist all failed the same way - silently under-scanning a repo that keeps growing.
+          # The listed version missed the five `parallel-consumer-examples/*` modules and all of
+          # `bin`/`.github`, which is where the duplication this job exists for actually hid; a
+          # `find -mindepth 2` version encoded "is this code?" as "how deep is it?"; a
+          # `<packaging>pom</packaging>` version needed grepping XML internals.
+          #
+          # What a whitelist would be protecting against, checked rather than assumed:
+          #   * build output - `target/` has ZERO tracked files and this job checks out without
+          #     building, so it is not on disk. (If a build step is ever added ABOVE this one, that
+          #     stops being true: jscpd still ignores `**/target/**` by default, CPD would not.)
+          #   * `.git`, node_modules, vendor - already excluded by the action's own scan and by
+          #     jscpd's default ignore pattern.
+          #   * CPD's language auto-detect is winner-take-all, so a wider scan could in principle
+          #     switch it off Java. It cannot here: java is 244 files against 37 xml, the next
+          #     CPD-mappable extension, and md/sh/yaml are not mappable at all. Worth re-checking
+          #     if a large module in another language ever lands.
+          directories: '.'
+          # THE TWO GUARDS DO DIFFERENT JOBS, and only one of them is denominator-proof.
+          #
+          # `max-increase` (+0.1%, the default) is the per-PR regression guard: base and head are
+          # measured with the same configuration, so it never needs manual recalibration as the repo
+          # grows. It is the one that actually catches a change introducing duplication.
+          #
+          # THAT IS SCALE-PROOF, NOT SENSITIVITY-PROOF, and the difference was easy to overclaim.
+          # The delta is still a percentage over the same enlarged denominator, so a fixed amount of
+          # newly duplicated code now produces a SMALLER percentage-point increase than it did
+          # against four Java directories - by the same ~17x the reading fell (1.89% -> 0.11%). So
+          # widening the scan raised the absolute quantity of new duplication needed to trip +0.1%,
+          # in the opposite direction from what "scan everything" is for. Unlike the cap, nothing
+          # about it LOOKS wrong afterwards, which is why it is written down here rather than
+          # noticed later. Raised in review on astubbs/parallel-consumer#320.
+          #
+          # `max-duplication` is the backstop against SLOW ACCUMULATION, which the increase guard
+          # cannot see: twenty PRs each adding +0.09% all pass, and together they are +1.8%.
+          #
+          # RE-BASELINED against a measured corpus, 2026-08-19, on astubbs/parallel-consumer#320,
+          # the change that widened both engines from four Java module directories to the whole
+          # repo. The old 5% caps were justified by "the repo baseline is already ~4.2% jscpd" -
+          # true then, meaningless after, because widening the scan grew the DENOMINATOR far faster
+          # than it grew duplication: CPD went 1.89% -> 0.11% and jscpd 2.52% -> 1.17% while the
+          # duplicated-line counts both went UP (721 -> 811 and 949 -> 981). A 5% ceiling over a
+          # 0.11% reading cannot fire, which is a guard that has quietly stopped guarding.
+          #
+          # Headroom is deliberately generous rather than tight - this is a drift backstop, not the
+          # regression check - but it can now fire before the number becomes absurd.
+          #
+          # THIS NUMBER IS CORPUS-RELATIVE. Anything that materially changes what is scanned (a new
+          # module, a large docs import, another directory) moves the baseline, so re-read the
+          # reported percentage and re-argue the cap rather than assuming it still means something.
+          cpd-max-duplication: '0.5'    # measured baseline 0.11%
+          jscpd-max-duplication: '2'    # measured baseline 1.17%
 
   # File similarity detection - finds files that are semantically similar overall
   file-similarity:
@@ -257,7 +303,13 @@ jobs:
       - uses: astubbs/duplicate-code-detection-tool@74adf74b65b6a288b21ba957d7d7bef43831ee65 # master: base-vs-PR comparison + ce-review fixes
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          directories: 'parallel-consumer-core/src,parallel-consumer-vertx/src,parallel-consumer-reactor/src,parallel-consumer-mutiny/src'
+          # Scan everything, same reasoning as the clones job. `file_extensions: java` is what
+          # keeps this engine off `bin/`, and that restriction is deliberate rather than incidental:
+          # it compares whole files for semantic likeness, and the shell scripts are similar BY
+          # DESIGN - every check-*.sh shares a header, an argument shape and an exit-code convention
+          # with its test-check-*.sh twin. An 80%-similarity threshold pointed at them yields
+          # findings that are all correct and all unactionable, which is how a check gets ignored.
+          directories: '.'
           file_extensions: 'java'
           ignore_below: 30
           fail_above: 80

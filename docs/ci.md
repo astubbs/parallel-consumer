@@ -48,8 +48,11 @@ document. This section is the detail behind it.
   See [`docs/testing.md`](testing.md).
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
-  [`docs/releasing.md`](releasing.md)) and the issue-reference gate (`issue-ref-gate.js`, see
-  [`docs/issue-references.md`](issue-references.md)).
+  [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
+  [`docs/issue-references.md`](issue-references.md)) and the file-reference gate
+  (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails a cited repo path that
+  does not exist - whole tree, so a deletion that strands a citation fails the PR that made it. Each gate's logic is a unit-tested module and its self-test runs first, so a
+  broken rule fails loudly rather than passing - or failing - every PR silently.
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -229,6 +232,7 @@ new branch 'ci/ossindex-audit-job'` inside "Run Claude Code". So a `bin/` script
 PR's. What does **not** come from the PR is the workflow file, and therefore the allowlist - see
 "Editing the reviewer". Both routes grant `git rev-parse` so a reviewer can settle which tree it is
 standing in by looking, rather than inferring it from the workflow and getting it backwards.
+<!-- file-refs: N/A - a path inside claude-code-action, not this repo -->
 
 **On a fork PR this route answers but does not run anything** - and "answers" needs one
 qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put

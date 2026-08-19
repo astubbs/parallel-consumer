@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.OffsetCommitBudgetExceededException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -24,6 +25,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * Delegate for {@link KafkaConsumer}
@@ -154,20 +157,41 @@ public class ConsumerManager<K, V> {
         }
     }
 
+    /**
+     * Commits, retrying the transient failures for as long as the configured budget allows.
+     * <p>
+     * {@code startedTime} is captured <b>once, for the whole call</b> - matching
+     * {@link #poll(Duration)}'s {@code pollStarted} - because the budgets it feeds
+     * ({@code offsetCommitTimeout}, {@code saslAuthenticationRetryTimeout}) are budgets for
+     * committing these offsets, not for one attempt at it. Capturing it inside the retry loop reset
+     * the budget on every attempt, so whenever an attempt failed faster than the budget the
+     * comparison could never become false and this retried forever with no backoff - see
+     * {@code ConsumerManagerCommitRetryBudgetTest}. That is reachable with ordinary settings: it needs
+     * only {@code default.api.timeout.ms} below {@code offsetCommitTimeout}, and it strands the
+     * broker-poll thread inside this method, which surfaces to the user as the unrelated-looking
+     * "Timeout waiting for commit response" (astubbs#177, confluentinc#833).
+     */
     public void commitSync(final Map<TopicPartition, OffsetAndMetadata> offsetsToSend) {
         // we don't want to be woken up during a commit, only polls
         boolean inProgress = true;
         noWakeups++;
+        Instant startedTime = Instant.now();
         while (inProgress) {
             try {
                 pendingRequests.addAndGet(1L);
                 long tryCount = 0;
+                boolean committed = false;
+                // SASL's budget is a DIFFERENT option, so it gets a different clock, started at its own
+                // first failure. Sharing startedTime would charge saslAuthenticationRetryTimeout for time
+                // spent retrying unrelated commit timeouts, so an LDAP flap arriving late in a slow commit
+                // would find its budget already spent by something that is not LDAP.
+                Instant saslFirstFailure = null;
                 //allow to try to commit at least once during close / shutdown regardless of the signal.
                 while (tryCount == 0 || !closeInProgressSignal.getAsBoolean()) {
                     tryCount++;
-                    Instant startedTime = Instant.now();
                     try {
                         consumer.commitSync(offsetsToSend);
+                        committed = true;
                         // break when offset commit is okay. Do not throw exception to main threads
                         break;
                     } catch(TimeoutException timeoutException) {
@@ -180,16 +204,27 @@ public class ConsumerManager<K, V> {
                             log.warn("Encountered timeout while committing offset. Retrying ({})", tryCount);
                             // The timeout is already after 1 minute. There is no need to sleep in between retries
                         } else {
-                            // bubble up other exceptions for main events to handle
                             log.error("Offset commit took too long due to TimeoutException (tried {} times)", tryCount);
-                            throw timeoutException;
+                            throw new OffsetCommitBudgetExceededException(msg(
+                                    "Offset commit gave up after {} attempt(s) and {}, having spent its whole " +
+                                            "offsetCommitTimeout of {}.{} To allow longer, raise offsetCommitTimeout. " +
+                                            "PC shuts down rather than continuing because there is no way yet to hand " +
+                                            "this decision to your application - see " +
+                                            "https://github.com/astubbs/parallel-consumer/issues/317",
+                                    tryCount, elapsed, offsetCommitTimeout, retriesWereReachable(tryCount)),
+                                    timeoutException);
                         }
                     } catch(SaslAuthenticationException authenticationException) {
                         // We should honor the user configured SaslAuthenticationException timeout here.
                         // to allow the program to sustain temporary LDAP failures
-                        Instant now = Instant.now();
-                        Duration elapsed = Duration.between(startedTime, now);
-                        boolean shouldRetry = elapsed.toMillis() <= saslAuthenticationRetryTimeout.toMillis();
+                        if (saslFirstFailure == null) {
+                            saslFirstFailure = Instant.now();
+                        }
+                        Duration elapsed = Duration.between(saslFirstFailure, Instant.now());
+                        // '<' not '<=', matching #poll's identical branch. The two had drifted, and with the
+                        // shipped default of PT0S the difference is the whole behaviour: '<=' makes elapsed==0
+                        // satisfy a zero budget, so "do not retry SASL" retried anyway.
+                        boolean shouldRetry = elapsed.toMillis() < saslAuthenticationRetryTimeout.toMillis();
                         if(shouldRetry) {
                             log.warn("Encountered SaslAuthenticationException while committing offset. Retrying ({})", tryCount);
                             // Since authentication exception may happen immediately, it is good to sleep a few seconds before trying again
@@ -202,10 +237,34 @@ public class ConsumerManager<K, V> {
                             }
                         } else {
                             log.error("Offset commit failed due to SaslAuthenticationException (tried {} times)", tryCount);
-                            // bubble up other exceptions for main events to handle
-                            throw authenticationException;
+                            throw new OffsetCommitBudgetExceededException(msg(
+                                    "Offset commit gave up after {} attempt(s) of SASL authentication failure and {}, " +
+                                            "having spent its whole saslAuthenticationRetryTimeout of {} (retries are " +
+                                            "spaced by saslAuthenticationExceptionRetryBackoff, currently {}). To ride " +
+                                            "out longer authentication outages, raise saslAuthenticationRetryTimeout. " +
+                                            "PC shuts down rather than continuing because there is no way yet to hand " +
+                                            "this decision to your application - see " +
+                                            "https://github.com/astubbs/parallel-consumer/issues/317",
+                                    tryCount, elapsed, saslAuthenticationRetryTimeout, saslAuthenticationRetryBackOff),
+                                    authenticationException);
                         }
                     }
+                }
+                if (!committed) {
+                    // The loop above ends without committing when a retry was due but close had begun -
+                    // the condition's job is to stop RETRYING during shutdown, not to claim the commit
+                    // happened. Returning normally here would do the latter: the caller,
+                    // AbstractOffsetCommitter#retrieveOffsetsAndCommit, calls onOffsetCommitSuccess as
+                    // soon as this returns, marking offsets the broker never received as committed and
+                    // leaving nothing to retry them. That is exactly the "swallow" option
+                    // ConsumerOffsetCommitter#commitDeferringOnRebalance rejects, one layer down and on
+                    // the close path, where the final commit matters most. Fail instead: the close
+                    // sequence logs it and shuts down, which is true rather than quietly wrong.
+                    // TODO(refactor): a user-facing failure wants a PC-named type - see
+                    // docs/inflight/next-exception-hierarchy-cleanup.md
+                    throw new InternalRuntimeException(
+                            "Offset commit abandoned after {} attempt(s) because close began - these offsets were NOT " +
+                                    "committed, so they must not be recorded as successful", null, tryCount);
                 }
                 inProgress = false;
             } catch (WakeupException w) {
@@ -215,6 +274,32 @@ public class ConsumerManager<K, V> {
                 pendingRequests.addAndGet(-1L);
             }
         }
+    }
+
+    /**
+     * The check Kafka would make at construction, made here instead because it cannot be made there.
+     * <p>
+     * Kafka validates the relationship between its own two-level timeouts up front - a producer refuses
+     * a {@code delivery.timeout.ms} below {@code request.timeout.ms + linger.ms} - precisely so nobody
+     * ships a total budget smaller than one attempt. PC's {@code offsetCommitTimeout} is the same kind
+     * of total, layered over the consumer's own per-call {@code default.api.timeout.ms}, but PC cannot
+     * read that: {@link org.apache.kafka.clients.consumer.Consumer} exposes no configuration, and the
+     * one place PC does reach for consumer config it does so by reflection, which its own javadoc calls
+     * brittle.
+     * <p>
+     * So the relationship is reported when it actually bites rather than guessed at start-up. Giving up
+     * after a single attempt means that attempt outlived the whole budget, so no retry was ever
+     * reachable - which is silent today: a user who set {@code offsetCommitTimeout} expecting retries
+     * gets exactly one try and no indication why.
+     */
+    private String retriesWereReachable(long tryCount) {
+        if (tryCount > 1) {
+            return "";
+        }
+        return " Only ONE attempt was made, so no retry was reachable: a single commit attempt outlived the" +
+                " whole budget. That is what happens when offsetCommitTimeout is below the consumer's own" +
+                " default.api.timeout.ms (60s by default), which bounds each individual attempt - raise" +
+                " offsetCommitTimeout above it for retries to be possible at all.";
     }
 
     // Return true if backoff is finished successfully

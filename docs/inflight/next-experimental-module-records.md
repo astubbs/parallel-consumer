@@ -2,6 +2,7 @@
 
 `docs/features/kafka-streams-experimental.yaml` and `kafka-connect-experimental.yaml` were written and
 then removed from the corpus. They are held here until their modules exist.
+<!-- file-refs: N/A - the sentence is about records that were written and then not kept -->
 
 **Why.** Neither `parallel-consumer-streams-spike` nor `parallel-consumer-connect` is a module in
 `pom.xml` or a directory in the tree. Both records carried `status: planned` with

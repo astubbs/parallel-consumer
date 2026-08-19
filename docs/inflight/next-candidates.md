@@ -3,6 +3,14 @@
 Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full verdicts live in
 `src/docs/development/upstream-pr-analysis.adoc`; these are the ready picks:
 
+- **Commit-failure seam ([astubbs#317](https://github.com/astubbs/parallel-consumer/issues/317))** -
+  **highest-demand item on this list, and the only one with a user shipping a patched build to get
+  it.** On confluentinc#833 `ndqvinh2109` reported patching `controlLoop` with a try/catch so the
+  exception would not reach `supervisorLoop` and close PC. That is not a feature request in a
+  backlog - it is someone maintaining a private fork of the library because the decision PC makes
+  for them is the wrong one for their deployment. Kafka's client throws a retriable exception and
+  lets the caller choose; PC only terminates. Research, both sides of the upstream argument, and why
+  fixing astubbs#177 does not close it: `next-commit-failure-seam.md`.
 - **`confluentinc#912` vertx leak** - branch done, needs rebase + PR (`branch-912-vertx-leak.md`). Best
   immediate pick.
 - **Auto-scaling (astubbs#227)** - runtime-discovered per-instance concurrency; candidate killer

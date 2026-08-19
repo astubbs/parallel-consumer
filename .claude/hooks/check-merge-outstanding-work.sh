@@ -85,7 +85,14 @@ while IFS= read -r f; do
     fi
 done < <(find "/tmp/claude-$(id -u)" -maxdepth 4 -path "*/${CLAUDE_CODE_SESSION_ID}/tasks/*.output" 2>/dev/null || true)
 
-live_builds="$(pgrep -af 'MavenWrapperMain' 2>/dev/null | grep -c '\.claude/worktrees' || true)"
+# THE EXECUTABLE MUST ACTUALLY BE java. `pgrep -f MavenWrapperMain` also matches every SHELL whose
+# command line merely mentions it - including this hook's own subshell, and any wait-loop polling
+# for a build. The first draft counted six "live builds" when none were running, which would have
+# denied every merge forever. Requiring argv[0] to be java is what separates a build from a process
+# talking about one; the self-test's stale-task case is the negative control that caught it.
+live_builds="$(pgrep -af 'MavenWrapperMain' 2>/dev/null \
+    | awk '$2 ~ /(^|\/)java$/' \
+    | grep -c '\.claude/worktrees' || true)"
 [ -z "$live_builds" ] && live_builds=0
 
 if [ -n "$live_tasks" ] || [ "$live_builds" -gt 0 ]; then

@@ -409,6 +409,19 @@ but not this.*
 
 ---
 
+### Test infrastructure - `MockConsumerTestBase` assumes one partition and one key
+
+- **Generalise the harness to take a partition count and a key supplier.** `MockConsumerTestBase`
+  hardcodes `new TopicPartition(topic, 0)` and a single record key, which is right for the six
+  scenarios on it today and wrong for any scenario whose subject is ordering or backlog:
+  `CommitResponseTimeoutSymptomTest` reproduces a reported workload of 1000 keys across 4 partitions
+  under `KEY` ordering, so it repeats the manual rebalance dance rather than inheriting it, and its
+  javadoc says why. Two smaller mismatches come with it: options are built once per class in
+  `@BeforeEach`, so a class needing two option sets must split into subclasses, and the teardown
+  asserts a null failure cause, which a scenario that expects PC to die must override. Doing this
+  means re-verifying the six classes already on the base, which is why it is here rather than folded
+  into the PR that noticed it (astubbs#204).
+
 ### Test infrastructure - timing-based waits
 
 - **`ParallelEoSStreamProcessorTest` waits on loop cycles, not events** - four markers:
@@ -542,6 +555,7 @@ A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.
 considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
 such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
 revisiting once the audit has been in use.
+<!-- file-refs: N/A - names a generated file this entry records as NOT built -->
 
 ### Build - jacoco coverage under forked surefire
 

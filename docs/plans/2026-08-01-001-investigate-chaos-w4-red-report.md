@@ -55,7 +55,7 @@ thread, and everything else follows from that:
 4. A rebalance is underway, so Kafka throws `RebalanceInProgressException`. `commitSync()`'s
    exception ladder (`ConsumerManager#commitSync` - the `CommitFailedException` branch is no longer at
    HEAD, see
-   `git log -S'CommitFailedException' -- parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerManager.java`)
+   `git log -S'CommitFailedException' -- parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerManager.java`)
    handles `CommitFailedException`, `TimeoutException` and `SaslAuthenticationException` - **but not
    this one**, its closest sibling.
 5. It escapes into `BrokerPollSystem.controlLoop()`'s `catch (Exception e)`, which logs
@@ -115,7 +115,7 @@ commit response anyway, so the waiter is released immediately instead of hanging
 
 > **Note for whoever touches this next:** the pre-existing `CommitFailedException` handler in
 > `ConsumerManager#commitSync` (no longer at HEAD:
-> `git log -S'CommitFailedException' -- parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerManager.java`)
+> `git log -S'CommitFailedException' -- parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerManager.java`)
 > has the *same* latent flaw - it breaks out of the commit and lets
 > `onOffsetCommitSuccess()` mark the offsets clean, despite its comment saying the poller will "seek
 > commit later". Worth a follow-up; not changed here to keep this fix reviewable.
@@ -193,7 +193,7 @@ chaos suite's timing-based SLOs are the canary. That is a hypothesis with a clea
 Primary, and the one to start with:
 
 ```
-parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/
+parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/
   chaostests/ChaosRevokeUnderWorkCooperativeIT.java   ::revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor
   chaostests/ChaosRevokeUnderWorkIT.java              (eager arm - fails too)
   chaostests/AbstractRevokeUnderWorkScenario.java     (shared driver; logs "=== CHAOS", then asserts)

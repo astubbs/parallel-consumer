@@ -124,6 +124,11 @@ checks it. Cite the path plus the smallest distinctive greppable string - an ide
 config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. Run
 the grep before you commit the citation.
 
+**The path half is now enforced: `bin/check-file-refs.sh` fails a cited path that does not exist**,
+across the whole tree, and the `PR Checklist` workflow runs the same module - so deleting a file
+also fails the PR that leaves citations behind. The anchor half is still yours: a gate can only tell
+you the file is there, never that your quoted string is still in it.
+
 Repairing one that has already gone stale in a dated record is its own procedure, because those
 documents may not be rewritten to match today's code - [`docs/citations.md`](docs/citations.md)
 **owns that procedure**.
@@ -172,6 +177,9 @@ and the traps that voided earlier experiments.
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
 
+- **The titles are already in your context**, injected at session start by
+  `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
+  an excuse, and the check costs one grep against a list you have been handed.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
 - **`--state open` is a collision check, not a prior-art search.** The PR that already solved
