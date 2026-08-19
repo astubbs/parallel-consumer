@@ -36,8 +36,12 @@
 # ..."` - reaches the token scan below as ONE opaque token and is not seen: shlex cannot unwrap a
 # nested shell without executing it, and the squash guard shares the same gap.
 #
-# ALSO CHECKED: a live maven build under .claude/worktrees, which is the other shape of "the thing
-# that would have changed this PR has not finished yet".
+# WHAT IS DELIBERATELY NOT CHECKED: a live maven build. An earlier version scanned the process table
+# for one, and it was dropped rather than scoped. Any build this harness launched is already a
+# background task and shows up in the arm above; a build started OUTSIDE the harness is not this
+# hook's business, and matching the process table by pattern brought its own bug - it counted the
+# hook's own subshell and every wait-loop mentioning the pattern, reporting six live builds when
+# none were running. One signal, honestly scoped, beats two where the second needs a caveat.
 #
 # THE OVERRIDE IS DELIBERATE AND LOUD. Prefix the merge command itself with
 # MERGE_DESPITE_OUTSTANDING_WORK=1 to proceed. From inside a session that prefix arrives as part
@@ -116,27 +120,12 @@ while IFS= read -r f; do
     fi
 done < <(find "/tmp/claude-$(id -u)" -maxdepth 4 -path "*/${CLAUDE_CODE_SESSION_ID}/tasks/*.output" 2>/dev/null || true)
 
-# THE EXECUTABLE MUST ACTUALLY BE java. `pgrep -f MavenWrapperMain` also matches every SHELL whose
-# command line merely mentions it - including this hook's own subshell, and any wait-loop polling
-# for a build. The first draft counted six "live builds" when none were running, which would have
-# denied every merge forever. Requiring argv[0] to be java is what separates a build from a process
-# talking about one; the self-test's stale-task case is the negative control that caught it.
-# The pattern is overridable so the self-test can isolate itself from the machine's REAL process
-# table (a genuine build running during a self-test is not a test failure) and, with a fake pgrep
-# on PATH, pin down the awk/grep pipeline below in both directions.
-BUILD_PATTERN="${MERGE_OUTSTANDING_BUILD_PATTERN:-MavenWrapperMain}"
-live_builds="$(pgrep -af "$BUILD_PATTERN" 2>/dev/null \
-    | awk '$2 ~ /(^|\/)java$/' \
-    | grep -c '\.claude/worktrees' || true)"
-[ -z "$live_builds" ] && live_builds=0
-
-if [ -n "$live_tasks" ] || [ "$live_builds" -gt 0 ]; then
+if [ -n "$live_tasks" ]; then
     # The repo's hook contract is a PreToolUse `permissionDecision: deny` payload on STDOUT, the
     # same shape check-squash-subject.sh emits - not a bare exit 2. The reason string is what the
     # model actually reads, so it names the work found and the one legitimate way past.
     REASON="Background work from this session is still in flight, so this PR may be missing something that belongs in it."
     [ -n "$live_tasks" ] && REASON="$REASON Tasks that wrote output in the last ${WINDOW_SECONDS}s: $(printf '%s' "$live_tasks" | tr -d '\n' | sed 's/^  - //; s/  - /, /g')."
-    [ "$live_builds" -gt 0 ] && REASON="$REASON Live maven build(s) under .claude/worktrees: ${live_builds}."
     REASON="$REASON Work that belongs in this PR cannot be added after the merge - it becomes a second PR, and whatever the description or the inflight notes claimed about it goes stale on master. Establish what each one is doing first. NOTE a stalled agent writes nothing and is not detected here, so this is not proof of quiescence - run ListAgents if the answer matters. If the outstanding work genuinely does not belong in this PR, re-run the merge command prefixed with MERGE_DESPITE_OUTSTANDING_WORK=1."
 
     REASON="$REASON" python3 -c '
