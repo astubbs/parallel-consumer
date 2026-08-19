@@ -83,7 +83,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         this.module = module;
         this.options = module.options();
         this.dynamicLoadFactor = dynamicExtraLoadFactor;
-        this.sm = new ShardManager<>(module, this);
+        this.sm = module.shardManager(this);
         this.pm = new PartitionStateManager<>(module, sm);
         this.pcMetrics = module.pcMetrics();
         initMetrics();
