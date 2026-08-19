@@ -51,10 +51,12 @@ stages:
     Maintained by the PRs that do the work: a PR that advances a track updates its entry's stage in
     the same change, from the PR that introduced this field onward. Stage does not wait for release
     review; a stale stage is a defect in the PR that made it stale. stage_delivery is set whenever
-    the stage's artifact rides an open PR, and mirrors that PR's own state - draft (a GitHub draft
-    PR) or pending-merge (open and marked ready) - so there is exactly one source of truth for it.
-    Entries whose artifact has landed, or spans many PRs, carry no stage_delivery. Drafted does not
-    mean doomed: a draft PR is simply not yet pending merge.
+    the stage's artifact rides an open PR, and records a judgment no command can answer: draft (still
+    being worked) or pending-merge (believed ready to land). GitHub's own draft flag is not the
+    source of truth - it has not been used consistently here - though flipping PRs recorded as draft
+    to actual GitHub drafts is the direction of travel. Entries whose artifact has landed, or spans
+    many PRs, carry no stage_delivery. Drafted does not mean doomed: a draft PR is simply not yet
+    pending merge.
   values:
     idea: Named and argued for; nothing more structured than notes exists yet.
     ideated: A ranked, verified ideation document exists; direction not yet chosen.
@@ -94,7 +96,7 @@ entries:
     horizon: "0.6.0.0"
     blocks_1_0: false
     stage: limited-poc
-    stage_delivery: pending-merge
+    stage_delivery: draft
     stage_detail: >-
       The spike on astubbs#271 measured 8x median, but only for one partition, one task, one
       instance, at-least-once, caching off - the general claim is unproven; windowing, joins and
@@ -111,7 +113,7 @@ entries:
     horizon: "0.6.0.0"
     blocks_1_0: false
     stage: limited-poc
-    stage_delivery: pending-merge
+    stage_delivery: draft
     stage_detail: >-
       On astubbs#269 the patched sink task shadows the stock one and a failing lane no longer
       stalls the others - a slice; the live delivery path is unfinished, so end-to-end sink
@@ -129,7 +131,7 @@ entries:
     previewed_in: "0.6.0.0"
     blocks_1_0: true
     stage: limited-poc
-    stage_delivery: pending-merge
+    stage_delivery: draft
     stage_detail: >-
       Phase one of astubbs#268 works and is tested - live page, offset ribbon - but it is a
       brand-new surface nobody has operated against, blocked on the listener-registration fix
@@ -210,7 +212,7 @@ entries:
     horizon: next-0x
     blocks_1_0: false
     stage: poc
-    stage_delivery: pending-merge
+    stage_delivery: draft
     stage_detail: >-
       A working proof on astubbs#226, review-hardened and carrying two staged breaking changes;
       not yet accepted as the shipping surface.
