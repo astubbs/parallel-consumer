@@ -150,6 +150,21 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         });
     }
 
+    /**
+     * Metrics de-registration for revoked partitions - and it must NEVER throw.
+     * <p>
+     * This runs inside {@code onPartitionsRevoked}, which runs on the broker-poll thread inside
+     * {@code poll()}. The meter registry is usually the USER'S, so this is third-party code on the
+     * rebalance path: an exception here escapes the callback and kills the poll thread, which is the
+     * only producer of commit responses, so every later commit blocks until it times out. That is the
+     * confluentinc#857 family's worst failure shape, reached from a reporting concern.
+     * <p>
+     * No try/catch here on purpose: {@link PCMetrics#removeMeter} carries the never-throws contract,
+     * guarded once at the source because this is one of eleven teardown call sites and a guard at each
+     * is a guard someone will miss. A second one here could never fire, and defensive code that cannot
+     * fire is worse than none - it implies the contract is doubted. Losing a meter is an acceptable
+     * outcome; losing the poll thread is not.
+     */
     private void deregisterPartitionCounters(Collection<TopicPartition> removedPartitions) {
         removedPartitions.forEach(topicPartition -> {
             Counter counter = slowWorkCounters.remove(topicPartition);

@@ -833,8 +833,30 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.error("exception during close", e);
             throw e;
         } finally {
-            deregisterMeters();
-            pcMetrics.close();
+            // Each step guarded separately, and NEITHER may escape. Both call into the MeterRegistry,
+            // which is usually the USER'S - so this is third-party code running inside PC's close.
+            // An exception thrown from a finally REPLACES the one already in flight, so an unguarded
+            // failure here would destroy the real shutdown error, skip the remaining teardown, and
+            // leave state short of CLOSED - stranding every caller that polls isClosedOrFailed(),
+            // which never becomes true. A metrics problem must not be able to do any of that: it is
+            // reporting, and it cannot be allowed to break shutting down.
+            try {
+                deregisterMeters();
+            } catch (Exception e) {
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Failed to de-register user-function meters during close - the metrics " +
+                                "registry is the user's, so meters may be left behind in it. Shutdown " +
+                                "continues; this cannot fail the close. Cause: {}",
+                                ThrowableUtils.describeWithRootCause(e), e));
+            }
+            try {
+                pcMetrics.close();
+            } catch (Exception e) {
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Failed to close the metrics subsystem during close - meters may be " +
+                                "left behind in the registry. Shutdown continues; this cannot fail the " +
+                                "close. Cause: {}", ThrowableUtils.describeWithRootCause(e), e));
+            }
             log.debug("Close complete.");
             this.state = CLOSED;
             if (this.getFailureCause() != null) {
