@@ -277,6 +277,90 @@ assert "a 150 KB merge-prep prompt is still injected" YES "$(injected "$big_prom
 
 assert "the preamble points at the doc rather than restating it" pointer_only "$got"
 
+# ---------------------------------------------------------------------------------------------
+# inject-recorded-knowledge.sh
+#
+# It runs at session start with no input to parse, so the risks are different from the other three:
+# it must never break a session, and it must actually name the documents. A reminder that silently
+# emits nothing is worse than none - it looks installed.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- inject-recorded-knowledge.sh ---"
+
+knowledge_out=$(CLAUDE_PROJECT_DIR="$REPO_ROOT" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+knowledge_rc=$?
+
+assert "exits 0" 0 "$knowledge_rc"
+
+# The point of the hook: a path you can grep for, not a vague nudge to go and look.
+case "$knowledge_out" in
+    *"docs/solutions/"*) got=names_paths ;;
+    *)                   got=no_paths ;;
+esac
+assert "names actual document paths" names_paths "$got"
+
+# One line per document, or it is not an index. Compare against the real corpus rather than a
+# hardcoded number, so adding a solution does not fail this test.
+want_count=$(find "$REPO_ROOT/docs/solutions" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+got_count=$(printf '%s\n' "$knowledge_out" | grep -c 'docs/solutions/.*\.md')
+assert "lists every solution document" "$want_count" "$got_count"
+
+# Titles, not slugs: the filename is already in the path, and the title is what makes an agent
+# recognise the document as relevant to the thing in front of it.
+case "$knowledge_out" in
+    *"duplication scanners do not look where agents actually duplicate"*) got=titles ;;
+    *) got=slugs_only ;;
+esac
+assert "uses frontmatter titles, not just filenames" titles "$got"
+
+# A YAML-quoted title must render WITHOUT its quotes. The title-check above happens to use an
+# unquoted one, so it passed while quoted titles rendered with literal quote marks - found in review
+# on astubbs/parallel-consumer#320. Asserted against whichever document actually needs quoting, so
+# the case survives that document being renamed.
+quoted=$(grep -rl '^title:[[:space:]]*"' "$REPO_ROOT/docs/solutions" 2>/dev/null | head -1)
+if [ -n "$quoted" ]; then
+    bare=$(sed -n 's/^title:[[:space:]]*"//p' "$quoted" | head -1 | sed 's/"$//')
+    case "$knowledge_out" in
+        *"\"${bare}\""*) got=quotes_leaked ;;
+        *"$bare"*)         got=quotes_stripped ;;
+        *)                 got=title_missing ;;
+    esac
+    assert "strips YAML quoting from a quoted title" quotes_stripped "$got"
+fi
+
+# A marked note must be lifted WITH its reason - the reason is what tells an agent when the note
+# applies, and a filename cannot. Asserted against the real corpus so the case tracks the convention
+# rather than one file's wording.
+case "$knowledge_out" in
+    *"Read these first"*) got=has_priority_block ;;
+    *)                    got=no_priority_block ;;
+esac
+assert "lifts high-priority notes into their own block" has_priority_block "$got"
+
+marked=$(grep -rl 'inflight-priority:[[:space:]]*high' "$REPO_ROOT/docs/inflight" 2>/dev/null | head -1)
+if [ -n "$marked" ]; then
+    marked_why=$(sed -n 's/.*inflight-priority:[[:space:]]*high[[:space:]]*-[[:space:]]*//p' "$marked" \
+                   | head -1 | sed 's/[[:space:]]*-->.*//')
+    case "$knowledge_out" in
+        *"$marked_why"*) got=reason_shown ;;
+        *)               got=reason_missing ;;
+    esac
+    assert "shows a marked note's reason, not just its path" reason_shown "$got"
+fi
+
+# A session must survive a repo that does not look like this one. Two shapes: no docs at all, and
+# a docs/ with no solutions - both are "say nothing, exit 0", never a stack trace into the session.
+empty_dir=$(mktemp -d)
+out_empty=$(CLAUDE_PROJECT_DIR="$empty_dir" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+assert "a tree with no docs/ exits 0" 0 "$?"
+assert "a tree with no docs/ emits nothing" "" "$out_empty"
+mkdir -p "$empty_dir/docs"
+out_nosol=$(CLAUDE_PROJECT_DIR="$empty_dir" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+assert "a docs/ with no solutions exits 0" 0 "$?"
+assert "a docs/ with no solutions emits nothing" "" "$out_nosol"
+rm -rf "$empty_dir"
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"

@@ -177,6 +177,9 @@ and the traps that voided earlier experiments.
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
 
+- **The titles are already in your context**, injected at session start by
+  `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
+  an excuse, and the check costs one grep against a list you have been handed.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
 - **`--state open` is a collision check, not a prior-art search.** The PR that already solved
