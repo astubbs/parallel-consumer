@@ -4,7 +4,7 @@
 // qualifying them would stop testing what the parser actually sees.
 const assert = require("assert");
 const {
-  ROADMAP_PATH, findOptOut, entriesClaimingPr, touchesRoadmap, formatFailure,
+  ROADMAP_PATH, findOptOut, entriesClaimingPr, entryStageSnapshot, stageMoved, formatFailure,
 } = require("./roadmap-stage-gate.js");
 
 let run = 0;
@@ -21,6 +21,9 @@ const ROADMAP = [
   "    title: A web view showing what a running instance is actually doing",
   "    stage: limited-poc",
   "    stage_delivery: draft",
+  "    stage_detail: >-",
+  "      Phase one works and is tested - live page, offset ribbon - but it is a",
+  "      brand-new surface nobody has operated against.",
   "    tracking: astubbs#215",
   "    pull_request: astubbs#268",
   "",
@@ -52,6 +55,11 @@ check("the number must match exactly - #26 is not #268", () => {
   assert.deepStrictEqual(entriesClaimingPr(ROADMAP, 26), []);
 });
 
+check("only the fork's own qualified form claims - confluentinc#268 is another repo's PR", () => {
+  const upstream = ROADMAP.replace("pull_request: astubbs#268", "pull_request: confluentinc#268");
+  assert.deepStrictEqual(entriesClaimingPr(upstream, 268), []);
+});
+
 check("string and numeric PR numbers agree", () => {
   assert.strictEqual(entriesClaimingPr(ROADMAP, "293").length, 1);
 });
@@ -61,11 +69,44 @@ check("empty or missing roadmap text claims nothing", () => {
   assert.deepStrictEqual(entriesClaimingPr(null, 268), []);
 });
 
-check("touchesRoadmap matches only the exact path", () => {
-  assert.ok(touchesRoadmap([{ filename: ROADMAP_PATH }]));
-  assert.ok(!touchesRoadmap([{ filename: "docs/data/schema.yaml" }]));
-  assert.ok(!touchesRoadmap([]));
-  assert.ok(!touchesRoadmap(null));
+check("the stage snapshot captures stage fields with their folded continuations, nothing else", () => {
+  const snap = entryStageSnapshot(ROADMAP, "web-gui");
+  assert.ok(snap.includes("stage: limited-poc"));
+  assert.ok(snap.includes("stage_delivery: draft"));
+  assert.ok(snap.includes("brand-new surface"));
+  assert.ok(!snap.includes("tracking"));
+  assert.ok(!snap.includes("title"));
+});
+
+check("a missing entry snapshots to null, not empty", () => {
+  assert.strictEqual(entryStageSnapshot(ROADMAP, "no-such-entry"), null);
+});
+
+check("an untouched file means the entry's stage did not move", () => {
+  assert.strictEqual(stageMoved(ROADMAP, ROADMAP, "web-gui"), false);
+});
+
+check("editing a DIFFERENT entry does not count as moving this one - the coarse-gate hole", () => {
+  const otherEdit = ROADMAP.replace("stage: ideated", "stage: planned"); // distributed-throttling
+  assert.strictEqual(stageMoved(ROADMAP, otherEdit, "web-gui"), false);
+  assert.strictEqual(stageMoved(ROADMAP, otherEdit, "distributed-throttling"), true);
+});
+
+check("a stage value change moves the entry", () => {
+  const bumped = ROADMAP.replace("stage: limited-poc\n    stage_delivery: draft",
+    "stage: poc\n    stage_delivery: pending-merge");
+  assert.strictEqual(stageMoved(ROADMAP, bumped, "web-gui"), true);
+});
+
+check("a stage_detail rewording alone also counts as movement", () => {
+  const reworded = ROADMAP.replace("brand-new surface nobody has operated against.",
+    "operated in production by one team since 0.6.0.0.");
+  assert.strictEqual(stageMoved(ROADMAP, reworded, "web-gui"), true);
+});
+
+check("an entry removed or renamed at head counts as moved - the PR answers for it", () => {
+  const removed = ROADMAP.replace("  - id: web-gui", "  - id: web-gui-renamed");
+  assert.strictEqual(stageMoved(ROADMAP, removed, "web-gui"), true);
 });
 
 check("opt-out needs a reason - a bare N/A is a bypass, not a judgment", () => {
@@ -84,6 +125,7 @@ check("the failure message names the entry, the file, and both ways out", () => 
   assert.ok(msg.includes(ROADMAP_PATH));
   assert.ok(msg.includes("roadmap-stage: N/A"));
   assert.ok(msg.includes("stage_delivery"));
+  assert.ok(msg.includes("unchanged"));
 });
 
 check("the gate finds today's real carriers in the real roadmap", () => {
@@ -94,6 +136,8 @@ check("the gate finds today's real carriers in the real roadmap", () => {
   const real = fs.readFileSync(path.join(__dirname, "../../", ROADMAP_PATH), "utf8");
   const claims = entriesClaimingPr(real, 293);
   assert.deepStrictEqual(claims, [{ id: "language-proxy-sidecar", ref: "astubbs#293" }]);
+  const snap = entryStageSnapshot(real, "language-proxy-sidecar");
+  assert.ok(snap && snap.includes("stage:"));
 });
 
 console.log(`roadmap-stage-gate: ${run} checks passed`);
