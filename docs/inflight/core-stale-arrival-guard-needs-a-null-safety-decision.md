@@ -18,6 +18,18 @@ old-epoch containers still enter shards whenever a rebalance lands after the onc
 `getWorkIfAvailable` evicts them inline - but rejecting them at the insert would prevent the churn
 rather than clean it up.
 
+## Why this reads as astubbs#31's, and what astubbs#31 actually settled
+
+**It surfaced during astubbs/parallel-consumer#31's review and was deliberately deferred out of it** -
+which is why anyone remembering it reaches for that number. astubbs#31 is merged, and it settled the
+**resident** half only: `addWorkContainer` now replaces a stale entry already sitting at the offset.
+Verified against master, where `addWorkContainer` tests `isWorkContainerStale(existing)` and nothing
+tests the arrival. The **arrival** half is this note, and it is untouched.
+
+It is also the "why not just add a null check - no partition means the work is stale, so drop it?"
+question, asked in review and never answered. The answer is not "no"; it is the decision below, which
+that question runs straight into. This note is that conversation, written down.
+
 ## The two measured reasons it is not a one-liner
 
 1. **It NPEs three existing tests.** The guard runs on *every* add, where the resident check runs
