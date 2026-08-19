@@ -1,6 +1,7 @@
 # Web GUI / demo: retry-queue visibility and making offset encoding's advantage obvious
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: candidate -->
+
 
 > Extracted from `origin/perf/192-offset-encoding-density` @2a31b0a74, `docs/inflight/web-gui-observability-ideas.md`.
 

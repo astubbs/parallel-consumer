@@ -1,6 +1,7 @@
 # What belongs in the required Performance Tests lane
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: blind-spot -->
+
 
 `bin/performance-test.sh` is the "Performance Tests" leg of `maven.yml` - **a required check on every PR**,
 `ubuntu-latest`, `timeout-minutes: 60`, and no retry (`AGENTS.md`: a flake fails the build, deliberately).

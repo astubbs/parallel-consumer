@@ -1,6 +1,7 @@
 # Package rename `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`
 
-<!-- inflight-priority: high - binds ANY agent merging ANY branch until no open branch predates the rename - a clean merge without it is silent corruption -->
+<!-- inflight-class: coordination -->
+
 
 The package-rename project's entry. Branches working the rename keep their own account of it at this
 same path, so when they converge git raises a conflict and whoever resolves it reads both and combines

@@ -1,6 +1,7 @@
 # Skipping CI on docs-only PRs - investigated, parked
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: decided-no -->
+
 
 **Recommendation: do not do it.** Investigated 2026-08-16/17 and answered, with nothing changed.
 Parked here rather than dropped so the next person asking "why does a markdown-only PR run the whole

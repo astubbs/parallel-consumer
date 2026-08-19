@@ -1,6 +1,7 @@
 # Dependency upgrades deliberately held back
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: deps-debt -->
+
 
 Everything is at its newest **non-major** version (`versions-maven-plugin -DallowMajorUpdates=false`
 plus `bin/deps-version-rules.xml`, which also filters pre-releases and Confluent `-ce`/`-ccs` Kafka

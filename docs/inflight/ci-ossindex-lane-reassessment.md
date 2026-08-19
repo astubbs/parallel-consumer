@@ -1,6 +1,7 @@
 # OSS Index lane - does it still earn its keep?
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: deps-debt -->
+
 
 The `deps: whole-tree CVE scan` lane (added by astubbs/parallel-consumer#279) was justified on Dependabot
 missing **transitive** components. That premise has partly expired, so the lane needs one deliberate

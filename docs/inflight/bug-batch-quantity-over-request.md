@@ -1,6 +1,7 @@
 # Batching requests a full extra in-flight target of work
 
-<!-- inflight-priority: medium -->
+<!-- inflight-class: throughput -->
+
 
 Tracked as astubbs#311. Gated on `isUsingBatching()`, so **a default configuration (`batchSize = 1`)
 is unaffected** - but every configuration that actually uses batching is affected, continuously.

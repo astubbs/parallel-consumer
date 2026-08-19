@@ -1,5 +1,6 @@
 # Flakes CI was hiding, none of them tracked when found
-<!-- inflight-priority: high - live flakes; read this before diagnosing any red test, and add a sighting when you meet one -->
+
+<!-- inflight-class: misdirection -->
 
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
