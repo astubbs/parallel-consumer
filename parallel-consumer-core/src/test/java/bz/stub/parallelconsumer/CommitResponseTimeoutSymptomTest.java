@@ -292,7 +292,16 @@ class CommitResponseTimeoutSymptomTest {
 
         var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
-            public synchronized void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
+            // DELIBERATELY NOT synchronized, unlike the overrides in the other two scenarios. They throw
+            // immediately; this one sleeps, and MockConsumer guards poll, addRecord, commitSync and close
+            // with one monitor - so sleeping while holding it parks PC's own polling and the teardown
+            // close, not just this commit. What the test needs is the POLL THREAD blocked inside
+            // commitSync, which happens either way; holding the monitor only adds collateral. Measured:
+            // with `synchronized`, green locally in 8.6s and dead on CI at the 60s await
+            // (run 32216929470). MockConsumerTestBase#addRecordsInBackground documents this hazard -
+            // inheriting that warning is part of what extending it would have bought, per the class
+            // javadoc above.
+            public void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
                 // the poll thread stays alive and healthy - it is simply in here, not answering
                 sleepOrFail(commitBlocksFor, "Interrupted while blocking the commit");
                 super.commitSync(offsets);
