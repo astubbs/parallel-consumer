@@ -219,6 +219,7 @@ entries:
     why_now: Orchestrators need a liveness answer better than "the process is up".
     done_when: A supported health surface exists on the public interface.
     tracking: astubbs#126
+    pull_request: astubbs#226
 
   - id: virtual-threads
     title: Support virtual threads
@@ -260,6 +261,7 @@ entries:
     why_now: Retrying forever is the only built-in answer today, and it is the wrong one for a poison record.
     done_when: A record that exhausts its retries can be diverted rather than blocking or being dropped silently.
     tracking: astubbs#149
+    pull_request: astubbs#313
 
   - id: docs-site
     title: A documentation site, rendered from the feature data rather than one enormous README
@@ -276,6 +278,7 @@ entries:
       documentation and the data is a second corpus rather than a source.
     done_when: A versioned documentation site renders the feature records, and the README defers to it.
     tracking: astubbs#208
+    pull_request: astubbs#316
     evidence: ../features/README.md
 
   - id: api-settlement
