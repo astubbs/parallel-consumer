@@ -549,6 +549,20 @@ such a gate would fail the PR Checklist job on any open PR touching a test annot
 revisiting once the audit has been in use.
 <!-- file-refs: N/A - names a generated file this entry records as NOT built -->
 
+### Test infrastructure - a logback config nothing loads
+
+`parallel-consumer-examples/parallel-consumer-example-core/src/test/resources/logback-temp-test.xml`
+is dead. Logback loads `logback-test.xml` then `logback.xml`; nothing sets
+`logback.configurationFile`, and a repo-wide grep finds no reference to the file except the comment
+in `bin/check-test-log-config.sh` that records it as dead. So its settings - including
+`bz.stub.parallelconsumer` at `debug` - have never taken effect, and anyone editing it to change that
+module's test output is editing nothing.
+
+Either delete it, or rename it to `logback-test.xml` if its contents were the intent - which is a
+behaviour change for that module's test output and should be decided, not defaulted. Found while
+scoping `bin/check-test-log-config.sh`, which deliberately excludes the examples modules; noted here
+rather than fixed there so the gate's scope stayed one decision.
+
 ### Build - jacoco coverage under forked surefire
 
 - `prepare-agent` writes ONE `jacoco.exec` in append mode, but the unit suite now runs
