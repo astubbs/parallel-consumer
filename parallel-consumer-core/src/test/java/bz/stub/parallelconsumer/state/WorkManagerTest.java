@@ -93,7 +93,6 @@ public class WorkManagerTest {
             successfulWork.add(work);
         });
 
-        module.setWorkManager(wm);
     }
 
     private void assignPartition(final int partition) {

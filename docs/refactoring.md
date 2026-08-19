@@ -438,6 +438,41 @@ but not this.*
 - `AVERAGE_USER_PROCESSING_TIME` / `AVERAGE_WAITING_TIME`: two unimplemented metric definitions -
   implement or drop.
 
+### internal/PCModule.java - setter injection can outrun the providers
+
+- **Make the remaining `@Setter` impossible to misuse, or remove the need for it.** `PCModule` is a
+  hand-rolled DI container ("modled on how Dagger works", zero-dependency policy): dependencies come
+  from lazy memoising provider methods. Setter injection sits alongside that and does not compose
+  with it - a provider caches on first call, and collaborators capture what they were given, so
+  `producerManager` and `brokerPollSystem` are both constructed with `workManager()` passed in. A
+  setter called *after* anything has resolved the dependency swaps the field and leaves those
+  collaborators holding the previous instance; called before, it is redundant with the provider. The
+  window in which it is both safe and useful is empty.
+- **The remaining `@Setter`, on `parallelEoSStreamProcessor`, is legitimate only because of the shape
+  around it - and that shape is the thing to change.** It is described as breaking a construction
+  cycle: the processor's constructor needs the module, the module needs the processor, so
+  `AbstractParallelEoSStreamProcessor` calls `module.setParallelEoSStreamProcessor(this)`. But it is
+  not a cycle between two peers. **In production the field is write-only.** The one production
+  consumer is `BrokerPollSystem`, and `brokerPoller` takes the processor *as a parameter* - the
+  processor passes `this` at the call site rather than the module resolving it. Nothing in main reads
+  the field back. Its only reader is the `pc()` provider, whose only caller is `ProducerManagerTest`,
+  which overrides `pc()` to substitute a spy.
+- So the registration exists to keep a lazy singleton consistent for a provider that only a test
+  calls. **Prefer deleting `pc()` and the field over hardening the setter**: the processor already
+  hands itself to the collaborator that needs it, and the test seam can be a constructed-and-passed
+  processor instead of an overridden provider. That removes the cycle rather than expressing it more
+  safely - no `Supplier`/`Lazy` indirection (Dagger's usual answer) and no extracted role interface
+  are needed, because no production dependency remains to invert. Both members are `protected` on an
+  `internal` class, so this is not published API. The one behaviour to preserve deliberately or drop
+  deliberately: today a `pc()` call after an externally-built processor returns that instance rather
+  than constructing a second one, which is the only thing the setter buys.
+- Related: `PCModuleTestEnv` shadows the parent's private `workManager` field with one of its own and
+  overrides the provider. Overriding the provider is the right way to substitute in a Dagger-shaped
+  module; the shadowed field is what made the two mechanisms hard to tell apart in the first place.
+- Background: astubbs#57 removed `@Setter` from `workManager`. It had no production callers - its
+  only two call sites were test lines that provably did nothing, each retrieving the instance from
+  the module and setting the identical reference straight back.
+
 ### metrics/PCMetrics.java
 - **`metersLock` is held across calls into the user's `MeterRegistry`.** `removeMeter`, `close` and
   `removeMetersByPrefixAndCommonTags` all call `remove`/`getMeters` with the lock held, so a

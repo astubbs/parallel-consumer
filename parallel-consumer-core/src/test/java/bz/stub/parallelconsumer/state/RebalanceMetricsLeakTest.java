@@ -52,7 +52,6 @@ class RebalanceMetricsLeakTest {
         var options = ParallelConsumerOptions.<String, String>builder().consumer(mockConsumer).build();
         var module = new PCModuleTestEnv(options);
         var wm = module.workManager();
-        module.setWorkManager(wm);
 
         var tp = UniLists.of(new TopicPartition(INPUT_TOPIC, 0));
 
