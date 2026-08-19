@@ -50,7 +50,10 @@ stages:
     spent. stage_detail is one honest line on how far that artifact goes - for a poc, its boundaries.
     Maintained by the PRs that do the work: a PR that advances a track updates its entry's stage in
     the same change, from the PR that introduced this field onward. Stage does not wait for release
-    review; a stale stage is a defect in the PR that made it stale.
+    review; a stale stage is a defect in the PR that made it stale. The optional stage_delivery says
+    how the artifact is arriving - draft (an open PR still being worked) or pending-merge (its
+    author considers it ready to land). Drafted does not mean doomed: a draft PR is simply not yet
+    pending merge.
   values:
     idea: Named and argued for; nothing more structured than notes exists yet.
     ideated: A ranked, verified ideation document exists; direction not yet chosen.
@@ -59,9 +62,10 @@ stages:
     limited-poc: A slice runs, but the central claim is not proven end-to-end; stage_detail says exactly what is missing.
     poc: A working proof answers the central question within stated boundaries; it is not the shipping implementation.
     implemented: >-
-      The implementation intended to ship exists and works on an open PR, subject to review. A draft
-      that will be replaced is not implemented - it is at most a poc, and if it is not even the
-      direction that will stay, it does not advance the stage at all.
+      The implementation intended to ship exists, works, and has been proven in use - not merely
+      built. A brand-new system nobody has run in anger is a poc however large it is, and an
+      implementation that is not the direction that will stay - a superseded upstream draft, an
+      exploration - does not advance the stage at all.
 
 entries:
   - id: known-defects-cleared
@@ -118,10 +122,12 @@ entries:
     horizon: "1.0"
     previewed_in: "0.6.0.0"
     blocks_1_0: true
-    stage: implemented
+    stage: limited-poc
+    stage_delivery: draft
     stage_detail: >-
-      Phase one of astubbs#268 works and is tested - live page, offset ribbon - blocked on the
-      listener-registration fix (astubbs#267); preview-grade, not the finished surface.
+      Phase one of astubbs#268 works and is tested - live page, offset ribbon - but it is a
+      brand-new surface nobody has operated against, blocked on the listener-registration fix
+      (astubbs#267); preview-grade, not the finished view.
     why_now: >-
       Moving scheduling and offset state into the JVM leaves ordinary broker tooling blind to most of
       what matters. An operator has metrics today and no picture.
@@ -198,6 +204,7 @@ entries:
     horizon: next-0x
     blocks_1_0: false
     stage: poc
+    stage_delivery: draft
     stage_detail: >-
       A working draft on astubbs#226, review-hardened and carrying two staged breaking changes;
       not yet accepted as the shipping surface.
@@ -250,10 +257,11 @@ entries:
     serves: [usability]
     horizon: next-0x
     blocks_1_0: false
-    stage: planned
+    stage: limited-poc
+    stage_delivery: draft
     stage_detail: >-
-      The site design is drafted on astubbs#316 - explicitly design only, no site is built there;
-      astubbs#302 holds the intent.
+      Actively being implemented in early draft against astubbs#302; the site design is drafted on
+      astubbs#316.
     why_now: >-
       The feature data exists and nothing renders it. Until something does, the README stays the only
       documentation and the data is a second corpus rather than a source.
@@ -285,11 +293,12 @@ entries:
     serves: [flexibility, usability]
     horizon: next-0x
     blocks_1_0: false
-    stage: implemented
+    stage: limited-poc
+    stage_delivery: pending-merge
     stage_detail: >-
       astubbs#293 carries the module, the frozen v1 protocol and eleven clients under one
-      conformance suite; every client negotiates only the dispatch capability so far - broad,
-      deliberately shallow.
+      conformance suite - broad, but an experimental brand-new system nobody has used in anger,
+      and every client negotiates only the dispatch capability so far.
     why_now: >-
       The engine's guarantees are locked to the JVM today. A sidecar speaking a frozen protocol makes
       them a capability any language can adopt, and the conformance suite makes every client answer to

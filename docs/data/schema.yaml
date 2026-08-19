@@ -59,6 +59,7 @@ kinds:
       - blocked_by
       - evidence
       - caveat
+      - stage_delivery
     entry_required:
       - id
       - title
