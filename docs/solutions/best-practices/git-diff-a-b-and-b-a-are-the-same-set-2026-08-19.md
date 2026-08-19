@@ -51,8 +51,15 @@ reviewer wants to hear. Nothing distinguished it from a true positive except kno
 Pin the base explicitly when it matters. Recomputing against `origin/master` after a fetch silently
 changes the question being asked.
 
-## The cheap check
+## The cheap check, and who owns it
 
 Before trusting any set operation over two diffs, ask what a **negative** result would look like. If
-"no overlap" is not reachable from the way the sets were built - here it was not, because they were
+"no overlap" was not reachable from the way the sets were built - here it was not, because they were
 the same set - the operation is not testing what it appears to.
+
+That principle is not this document's:
+[`negative-results-need-an-instrument-that-could-have-said-yes.md`](../workflow-issues/negative-results-need-an-instrument-that-could-have-said-yes.md)
+**owns it**, and lists "reviewing a diff to judge a branch's scope" among the cases it covers. What
+is recorded here is the specific instrument - the two-dot/three-dot mechanics above - because
+knowing the principle does not tell you that `git diff A..B` quietly means something other than it
+does in `git log`.

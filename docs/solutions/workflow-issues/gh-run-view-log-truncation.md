@@ -51,6 +51,26 @@ log **stream** itself server-side, so neither `--log` nor `--log-failed` contain
 test-report artifact (see that entry's `**Retrieval note`). Two different truncation mechanisms,
 same failure mode: a log that looks complete but isn't, feeding a diagnosis that inherits the gap.
 
+**Third instance, 2026-08-19, on astubbs#57** - and the shape did not vary. Diagnosing another
+`Chaos Pain Suite` failure ([job 95906973285](https://github.com/astubbs/parallel-consumer/actions/runs/32198410456/job/95906973285)),
+`gh run view --job --log` returned nothing usable, and so did two further attempts. Only then was
+this file opened; the archive endpoint produced the full 12,015-line log immediately and the
+diagnosis followed in minutes. The seed, `7964289159858266180`, is recorded as the eleventh sighting
+in `docs/inflight/bug-857-family.md`.
+
+**What all three share is timing, not knowledge.** Each person had this document available. Each
+reached for the obvious command, then a variant, then a third, and searched `docs/solutions/` only
+after running out of ideas - because the first command feels too simple to have a known trap. That
+is the wrong instinct for this class specifically: **a tool returning *less* than expected - empty
+output, a suspiciously short log, a clean result where a failure was expected - is a stronger signal
+of a known trap than a loud error is**, because a loud error tends to explain itself. Silence is the
+signature of a swallowed limit.
+
+`.claude/hooks/inject-recorded-knowledge.sh` (SessionStart) now puts this document's title into
+every session, so "never learned it existed" is no longer the gap. What remains is matching a title
+already in context to the symptom in front of you - which for this one is easy, since the title
+names the command.
+
 ## Guidance
 
 **Before diagnosing anything from a fetched CI log, verify it is complete - then, if it might not
