@@ -1061,6 +1061,12 @@ Gauge `pc.shards.size{subsystem=shardmanager}`
 
 Number of records queued for processing across all shards
 
+**Shards Max Size**
+
+Gauge `pc.shards.max.size{subsystem=shardmanager}`
+
+Maximum number of records queued in any single shard (the most-loaded shard) - useful for spotting hot-key shards under KEY ordering
+
 ==== Work Manager
 
 **Inflight Records**

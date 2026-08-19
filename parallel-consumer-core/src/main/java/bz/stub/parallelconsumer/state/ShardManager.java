@@ -84,6 +84,7 @@ public class ShardManager<K, V> {
     private Optional<ShardKey> iterationResumePoint = Optional.empty();
 
     private Gauge shardsSizeGauge;
+    private Gauge shardsMaxSizeGauge;
     private Gauge numberOfShardsGauge;
 
     private final PCMetrics pcMetrics;
@@ -324,7 +325,13 @@ public class ShardManager<K, V> {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
                 this, shardManager -> shardManager.processingShards.values().stream()
                         .mapToInt(processingShard -> processingShard.getEntries().size()).sum());
+        // TODO(refactor): re-walks every shard queue, duplicating the SHARDS_SIZE traversal above
+        // (getEntries().size() is O(n)); derive both gauges from one scan. See docs/refactoring.md.
+        shardsMaxSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_MAX_SIZE,
+                this, shardManager -> shardManager.processingShards.values().stream()
+                        .mapToInt(processingShard -> processingShard.getEntries().size()).max().orElse(0));
+
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
-                this, shardManager -> shardManager.processingShards.keySet().size());
+                this, shardManager -> shardManager.processingShards.size());
     }
 }
