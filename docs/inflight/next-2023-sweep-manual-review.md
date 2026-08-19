@@ -1,6 +1,7 @@
 # Upstream closure audit - what still needs a human decision
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: stranded-work -->
+
 
 The 2023 administrative sweeps are mirrored and mapped (see
 [`upstream-map.yaml`](../../src/docs/development/upstream-map.yaml), entries `sweep-2023-*`, fork

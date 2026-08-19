@@ -1,6 +1,7 @@
 # A commit-failure seam - astubbs/parallel-consumer#317
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: candidate -->
+
 
 **Priority: high.** Ranked top of `next-candidates.md`. The demand signal is not a request in a
 tracker - it is a user running a **patched build of the library** in production to get this

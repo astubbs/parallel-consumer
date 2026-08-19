@@ -1,6 +1,7 @@
 # `offsetCommitTimeout` does two jobs, and 10s is wrong for both
 
-<!-- inflight-priority: medium -->
+<!-- inflight-class: config-lie -->
+
 
 Open after astubbs#204. That PR made the option mean "the whole commit" rather than "one attempt",
 which is the precondition for fixing this - but it does not fix it, and the default is untouched.

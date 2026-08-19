@@ -58,27 +58,39 @@ without knowing they exist** - and for those, being findable is not enough. Such
 the line after its heading:
 
 ```markdown
-<!-- inflight-priority: high - one line saying why, in the imperative -->
-<!-- inflight-priority: medium -->
-<!-- inflight-priority: low -->
+<!-- inflight-class: misdirection -->
 ```
 
-**Three levels, and only `high` has to justify itself.** `high` REQUIRES a reason and stays rare -
-it is the anti-inflation rule that keeps the block worth reading, and a marker on everything is a
-marker on nothing. `medium` and `low` take no reason: they are cheap ordering hints, nothing more,
-and they exist because a category with twenty entries in filename order tells you nothing about
-which to read. An unmarked note sorts as `low`, so forgetting the marker is quiet rather than
-promoting the note.
+**Classify by CONSEQUENCE - what it costs someone to not know - not by what kind of file it is.**
+The `<category>-` filename prefix already says the latter. A class answers the question a reader
+actually has, and it spans prefixes: `misdirection` currently covers notes filed under `ci-`,
+`test-`, `branch-`, `deps-` and `static-`.
 
-**The bulk of the levels were assigned in one first-pass triage and are not authoritative.** They
-were set from titles, not from reading every note; treat a `medium` or `low` as a default to correct
-on contact rather than a considered judgement. Correcting one costs a line. `high` is the exception:
-each was set deliberately, with its reason.
+The classes, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
+start. **The order is not severity - signal integrity comes first**, because you cannot judge the
+state of the code through instruments that lie, and acting on a false green is worse than acting on
+nothing:
 
-`.claude/hooks/inject-recorded-knowledge.sh` lifts every marked note into a **Read these first**
-block at session start, with that reason, above the flat list of everything else. The reason is the
-payload: "live flakes; read this before diagnosing any red test" tells an agent *when* the note
-applies, which a filename cannot.
+| Class | The consequence |
+|---|---|
+| `misdirection` | the signal is actively WRONG - a green that asserted nothing, a hidden flake, a contaminated control arm, a scanner returning 401 while appearing to scan |
+| `blind-spot` | there is no signal - untested behaviour, unscanned code, an obligation nobody tracks |
+| `data-loss` | a record is dropped or mis-committed |
+| `stall` | something stops making progress and stays stopped |
+| `security` | a grant or permission wider than it should be |
+| `config-lie` | an option does not do what it says |
+| `throughput` | backpressure or fetch behaviour is wrong, with no data risk |
+| `release-gate` | blocks publishing |
+| `stranded-work` | work or knowledge that will be lost if nobody acts |
+| `coordination` | collisions between branches or PRs, or someone blocked waiting |
+| `deps-debt` | upgrades deliberately held back |
+| `candidate` | proposed work, direction not chosen |
+| `decided-no` | answered and parked, kept so the question is not re-asked |
+
+**Add a class when the corpus needs one, do not force a note into a poor fit** - the set above was
+derived by reading the notes, not chosen in advance. An unclassified note is still listed at session
+start, under its own heading, so a missing marker is visible rather than silent.
+
 
 **The test is collision, not importance.** Every note here matters or it would be deleted. What
 earns the marker is that an agent working on something unrelated will otherwise waste the work, or

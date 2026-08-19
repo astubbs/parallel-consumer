@@ -329,25 +329,37 @@ if [ -n "$quoted" ]; then
     assert "strips YAML quoting from a quoted title" quotes_stripped "$got"
 fi
 
-# A marked note must be lifted WITH its reason - the reason is what tells an agent when the note
-# applies, and a filename cannot. Asserted against the real corpus so the case tracks the convention
-# rather than one file's wording.
+# Open work must be grouped by CONSEQUENCE, in the order docs/inflight/AGENTS.md defines - and
+# signal-integrity classes must come FIRST. That ordering is the whole claim of the system: you
+# cannot judge the code through instruments that lie, so `misdirection` before any product defect.
+# Asserted against the real corpus, so the case tracks the convention rather than one file's wording.
 case "$knowledge_out" in
-    *"Read these first"*) got=has_priority_block ;;
-    *)                    got=no_priority_block ;;
+    *"**misdirection**"*) got=grouped_by_class ;;
+    *)                    got=not_grouped ;;
 esac
-assert "lifts high-priority notes into their own block" has_priority_block "$got"
+assert "groups open work by consequence class" grouped_by_class "$got"
 
-marked=$(grep -rl 'inflight-priority:[[:space:]]*high' "$REPO_ROOT/docs/inflight" 2>/dev/null | head -1)
-if [ -n "$marked" ]; then
-    marked_why=$(sed -n 's/.*inflight-priority:[[:space:]]*high[[:space:]]*-[[:space:]]*//p' "$marked" \
-                   | head -1 | sed 's/[[:space:]]*-->.*//')
-    case "$knowledge_out" in
-        *"$marked_why"*) got=reason_shown ;;
-        *)               got=reason_missing ;;
-    esac
-    assert "shows a marked note's reason, not just its path" reason_shown "$got"
+mis_at=$(printf '%s' "$knowledge_out" | grep -n '^\*\*misdirection\*\*' | head -1 | cut -d: -f1)
+loss_at=$(printf '%s' "$knowledge_out" | grep -n '^\*\*data-loss\*\*' | head -1 | cut -d: -f1)
+if [ -n "$mis_at" ] && [ -n "$loss_at" ]; then
+    [ "$mis_at" -lt "$loss_at" ] && got=signal_first || got=defect_first
+    assert "signal integrity is listed before product defects" signal_first "$got"
 fi
+
+# A note with no class must still appear. A marker someone forgot to add must be VISIBLE, never a
+# way for a note to drop silently out of the index - that failure mode is the one the whole hook
+# exists to prevent.
+class_tmp=$(mktemp -d)
+mkdir -p "$class_tmp/docs/inflight" "$class_tmp/docs/solutions/x"
+printf -- '---\ntitle: "s"\n---\n' > "$class_tmp/docs/solutions/x/s.md"
+printf '# An unclassified note\n' > "$class_tmp/docs/inflight/bug-no-class.md"
+unclassified_out=$(CLAUDE_PROJECT_DIR="$class_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+case "$unclassified_out" in
+    *"An unclassified note"*) got=listed ;;
+    *)                        got=dropped ;;
+esac
+assert "an unclassified note is still listed, not silently dropped" listed "$got"
+rm -rf "$class_tmp"
 
 # A session must survive a repo that does not look like this one. Two shapes: no docs at all, and
 # a docs/ with no solutions - both are "say nothing, exit 0", never a stack trace into the session.

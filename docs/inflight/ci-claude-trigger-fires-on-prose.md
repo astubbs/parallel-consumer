@@ -1,6 +1,7 @@
 # The `@claude` trigger fires on prose about it, and the fix is a semantics change
 
-<!-- inflight-priority: medium -->
+<!-- inflight-class: misdirection -->
+
 
 `.github/workflows/claude.yml` decides whether to start on
 `contains(github.event.comment.body, '@claude')` - a plain substring test with no awareness of

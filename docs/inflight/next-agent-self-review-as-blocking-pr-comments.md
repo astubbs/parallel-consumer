@@ -1,6 +1,7 @@
 # Proposal: the agent reviews its own PR, and its must-dos become blocking review comments
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: coordination -->
+
 
 **Status: proposed, not built.** Owner's idea, recorded so the design argument is not re-derived.
 Tune once it exists rather than up front.

@@ -1,6 +1,7 @@
 # Open obligation: every upstream issue, PR and discussion must be accounted for
 
-<!-- inflight-priority: medium -->
+<!-- inflight-class: blind-spot -->
+
 
 **This is not done.** The 2023 administrative sweeps are handled - 28 issues mirrored as
 astubbs#227-254, the PR sweep mapped - but that was one cohort, found because it happened to be a

@@ -1,6 +1,7 @@
 # Review follow-ups left open from the inactive-test work
 
-<!-- inflight-priority: low -->
+<!-- inflight-class: blind-spot -->
+
 
 A seven-reviewer pass over astubbs#264 found four P1s, all fixed there (two of them reproduced by *running*
 the tests: a 3-in-10 tick-path flake and a 1-in-10 worker-scheduling race). These are the findings that were
