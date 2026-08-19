@@ -15,6 +15,52 @@ sightings four carry a reproducer; two of those four have been run. The third si
 verdict at all; the fourth's seed was recorded as lost and then recovered, see its own correction. Compare `test-857-churn-storm-async-stalls.md`, whose
 sightings are in a mode where the cycle cannot close.
 
+## Experiment 1, 2026-08-19: the stall RECOVERS - so it is not the thing the probe hunts
+
+**Seed A replayed with `-Dchaos.diagnoseStallRecovery=true`, which keeps the quiet phase watching
+instead of aborting at the first violation. The run drained completely.**
+
+```
+consumed=252421/250000 violations=53 done=true      <- await SUCCEEDED, zero ConditionTimeoutException
+```
+
+- Storm ended `57:08`; every expected key was consumed by `01:49`. **Legitimate recovery took 281s.**
+- The probe declares `CLASS2_STALL` at **150s** of per-partition stagnation, and the gating run's
+  `failFast` kills the wait at the first violation - around 154s. So the run is destroyed at ~154s
+  while the workload needs ~281s to finish honestly.
+- 53 partitions eventually tripped the bound (49 by the time of the first poll, 4 more while
+  legitimately draining) and **all of them recovered** - `done=true` requires every expected key.
+- Duplicates were 2,421 over 250,000, ~1%, which is at-least-once working, not loss.
+
+**Why this matters more than a threshold tweak.** The probe's own javadoc defines what it hunts:
+*"a REAL Class 2 stall is unbounded, so the bound still catches it with 50s margin"*. A bounded
+stall is by that definition **not the defect the probe claims to detect**, so what these sightings
+recorded is the detector firing on legitimate slow recovery.
+
+It also explains the replay grid without a surviving bug. Reproduction on **both** arms is exactly
+what a mis-calibrated bound produces, because a false positive does not care which arm it runs on;
+the universal ~154s is bound-plus-cadence; and a green re-run is simply a run whose interleaving
+finished under 150s.
+
+**The scenario's calibration arithmetic under-counts redelivery chaining.** It reasons *"Worst legit
+freeze = STORM_DURATION + HEAVY_SLEEP + ~20s commit slack = 60+20+20 = 100s"*, which assumes a
+heavy record is redelivered once. Under a 60s storm at 300-1000ms ticks it can be revoked mid-dwell
+repeatedly, and each chain link adds another `HEAVY_SLEEP`. This is a failure mode the file already
+named once - *"At 90s storm + 45s dwell the legit window was ~155s - structurally over the bound,
+false-positive on BOTH arms"* - and the parameters were retuned to 60s/20s to get under it. The
+retune fixed the single-chain case and left the multi-chain case.
+
+**Confounds, and what is NOT yet established.** One seed, one run. Seed A is the violent arm (25-44
+violations); seed B, the narrow one, is untested under this instrument. The box caps every JVM at
+`-XX:ActiveProcessorCount=8` of 32 cores, which slows the drain and therefore inflates the 281s -
+on an uncontended runner the legit window may well fit under 150s, which would make this a
+contention story rather than a calibration story. **Do not retune the bound on this run alone**:
+that is the move the repo forbids for good reason, and the honest next step is seed B plus an
+uncontended repeat, measuring the legit recovery time rather than adjusting until green.
+
+What is established: on this workload the stall is **bounded**, so "unbounded" can no longer be
+assumed, and the astubbs#29 fix is not implicated by these sightings at all.
+
 ## The first replays, 2026-08-18 - both seeds reproduce on BOTH arms
 
 **Headline: the astubbs#29 deadlock fix does not close this failure.** 16 local runs of
