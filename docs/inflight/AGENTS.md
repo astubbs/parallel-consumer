@@ -82,10 +82,16 @@ nothing:
 | `throughput` | backpressure or fetch behaviour is wrong, with no data risk |
 | `release-gate` | blocks publishing |
 | `stranded-work` | work or knowledge that will be lost if nobody acts |
-| `coordination` | collisions between branches or PRs, or someone blocked waiting |
+| `coordination` | two pieces of work will collide, or one is blocked waiting on another |
 | `deps-debt` | upgrades deliberately held back |
 | `candidate` | proposed work, direction not chosen |
 | `decided-no` | answered and parked, kept so the question is not re-asked |
+
+**A class names a CONSEQUENCE, never a state.** "in progress", "standard work", "medium" and the
+like are status labels wearing a class's clothes - they answer "where is this?" when the question is
+"what does it cost me to not know?". An open PR is not its own class: not knowing about it costs you
+a collision, so it is `coordination`. This rule exists because the first draft added an `active-work`
+class and had to remove it.
 
 **Add a class when the corpus needs one, do not force a note into a poor fit** - the set above was
 derived by reading the notes, not chosen in advance. An unclassified note is still listed at session

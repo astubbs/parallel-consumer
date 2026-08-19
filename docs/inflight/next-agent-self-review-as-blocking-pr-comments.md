@@ -1,6 +1,6 @@
 # Proposal: the agent reviews its own PR, and its must-dos become blocking review comments
 
-<!-- inflight-class: coordination -->
+<!-- inflight-class: candidate -->
 
 
 **Status: proposed, not built.** Owner's idea, recorded so the design argument is not re-derived.
