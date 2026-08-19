@@ -1,6 +1,7 @@
 # Next: the cross-language performance comparison matrix
 
 <!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6 -->
 
 
 > Extracted from `origin/docs/ideate-perf-comparison-matrix` @3dd35926a, `docs/inflight/perf-comparison-matrix.md`.

@@ -1,6 +1,7 @@
 # Next: Dapr adapter — ideation done, probe is the first move
 
 <!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6, the probe has not run -->
 
 
 > Extracted from `origin/docs/ideate-dapr-adapter` @d5c8cf1b0, `docs/inflight/core-dapr-adapter.md`.

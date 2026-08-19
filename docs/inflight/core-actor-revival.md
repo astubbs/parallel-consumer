@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-state: deferred - after v6, structural work that should not ride a release -->
 
 
 The 2022 micro-actor branch family (manifest entry `sweep-2023-actor-ipc` in

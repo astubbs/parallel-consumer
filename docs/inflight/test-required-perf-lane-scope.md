@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, tuning -->
 
 
 `bin/performance-test.sh` is the "Performance Tests" leg of `maven.yml` - **a required check on every PR**,

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, tooling investment -->
 
 
 Nothing is switched off. There is no `archunit.properties`, no `FreezingArchRule`, no `@Disabled`,

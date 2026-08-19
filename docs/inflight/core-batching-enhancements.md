@@ -1,6 +1,7 @@
 # Batching enhancements - ideation done, direction decision pending
 
 <!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6, direction not yet chosen -->
 
 
 > Extracted from `origin/docs/ideate-batching-enhancements` @98a5ea8f5, `docs/inflight/core-batching-enhancements.md`.

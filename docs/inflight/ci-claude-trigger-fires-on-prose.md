@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, the fix is an undecided semantics change -->
 
 
 `.github/workflows/claude.yml` decides whether to start on

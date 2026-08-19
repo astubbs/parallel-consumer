@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
+<!-- inflight-state: deferred - after v6, new scenarios rather than repairs -->
 
 
 - **Class 2 RED hunt - stands as a calibrated tripwire.** A true unbounded Class 2 stall has not

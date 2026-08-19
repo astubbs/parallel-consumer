@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-state: deferred - after v6, agent tooling proposal -->
 
 
 **Status: proposed, not built.** Owner's idea, recorded so the design argument is not re-derived.

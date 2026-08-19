@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: reliability -->
+<!-- inflight-state: deferred - after v6, no defect currently attributed to it -->
 
 
 Four things astubbs#296 surfaced and did not fix. Kept because each is a contract that is currently

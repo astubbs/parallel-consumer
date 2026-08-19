@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: throughput -->
+<!-- inflight-state: deferred - after v6, throughput only, no data risk -->
 
 
 Tracked as astubbs#311. Gated on `isUsingBatching()`, so **a default configuration (`batchSize = 1`)

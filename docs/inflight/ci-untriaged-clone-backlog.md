@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, tooling investment -->
 
 
 Both duplication engines scanned four Java module directories until

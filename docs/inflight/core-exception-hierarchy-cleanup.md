@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
+<!-- inflight-state: deferred - after v6, structural work that should not ride a release -->
 
 
 **Priority: high, and easy.** Mechanical, well-bounded, and the major-version gate is open

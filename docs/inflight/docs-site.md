@@ -1,6 +1,7 @@
 # A documentation site - planning draft, direction not chosen
 
 <!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6, planning draft only -->
 
 
 The docs are heading for a proper generated site rather than one enormous `README.adoc`.

@@ -1,6 +1,6 @@
 # Groom the 1.0 release train issue against the roadmap data
 
-<!-- inflight-type: task -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: release-gate -->
 
 
