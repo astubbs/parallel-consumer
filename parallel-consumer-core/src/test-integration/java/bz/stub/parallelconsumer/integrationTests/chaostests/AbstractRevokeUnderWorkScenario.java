@@ -82,8 +82,16 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
      */
     private static final boolean DIAGNOSE_STALL_RECOVERY = Boolean.getBoolean("chaos.diagnoseStallRecovery");
 
-    /** Quiet cap in {@link #DIAGNOSE_STALL_RECOVERY} mode - long enough that "never recovered" means
-     * something. Override with {@code -Dchaos.diagnosticQuietCapMinutes=<n>}. */
+    /**
+     * Quiet cap in {@link #DIAGNOSE_STALL_RECOVERY} mode - long enough that "never recovered" means
+     * something. Override with {@code -Dchaos.diagnosticQuietCapMinutes=<n>}.
+     * <p>
+     * <b>The scenario class's {@code @Timeout} is the real ceiling, and it wins silently.</b> Those
+     * are 600s today, so a quiet cap above about six minutes cannot be reached - JUnit kills the
+     * test first, mid-observation, and the run then looks like one that stopped for its own reasons
+     * rather than one that was cut off. Raise the annotation if you genuinely need a longer watch;
+     * do not just raise this number and believe the result.
+     */
     private static final Duration DIAGNOSTIC_QUIET_CAP =
             Duration.ofMinutes(Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
     /** Low eviction horizon: a storm-wedged (deadlocked) member stops polling and gets evicted ~30s
