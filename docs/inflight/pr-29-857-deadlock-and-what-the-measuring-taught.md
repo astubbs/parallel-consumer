@@ -42,6 +42,30 @@ throwing. Reading the result would let it log "the poll thread still owns the co
 rather than routing a foreseeable, expected condition through an exception. Same outcome, cheaper,
 and it stops a normal shutdown-race outcome looking like a bug in a stack trace.
 
+## AT MERGE TIME: take master's PCMetrics, do not keep this branch's
+
+**Instruction from astubbs/parallel-consumer#57's author, 2026-08-19.** This branch's metrics
+teardown fix was extracted to a branch so it could ride with astubbs#57, which owns `PCMetrics.java`.
+That branch has since been **deleted** - worktree, local and remote - after being merged into
+astubbs#57, so there is nothing to point at and no comparison to make by hand.
+
+**The rule is therefore simple: merge master after astubbs#57 lands, and take MASTER'S side in
+`PCMetrics.java`.** Not this branch's.
+
+**Why, concretely - master's version is better in a way that is easy to lose in a conflict.** Two
+improvements happened after the code left here:
+
+- `PCMetrics.close()` iterates the registry directly rather than going through `removeMeter`, so it
+  needed its own guard. That was invisible on this branch, because `doClose`'s `finally` wraps the
+  call - the escape only appeared when the code was lifted onto a branch without that wrapper.
+- `removeMetersByPrefixAndCommonTags` guards **per meter**, where this branch wraps the whole
+  `forEach` in one try. The loop-level shape aborts on the first throw, so the remaining meters are
+  never removed - and with astubbs#57's leak fix present, the tracking set is left un-pruned too.
+  This branch is inconsistent about it: `close()` already guards per meter, and this method does not.
+
+astubbs#57 pinned both with a test that fails against either weaker shape, so a wrong resolution is
+caught rather than merely regretted - but only if master's side is the one kept.
+
 ## Still open on this PR, 2026-08-19
 
 Ordered by what blocks a merge. **This file should have existed from the branch's first commit and
