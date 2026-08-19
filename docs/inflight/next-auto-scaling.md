@@ -1,6 +1,6 @@
 # Auto-scaling - self-discovered concurrency, and instance-count recommendation
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 The ask is astubbs#227 (mirror of confluentinc#21): stop making users pick `maxConcurrency` -

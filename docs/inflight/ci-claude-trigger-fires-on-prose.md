@@ -1,6 +1,7 @@
 # The `@claude` trigger fires on prose about it, and the fix is a semantics change
 
-<!-- inflight-class: misdirection -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
 
 
 `.github/workflows/claude.yml` decides whether to start on

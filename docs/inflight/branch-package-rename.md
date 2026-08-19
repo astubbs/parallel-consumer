@@ -1,6 +1,7 @@
 # Package rename `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`
 
-<!-- inflight-class: coordination -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
 
 
 The package-rename project's entry. Branches working the rename keep their own account of it at this

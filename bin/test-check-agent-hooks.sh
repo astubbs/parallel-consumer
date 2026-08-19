@@ -338,16 +338,16 @@ fi
 # cannot judge the code through instruments that lie, so `misdirection` before any product defect.
 # Asserted against the real corpus, so the case tracks the convention rather than one file's wording.
 case "$knowledge_out" in
-    *"**misdirection**"*) got=grouped_by_class ;;
-    *)                    got=not_grouped ;;
+    *"**bug / misdirection**"*) got=grouped_by_class ;;
+    *)                          got=not_grouped ;;
 esac
-assert "groups open work by consequence class" grouped_by_class "$got"
+assert "groups open work by type and impact" grouped_by_class "$got"
 
-mis_at=$(printf '%s' "$knowledge_out" | grep -n '^\*\*misdirection\*\*' | head -1 | cut -d: -f1)
-loss_at=$(printf '%s' "$knowledge_out" | grep -n '^\*\*data-loss\*\*' | head -1 | cut -d: -f1)
+mis_at=$(printf '%s' "$knowledge_out" | grep -n '^\*\*bug / misdirection\*\*' | head -1 | cut -d: -f1)
+loss_at=$(printf '%s' "$knowledge_out" | grep -n '^\*\*feature' | head -1 | cut -d: -f1)
 if [ -n "$mis_at" ] && [ -n "$loss_at" ]; then
     [ "$mis_at" -lt "$loss_at" ] && got=signal_first || got=defect_first
-    assert "signal integrity is listed before product defects" signal_first "$got"
+    assert "signal integrity is listed before proposed work" signal_first "$got"
 fi
 
 # A note with no class must still appear. A marker someone forgot to add must be VISIBLE, never a
@@ -357,12 +357,26 @@ class_tmp=$(mktemp -d)
 mkdir -p "$class_tmp/docs/inflight" "$class_tmp/docs/solutions/x"
 printf -- '---\ntitle: "s"\n---\n' > "$class_tmp/docs/solutions/x/s.md"
 printf '# An unclassified note\n' > "$class_tmp/docs/inflight/bug-no-class.md"
+printf '# A closed note\n\n<!-- inflight-type: task -->\n<!-- inflight-state: closed - will not do -->\n' > "$class_tmp/docs/inflight/task-closed.md"
 unclassified_out=$(CLAUDE_PROJECT_DIR="$class_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
 case "$unclassified_out" in
     *"An unclassified note"*) got=listed ;;
     *)                        got=dropped ;;
 esac
-assert "an unclassified note is still listed, not silently dropped" listed "$got"
+assert "a note whose tags match no group is still listed" listed "$got"
+
+# A stated note is excluded from the index - but the exclusion must COUNT itself, or a view that
+# silently shrinks is indistinguishable from one with nothing to hide.
+case "$unclassified_out" in
+    *"A closed note"*) got=leaked ;;
+    *)                 got=excluded ;;
+esac
+assert "a closed note is excluded from the index" excluded "$got"
+case "$unclassified_out" in
+    *"note(s) not shown"*) got=counted ;;
+    *)                     got=hidden_silently ;;
+esac
+assert "the exclusion says how many it hid" counted "$got"
 rm -rf "$class_tmp"
 
 # A session must survive a repo that does not look like this one. Two shapes: no docs at all, and

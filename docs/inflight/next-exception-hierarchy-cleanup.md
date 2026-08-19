@@ -1,6 +1,6 @@
 # PC's exceptions have three roots and no consistent name
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 **Priority: high, and easy.** Mechanical, well-bounded, and the major-version gate is open

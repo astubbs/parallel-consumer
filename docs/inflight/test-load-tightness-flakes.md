@@ -1,6 +1,7 @@
 # Load-tightness flake family (undiagnosed)
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 Shared signature: a **fast-failing** assertion or timeout under heavy contention, passing in isolation

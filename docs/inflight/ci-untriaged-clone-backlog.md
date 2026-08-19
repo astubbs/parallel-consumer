@@ -1,6 +1,7 @@
 # Clones nobody has ever looked at
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 Both duplication engines scanned four Java module directories until

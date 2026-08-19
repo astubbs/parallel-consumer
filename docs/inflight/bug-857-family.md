@@ -1,6 +1,7 @@
 # The confluentinc#857 family - what is still open
 
-<!-- inflight-class: data-loss -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
 
 
 Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom.

@@ -1,6 +1,7 @@
 # Dependency upgrades deliberately held back
 
-<!-- inflight-class: deps-debt -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: deps-debt -->
 
 
 Everything is at its newest **non-major** version (`versions-maven-plugin -DallowMajorUpdates=false`

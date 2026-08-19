@@ -1,6 +1,6 @@
 # Next: the cross-language performance comparison matrix
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 > Extracted from `origin/docs/ideate-perf-comparison-matrix` @3dd35926a, `docs/inflight/next-perf-comparison-matrix.md`.

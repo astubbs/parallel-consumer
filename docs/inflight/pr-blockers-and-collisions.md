@@ -1,6 +1,7 @@
 # Open PRs: what `gh pr list` cannot tell you
 
-<!-- inflight-class: coordination -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
 
 
 Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` has that, and is right.

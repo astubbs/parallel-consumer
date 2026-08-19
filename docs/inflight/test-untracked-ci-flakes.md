@@ -1,6 +1,7 @@
 # Flakes CI was hiding, none of them tracked when found
 
-<!-- inflight-class: misdirection -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
 
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.

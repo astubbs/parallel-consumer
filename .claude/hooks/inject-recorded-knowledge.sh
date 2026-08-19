@@ -99,42 +99,73 @@ inflight_title() { # <file> -> its heading, else its slug
     printf '%s' "$t"
 }
 
-emit "**Open work** (\`docs/inflight/\`, one file per item) - grouped by what it costs you to not know:"
-emit ""
-
 # bug first (defects in shipped code), tooling next (fires on everyone), then tests, then
 # cross-branch state, then the long tail, then candidates, and parked last.
-# GROUPED BY CONSEQUENCE, not by filename prefix. The prefix says what KIND of file it is; the class
-# says what it costs you if you do not know. Those are different questions and the second is the one
-# a reader has. A class also spans prefixes - `misdirection` shows up under ci-, test-, branch-,
-# deps- AND static-, and grouping by prefix scatters that family across five headings.
+# THREE FIELDS, because one was doing three jobs. `inflight-type` says what KIND of item it is
+# (bug/feature/task - this directory is a file-backed issue tracker, so use a tracker's vocabulary);
+# `inflight-impact` says what it COSTS you to not know, which only bugs and tasks carry; and
+# `inflight-state` is disposition, ABSENT meaning open. Collapsing those into one field produced
+# classes like "candidate" and "decided-no", which are states wearing a class's clothes.
 #
-# THE ORDER IS THE POINT, and it is not severity. Signal integrity comes FIRST: you cannot judge the
-# state of the code through instruments that lie, and acting on a false green is worse than acting
-# on nothing - which is why `misdirection` outranks `blind-spot`, and both outrank any product
-# defect. docs/inflight/AGENTS.md defines each class.
-for class in misdirection blind-spot data-loss stall security config-lie throughput \
-             release-gate stranded-work coordination deps-debt candidate decided-no; do
-    files=$(grep -rl "inflight-class:[[:space:]]*${class}[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
-              | grep -v 'AGENTS.md' | sort)
-    [ -n "$files" ] || continue
-    n=$(printf '%s\n' "$files" | grep -c .)
-    emit "**${class}** (${n})"
-    while IFS= read -r f; do
-        emit "- $(inflight_title "$f")"
-    done <<< "$files"
-    emit ""
-done
+# ORDER IS NOT SEVERITY. Signal integrity first: you cannot judge the code through instruments that
+# lie, so `misdirection` outranks `blind-spot` and both outrank any product defect. Bugs before
+# tasks before features - what is broken before what is owed before what is wanted.
+emit "**Open work** (\`docs/inflight/\`, one file per item) - what it costs you to not know:"
+emit ""
 
-# Anything unclassified is still listed, because a missing marker must not hide a note.
-unclassified=$(find docs/inflight -maxdepth 1 -name '*.md' -type f 2>/dev/null \
-                 | grep -vE '(AGENTS|CLAUDE)\.md' | sort \
-                 | while IFS= read -r f; do grep -q 'inflight-class:' "$f" || printf '%s\n' "$f"; done)
-if [ -n "$unclassified" ]; then
-    emit "**unclassified** - no \`inflight-class\` marker yet:"
-    while IFS= read -r f; do emit "- $(inflight_title "$f")"; done <<< "$unclassified"
+emitted=""
+note_field() { sed -n "s/.*inflight-$2:[[:space:]]*\([^-][^>]*\)-->.*/\1/p" "$1" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
+is_open()    { ! grep -q 'inflight-state:' "$1" 2>/dev/null; }
+
+emit_group() { # <type> <impact-or-empty> <heading>
+    local files hits=""
+    files=$(grep -rl "inflight-type:[[:space:]]*$1[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
+              | grep -v 'AGENTS.md' | sort)
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        is_open "$f" || continue
+        if [ -n "$2" ]; then grep -q "inflight-impact:[[:space:]]*$2[[:space:]]*-->" "$f" || continue; fi
+        hits="${hits}- $(inflight_title "$f")"$'\n'
+        emitted="${emitted}${f}"$'\n'
+    done <<< "$files"
+    [ -n "$hits" ] || return
+    emit "**$3**"
+    printf '%s' "$hits"
+    emit ""
+}
+
+for imp in misdirection blind-spot data-loss stall security config-lie throughput; do
+    emit_group bug "$imp" "bug / ${imp}"
+done
+for imp in release-gate coordination stranded-work deps-debt; do
+    emit_group task "$imp" "task / ${imp}"
+done
+emit_group feature "" "feature - proposed, direction not chosen"
+
+# ANY OPEN NOTE THAT MATCHED NO GROUP IS LISTED, LOUDLY. The loops above iterate the values this repo
+# knows about, so a typo'd or invented inflight-type/inflight-impact matches nothing and the note
+# would vanish from the index - silently, and precisely because the filter worked. Same failure as
+# the exclusion count below, one level in: the grouping itself can hide things. Listed by name rather
+# than counted, because an unmatched note is a bug in its tags and the fix needs to know which file.
+unmatched=""
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -q 'inflight-state:' "$f" 2>/dev/null && continue
+    printf '%s' "$emitted" | grep -qxF "$f" && continue
+    unmatched="${unmatched}- $(inflight_title "$f")  \`${f}\`"$'\n'
+done <<< "$(find docs/inflight -maxdepth 1 -name '*.md' -type f 2>/dev/null | grep -vE '(AGENTS|CLAUDE)\.md' | sort)"
+if [ -n "$unmatched" ]; then
+    emit "**unmatched** - open, but no group claimed them. Their \`inflight-type\` or \`inflight-impact\` is missing or misspelt:"
+    printf '%s' "$unmatched"
     emit ""
 fi
+
+# THE FILTER MUST ADMIT WHAT IT HID. Notes carrying a state are excluded - a closed item presented as
+# open is misdirection by this repo's own taxonomy - but a view that silently shrinks is
+# indistinguishable from one with nothing to hide. One line of count keeps the undone-cleanup backlog
+# visible without letting it occupy the index. Same rule as "no silent caps" for a bounded workflow.
+stated=$(grep -rl 'inflight-state:' docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' | grep -c . || true)
+[ "${stated:-0}" -gt 0 ] && emit "_${stated} note(s) not shown: closed, parked or blocked. Delete or migrate them - \`grep -rl inflight-state: docs/inflight\`._" && emit ""
 
 emit "**Dated plans and investigations** (\`docs/plans/\`) - the method that settled a question of this shape before:"
 plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')

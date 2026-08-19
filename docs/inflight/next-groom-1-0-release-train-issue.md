@@ -1,6 +1,7 @@
 # Groom the 1.0 release train issue against the roadmap data
 
-<!-- inflight-class: release-gate -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
 
 
 astubbs#135 (mirroring confluentinc#172) is the 1.0 release train. It has not been groomed in years and

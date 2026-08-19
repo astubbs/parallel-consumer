@@ -1,6 +1,7 @@
 # `getWorkIfAvailable`'s inline stale removal orphans the retry-queue entry
 
-<!-- inflight-class: throughput -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: throughput -->
 
 
 **Known defect in product code. Not data loss - it inflates the counter that gates the poller

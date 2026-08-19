@@ -1,6 +1,7 @@
 # Branches that must re-check `STRATEGY.md` before they merge
 
-<!-- inflight-class: coordination -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
 
 
 `STRATEGY.md` is a claims document, and unlike the README nothing tests it. The branches below either

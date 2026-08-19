@@ -1,6 +1,7 @@
 # Release 0.6.0.0
 
-<!-- inflight-class: release-gate -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
 
 
 **Tracking issue: astubbs#197.** That issue is the linkable handle - from PRs, from mirrors, from upstream

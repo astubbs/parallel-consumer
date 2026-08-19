@@ -1,6 +1,7 @@
 # Branch audit 2026-08-17: orphans to investigate
 
-<!-- inflight-class: stranded-work -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
 
 
 A full sweep of all 196 origin branches against the tracking corpus (upstream-map.yaml,

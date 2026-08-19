@@ -1,6 +1,7 @@
 # `RetryQueue` behaviour is essentially untested - could be hiding bugs
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 The only coverage is three tests in `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/state/ShardManagerTest.java`:

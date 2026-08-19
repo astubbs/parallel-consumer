@@ -1,6 +1,7 @@
 # Batching requests a full extra in-flight target of work
 
-<!-- inflight-class: throughput -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: throughput -->
 
 
 Tracked as astubbs#311. Gated on `isUsingBatching()`, so **a default configuration (`batchSize = 1`)

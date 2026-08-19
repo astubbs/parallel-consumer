@@ -1,6 +1,7 @@
 # SpotBugs findings the rename made visible
 
-<!-- inflight-class: misdirection -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 **30 findings, surfaced on astubbs#294. None are new, none block anything, and they will go invisible

@@ -1,6 +1,7 @@
 # Release 0.6.0.0 - correctness of the artefacts we are about to publish
 
-<!-- inflight-class: release-gate -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
 
 
 Scope: are the things 0.6.0.0 *publishes* (`CHANGELOG.adoc`, `README.adoc`) true on the day we cut it?

@@ -1,6 +1,6 @@
 # Actor-collection revival: ranked candidate directions
 
-<!-- inflight-class: candidate -->
+<!-- inflight-type: feature -->
 
 
 The 2022 micro-actor branch family (manifest entry `sweep-2023-actor-ipc` in

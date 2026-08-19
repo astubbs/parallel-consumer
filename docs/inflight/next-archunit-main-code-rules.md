@@ -1,6 +1,7 @@
 # ArchUnit is wired up and barely used
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 Nothing is switched off. There is no `archunit.properties`, no `FreezingArchRule`, no `@Disabled`,

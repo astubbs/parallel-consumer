@@ -1,6 +1,7 @@
 # Upstream closure audit - what still needs a human decision
 
-<!-- inflight-class: stranded-work -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
 
 
 The 2023 administrative sweeps are mirrored and mapped (see

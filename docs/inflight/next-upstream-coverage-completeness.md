@@ -1,6 +1,7 @@
 # Open obligation: every upstream issue, PR and discussion must be accounted for
 
-<!-- inflight-class: blind-spot -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
 
 
 **This is not done.** The 2023 administrative sweeps are handled - 28 issues mirrored as

@@ -1,6 +1,7 @@
 # Agent polling loops leak, because nothing bounds them
 
-<!-- inflight-class: stall -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
 
 
 Found 2026-08-18 while clearing a merged worktree: it could not be removed because a shell from a

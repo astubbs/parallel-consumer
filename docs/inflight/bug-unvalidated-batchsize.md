@@ -1,6 +1,7 @@
 # `batchSize` is unvalidated, and zero fails in two different ways
 
-<!-- inflight-class: config-lie -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
 
 
 Tracked as astubbs#311, alongside the arithmetic defect in

@@ -1,6 +1,7 @@
 # Deferred follow-ups from the density-work review (astubbs#192)
 
-<!-- inflight-class: throughput -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: throughput -->
 
 
 > Extracted from `origin/perf/192-offset-encoding-density` @2a31b0a74, `docs/inflight/perf-192-followups.md`.
