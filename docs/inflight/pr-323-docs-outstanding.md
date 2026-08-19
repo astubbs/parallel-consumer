@@ -10,6 +10,7 @@ Documentation only - no product code, no tests, no CI config. Delete this note w
 
 The retagged notes land **here**; the vocabulary, `bin/check-inflight-tags.sh`, the hook rewrite and
 `docs/inflight/AGENTS.md` all ride **astubbs#324**. Verified against master:
+<!-- file-refs: N/A - the tag machinery named here ships in astubbs#324 - naming what this PR does not carry is the point of the entry -->
 
 - master's `.claude/hooks/inject-recorded-knowledge.sh` keys on **`inflight-priority`** and contains
   **zero** references to `inflight-impact`;
@@ -24,6 +25,7 @@ prevent.
 four machinery files (`bin/lib/inflight-tags.sh`, `bin/check-inflight-tags.sh`, the hook, and
 `docs/inflight/AGENTS.md`) down into this PR so the tags and the thing that reads them land together
 - the same call already made for the quarantine rule on astubbs#322. **Undecided.**
+<!-- file-refs: N/A - these are the astubbs#324 files this entry proposes moving; they do not exist here yet, which is the decision being recorded -->
 
 ## Also open
 

@@ -31,6 +31,7 @@ What the ideation settled that the seed docs left open:
   `docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md`
   (astubbs#271, issue astubbs#255) with mechanics in `parallel-consumer-streams/bin/apply-patch.sh`
   on `feats/ks-on-pc-spike`.
+<!-- file-refs: N/A - names artefacts a future Dapr/streams probe would create; neither exists yet, which is what the entry records -->
 
 Decision pending: none blocking — the probe is unblocked, cheap, and gates everything else.
 Per the expansion rule (demand decides), the full component build waits on a named ask; the probe
