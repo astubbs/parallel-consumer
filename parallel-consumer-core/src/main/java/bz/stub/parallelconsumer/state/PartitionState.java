@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -449,8 +450,11 @@ public class PartitionState<K, V> {
 
     // visible for testing
     protected OffsetAndMetadata createOffsetAndMetadata() {
-        Optional<String> payloadOpt = tryToEncodeOffsets();
-        long nextOffset = getOffsetToCommit();
+        // use tuple to make sure getOffsetToCommit is invoked only once to avoid dirty read
+        // and commit the wrong offset
+        ParallelConsumer.Tuple<Optional<String>, Long> tuple = tryToEncodeOffsets();
+        Optional<String> payloadOpt = tuple.getLeft();
+        long nextOffset = tuple.getRight();
         return payloadOpt
                 .map(encodedOffsets -> new OffsetAndMetadata(nextOffset, encodedOffsets))
                 .orElseGet(() -> new OffsetAndMetadata(nextOffset));
@@ -520,29 +524,30 @@ public class PartitionState<K, V> {
      *
      * @return if possible, the String encoded offset map
      */
-    private Optional<String> tryToEncodeOffsets() {
+    private ParallelConsumer.Tuple<Optional<String>, Long> tryToEncodeOffsets() {
+        long offsetOfNextExpectedMessage = getOffsetToCommit();
+
         if (incompleteOffsets.isEmpty()) {
             setAllowedMoreRecords(true);
-            return empty();
+            return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
         }
 
         try {
             // todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null - confluentinc#233
-            long offsetOfNextExpectedMessage = getOffsetToCommit();
             var offsetRange = getOffsetHighestSucceeded() - offsetOfNextExpectedMessage;
             String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, this);
             ratioPayloadUsedDistributionSummary.record(offsetMapPayload.length() / (double) offsetRange);
             ratioMetadataSpaceUsedDistributionSummary.record(offsetMapPayload.length() / (double) OffsetMapCodecManager.DefaultMaxMetadataSize);
             boolean mustStrip = updateBlockFromEncodingResult(offsetMapPayload);
             if (mustStrip) {
-                return empty();
+                return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
             } else {
-                return of(offsetMapPayload);
+                return ParallelConsumer.Tuple.pairOf(of(offsetMapPayload), offsetOfNextExpectedMessage);
             }
         } catch (NoEncodingPossibleException e) {
             setAllowedMoreRecords(false);
             log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance.", e);
-            return empty();
+            return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
         }
     }
 
