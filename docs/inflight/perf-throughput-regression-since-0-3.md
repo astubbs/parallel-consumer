@@ -214,6 +214,49 @@ and the second is the important one:
 
 The patch was reverted and the clean snapshot reinstalled; it exists only as this measurement.
 
+### It is the buffer, NOT the pressure system
+
+The first patch changed both overrides at once, so it could not say which mattered. A second patch
+restored **only** the target formula and left `checkPipelinePressure()` a no-op, pinning the load
+factor at its initial value of 2:
+
+| build | msg/s at maxConcurrency 100 | peak in flight |
+|---|---|---|
+| as shipped | 16,304 | 100 |
+| target restored **and** pressure re-enabled | 21,950 | 100 |
+| **target restored, pressure still disabled** | **21,777 / 22,059 / 22,059** | **100** |
+
+**A 2x buffer is the whole effect.** `getPoolLoadTarget()` is `maxConcurrency x batchSize`, so at the
+initial factor of 2 the target is 200 against 100 in flight - one record queued behind each one being
+worked. The dynamic stepping contributes nothing measurable at this workload.
+
+So the pressure system is **not the cause of the regression - it is inert**. All of the value sits in
+a constant multiplier that happens to live inside it. That matters for the auto-scaling track below:
+the adaptive mechanism that exists is not earning its complexity here, while the fixed constant next
+to it is worth 35%.
+
+### Scope: which engines this affects
+
+`ExternalEngine` is the base for **Vert.x, Reactor, Mutiny and the language proxy**:
+
+```
+ParallelEoSStreamProcessor       extends AbstractParallelEoSStreamProcessor   <- core, unaffected
+VertxParallelEoSStreamProcessor  extends ExternalEngine
+ReactorProcessor                 extends ExternalEngine
+MutinyProcessor                  extends ExternalEngine
+ProxyProcessor                   extends ExternalEngine
+```
+
+**`ProxyProcessor` is on this path**, so every foreign-language client heading for the v6 experimental
+release runs on the throttled pipeline. Nobody has measured it. That ties this note directly to
+`branch-classic-comparison-demo.md`: a per-language demo whose headline is a throughput comparison
+would be publishing the throttled number.
+
+**Core does not go through these overrides and is immune to this mechanism. That is not the same as
+core being unaffected overall** - core has not been benchmarked at all here, and a separate core
+regression would be invisible to every measurement in this note. The harness only has a Vert.x arm;
+adding a core arm is the obvious next coverage gap.
+
 ### What this does NOT establish
 
 Whether removing the overrides is *safe*. They were added deliberately, and the comment on
