@@ -51,3 +51,10 @@ The rest of the design work is the hard part, not the running:
 
 Post-v6, after the shared conformance and performance suites exist - they are the harness this would
 reuse, and building it before them would mean building a second one.
+
+**Partly unparked (2026-08-20):** the owner has made this comparison the headline of the per-language
+demo - see [`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md). The cautions
+above bind that work. One rule needs a demo-shaped carve-out written down: "native clients arrive as
+test-scope dependencies only" cannot hold literally for a demo container, which necessarily ships
+librdkafka. The reproducibility bar and the "state plainly the workloads where it is not fair"
+requirement carry over unchanged.

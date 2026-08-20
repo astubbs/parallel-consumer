@@ -26,3 +26,7 @@ the gallery is deployment work over demos that already exist, not demo work.
 mock-backed demo containers, the gallery is its natural first dynamic content. Failing that, the
 plan's review recorded the fallback ladder in descending order of honesty: separate server-side
 demo hosting, then in-browser or recorded captures.
+
+**Related (2026-08-20):** [`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md)
+starts the per-language demo containers this file promises "still ship without it" - one per language,
+comparison-shaped, no hosting. If this gallery is ever unparked, those are the demos it would host.

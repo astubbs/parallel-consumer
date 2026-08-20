@@ -49,3 +49,10 @@ under the recorded constraints (fingerprinted config, ratio framing, no absolute
 **Next step.** Brainstorm idea 1 (the harness architecture - everything else attaches to it) or
 idea 6 (the live loop) into requirements, then implement as a stacked PR off
 `feats/proxy-requirements`.
+
+**A consumer of this track's schema now exists (2026-08-20):**
+[`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) builds the per-language
+comparison demo this file's opening ask names. It needs the parameterised scenario definition -
+delay, ordering mode, failure percentage, max concurrency - so the constraint recorded here is now
+load-bearing rather than anticipated. Its arms are foreign-over-PC vs that language's own native
+client, and for Java specifically core-vs-sidecar, which is the attribution ladder's first rung.

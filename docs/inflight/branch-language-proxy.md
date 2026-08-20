@@ -215,3 +215,9 @@ all — deletes cleanly with every gate green (verified empirically in review). 
 modules carry maturity fragments but no evidence records, so the check either scopes to the
 fragment convention or those modules need evidence deferrals seeded. Small either way; needs the
 scoping call first.
+
+## Stacked on this branch
+
+[`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) (`feats/classic-vertx-demo`)
+rescues the 2021 asciinema demo and builds the per-language comparison demo on top of the clients.
+It jumps U35's queue and is blocked, proxy-side, on U10's sidecar entry point.
