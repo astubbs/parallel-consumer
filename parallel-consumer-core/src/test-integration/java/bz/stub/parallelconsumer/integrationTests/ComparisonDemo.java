@@ -105,7 +105,9 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      * {@code ChaosConductor.ChaosAction} are public for the same reason.
      */
     public enum Lane {
-        VANILLA(null),
+        /** The Apache Kafka client itself - see CONCEPTS.md. Named AK_CORE, never "core" alone,
+         * which would read as the parallel-consumer-core module. */
+        AK_CORE(null),
         PC_UNORDERED(ProcessingOrder.UNORDERED),
         PC_KEY(ProcessingOrder.KEY),
         PC_PARTITION(ProcessingOrder.PARTITION);
@@ -128,7 +130,7 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
     /**
      * Partitions on the demo topic. <b>Not the inherited default of 1</b>, which quietly voided the
      * whole PC_PARTITION lane: partition ordering gives one shard per partition, so on a
-     * single-partition topic that lane is serial by construction and cannot beat the vanilla arm at
+     * single-partition topic that lane is serial by construction and cannot beat the AK core arm at
      * any volume or any concurrency. It was measured doing exactly that - 0.1x, with the retry
      * backoff of each failed record serialising behind it - before this knob existed.
      * <p>
@@ -137,6 +139,24 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      * raising the partition count.
      */
     static final int PARTITIONS = Integer.getInteger("demo.partitions", 10);
+
+    /**
+     * The BIG REPLAY, as a multiple of {@link #RECORDS} - the classic demo's second act, and the
+     * reason it could quote 81.7x from a five-thousand-record comparison. 70 is its own factor:
+     * 5,000 compared, then 350,000 replayed.
+     * <p>
+     * <b>Why two phases rather than one volume.</b> The comparison phase and the replay answer
+     * different questions and cannot be the same run. Comparison needs identical records through
+     * every lane (decision 7), which caps the volume at whatever the SERIAL arm can finish in a
+     * sane wall-clock. But that volume is a fraction of a second of work for a parallel lane, so
+     * everything it reports is start-up - measured here at 13x against the same engine's 78x. The
+     * replay removes the cap by removing the serial arm, and shows the rate the engine actually
+     * sustains. Neither number is wrong; they are answers to different questions, and the demo
+     * prints both rather than averaging them into something true of nothing.
+     * <p>
+     * Set to 1 or less to skip the replay - which is what a quick functional run wants.
+     */
+    static final int REPLAY_FACTOR = Integer.getInteger("demo.replayFactor", 70);
 
     /** The simulated per-record service time. 2ms is the classic cast's value. */
     static final int DELAY_MS = Integer.getInteger("demo.delayMs", 2);
@@ -257,17 +277,64 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
         log.info("Producing {} records ({} unique keys)...", format(RECORDS), format(uniqueKeys));
         getKcu().produceMessages(topic, RECORDS, "", uniqueKeys);
 
-        List<LaneResult> results = SEQUENTIAL
-                ? runSequentially(topic)
-                : runConcurrently(topic);
+        // Both acts replay a pre-produced backlog - the difference is only its SIZE, and what
+        // that size makes measurable. The small one can include every lane, so it compares; the
+        // big one cannot, so it shows the ceiling instead.
+        List<LaneResult> smallReplay = runPhase(topic, LANES, RECORDS);
+        report("Small replay - every lane over the same " + format(RECORDS) + " records (the comparison)",
+                smallReplay, smallReplay);
 
-        report(results);
+        if (REPLAY_FACTOR <= 1) {
+            log.info("Big replay skipped (demo.replayFactor={})", REPLAY_FACTOR);
+            return;
+        }
+
+        // The same topic grown to a real backlog.
+        int replayTotal = RECORDS * REPLAY_FACTOR;
+        int topUp = replayTotal - RECORDS;
+        log.info("\nProducing {} more records for the big replay ({} total)...",
+                format(topUp), format(replayTotal));
+        getKcu().produceMessages(topic, topUp, "", Math.max(1, (int) (topUp * (KEYS_PERCENT / 100d))));
+
+        List<Lane> replaying = replayLanes(replayTotal);
+        log.info("Replay lanes: {} - the rest are capped below the concurrency dial and would still "
+                + "be running long after the point was made", replaying);
+        List<LaneResult> bigReplay = runPhase(topic, replaying, replayTotal);
+        report("Big replay - " + format(replayTotal) + " records, dial-bound lanes only",
+                bigReplay, smallReplay);
     }
 
-    private List<LaneResult> runSequentially(String topic) {
+    /**
+     * A lane joins the replay only if it can actually USE the concurrency dial. Everything else is
+     * structurally capped far below it and would still be running long after the point was made.
+     * <p>
+     * That excludes two lanes for the same underlying reason, not two different ones. AK_CORE is
+     * capped at one. <b>PC_PARTITION is capped at the partition count</b> - partition ordering
+     * allows one in-flight record per partition, so with ten partitions it performs in the serial
+     * consumer's class no matter how high the dial goes. Measured, when an earlier version of this
+     * demo tried to replay it: ~370 msg/s, which is fifteen minutes for a 350,000-record backlog
+     * against roughly twenty seconds for the unordered lane.
+     * <p>
+     * Written as the property rather than as a list of names, so it stays true when the knobs move:
+     * raise {@code demo.partitions} above {@code demo.maxConcurrency} and PC_PARTITION becomes
+     * dial-bound like the others, and joins the replay on its own merits.
+     */
+    private static List<Lane> replayLanes(int replayTotal) {
+        return LANES.stream()
+                .filter(lane -> effectiveConcurrency(lane, replayTotal) >= MAX_CONCURRENCY)
+                .collect(Collectors.toList());
+    }
+
+    private List<LaneResult> runPhase(String topic, List<Lane> lanes, int target) {
+        return SEQUENTIAL
+                ? runSequentially(topic, lanes, target)
+                : runConcurrently(topic, lanes, target);
+    }
+
+    private List<LaneResult> runSequentially(String topic, List<Lane> lanes, int target) {
         List<LaneResult> results = new ArrayList<>();
-        for (Lane lane : LANES) {
-            results.add(runLane(lane, topic));
+        for (Lane lane : lanes) {
+            results.add(runLane(lane, topic, target));
         }
         return results;
     }
@@ -277,13 +344,13 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      * these numbers are comparable with each other but NOT with a sequential run's.
      */
     @SneakyThrows
-    private List<LaneResult> runConcurrently(String topic) {
+    private List<LaneResult> runConcurrently(String topic, List<Lane> lanes, int target) {
         Map<Lane, LaneResult> results = new ConcurrentHashMap<>();
-        CountDownLatch done = new CountDownLatch(LANES.size());
-        for (Lane lane : LANES) {
+        CountDownLatch done = new CountDownLatch(lanes.size());
+        for (Lane lane : lanes) {
             Thread thread = new Thread(() -> {
                 try {
-                    results.put(lane, runLane(lane, topic));
+                    results.put(lane, runLane(lane, topic, target));
                 } finally {
                     done.countDown();
                 }
@@ -291,15 +358,15 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
             thread.start();
         }
         done.await();
-        return LANES.stream().map(results::get).filter(r -> r != null).collect(Collectors.toList());
+        return lanes.stream().map(results::get).filter(r -> r != null).collect(Collectors.toList());
     }
 
-    private LaneResult runLane(Lane lane, String topic) {
-        log.info("\n=== {} starting ===", lane);
+    private LaneResult runLane(Lane lane, String topic, int target) {
+        log.info("\n=== {} starting over {} records ===", lane, format(target));
         long startedAt = System.nanoTime();
         int processed = lane.isParallel()
-                ? runParallelLane(lane, topic)
-                : runVanillaLane(topic);
+                ? runParallelLane(lane, topic, target)
+                : runAkCoreLane(topic, target);
         Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
         log.info("=== {} finished: {} records in {}ms ===", lane, format(processed), elapsed.toMillis());
         return new LaneResult(lane, elapsed, processed);
@@ -308,19 +375,19 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
     /**
      * The serial arm: poll, then process each record to completion before the next one. Failures
      * are retried inline, because that is what a naive consumer does with a record it cannot skip -
-     * dropping them here would hand the vanilla lane a discount the parallel lanes do not get.
+     * dropping them here would hand the AK core lane a discount the parallel lanes do not get.
      */
     @SneakyThrows
-    private int runVanillaLane(String topic) {
+    private int runAkCoreLane(String topic, int target) {
         KafkaConsumer<String, String> consumer = getKcu().createNewConsumer(GroupOption.NEW_GROUP);
         openResources.add(consumer);
         consumer.subscribe(of(topic));
 
         AtomicInteger processed = new AtomicInteger();
-        try (ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, RECORDS)) {
-            long deadline = System.nanoTime() + deadlineFor(Lane.VANILLA).toNanos();
-            while (processed.get() < RECORDS) {
-                failIfPastDeadline(Lane.VANILLA, processed, deadline);
+        try (ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, target)) {
+            long deadline = System.nanoTime() + deadlineFor(Lane.AK_CORE, target).toNanos();
+            while (processed.get() < target) {
+                failIfPastDeadline(Lane.AK_CORE, processed, target, deadline);
                 ConsumerRecords<String, String> polled = consumer.poll(ofMillis(500));
                 for (ConsumerRecord<String, String> record : polled) {
                     int attempt = 0;
@@ -340,7 +407,7 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
     }
 
     @SneakyThrows
-    private int runParallelLane(Lane lane, String topic) {
+    private int runParallelLane(Lane lane, String topic, int target) {
         Properties consumerProps = new Properties();
         KafkaConsumer<String, String> consumer = getKcu().createNewConsumer(true, consumerProps);
 
@@ -355,7 +422,7 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
         pc.subscribe(of(topic));
 
         AtomicInteger processed = new AtomicInteger();
-        try (ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, RECORDS)) {
+        try (ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, target)) {
             pc.poll(context -> {
                 simulateWork(recordId(context.getSingleConsumerRecord()),
                         context.getSingleRecord().getNumberOfFailedAttempts());
@@ -366,7 +433,7 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
                 bar.step();
             });
 
-            awaitCompletion(lane, processed);
+            awaitCompletion(lane, processed, target);
         }
         pc.closeDrainFirst();
         return processed.get();
@@ -379,18 +446,39 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      * performance assertion, and a tight deadline here would turn a slow host into a false failure.
      * The floor absorbs broker start-up and the first rebalance, which dominate at small volumes.
      */
-    private static Duration deadlineFor(Lane lane) {
-        long idealMs = (long) RECORDS * DELAY_MS;
-        if (lane.isParallel()) {
-            idealMs = idealMs / MAX_CONCURRENCY;
-        }
+    private static Duration deadlineFor(Lane lane, int target) {
+        long idealMs = (long) target * DELAY_MS / effectiveConcurrency(lane, target);
         return Duration.ofMillis(Math.max(SLOWEST_ACCEPTABLE_FACTOR * idealMs, DEADLINE_FLOOR.toMillis()));
     }
 
-    private static void awaitCompletion(Lane lane, AtomicInteger processed) {
-        long deadline = System.nanoTime() + deadlineFor(lane).toNanos();
-        while (processed.get() < RECORDS) {
-            failIfPastDeadline(lane, processed, deadline);
+    /**
+     * What a lane can actually run in parallel, which is NOT {@link #MAX_CONCURRENCY} for the
+     * ordered lanes - and conflating the two gave PC_PARTITION a deadline ten times tighter than its
+     * own best case, then reported the result as a stall.
+     * <p>
+     * <b>The ceiling is the number of independent ordering units, whichever is lower.</b> Partition
+     * ordering gets one in-flight record per partition, so ten partitions cap it at ten however high
+     * the dial goes; key ordering gets one per distinct key. That is not a limitation of the demo,
+     * it is the property the demo exists to show - and it is why raising the concurrency dial does
+     * nothing for a partition-ordered workload while key ordering scales with the keyspace.
+     */
+    private static int effectiveConcurrency(Lane lane, int target) {
+        switch (lane) {
+            case AK_CORE:
+                return 1;
+            case PC_PARTITION:
+                return Math.min(MAX_CONCURRENCY, PARTITIONS);
+            case PC_KEY:
+                return Math.min(MAX_CONCURRENCY, Math.max(1, (int) (target * (KEYS_PERCENT / 100d))));
+            default:
+                return MAX_CONCURRENCY;
+        }
+    }
+
+    private static void awaitCompletion(Lane lane, AtomicInteger processed, int target) {
+        long deadline = System.nanoTime() + deadlineFor(lane, target).toNanos();
+        while (processed.get() < target) {
+            failIfPastDeadline(lane, processed, target, deadline);
             ThreadUtils.sleepQuietly(100);
         }
     }
@@ -399,12 +487,12 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      * A demo that hangs reports nothing, which is worse than a demo that fails - so the wait ends
      * with a message naming the lane and how far it got.
      */
-    private static void failIfPastDeadline(Lane lane, AtomicInteger processed, long deadlineNanos) {
+    private static void failIfPastDeadline(Lane lane, AtomicInteger processed, int target, long deadlineNanos) {
         if (System.nanoTime() > deadlineNanos) {
             throw new IllegalStateException(String.format(
                     "%s stalled: %s of %s records after %s. Nothing is asserted here, so this is a "
                             + "stall, not a slow host - check the broker and the engine's logs above.",
-                    lane, format(processed.get()), format(RECORDS), deadlineFor(lane)));
+                    lane, format(processed.get()), format(target), deadlineFor(lane, target)));
         }
     }
 
@@ -447,6 +535,8 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
         Map<String, Object> fingerprint = new HashMap<>();
         fingerprint.put("records", RECORDS);
         fingerprint.put("partitions", PARTITIONS);
+        fingerprint.put("replayFactor", REPLAY_FACTOR);
+        fingerprint.put("replayRecords", REPLAY_FACTOR > 1 ? RECORDS * REPLAY_FACTOR : "skipped");
         fingerprint.put("delayMs", DELAY_MS);
         fingerprint.put("keysPercent", KEYS_PERCENT);
         fingerprint.put("uniqueKeys", uniqueKeys);
@@ -472,23 +562,41 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
         }
     }
 
-    private void report(List<LaneResult> results) {
-        LaneResult vanilla = results.stream()
-                .filter(r -> r.getLane() == Lane.VANILLA)
+    /**
+     * @param baseline the replay whose AK_CORE lane the ratios are against. The small replay is its
+     *                 own baseline; the big replay borrows the small one's, because it has no serial
+     *                 lane to divide by - and that ratio across replays is exactly the 81.7x the
+     *                 classic cast quoted. Labelled as such rather than presented as like-for-like,
+     *                 because it is not: a steady-state rate over a real backlog against a serial
+     *                 rate that includes its own start-up.
+     */
+    private void report(String title, List<LaneResult> results, List<LaneResult> baseline) {
+        LaneResult akCore = baseline.stream()
+                .filter(r -> r.getLane() == Lane.AK_CORE)
                 .findFirst()
                 .orElse(null);
+        boolean acrossReplays = baseline != results;
 
-        StringBuilder table = new StringBuilder("\n\nResults (" + describeKeyRelevance() + "):\n");
-        table.append(String.format("  %-14s %12s %14s %10s%n", "lane", "elapsed", "msg/s", "vs vanilla"));
+        StringBuilder table = new StringBuilder("\n\n" + title + "\n");
+        table.append("(").append(describeKeyRelevance()).append(")\n");
+        String ratioHeader = acrossReplays ? "vs AK core*" : "vs AK core";
+        table.append(String.format("  %-14s %12s %14s %11s%n", "lane", "elapsed", "msg/s", ratioHeader));
         for (LaneResult result : results) {
-            String ratio = vanilla == null || vanilla.ratePerSecond() == 0
+            String ratio = akCore == null || akCore.ratePerSecond() == 0
                     ? "-"
-                    : String.format("%.1fx", result.ratePerSecond() / vanilla.ratePerSecond());
-            table.append(String.format("  %-14s %11ds %14s %10s%n",
+                    : String.format("%.1fx", result.ratePerSecond() / akCore.ratePerSecond());
+            table.append(String.format("  %-14s %11ds %14s %11s%n",
                     result.getLane(),
                     result.getElapsed().getSeconds(),
                     format((int) result.ratePerSecond()),
                     ratio));
+        }
+        if (acrossReplays && akCore != null) {
+            table.append(String.format("%n  * against the SMALL replay's serial lane (%s msg/s over %s records).%n",
+                    format((int) akCore.ratePerSecond()), format(akCore.getProcessed())));
+            table.append("    Across replays, so not like-for-like: a sustained rate over a real backlog\n");
+            table.append("    against a serial rate that carries its own start-up. It is the number the\n");
+            table.append("    2021 cast quoted, and the small replay above is the honest side-by-side.\n");
         }
         log.info(table.toString());
     }

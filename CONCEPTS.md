@@ -15,6 +15,18 @@ produce side at once, but the controller's commit side excludes them all. Everyt
 commit cluster — **dirty**, **eager processing during commit**, **commit lock timeout** — is a rule
 about when one side may be taken or must wait.
 
+## Naming
+
+**AK core** (never bare "core")
+The Apache Kafka client itself - `KafkaConsumer`, `KafkaProducer` - as opposed to anything in this
+project. Say **AK core**, because bare "core" collides with **`parallel-consumer-core`**, the module,
+and the two turn up a sentence apart whenever the engine is being compared against the client it
+wraps. "For Java, core is the native client" and "build the core/sleep demo" were written in the same
+document meaning opposite things.
+<p>
+"AK" is already the repo's abbreviation for Apache Kafka. The comparison demo names its serial lane
+`AK_CORE` for the same reason.
+
 ## Parallel consumption
 
 **Control loop**

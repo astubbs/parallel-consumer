@@ -12,6 +12,17 @@ work, because the decisions below were made in conversation and would otherwise 
 history. Every decision records who made it. Open questions stay open in writing rather than being
 silently resolved by whoever picks this up.
 
+## Say "AK core", never bare "core" (owner, 2026-08-21)
+
+Both senses are already in this file, one decision apart, meaning opposite things - so the word is
+settled here and recorded in [`CONCEPTS.md`](../../CONCEPTS.md):
+
+- **AK core** - the Apache Kafka client, `KafkaConsumer`. The serial arm. Decision 8 calls it
+  *vanilla/native*; decision 4 calls it *the native client* for Java.
+- **`parallel-consumer-core`** - the module, as in decision 10's "build the core/sleep one".
+
+`ComparisonDemo` names the lane `AK_CORE`. Bare "core" means neither.
+
 ## Why this exists at all
 
 The driver is a **v6 experimental release of the proxy clients**. They are close to ready; what is
