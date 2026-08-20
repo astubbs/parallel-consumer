@@ -40,7 +40,7 @@ matrix and published pieces from Anthropic and Martin Fowler.
   `docs/inflight/` and `docs/refactoring.md`, "a filename carries no status", "deferred is a schedule
   and all non-deferred work happens first" - none of that ships with anyone's hooks. Adopting the
   tooling without them gets gates enforcing rules nobody agreed to, which is worse than no gates.
-- **The self-test density is unmatched** - thirteen self-tests paired one-to-one with their gates,
+- **The self-test density is unmatched** - every gate paired one-to-one with a self-test,
   each verified red against a deliberately broken copy. The research found the *idea* advocated
   elsewhere and one project genuinely eval-gated, but nobody requires it per gate. That discipline is
   the thing worth keeping whatever the tooling underneath.
@@ -57,8 +57,8 @@ hook closes it. Worth doing before any adoption decision, because it is useful e
 
 Adopting mid-release-run would destabilise the tooling every session depends on, for a benefit that
 is entirely about future effort. The prerequisite is that our own harness stops changing weekly -
-three of the seven hooks were written or substantially fixed in a single session, and two gates gained
-bypass fixes in the same window. Re-evaluate once v6 has shipped and the harness has been still for a
+most of the hooks were written or substantially fixed in a single session, and gates gained bypass
+fixes in the same window. Re-evaluate once v6 has shipped and the harness has been still for a
 while.
 
 [`process-quarantine-lane-foss.md`](process-quarantine-lane-foss.md) is the same question about one
