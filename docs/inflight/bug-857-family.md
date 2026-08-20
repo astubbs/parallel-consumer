@@ -605,6 +605,7 @@ wedged, rather than stalling somewhere random mid-run. **Two samples is not enou
 and it is recorded here as the thing to check on the next sighting rather than as a finding. If it
 holds, the seed matters less to this family than the ledger has assumed - which would also explain
 the sightings whose seeds replay clean.
+
 **Fourteenth sighting, 2026-08-20 - three `Chaos Pain Suite` reds inside twenty minutes across two
 branches, and the first one is on the DRAIN control arm.** Four scenarios fired between 01:05 and
 01:21Z. All the numbers below come from the uploaded failsafe artifacts, per the retrieval note
