@@ -1,5 +1,8 @@
 # Branch: the classic comparison demo, rescued and ported per language
 
+<!-- inflight-type: feature -->
+<!-- inflight-impact: coordination -->
+
 Branch `feats/classic-vertx-demo`, stacked on `feats/proxy-requirements` (astubbs#293, astubbs#242),
 because the per-language demos need the proxy client modules and those exist only there. The rescue
 half needs nothing from that branch; the port half needs all of it.
