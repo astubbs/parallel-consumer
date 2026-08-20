@@ -1,5 +1,8 @@
 # Teardown can race a live broker-poll thread on a failing shutdown
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: reliability -->
+
 `AbstractParallelEoSStreamProcessor.doClose()` runs subsystem and metrics teardown in a `finally`
 that executes **even when the broker-poll thread was never joined**:
 

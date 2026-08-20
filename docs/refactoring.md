@@ -1,14 +1,21 @@
 # Refactoring backlog
 
-This doc owns the deferred-work backlog - internal refactors, the release-gated breaking-change
-queue, and `TODO`/`FIXME`/`XXX` triage. AGENTS.md routes here and keeps only the one-line rule.
+This doc owns the **lightweight** refactor list - refactors too small to deserve their own
+`docs/inflight/` note - plus the release-gated breaking-change queue and `TODO`/`FIXME`/`XXX`
+triage. AGENTS.md routes here and keeps only the one-line rule.
 
-Deferred internal refactors - improvements noticed while working that are too big
-or too risky to fold into the change at hand, to be picked up **when things are
-quiet**. This is a solo-maintainer backlog, not an issue tracker: entries live
-here (versioned, greppable, zero per-item ceremony) instead of as GitHub issues.
+An entry is a line or two: no owner, no tags, no state. Improvements noticed while working that are
+too big or too risky to fold into the change at hand, to be picked up **when things are quiet**. This
+is a solo-maintainer list, not an issue tracker: entries live here (versioned, greppable, zero
+per-item ceremony) instead of as GitHub issues.
 
-**This is the index for all refactor work.** It also catalogues the abandoned
+**The axis is weight, not timing.** The moment an entry acquires a decision, a blocker, or evidence
+worth keeping, it has outgrown this file: promote it to a `docs/inflight/` note and delete the line in
+the same commit - neither file may state it twice.
+[`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns that boundary. Being here says nothing about
+*when* the work happens, and work decided to happen later is **not** moved here from a note.
+
+**This is the index for the small refactor work, and for the archive below.** It also catalogues the abandoned
 draft branches and prior closed PRs so their ideas aren't lost - each with what it
 did, whether it's still relevant, and any linked issue. Why so many draft-looking
 branches? This fork was never meant to be the project's primary - it was astubbs's
@@ -420,52 +427,6 @@ but not this.*
 ### metrics/PCMetricsDef.java
 - `AVERAGE_USER_PROCESSING_TIME` / `AVERAGE_WAITING_TIME`: two unimplemented metric definitions -
   implement or drop.
-
-### internal/PCModule.java - setter injection can outrun the providers
-
-- **Make the remaining `@Setter` impossible to misuse, or remove the need for it.** `PCModule` is a
-  hand-rolled DI container ("modled on how Dagger works", zero-dependency policy): dependencies come
-  from lazy memoising provider methods. Setter injection sits alongside that and does not compose
-  with it - a provider caches on first call, and collaborators capture what they were given, so
-  `producerManager` and `brokerPollSystem` are both constructed with `workManager()` passed in. A
-  setter called *after* anything has resolved the dependency swaps the field and leaves those
-  collaborators holding the previous instance; called before, it is redundant with the provider. The
-  window in which it is both safe and useful is empty.
-- **The remaining `@Setter`, on `parallelEoSStreamProcessor`, is legitimate only because of the shape
-  around it - and that shape is the thing to change.** It is described as breaking a construction
-  cycle: the processor's constructor needs the module, the module needs the processor, so
-  `AbstractParallelEoSStreamProcessor` calls `module.setParallelEoSStreamProcessor(this)`. But it is
-  not a cycle between two peers. **In production the field is write-only.** The one production
-  consumer is `BrokerPollSystem`, and `brokerPoller` takes the processor *as a parameter* - the
-  processor passes `this` at the call site rather than the module resolving it. Nothing in main reads
-  the field back. Its only reader is the `pc()` provider, whose only caller is `ProducerManagerTest`,
-  which overrides `pc()` to substitute a spy.
-- So the registration exists to keep a lazy singleton consistent for a provider that only a test
-  calls. **Prefer deleting `pc()` and the field over hardening the setter**: the processor already
-  hands itself to the collaborator that needs it, and the test seam can be a constructed-and-passed
-  processor instead of an overridden provider. That removes the cycle rather than expressing it more
-  safely - no `Supplier`/`Lazy` indirection (Dagger's usual answer) and no extracted role interface
-  are needed, because no production dependency remains to invert. Both members are `protected` on an
-  `internal` class, so this is not published API. The one behaviour to preserve deliberately or drop
-  deliberately: today a `pc()` call after an externally-built processor returns that instance rather
-  than constructing a second one, which is the only thing the setter buys.
-- Related: `PCModuleTestEnv` shadows the parent's private `workManager` field with one of its own and
-  overrides the provider. Overriding the provider is the right way to substitute in a Dagger-shaped
-  module; the shadowed field is what made the two mechanisms hard to tell apart in the first place.
-- Background: astubbs#57 removed `@Setter` from `workManager`. It had no production callers - its
-  only two call sites were test lines that provably did nothing, each retrieving the instance from
-  the module and setting the identical reference straight back.
-
-### metrics/PCMetrics.java
-- **`metersLock` is held across calls into the user's `MeterRegistry`.** `removeMeter`, `close` and
-  `removeMetersByPrefixAndCommonTags` all call `remove`/`getMeters` with the lock held, so a
-  Micrometer `MeterRegistry` whose listener takes a user lock and separately calls back into
-  `PCMetrics` gives a textbook AB/BA inversion. No such path exists in this codebase or in
-  Micrometer's own registries, and the shapes that would reach it are contrived - which is why this
-  is queued rather than fixed. The fix is to collect the ids under the lock and call the registry
-  outside it; that is a real restructure of all three methods, not a tweak, and it must not undo
-  the never-throws contract those methods now carry (`removeQuietly`, and the two-level guard in
-  `removeMetersByPrefixAndCommonTags`). Raised in review of astubbs#57 and rated theoretical there.
 
 ---
 

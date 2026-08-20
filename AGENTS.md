@@ -102,8 +102,8 @@ a file in it is touched, rather than waiting to be opened.
 |---|---|---|
 | **`AGENTS.md`** (this file) | Rules that bind every agent, and the map above | Work items of any kind; anything only one topic needs |
 | **`STRATEGY.md`** (repo root) | What the product is and why: target problem, the client-side guiding choice, who it is for, success metrics, tracks under investment | A roadmap or feature list. It is a *claims* document nothing tests - work that falsifies a claim must update it; the branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
-| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
-| **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
+| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` and tagged with `inflight-type`/`inflight-impact`. [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) owns the prefixes, the tags and what qualifies; the axis is **weight**, so work decided to happen later stays here under `inflight-state: deferred` | A committed index file, which every PR would edit. A file is deleted when its work lands |
+| **`docs/refactoring.md`** | Refactors **too small to deserve their own note** - a line or two each, grouped by file, no owner or tags - plus **breaking changes queued for the next major** (release-gated section) and the **triage of `TODO`/`FIXME`/`XXX` markers** | Anything carrying a decision, evidence or tracking - that is a `docs/inflight/` note; promote the line and delete it in the same commit |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
 | **`docs/test-hardening/`** | Dated audits of tests that do not run, do not assert, or were never written - per-test evidence and the commit that disabled each one | A live or generated registry - each audit is point-in-time; triage goes in `refactoring.md` |
@@ -512,11 +512,13 @@ branch, and never pipe a git command whose failure must stop an `&&` chain (or t
 
 ## Refactoring backlog
 
-Deferred internal refactors live in [`docs/refactoring.md`](docs/refactoring.md) - see the table
+Small internal refactors live in [`docs/refactoring.md`](docs/refactoring.md) - see the table
 above for what it owns, including `TODO`/`FIXME`/`XXX` triage and the release-gated breaking-change
 queue. When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot
-(`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry
-to the doc - **do not start a parallel list**. Promote an item to a branch or PR only when you
+(`grep -rn "TODO(refactor)" --include=*.java` lists them) and add a line or two to the doc - **do not
+start a parallel list**. **The moment it needs more than that** - a decision, a blocker, evidence
+worth keeping - **it is a `docs/inflight/` note instead**, and a line already there is promoted and
+deleted in the same commit; [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) owns that call. Promote an item to a branch or PR only when you
 actually start it; if it maps to an upstream issue, link it rather than duplicate it.
 
 ## Upstream tracking
