@@ -206,3 +206,21 @@ again, so removing the meter here is the last word rather than a race with the s
 - `docs/inflight/bug-shutdown-teardown-race.md` - the deeper root cause left open: whether
   `AbstractParallelEoSStreamProcessor.doClose()` should guarantee the broker-poll join before running
   teardown, rather than each subsystem defending itself.
+
+## What came after this record
+
+Added beside the account above rather than into it - the record stands as written on 2026-08-07, and
+these describe work that landed later on the same PR.
+
+The "each subsystem defending itself" half hardened considerably. `PCMetrics` teardown now carries an
+explicit **never-throws contract** in three parts: `removeQuietly` around every `remove(Meter.Id)`; a
+two-level guard in `removeMetersByPrefixAndCommonTags`, per-meter *and* around the enumeration,
+because either alone leaves a hole; and a guard on `meter.getId()` in the public
+`removeMeter(Meter)`, since a custom registry's `Meter` is the user's code too. The reason it matters
+is the one this record already names - teardown runs inside `doClose`'s `finally`, where an escape
+replaces the in-flight exception and skips the transition to CLOSED.
+
+- `docs/inflight/core-pcmetrics-lock-held-across-registry-calls.md` - the open consequence of that
+  hardening: those guarded calls run with `metersLock` held, so a registry listener that calls back
+  into `PCMetrics` is an AB/BA inversion. Contrived today; the fix must not weaken any of the three
+  guards, which is what makes it a decision rather than a tidy-up.
