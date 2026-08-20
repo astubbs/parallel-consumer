@@ -30,17 +30,23 @@ title plus every commit subject concatenated - is a log of how the work happened
 explanation of what changed and why, and the PR discussion is not in `git log`, so the squash message
 is all a future reader gets. **Write a real one.**
 
-**Write it where it is used, not into the conversation.** That means the merge itself -
-`gh pr merge --squash --body`, or the merge box. Do not print it out in chat unless asked: it is
-long, the author is being asked for a decision rather than a proofread, and pasting it makes them
-scroll past the thing they actually have to answer. Say the strategy and why in a line or two, and
-offer the message.
+**Write it to a scratch file and say where it is.** Put it in the merge when you perform it;
+otherwise write it to a file under the session's scratchpad and give the author the path. Say the
+strategy and why in a line or two.
 
-**Never put a squash message in the PR description.** A description tells reviewers what the change
-is and is read while the PR is open; a squash message is commit text consumed once, at merge. Parking
-one in the other corrupts the description for every reader before the merge, and leaves it behind as
-noise after. When the author is merging, hand the message over at merge time - post it as a PR
-comment, or give it to them when they ask - and leave the description alone.
+**Never the PR body.** It is what reviewers read to understand the change, so a squash message there
+is a second description of the same PR and the two drift the moment either is touched. It is also
+not where any merge command reads from, so it buys nothing at the point of use.
+
+**Print it in chat once the strategy is settled** - it is a few KB, and making the author open a file
+to read the thing they asked for is friction with nothing behind it. The one time to withhold it is
+while you are still *asking* which strategy to use: then the author owes you an answer, and a long
+message above the question buries it. Decided, print it; undecided, offer it.
+
+This paragraph previously said "or in the PR body if the author is merging", and it is injected into
+every merge-prep prompt, so it produced the same wrong move repeatedly - the last time on
+astubbs/parallel-consumer#323, whose description carried a squash message until it was removed by
+hand.
 
 That is a delivery rule, not a licence to skip it: the message still gets written, and written
 properly.
@@ -74,6 +80,13 @@ Rewriting history someone else may have pulled is not reversible from inside a P
 
 - **Is the PR description still true?** Long-running branches drift; a description written before
   three rounds of review usually describes a PR that no longer exists.
+- **Is background work from this session still writing?** A subagent mid-task may hold work that
+  belongs IN this PR; merged without it, that work becomes a second PR and whatever the description
+  or the inflight notes said about the gap goes stale on master.
+  `.claude/hooks/check-merge-outstanding-work.sh` refuses the merge while task output is still
+  being written (override by prefixing the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) -
+  but a STALLED agent writes nothing and is not detected, so run `ListAgents` when the answer
+  matters.
 - **Has a human reviewed it and said LGTM?** Automated review is not approval, and neither is green
   CI.
 - **Do the commit messages explain WHY?** The diff already says what.
@@ -88,26 +101,3 @@ Rewriting history someone else may have pulled is not reversible from inside a P
   `docs/data/roadmap.yaml` move in the same change - the `stages` block there owns the rule. The
   roadmap-stage gate enforces it when the entry's `pull_request` names this PR; entries carried by
   a tracking issue only are on you.
-
-## Say everything you have to say BEFORE the merge
-
-**Every follow-up, suggestion and learning goes to the author while the PR is still open** - as part
-of answering "is this ready to merge?", not afterwards. That includes the ones it is most tempting
-to defer: a refactor you noticed but did not do, a test you would add next, a rule the work suggests
-changing, and the **compounding run** - the learnings worth capturing from what just happened
-(`ce-compound`, `docs/solutions/`).
-
-**After the merge they are worth a fraction as much, and some are worth nothing.** The branch is
-gone, so anything that belonged *in* this PR now costs a new one. The reviewer's attention is gone.
-The context that made the suggestion obvious is gone, and the person best placed to judge it has
-moved on. A follow-up filed at merge+1 competes for attention with everything else in the backlog;
-the same sentence said at merge-1 gets decided in seconds by someone already holding the problem.
-
-The worked example is astubbs#204: the agent that merged it read the manifest entry during merge
-prep, saw `status: pr-open`, **merged anyway**, and reported the staleness as a follow-up afterwards
-- at which point fixing it needed a fresh branch, a commit straight to master, and a later session
-to notice at all. Said one minute earlier it was a one-line edit to a branch that was still open.
-
-So: when you think you are done, ask what you are holding back, and say it now. "Nothing outstanding"
-is a fine answer and worth stating explicitly - it is the difference between having checked and
-having not thought about it.

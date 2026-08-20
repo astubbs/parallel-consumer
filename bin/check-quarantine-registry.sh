@@ -28,7 +28,7 @@ for f in $(quarantined_files); do
     count=$(quarantined_occurrences "$f")
     entries=$(registry_entries | awk -F. -v c="$cls" '$1 == c' | wc -l | tr -d ' ')
     if [ "$entries" -eq 0 ]; then
-        echo "DRIFT: $cls carries @Quarantined but has NO entry in $REGISTRY - add one (rule 1: no quarantine without diagnosis)."
+        echo "DRIFT: $cls carries @Quarantined but has NO entry in $REGISTRY - add one (rule 1: no quarantine without evidence)."
         drift=1
     elif [ "$entries" -ne "$count" ]; then
         echo "DRIFT: $cls has $count @Quarantined annotation(s) but $entries registry entr(ies) - every quarantined test needs its own diagnosed entry."

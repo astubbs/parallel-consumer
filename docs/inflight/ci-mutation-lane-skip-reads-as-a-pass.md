@@ -1,5 +1,10 @@
 # The mutation lane's skip renders as a green tick - decision pending
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, rides with the mutation-lane widening -->
+
+
 **Open decision, not a bug.** The lane behaves exactly as designed and says so in its job summary.
 What is undecided is whether *the checks list* should keep showing a pass when the lane graded
 nothing. Raised off astubbs#296, whose only main-code file is

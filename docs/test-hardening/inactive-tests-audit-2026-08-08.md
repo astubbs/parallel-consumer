@@ -415,7 +415,7 @@ feature first, and each already has a home in the tracker.
 
 - **`poisonPillGoesToDeadLetterQueue`** - **parallel-consumer has no dead-letter-queue concept and
   never has.** Zero occurrences of dead-letter or DLQ in any `src/main/java` in the tree. Tracked as
-  **astubbs#149** (mirroring `confluentinc#310`), and `docs/inflight/next-candidates.md` already
+  **astubbs#149** (mirroring `confluentinc#310`), and `docs/inflight/process-candidate-ranking.md` already
   ranks DLQ as **the most-demanded missing feature**. The stub is a 2020-era vote for that feature,
   not a test debt.
 - **`maxPerPartition`** - **no per-partition in-flight limit exists.** `ParallelConsumerOptions` has

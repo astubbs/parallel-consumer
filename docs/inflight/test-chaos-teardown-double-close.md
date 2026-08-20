@@ -1,5 +1,9 @@
 # Chaos teardown can still double-close a PC, and can orphan one after the fleet is "settled"
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
+
 The double-start race inside `ChaosConductor`'s draw loop is fixed (astubbs/parallel-consumer#292:
 single-flight `start()`, `stopRequested` abort, `closePending` CAS). Three independent reviewers on
 that PR then found the *same failure class* reachable through the teardown path, which astubbs#292
@@ -63,6 +67,6 @@ paths astubbs#292 deliberately left alone.
 
 ## Related
 
-- `bug-857-family.md` - the `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED` signature these produce is the same
+- `test-857-churn-storm-async-stalls.md` - the `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED` signature these produce is the same
   one that file tracks. astubbs#292 confirmed one of its sightings was the harness, not the product;
   these paths are how the harness could still produce it.

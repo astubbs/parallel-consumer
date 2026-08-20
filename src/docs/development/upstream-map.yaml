@@ -267,13 +267,13 @@ entries:
       rejecting new ones, preventing record drops on rebalance. Upstream PR had no
       tests; the fork carry adds four, every one proven RED against the pre-fix
       behaviour, one of them driving the defect through the real registration path
-      rather than around it. Fork PR #31 is open and ready for review against
-      master, with cserspring's authorship preserved on the fix commit; it also
-      narrows both addWorkContainer overloads to package-private and documents the
-      three staleness checkpoints in PartitionState#epochIsStale. No load-level
-      reproduction exists - the existing chaos scenario does not reproduce this
-      defect, recorded in
-      docs/inflight/test-909-not-reproducible-by-existing-chaos-scenario.md.
+      rather than around it. Fork PR #31 merged 2026-08-19, with cserspring's
+      authorship preserved on the fix commit; it also narrows both addWorkContainer
+      overloads to package-private and documents the three staleness checkpoints in
+      PartitionState#epochIsStale. A deterministic broker-level reproduction
+      (RegistrationRaceStaleResidentIT) followed in a separate PR; why chance-based
+      chaos load could never find the race is recorded in
+      docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4
@@ -698,7 +698,7 @@ entries:
       (draft PR #22 @ba6b71f10 -- NB that SHA is the UPSTREAM branch tip; the fork's
       same-named branch features/dynamic-concurrency-control @6f85eac41 has DIVERGED
       from it and the upstream side is not preserved on origin -- see
-      docs/inflight/next-branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
+      docs/inflight/branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
       is unrelated (throttles status logging in tests). #119 Connect: reporter offered
       to do the work and was told there was no demand; maintainer later had working
       hacks both directions and judged "Connect sinks inside PC" publishable -- that
