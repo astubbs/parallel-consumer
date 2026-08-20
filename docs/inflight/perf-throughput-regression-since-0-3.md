@@ -364,7 +364,11 @@ anything else recorded: same key-ordered-concurrency claim, a gRPC sidecar relay
 (the astubbs#242 architecture, already shipped), formally verified, and commercial with a patent
 pending.
 
-**Two things in the original description turned out to be wrong, and both change the comparison:**
+**It is a Go project, not a Java one** - the JVM build is a separate native implementation of the
+same design. See the note.
+
+**Two further things in the original description turned out to be wrong, and both change the
+comparison:**
 
 - **It does commit offsets**, by reconstructing contiguous per-partition order before committing -
   the same hard problem PC's offset encoding solves. So there is no "they skipped the hard part"
