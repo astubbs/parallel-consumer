@@ -114,6 +114,14 @@ assert "a task with a task impact passes"                  pass '# T\n\n<!-- inf
 # proven by execution). The gate must reject what the index cannot parse.
 assert "a state reason containing '>' is rejected"         fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: coordination -->\n<!-- inflight-state: closed - superseded, fix -> astubbs#331 -->\n'
 
+# A DUPLICATED tag is invisible to every other check: they all read the first match, so a note can
+# carry two contradictory states and be reported valid. A merge produced exactly that - the stale
+# block appended under the corrected one - and the gate passed it.
+assert "a second inflight-state is rejected"               fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: deferred - parked -->\n<!-- inflight-state: parked - deferred -->\n'
+assert "a second inflight-type is rejected"                fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n'
+assert "a second inflight-impact is rejected"              fail '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-impact: ci -->\n'
+assert "one of each still passes"                          pass '# T\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: deferred - after v6 -->\n'
+
 echo
 if [ "$failures" -eq 0 ]; then echo "All check-inflight-tags self-tests passed"; exit 0; fi
 echo "$failures self-test(s) FAILED"

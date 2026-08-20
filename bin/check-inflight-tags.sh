@@ -39,6 +39,11 @@ TASK_IMPACTS="$INFLIGHT_TASK_IMPACTS"
 IMPACTS="$BUG_IMPACTS $TASK_IMPACTS"
 
 problems=0
+# NAME THE NOTE, NOT JUST THE PATH. A filename is an identifier; the title is what a reader
+# recognises - and after the rename pass, paths are the part most likely to have just changed under
+# whoever is reading the failure.
+note_title() { sed -n 's/^# //p' "$1" 2>/dev/null | head -1; }
+
 note() { printf 'INFLIGHT: %s\n' "$1" >&2; problems=$((problems + 1)); }
 in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
@@ -54,6 +59,20 @@ for f in docs/inflight/*.md; do
     base=$(basename "$f")
     case "$base" in AGENTS.md|CLAUDE.md) continue ;; esac
 
+    # A SECOND copy of any tag is a merge artefact, and it is invisible to every other check here:
+    # each one reads the first match, so a note can carry two contradictory states and be reported
+    # valid. Introduced exactly that way - merging a branch whose notes predated a state reword
+    # appended the stale block underneath the corrected one rather than replacing it, and the gate
+    # said "83 note(s) valid" over a note that was both `deferred - parked` and `parked - deferred`.
+    for tag in type impact state; do
+        # No `|| echo 0`: grep -c PRINTS 0 and exits 1 on no match, so the fallback appends a
+        # second line and the numeric test below errors on "0\n0".
+        n=$(grep -c "<!-- inflight-$tag:" "$f" 2>/dev/null); n=${n:-0}
+        if [ "${n:-0}" -gt 1 ]; then
+            note "$f \"$(note_title "$f")\": $n inflight-$tag markers, expected one. Every check here reads the first, so the others are silently ignored - usually a merge that appended a stale tag block instead of replacing it"
+        fi
+    done
+
     # THE CLOSING --> IS REQUIRED, because the index's grep requires it. A bare `inflight-type: bug`
     # with no comment wrapper used to pass here and then land in the index's "unmatched" list -
     # defeating the whole point of a gate, which is to fail the commit rather than the next session.
@@ -66,21 +85,21 @@ for f in docs/inflight/*.md; do
     state=$(sed -n 's/.*inflight-state:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
 
     if [ -z "$state" ] && grep -q 'inflight-state:.*-->' "$f"; then
-        note "$f: inflight-state reason contains '>' - the session index (is_open in .claude/hooks/inject-recorded-knowledge.sh) cannot parse that marker and would list the note as OPEN. Reword without '>'"
+        note "$f \"$(note_title "$f")\": inflight-state reason contains '>' - the session index (is_open in .claude/hooks/inject-recorded-knowledge.sh) cannot parse that marker and would list the note as OPEN. Reword without '>'"
     fi
 
     if [ -z "$type" ]; then
-        note "$f: no inflight-type. One of: $TYPES"
+        note "$f \"$(note_title "$f")\": no inflight-type. One of: $TYPES"
     elif ! in_set "$type" "$TYPES"; then
-        note "$f: inflight-type '$type' is not one of: $TYPES"
+        note "$f \"$(note_title "$f")\": inflight-type '$type' is not one of: $TYPES"
     fi
 
     if [ -n "$impact" ] && ! in_set "$impact" "$IMPACTS"; then
-        note "$f: inflight-impact '$impact' is not one of: $IMPACTS"
+        note "$f \"$(note_title "$f")\": inflight-impact '$impact' is not one of: $IMPACTS"
     elif [ -n "$impact" ] && [ "$type" = "bug" ] && ! in_set "$impact" "$BUG_IMPACTS"; then
-        note "$f: impact '$impact' is a task impact, not a bug one. bug takes: $BUG_IMPACTS"
+        note "$f \"$(note_title "$f")\": impact '$impact' is a task impact, not a bug one. bug takes: $BUG_IMPACTS"
     elif [ -n "$impact" ] && [ "$type" = "task" ] && ! in_set "$impact" "$TASK_IMPACTS"; then
-        note "$f: impact '$impact' is a bug impact, not a task one. task takes: $TASK_IMPACTS"
+        note "$f \"$(note_title "$f")\": impact '$impact' is a bug impact, not a task one. task takes: $TASK_IMPACTS"
     fi
 
     # A bug or a task with no impact says what it IS without saying what it COSTS, which is the
@@ -89,18 +108,18 @@ for f in docs/inflight/*.md; do
     # among cosmetic features; it is optional because a new capability with no problem behind it has an
     # opportunity rather than a cost.
     if [ -z "$impact" ] && { [ "$type" = "bug" ] || [ "$type" = "task" ]; }; then
-        note "$f: type '$type' needs an inflight-impact (what it costs someone to not know)"
+        note "$f \"$(note_title "$f")\": type '$type' needs an inflight-impact (what it costs someone to not know)"
     fi
     if [ -n "$impact" ] && [ "$type" = "register" ] && ! in_set "$impact" "$INFLIGHT_REGISTER_IMPACTS"; then
-        note "$f: inflight-impact '$impact' is not a known impact. register takes any of: $INFLIGHT_REGISTER_IMPACTS"
+        note "$f \"$(note_title "$f")\": inflight-impact '$impact' is not a known impact. register takes any of: $INFLIGHT_REGISTER_IMPACTS"
     fi
     if [ -n "$impact" ] && [ "$type" = "feature" ] && ! in_set "$impact" "$INFLIGHT_FEATURE_IMPACTS"; then
-        note "$f: inflight-impact '$impact' is not a known impact. feature takes any of: $INFLIGHT_FEATURE_IMPACTS"
+        note "$f \"$(note_title "$f")\": inflight-impact '$impact' is not a known impact. feature takes any of: $INFLIGHT_FEATURE_IMPACTS"
     fi
 
     # A state must say WHY, or a reader cannot tell a decision from an abandonment.
     if [ -n "$state" ] && ! grep -q ' - ' <<<"$state"; then
-        note "$f: inflight-state '$state' has no reason. Use '<state> - <why>'"
+        note "$f \"$(note_title "$f")\": inflight-state '$state' has no reason. Use '<state> - <why>'"
     fi
 done
 

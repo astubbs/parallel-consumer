@@ -3,7 +3,6 @@
 <!-- inflight-type: feature -->
 <!-- inflight-state: deferred - parked; decide together with process-adopt-external-harness.md -->
 
-
 The `@Quarantined` lane - annotation, enforced registry, owner-claim verification, non-gating CI job,
 release blocking, self-tests - is generic; nothing in it is parallel-consumer-specific.
 

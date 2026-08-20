@@ -155,8 +155,16 @@ is_open()    { ! grep -q 'inflight-state:[^>]*-->' "$1" 2>/dev/null; }
 # index entirely. The position of the word carries no meaning - only its presence does - so matching
 # on position was inventing a rule the writer never agreed to. Bounded by `-->` so prose mentioning
 # the word elsewhere in the note cannot trigger it.
-is_deferred() { grep -q 'inflight-state:[^>]*deferred[^>]*-->' "$1" 2>/dev/null; }
-deferred_reason() { sed -n 's/.*inflight-state:[[:space:]]*\(deferred[^>]*\)-->.*/\1/p' "$1" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
+# PARKED IS DEFERRED. Antony's ruling, and it settles a split that was only ever accidental: the two
+# words named the same disposition - work that is real, not now - but only one of them was recognised,
+# so a note saying `parked` was filed with `closed` and `blocked` under "not shown". Matching either
+# word means the writer picks whichever reads better and neither choice strands the note.
+DEFERRED_RE='inflight-state:[^>]*\(deferred\|parked\)[^>]*-->'
+is_deferred() { grep -q "$DEFERRED_RE" "$1" 2>/dev/null; }
+# Prints the WHOLE state, not the part after a keyword: `parked` and `deferred` are the same
+# disposition, they can appear in either order or mid-sentence, and anchoring to one of them printed
+# an empty reason for every note that used the other. The state text IS the reason.
+deferred_reason() { sed -n 's/.*inflight-state:[[:space:]]*\([^>]*\)-->.*/\1/p' "$1" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
 
 emit_group_impactless() { # <type> <full-heading-incl-hashes> - only notes of this type carrying NO impact
     local files hits=""
@@ -238,23 +246,6 @@ emit_impact_group() { # <impact> - every open note with this impact, whatever it
     emit ""
 }
 
-emit_group() { # <type> <impact-or-empty> <heading>
-    local files hits=""
-    files=$(grep -rl "inflight-type:[[:space:]]*$1[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
-              | grep -v 'AGENTS.md' | sort)
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        is_open "$f" || continue
-        if [ -n "$2" ]; then grep -q "inflight-impact:[[:space:]]*$2[[:space:]]*-->" "$f" || continue; fi
-        hits="${hits}- $(inflight_title "$f")"$'\n'
-        emitted="${emitted}${f}"$'\n'
-    done <<< "$files"
-    [ -n "$hits" ] || return
-    emit "## $3"
-    printf '%s' "$hits"
-    emit ""
-}
-
 # GROUPED BY IMPACT, NOT BY TYPE. A feature that exists to prevent a crash has to appear beside the
 # crashes; grouping by type first buried it under "proposed work" where nobody ranking the day's work
 # would look. The type is still printed on each line, so nothing is lost by leading with the cost.
@@ -308,9 +299,9 @@ fi
 # omissions, which is the exact failure this index claims it cannot make; listing them by name means
 # a note whose state nothing recognises still appears, wearing the state that stranded it.
 excluded=$(grep -rl 'inflight-state:[^>]*-->' docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' \
-           | xargs -r grep -L 'inflight-state:[^>]*deferred[^>]*-->' 2>/dev/null | sort || true)
+           | xargs -r grep -L "$DEFERRED_RE" 2>/dev/null | sort || true)
 if [ -n "$excluded" ]; then
-    emit "# Not shown above - closed, parked or blocked"
+    emit "# Not shown above - closed or blocked"
     emit ""
     emit "Listed rather than counted: a number cannot tell you a note fell here by accident. Delete or migrate them."
     emit ""
