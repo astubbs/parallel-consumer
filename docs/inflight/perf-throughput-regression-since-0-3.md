@@ -91,7 +91,7 @@ so it fails with `Unsupported class file major version 61` regardless of how man
 opened. Consuming the **published artifact** from Central sidesteps all of it and is more faithful,
 since it is the jar users actually got.
 
-## Root cause of the FIRST cliff: 0.3.2.0 -> 0.4.0.0, and it is a fix
+## The first cliff: 0.3.2.0 -> 0.4.0.0, and what it is NOT
 
 The bisect showed a step, not a slope. Throughput halves at exactly one release boundary and stays
 down:
@@ -104,67 +104,80 @@ down:
 | **0.4.0.0** | **11,334** | **11,551** |
 | 0.4.0.1 | 11,321 | 11,388 |
 | 0.5.0.0 | 10,457 | 10,260 |
+| 0.5.1.0 | 10,309 | 10,907 |
+| 0.5.2.0 | 9,858 | 10,721 |
+| **0.5.2.8** | **2,583** | **2,467** |
+| 0.5.3.2 | 2,536 | - |
 
-(These are the sweep harness's numbers and are internally consistent; they are lower than the
-three-repeat control above because that used a different produce configuration. Compare within a
-table, never across.)
+(Sweep-harness numbers, internally consistent. Compare within a table, never across tables - the
+control run further up used a different produce configuration and different harness instrumentation.)
 
-19 commits sit in that gap, and the relevant one introduces
-`internal/ExternalEngine.java` - the shared base for Vert.x and Reactor, which is exactly what this
-benchmark drives.
-
-**Before (0.3.2.0)**, Vert.x used the core's work-request path:
-
-```java
-getPoolQueueTarget()   = options.getMaxConcurrency();          // 100
-getQueueTargetLoaded() = getPoolQueueTarget() * loadFactor;    // DynamicLoadFactor: starts 2, +2, maxFactor 100
-delta = target - workerPool.getQueue().size();
-```
-
-So the in-flight target could climb to **maxConcurrency x 100 = 10,000 records**.
-
-**After (0.4.0.0)**, `ExternalEngine` overrides both halves:
+19 commits sit in the first gap, and one introduces `internal/ExternalEngine.java` - the shared base
+for Vert.x and Reactor, which is what this benchmark drives. It changes how much work is requested:
 
 ```java
+// 0.3.2.0, via the core path
+getQueueTargetLoaded() = options.getMaxConcurrency() * DynamicLoadFactor.getCurrentFactor();  // factor: 2 -> 100
+
+// 0.4.0.0, ExternalEngine
 protected int calculateQuantityToRequest() {
-    return Math.max(0, maxConcurrency - wm.getNumberRecordsOutForProcessing());   // hard cap: 100
+    return Math.max(0, maxConcurrency - wm.getNumberRecordsOutForProcessing());
 }
-protected void checkPressure() { }   // no-op, so the load factor never steps up
+protected void checkPressure() { }   // no-op: the load factor never steps up
 ```
 
-**The old build was not honouring `maxConcurrency` for external engines** - it could dispatch up to
-100x what the caller asked for. The 27,000 msg/s in the README's asciinema cast was produced with up
-to 10,000 requests in flight against a configured limit of 100.
+### REFUTED: "the old build was over-dispatching"
 
-**So the first cliff is the price of a correctness fix, not a regression to undo.**
-`VertxConcurrencyIT` asserts that max concurrency is never exceeded, which is that fix being held in
-place.
+An earlier revision of this note claimed the old build ignored `maxConcurrency` and ran up to 10,000
+requests in flight, making the first cliff the price of a correctness fix. **That was wrong, and it
+was wrong because it was inferred from the diff instead of measured.**
 
-### Two hypotheses, both refuted at this boundary
+The harness now measures peak in-flight **at the stub**, which is what the engine actually had
+outstanding rather than what it was configured to allow:
 
-Recorded because refuted predictions are worth as much as confirmed ones, and both were plausible:
+| arm | maxConcurrency | msg/s | peak in flight |
+|---|---|---|---|
+| 0.3.2.0 | 100 | 21,178 / 22,054 | **100** |
+| 0.6.0.0-SNAPSHOT | 100 | 16,563 / 16,532 | **100** |
+| 0.6.0.0-SNAPSHOT | 1,000 | 30,435 / 32,270 | 327 / 340 |
+| 0.6.0.0-SNAPSHOT | 10,000 | 23,361 / 23,421 | 390 / 381 |
 
-- **The forced single-thread worker pool** (`setupWorkerPool` -> `super.setupWorkerPool(1)`) looked
-  like the cause. It is not: 0.3.2.0's `VertxParallelEoSStreamProcessor` already had that exact
-  override. It only *moved* into `ExternalEngine`. No behaviour change.
-- **Thread-safe collections and lock contention** (the owner's hypothesis, below). No evidence at
-  this boundary - the diff is dispatch accounting, not locking. It is untested against the later
-  drops, where it may still hold.
+**0.3.2.0 peaked at exactly 100, the same as today.** It was not over-dispatching to the HTTP layer.
+The `maxConcurrency x loadFactor` figure governs the **worker pool queue depth** - how many records
+may sit queued ahead of the dispatch thread - not the number of concurrent requests. Those two were
+conflated. The `ExternalEngine` change is still the boundary the throughput drops at, but "it used to
+cheat" is not the explanation.
 
-### The open question this creates - and it is the release gate
+### What the measurement does establish
 
-If the old number came from over-dispatching, then the legitimate way to get it back is for the
-caller to **ask for the concurrency they actually want**. The test: run the current build with
-`maxConcurrency` set to what 0.3.2.0 was effectively using, and see whether it reaches the old
-throughput. If it does, nothing is lost and the fix is purely a truthfulness improvement; the demo
-and the README simply need to state the concurrency honestly. If it does not, there is a real cost
-on top of the fix, and it needs its own diagnosis.
+1. **At matched concurrency there is a real per-record cost.** Same 100 in, same 100 observed
+   in flight, and current is ~24% slower (16,550 vs 21,600). That is not accounting - it is work
+   being done per record that was not being done before. **This is where the locking / thread-safe
+   collection hypothesis belongs**, and it is now the leading explanation rather than a guess.
+2. **The throughput is recoverable by configuration, and then some.** At `maxConcurrency=1000` the
+   current build reaches ~31,350 msg/s - faster than 0.3.2.0 ever measured here, and faster than the
+   2021 cast.
+3. **More concurrency is not monotonically better.** At 10,000 it falls back to ~23,400, and observed
+   peak in-flight only reaches ~385 either way, so the engine saturates around 300-400 concurrent and
+   further ceiling only adds overhead. A demo or a doc that recommends a number should recommend one
+   near that knee, not the largest one.
+
+### The release gate, answered in part
+
+The number **is** recoverable without going back to any old behaviour: raise `maxConcurrency`. What
+is not resolved is the ~24% per-record cost at matched concurrency, which is a genuine regression
+sitting underneath the recoverable part, and which nothing here has diagnosed yet.
 
 ### There is at least one more cliff
 
-`0.5.2.8` came in at 2,583 msg/s against 0.5.2.0's ~10,300 - a further 4x drop, unexamined. The
-current build recovers to ~19,300, so something also went back up between there and now. The shape
-is at least three events, not one, and only the first is diagnosed.
+`0.5.2.8` measured ~2,500 against `0.5.2.0`'s ~10,300 - a further 4x drop - and `0.5.3.2` stays
+there, while the current build recovers to ~16,500-19,300. So the curve is at least three events, and
+none of them is diagnosed. Narrowing that one to a single patch release is the next measurement;
+every intermediate tag (`0.5.2.1` ... `0.5.2.7`) exists, and the diff across the whole 0.5.2.0-0.5.2.8
+range is 152 commits over 69 files, which is why narrowing has to come before reading.
+
+Visible in that range and worth suspicion once narrowed, because they sit on the per-record path:
+`ShardKey` (+90), `ShardManager` (+153), `ProcessingShard`, `PartitionState` (+518).
 
 ## The owner's original hypothesis, and where it still might apply
 
@@ -178,12 +191,32 @@ Recorded before any code was read, deliberately, so it could be refuted rather t
 That is a specific, falsifiable claim with a named mechanism, and it predicts particular things: the
 regression should track commits that introduced concurrent collection types or lock scopes on the
 per-record path, and it should be roughly proportional to records processed rather than to
-partitions or rebalances. If the bisect lands the drop on a release with no such change, the
-hypothesis is wrong and should be recorded as wrong.
+partitions or rebalances.
+
+**It is now the leading explanation rather than a guess, and the measurement is what promoted it.**
+The ~24% gap at *matched* in-flight concurrency is precisely the shape this hypothesis predicts:
+identical concurrency, identical work requested, identical records - and more time spent per record.
+No dispatch-accounting difference can produce that, because there is no accounting difference left
+once both arms are observed holding 100 requests at once.
+
+A competing hypothesis that has NOT been ruled out and must be, before any code is blamed: the two
+arms are five years apart in every dependency, not just PC. The vanilla control covers the Kafka
+client, but not Vert.x itself, whose own version moved across the range and which is doing the actual
+HTTP work in both arms.
 
 **The analysis waits on the bisect**, because the bisect narrows the diff to read from five years to
-one release, and reading the wrong five years is the expensive mistake here. It is then done by
-reading the attributed diff directly - in session, not delegated (owner's instruction, 2026-08-20).
+one release, and reading the wrong five years is the expensive mistake here - as the refuted
+over-dispatch reading above demonstrates, at the cost of one wrong committed conclusion. It is then
+done by reading the attributed diff directly - in session, not delegated (owner's instruction,
+2026-08-20).
+
+## Method note, learned the hard way
+
+**Measure the thing, do not infer it from the diff.** The over-dispatch conclusion was reached by
+reading `ExternalEngine` against the code it replaced, it was coherent, it explained the magnitude,
+and it was wrong. What killed it was two lines of instrumentation in the stub counting concurrent
+requests. Anything this analysis claims about what the engine *does* should be observable from
+outside the engine before it is written down.
 
 The actor work is relevant prior art either way - `improvements/lambda-actor-bus`,
 `improvements/commit-command-actor`, `improvements/poller-bus-actor` and

@@ -36,12 +36,24 @@ import static com.github.tomakehurst.wiremock.client.WireMock.*;
  *   Bench vanilla  <bootstrap> <topic> <count> <delayMs>
  *   Bench pc       <bootstrap> <topic> <count> <delayMs> <concurrency>
  *
- * Prints one machine-readable result line: RESULT <mode> <count> <ms> <msgPerSec>
+ * Prints one machine-readable result line: RESULT <mode> <count> <ms> <msgPerSec> peak=<maxInFlight>
+ *
+ * peak is measured at the stub, so it is what the engine actually had outstanding - not what it was
+ * configured to allow.
  */
 public class Bench {
 
     static WireMockServer stub;
     static final AtomicInteger responses = new AtomicInteger();
+
+    /**
+     * Peak requests being served at once. This is the engine's ACTUAL in-flight count, observed from
+     * outside it, and it is the whole reason this harness can tell a throughput change from a
+     * dispatch-accounting change: an engine that ignores maxConcurrency looks fast for a reason that
+     * has nothing to do with being fast.
+     */
+    static final AtomicInteger inFlight = new AtomicInteger();
+    static final AtomicInteger peakInFlight = new AtomicInteger();
 
     public static void main(String[] args) throws Exception {
         String mode = args[0], bootstrap = args[1], topic = args[2];
@@ -55,11 +67,12 @@ public class Bench {
         }
 
         int delayMs = Integer.parseInt(args[4]);
-        startStub(delayMs, "pc".equals(mode) ? Integer.parseInt(args[5]) : 8);
+        startStub(delayMs, "pc".equals(mode) ? Integer.parseInt(args[5]) * 2 : 8);
         long ms = "vanilla".equals(mode)
                 ? runVanilla(bootstrap, topic, count)
                 : runPc(bootstrap, topic, count, Integer.parseInt(args[5]));
-        System.out.printf("RESULT %s %d %d %.1f%n", mode, count, ms, count * 1000.0 / ms);
+        System.out.printf("RESULT %s %d %d %.1f peak=%d%n",
+                mode, count, ms, count * 1000.0 / ms, peakInFlight.get());
         stub.stop();
         System.exit(0);
     }
@@ -68,7 +81,12 @@ public class Bench {
         stub = new WireMockServer(WireMockConfiguration.wireMockConfig()
                 .dynamicPort().containerThreads(Math.max(threads, 6)));
         stub.stubFor(get(urlPathEqualTo("/")).willReturn(aResponse()));
-        stub.addMockServiceRequestListener((rq, rs) -> sleep(delayMs));
+        stub.addMockServiceRequestListener((rq, rs) -> {
+            int now = inFlight.incrementAndGet();
+            peakInFlight.accumulateAndGet(now, Math::max);
+            sleep(delayMs);
+            inFlight.decrementAndGet();
+        });
         stub.start();
     }
 

@@ -105,7 +105,8 @@ POM
   echo "$dir/classes:$cp"
 }
 
-run_one() { java -cp "$1" Bench "${@:2}" 2>/dev/null | grep '^RESULT' | awk '{print $NF}'; }
+# RESULT <mode> <count> <ms> <msgPerSec> peak=<n>  ->  "<msgPerSec> <n>"
+run_one() { java -cp "$1" Bench "${@:2}" 2>/dev/null | grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; }
 
 start_broker
 
@@ -118,16 +119,16 @@ TOPIC=${BENCH_TOPIC:-bench-$RECORDS}
 log "producing $RECORDS records into $TOPIC (once)"
 run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null
 
-echo "pc_version,client_pin,mode,repeat,msg_per_sec" > "$RESULTS"
+echo "pc_version,client_pin,mode,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
 for pin in $CLIENT_PINS; do
   for pcv in $PC_VERSIONS; do
     [ "$pcv" = "LOCAL" ] && [ "$pin" != "NATIVE" ] && continue   # local arm is not re-pinnable here
     CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,pc,,COMPILE_FAILED" >> "$RESULTS"; continue; }
     for r in $(seq 1 "$REPEATS"); do
-      rate=$(run_one "$CP" pc "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$DELAY_MS" "$CONCURRENCY")
-      [ -z "$rate" ] && rate=RUN_FAILED
-      log "$pcv/$pin pc run$r = $rate"
-      echo "$pcv,$pin,pc,$r,$rate" >> "$RESULTS"
+      read -r rate peak <<< "$(run_one "$CP" pc "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$DELAY_MS" "$CONCURRENCY")"
+      [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
+      log "$pcv/$pin pc run$r = $rate msg/s, peak in flight $peak"
+      echo "$pcv,$pin,pc,$r,$rate,$peak" >> "$RESULTS"
     done
   done
 done
