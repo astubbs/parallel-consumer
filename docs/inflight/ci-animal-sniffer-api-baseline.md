@@ -15,10 +15,12 @@ astubbs#315 (`ci/api-compatibility-gate`), which asks whether *our* published AP
 consumers - these are complementary, not duplicates, and neither substitutes for the other.
 
 **It was started once and dropped.** The pre-fork branch `origin/animal-sniffer` adds the plugin
-bound to the `test` phase against the `org.codehaus.mojo.signature:java18` signature, plus one
-follow-up commit setting a version. Both commit bodies are empty, so no reason for abandoning it was
-recorded. Last touched March 2022; the plugin appears zero times in today's poms, and nothing has
-replaced it in that direction.
+bound to the `test` phase against the `org.codehaus.mojo.signature:java18` signature. Both commit
+bodies are empty, so no reason was recorded - but the second commit adds a version and, in the
+same hunk, mistypes the signature groupId to `org.codehaus.mosdfsdfjo.signature`, which cannot
+resolve. The tip reads as abandoned mid-debug rather than as a considered rejection. Last touched
+March 2022; the plugin appears zero times in today's poms, and nothing replaced it in that
+direction.
 
 **Why it reads as a cheap win.** The configuration is about twenty lines and already written -
 `git show 0b4b0f642:pom.xml` has it. What has to be decided is what the 2022 attempt did not
