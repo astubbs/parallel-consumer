@@ -342,13 +342,37 @@ Recorded as hypotheses, not findings. None of these is tested.
   Consumer"*. A user report of exactly this class of problem, unresolved. Whether it is this defect
   is unknown, but it should be re-read against these findings before being answered.
 
+## Connections to existing issues
+
+What this investigation says about each open issue it touches. **None of these has been posted to the
+issue tracker** - recorded here first, deliberately.
+
+| Issue | What this work found |
+|---|---|
+| **astubbs#155** (`confluentinc#402`) *"Max loading factor steps reached: 100/100"* | Corroborated from a second direction, and worse than reported. The factor pegging at max is one failure; the other is that on **Vert.x, Reactor, Mutiny and the proxy the stepping is disabled outright** (`ExternalEngine.checkPipelinePressure()` is a no-op), so on four of five engines it never steps at all. Measured: re-enabling the stepping added **nothing** beyond the initial factor of 2. A controller that is inert on four engines and saturated on the fifth is not regulating anything. |
+| **astubbs#187** (`confluentinc#884`) *"Parallel Consumer is 30 times slower than Normal Consumer"* | A plausible, unconfirmed explanation now exists. If the reporter is on Vert.x, Reactor, Mutiny or the proxy, they are running with the loading factor pinned at 1 and no buffer behind the in-flight ceiling - measured here as worth 35% on one workload, and the effect grows as per-record latency falls. **Read the issue against these findings before answering it**; the first question to ask is which engine they use, and the second is their `maxConcurrency`. Note this is a hypothesis about someone else's workload, not a diagnosis. |
+| **astubbs#311** *"Batching requests a full extra in-flight target of work, and batchSize is unvalidated"* | Same expression, opposite direction. That issue is about `getTargetAmountOfRecordsInFlight()` (= `maxConcurrency * batchSize`) requesting **too much**; this note is about `ExternalEngine` using it raw and so requesting **too little**. Any change to that expression must satisfy both, so they should be designed together rather than fixed independently. |
+| **astubbs#227** (`confluentinc#21`) *"Dynamic concurrency control..."* | Supplied with measured evidence rather than argument: the knee sits near 340-420 in flight, throughput is non-monotonic in the ceiling, and neither 100 nor 10,000 finds it. Recorded in [`next-auto-scaling.md`](next-auto-scaling.md), which is the design note that owns it. |
+| **astubbs#242** (`confluentinc#154`) - the language proxy | `ProxyProcessor extends ExternalEngine`, so **every foreign-language client is on the throttled path**. Its per-language comparison demo would publish the throttled number. See [`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md). |
+
 ## Compare against the other Java parallel-consumption project
 
-Owner's note, 2026-08-20. **The name is not recorded because it could not be identified.** The repo's
-own landscape notes were searched - `next-architecture-landscape-comparison.md` (Beam, Temporal, Ray,
-Envoy `ext_proc`, Bytewax, Quix, Dask, Share Groups) and the distributed-throttling ideation (Karafka
-Pro, Netflix `concurrency-limits`) - and none of them names a Java project matching this description.
-Guessing a name would be worse than carrying the description, so here is the description:
+**Identified: llingr / llingr-demux** (<https://llingr.io/>), supplied by the owner 2026-08-20 after
+a search of the repo's own landscape notes failed to name it. It has its own entry -
+the llingr market-analysis note - because it is closer to this project than
+anything else recorded: same key-ordered-concurrency claim, a gRPC sidecar relay for other languages
+(the astubbs#242 architecture, already shipped), formally verified, and commercial with a patent
+pending.
+
+**Two things in the original description turned out to be wrong, and both change the comparison:**
+
+- **It does commit offsets**, by reconstructing contiguous per-partition order before committing -
+  the same hard problem PC's offset encoding solves. So there is no "they skipped the hard part"
+  discount available.
+- **Nothing supports virtual threads.** The JVM build requires JDK 21+ and lists **Kotlin
+  coroutines** among its dependencies. JDK 21+ is a floor, not evidence of Loom.
+
+The rest of the original description held:
 
 - Another Java library doing parallel Kafka consumption.
 - **It does not commit offsets** - which removes most of what makes this problem hard, so any
