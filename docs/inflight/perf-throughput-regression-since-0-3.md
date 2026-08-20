@@ -1,7 +1,10 @@
-# Throughput has regressed roughly 30% since 0.3.0.2, measured
+# Throughput dropped ~30% since 0.3.0.2, and the first cliff is a correctness fix
 
-<!-- inflight-type: bug -->
-<!-- inflight-impact: throughput -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
+
+**Release gate (owner, 2026-08-20):** the question to answer before v6 is whether this throughput can
+be recovered legitimately - without going back to ignoring the concurrency the user asked for.
 
 Found 2026-08-20 while rescuing the 2021 Vert.x demo behind the README's asciinema cast (see
 `branch-classic-comparison-demo.md`). The rescued demo ran slower than the recording, which looked
@@ -88,10 +91,84 @@ so it fails with `Unsupported class file major version 61` regardless of how man
 opened. Consuming the **published artifact** from Central sidesteps all of it and is more faithful,
 since it is the jar users actually got.
 
-## Next step, and the hypothesis to test it against
+## Root cause of the FIRST cliff: 0.3.2.0 -> 0.4.0.0, and it is a fix
 
-**Owner's hypothesis, recorded 2026-08-20, before any code analysis has been done** - stated in
-advance deliberately, so it can be refuted rather than fitted afterwards:
+The bisect showed a step, not a slope. Throughput halves at exactly one release boundary and stays
+down:
+
+| version | run 1 | run 2 |
+|---|---|---|
+| 0.3.0.2 | 22,079 | 22,655 |
+| 0.3.1.0 | 22,338 | 22,611 |
+| 0.3.2.0 | 22,451 | 22,247 |
+| **0.4.0.0** | **11,334** | **11,551** |
+| 0.4.0.1 | 11,321 | 11,388 |
+| 0.5.0.0 | 10,457 | 10,260 |
+
+(These are the sweep harness's numbers and are internally consistent; they are lower than the
+three-repeat control above because that used a different produce configuration. Compare within a
+table, never across.)
+
+19 commits sit in that gap, and the relevant one introduces
+`internal/ExternalEngine.java` - the shared base for Vert.x and Reactor, which is exactly what this
+benchmark drives.
+
+**Before (0.3.2.0)**, Vert.x used the core's work-request path:
+
+```java
+getPoolQueueTarget()   = options.getMaxConcurrency();          // 100
+getQueueTargetLoaded() = getPoolQueueTarget() * loadFactor;    // DynamicLoadFactor: starts 2, +2, maxFactor 100
+delta = target - workerPool.getQueue().size();
+```
+
+So the in-flight target could climb to **maxConcurrency x 100 = 10,000 records**.
+
+**After (0.4.0.0)**, `ExternalEngine` overrides both halves:
+
+```java
+protected int calculateQuantityToRequest() {
+    return Math.max(0, maxConcurrency - wm.getNumberRecordsOutForProcessing());   // hard cap: 100
+}
+protected void checkPressure() { }   // no-op, so the load factor never steps up
+```
+
+**The old build was not honouring `maxConcurrency` for external engines** - it could dispatch up to
+100x what the caller asked for. The 27,000 msg/s in the README's asciinema cast was produced with up
+to 10,000 requests in flight against a configured limit of 100.
+
+**So the first cliff is the price of a correctness fix, not a regression to undo.**
+`VertxConcurrencyIT` asserts that max concurrency is never exceeded, which is that fix being held in
+place.
+
+### Two hypotheses, both refuted at this boundary
+
+Recorded because refuted predictions are worth as much as confirmed ones, and both were plausible:
+
+- **The forced single-thread worker pool** (`setupWorkerPool` -> `super.setupWorkerPool(1)`) looked
+  like the cause. It is not: 0.3.2.0's `VertxParallelEoSStreamProcessor` already had that exact
+  override. It only *moved* into `ExternalEngine`. No behaviour change.
+- **Thread-safe collections and lock contention** (the owner's hypothesis, below). No evidence at
+  this boundary - the diff is dispatch accounting, not locking. It is untested against the later
+  drops, where it may still hold.
+
+### The open question this creates - and it is the release gate
+
+If the old number came from over-dispatching, then the legitimate way to get it back is for the
+caller to **ask for the concurrency they actually want**. The test: run the current build with
+`maxConcurrency` set to what 0.3.2.0 was effectively using, and see whether it reaches the old
+throughput. If it does, nothing is lost and the fix is purely a truthfulness improvement; the demo
+and the README simply need to state the concurrency honestly. If it does not, there is a real cost
+on top of the fix, and it needs its own diagnosis.
+
+### There is at least one more cliff
+
+`0.5.2.8` came in at 2,583 msg/s against 0.5.2.0's ~10,300 - a further 4x drop, unexamined. The
+current build recovers to ~19,300, so something also went back up between there and now. The shape
+is at least three events, not one, and only the first is diagnosed.
+
+## The owner's original hypothesis, and where it still might apply
+
+Recorded before any code was read, deliberately, so it could be refuted rather than fitted:
 
 > More collections became thread-safe over the range, and there is more locking. The slow path could
 > plausibly be reorganised so it does not need the thread-safe collection variants at all - in the
