@@ -1,9 +1,13 @@
-package bz.stub.parallelconsumer.integrationTests.utils;
+package bz.stub.parallelconsumer.integrationTests;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.integrationTests.utils.BrokerlessInstances;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
+import bz.stub.parallelconsumer.integrationTests.utils.RecordingExecutor;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import org.junit.jupiter.api.Test;
 

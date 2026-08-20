@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
  */
 
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,12 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * <ul>
  *   <li><b>Progress watermark</b>: while work remains, fleet-wide consumed count must advance within
  *   {@link #NO_PROGRESS_WINDOW} (generalises the confluentinc#857 investigation's "no progress for 11s" check).</li>
+ *   <li><b>Instance progress</b> ({@code INSTANCE_STALL/NO_WORK_COMPLETED}): the same shape one
+ *   granularity finer - for each LIVE fleet member that holds work (queued in shards or out for
+ *   processing, read from PC's own {@code WorkManager}), a work result must be returned within
+ *   {@link #INSTANCE_STALL_BOUND}. Wired per-run via {@link #withInstanceProgress}; inactive (like
+ *   the watermark) in ambient mode. See the bound's javadoc for why this is instance-level rather
+ *   than shard-level, and why it cannot fire on a merely-busy instance.</li>
  *   <li><b>Zombie-member / rebalance dwell</b>: the group must not dwell in
  *   {@code PREPARING_REBALANCE}/{@code COMPLETING_REBALANCE} beyond {@link #REBALANCE_DWELL_BOUND}.
  *   Keyed on protocol-unresponsiveness, NOT on "member holds partitions with zero consumption" - a
@@ -92,8 +99,54 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * artifact-free but has not yet reproduced a true unbounded Class 2 stall on master (the confluentinc#857
      * root-cause stall is probabilistic); the probe ships GREEN-calibrated with peaks measured. */
     public static final Duration LAG_STAGNATION_BOUND = Duration.ofSeconds(150);
+    /**
+     * Appended to every Class 2 violation so the interpretation arrives WITH the failure, not in a
+     * document the reader must first decide to open. The gap it closes cost a measured day: three of
+     * four 2026-08-19 arms failed this check while progressing normally, because the natural reading
+     * of the bare message - "the library has stalled" - is wrong.
+     */
+    static final String CLASS2_INTERPRETATION =
+            "NOTE: this bound is a TIMING measurement, not a correctness verdict - a partition's "
+                    + "committed offset cannot advance past one incomplete record, so a slow or "
+                    + "repeatedly-redelivered record pins the watermark while the shard behind it "
+                    + "completes work normally, and exceeding the bound does NOT mean the consumer is "
+                    + "stalled or incorrect. Before concluding a defect, re-run with "
+                    + "-Dchaos.diagnoseStallRecovery=true (keeps the run observing instead of aborting) "
+                    + "and check whether the backlog drains: on seed 4734674029169027864 the eager arm "
+                    + "trips this bound 53 times and still drains completely - see "
+                    + "docs/inflight/test-class2-probe-asserts-timing-not-correctness.md";
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
     public static final long LAG_STAGNATION_MIN_LAG = 50;
+    /**
+     * INSTANCE-progress probe: no live instance may hold work while returning no work result for
+     * longer than this. The liveness claim it makes is the one the Class 2 lag bound only
+     * approximates: {@code CLASS2_STALL} watches a partition's COMMITTED offset, which one incomplete
+     * record legitimately pins while the shard behind it completes work continuously - so a busy
+     * fleet and a wedged fleet look identical to it (measured 2026-08-19, seed 4734674029169027864:
+     * four arms all drained fully, three of four still tripped the 150s bound). This probe instead
+     * watches COMPLETIONS: any returned work result re-arms it, so it structurally cannot fire on an
+     * instance that is slow-but-progressing - only on one that is holding work and finishing nothing.
+     * <p>
+     * <b>Granularity is per INSTANCE, not per shard, and that is a reachability constraint, not the
+     * ideal.</b> The owner's formulation is per shard ("no shard should go {@code INSTANCE_STALL_BOUND}
+     * without returning a work result"), but "which shards hold queued work" lives in
+     * {@code ShardManager}'s private {@code processingShards} map with no public accessor, and this
+     * suite does not add main-code accessors for a probe. Per instance is still the confluentinc#857
+     * wedge signature exactly: work results are counted where {@code WorkManager#onSuccessResult}
+     * runs - PC's CONTROL thread - so a deadlocked control loop freezes the count even while worker
+     * threads finish records and heartbeats keep flowing. What per-instance cannot see is one wedged
+     * shard on an instance whose other shards keep completing; that case remains
+     * {@code CLASS2_STALL}'s, false positives and all.
+     * <p>
+     * Bound arithmetic (why 150s cannot fire legitimately): a completion arrives at the end of every
+     * user-function execution, so the longest legitimate GAP is one heaviest record - W1's 45s dwell,
+     * 3.3x under the bound. The other legitimate quiet stretch is an eager storm, where completions
+     * of revoked in-flight work are dropped as stale (no listener fire): storm (60s) plus one
+     * eviction horizon (30s) is 90s, still 60s under. Sharing {@link #LAG_STAGNATION_BOUND}'s 150s
+     * figure is deliberate - it keeps the two detectors' verdicts comparable on the same run: a run
+     * where Class 2 fires and this stays silent is measured slow-but-progressing, not wedged.
+     */
+    public static final Duration INSTANCE_STALL_BOUND = Duration.ofSeconds(150);
     private static final Duration SAMPLE_INTERVAL = Duration.ofSeconds(1);
     /** A probe that cannot sample is a probe silently passing - after this many consecutive sampling
      * failures the degradation itself becomes a violation (false-GREEN guard), instead of the run
@@ -130,6 +183,95 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     /** Chaos mode's fleet consumed-count; null in {@link Mode#AMBIENT_OBSERVER} (progress watermark inactive). */
     private final LongSupplier totalConsumed;
     private final long expectedTotal;
+    /**
+     * What the instance-progress probe samples from one fleet member. An interface rather than
+     * {@code ManagedPCInstance} directly so the detector's decision logic is broker-free testable
+     * against fake views ({@code InstanceStallProbeIT}) - the same pure-replay pattern as
+     * {@link #ledger} and {@code KeyOrderLedger#check}.
+     */
+    public interface InstanceProgressView {
+        int instanceId();
+
+        /**
+         * Started, not mid-stop/restart, and its PC is up and not failed. The chaos harness stops and
+         * restarts members constantly; a stopped or restarting instance holds torn-down state and must
+         * never be reported as stalled.
+         */
+        boolean isLive();
+
+        /** Work queued in this instance's shards awaiting selection ({@code WorkManager}'s own count). */
+        long queuedInShards();
+
+        /** Records this instance currently has out for processing ({@code WorkManager}'s own count). */
+        long outForProcessing();
+
+        /** Monotone count of work results returned - see {@code ManagedPCInstance#workResultsReturned}. */
+        long workResultsReturned();
+
+        /**
+         * Identity that changes when the instance brings up a NEW PC (a restart). A fresh incarnation
+         * gets a fresh full bound-window rather than inheriting the old PC's silence.
+         */
+        Object incarnationMarker();
+
+        /** The live adapter over a real fleet member, reading PC's own {@code WorkManager} state. */
+        static InstanceProgressView of(ManagedPCInstance pc) {
+            return new InstanceProgressView() {
+                @Override
+                public int instanceId() {
+                    return pc.getInstanceId();
+                }
+
+                @Override
+                public boolean isLive() {
+                    var parallelConsumer = pc.getParallelConsumer();
+                    return pc.isStarted() && !pc.isClosePending()
+                            && parallelConsumer != null && !parallelConsumer.isClosedOrFailed();
+                }
+
+                @Override
+                public long queuedInShards() {
+                    var parallelConsumer = pc.getParallelConsumer();
+                    // the count can be transiently negative by its own javadoc (counter races) - floor it
+                    return parallelConsumer == null ? 0
+                            : Math.max(0, parallelConsumer.getWm().getNumberOfWorkQueuedInShardsAwaitingSelection());
+                }
+
+                @Override
+                public long outForProcessing() {
+                    var parallelConsumer = pc.getParallelConsumer();
+                    return parallelConsumer == null ? 0
+                            : Math.max(0, parallelConsumer.getWm().getNumberRecordsOutForProcessing());
+                }
+
+                @Override
+                public long workResultsReturned() {
+                    return pc.getWorkResultsReturnedCount();
+                }
+
+                @Override
+                public Object incarnationMarker() {
+                    return pc.getParallelConsumer();
+                }
+            };
+        }
+    }
+
+    /** Instance-progress bookkeeping: the completion count last seen, which PC it was seen on, and
+     * since when it has not advanced. */
+    @Value
+    private static class InstanceProgressMark {
+        long workResultsReturned;
+        Object incarnation;
+        Instant since;
+    }
+
+    /** Fleet supplier for the instance-progress probe; null (ambient mode, or not wired) = inactive. */
+    private volatile Supplier<List<InstanceProgressView>> instanceProgressSupplier;
+    private final Map<Integer, InstanceProgressMark> instanceProgressMarks = new ConcurrentHashMap<>();
+    @Getter
+    private volatile long peakInstanceStallMs = 0;
+
     /** per-partition committed-offset watermarks for the Class 2 (lag stagnation) probe */
     private final Map<TopicPartition, Long> lastCommitted = new ConcurrentHashMap<>();
     private final Map<TopicPartition, Instant> lastCommittedMove = new ConcurrentHashMap<>();
@@ -173,6 +315,17 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * (an eager rebalance revokes every member's partitions) longer than the W1 default tolerates. */
     public ProgressProbe withNoProgressWindow(Duration window) {
         this.noProgressWindow = window;
+        return this;
+    }
+
+    /**
+     * Arms the instance-progress probe ({@code INSTANCE_STALL/NO_WORK_COMPLETED} - see
+     * {@link #INSTANCE_STALL_BOUND}) with a live view of the fleet. A supplier because the fleet
+     * GROWS during a run (JOIN_NEW); {@code ChaosScenarioBase#startRun} wires it from the conductor
+     * for every chaos scenario. Never wired in ambient mode, which has no fleet to watch.
+     */
+    public ProgressProbe withInstanceProgress(Supplier<List<InstanceProgressView>> fleetSupplier) {
+        this.instanceProgressSupplier = fleetSupplier;
         return this;
     }
 
@@ -234,11 +387,11 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
         if (isObserverMode()) {
             // quiet flight recorder: the extension owns end-of-test reporting (autopsy / DEBUG one-liner)
-            log.debug("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
-                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
+            log.debug("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms maxInstanceStall={}ms",
+                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs, peakInstanceStallMs);
         } else {
-            log.info("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
-                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
+            log.info("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms maxInstanceStall={}ms",
+                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs, peakInstanceStallMs);
         }
         return getViolations();
     }
@@ -272,6 +425,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 Thread.sleep(SAMPLE_INTERVAL.toMillis());
                 if (!isObserverMode()) {
                     sampleProgress();
+                    sampleInstanceProgress(Instant.now());
                 }
                 sampleRebalanceDwell();
                 sampleDrains();
@@ -310,6 +464,55 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             violate("NO_PROGRESS: fleet consumed count stuck at " + now + "/" + expectedTotal
                     + " for " + stalled.getSeconds() + "s (bound " + noProgressWindow.getSeconds() + "s)");
             lastAdvance = Instant.now(); // re-arm so a genuine stall reports once per window, not per sample
+        }
+    }
+
+    /**
+     * INSTANCE-progress detector - see {@link #INSTANCE_STALL_BOUND} for the property it asserts and
+     * the granularity reasoning. Per live instance: if it holds work (queued in shards, or records out
+     * for processing) and its returned-work-result count has not advanced within the bound, that is a
+     * violation. The clock re-arms on ANY of: a result returned, the instance going idle (nothing
+     * held), a restart (new PC incarnation), or the instance leaving the live set - so only a
+     * continuous hold-work-return-nothing stretch can accumulate.
+     * <p>
+     * Package-private and taking {@code now} explicitly so {@code InstanceStallProbeIT} can drive it
+     * deterministically, broker-free, in both directions - the sampler thread calls it with
+     * {@code Instant.now()}.
+     */
+    void sampleInstanceProgress(Instant now) {
+        var supplier = instanceProgressSupplier;
+        if (supplier == null) return; // not wired (ambient mode, or a scenario predating the probe)
+        for (InstanceProgressView view : supplier.get()) {
+            int id = view.instanceId();
+            if (!view.isLive()) {
+                // stopped or mid-restart: torn-down state must never read as a stall
+                instanceProgressMarks.remove(id);
+                continue;
+            }
+            long returned = view.workResultsReturned();
+            Object incarnation = view.incarnationMarker();
+            InstanceProgressMark mark = instanceProgressMarks.get(id);
+            boolean advanced = mark == null
+                    || mark.getWorkResultsReturned() != returned
+                    || mark.getIncarnation() != incarnation;
+            long queued = view.queuedInShards();
+            long outForProcessing = view.outForProcessing();
+            boolean holdsWork = queued > 0 || outForProcessing > 0;
+            if (advanced || !holdsWork) {
+                instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now));
+                continue;
+            }
+            long stalledMs = Duration.between(mark.getSince(), now).toMillis();
+            if (stalledMs > peakInstanceStallMs) peakInstanceStallMs = stalledMs;
+            if (stalledMs > INSTANCE_STALL_BOUND.toMillis()) {
+                violate("INSTANCE_STALL/NO_WORK_COMPLETED: instance " + id + " holds work (queued="
+                        + queued + ", outForProcessing=" + outForProcessing
+                        + ") but has returned no work result for " + (stalledMs / 1000) + "s (bound "
+                        + INSTANCE_STALL_BOUND.getSeconds() + "s) at " + returned
+                        + " results returned - completions are counted on PC's control thread, so this "
+                        + "instance's control loop is holding work and finishing nothing");
+                instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now)); // re-arm
+            }
         }
     }
 
@@ -386,7 +589,8 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 violate("CLASS2_STALL/LAG_STAGNATION: partition " + tp + " lag=" + lag
                         + " with committed offset stagnant at " + committed + " for " + (stagnantMs / 1000)
                         + "s (bound " + LAG_STAGNATION_BOUND.getSeconds() + "s) - protocol-invisible stall: "
-                        + "group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere");
+                        + "group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere. "
+                        + CLASS2_INTERPRETATION);
                 lastCommittedMove.put(tp, now); // re-arm
             }
         }
