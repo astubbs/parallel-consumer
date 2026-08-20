@@ -152,7 +152,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java`**
 
-- TODO(refactor): this walks every shard queue, as SHARDS_SIZE above does - and
+- TODO(refactor): walks every shard queue, as SHARDS_SIZE above does, and
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java`**
 

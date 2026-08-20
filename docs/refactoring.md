@@ -313,7 +313,9 @@ Do not start one casually.
 - The confluentinc#905 `SHARDS_MAX_SIZE` gauge re-walks every shard queue
   (`getEntries().size()` is O(n) on a `ConcurrentSkipListMap`), duplicating the traversal
   `SHARDS_SIZE` already does - so each metrics scrape walks the shard queues twice.
-  Negligible now; if it ever matters, derive both gauges from a single scan.
+  Negligible now; if it ever matters, derive both gauges from a single scan - see
+  **Shard-count caching** under [Performance](#performance) above for the upstream design draft
+  (`confluentinc#530`) and the three abandoned branches that attempted it.
 
 ### state/WorkContainer.java
 *Mirror: [#143](https://github.com/astubbs/parallel-consumer/issues/143) - and see the index above: the field is read by nobody, so deletion beats an enum.*

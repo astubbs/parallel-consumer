@@ -330,11 +330,11 @@ public class ShardManager<K, V> {
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
                 this, shardManager -> shardManager.shardEntryCounts().sum());
-        // TODO(refactor): this walks every shard queue, as SHARDS_SIZE above does - and
-        // ConcurrentSkipListMap.size() is O(n), so each is O(total queued records). Micrometer pulls each
-        // gauge independently, so they cannot share one scan without a memoised snapshot; the cheap fix is
-        // an O(1) counter on ProcessingShard, maintained where availableWorkContainerCnt already is. Runs
-        // at scrape frequency on the scrape thread, so this is deferred, not urgent. See docs/refactoring.md.
+        // TODO(refactor): walks every shard queue, as SHARDS_SIZE above does, and
+        // ConcurrentSkipListMap.size() is O(n) - so each scrape is O(total queued records), twice.
+        // Triaged as negligible; docs/refactoring.md owns the assessment and the fix under
+        // "state/ShardManager.java", with the upstream shard-count-caching design under "Performance".
+        // Do not restate the fix here - two copies of it had already drifted apart once.
         shardsMaxSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_MAX_SIZE,
                 this, shardManager -> shardManager.shardEntryCounts().max().orElse(0));
 
