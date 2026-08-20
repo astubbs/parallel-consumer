@@ -135,6 +135,38 @@ a mock. So:
   Written in 2021 at Confluent, so that exact block is what it gets - added in the **port** commit,
   not the verbatim one.
 
+### State of the rescue, and what running it under Maven cost
+
+The rescue commits landed the demo **without ever running it under Maven** - it had only been run
+from a hand-built classpath. Running the documented command found four things, in the order they
+bite. All four are fixed; the last one had already reached a required test.
+
+1. The build died at `validate`. The copyright check judged `Demo.java` fork-original - it is
+   Confluent-authored, but no fork-point path holds it, because its branch was never merged. The
+   scanner now has a third provenance table, `RECOVERED_FROM_UPSTREAM_BRANCH`, and unlike the
+   extraction list it **verifies** the claim against the origin commit rather than trusting it.
+2. `-pl parallel-consumer-vertx` alone fails the enforcer's ReactorModuleConvergence rule. The
+   working command needs `-am`, plus `-Dfailsafe.failIfNoSpecifiedTests=false` (not
+   `-DfailIfNoTests`, which is surefire's spelling and does not stop failsafe failing the modules
+   `-am` drags in).
+3. `setupWireMock()` was called only from `main()`, so the JUnit entry point the previous commit
+   introduced ran with a null stub. It is `@BeforeEach` now, and there is an `@AfterEach` that
+   closes the stub, the engine and the consumer - the hang-on-failure the previous commit flagged.
+   `System.exit(0)` is gone from the test body: under Maven that runs inside the failsafe fork and
+   would report as a crashed VM however well the demo went.
+4. **`VertxConcurrencyIT` was broken by the shared-helper refactor and nobody saw.** Collapsing the
+   produce loops onto `KafkaClientUtils#produceMessages` reached `PCModuleTestEnv`, whose
+   `MutableClock` comes from a **test-scoped** dependency of core - and test scope is not
+   transitive, so consuming core's tests jar does not bring it. Both callers died on
+   `NoClassDefFoundError` at runtime having compiled cleanly, and `VertxConcurrencyIT` is in the
+   required lane. `threeten-extra` is now managed in the parent and declared by the vertx module.
+
+**Outstanding: the timed re-measurement.** The numbers in commit `ef698d1c9` (263 msg/s vanilla,
+20,588 msg/s PC, 78.2x) were taken before these fixes, from `main()`. They should be re-taken from
+the Maven entry point before any of them are quoted anywhere a reader sees. That run needs an idle
+machine - it was deferred here because a throughput bisect was using the same host, and a perf
+number taken beside one is worthless in both directions.
+
 ## Constraints inherited from elsewhere - do not re-derive
 
 - The **per-language sleep rule**: the simulated delay must use the language's non-occupying wait

@@ -5,10 +5,6 @@ package bz.stub.parallelconsumer.vertx.integrationTests;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import com.github.tomakehurst.wiremock.WireMockServer;
-import com.github.tomakehurst.wiremock.client.MappingBuilder;
-import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
-import com.github.tomakehurst.wiremock.http.Request;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
 import bz.stub.parallelconsumer.internal.RateLimiter;
@@ -22,10 +18,10 @@ import me.tongfei.progressbar.ProgressBar;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.Producer;
-import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import pl.tlinkowski.unij.api.UniMaps;
@@ -37,17 +33,12 @@ import java.net.URL;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
-import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
-import static java.lang.Thread.getAllStackTraces;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.data.Percentage.withPercentage;
 import static org.awaitility.Awaitility.waitAtMost;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
@@ -57,11 +48,29 @@ import static pl.tlinkowski.unij.api.UniLists.of;
 @Slf4j
 public class Demo extends BrokerIntegrationTest<String, String> {
 
+    /**
+     * Standalone entry point, kept for running the demo outside Maven. It has to drive the
+     * lifecycle by hand - JUnit is not here to call {@link #setupWireMock()} or {@link #close()} -
+     * and it has to exit EXPLICITLY: Testcontainers, WireMock and the engine all run non-daemon
+     * threads, so a JVM that merely reaches the end of this method keeps running.
+     * <p>
+     * The status code is the point of the try/catch. Before it, only the success path exited, so a
+     * failure left those threads holding the JVM open and the demo hung instead of reporting.
+     */
     public static void main(String[] args) {
         Demo demo = new Demo();
-        demo.getKcu().open();
-        demo.setupWireMock();
-        demo.testVertxConcurrency();
+        int status = 0;
+        try {
+            demo.getKcu().open();
+            demo.setupWireMock();
+            demo.testVertxConcurrency();
+        } catch (Throwable t) {
+            log.error("Demo failed", t);
+            status = 1;
+        } finally {
+            demo.close();
+        }
+        System.exit(status);
     }
 
     /** Set to {@code true} to run the demo; see {@link #testVertxConcurrency()}. */
@@ -79,10 +88,6 @@ public class Demo extends BrokerIntegrationTest<String, String> {
 
     public static VertxHttpStub stubServer;
 
-    static CountDownLatch responseLock = new CountDownLatch(1);
-
-    static Queue<Request> parallelRequests = new ConcurrentLinkedQueue<>();
-
     Demo() {
 
     }
@@ -94,6 +99,21 @@ public class Demo extends BrokerIntegrationTest<String, String> {
 
     ProgressBar bar;
 
+    /**
+     * Held as fields, not locals, so {@link #close()} can reach them on the failure path. Both keep
+     * non-daemon threads alive, which is what turns an exception in the middle of a run into a
+     * hang.
+     */
+    VertxParallelEoSStreamProcessor<String, String> pc;
+
+    KafkaConsumer<String, String> vanillaConsumer;
+
+    /**
+     * @implNote annotated for the JUnit path AND called by hand from {@link #main(String[])}, which
+     * has no JUnit to call it. It ran from {@code main} only until now, so the documented Maven
+     * command reached {@code stubServer.port()} with a null stub.
+     */
+    @BeforeEach
     void setupWireMock() {
         bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
         bar.pause();
@@ -104,21 +124,50 @@ public class Demo extends BrokerIntegrationTest<String, String> {
     }
 
     /**
-     * This test uses a wire mock server which blocks responding to all requests, until it has received a certain number
-     * of requests in parallel. Once this count has been reached, the global latch is released, and all requests are
-     * responded to.
-     * <p>
-     * This is used to sanity test that the PC vertx module is indeed sending the number of concurrent requests that we
-     * would expect.
+     * Releases everything that holds a non-daemon thread, on the success path and the failure path
+     * alike. Each close is guarded: the first failure must not skip the rest, or one broken
+     * resource still hangs the JVM.
      */
+    @AfterEach
+    void close() {
+        closeQuietly("parallel consumer", () -> {
+            if (pc != null) pc.close();
+        });
+        closeQuietly("vanilla consumer", () -> {
+            if (vanillaConsumer != null) vanillaConsumer.close();
+        });
+        closeQuietly("progress bar", () -> {
+            if (bar != null) bar.close();
+        });
+        closeQuietly("stub server", () -> {
+            if (stubServer != null) stubServer.close();
+        });
+    }
+
+    private static void closeQuietly(String what, Runnable close) {
+        try {
+            close.run();
+        } catch (Exception e) {
+            log.warn("Failed to close the {} - continuing, so the remaining closes still run", what, e);
+        }
+    }
+
     /**
+     * The demo: a vanilla consumer and the Vert.x Parallel Consumer over the same records, against
+     * a stub HTTP service with a simulated per-request delay. It measures; it does not assert.
+     * <p>
      * Off by default. This lane collects by PACKAGE PATH - failsafe includes
      * {@code **&#47;integrationTest*&#47;**&#47;*.java} - so living in this package is what decides
      * collection, and a multi-minute measurement with no assertions would otherwise run on every
      * build. {@code VertxConcurrencyIT} is the sibling that does assert, and it stays in the lane.
      * <p>
      * Run it with:
-     * <pre>./mvnw verify -pl parallel-consumer-vertx -Dit.test=Demo -Dpc.demo=true</pre>
+     * <pre>./mvnw verify -pl parallel-consumer-vertx -am -Dit.test=Demo -DfailIfNoTests=false -DskipUTs=true -Dpc.demo=true</pre>
+     * {@code -am} is not optional: this module's parent is not in a single-module reactor, and the
+     * enforcer's ReactorModuleConvergence rule fails the build before any test runs without it.
+     * {@code -DfailIfNoTests=false} keeps {@code -Dit.test} from failing the modules that {@code -am}
+     * drags in, and {@code -DskipUTs=true} stops those modules running their unit tests on the way
+     * past.
      */
     @Test
     @EnabledIfSystemProperty(named = DEMO_ENABLED_PROPERTY, matches = "true")
@@ -146,7 +195,7 @@ public class Demo extends BrokerIntegrationTest<String, String> {
         Properties consumerProps = new Properties();
 
         {
-            KafkaConsumer<String, String> vanillaConsumer = getKcu().createNewConsumer(true, consumerProps);
+            vanillaConsumer = getKcu().createNewConsumer(true, consumerProps);
 
             vanillaConsumer.subscribe(of(inputName));
             log.info("\nStarting vanilla consumer run...");
@@ -177,7 +226,6 @@ public class Demo extends BrokerIntegrationTest<String, String> {
 
         log.info("\nPC run starting with concurrency setting of {}...", format(concurrencyTarget));
 
-        VertxParallelEoSStreamProcessor<String, String> pc;
         {
             // sanity
             KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(true, consumerProps);
@@ -239,7 +287,8 @@ public class Demo extends BrokerIntegrationTest<String, String> {
                 });
 //        bar.stepTo(expectedMessageCount);
 
-        // close
+        // Drain rather than close: the second run reassigns pc, so this instance would otherwise
+        // only be reached by close() after it had been replaced.
         pc.closeDrainFirst();
         bar.close();
         log.info("\nAll {} responses received.", format(expectedMessageCount));
@@ -292,7 +341,9 @@ public class Demo extends BrokerIntegrationTest<String, String> {
 //        assertThat(expectedMessageCount).isEqualTo(processedCount.get());
 //        assertThat(responseLock.getCount()).isZero();
 //        assertThat(httpResponceReceivedCount).hasValue(bigExpectedMessageCount);
-        System.exit(0);
+        // Deliberately no System.exit here. Under Maven this method runs INSIDE the failsafe fork,
+        // and exiting it reports as "the forked VM terminated without properly saying goodbye"
+        // however well the demo went. Releasing the threads is close()'s job; main() owns the exit.
     }
 
     /**
