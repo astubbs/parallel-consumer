@@ -170,15 +170,70 @@ Three things follow.
 3. **Both versions saturate around 340-420 in flight and both are slower at 10,000 than at 1,000.**
    The knee is a property of the engine, not of the version.
 
+## WHY it got slower: the missing pipeline buffer, proven by patch
+
+`ExternalEngine` overrides two things, and has since 0.4.0.0. In today's names:
+
+```java
+protected int getTargetOutForProcessing() {
+    return getOptions().getTargetAmountOfRecordsInFlight();   // maxConcurrency x batchSize
+}
+protected void checkPipelinePressure() { }                    // no-op: load factor never steps up
+```
+
+The core instead returns `getQueueTargetLoaded()` = `getPoolLoadTarget() * dynamicExtraLoadFactor`,
+where the factor starts at 2, steps by 2, and is capped at 100.
+
+**The consequence is a pipeline depth, not a concurrency limit.** The core keeps a deep buffer of
+work queued behind the records currently in flight, so the dispatch thread always has something
+ready. `ExternalEngine` asks only for the shortfall against in-flight, so once the ceiling is full
+the request is approximately zero and every completion needs a control-loop iteration before the next
+record can be dispatched. Same in flight; nothing behind it.
+
+### Proven, not argued
+
+The two overrides were patched out of the current build - `getTargetOutForProcessing()` delegating to
+`getQueueTargetLoaded()`, `checkPipelinePressure()` calling `super` - and nothing else changed:
+
+| build | msg/s at maxConcurrency 100 | peak in flight |
+|---|---|---|
+| 0.3.2.0 | 22,271 | 100 |
+| 0.6.0.0-SNAPSHOT, as shipped | 16,304 | 100 |
+| **0.6.0.0-SNAPSHOT, overrides removed** | **21,847 / 21,907 / 22,096** | **100** |
+
+**The current engine matches the 2021 engine exactly once the buffer is restored.** Two consequences,
+and the second is the important one:
+
+1. **These two overrides account for the whole regression.** There is no residual per-record cost. An
+   earlier revision of this note claimed a "16-27% per-record regression that survives every
+   configuration" - that is now explained rather than outstanding, and it was never per-record.
+2. **Peak in flight stays at exactly 100.** The recovery is *not* bought by over-dispatching. The
+   buffer sits behind the ceiling, not through it, so `maxConcurrency` is still honoured. This is the
+   control that matters, because the obvious worry about restoring old behaviour is that it restores
+   old over-dispatching, and it measurably does not.
+
+The patch was reverted and the clean snapshot reinstalled; it exists only as this measurement.
+
+### What this does NOT establish
+
+Whether removing the overrides is *safe*. They were added deliberately, and the comment on
+`checkPipelinePressure` says the pressure system does not apply to external engines. Reasons they
+might be right that this measurement cannot see: a deep pipeline of records queued ahead of an
+external engine may interact badly with rebalances (queued work whose partitions have been revoked),
+with the `astubbs#857` family, or with shutdown draining. **That is the next question, and it is a
+correctness question, not a performance one.**
+
 ### The release gate, answered
 
 **The 2021 headline number is reachable on the current build**: `maxConcurrency` 1,000 gives ~28,300
 msg/s against the cast's 27,201. Nothing needs reverting - it is a configuration change, and the
 demo and README should state the concurrency they used.
 
-**What remains is a genuine 16-27% per-record regression** that no configuration removes. That is the
-part still undiagnosed, and it is the part worth a decision before v6: ship with it and record it, or
-hold the release to chase it.
+**And the regression is fully recoverable in code, not merely worked around by configuration.**
+Removing the two `ExternalEngine` overrides restores 0.3.2.0's throughput exactly, while still
+honouring `maxConcurrency`. What is not yet known is whether that is safe - see above. The decision
+before v6 is therefore about correctness risk, not about performance: either establish that a deep
+pipeline is safe for external engines, or ship at today's number and record why.
 
 ## Feeds the auto-scaling / dynamic concurrency work
 
