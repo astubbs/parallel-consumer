@@ -154,11 +154,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
-# pre-commit-gate.sh
-#
-# CLAUDE_PROJECT_DIR points at a fixture holding a stub `.githooks/pre-commit`, so the gate's
-# pass/fail is controlled by the test rather than by the state of the real tree.
-# ---------------------------------------------------------------------------------------------
 # check-upstream-map-merged.sh
 #
 # Refuses `gh pr merge <N>` while upstream-map.yaml still records that PR as `status: pr-open`.
@@ -199,6 +194,17 @@ expect DENY  "attached --repo= form"               'gh --repo=astubbs/parallel-c
 expect DENY  "-R between pr and merge"             'gh pr -R astubbs/parallel-consumer merge 2999 --squash'
 expect DENY  "PR URL instead of a bare number"     'gh pr merge https://github.com/astubbs/parallel-consumer/pull/2999 --squash'
 
+# The PR argument is the first POSITIONAL, not the first digit-shaped word: an unquoted numeric
+# flag value ahead of it used to win. Both directions of that bug are pinned - denying the wrong
+# PR, and quietly checking a PR nobody is merging.
+expect DENY  "numeric --body value before the PR"  'gh pr merge --body 2998 2999 --squash'
+expect ALLOW "numeric --body value, merged PR"     'gh pr merge --body 2999 2998 --squash'
+# Passes on the pre-fix code too - `--body=2998` is one token, so the old first-digit-wins scan
+# already skipped it. Kept as a guard on the attached form rather than as proof of this fix: a
+# future refactor that starts splitting `--flag=value` would break it, and this is where that shows.
+expect DENY  "attached --body= before the PR"      'gh pr merge --body=2998 2999 --squash'
+expect DENY  "-t value before the PR"              'gh pr merge -t 2998 2999 --squash'
+
 # Negative controls - each names the reason the hook must NOT fire, so a future change that makes
 # it deny everything shows up here rather than by jamming somebody's merge shut.
 expect ALLOW "entry already says merged"           'gh pr merge 2998 --squash'
@@ -214,6 +220,12 @@ rm -rf "$umm_fixture"
 umm_empty=$(mktemp -d); umm_prev_pwd=$PWD; cd "$umm_empty"
 expect ALLOW "no manifest here - fails open"       'gh pr merge 2999 --squash'
 cd "$umm_prev_pwd"; rm -rf "$umm_empty"
+
+# ---------------------------------------------------------------------------------------------
+# pre-commit-gate.sh
+#
+# CLAUDE_PROJECT_DIR points at a fixture holding a stub `.githooks/pre-commit`, so the gate's
+# pass/fail is controlled by the test rather than by the state of the real tree.
 
 # ---------------------------------------------------------------------------------------------
 

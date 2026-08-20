@@ -379,7 +379,9 @@ public class PCMetrics {
         // leaves the rest of the prefix un-swept for this call. That is deliberate rather than
         // overlooked: Search.meters() must read every candidate's id to filter by name and tags, so a
         // deterministically hostile getId() dies during enumeration however the forEach is written -
-        // a per-meter getId() guard would buy nothing. Nothing escapes either way, and the meters left
+        // a per-meter getId() guard would buy nothing. Confirmed against micrometer-core 1.13.15
+        // bytecode rather than assumed: Search.meterStream()'s filter lambdas call Meter.getId(),
+        // so the read happens inside Micrometer's own stream, upstream of anything we can wrap. Nothing escapes either way, and the meters left
         // behind stay in registeredMeters, so the next full close() sweeps them.
         String context = "removing meters with prefix '" + meterNamePrefix + "'";
         try {

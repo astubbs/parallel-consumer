@@ -80,11 +80,32 @@ for m in MERGE.finditer(cmd):
         u = re.search(r"/pull/(\d+)(?:[/?#]|$)", token)
         return u.group(1) if u else None
 
+    # Flags whose VALUE is a separate token. Without this, the first digit-shaped word after
+    # `merge` wins - so `gh pr merge --body 2998 2999` reads the body's stray number as the PR and
+    # then either denies the wrong merge or checks a PR nobody is merging. Both directions are
+    # wrong, and the second is the quiet one.
+    VALUE_FLAGS = {"--body", "-b", "--body-file", "-F", "--subject", "-t",
+                   "--match-head-commit", "--repo", "-R", "--author-email"}
+
     try:
         after = tokens[tokens.index("merge") + 1:]
     except ValueError:
         continue
-    pr = next((n for n in (_pr_number(t) for t in after) if n), None)
+
+    pr, skip_next = None, False
+    for tok in after:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in VALUE_FLAGS:        # `--body VALUE`: the value is the next token
+            skip_next = True
+            continue
+        if tok.startswith("-"):       # `--body=VALUE` / `-tVALUE`: value is attached, not a token
+            continue
+        pr = _pr_number(tok)
+        if pr:
+            break
+        break                         # first positional is the PR argument; if not a number, give up
     if pr is None:
         continue                      # merging the current branch's PR by name; number unknown
 
