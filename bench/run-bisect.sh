@@ -25,6 +25,10 @@ RECORDS=${1:-100000}
 DELAY_MS=${2:-2}
 CONCURRENCY=${3:-100}
 REPEATS=${4:-2}
+# "pc" = the Vert.x engine (an ExternalEngine); "core" = ParallelEoSStreamProcessor. Different code
+# paths through the control loop, so a result from one says nothing about the other.
+MODE=${MODE:-pc}
+BUFFER=${BUFFER:-0}
 
 BROKER_NAME=pc-bench-broker
 BOOTSTRAP=localhost:19092
@@ -129,10 +133,10 @@ for pin in $CLIENT_PINS; do
   for pcv in $PC_VERSIONS; do
     CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,pc,,COMPILE_FAILED" >> "$RESULTS"; continue; }
     for r in $(seq 1 "$REPEATS"); do
-      read -r rate peak <<< "$(run_one "$CP" pc "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$DELAY_MS" "$CONCURRENCY")"
+      read -r rate peak <<< "$(run_one "$CP" "$MODE" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$DELAY_MS" "$CONCURRENCY" "$BUFFER")"
       [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
-      log "$pcv/$pin pc run$r = $rate msg/s, peak in flight $peak"
-      echo "$pcv,$pin,pc,$r,$rate,$peak" >> "$RESULTS"
+      log "$pcv/$pin $MODE run$r = $rate msg/s, peak in flight $peak"
+      echo "$pcv,$pin,$MODE,$r,$rate,$peak" >> "$RESULTS"
     done
   done
 done

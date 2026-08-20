@@ -235,6 +235,45 @@ a constant multiplier that happens to live inside it. That matters for the auto-
 the adaptive mechanism that exists is not earning its complexity here, while the fixed constant next
 to it is worth 35%.
 
+### The core arm: core does NOT have the cliff
+
+Every measurement above this section is Vert.x. That was the blind spot, and closing it changes the
+conclusion's scope. The harness now has a `core` mode driving `ParallelEoSStreamProcessor` directly
+(`MODE=core`), same broker, same dataset, same 100 in flight:
+
+| version | core | Vert.x |
+|---|---|---|
+| 0.3.0.2 | 26,110 | 22,178 |
+| 0.3.2.0 | 25,951 | 21,987 |
+| **0.4.0.0** | **25,979** | **11,878** |
+| 0.5.0.0 | 23,230 | 9,821 |
+| 0.5.2.0 | 23,094 | 9,095 |
+| 0.5.2.4 | 25,894 | 15,123 |
+| 0.5.3.2 | 23,402 | 16,159 |
+| 0.6.0.0-SNAPSHOT | 23,751 | 16,304 |
+
+**Core has no cliff at 0.4.0.0.** It is flat across the exact boundary where Vert.x halves, which is
+the control that settles it: the cliff is `ExternalEngine`, not the engine core, not the Kafka
+client, not the machine.
+
+Core's own decline is about **10% over five years** (26,110 -> 23,751), against Vert.x's 27%. That
+10% is real but is a different question from the cliff, and it is not diagnosed.
+
+### The precise statement of the defect
+
+`ExternalEngine` is **core with the loading factor pinned at 1**:
+
+```java
+core:           getPoolLoadTarget() * loadFactor    ==  (maxConcurrency * batchSize) * factor
+ExternalEngine: getTargetAmountOfRecordsInFlight()  ==  (maxConcurrency * batchSize)
+```
+
+Same formula, multiplier removed. Not a different algorithm. And 1 -> 2 is the whole 35%.
+
+The rationale in the code is *"unlike core, we don't pipeline messages into the executor pool for
+processing"* - true, but the dispatch thread still needs a queue to pull from, and with no buffer it
+starves waiting on the control loop.
+
 ### Scope: which engines this affects
 
 `ExternalEngine` is the base for **Vert.x, Reactor, Mutiny and the language proxy**:
@@ -278,6 +317,55 @@ honouring `maxConcurrency`. What is not yet known is whether that is safe - see 
 before v6 is therefore about correctness risk, not about performance: either establish that a deep
 pipeline is safe for external engines, or ship at today's number and record why.
 
+## Open questions, and the owner's reading of them
+
+Recorded as hypotheses, not findings. None of these is tested.
+
+- **Core's 0.5.2.4 -> 0.5.3.2 drop (25,894 -> 23,402) is interesting in its own right**, and so is
+  the earlier 0.4.0.0 -> 0.5.0.0 decline. Core has the same trough-and-recovery *shape* as Vert.x
+  around 0.5.2.0 / 0.5.2.4, at about a third of the amplitude - so whatever causes it is in shared
+  code, not in `ExternalEngine`.
+- **Owner's hypothesis for those:** the collection changes in that window, **and more than
+  collections - more defensive concurrent code generally**, plus possible changes to the pressure
+  system itself. The candidates in the 0.5.2.x range remain `ShardKey`, `ShardManager`,
+  `ProcessingShard`, `PartitionState`, and the two refactor commits `f06c26fc8` ("unify PS
+  collections, change Set to List") and `b74314d0f` ("SortedSet's all the way down").
+- **The load factor is independently reported as broken.** **astubbs#155** (`confluentinc#402`),
+  open: *"Max loading factor steps reached: 100/100"* - the factor pegs at its maximum, which is the
+  pressure system failing to be a control loop at all. Directly relevant: this note found the
+  stepping to be inert on external engines (because it is disabled there) and worth nothing beyond
+  the initial 2 on the workload measured. A mechanism that either does nothing or pegs at maximum is
+  not regulating anything.
+- **astubbs#311** - "Batching requests a full extra in-flight target of work, and batchSize is
+  unvalidated" - touches `getTargetAmountOfRecordsInFlight()`, the exact expression at issue here.
+- **astubbs#187** (`confluentinc#884`), open: *"Parallel Consumer is 30 times slower than Normal
+  Consumer"*. A user report of exactly this class of problem, unresolved. Whether it is this defect
+  is unknown, but it should be re-read against these findings before being answered.
+
+## Compare against the other Java parallel-consumption project
+
+Owner's note, 2026-08-20. **The project's name is not recorded here because it was not identified in
+the session, and guessing it would be worse than leaving a description.** What is known about it:
+
+- Another Java library doing parallel Kafka consumption.
+- **It does not commit offsets** - which removes most of what makes this problem hard, so any
+  comparison must say so prominently rather than present a like-for-like number.
+- It appears to offer key-ordered parallelism, the same core claim as this project.
+- Its material emphasises being *provable* / formally argued.
+- It targets a current Java release and uses **virtual threads**.
+
+**Why it is worth doing eventually:** it is the closest comparable, and knowing where the gap is - and
+how much of it is explained by not committing offsets - is better than not knowing. The same
+discipline as
+[`parked-perf-against-native-kafka-clients.md`](parked-perf-against-native-kafka-clients.md) applies:
+name the workloads where the comparison is unfair, and publish the case we expect to lose.
+
+**Sequencing:** the virtual-threads comparison is only meaningful after this project has a virtual
+threads implementation, and that is **deferred** - `release-0.6.0.0.md` lists virtual threads as
+deliberately not in this release, and astubbs#51 is the open PR (cross-repository, on a contributor's
+fork; see `branch-package-rename-sweep.md`). So: identify the project, measure the non-virtual-threads
+gap first, and revisit the virtual-threads arm when there is something to put in it.
+
 ## Feeds the auto-scaling / dynamic concurrency work
 
 The concurrency sweep produced the most directly useful data here, and it belongs to that track
@@ -289,6 +377,10 @@ rather than this one:
 - **Throughput is non-monotonic in the ceiling**, with a knee: 100 -> ~16,500, 1,000 -> ~31,350,
   10,000 -> ~23,400 on the same build and workload. A wrong `maxConcurrency` costs about as much as
   the regression this note is about, in either direction.
+- **`messageBufferSize` is a public, documented option that sets a static load factor** - and
+  `ExternalEngine` ignores the load factor entirely, so on Vert.x, Reactor, Mutiny and the proxy it
+  silently does nothing. On core it also measured as no change (23,565 at default vs 23,471 at
+  buffer 200), because the default factor of 2 already produces that target.
 - **That is the argument for tuning it automatically**, and it is measured rather than asserted. A
   user cannot be expected to find a knee that moves with their workload, and the current failure mode
   is silent: too high looks like a reasonable setting and simply runs slower.

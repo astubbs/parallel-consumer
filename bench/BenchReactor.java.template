@@ -1,6 +1,7 @@
 import __PKG__.ParallelConsumerOptions;
 import __PKG__.ParallelEoSStreamProcessor;
-import __PKG__.vertx.VertxParallelEoSStreamProcessor;
+import __PKG__.reactor.ReactorProcessor;
+import reactor.core.publisher.Mono;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -47,7 +48,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.*;
  * peak is measured at the stub, so it is what the engine actually had outstanding - not what it was
  * configured to allow.
  */
-public class Bench {
+public class Bench {  // reactor variant
 
     static WireMockServer stub;
     static final AtomicInteger responses = new AtomicInteger();
@@ -82,8 +83,7 @@ public class Bench {
         } else if ("core".equals(mode)) {
             ms = runCore(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         } else {
-            startStub(delayMs, concurrency * 2);
-            ms = runPc(bootstrap, topic, count, concurrency, bufferSize);
+            ms = runReactor(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         }
         System.out.printf("RESULT %s %d %d %.1f peak=%d%n",
                 mode, count, ms, count * 1000.0 / ms, peakInFlight.get());
@@ -172,17 +172,27 @@ public class Bench {
         return took;
     }
 
-    static long runPc(String bootstrap, String topic, int expected, int concurrency, int bufferSize) throws Exception {
+    /**
+     * The Reactor engine - also an ExternalEngine, so it shares the overrides under test.
+     * <p>
+     * The simulated work is a non-blocking {@code Mono.delay}, which is the reactive analogue of the
+     * Vert.x arm's non-blocking HTTP call rather than an identical operation. Compare Reactor to
+     * Vert.x for engine SHAPE, and each to core within its own mode; do not read small differences
+     * between the two as meaningful.
+     */
+    static long runReactor(String bootstrap, String topic, int expected, int delayMs,
+                           int concurrency, int bufferSize) throws Exception {
         KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps(bootstrap));
-        VertxParallelEoSStreamProcessor<String, String> pc =
-                new VertxParallelEoSStreamProcessor<>(options(consumer, concurrency, bufferSize));
+        ReactorProcessor<String, String> pc = new ReactorProcessor<>(options(consumer, concurrency, bufferSize));
         pc.subscribe(Collections.singletonList(topic));
         responses.set(0);
         long start = System.currentTimeMillis();
-        pc.vertxHttpReqInfo(
-                record -> new VertxParallelEoSStreamProcessor.RequestInfo("localhost", stub.port(), "/", new HashMap<>()),
-                onSend -> { },
-                onResponse -> responses.incrementAndGet());
+        pc.react(ignored -> {
+            int now = inFlight.incrementAndGet();
+            peakInFlight.accumulateAndGet(now, Math::max);
+            return Mono.delay(java.time.Duration.ofMillis(delayMs))
+                    .doOnNext(x -> { inFlight.decrementAndGet(); responses.incrementAndGet(); });
+        });
         while (responses.get() < expected) sleep(25);
         long took = System.currentTimeMillis() - start;
         try { pc.closeDrainFirst(); } catch (Exception ignored) { }
