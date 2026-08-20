@@ -256,3 +256,14 @@ hinted it might (forked unit suite green with threads enabled; the integration r
 `PartitionStateCommittedOffsetIT` flake, since fixed by astubbs#80), but one green run is not proof. Forking
 stays the default regardless: fork×threads measured no faster than fork alone, because forking already
 saturates the cores.
+
+
+## A technique with a named target here (2026-08-21)
+
+A competitor's TLA+ verification reports finding, by exhaustive state exploration, **a race between
+offset commit and partition revocation** - a commit tick executing inside a revoked window before
+revocation completed, producing silent duplicates under specific rebalance interleavings. That is the
+shape of this family, found by construction rather than by seeded replay.
+[`next-formal-verification-and-correctness-methods.md`](next-formal-verification-and-correctness-methods.md)
+argues the case and scopes it: model the commit-advancement and drain/revoke paths only, not the
+whole system.

@@ -20,3 +20,14 @@
   only suppressed" invariant have no fast coverage - the samplers are private, so extract a seam first.
   Same for `ManagedPCInstance.Config.extraConsumerProps` (null vs present, wins-last ordering). Both
   become millisecond broker-free tests once the seams exist.
+
+
+## A breadth checklist to audit this against (2026-08-21)
+
+[`next-formal-verification-and-correctness-methods.md`](next-formal-verification-and-correctness-methods.md)
+records a competitor's published chaos matrix in full, as a checklist rather than an aspiration. The
+gap it identifies first is **network-level fault injection** (Toxiproxy: packet loss, latency jitter,
+payload truncation, asymmetric partitions), which this suite does not do at all. It also records two
+cheaper wins that would make soak runs assert something: a per-message hash so truncation and
+corruption are detected, and an end-to-end validator confirming every produced message reached either
+the primary store or the dead-letter store with no gaps.

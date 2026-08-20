@@ -52,3 +52,11 @@ To re-widen, in order:
   pitest 1.25.8 errors with *"no history plugin has been installed"*. arcmutate is free for
   open-source projects, but claiming that needs maintainer signup and a licence file at the repo root,
   which on a public repo means a committed key or a CI secret.
+
+
+## Corroboration (2026-08-21)
+
+[`next-formal-verification-and-correctness-methods.md`](next-formal-verification-and-correctness-methods.md)
+notes that a competitor reaches the same conclusion this work rests on - that coverage measures what
+executed, not what was verified - and pairs mutation testing with formally-derived invariants
+asserted directly in unit tests. That pairing is the part we do not have.
