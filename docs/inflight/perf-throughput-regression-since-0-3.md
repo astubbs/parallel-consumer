@@ -344,8 +344,11 @@ Recorded as hypotheses, not findings. None of these is tested.
 
 ## Compare against the other Java parallel-consumption project
 
-Owner's note, 2026-08-20. **The project's name is not recorded here because it was not identified in
-the session, and guessing it would be worse than leaving a description.** What is known about it:
+Owner's note, 2026-08-20. **The name is not recorded because it could not be identified.** The repo's
+own landscape notes were searched - `next-architecture-landscape-comparison.md` (Beam, Temporal, Ray,
+Envoy `ext_proc`, Bytewax, Quix, Dask, Share Groups) and the distributed-throttling ideation (Karafka
+Pro, Netflix `concurrency-limits`) - and none of them names a Java project matching this description.
+Guessing a name would be worse than carrying the description, so here is the description:
 
 - Another Java library doing parallel Kafka consumption.
 - **It does not commit offsets** - which removes most of what makes this problem hard, so any
@@ -385,12 +388,22 @@ rather than this one:
   user cannot be expected to find a knee that moves with their workload, and the current failure mode
   is silent: too high looks like a reasonable setting and simply runs slower.
 
-Where that work already lives, none of it referenced by any other document (see
-[`next-fork-branch-archaeology.md`](next-fork-branch-archaeology.md)):
+Where that work already lives:
 
+- **[`next-auto-scaling.md`](next-auto-scaling.md)** is the live design note and the place these
+  numbers belong. It already argues the case this data supports - an adaptive controller stepping
+  concurrency up until performance degrades, TCP-congestion shaped, where *"the cause of the plateau
+  never needs diagnosing"*. The measurements here are an instance of exactly that: the knee sits near
+  340-420 in flight, and neither 100 nor 10,000 finds it.
+- **[`next-distributed-throttling.md`](next-distributed-throttling.md)** - the sibling it was split
+  from.
 - **astubbs#227** (`confluentinc#21`) - "Dynamic concurrency control with flow control or tcp
-  congestion control theory", open. The congestion-control framing is exactly what a knee that moves
-  with the workload calls for.
+  congestion control theory", open.
+- **The differentiator claim is already recorded there**, and this note does not restate it:
+  `next-auto-scaling.md` says *"no known competitor does runtime-discovered, per-instance adaptive
+  concurrency"*, with the priority raised on 2026-08-18 to candidate killer feature. The nearest
+  comparator that document's ideation names is **Karafka Pro** (Ruby), whose throttler is explicitly
+  local-only and resets on rebalance, plus Netflix's `concurrency-limits` as adaptive prior art.
 - **`origin/feature/auto-tuning-pressure`** (2020-12-01, "Wip! Experiments in self tuning") and
   **`origin/features/dynamic-concurrency-control`** (2020-11-05) - prior attempts, unmerged and
   unread.

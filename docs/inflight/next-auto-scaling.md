@@ -109,3 +109,23 @@ Next step when picked up: ce-brainstorm the per-instance controller (dimension 1
 requirements; instance-count recommendation is a follow-on with its own note when dimension 1
 lands. Branch plan: this docs branch merges as one unit; implementation work starts in its own
 worktree from master afterwards (do not stack implementation on a docs branch).
+
+## Measured evidence for the premise (2026-08-20)
+
+[`perf-throughput-regression-since-0-3.md`](perf-throughput-regression-since-0-3.md) produced numbers
+that bear directly on this design, from a repeatable harness (`bench/run-bisect.sh`):
+
+- **The knee is real and neither obvious bound finds it.** On one workload, `maxConcurrency` 100 gave
+  ~16,300 msg/s, 1,000 gave ~28,300, and 10,000 gave ~23,800 - non-monotonic, with observed peak
+  in-flight saturating around 340-420 regardless of the ceiling. Too high is not merely wasteful, it
+  is *slower*, which is the silent failure mode this feature exists to remove.
+- **The existing adaptive mechanism is not doing the job.** `DynamicLoadFactor`'s stepping was
+  measured to contribute nothing beyond its initial constant of 2 on that workload, and
+  `ExternalEngine` disables it outright - so Vert.x, Reactor, Mutiny and the proxy have no adaptive
+  element at all. astubbs#155 (`confluentinc#402`) separately reports it pegging at 100/100. A
+  controller that is either inert or saturated is not regulating.
+- **`messageBufferSize`, the documented manual escape hatch, silently does nothing on the external
+  engines**, because it configures the load factor that `ExternalEngine` never reads.
+
+Read as: the manual knob is hard to set, the adaptive mechanism that exists does not work, and the
+documented workaround does not apply to four of the five engines.
