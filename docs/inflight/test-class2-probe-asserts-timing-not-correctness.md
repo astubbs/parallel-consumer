@@ -49,6 +49,6 @@ a third time.
 ## Related
 
 - `docs/inflight/test-857-revoke-under-work-sightings.md` - the four arms and their numbers
-- `docs/inflight/next-truth-probes-for-internal-state.md` - the same shape of question for internal state
+- `docs/inflight/test-truth-probes-for-internal-state.md` - the same shape of question for internal state
 - `docs/testing.md` - the chaos suite and its probes
 <!-- file-refs: N/A - the sightings ledger arrives with astubbs/parallel-consumer#29, which this branch was split out of; it resolves once that merges -->

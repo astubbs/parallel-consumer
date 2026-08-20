@@ -1,5 +1,8 @@
 # The chaos suite cannot model a CRASH, only a close - and the fleet's shared memory is why
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+<!-- inflight-state: deferred - the Class 2 stall it would chase is losing on the evidence; revisit when a crash-shaped stall is suspected on its own evidence, or when the fork wants a fidelity claim it cannot currently make -->
 ## What is missing
 
 Every stop the chaos conductor performs is a `close()` of some kind. `ManagedPCInstance.stop()` and
