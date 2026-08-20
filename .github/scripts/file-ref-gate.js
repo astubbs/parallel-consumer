@@ -127,7 +127,11 @@ function isExempt(path) {
 
 // Only text files carry citations, and only their added lines are this PR's responsibility. A .java
 // file's imports are the compiler's problem, not this gate's.
-const CITING_FILE = /\.(md|adoc|txt)$/i;
+// `.html` IS A CITING FILE. It was excluded, so a path inside one was never checked - and a rename
+// left `docs/ideation/2026-08-17-distributed-throttling-ideation.html` pointing at a note that no
+// longer existed, silently, because the gate could not see the file at all (astubbs#323 review).
+// The ideation documents cite notes and scripts the same way prose does; the format is not the point.
+const CITING_FILE = /\.(md|adoc|txt|html)$/i;
 
 function normalise(path) {
   const parts = [];

@@ -70,7 +70,18 @@ document. This section is the detail behind it.
   package-rename tool (`bin/rename-packages.sh`) - a tool run by hand once per branch, which is
   exactly the shape that rots unnoticed between the day it is written and the day the whole rename
   depends on it. `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows. Self-tests run first. **`shell: sigpipe`
+  GitHub Action pinned to one version across all workflows.
+  `inflight-tags` runs `bin/check-inflight-tags.sh`, which validates every `docs/inflight/` note's
+  tags against the closed sets in `bin/lib/inflight-tags.sh`
+  ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their meanings) - failing the commit that
+  mistyped a tag, rather than leaving it to whoever starts the next session to notice the index
+  could not place a note. `test-log-config` runs `bin/check-test-log-config.sh`, which pins the
+  four library modules' `logback-test.xml` to the `pc.log.level`-driven harness and fails any
+  logger committed at debug/trace - a failure class that is otherwise silent: the log floods,
+  nothing goes red, and the volume alone has timed tests out (measurements in the script header;
+  [`docs/testing.md`](testing.md), "Seeing test output", owns the how-to). Both are new alongside
+  `tooling: package rename` and, like it, cannot join the ruleset until the jobs exist on master.
+  Self-tests run first. **`shell: sigpipe`
   and `workflows: action versions` are required status checks** - which is exactly why the job names
   are an API. They exist because the failures they catch are invisible rather than loud, and they
   gate precisely so those failures cannot be skimmed past. `tooling: package rename` is not in the
