@@ -11,26 +11,16 @@ Almost documentation-only, and the exception is worth stating rather than glossi
 those hunks is a comment-only citation repoint** - notes renamed from `next-`/`parked-` to area
 prefixes, and the references to them updated. No behaviour changes. Delete this note when it merges.
 
-## The one that needs a decision: this PR breaks the session index until astubbs#324 lands
+## Closed: the session-index window
 
-The retagged notes land **here**; the vocabulary, `bin/check-inflight-tags.sh`, the hook rewrite and
-`docs/inflight/AGENTS.md` all ride **astubbs#324**. Verified against master:
-<!-- file-refs: N/A - the tag machinery named here ships in astubbs#324 - naming what this PR does not carry is the point of the entry -->
+This note used to record that the retagged notes landed here while the vocabulary, the tag gate and
+the index hook rode astubbs#324 - so between the two merging, master's hook would key on
+`inflight-priority`, find nothing, and the "open work" block would go silently empty.
 
-- master's `.claude/hooks/inject-recorded-knowledge.sh` keys on **`inflight-priority`** and contains
-  **zero** references to `inflight-impact`;
-- this PR removes those priority markers.
-
-So in the window between the two merging, **the session-start "open work" block reads tags that no
-longer exist and goes silently empty**, and `docs/inflight/AGENTS.md` on master documents a retired
-scheme. Silence that reads as "nothing open" is exactly the failure class the index was built to
-prevent.
-
-**Two ways out.** Merge astubbs#324 immediately after this one and accept a short window; or move the
-four machinery files (`bin/lib/inflight-tags.sh`, `bin/check-inflight-tags.sh`, the hook, and
-`docs/inflight/AGENTS.md`) down into this PR so the tags and the thing that reads them land together
-- the same call already made for the quarantine rule on astubbs#322. **Undecided.**
-<!-- file-refs: N/A - these are the astubbs#324 files this entry proposes moving; they do not exist here yet, which is the decision being recorded -->
+**It is closed.** The tracker's reader now travels with its data: `inject-recorded-knowledge.sh`,
+`bin/lib/inflight-tags.sh`, `bin/check-inflight-tags.sh` and its self-test are all in THIS PR,
+alongside `docs/inflight/AGENTS.md`. It was not a theoretical risk - `agents: hook self-tests` went
+red on this PR for exactly that reason, which is what forced the move.
 
 ## Also open
 
