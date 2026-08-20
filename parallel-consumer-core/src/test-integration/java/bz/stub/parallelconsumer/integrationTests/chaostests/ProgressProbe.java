@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
  */
 
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -214,7 +215,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         Object incarnationMarker();
 
         /** The live adapter over a real fleet member, reading PC's own {@code WorkManager} state. */
-        static InstanceProgressView of(bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance pc) {
+        static InstanceProgressView of(ManagedPCInstance pc) {
             return new InstanceProgressView() {
                 @Override
                 public int instanceId() {

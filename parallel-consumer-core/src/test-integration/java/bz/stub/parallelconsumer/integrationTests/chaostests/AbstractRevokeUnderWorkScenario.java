@@ -230,7 +230,10 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                 .minTick(minTick())
                 .maxTick(maxTick())
                 .weights(chaosWeights())
-                .joinAfterDrainBias(0) // no drains to bias after
+                // 0 in every cell, for different reasons: the matrix cells have no drains to bias
+                // after, and the drain control arms deliberately keep the unbiased join schedule so
+                // only the MANNER of leaving changes against their no-drain counterparts
+                .joinAfterDrainBias(0)
                 .build();
 
         startRun(probe, conductor);

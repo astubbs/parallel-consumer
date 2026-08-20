@@ -102,11 +102,52 @@ with `bin/quarantined-test.sh`.
 ## Chaos Pain Suite (on-demand bug detector - never gates)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
-`ChaosScenarioBase`, plus scenarios `ChaosChurnStormIT` W1 and `ChaosRevokeUnderWorkIT` W4) that
-hunts the "alive but not progressing" bug class: rebalance-dwell zombies, protocol-invisible
-per-partition lag stagnation (Class 2, W4's prey), drain overruns, and record loss or duplication.
-Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
+`ChaosScenarioBase`) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,
+protocol-invisible per-partition lag stagnation (Class 2), drain overruns, and record loss or
+duplication. Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
 `excluded.groups` default.
+
+**What it can assert, so you know whether a question is already answerable.** Reach for an existing
+capability before building one - the calibration behind each of these is the expensive part, not the
+code:
+
+| Capability | Where | What it catches |
+|---|---|---|
+| Loss and bounded duplication | `ProgressProbe`'s ledger | a record never arrives, or arrives more often than a disturbance explains |
+| **Per-key ORDERING and concurrency** | `KeyOrderLedger` | a key's offsets going backwards, or two deliveries of one key in flight at once |
+| **A stalled instance** | `InstanceStallProbeIT`, `ProgressProbe` | a member present and heartbeating while making no progress |
+| Lag stagnation (Class 2) | `ProgressProbe` | a committed offset frozen while lag grows, group STABLE |
+| **Watching a stall instead of killing it** | `-Dchaos.diagnoseStallRecovery=true` | keeps a stalled run alive so its state can be read |
+
+**Recorded but not yet analysed - reach for this before adding instrumentation.** The ledger is an
+event register: it writes down facts and lets the end-of-run assessment decide what they mean. So
+some questions need only a new *analysis*, not new *recording*. Every `KeyOrderLedger.Delivery`
+already carries `incarnationId`, `partition`, `epoch`, `key`, `offset`, `startSeq` and `endSeq`
+(`null` while still running), and the full history is retained - the per-window grouping is a choice
+`check()` makes, not a limit on what was captured.
+
+The worked example is cross-epoch comparison. Nothing today compares deliveries across an epoch
+boundary, but the data to do it is present: a delivery with `endSeq == null` in one epoch, against a
+delivery of the same key and partition in a later epoch whose `startSeq` falls after it. **If a test
+needs that, write the comparison - do not add instrumentation for it.** The work is the calibration,
+not the capture: a revoked owner finishing its in-flight record is legitimate, so such a check needs a
+defensible bound on how long an old-epoch delivery may still run before it counts as a violation.
+
+Scenario cells, each isolating one disturbance shape: `ChaosChurnStormIT` (W1, continuous churn),
+`ChaosRevokeUnderWorkIT` (W4, revoke while work is in flight), `ChaosKeyOrderIT` (key-ordered
+processing under churn), `ChaosRevokeUnderWorkKeyOrderIT` (key order under revoke), and
+`ChaosRevokeUnderWorkDrainIT` / `ChaosRevokeUnderWorkCooperativeDrainIT` - a 2x2 control arm over
+assignor and stop-mode, whose weights are shared through `drainOnlyChaosWeights()` so the two cannot
+drift apart.
+
+**Two limits worth knowing before you trust a verdict.** `KeyOrderLedger` compares only within one
+incarnation, partition, epoch and key - so a **cross-epoch overlap** (an old owner still running past
+a revoke while the new owner takes the same key) lands in two windows and is not reported. It is
+**not** unanswerable, though: every delivery records its epoch and incarnation and the full history is
+kept, so the check is a function nobody has written rather than data nobody has. What it would need is
+a calibrated bound on how long a revoked owner may legitimately still be finishing - see the class
+javadoc. That shape is a real defect this repo has already fixed once (astubbs#80). And `CLASS2_STALL` gates on a timing bound, so a red proves the bound was crossed, not
+that the backlog never drained - see `docs/inflight/test-class2-probe-asserts-timing-not-correctness.md`.
 
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups=`

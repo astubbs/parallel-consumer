@@ -38,8 +38,24 @@ class KeyOrderLedgerIT {
     private static final int P0 = 0;
 
     /** A delivery that ran to completion between {@code startSeq} and {@code endSeq}. */
-    private static KeyOrderLedger.Delivery d(String incarnation, int partition, long epoch, String key,
-                                             long offset, long startSeq, long endSeq) {
+    /**
+     * Builds a delivery that FINISHED. Overloaded so the fixtures can keep writing plain integer
+     * literals. Java widens {@code int -> long} or boxes {@code long -> Long}, never both in one
+     * step, so without this every end value would need an {@code L} suffix - 34 call sites edited to
+     * satisfy a signature rather than to say anything.
+     */
+    private static KeyOrderLedger.Delivery delivery(String incarnation, int partition, long epoch, String key,
+                                             long offset, long startSeq, int endSeq) {
+        return delivery(incarnation, partition, epoch, key, offset, startSeq, Long.valueOf(endSeq));
+    }
+
+    /**
+     * The real one. {@code endSeq} is {@code null} for a delivery that never finished - the absence
+     * of an end, not a value standing in for one. {@code null} is not applicable to the {@code int}
+     * overload above, so it resolves here unambiguously.
+     */
+    private static KeyOrderLedger.Delivery delivery(String incarnation, int partition, long epoch, String key,
+                                             long offset, long startSeq, Long endSeq) {
         return new KeyOrderLedger.Delivery(incarnation, partition, epoch, key, offset, startSeq, endSeq);
     }
 
@@ -49,7 +65,7 @@ class KeyOrderLedgerIT {
         List<KeyOrderLedger.Delivery> deliveries = new ArrayList<>();
         long seq = fromSeq;
         for (long offset : offsets) {
-            deliveries.add(d(incarnation, P0, epoch, key, offset, seq, seq + 1));
+            deliveries.add(delivery(incarnation, P0, epoch, key, offset, seq, seq + 1));
             seq += 2;
         }
         return deliveries;
@@ -61,9 +77,9 @@ class KeyOrderLedgerIT {
     void outOfOrderInsideOneWindowIsCaught() {
         // one instance, one partition, one epoch, one key: 10, then 12, then 11 - a real regression
         List<KeyOrderLedger.Delivery> history = of(
-                d(PC_A, P0, 4, "k-1", 10, 1, 2),
-                d(PC_A, P0, 4, "k-1", 12, 3, 4),
-                d(PC_A, P0, 4, "k-1", 11, 5, 6));
+                delivery(PC_A, P0, 4, "k-1", 10, 1, 2L),
+                delivery(PC_A, P0, 4, "k-1", 12, 3, 4L),
+                delivery(PC_A, P0, 4, "k-1", 11, 5, 6L));
 
         List<String> problems = KeyOrderLedger.check(history);
 
@@ -78,8 +94,8 @@ class KeyOrderLedgerIT {
         // offsets ascend, so the order check is happy - but the two executions OVERLAP (offset 11 starts
         // at seq 2, before offset 10 ends at seq 4), which abandons per-key order rather than reordering it
         List<KeyOrderLedger.Delivery> history = of(
-                d(PC_A, P0, 4, "k-1", 10, 1, 4),
-                d(PC_A, P0, 4, "k-1", 11, 2, 3));
+                delivery(PC_A, P0, 4, "k-1", 10, 1, 4L),
+                delivery(PC_A, P0, 4, "k-1", 11, 2, 3L));
 
         List<String> problems = KeyOrderLedger.check(history);
 
@@ -94,9 +110,9 @@ class KeyOrderLedgerIT {
         // enqueue in the opposite order to the one they started in - check() sorts by startSeq, and this
         // is what proves it does
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
-                d(PC_A, P0, 4, "k-1", 10, 1, 2),
-                d(PC_A, P0, 4, "k-1", 12, 3, 4),
-                d(PC_A, P0, 4, "k-1", 11, 5, 6)));
+                delivery(PC_A, P0, 4, "k-1", 10, 1, 2L),
+                delivery(PC_A, P0, 4, "k-1", 12, 3, 4L),
+                delivery(PC_A, P0, 4, "k-1", 11, 5, 6L)));
         Collections.shuffle(history, new Random(42));
 
         assertThat(KeyOrderLedger.check(history).get(0)).contains("LEDGER_KEY_ORDER");
@@ -105,10 +121,10 @@ class KeyOrderLedgerIT {
     @Test
     void everyRegressionIsCountedButOnlyASampleIsPrinted() {
         List<KeyOrderLedger.Delivery> history = new ArrayList<>();
-        history.add(d(PC_A, P0, 4, "k-1", 1_000, 1, 2));
+        history.add(delivery(PC_A, P0, 4, "k-1", 1_000, 1, 2L));
         long seq = 3;
         for (int offset = 0; offset < KeyOrderLedger.MAX_REPORTED_PER_KIND + 3; offset++) {
-            history.add(d(PC_A, P0, 4, "k-1", offset, seq, seq + 1));
+            history.add(delivery(PC_A, P0, 4, "k-1", offset, seq, seq + 1));
             seq += 2;
         }
 
@@ -118,6 +134,27 @@ class KeyOrderLedgerIT {
         assertThat(problems.get(0)).contains((KeyOrderLedger.MAX_REPORTED_PER_KIND + 3) + " per-key ordering regression");
         // the sample is capped: a systemic break must not print thousands of identical lines
         assertThat(problems.get(0)).doesNotContain("offset " + (KeyOrderLedger.MAX_REPORTED_PER_KIND + 2) + " of key");
+    }
+
+    @Test
+    void everyOverlapIsCountedButOnlyASampleIsPrinted() {
+        // sibling of the regression-cap test above, for the LEDGER_KEY_CONCURRENCY kind: one long
+        // delivery spans the window, every later one overlaps it, offsets ascend so order stays quiet
+        List<KeyOrderLedger.Delivery> history = new ArrayList<>();
+        history.add(delivery(PC_A, P0, 4, "k-1", 10, 1, 1_000));
+        long seq = 2;
+        int overlapping = KeyOrderLedger.MAX_REPORTED_PER_KIND + 3;
+        for (int i = 1; i <= overlapping; i++) {
+            history.add(delivery(PC_A, P0, 4, "k-1", 10 + i, seq, seq + 1));
+            seq += 2;
+        }
+
+        List<String> problems = KeyOrderLedger.check(history);
+
+        assertThat(problems).hasSize(1);
+        assertThat(problems.get(0)).contains(overlapping + " overlapping delivery pair");
+        // the sample is capped: a systemic break must not print thousands of identical lines
+        assertThat(problems.get(0)).doesNotContain("offset " + (10 + overlapping) + " of key");
     }
 
     // --- and must NOT fire on the legitimate redelivery churn produces on purpose ---
@@ -162,10 +199,10 @@ class KeyOrderLedgerIT {
         // is still running (ends at seq 9) while epoch 5's redelivery of 10 and 11 runs. Different
         // windows - the epoch is read off the record's own WorkContainer, so the straggler keeps epoch 4
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
-                d(PC_A, P0, 4, "k-1", 9, 1, 2),
-                d(PC_A, P0, 4, "k-1", 10, 3, 9),
-                d(PC_A, P0, 5, "k-1", 10, 4, 6),
-                d(PC_A, P0, 5, "k-1", 11, 7, 8)));
+                delivery(PC_A, P0, 4, "k-1", 9, 1, 2L),
+                delivery(PC_A, P0, 4, "k-1", 10, 3, 9L),
+                delivery(PC_A, P0, 5, "k-1", 10, 4, 6L),
+                delivery(PC_A, P0, 5, "k-1", 11, 7, 8L)));
 
         assertThat(KeyOrderLedger.check(history)).isEmpty();
     }
@@ -175,10 +212,10 @@ class KeyOrderLedgerIT {
         // the KEY shard carries the record's TopicPartition, so the same key on two partitions is two
         // independent orders (only reachable with a non-default partitioner, but the window says so)
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
-                d(PC_A, 0, 4, "k-1", 10, 1, 2),
-                d(PC_A, 0, 4, "k-1", 11, 3, 4),
-                d(PC_A, 7, 4, "k-1", 5, 5, 6),
-                d(PC_A, 7, 4, "k-1", 6, 7, 8)));
+                delivery(PC_A, 0, 4, "k-1", 10, 1, 2L),
+                delivery(PC_A, 0, 4, "k-1", 11, 3, 4L),
+                delivery(PC_A, 7, 4, "k-1", 5, 5, 6L),
+                delivery(PC_A, 7, 4, "k-1", 6, 7, 8L)));
 
         assertThat(KeyOrderLedger.check(history)).isEmpty();
     }
@@ -188,10 +225,10 @@ class KeyOrderLedgerIT {
         // the concurrency PC exists to give: k-2's whole sequence runs interleaved with, and out of
         // offset order relative to, k-1's - which is not an order anyone promised
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
-                d(PC_A, P0, 4, "k-1", 40, 1, 4),
-                d(PC_A, P0, 4, "k-2", 5, 2, 3),
-                d(PC_A, P0, 4, "k-2", 6, 5, 6),
-                d(PC_A, P0, 4, "k-1", 41, 7, 8)));
+                delivery(PC_A, P0, 4, "k-1", 40, 1, 4L),
+                delivery(PC_A, P0, 4, "k-2", 5, 2, 3L),
+                delivery(PC_A, P0, 4, "k-2", 6, 5, 6L),
+                delivery(PC_A, P0, 4, "k-1", 41, 7, 8L)));
 
         assertThat(KeyOrderLedger.check(history)).isEmpty();
     }
@@ -206,17 +243,53 @@ class KeyOrderLedgerIT {
     }
 
     @Test
-    void anUnfinishedDeliveryOnlySuppressesTheOverlapClaim() {
-        // torn down mid-flight: its end is unknowable, so the overlap check on the next delivery is
-        // skipped (the safe direction) - but the ordering regression is still reported
+    void aWedgedDeliveryStillOverlapsLaterStartsInItsWindow() {
+        // THE confluentinc#857 wedge shape: offset 10 never finishes (a stuck worker holds the shard),
+        // yet PC hands offset 11 of the SAME window to another worker. Offsets ascend, so the order
+        // half is silent - only the overlap half can see this, and a never-finished delivery overlaps
+        // every later start in its window BY CONSTRUCTION (finished() is finally-guaranteed, so
+        // UNFINISHED means genuinely still running, not instrumentation noise)
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
-                d(PC_A, P0, 4, "k-1", 12, 1, KeyOrderLedger.Delivery.UNFINISHED),
-                d(PC_A, P0, 4, "k-1", 11, 2, 3)));
+                delivery(PC_A, P0, 4, "k-1", 10, 1, null),
+                delivery(PC_A, P0, 4, "k-1", 11, 2, 3L)));
+
+        List<String> problems = KeyOrderLedger.check(history);
+
+        assertWithMessage("a wedged delivery is in flight for the rest of the run - a later same-window "
+                + "start is a certain overlap, not an unknowable one")
+                .that(problems).hasSize(1);
+        assertThat(problems.get(0)).contains("LEDGER_KEY_CONCURRENCY");
+    }
+
+    @Test
+    void anUnfinishedDeliveryReportsBothTheRegressionAndTheOverlap() {
+        // still running at teardown: the ordering regression (11 after 12) is reported, AND the
+        // never-finished 12 is an open interval, so 11 starting inside it is also a certain overlap
+        List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
+                delivery(PC_A, P0, 4, "k-1", 12, 1, null),
+                delivery(PC_A, P0, 4, "k-1", 11, 2, 3L)));
+
+        List<String> problems = KeyOrderLedger.check(history);
+
+        assertThat(problems).hasSize(2);
+        assertThat(problems.get(0)).contains("LEDGER_KEY_ORDER");
+        assertThat(problems.get(1)).contains("LEDGER_KEY_CONCURRENCY");
+    }
+
+    @Test
+    void aFinishedEndIsNotForgottenWhenAnUnfinishedDeliveryFollowsIt() {
+        // d1 ends at seq 10; d2 (unfinished) is caught overlapping d1; d3 starts at seq 4, inside
+        // BOTH d1's known interval and d2's open one - the known end must survive d2, not be wiped
+        List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
+                delivery(PC_A, P0, 4, "k-1", 20, 1, 10L),
+                delivery(PC_A, P0, 4, "k-1", 21, 2, null),
+                delivery(PC_A, P0, 4, "k-1", 22, 4, 5L)));
 
         List<String> problems = KeyOrderLedger.check(history);
 
         assertThat(problems).hasSize(1);
-        assertThat(problems.get(0)).contains("LEDGER_KEY_ORDER");
+        assertThat(problems.get(0)).contains("LEDGER_KEY_CONCURRENCY");
+        assertThat(problems.get(0)).contains("2 overlapping delivery pair");
     }
 
     @Test
@@ -231,9 +304,9 @@ class KeyOrderLedgerIT {
         // exactly what W1/W4 produce: every window holds one delivery, so nothing is ever compared. The
         // check going quiet must be a failure, not a pass
         List<KeyOrderLedger.Delivery> history = new ArrayList<>(of(
-                d(PC_A, P0, 4, "key-1", 10, 1, 2),
-                d(PC_A, P0, 4, "key-2", 11, 3, 4),
-                d(PC_A, P0, 4, "key-3", 12, 5, 6)));
+                delivery(PC_A, P0, 4, "key-1", 10, 1, 2L),
+                delivery(PC_A, P0, 4, "key-2", 11, 3, 4L),
+                delivery(PC_A, P0, 4, "key-3", 12, 5, 6L)));
 
         List<String> problems = KeyOrderLedger.check(history);
 

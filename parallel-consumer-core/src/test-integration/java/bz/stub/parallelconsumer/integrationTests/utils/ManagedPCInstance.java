@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
@@ -118,7 +119,7 @@ public class ManagedPCInstance implements Runnable {
      */
     @Getter(AccessLevel.NONE) // mutable guard - callers get the count via getWorkResultsReturnedCount()
     @ToString.Exclude
-    private final java.util.concurrent.atomic.AtomicLong workResultsReturned = new java.util.concurrent.atomic.AtomicLong();
+    private final AtomicLong workResultsReturned = new AtomicLong();
 
     /** Snapshot of {@link #workResultsReturned} - see its javadoc for what a "work result" is here. */
     public long getWorkResultsReturnedCount() {
@@ -412,8 +413,14 @@ public class ManagedPCInstance implements Runnable {
     /**
      * Test hook: seed the PC without bringing one up, so the close-path guards can be exercised
      * without a broker. Production callers get their PC from {@link #run()}.
+     * <p>
+     * Public rather than package-private only so its test can live with the other integration tests
+     * instead of in this helpers package. Package-private was keeping
+     * {@code ManagedPCInstanceLifecycleIT} here - the sole test among six helpers with no test
+     * methods - which is a filing decision made by a modifier rather than by where the test belongs.
+     * This whole source root is test-only, so nothing is published by widening it.
      */
-    void setParallelConsumerForTest(ParallelEoSStreamProcessor<String, String> pc) {
+    public void setParallelConsumerForTest(ParallelEoSStreamProcessor<String, String> pc) {
         this.parallelConsumer = pc;
     }
 

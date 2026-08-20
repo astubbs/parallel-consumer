@@ -46,10 +46,20 @@ seed, and the ledger warns explicitly that the frozen-partition set is not a fin
 
 **The discriminator is a replay of that seed on an uncontended box**, and nothing cheaper works:
 
-| Replay uncontended | Reading |
-|---|---|
-| **RED**, unbounded, does not drain | A family occurrence. Record it in `bug-857-family.md`. |
-| **GREEN**, drains, peaks under the bound | Contention. Record it here. |
+| Replay uncontended | Reading | Replays needed |
+|---|---|---|
+| **RED**, unbounded, does not drain | A family occurrence. Record it in `bug-857-family.md`. | One is enough |
+| **GREEN**, drains, peaks under the bound | Contention. Record it here. | **Two or three** |
+
+**The two sides need different amounts of evidence, and an earlier version of this table implied they
+did not.** A RED replay is positive evidence: the schedule crossed the bound without contention, and
+one instance of that is enough - the eleventh sighting happened to get three (CI, local replay, local
+control on plain master), but the first would have carried it. A GREEN replay is an ABSENCE, and this
+family is intermittent: `bug-857-family.md` records the same seed swinging 5 / 7 / 10 violations
+across otherwise-identical uncontended runs. A genuinely intermittent family occurrence that simply
+does not fire on one replay is indistinguishable from contention, so a single green is the weakest
+evidence in the table and was being read as the strongest. The occurrence recorded in this note has
+exactly one green replay; it should get two more before anyone treats it as settled.
 
 A real Class 2 stall is unbounded, so a schedule that finishes on replay cannot encode one - that is
 the whole argument, and it is why the replay is worth the minutes it costs before a hunt begins.

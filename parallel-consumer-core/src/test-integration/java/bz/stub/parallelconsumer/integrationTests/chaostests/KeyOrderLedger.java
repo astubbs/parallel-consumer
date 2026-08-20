@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -58,8 +59,10 @@ import java.util.stream.Collectors;
  * </ul>
  * <p>
  * Everything the window excludes is excluded in the SAFE direction: a delivery that cannot be placed in
- * a window (or whose end is unknown) is skipped, so a mis-scoped observation loses a detection rather
- * than inventing one. A detector that fires on correct behaviour would be disabled within a week, and
+ * a window is skipped, so a mis-scoped observation loses a detection rather than inventing one. (A
+ * delivery with no recorded end is NOT such a case: {@code finished} is finally-guaranteed, so a missing
+ * end means still-running, and {@link #check} treats it as an open interval that any later same-window
+ * start certainly overlaps.) A detector that fires on correct behaviour would be disabled within a week, and
  * the suite's whole value is that a RED means something.
  *
  * <h2>Why this cannot silently become vacuous</h2>
@@ -67,7 +70,9 @@ import java.util.stream.Collectors;
  * what the other chaos scenarios produce) is nothing BUT such windows. {@link #check} therefore reports
  * {@code LEDGER_ORDER_VACUOUS} when no window held two deliveries - the check going quiet is itself a
  * failure. Scenarios that make no ordering claim (UNORDERED processing) must not record at all rather
- * than record a history this would call vacuous.
+ * than record a history this would call vacuous. The same failure shape - an assertion silently losing
+ * its precondition and going green - is the subject of
+ * {@code docs/solutions/test-flakiness/vacuous-counting-assertion-loop-changed-its-own-precondition-2026-08-18.md}.
  *
  * <h2>Prior art, and why it is not extended</h2>
  * The one existing per-key ordering assertion in the repo is
@@ -81,6 +86,76 @@ import java.util.stream.Collectors;
  * assertions in {@code WorkManagerTest} ({@code orderedByKeyParallel},
  * {@code testOrderedInFlightShouldBlockQueue}) check the same guarantee one layer down - that a shard
  * hands out one record at a time in offset order - also with no epochs in play.
+ *
+ * <h2>What this does NOT assert</h2>
+ *
+ * "Asserts ordering under churn" is easy to read as "no two owners ever concurrently touch a key
+ * across a revoke", and it does not mean that. Overlap and order are compared only WITHIN a window,
+ * so a <b>cross-epoch overlap</b> - an old-epoch delivery still executing on a stopped-but-not-drained
+ * owner while the new owner processes the same key in a new epoch - falls into two different windows
+ * and is not raised as {@code LEDGER_KEY_CONCURRENCY}. That is the window doing its job:
+ * a new epoch legitimately opens a new window, which is what keeps at-least-once redelivery after a
+ * revoke from reading as a violation.
+ *
+ * <p><b>The data to close that gap is already here.</b> Nothing is discarded: every {@link Delivery}
+ * carries its {@code epoch} and {@code incarnationId}, and the whole history is retained - the window
+ * is a grouping the ANALYSIS chooses, not a limit on what was recorded. So a cross-epoch check is a
+ * function nobody has written yet rather than a question this ledger cannot answer. It would look
+ * for a delivery with {@code endSeq == null} in one epoch, and a delivery of the same key and
+ * partition in a LATER epoch whose {@code startSeq} falls after it - which is an overlap on the same
+ * evidence the within-window check already uses. What makes it a separate piece of work is not the
+ * data but the calibration: a revoked owner finishing its in-flight record is legitimate, so such a
+ * check needs a defensible bound on how long an old-epoch delivery may still be running before it
+ * counts as a violation, and picking that number is the whole job.
+ *
+ * <p>It is worth stating explicitly because that gap is the shape of a product bug this repo has
+ * already found once - the drain-path zombie in
+ * {@code docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md}, fixed in
+ * astubbs#80 - so a reader could reasonably assume this ledger now covers it. It does not, and it is
+ * not trying to: {@code AbstractRevokeUnderWorkScenario} names the same boundary from the scenario
+ * side ("a drain opens the Class 1 drain-zombie window, which can mask the Class 2 mechanism it
+ * isolates"). Detecting cross-epoch overlap needs an instrument that outlives an epoch, which is a
+ * different tool from this one.
+ *
+ * <h2>It is an event register: record facts, decide meaning at the end</h2>
+ *
+ * The recorder writes down what happened - key, offset, start, end - and nothing else. Interpretation
+ * belongs to {@link #check}, which runs once, with the whole run in front of it. Keeping those two
+ * jobs apart is not tidiness; it is the reason the ledger can be trusted, because a fact discarded
+ * while the run is still going cannot be reconsidered once the run is over.
+ *
+ * <p><b>The analysis pass must not throw information away either, and that is where this went
+ * wrong.</b> A delivery with no end time is a FACT - the worker never finished. The first version
+ * read that fact, concluded "end unknown", and deleted the window's running end, so the next
+ * delivery had nothing to compare against. It had turned a recorded fact into a forgotten one, and
+ * the detector reported green because it had stopped looking rather than because nothing was wrong.
+ * The information was always there; only the analysis discarded it.
+ *
+ * <p>So the rule for anything added here: <b>never delete, only interpret</b>. A missing end means
+ * still running, which makes every later start in that window a certain overlap - no guess, and no
+ * data thrown away to reach it.
+ *
+ * <p><b>Which is why absence is {@code null} here and never a sentinel.</b> A sentinel is
+ * type-compatible with the arithmetic: {@code Long.MAX_VALUE} slides into {@code Math::max}, into a
+ * {@code >} comparison, into a subtraction, and the calculation simply happens - silently, on a
+ * number the run never produced. A {@code null Long} cannot. It will not compile into arithmetic,
+ * and at runtime it throws rather than returning a plausible answer, so the compiler is what forces
+ * every site touching the value to decide what "we do not know" means there. That is the difference
+ * between a rule written down and a rule enforced.
+ *
+ * <p>This is not hypothetical: the first fix for the discarded-end bug used {@code Long.MAX_VALUE}
+ * as the open-interval marker and reintroduced the same class of error one layer down - a max
+ * computed over a fabricated value, which then leaked into the overlap report as "ended at seq
+ * 9223372036854775807". <b>Do not take shortcuts in capturing reality</b>: record what happened, and
+ * let the type system carry the fact that sometimes nothing did.
+ *
+ * <p><b>And the reason the rule is absolute rather than a preference: a check that does not hold all
+ * the information its decision needs cannot be testing what it claims to test.</b> Not testing it
+ * weakly - not testing it. Once the end time was discarded, no amount of care in the comparison that
+ * followed could recover the answer, because the input to that comparison was gone. That is why this
+ * failed silently instead of loudly: a check starved of its inputs does not error, it returns
+ * "nothing found", which is indistinguishable from a healthy run. Any future change here should be
+ * read against that test - after it, does the assessment still hold everything it needs to decide?
  *
  * @see ProgressProbe#ledger the loss / bounded-duplicate half of the same end-of-run ledger
  */
@@ -96,14 +171,11 @@ public final class KeyOrderLedger {
     /**
      * One execution of the user function, bracketed. {@code startSeq}/{@code endSeq} come from a single
      * shared counter, so they order events across every worker thread in the fleet - the observation
-     * order the check replays. {@code endSeq} stays {@link #UNFINISHED} for a delivery still running when
-     * the run was torn down.
+     * order the check replays. {@code endSeq} stays {@code null} for a delivery still running when the
+     * run was torn down - the absence of an end, never a value standing in for one.
      */
     @Getter
     public static class Delivery {
-
-        /** {@code endSeq} of a delivery that never completed - its overlap window is unknowable. */
-        public static final long UNFINISHED = -1;
 
         private final String incarnationId;
         private final int partition;
@@ -111,10 +183,11 @@ public final class KeyOrderLedger {
         private final String key;
         private final long offset;
         private final long startSeq;
-        private volatile long endSeq;
+        /** {@code null} until {@link #finished} runs - absence of an end, not a value standing in for one. */
+        private volatile Long endSeq;
 
         public Delivery(String incarnationId, int partition, long epoch, String key, long offset,
-                        long startSeq, long endSeq) {
+                        long startSeq, Long endSeq) {
             this.incarnationId = incarnationId;
             this.partition = partition;
             this.epoch = epoch;
@@ -155,7 +228,7 @@ public final class KeyOrderLedger {
             var record = context.getSingleConsumerRecord();
             long epoch = epochOf(context);
             var delivery = new Delivery(incarnationId, record.partition(), epoch, record.key(),
-                    record.offset(), sequence.incrementAndGet(), Delivery.UNFINISHED);
+                    record.offset(), sequence.incrementAndGet(), null);
             history.add(delivery);
             return delivery;
         }
@@ -202,11 +275,16 @@ public final class KeyOrderLedger {
         long comparedCount = 0;
 
         var byStartSeq = history.stream()
-                .sorted((a, b) -> Long.compare(a.getStartSeq(), b.getStartSeq()))
+                .sorted(Comparator.comparingLong(Delivery::getStartSeq))
                 .collect(Collectors.toList());
 
         Map<String, Long> highestOffsetStarted = new HashMap<>();
         Map<String, Long> latestEndSeq = new HashMap<>();
+        // A window with a delivery that never ended. Kept as its own FACT rather than folded into
+        // latestEndSeq as Long.MAX_VALUE: that sentinel is a real, valid end value standing in for
+        // "no end", so it fabricates information the run never produced - and it leaked, printing
+        // "ended at seq 9223372036854775807" in the very report meant to explain the overlap.
+        Set<String> windowsWithOpenDelivery = new HashSet<>();
         Set<String> assertingWindows = new HashSet<>();
         Set<String> keysSeen = new HashSet<>();
 
@@ -233,22 +311,31 @@ public final class KeyOrderLedger {
                 }
 
                 Long previousEnd = latestEndSeq.get(window);
-                if (previousEnd != null && previousEnd > delivery.getStartSeq()) {
+                boolean openDeliveryHere = windowsWithOpenDelivery.contains(window);
+                if (openDeliveryHere || (previousEnd != null && previousEnd > delivery.getStartSeq())) {
                     overlapCount++;
                     if (overlapProblems.size() < MAX_REPORTED_PER_KIND) {
                         overlapProblems.add(delivery + " started at seq " + delivery.getStartSeq()
-                                + " while an earlier delivery of the same key was still in flight (it ended at seq "
-                                + previousEnd + ")");
+                                + " while an earlier delivery of the same key was still in flight ("
+                                + (openDeliveryHere ? "that delivery never finished" : "it ended at seq " + previousEnd)
+                                + ")");
                     }
                 }
             }
 
-            if (delivery.getEndSeq() != Delivery.UNFINISHED) {
-                // an UNFINISHED delivery leaves the window's end unknown, so the next delivery's overlap
-                // check is skipped rather than guessed - the safe direction
+            if (delivery.getEndSeq() != null) {
                 latestEndSeq.merge(window, delivery.getEndSeq(), Math::max);
             } else {
-                latestEndSeq.remove(window);
+                // No end recorded is a FACT, and it is recorded as one. finished() is
+                // finally-guaranteed ({@code ChaosScenarioBase#newInstance}), so no end means the
+                // delivery is genuinely still running - which makes any later start in the same
+                // window a CERTAIN overlap, with no guess and no invented end value involved.
+                // Legitimate redelivery of a wedged record opens a NEW window (epoch bump on
+                // revoke+assign, or a new incarnation), so this cannot fire on correct behaviour.
+                // Deleting the window's end here instead was the original bug: it silently disabled
+                // the overlap half for exactly the confluentinc#857 wedge shape this detector exists
+                // to catch.
+                windowsWithOpenDelivery.add(window);
             }
         }
 

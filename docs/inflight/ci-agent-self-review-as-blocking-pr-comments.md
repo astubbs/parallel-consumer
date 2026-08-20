@@ -61,6 +61,49 @@ So: **the agent proposes its candidate comments in chat and the maintainer appro
 posted.** Never auto-posted. That keeps the human as the filter on volume and keeps the blocking
 power meaningful.
 
+## Simpler variant, found by needing it: DRAFT plus a checklist comment
+
+Owner's refinement, and it removes the mechanism's dependency on a repository setting.
+
+**It does not need to be a review at all.** On 2026-08-20 the attempt to post a genuinely blocking
+review on astubbs/parallel-consumer#325 failed outright:
+
+    failed to create review: GraphQL: Review Can not request changes on your own pull request
+
+That is not a permissions quirk to work around - it is fatal to the mechanism above **for this
+repository specifically**, because the maintainer is the author of nearly every PR and an agent acts
+as him. The one route that carries real blocking weight is the one route unavailable here.
+
+**Draft mode is the block; a comment is the memory.** Two artefacts, each doing the job it is good
+at:
+
+- **Convert the PR to draft.** GitHub refuses to merge a draft, so this is mechanical rather than
+  advisory, and it needs no ruleset, no `required_review_thread_resolution`, and no cooperation from
+  a reviewer. `gh pr ready <n>` reverses it in one command, which keeps the cost of a false positive
+  near zero - the property that makes it safe to use liberally.
+- **Post the must-dos as an ordinary comment with a `- [ ]` checklist**, saying plainly that the
+  draft state is deliberate and naming what has to be true before it goes ready.
+
+**The recovery path is what makes it work, and it is self-documenting.** A future agent reaching for
+the merge finds the PR is a draft. That is an unmissable stop rather than a rule it might not have
+loaded. It then asks *why is this a draft* - a question with an answer sitting in the comments - and
+arrives at the checklist it or a predecessor wrote. Knowledge that did not survive the turn it was
+formed in now survives as repository state.
+
+**What draft actually changes, checked rather than assumed** (2026-08-20, this repo):
+
+- Merge is blocked; auto-merge cannot be enabled.
+- **CI still runs.** No workflow here gates on `draft == false` - verified by grepping every file in
+  `.github/workflows/`. This is the one thing to re-check before relying on the variant, because in a
+  repo that does gate on it, going draft silently costs all CI signal.
+- Reviewers are not auto-requested, and pending requests are dropped; marking ready re-requests them.
+- Agents will not babysit it - `ce-babysit-pr` treats drafts as opt-in and stops rather than watching.
+- It does not dismiss reviews, close threads, touch the branch, or change what depends on the PR.
+
+**The noise guard above still applies, and matters more here**, since draft is cheap enough to reach
+for reflexively. A draft with no checklist comment explaining it is worse than no draft: the next
+agent finds a stop with no reason and either guesses or reverses it.
+
 ## Open questions
 
 - **Does unresolved-conversation blocking actually apply here?** It is a repository setting;

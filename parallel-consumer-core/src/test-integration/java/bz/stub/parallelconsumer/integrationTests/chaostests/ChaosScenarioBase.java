@@ -26,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -278,7 +279,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
     protected void startRun(ProgressProbe probe, ChaosConductor conductor) {
         probe.withInstanceProgress(() -> conductor.getFleet().stream()
                 .map(ProgressProbe.InstanceProgressView::of)
-                .collect(java.util.stream.Collectors.toList()));
+                .collect(Collectors.toList()));
         probe.start();
         conductor.start();
     }
