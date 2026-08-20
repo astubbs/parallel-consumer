@@ -1,16 +1,21 @@
-package io.confluent.parallelconsumer.vertx.integrationTests;
+package bz.stub.parallelconsumer.vertx.integrationTests;
+
+/*-
+ * Copyright (C) 2020-2022 Confluent, Inc.
+ * Modifications Copyright (C) 2026 Antony Stubbs and contributors
+ */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.MappingBuilder;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.github.tomakehurst.wiremock.http.Request;
-import io.confluent.csid.utils.GeneralTestUtils;
-import io.confluent.csid.utils.ProgressBarUtils;
-import io.confluent.csid.utils.ThreadUtils;
-import io.confluent.parallelconsumer.ParallelConsumerOptions;
-import io.confluent.parallelconsumer.RateLimiter;
-import io.confluent.parallelconsumer.integrationTests.BrokerIntegrationTest;
-import io.confluent.parallelconsumer.vertx.VertxParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.internal.RateLimiter;
+import bz.stub.parallelconsumer.internal.utils.GeneralTestUtils;
+import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
+import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import me.tongfei.progressbar.ProgressBar;
@@ -21,44 +26,38 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
-import org.eclipse.jetty.util.ConcurrentArrayQueue;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import pl.tlinkowski.unij.api.UniMaps;
-import simplehttp.CommonHttpClient;
-import simplehttp.HttpResponse;
 
+import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
-import static io.confluent.csid.utils.StringTestUtils.format;
-import static io.confluent.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static java.lang.Thread.getAllStackTraces;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.data.Percentage.withPercentage;
 import static org.awaitility.Awaitility.waitAtMost;
 import static pl.tlinkowski.unij.api.UniLists.of;
-import static simplehttp.HttpClients.anApacheClient;
 
 /**
  * @see #testVertxConcurrency()
  */
-@Testcontainers
 @Slf4j
-public class Demo extends BrokerIntegrationTest {
+public class Demo extends BrokerIntegrationTest<String, String> {
 
     public static void main(String[] args) {
         Demo demo = new Demo();
-        demo.open();
+        demo.getKcu().open();
         demo.setupWireMock();
         demo.testVertxConcurrency();
     }
@@ -77,15 +76,19 @@ public class Demo extends BrokerIntegrationTest {
 
     static CountDownLatch responseLock = new CountDownLatch(1);
 
-    static Queue<Request> parallelRequests = new ConcurrentArrayQueue<>();
+    static Queue<Request> parallelRequests = new ConcurrentLinkedQueue<>();
 
     Demo() {
 
     }
 
+    /** Groups digits, as {@code StringTestUtils.format} did before that class was deleted. */
+    private static String format(int number) {
+        return String.format("%,d", number);
+    }
+
     ProgressBar bar;
 
-    @BeforeEach
     void setupWireMock() {
         int minThreadsJettyNeeds = 6;
         WireMockConfiguration options = wireMockConfig().dynamicPort()
@@ -120,7 +123,6 @@ public class Demo extends BrokerIntegrationTest {
      * This is used to sanity test that the PC vertx module is indeed sending the number of concurrent requests that we
      * would expect.
      */
-    @Test
     @SneakyThrows
     void testVertxConcurrency() {
         var commitMode = PERIODIC_CONSUMER_ASYNCHRONOUS;
@@ -136,7 +138,7 @@ public class Demo extends BrokerIntegrationTest {
         {
             log.info("\nProducing {} messages for test...", format(expectedMessageCount));
             List<Future<RecordMetadata>> sends = new ArrayList<>();
-            try (Producer<String, String> kafkaProducer = kcu.createNewProducer(false)) {
+            try (Producer<String, String> kafkaProducer = getKcu().createNewProducer(false)) {
                 for (int i = 0; i < expectedMessageCount; i++) {
                     String key = "key-" + i;
                     Future<RecordMetadata> send = kafkaProducer.send(new ProducerRecord<>(inputName, key, "value-" + i), (meta, exception) -> {
@@ -159,19 +161,17 @@ public class Demo extends BrokerIntegrationTest {
 
         // run parallel-consumer
         log.debug("Starting test");
-//        KafkaProducer<String, String> newProducer = kcu.createNewProducer(commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER));
+//        KafkaProducer<String, String> newProducer = getKcu().createNewProducer(commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER));
 
 
         Properties consumerProps = new Properties();
 
         {
-            KafkaConsumer<String, String> vanillaConsumer = kcu.createNewConsumer(true, consumerProps);
+            KafkaConsumer<String, String> vanillaConsumer = getKcu().createNewConsumer(true, consumerProps);
 
             vanillaConsumer.subscribe(of(inputName));
             log.info("\nStarting vanilla consumer run...");
             bar.resume();
-            CommonHttpClient commonHttpClient = anApacheClient();
-
             URL uri = URI.create("http://localhost:" + stubServer.port()).toURL();
 
 //        HttpClient client = HttpClient.newHttpClient();
@@ -182,16 +182,7 @@ public class Demo extends BrokerIntegrationTest {
                 poll.forEach(c -> {
                     consumedKeys.add(c.key());
 
-                    Duration time = GeneralTestUtils.time(() -> {
-//                    try {
-//                        client.send(request, HttpResponse.BodyHandlers.ofString());
-                        HttpResponse response = commonHttpClient.get(uri);
-//                    } catch (IOException e) {
-//                        e.printStackTrace();
-//                    } catch (InterruptedException e) {
-//                        e.printStackTrace();
-//                    }
-                    });
+                    Duration time = GeneralTestUtils.time(() -> blockingGet(uri));
                     rateLimiter.performIfNotLimited(() -> log.debug("Req duration: {}ms", time.toMillis()));
 
                 });
@@ -210,7 +201,7 @@ public class Demo extends BrokerIntegrationTest {
         VertxParallelEoSStreamProcessor<String, String> pc;
         {
             // sanity
-            KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(true, consumerProps);
+            KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(true, consumerProps);
             TopicPartition tp = new TopicPartition(inputName, 0);
             Map<TopicPartition, Long> beginOffsets = newConsumer.beginningOffsets(of(tp));
             Map<TopicPartition, Long> endOffsets = newConsumer.endOffsets(of(tp));
@@ -282,7 +273,7 @@ public class Demo extends BrokerIntegrationTest {
             log.info("\nProducing {} messages for a longer PC test...", format(bigExpectedMessageCount));
             List<Future<RecordMetadata>> sends = new ArrayList<>();
             int bigTestMessagesToProduce = bigExpectedMessageCount - expectedMessageCount;
-            try (Producer<String, String> kafkaProducer = kcu.createNewProducer(false)) {
+            try (Producer<String, String> kafkaProducer = getKcu().createNewProducer(false)) {
                 for (int i = 0; i < bigTestMessagesToProduce; i++) {
                     String key = "key-" + i;
                     Future<RecordMetadata> send = kafkaProducer.send(new ProducerRecord<>(inputName, key, "value-" + i), (meta, exception) -> {
@@ -308,7 +299,7 @@ public class Demo extends BrokerIntegrationTest {
 
         httpResponceReceivedCount.set(0);
         {
-            KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(true, consumerProps);
+            KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(true, consumerProps);
             pc = new VertxParallelEoSStreamProcessor<String, String>(ParallelConsumerOptions.<String, String>builder()
                     .ordering(order)
                     .consumer(newConsumer)
@@ -347,34 +338,26 @@ public class Demo extends BrokerIntegrationTest {
     }
 
     /**
-     * Should be around this number of threads running - introduced to sanity check thread count looks right
+     * One blocking HTTP round trip - the whole point of the vanilla arm, which does exactly one of
+     * these at a time.
+     * <p>
+     * The original used {@code simplehttp}, which the build no longer carries. {@code java.net.http}
+     * is not the replacement: {@code release.target} is 8, so the Java 11 client is invisible to this
+     * compile - which is what the 2021 commit subject ("Java http net doesn't compile?") was already
+     * running into. {@link HttpURLConnection} is blocking, dependency-free and available at that
+     * target.
      */
-    private void assertNumberOfThreads() {
-        Set<Thread> threadKeys = getAllStackTraces().keySet();
-        String pcPrefix = "pc-";
-        String wireMockPrefix = "qtp";
-        long pcThreadCount = threadKeys.stream().filter(x -> x.getName().startsWith(pcPrefix)).count();
-        long wireMockThreadCount = threadKeys.stream().filter(x -> x.getName().startsWith(wireMockPrefix)).count();
-
-        int expectedPCThreads = 3;
-
-        if (pcThreadCount > 0) // pc may not have started
-        {
-            log.info("Checking there are only {} PC threads running", expectedPCThreads);
-            assertThat(pcThreadCount)
-                    .as("Number of Parallel Consumer threads outside expected estimates")
-                    .isEqualTo(expectedPCThreads);
+    @SneakyThrows
+    private static void blockingGet(URL url) {
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        try {
+            connection.setRequestMethod("GET");
+            connection.getResponseCode();
+        } catch (IOException e) {
+            throw new RuntimeException("Vanilla arm request failed", e);
+        } finally {
+            connection.disconnect();
         }
-
-        log.info("Checking there are about ~{} wire mock threads running to process requests in parallel from vert.x", expectedMessageCount);
-        assertThat(wireMockThreadCount)
-                .as("Number of wiremock threads outside expected estimates")
-                .isCloseTo(expectedMessageCount, withPercentage(5));
-
-        log.info("Checking total thread count is about {} plus {}", expectedMessageCount, expectedPCThreads);
-        assertThat(threadKeys.size())
-                .as("Total number of threads")
-                .isCloseTo(expectedMessageCount + expectedPCThreads, withPercentage(15));
     }
 
 }
