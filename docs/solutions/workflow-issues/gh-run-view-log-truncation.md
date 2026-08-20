@@ -55,8 +55,11 @@ same failure mode: a log that looks complete but isn't, feeding a diagnosis that
 `Chaos Pain Suite` failure ([job 95906973285](https://github.com/astubbs/parallel-consumer/actions/runs/32198410456/job/95906973285)),
 `gh run view --job --log` returned nothing usable, and so did two further attempts. Only then was
 this file opened; the archive endpoint produced the full 12,015-line log immediately and the
-diagnosis followed in minutes. The seed, `7964289159858266180`, is recorded as the eleventh sighting
-in `docs/inflight/bug-857-family.md`.
+diagnosis followed in minutes. The seed, `7964289159858266180`, is recorded
+in `docs/inflight/bug-857-family.md` - grep the seed rather than an ordinal. It was the *eleventh*
+sighting when this was written and is the *twelfth* since astubbs#57 merged astubbs#325, which
+interleaved entries from two branches and renumbered from that point on; the ordinals in that ledger
+are positions in a list two branches append to, so they are not stable citation anchors.
 
 **What all three share is timing, not knowledge.** Each person had this document available. Each
 reached for the obvious command, then a variant, then a third, and searched `docs/solutions/` only

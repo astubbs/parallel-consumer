@@ -134,8 +134,10 @@ may state it twice. The stale-arrival guard is the worked example: a one-line ti
 `docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`.
 
 This wording replaces "happening now → inflight; should happen later → refactoring.md", which stopped
-being true the moment `docs/inflight/` gained deferred notes: 34 of them are "later" work and none of
-them belong in `refactoring.md`.
+being true the moment `docs/inflight/` gained deferred notes - they are "later" work and none of them
+belong in `refactoring.md`. The count is deliberately not written here; it was 34 when this paragraph
+landed and drifted within days. `grep -l 'inflight-state:.*deferred' docs/inflight/*.md` answers it,
+which is the rule [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) states about this very file.
 
 ### Cite by anchor, never by line number
 

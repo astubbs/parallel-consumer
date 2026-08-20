@@ -573,7 +573,7 @@ and the cooperative arm's expected rebalance churn is exactly what a truncated r
 failure.
 
 **Thirteenth sighting, 2026-08-19 - same test, same arm, two hours later, and two partitions breached
-at coordinates identical to the eleventh.**
+at coordinates identical to the twelfth.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` again, on
 [job 96004301277](https://github.com/astubbs/parallel-consumer/actions/runs/32232211120/job/96004301277),
 astubbs#57 at head `00ea82325`. **Replay seed `6993732056053195542`**:
@@ -581,16 +581,16 @@ astubbs#57 at head `00ea82325`. **Replay seed `6993732056053195542`**:
     ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
       -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=6993732056053195542
 
-Only **2** violations this time against the eleventh's 17, both `CLASS2_STALL/LAG_STAGNATION`, no
+Only **2** violations this time against the twelfth's 17, both `CLASS2_STALL/LAG_STAGNATION`, no
 zombie arm; peaks `rebalanceDwell=7704ms`, `lagStagnation=154093ms`. The control arm held for a
 fourth time - `ChaosRevokeUnderWorkCooperativeIT` (111s) and `ChaosChurnStormIT` (66s) both green in
 the same run.
 
-**Worth one more sample: the two violating partitions match the eleventh exactly, on a different
+**Worth one more sample: the two violating partitions match the twelfth exactly, on a different
 seed.**
 
-    eleventh  (seed 7964...6180)   -21 lag=2974 committed=91    -22 lag=3010 committed=173
-    twelfth   (seed 6993...5542)   -21 lag=2974 committed=91    -22 lag=3010 committed=173
+    twelfth   (seed 7964...6180)   -21 lag=2974 committed=91    -22 lag=3010 committed=173
+    thirteenth(seed 6993...5542)   -21 lag=2974 committed=91    -22 lag=3010 committed=173
 
 That is not simply a deterministic workload replaying. The per-partition `end` offsets *are* fixed
 across runs, but progress is not: of the frozen-partition lines in the two autopsies (28 and 4

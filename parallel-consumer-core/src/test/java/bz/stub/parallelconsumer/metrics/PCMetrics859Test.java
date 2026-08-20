@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import org.mockito.Mockito;
 import java.util.Collections;
 import java.util.List;
 
@@ -97,6 +98,26 @@ class PCMetrics859Test {
         pcMetrics.close();
 
         assertThat(pcMetrics.registeredMeterCount()).isEqualTo(0);
+    }
+
+    /**
+     * The third surface of the same contract: {@code removeMeter(Meter)} reads {@code getId()} off a
+     * meter the user's registry produced. `PartitionState` and `WorkManager` both call it while
+     * partitions are being revoked, so an escape here throws on the broker-poll thread.
+     *
+     * <p>Found in review after the enumeration guard landed - guarding the two obvious calls into the
+     * registry left the accessor between them unguarded.
+     */
+    @Test
+    void aMeterWhoseIdCannotBeReadMustNotPropagateOutOfRemoval() {
+        PCMetrics metrics = new PCMetrics(new SimpleMeterRegistry(), Collections.emptyList(), "hostile-getid");
+        Meter hostile = Mockito.mock(Meter.class);
+        Mockito.when(hostile.getId()).thenThrow(new IllegalStateException("meter refuses to identify itself"));
+        try {
+            metrics.removeMeter(hostile);
+        } finally {
+            metrics.close();
+        }
     }
 
     /**

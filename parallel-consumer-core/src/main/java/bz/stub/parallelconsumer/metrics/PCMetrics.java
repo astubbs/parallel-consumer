@@ -294,7 +294,19 @@ public class PCMetrics {
      */
     public void removeMeter(Meter meter) {
         if (meter != null) {
-            removeMeter(meter.getId());
+            // getId() is the user's code too - a custom MeterRegistry returns its own Meter
+            // implementations - and this runs on the revocation path via PartitionState and
+            // WorkManager, so it carries the same never-throws obligation as the removal itself.
+            Meter.Id meterId;
+            try {
+                meterId = meter.getId();
+            } catch (Exception e) {
+                log.warn("Failed to read the id of a meter being removed - it is left behind in the " +
+                        "registry and in the tracking set. Continuing: metrics teardown is reporting, " +
+                        "and must not be able to break consuming or shutting down. Cause: {}", e.toString(), e);
+                return;
+            }
+            removeMeter(meterId);
         }
     }
 
