@@ -618,6 +618,15 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
         return inFlight.size();
     }
 
+    /**
+     * How long the drain may wait for the client, as the client itself configured it in {@code Configure}.
+     * Exposed because core keeps {@code getOptions()} protected, and the lifecycle unit lives outside this
+     * package - reading one duration is a smaller seam than widening the whole options object.
+     */
+    public Duration drainTimeout() {
+        return options.getDrainTimeout();
+    }
+
     @Override
     protected boolean isAsyncFutureWork(List<?> resultsFromUserFunction) {
         // the smallest complete precedent is ReactorProcessor: recognise this engine's own sentinel type

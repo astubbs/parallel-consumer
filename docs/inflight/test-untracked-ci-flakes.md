@@ -29,6 +29,15 @@ defect:
 - `ProxyProcessorLivenessTest.aSlowWorkerKeepsItsRecordWhileHeartbeatsContinueAndLosesItWhenTheyStop`
 - `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` - added 2026-08-17, seen with ~60
   worktrees live on the box; passed in isolation and in the same session's full post-change run
+- `ParallelEoSStreamProcessorTest.processInKeyOrder(CommitMode)[3]` - added 2026-08-21, seen once while
+  building U10 in the proxy module (`-am` again). **A different assertion from the commit-frontier
+  symptom this file records for the same test further down**: this one failed on
+  `assertThat(polled).as("sanity check input data").hasSameSizeAs(locks)` - the check on the INPUT,
+  before the engine's behaviour is asserted at all - so do not merge the two symptoms without
+  evidence. Classified as contention by the AGENTS.md diagnostic rather than by assumption: it failed
+  inside the full parallel reactor build and then passed **3/3 uncontended** when run alone. The
+  branch that met it changed only `parallel-consumer-proxy/`, and core does not depend on that module,
+  so it could not have caused it.
 
 **Do not quarantine any of them on this evidence.** Contention on a box running many JVMs is exactly
 the condition rule 2 exists to rule out, and the first uncontended full run of this branch passed all

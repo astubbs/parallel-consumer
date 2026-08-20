@@ -14,6 +14,7 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.Dispatch;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Drop;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Manifest;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Shutdown;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import io.grpc.Status;
@@ -135,6 +136,21 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
     }
 
     /** The engine, once a stream has configured one - the handle its lifecycle owner closes. */
+    /** Stop dispatching new work - the drain's first step (KTD17). */
+    public void stopAcceptingNewWork() {
+        router.stopDispatching();
+    }
+
+    /**
+     * Ask the client to wind down. Sent BEFORE the drain waits, so the client has a reason to return what it
+     * is holding rather than being waited out.
+     *
+     * @return false when no client stream is connected
+     */
+    public boolean tellClientToShutDown() {
+        return router.sendShutdown();
+    }
+
     public Optional<ProxyProcessor> engine() {
         return Optional.ofNullable(engine);
     }
@@ -492,6 +508,9 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
         /** The stream currently holding the session; null between a connection loss and its replacement. */
         private volatile SessionObserver active;
 
+        /** Set by the drain. Once true the in-flight set can only shrink, which is what makes a drain finite. */
+        private volatile boolean windingDown;
+
         private synchronized void bind(SessionObserver observer) {
             active = observer;
         }
@@ -512,6 +531,10 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                         wave.getRecordsCount(), CAPABILITY_DISPATCH);
                 return;
             }
+            if (windingDown) {
+                log.debug("Dropping a wave of {}: the sidecar is winding down", wave.getRecordsCount());
+                return;
+            }
             var target = active;
             if (target == null) {
                 log.debug("Dropping a wave of {}: no client stream holds the session. The records stay in "
@@ -519,6 +542,33 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
                 return;
             }
             target.transmit(ProxyMessage.newBuilder().setDispatch(wave).build());
+        }
+
+        /**
+         * Drops new waves from here on. Undispatched records are NOT stranded: never having reached the
+         * client, they are not in the in-flight registry, so they neither hold the drain open nor get
+         * committed - they stay uncommitted and are redelivered, which is the same treatment this router
+         * already gives a wave that arrives while no client stream holds the session.
+         */
+        private void stopDispatching() {
+            windingDown = true;
+        }
+
+        /**
+         * Tells the client to stop handing records to its workers and report what it already holds. Not
+         * capability-gated: shutdown is not an optional dialect feature, and a client that could not be told
+         * to wind down would be one the drain could only ever wait out.
+         *
+         * @return false when no stream holds the session - there is nobody to tell, which is not an error
+         */
+        private boolean sendShutdown() {
+            var target = active;
+            if (target == null) {
+                log.debug("No client stream holds the session; nobody to send Shutdown to");
+                return false;
+            }
+            target.transmit(ProxyMessage.newBuilder().setShutdown(Shutdown.newBuilder().build()).build());
+            return true;
         }
     }
 
