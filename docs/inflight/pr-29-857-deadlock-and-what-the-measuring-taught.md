@@ -1,5 +1,39 @@
 # astubbs#29 - the confluentinc#857 deadlock fix, and what measuring it taught
 
+## START HERE - handoff, 2026-08-20
+
+**PR astubbs/parallel-consumer#29 is BLOCKED and that is correct.** Six `depends on` lines in its
+body; astubbs#323/#324/#325 merged, **astubbs#57, astubbs#322, astubbs#267 have not**. Nothing to do
+on this branch until they land.
+
+Worktree `/home/astubbs/git/parallel-consumer/.claude/worktrees/sweep-29`, branch
+`bugs/857-paused-consumption-multi-consumers-bug-rename`, pushed to
+`bugs/857-paused-consumption-multi-consumers-bug`. Tree clean, 0/0 with origin, ~29 behind master
+deliberately.
+
+**Do not:** merge master early (one merge at the end - a trial merge produced two resolutions later
+PRs would have redone); request review before that merge; keep this branch's `PCMetrics.java` at
+merge - **take master's**, astubbs#57 has the better version.
+
+**When astubbs#57, astubbs#322 and astubbs#267 have landed:** merge master once -> expect `ConsumerManagerCommitRetryBudgetTest`
+to need `ThreadConfinedConsumer` wrapping and `bug-857-family.md` to conflict structurally (take
+master's) -> run the deadlock probe, `ShardManagerStaleContainerTest`,
+`OutForProcessingCounterDriftProbeTest`, `InstanceStallProbeIT` -> then request review + human LGTM.
+
+**Owed at merge:** merge-strategy recommendation and squash message (90+ commits; `e81ac20fe` is
+mislabelled `docs(inflight)` but carries 584 lines of detector code); a one-line `stage_detail` fix in
+`docs/data/roadmap.yaml` (`known-defects-cleared` still says "drafted on astubbs#29") that no gate
+will ask for.
+
+**Unfinished:** one more `/ce-compound` run for the second learning - the four-arm measurement showing
+the eager `CLASS2_STALL` is the detector meeting the workload, not a defect. The skill takes one
+learning per run; the first (metrics teardown) is captured in
+`docs/solutions/runtime-errors/a-throwing-meter-registry-kills-the-poll-thread-and-strands-close.md`.
+
+**Do not re-attribute the eager `CLASS2_STALL` sightings to this PR.** Four measured arms say
+otherwise; details below and in `test-857-revoke-under-work-sightings.md`.
+
+
 Context `gh` cannot give you about PR astubbs/parallel-consumer#29
 (`bugs/857-paused-consumption-multi-consumers-bug`). Delete this file when the PR merges, promoting
 anything below that is still wanted into `next-candidates.md`.
