@@ -22,13 +22,21 @@
         </encoder>
     </appender>
 
-    <root level="warn">
+    <root level="${pc.log.level:-warn}">
         <!--    <root level="debug">-->
         <appender-ref ref="STDOUT"/>
     </root>
 
     <!-- primary -->
-    <logger name="bz.stub.parallelconsumer" level="info"/>
+    <!-- Raised from the command line, not by editing: -Dpc.log.level=debug|trace. See docs/testing.md. -->
+    <logger name="bz.stub.parallelconsumer" level="${pc.log.level:-warn}"/>
+
+    <!-- Vertx is the ONLY sibling module with a failsafe suite (VertxConcurrencyIT, 9 log.info calls),
+         so it needs core's carve-out: the tests' own narration keeps a floor of info while the product
+         drops to warn. Same knob, so -Dpc.log.level=debug still raises it - a hard "info" here would
+         silently skip the integration tests, the case you most want it for. reactor and mutiny have no
+         src/test-integration sources, so they deliberately do not carry this. -->
+    <logger name="bz.stub.parallelconsumer.vertx.integrationTests" level="${pc.log.level:-info}"/>
 
     <!-- Key classes -->
     <!--    <logger name="bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="info"/>-->

@@ -1,5 +1,9 @@
 # Release 0.6.0.0
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: release-gate -->
+
+
 **Tracking issue: astubbs#197.** That issue is the linkable handle - from PRs, from mirrors, from upstream
 comments. This file is the detail behind it. Keep them in step: if a blocker is resolved here, tick it
 there.

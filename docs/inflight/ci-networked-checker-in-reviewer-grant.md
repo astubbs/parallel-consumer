@@ -1,5 +1,9 @@
 # `bin/check-quarantine-owners.sh` reaches the network inside the reviewer's grant
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: security -->
+
+
 `bin/AGENTS.md` states the rule for the two granted prefixes: **do not give that prefix to a script
 that writes, publishes, deploys, or reaches the network beyond `gh` reads.** One script breaks it.
 

@@ -62,6 +62,46 @@ jobs:
       - name: Self-test the agent hooks
         run: bash bin/test-check-agent-hooks.sh
 
+  inflight-tags:
+    name: "inflight: tags"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same self-test-then-gate sequencing as the sigpipe job: prove the tag checker can fail, then
+      # run it. The session-start index already LISTS a note no group claimed, but only to whoever
+      # starts the next session - which may not be whoever mistyped the tag, and may be days later.
+      # This fails the commit that made the mistake.
+      - name: Self-test the inflight tag checker
+        run: bash bin/test-check-inflight-tags.sh
+
+      - name: Inflight notes carry valid tags
+        run: bash bin/check-inflight-tags.sh
+
+      # Self-test only. check-pr-ready.sh reads a live PR, so running the gate itself in CI would be
+      # a network call with an answer that changes by the minute; what must not rot is its refusal to
+      # ever conclude "ready".
+      - name: Self-test the PR-readiness reporter
+        run: bash bin/test-check-pr-ready.sh
+
+  test-log-config:
+    name: "tests: log config"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same sequencing again. This one guards a default that fails SILENTLY: a logback-test.xml
+      # committed at debug does not go red, it floods the log and slows the run - and the volume alone
+      # broke three tests when measured (see the script header). Nobody attributes a latch timeout to a
+      # logging default, which is why it is a gate and not a note.
+      - name: Self-test the test log config checker
+        run: bash bin/test-check-test-log-config.sh
+
+      - name: Test log config is flag-driven, not edited
+        run: bash bin/check-test-log-config.sh
+
   rename:
     name: "tooling: package rename"
     runs-on: ubuntu-latest

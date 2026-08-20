@@ -1,5 +1,9 @@
 # Dependency upgrades deliberately held back
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: deps-debt -->
+
+
 Everything is at its newest **non-major** version (`versions-maven-plugin -DallowMajorUpdates=false`
 plus `bin/deps-version-rules.xml`, which also filters pre-releases and Confluent `-ce`/`-ccs` Kafka
 builds - without that filter Kafka "latest" mis-resolves to a Confluent build).

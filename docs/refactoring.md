@@ -73,23 +73,6 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
-- **Reject a stale ARRIVAL in `state/ProcessingShard.java`'s `addWorkContainer`, symmetric with the
-  stale-resident check beside it.** Today only the RESIDENT is checked, so old-epoch containers still
-  enter shards whenever a rebalance lands after the once-per-batch `epochIsStale()` guard in
-  `maybeRegisterNewPollBatchAsWork`. They are harmless - `couldBeTakenAsWork` refuses them and
-  `getWorkIfAvailable` removes them inline - but rejecting them at the insert would prevent the churn
-  rather than clean it up, and would shrink the window that astubbs#31 defends.
-  **Not a one-liner, which is why it is here and not in astubbs#31**: the guard runs on *every* add,
-  where the resident check runs only when an entry already exists, so it reaches inputs the current
-  code never evaluates. `PartitionStateManager.getPartitionState` returns `partitionStates.get(tp)`
-  unguarded, and adding the check makes `PartitionStateCommittedOffsetTest` NPE in three tests
-  (`compactedTopic`, `committedOffsetLower`, and one more) because they register polls against a
-  `PartitionState` that was never installed in the manager. Needs a null-safety decision - treat an
-  absent state as not-stale, or make the absence itself an error - plus a judgement on whether those
-  tests encode a real production shape or only a fixture shortcut. **Also note it makes the
-  stale-resident branch unreachable from every public entry point** (verified by experiment: with the
-  arrival guard in place and the resident branch reverted, the other regression tests still pass), so
-  it must land together with the white-box test that plants a resident directly.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
@@ -275,6 +258,14 @@ Do not start one casually.
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
+### state/ShardKey.java
+
+- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
+  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
+  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
+  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
+  doc fix plus a field rename, not a behaviour change.
+
 ### state/ProcessingShard.java
 
 - **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
@@ -290,14 +281,6 @@ Do not start one casually.
   `retryQueueOrdering`, `testRetryQueueOrdering` and `testRetryQueueOrderingMultipleTries`, all of
   which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
   either path.
-
-### state/ShardKey.java
-
-- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
-  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
-  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
-  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
-  doc fix plus a field rename, not a behaviour change.
 
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
@@ -543,7 +526,7 @@ Only the items needing a decision are listed here - do not restate the inventory
 - **Three deleted stubs are missing *features*, not missing tests** - record them as issues, never as
   test debt. `poisonPillGoesToDeadLetterQueue`: PC has no dead-letter-queue concept and never has
   (zero DLQ occurrences in any `src/main/java`); tracked as astubbs#149, and already the
-  most-demanded missing feature in `docs/inflight/next-candidates.md`. `maxPerPartition` and
+  most-demanded missing feature in `docs/inflight/process-candidate-ranking.md`. `maxPerPartition` and
   `maxPerTopic`: no per-partition or per-topic in-flight limit exists - `ParallelConsumerOptions` has
   only the global `maxConcurrency`, and `ShardKey` never keys by topic. Nearest tracked: astubbs#160
   and astubbs#236. **They were written as a trio with `maxOverall`, and only the global scope was
@@ -573,6 +556,20 @@ considered and **deliberately not built**: the previous audit was lost to invisi
 such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
 revisiting once the audit has been in use.
 <!-- file-refs: N/A - names a generated file this entry records as NOT built -->
+
+### Test infrastructure - a logback config nothing loads
+
+`parallel-consumer-examples/parallel-consumer-example-core/src/test/resources/logback-temp-test.xml`
+is dead. Logback loads `logback-test.xml` then `logback.xml`; nothing sets
+`logback.configurationFile`, and a repo-wide grep finds no reference to the file except the comment
+in `bin/check-test-log-config.sh` that records it as dead. So its settings - including
+`bz.stub.parallelconsumer` at `debug` - have never taken effect, and anyone editing it to change that
+module's test output is editing nothing.
+
+Either delete it, or rename it to `logback-test.xml` if its contents were the intent - which is a
+behaviour change for that module's test output and should be decided, not defaulted. Found while
+scoping `bin/check-test-log-config.sh`, which deliberately excludes the examples modules; noted here
+rather than fixed there so the gate's scope stayed one decision.
 
 ### Build - jacoco coverage under forked surefire
 

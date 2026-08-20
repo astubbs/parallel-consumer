@@ -1,5 +1,9 @@
 # Package rename `io.confluent.parallelconsumer.*` → `bz.stub.parallelconsumer.*`
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
+
 The package-rename project's entry. Branches working the rename keep their own account of it at this
 same path, so when they converge git raises a conflict and whoever resolves it reads both and combines
 them into the single entry for the project. That is deliberate, and more reliable than a

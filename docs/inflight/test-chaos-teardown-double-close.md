@@ -1,5 +1,9 @@
 # Chaos teardown can still double-close a PC, and can orphan one after the fleet is "settled"
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
+
 The double-start race inside `ChaosConductor`'s draw loop is fixed (astubbs/parallel-consumer#292:
 single-flight `start()`, `stopRequested` abort, `closePending` CAS). Three independent reviewers on
 that PR then found the *same failure class* reachable through the teardown path, which astubbs#292

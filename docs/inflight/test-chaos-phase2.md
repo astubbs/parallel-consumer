@@ -1,5 +1,10 @@
 # Chaos Pain Suite - Phase 2+ roster
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+<!-- inflight-state: deferred - after v6, new scenarios rather than repairs -->
+
+
 - **Class 2 RED hunt - stands as a calibrated tripwire.** A true unbounded Class 2 stall has not
   reproduced on master: a 9-seed sweep found 0 hits (stagnation peaks banded 95-112s, all
   legit-window), and the cooperative-sticky W4 variant was green on both arms (sticky drops revoke
@@ -17,6 +22,8 @@
   Class 2 under KEY ordering should start from W5's constants, not W1's.
 - **Thin margin.** W4's legit lag-stagnation peaks (117-123s) sit only ~1.25x under the 150s Class 2
   bound. Fine for a non-gating suite; widen it (shorter storm or dwell) if it ever flakes.
+  **It has flaked, and the cause was measured** - see
+  [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md).
 - **Revoke-event instrumentation (open).** Nothing logs actual `onPartitionsRevoked` events, so the
   ~6x revoke-drop finding is not reproducible from a run's own logs. Add a per-instance revoke counter
   to `ManagedPCInstance`'s rebalance listener and fold `revokeEvents=` into the driver's run summary.

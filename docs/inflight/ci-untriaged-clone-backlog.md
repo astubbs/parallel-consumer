@@ -1,5 +1,10 @@
 # Clones nobody has ever looked at
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, tooling investment -->
+
+
 Both duplication engines scanned four Java module directories until
 astubbs/parallel-consumer#320 widened them to the whole repo. Everything outside those four
 directories has therefore **never been triaged** - not once, not by anyone.

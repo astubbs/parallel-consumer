@@ -1,5 +1,9 @@
 # A terminally failed send leaves the transaction abortable but unaborted
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
+
 Opened by astubbs#261, which fixed the data-correctness half of this and deliberately left the
 liveness half. Read that PR's "what this does not fix" section first; this note is the follow-up it
 owes.
@@ -52,7 +56,7 @@ away.
 
 - **No DLQ exists.** `docs/refactoring.md` records the deleted `poisonPillGoesToDeadLetterQueue`
   stub and confirms zero DLQ occurrences in `src/main/java`. Tracked as astubbs#149
-  (`confluentinc#310`), with `confluentinc#366` the closed prior attempt. `docs/inflight/next-candidates.md`
+  (`confluentinc#310`), with `confluentinc#366` the closed prior attempt. `docs/inflight/process-candidate-ranking.md`
   ranks it the most-demanded missing feature.
 - **Retry is unbounded and purely time-based.** `defaultMessageRetryDelay` / `retryDelayProvider`
   set *when* to retry, never *whether to stop*. There is no max-attempt count and no terminal

@@ -7,7 +7,7 @@
 const assert = require("assert");
 const {
   danglingRefs, newFindings, readTreeDocs, historyPointersIn, citationsIn, resolves, treeFrom, findOptOut,
-  isExempt, formatFailure, normalise,
+  isExempt, formatFailure, normalise, CITING_FILE,
 } = require("./file-ref-gate.js");
 
 const file = (filename, ...docLines) => [{ filename, lines: docLines }];
@@ -372,6 +372,23 @@ check("the failure message names every hit, and both escapes", () => {
   assert.ok(msg.includes("  a.md:3: b/c.md"));
   assert.ok(msg.includes("git show <sha>^:<path>"), "must name the history-pointer repair");
   assert.ok(msg.includes("file-refs: N/A"), "must name the paragraph marker");
+});
+
+// AN .html FILE IS A CITING FILE. It was excluded, so a path inside one was never checked at all -
+// and a rename left an ideation document pointing at a note that no longer existed, silently,
+// because the gate could not see the file. Found in review of astubbs#323, where the sweep over
+// renamed notes covered the .md tree and the one .html citation survived it.
+check("html is scanned as a citing file", () => {
+  assert.ok(CITING_FILE.test("docs/ideation/a.html"), "an .html document must be scanned");
+  assert.ok(CITING_FILE.test("x.md") && CITING_FILE.test("x.adoc") && CITING_FILE.test("x.txt"),
+    "the formats that already worked must keep working");
+  assert.ok(!CITING_FILE.test("x.java") && !CITING_FILE.test("x.png"),
+    "code and binaries are still not citing documents");
+
+  const docs = file("docs/ideation/d.html", "<code>docs/inflight/gone.md</code>");
+  const found = danglingRefs(docs, treeOf("docs/inflight/here.md"));
+  assert.ok(found.length === 1, "a dangling path inside html must be reported");
+  assert.ok(found[0].ref === "docs/inflight/gone.md");
 });
 
 console.log("\n" + run + " assertions passed");
