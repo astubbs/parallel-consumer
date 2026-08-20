@@ -145,10 +145,17 @@ Three fields, as HTML comments after the heading. Only `inflight-type` is always
 - **`inflight-state`** - disposition. **Absent means open**, which is the common case, so most notes
   carry two fields. When present it must give a reason: `<state> - <why>`.
 
-  **A state beginning with `deferred` means decided-but-not-now, and is treated differently from
-  closed.** `<!-- inflight-state: deferred - after v6 -->`. Deferred notes leave open work and get
+  **A state containing `deferred` OR `parked` means decided-but-not-now, and is treated differently
+  from closed.** `<!-- inflight-state: deferred - after v6 -->`. Deferred notes leave open work and get
   their own section at the BOTTOM of the session index, ordered by the same impact scale, each showing
   its reason - so `grep 'deferred - after v6'` finds a release's worth of them.
+
+  **`parked` and `deferred` are the same disposition** - Antony's ruling, and the two words never
+  named different things here. The word can sit anywhere in the state and in either order: `parked`,
+  `deferred - parked`, `parked - deferred, gated on X` all read as deferred. Requiring one word, in
+  one position, is what stranded notes: a state the index recognised as neither open nor deferred
+  fell in with `closed` and `blocked` under "not shown", which is where two notes vanished on
+  astubbs#323. `closed` and `blocked` still mean what they say and are still excluded.
 
   **The rule that makes this a schedule rather than a label: all non-deferred work happens before any
   deferred work.** Running out of open work is the trigger to re-read the deferred section. That is
