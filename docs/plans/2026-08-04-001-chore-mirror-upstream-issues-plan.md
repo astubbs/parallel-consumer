@@ -78,7 +78,9 @@ numbers. Dropped:
   `#857` will eventually exist and mean something else entirely.
 
 The underlying problem - an unqualified number resolving against the wrong repo - is already solved by
-the reference convention this repo adopted (AGENTS.md "Reference convention"): bare `#NN` is the fork,
+the reference convention this repo adopted (then at docs/inflight/AGENTS.md "Reference convention" -
+heading retired in astubbs#324, readable via `git show e7af9e897^:docs/inflight/AGENTS.md`;
+[`docs/issue-references.md`](../issue-references.md) owns the rule today): bare `#NN` is the fork,
 `upstream #NN` is upstream. Phase 4 extends it rather than replacing it.
 
 ## Label scheme
@@ -437,7 +439,8 @@ table matches.
 
 ### Phase 4 - enforce the reference convention — **DONE**
 
-The convention itself already exists (AGENTS.md "Reference convention", `docs/inflight/AGENTS.md`,
+The convention itself already exists (docs/inflight/AGENTS.md's then "Reference convention" section -
+retired in astubbs#324, `docs/issue-references.md` owns it now -
 `CHANGELOG.adoc`, `docs/refactoring.md`): bare `#NN` is the fork, `upstream #NN` is upstream. What is
 missing is enforcement and the GitHub-rendering carve-out:
 
