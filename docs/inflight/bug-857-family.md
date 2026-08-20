@@ -502,6 +502,14 @@ clean". This one does not:
 | Local replay | `2b8b89183` (astubbs#204) | RED | 5 | 154429ms |
 | **Local control** | **`5c377ec04` (master)** | **RED** | **10** | **154387ms** |
 
+**A RED here does NOT mean every `CLASS2_STALL` is a family occurrence.**
+[`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
+records one with this same ~154s signature whose seed replays **green** on an uncontended box,
+peaking at 121.3s - self-hosted runner contention, from `Performance` and `Chaos Pain Suite` sharing
+the box. That note owns the discriminator; the short version is that ~154s is what a crossed 150s
+bound looks like regardless of cause, so only an uncontended replay of the seed separates the two.
+This arm earns its place precisely because it replayed RED.
+
 **The master arm is the point.** The same seed fails on plain master with no astubbs#204 code in the
 tree, so this is the family's own defect and not something that PR introduced. Two further checks
 agree: astubbs#204's tree at the passing run `45fd8f6f9` and the failing run `6b2d91370` have the

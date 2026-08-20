@@ -1,4 +1,4 @@
-# The Class 2 chaos RED has already fired, and it was the runner, not a stall
+# A Class 2 chaos RED that was the runner, not a stall - and how to tell which you have
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
@@ -29,6 +29,33 @@ known fixes inside its own blast radius - rebalance, offsets, commit path, execu
 seen before those land is odds-on one of them, so hunting it as a new unknown spends effort on an
 already-solved bug. Land the backlog, then re-run. That also qualifies the neighbouring "0 hits in a
 9-seed sweep" claim, which was measured against the same incomplete tree.
+
+## Reconciled with the family ledger: the same signature has TWO causes
+
+[`bug-857-family.md`](bug-857-family.md) records a `CLASS2_STALL` whose seed
+(`6825864417772979246`) replays **RED on plain master, locally, uncontended** - 10 violations,
+`lagStagnation` 154387ms. This note records one whose seed replays **GREEN uncontended**, peaking at
+121.3s. Both measurements are sound; neither refutes the other, because they are different
+occurrences. What they jointly establish is more useful than either alone:
+
+**~154s `CLASS2_STALL/LAG_STAGNATION` is a signature, not a diagnosis.** The 154s figure appears in
+both, so it discriminates nothing on its own - it is roughly what a 150s bound produces once crossed,
+whatever crossed it. Do not read the number as evidence either way, and do not read "every partition
+stagnated at the same instant" as evidence of starvation: violation counts vary run to run on a fixed
+seed, and the ledger warns explicitly that the frozen-partition set is not a fingerprint.
+
+**The discriminator is a replay of that seed on an uncontended box**, and nothing cheaper works:
+
+| Replay uncontended | Reading |
+|---|---|
+| **RED**, unbounded, does not drain | A family occurrence. Record it in `bug-857-family.md`. |
+| **GREEN**, drains, peaks under the bound | Contention. Record it here. |
+
+A real Class 2 stall is unbounded, so a schedule that finishes on replay cannot encode one - that is
+the whole argument, and it is why the replay is worth the minutes it costs before a hunt begins.
+
+**Both records were written without knowing about the other**, which is how they came to look like
+disagreement. Neither cited the other until now.
 
 ## Delete when
 
