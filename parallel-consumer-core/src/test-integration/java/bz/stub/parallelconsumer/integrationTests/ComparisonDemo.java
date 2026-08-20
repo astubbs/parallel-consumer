@@ -26,6 +26,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -96,8 +97,14 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      * The four lanes of decision 8. The pairing is the point: a plain consumer is inherently
      * partition-ordered and serial, so {@link #PC_PARTITION} is the apples-to-apples lane and
      * {@link #PC_UNORDERED} is the ceiling. That is the README chart's own structure.
+     * <p>
+     * <b>Public because the truth generator sweeps every enum under
+     * {@code bz.stub.parallelconsumer} and emits its Subject into the PARENT package</b>, which
+     * cannot see a package-private type - so narrowing this fails the generated code's compile in
+     * another directory, not this file's. {@code OffsetCommittingSanityTest.CheckMode} and
+     * {@code ChaosConductor.ChaosAction} are public for the same reason.
      */
-    enum Lane {
+    public enum Lane {
         VANILLA(null),
         PC_UNORDERED(ProcessingOrder.UNORDERED),
         PC_KEY(ProcessingOrder.KEY),
@@ -164,10 +171,17 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
 
     static final List<Lane> LANES = parseLanes(System.getProperty("demo.lanes"));
 
-    /** Records whose first attempt has already been failed, so the retry succeeds. */
-    private final Map<String, Boolean> alreadyFailed = new ConcurrentHashMap<>();
+    /** How far past a lane's ideal time the run may go before it is called a stall. */
+    private static final int SLOWEST_ACCEPTABLE_FACTOR = 20;
 
-    private final List<AutoCloseable> openResources = new ArrayList<>();
+    /** Below this, start-up and the first rebalance dominate, so the derived deadline is noise. */
+    private static final Duration DEADLINE_FLOOR = Duration.ofMinutes(2);
+
+    /**
+     * Written by every lane, and in concurrent mode by several at once, so it cannot be a plain
+     * list.
+     */
+    private final List<AutoCloseable> openResources = Collections.synchronizedList(new ArrayList<>());
 
     private static List<Lane> parseLanes(String property) {
         if (property == null || property.isEmpty()) {
@@ -285,7 +299,9 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
 
         AtomicInteger processed = new AtomicInteger();
         try (ProgressBar bar = ProgressBarUtils.getNewMessagesBar(log, RECORDS)) {
+            long deadline = System.nanoTime() + deadlineFor(Lane.VANILLA).toNanos();
             while (processed.get() < RECORDS) {
+                failIfPastDeadline(Lane.VANILLA, processed, deadline);
                 ConsumerRecords<String, String> polled = consumer.poll(ofMillis(500));
                 for (ConsumerRecord<String, String> record : polled) {
                     int attempt = 0;
@@ -327,12 +343,46 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
                 bar.stepTo(processed.incrementAndGet());
             });
 
-            while (processed.get() < RECORDS) {
-                ThreadUtils.sleepQuietly(100);
-            }
+            awaitCompletion(lane, processed);
         }
         pc.closeDrainFirst();
         return processed.get();
+    }
+
+    /**
+     * Derived from the work the lane actually has to do, not picked: the serial arm owes
+     * {@code records x delay}, a parallel arm owes that divided by its in-flight ceiling. The
+     * multiplier is deliberately loose - this is a demo's "something is wrong" backstop, not a
+     * performance assertion, and a tight deadline here would turn a slow host into a false failure.
+     * The floor absorbs broker start-up and the first rebalance, which dominate at small volumes.
+     */
+    private static Duration deadlineFor(Lane lane) {
+        long idealMs = (long) RECORDS * DELAY_MS;
+        if (lane.isParallel()) {
+            idealMs = idealMs / MAX_CONCURRENCY;
+        }
+        return Duration.ofMillis(Math.max(SLOWEST_ACCEPTABLE_FACTOR * idealMs, DEADLINE_FLOOR.toMillis()));
+    }
+
+    private static void awaitCompletion(Lane lane, AtomicInteger processed) {
+        long deadline = System.nanoTime() + deadlineFor(lane).toNanos();
+        while (processed.get() < RECORDS) {
+            failIfPastDeadline(lane, processed, deadline);
+            ThreadUtils.sleepQuietly(100);
+        }
+    }
+
+    /**
+     * A demo that hangs reports nothing, which is worse than a demo that fails - so the wait ends
+     * with a message naming the lane and how far it got.
+     */
+    private static void failIfPastDeadline(Lane lane, AtomicInteger processed, long deadlineNanos) {
+        if (System.nanoTime() > deadlineNanos) {
+            throw new IllegalStateException(String.format(
+                    "%s stalled: %s of %s records after %s. Nothing is asserted here, so this is a "
+                            + "stall, not a slow host - check the broker and the engine's logs above.",
+                    lane, format(processed.get()), format(RECORDS), deadlineFor(lane)));
+        }
     }
 
     /**
@@ -343,7 +393,7 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      */
     private void simulateWork(String recordId, int attempt) {
         ThreadUtils.sleepQuietly(DELAY_MS);
-        if (shouldFail(recordId) && attempt == 0 && alreadyFailed.putIfAbsent(recordId, true) == null) {
+        if (attempt == 0 && shouldFail(recordId)) {
             throw new RuntimeException("Simulated failure for " + recordId + " (demo.failurePercent="
                     + FAILURE_PERCENT + ") - it will succeed on retry");
         }
