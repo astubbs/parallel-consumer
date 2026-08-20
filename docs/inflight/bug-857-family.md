@@ -553,9 +553,10 @@ watermark pinning is redelivery of heavy work abandoned by a non-draining stop. 
 pre-declares both outcomes, and this is the second one - *"Drain arm ALSO red - the abandoned-work
 explanation is wrong and something else pins the watermark."*
 
-**Do not cash that in yet, for two reasons.** The arm is brand new and has three CI exposures in
+**Do not cash that in yet, for two reasons.** The arm is brand new and has four CI exposures in
 total: green at 21:17 on 2026-08-19 (run 32303069710, seed `754504705742948700`, all seven scenarios
-green), then red twice tonight on different seeds. One green and two reds is not a calibration.
+green), then red three times tonight on three different seeds (01:05, 01:21 and the 01:41 run
+below). One green and three reds is a rate worth noticing, not a calibration.
 More importantly, a fail-fast red proves the *bound* was crossed, not that the backlog never drained
 - which is exactly the critique in
 [`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md),
@@ -591,3 +592,20 @@ branch adds test-integration code only. The 01:21 run is at `4b7ffc6e6`, whose o
 `AbstractRevokeUnderWorkScenario#drainOnlyChaosWeights()`; the run's own log confirms the mix is
 unchanged - `weights={STOP_DRAIN=3, RESTART=3, JOIN_NEW=2} tick=PT0.3S..PT1S joinAfterDrainBias=0.0`
 - and the same arm had already fired at 01:05, before that commit existed.
+
+**A fourth red the same night, on a documentation-only commit.** Run
+[32321963226](https://github.com/astubbs/parallel-consumer/actions/runs/32321963226/job/96285796525)
+at 01:41Z, head `202da9d0a` on astubbs#325 - which differs from `4b7ffc6e6` by two markdown files and
+nothing else. Three arms fired, all eager: `ChaosChurnStormIT` 23 `CLASS2_STALL` plus 2
+`ZOMBIE_MEMBER` (peaks `rebalanceDwell=15602ms lagStagnation=151882ms`, seed `989468380938115993`),
+`ChaosRevokeUnderWorkDrainIT` 43 `CLASS2_STALL` (`lagStagnation=152433ms`, seed
+`6334815371835997501`), `ChaosRevokeUnderWorkIT` 4 `CLASS2_STALL` (`lagStagnation=154211ms`, seed
+`2553818384688673562`). Both cooperative arms passed again, on seeds `7815585942040470933` and
+`2549365579181485261`.
+
+**Two things this adds.** A commit whose entire diff is prose cannot be a suspect, which is the same
+argument astubbs#323's head makes and this time on the branch that owns the chaos code. And the two
+`ZOMBIE_MEMBER` violations arrive **inside** a `CLASS2_STALL` autopsy again - the sixth sighting was
+the first time both arms fired in one run and said "these are unrelated signatures can no longer be
+assumed for free"; this is the third such run in the ledger, so that caution has now outlived being
+a one-off.
