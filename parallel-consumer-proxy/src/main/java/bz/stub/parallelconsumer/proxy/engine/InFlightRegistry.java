@@ -164,6 +164,14 @@ class InFlightRegistry {
     }
 
     /**
+     * How many records are out with the client right now. Separate from {@link #snapshot()} because the drain
+     * polls this and {@code snapshot} copies the whole map - a per-poll copy to learn one integer.
+     */
+    int size() {
+        return byRecordId.size();
+    }
+
+    /**
      * Atomically removes and returns the entry the caller {@link #peek}ed - conditional on that exact entry
      * still being the registered one, so two report threads racing on one token resolve to one winner, and a
      * delivery superseded between peek and claim is left untouched (its entry no longer matches). Empty when
