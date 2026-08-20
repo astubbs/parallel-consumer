@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.util.EnumMap;
 import java.util.Map;
 
 /**
@@ -64,17 +63,13 @@ class ChaosRevokeUnderWorkDrainIT extends AbstractRevokeUnderWorkScenario {
     }
 
     /**
-     * Drain-only stops - the single variable against {@link ChaosRevokeUnderWorkIT}. RESTART and
-     * JOIN_NEW keep their W4 weights so the membership churn RATE is comparable; only the manner of
-     * leaving changes, which is what keeps this a control arm rather than a different workload.
+     * Drain-only stops - the single variable against {@link ChaosRevokeUnderWorkIT}. The mix itself is
+     * {@link AbstractRevokeUnderWorkScenario#drainOnlyChaosWeights()}, shared with the cooperative
+     * control arm ({@link ChaosRevokeUnderWorkCooperativeDrainIT}) so the two cannot drift apart.
      */
     @Override
     protected Map<ChaosConductor.ChaosAction, Integer> chaosWeights() {
-        Map<ChaosConductor.ChaosAction, Integer> w = new EnumMap<>(ChaosConductor.ChaosAction.class);
-        w.put(ChaosConductor.ChaosAction.STOP_DRAIN, 3); // was STOP_NO_DRAIN at 3
-        w.put(ChaosConductor.ChaosAction.RESTART, 3);
-        w.put(ChaosConductor.ChaosAction.JOIN_NEW, 2);
-        return w;
+        return drainOnlyChaosWeights();
     }
 
     @Test

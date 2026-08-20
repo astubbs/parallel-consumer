@@ -13,6 +13,8 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
@@ -164,8 +166,26 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
      * see, so a variant that overrides this is answering a different question, not running the same
      * test more gently.
      */
-    protected java.util.Map<ChaosConductor.ChaosAction, Integer> chaosWeights() {
+    protected Map<ChaosConductor.ChaosAction, Integer> chaosWeights() {
         return ChaosConductor.defaultW4Weights();
+    }
+
+    /**
+     * The drain-only action mix, shared by this family's CONTROL ARMS
+     * ({@link ChaosRevokeUnderWorkDrainIT} and {@link ChaosRevokeUnderWorkCooperativeDrainIT}) so the
+     * two cells cannot drift apart and silently stop being the same control.
+     * <p>
+     * {@code STOP_DRAIN} takes the weight {@link ChaosConductor#defaultW4Weights()} gives
+     * {@code STOP_NO_DRAIN}; RESTART and JOIN_NEW keep theirs, so the membership churn RATE is
+     * comparable and only the MANNER of leaving changes. That is what keeps a control arm a control
+     * arm rather than a different workload.
+     */
+    protected Map<ChaosConductor.ChaosAction, Integer> drainOnlyChaosWeights() {
+        Map<ChaosConductor.ChaosAction, Integer> weights = new EnumMap<>(ChaosConductor.ChaosAction.class);
+        weights.put(ChaosConductor.ChaosAction.STOP_DRAIN, 3); // was STOP_NO_DRAIN at 3
+        weights.put(ChaosConductor.ChaosAction.RESTART, 3);
+        weights.put(ChaosConductor.ChaosAction.JOIN_NEW, 2);
+        return weights;
     }
 
     protected void runRevokeUnderWorkScenario() throws Exception {
