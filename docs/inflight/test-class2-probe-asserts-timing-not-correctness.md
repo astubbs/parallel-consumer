@@ -54,7 +54,9 @@ a third time.
 - `docs/inflight/test-857-revoke-under-work-sightings.md` - the four arms and their numbers
 - `docs/inflight/test-truth-probes-for-internal-state.md` - the same shape of question for internal state
 - `docs/testing.md` - the chaos suite and its probes
-- `docs/inflight/bug-857-family.md` - the sighting ledger. Its **twelfth sighting** is the live test
+- `docs/inflight/bug-857-family.md` - the sighting ledger. Its **fourteenth sighting** (the merge of
+  astubbs#325 into astubbs#57 renumbered it from twelfth; grep the date, since ordinals in that
+  ledger are not stable anchors) is the live test
   of this critique: the new drain control arm fired `CLASS2_STALL` twice on 2026-08-20, and whether
   that is a stall or the slowness this note describes is decided by one
   `-Dchaos.diagnoseStallRecovery=true` replay, which nobody has run yet

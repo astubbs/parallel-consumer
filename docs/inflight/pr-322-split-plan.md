@@ -81,7 +81,9 @@ It is a test defect: the assertion compares `PARTITION_LAST_COMMITTED_OFFSET` (c
 completion counter under `UNORDERED`, and workers latch before incrementing so the gap is permanent.
 The entry is retained with a supersession note rather than removed - the file already records one
 contamination of this kind, and the reasoning that led there is worth seeing. Mechanism:
-[`bug-pcmetrics-committed-offset-vs-completion-count.md`](bug-pcmetrics-committed-offset-vs-completion-count.md).
+[`docs/solutions/test-issues/metrics-test-compared-a-commit-offset-to-a-completion-counter-2026-08-20.md`](../solutions/test-issues/metrics-test-compared-a-commit-offset-to-a-completion-counter-2026-08-20.md)
+(the inflight note this cited, `bug-pcmetrics-committed-offset-vs-completion-count.md`, closed into
+that write-up when astubbs#57 fixed the defect).
 
 ## Still open after these three merge
 

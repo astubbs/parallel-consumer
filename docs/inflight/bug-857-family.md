@@ -347,24 +347,6 @@ of astubbs#265's fix and one contrary observation, rather than as proven stable.
 
 **SUPERSEDED 2026-08-19 - this sighting is a test defect, and does not belong to the family.**
 The entry above asks for "a full-suite run on a CI runner, repeated enough times to put a number on
-the rate". A mechanism settles it instead:
-[`bug-pcmetrics-committed-offset-vs-completion-count.md`](bug-pcmetrics-committed-offset-vs-completion-count.md)
-**owns the diagnosis** - the assertion compares a contiguous commit offset to an out-of-order
-completion counter under `UNORDERED`, and the gap is permanent, not slow. That explains every
-observation here without invoking a stall: failing only under load (concurrency is what produces
-out-of-order completion), passing in isolation, and both observed gaps - the 2 records here
-(`205.0` vs `203.0`) and the 7 seen later on astubbs/parallel-consumer#322.
-
-**Do not count this as a family sighting.** It was recorded as "the family's signature" on the
-strength of a shortfall under load, which the family shares with any test that races. Leaving it here
-inflates the ledger with a defect that has nothing to do with the revoke path - the same contamination
-this file already records once, when a transactional-mode failure was logged as confirmation of a
-cycle impossible in that mode. Kept rather than deleted so the reasoning that led here is visible.
-
-The original assessment follows, and is retained deliberately.
-
-**SUPERSEDED 2026-08-19 - this sighting is a test defect, and does not belong to the family.**
-The entry above asks for "a full-suite run on a CI runner, repeated enough times to put a number on
 the rate". A mechanism settled it instead, and the test defect is now FIXED - so the sighting is
 closed, not merely reattributed.
 [`docs/solutions/test-issues/metrics-test-compared-a-commit-offset-to-a-completion-counter-2026-08-20.md`](../solutions/test-issues/metrics-test-compared-a-commit-offset-to-a-completion-counter-2026-08-20.md)

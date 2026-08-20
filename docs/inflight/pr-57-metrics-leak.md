@@ -14,10 +14,6 @@ Owns `PCMetrics.java`, `PCMetricsDef.java`, `PartitionState.java`, `PartitionSta
 
 ## Open on this PR
 
-- **Stacked on astubbs#325.** The base branch is `test/chaos-instrumentation`, not `master`, so this
-  PR's diff shows only its own 32 files. **Merging it while the base is that branch would merge into
-  astubbs#325 rather than master.** GitHub retargets when astubbs#325's branch is deleted on merge -
-  confirm it happened rather than assuming.
 - **No human LGTM.** Green CI is not approval.
 - **The teardown never-throws contract grew after the leak fix** and has its own open follow-up in
   [`core-pcmetrics-lock-held-across-registry-calls.md`](core-pcmetrics-lock-held-across-registry-calls.md).
