@@ -84,7 +84,8 @@
 # Test-harness overrides (used by bin/test-check-copyright-headers.sh; not needed
 # for normal use): COPYRIGHT_CHECK_FORK_POINT pins a different fork-point commit,
 # COPYRIGHT_CHECK_EXTRA_RENAMES appends 'newpath|oldpath' lines,
-# COPYRIGHT_CHECK_EXTRA_EXTRACTIONS appends extraction paths.
+# COPYRIGHT_CHECK_EXTRA_EXTRACTIONS appends extraction paths,
+# COPYRIGHT_CHECK_EXTRA_RECOVERIES appends 'path|origin-commit' lines.
 
 set -euo pipefail
 
@@ -300,6 +301,33 @@ parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerTestBa
 ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 "
 
+# RECOVERIES of upstream code from a branch that never reached the fork point:
+# 'path|origin-commit'. Treated exactly as an extraction is - Confluent + modifications line -
+# because that is what the file IS; the separate table exists because the REASON differs and the
+# claim here is checkable, where an extraction's is not.
+#
+# WHY A THIRD TABLE AND NOT A LINE IN EXTRACTED_FROM_UPSTREAM. An extraction has no single origin
+# path, so its provenance can only be asserted. A recovery has one, and the blob is still in this
+# repository's history - just on a ref that is not an ancestor of the fork point. So the claim is
+# VERIFIED below rather than trusted: the origin commit must actually contain the file at its
+# fork-point path, and a manifest entry naming a commit that does not is a FAILURE. Filing these
+# as extractions would have thrown that check away to save a table.
+#
+# THE ORIGIN PATH IS DERIVED, NOT LISTED. It is the file's fork-point path - PACKAGE_MOVES already
+# maps bz/stub/parallelconsumer back to io/confluent/parallelconsumer, which is the spelling every
+# pre-fork branch uses. A recovery that also MOVED within the tree does not fit this table; give it
+# a RENAMED_FROM_UPSTREAM-shaped entry when one turns up, rather than bending this one.
+#
+# Demo.java is the code behind the asciinema cast README_TEMPLATE.adoc links
+# (https://asciinema.org/a/404299), written at Confluent in 2021 on `origin/presentation` and never
+# merged to any master. docs/inflight/branch-classic-comparison-demo.md is its rescue ledger, and
+# records that the branch is to be archived as a tag once the rescue lands - the tag is what keeps
+# this commit reachable, so deleting it without one turns the verification below into a warning.
+RECOVERED_FROM_UPSTREAM_BRANCH="
+parallel-consumer-vertx/src/test-integration/java/bz/stub/parallelconsumer/vertx/integrationTests/Demo.java|ffda9c6a3a9e06d948cc6130d7694b3562f63b92
+${COPYRIGHT_CHECK_EXTRA_RECOVERIES:-}
+"
+
 if ! git cat-file -e "${FORK_POINT}^{commit}" 2>/dev/null; then
     # Provenance can't be determined without the fork-point commit (e.g. a shallow clone, or a
     # `mvn validate` build in an environment without full history). Default: WARN and skip rather
@@ -463,6 +491,17 @@ done <<EOF
 $EXTRACTED_FROM_UPSTREAM
 EOF
 
+recovered_path=(); recovered_commit=(); n_recovered=0
+while IFS='|' read -r path commit; do
+    [ -n "$path" ] || continue
+    [ -n "$commit" ] || continue
+    recovered_path[$n_recovered]="$(fp_path_of "$path")"
+    recovered_commit[$n_recovered]="$commit"
+    n_recovered=$((n_recovered + 1))
+done <<EOF
+$RECOVERED_FROM_UPSTREAM_BRANCH
+EOF
+
 registered_rename() { # <fork-point path> -> sets RENAME_ORIGIN; 1 if the path is not registered
     # exact match on the newpath field - a substring match would misroute files whose path is a
     # tail-substring of a registered newpath into the rename branch
@@ -479,6 +518,18 @@ registered_extraction() { # <fork-point path>
     local i=0
     while [ "$i" -lt "$n_extracted" ]; do
         if [ "${extracted[$i]}" = "$1" ]; then return 0; fi
+        i=$((i + 1))
+    done
+    return 1
+}
+
+registered_recovery() { # <fork-point path> -> sets RECOVERY_COMMIT; 1 if the path is not registered
+    local i=0
+    RECOVERY_COMMIT=""
+    while [ "$i" -lt "$n_recovered" ]; do
+        if [ "${recovered_path[$i]}" = "$1" ]; then
+            RECOVERY_COMMIT="${recovered_commit[$i]}"; return 0
+        fi
         i=$((i + 1))
     done
     return 1
@@ -660,6 +711,19 @@ while IFS=$'\t' read -r fp_path f cur_sha style fp_sha; do
         require_confluent "$f" || { fails=$((fails + 1)); continue; }
         require_modifications_line "$f" \
             "extraction of upstream-derived code" || fails=$((fails + 1))
+    elif registered_recovery "$fp_path"; then
+        # Verify the claim before enforcing on it. A missing COMMIT is the shallow-clone case the
+        # fork-point guard above already tolerates, so it warns; a commit that is present but does
+        # not hold the file is a WRONG entry, and that fails.
+        if ! git cat-file -e "${RECOVERY_COMMIT}^{commit}" 2>/dev/null; then
+            echo "WARNING: recovery origin ${RECOVERY_COMMIT} not in history - provenance of $f unverified." >&2
+        elif ! git cat-file -e "${RECOVERY_COMMIT}:${fp_path}" 2>/dev/null; then
+            echo "FAIL (recovery origin ${RECOVERY_COMMIT} does not contain ${fp_path}): $f"
+            fails=$((fails + 1)); continue
+        fi
+        require_confluent "$f" || { fails=$((fails + 1)); continue; }
+        require_modifications_line "$f" \
+            "recovery of upstream code from an unmerged branch" || fails=$((fails + 1))
     elif [ -n "$fp_sha" ]; then
         if ! require_confluent "$f" > "$TMP/msg" ; then
             if grandfathered "$fp_sha"; then

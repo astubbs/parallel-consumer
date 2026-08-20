@@ -65,7 +65,8 @@
 # table so a language cannot be added there without being exercised here. Fixture F (cases 30-38)
 # covers the rules that are not about a language: the unclassified-file failure, exemptions,
 # grandfathering and its limit, and the three ways a header can be present and still wrong. Both
-# carry their own case lists where they are built.
+# carry their own case lists where they are built. Fixture G (cases 39-43) covers the third
+# provenance table, recovery from an unmerged branch, whose claim the scanner verifies.
 #
 # Run: bin/test-check-copyright-headers.sh   (CI runs it before the real scan)
 
@@ -500,6 +501,73 @@ case "$out" in
         echo "FAIL: the word Confluent in PROSE was read as a copyright claim - the test must be same-line"
         failures=$((failures + 1)) ;;
     *) echo "ok:   a fork-original file may discuss Confluent without claiming its copyright" ;;
+esac
+
+# --- Fixture G: recovery from an unmerged branch (cases 39-43) ---------------------
+# The scanner's third provenance table is the only one whose claim is CHECKABLE, so these cases
+# are mostly about the check rather than about the header: a recovery entry names an origin
+# commit, and the scanner must confirm that commit really holds the file before enforcing on it.
+#
+#   39. a recovered file carrying Confluent + modifications passes
+#   40. a recovered file carrying Confluent ALONE fails for the missing modifications line
+#   41. an entry whose origin commit EXISTS but does not contain the file fails - this is the
+#       wrong-entry case, and it is the reason recoveries are not filed as extractions
+#   42. CONTROL ARM: the identical file, unregistered, is judged fork-original and fails for
+#       claiming Confluent - so the table is demonstrably what changes the verdict, not the header
+#   43. an origin commit absent from the clone WARNS and still enforces, matching how the
+#       fork-point guard already degrades on a shallow clone
+repoG="$WORK/g"
+new_repo "$repoG"
+confluent_file "$repoG/Upstream.java"
+git -C "$repoG" add -A && git -C "$repoG" commit -qm upstream
+fork_point_g=$(git -C "$repoG" rev-parse HEAD)
+
+# The unmerged branch the recovery comes from - a sibling of the fork point, never merged.
+git -C "$repoG" checkout -q -b presentation
+confluent_file "$repoG/Recovered.java"
+confluent_file "$repoG/NoModsLine.java"
+confluent_file "$repoG/Unregistered.java"
+git -C "$repoG" add -A && git -C "$repoG" commit -qm "the branch that was never merged"
+origin_g=$(git -C "$repoG" rev-parse HEAD)
+git -C "$repoG" checkout -q -
+
+dual_file       "$repoG/Recovered.java"     "int ported;"   # 39 conformant
+confluent_file  "$repoG/NoModsLine.java"    "int ported;"   # 40 violation
+dual_file       "$repoG/WrongOrigin.java"   "int ported;"   # 41 violation: not on that branch
+confluent_file  "$repoG/Unregistered.java"  "int ported;"   # 42 violation: fork-original claim
+dual_file       "$repoG/Absent.java"        "int ported;"   # 43 warns, does not fail
+git -C "$repoG" add -A && git -C "$repoG" commit -qm fork
+
+# A well-formed sha that names no object in this repo - the shallow-clone shape, not a typo.
+absent_commit=0000000000000000000000000000000000000000
+recoveries="Recovered.java|$origin_g
+NoModsLine.java|$origin_g
+WrongOrigin.java|$origin_g
+Absent.java|$absent_commit"
+
+out=$( (cd "$repoG" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_g" \
+        COPYRIGHT_CHECK_EXTRA_RECOVERIES="$recoveries" \
+        bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
+assert          "recovery fixture exits 1"                          1 "$rc"
+assert_contains "detects recovered file w/o mods line" \
+    "recovery of upstream code from an unmerged branch but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): NoModsLine.java" "$out"
+assert_contains "detects an entry whose origin commit lacks the file" \
+    "recovery origin $origin_g does not contain WrongOrigin.java): WrongOrigin.java" "$out"
+assert_contains "unregistered recovery stays fork-original (control arm)" \
+    "fork-original file claims Confluent copyright): Unregistered.java" "$out"
+assert_contains "an origin commit missing from the clone warns" \
+    "recovery origin $absent_commit not in history" "$out"
+assert_contains "recovery fixture reports exactly 3 violations"     "3 violation(s)" "$out"
+case "$out" in
+    *"): Recovered.java"*)
+        echo "FAIL: a conformant recovery was flagged"; failures=$((failures + 1)) ;;
+    *) echo "ok:   a recovery carrying Confluent + modifications is not flagged" ;;
+esac
+case "$out" in
+    *"): Absent.java"*)
+        echo "FAIL: an unverifiable recovery was failed rather than warned - that fails on shallow clones"
+        failures=$((failures + 1)) ;;
+    *) echo "ok:   an unverifiable recovery degrades to a warning, as the fork-point guard does" ;;
 esac
 
 # --- Drift guard: PACKAGE_MOVES vs bin/rename-packages.sh's PKG_MAP (rule 25) --------
