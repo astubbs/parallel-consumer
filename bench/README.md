@@ -29,11 +29,16 @@ PC_VERSIONS="0.3.0.2 0.5.3.2 LOCAL" CLIENT_PINS="NATIVE 3.9.2" bench/run-bisect.
 BENCH_WORK=/some/dir bench/run-bisect.sh     # keep resolved classpaths between sweeps
 ```
 
-`LOCAL` means this checkout's built classes, so run a build first:
+`LOCAL` is this checkout, resolved as an ordinary Maven coordinate, so install it first:
 
 ```sh
-./mvnw -q -pl parallel-consumer-vertx -am -DskipTests -Dcopyright.skip=true test-compile
+./mvnw install -DskipTests -Dcopyright.skip=true
 ```
+
+It used to read the local build out of `target/` directories instead. That special case bought
+nothing and cost a confusing failure - a worktree that had never been built failed as `package
+bz.stub.parallelconsumer does not exist` - and, far worse, it resolved a **different classpath** from
+every other arm. See the logging trap below.
 
 Results land in `$BENCH_WORK/results.csv` as `pc_version,client_pin,mode,repeat,msg_per_sec`.
 
@@ -50,11 +55,21 @@ Results land in `$BENCH_WORK/results.csv` as `pc_version,client_pin,mode,repeat,
 - **A vanilla `KafkaConsumer` arm** (`Bench vanilla`) that touches no PC code, as the control for
   everything environmental.
 
-## Two traps it already encodes
+- **Logging is pinned for every arm** (`bench/conf/logback.xml`, first on the classpath). See below.
+
+## Three traps it already encodes
 
 - **Jabel must be stripped from the compile classpath.** It ships as a transitive of older PC
   releases and javac auto-loads it as a compiler plugin via `ServiceLoader`; its 2021 ASM then dies
   on modern class files with `Unsupported class file major version 61`.
+- **Logging configuration is a 6x confound, and it is invisible.** With no logback config on the
+  classpath, logback defaults to DEBUG and Parallel Consumer logs per record. The same build measured
+  **2,595 msg/s at default DEBUG and 16,231 msg/s with logging pinned to WARN**. Older versions barely
+  notice the same setting - 0.3.2.0 moved 2% - so the effect is *not* uniform across arms and does not
+  cancel out: it manufactures a cliff wherever per-record logging was added. This went unnoticed at
+  first because the local arm resolved `parallel-consumer-core`'s tests jar, which ships a
+  `logback-test.xml`, while every arm from Central did not. A benchmark that does not pin logging is
+  measuring its own configuration.
 - **Too small a dataset reads as "no difference".** At 20,000 records every version returned about
   4,200 msg/s, because consumer-group join dominated the window. The arms only separate once the
   measured period is long enough to reach steady state; 350,000 is where the recorded result was

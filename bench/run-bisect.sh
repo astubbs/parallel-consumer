@@ -72,33 +72,41 @@ prepare() {
   [ -f "$dir/cp.txt" ] && { echo "$dir/classes:$(cat "$dir/cp.txt")"; return 0; }
   mkdir -p "$dir/classes" "$dir/src"
 
-  local pkg cp
+  # Every arm is a Maven coordinate, including this checkout's own build - install it with
+  #   ./mvnw install -DskipTests -Dcopyright.skip=true
+  # and it resolves like any other version. Reading the local build out of target/ directories
+  # instead was a special case that bought nothing and cost a confusing failure: a worktree that
+  # had never been built failed as "package bz.stub.parallelconsumer does not exist".
+  local pkg cp gid aid ver
   if [ "$pcv" = "LOCAL" ]; then
-    pkg=bz.stub.parallelconsumer
-    cp="$REPO/parallel-consumer-vertx/target/classes:$REPO/parallel-consumer-core/target/classes:$(cat "$WORK/local-deps.txt")"
+    pkg=bz.stub.parallelconsumer; gid=bz.stub.parallelconsumer; ver=${LOCAL_VERSION:-0.6.0.0-SNAPSHOT}
   else
-    pkg=io.confluent.parallelconsumer
-    local pinblock=""
-    [ "$pin" != "NATIVE" ] && pinblock="<dependency><groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>$pin</version></dependency>"
-    cat > "$dir/pom.xml" <<POM
+    pkg=io.confluent.parallelconsumer; gid=io.confluent.parallelconsumer; ver=$pcv
+  fi
+  aid=parallel-consumer-vertx
+  local pinblock=""
+  [ "$pin" != "NATIVE" ] && pinblock="<dependency><groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>$pin</version></dependency>"
+  cat > "$dir/pom.xml" <<POM
 <project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
 <groupId>bench</groupId><artifactId>arm-$pcv</artifactId><version>1</version>
 <dependencies>
   $pinblock
-  <dependency><groupId>io.confluent.parallelconsumer</groupId><artifactId>parallel-consumer-vertx</artifactId><version>$pcv</version></dependency>
+  <dependency><groupId>$gid</groupId><artifactId>$aid</artifactId><version>$ver</version></dependency>
   <dependency><groupId>com.github.tomakehurst</groupId><artifactId>wiremock-jre8</artifactId><version>2.35.2</version></dependency>
   <dependency><groupId>ch.qos.logback</groupId><artifactId>logback-classic</artifactId><version>1.3.14</version></dependency>
 </dependencies></project>
 POM
-    (cd "$dir" && mvn -q -B dependency:build-classpath -Dmdep.outputFile="$dir/cp.raw" >/dev/null 2>&1) || return 1
-    cp=$(cat "$dir/cp.raw")
-  fi
+  (cd "$dir" && mvn -q -B dependency:build-classpath -Dmdep.outputFile="$dir/cp.raw" >/dev/null 2>&1) || return 1
+  cp=$(cat "$dir/cp.raw")
 
   # Jabel ships as a transitive of older PC releases and javac auto-loads it as a compiler plugin
   # via ServiceLoader, where its 2021 ASM cannot read modern class files. It is compile-time-only
   # for PC's own build and nothing here needs it.
   cp=$(python3 -c "import sys;print(':'.join(p for p in sys.argv[1].split(':') if 'jabel' not in p.lower()))" "$cp")
 
+  # bench/conf goes FIRST on every runtime classpath, so logback.xml is found before anything an
+  # arm might drag in. See bench/conf/logback.xml for what this is protecting against.
+  cp="$HERE/conf:$cp"
   sed "s/__PKG__/$pkg/" "$HERE/Bench.java.template" > "$dir/src/Bench.java"
   javac -nowarn -cp "$cp" -d "$dir/classes" "$dir/src/Bench.java" >"$dir/javac.log" 2>&1 || return 1
   echo "$cp" > "$dir/cp.txt"
@@ -111,9 +119,6 @@ run_one() { java -cp "$1" Bench "${@:2}" 2>/dev/null | grep '^RESULT' | awk '{p=
 start_broker
 
 # The dataset: produced once, by the local build, and reused by every arm.
-log "resolving local dependency classpath"
-(cd "$REPO" && ./mvnw -q -o -pl parallel-consumer-vertx dependency:build-classpath \
-   -Dmdep.outputFile="$WORK/local-deps.txt" -Dmdep.includeScope=test -Dcopyright.skip=true >/dev/null 2>&1)
 LOCAL_CP=$(prepare LOCAL NATIVE) || { log "FATAL: cannot build local arm"; exit 1; }
 TOPIC=${BENCH_TOPIC:-bench-$RECORDS}
 log "producing $RECORDS records into $TOPIC (once)"
@@ -122,7 +127,6 @@ run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null
 echo "pc_version,client_pin,mode,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
 for pin in $CLIENT_PINS; do
   for pcv in $PC_VERSIONS; do
-    [ "$pcv" = "LOCAL" ] && [ "$pin" != "NATIVE" ] && continue   # local arm is not re-pinnable here
     CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,pc,,COMPILE_FAILED" >> "$RESULTS"; continue; }
     for r in $(seq 1 "$REPEATS"); do
       read -r rate peak <<< "$(run_one "$CP" pc "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$DELAY_MS" "$CONCURRENCY")"
