@@ -1,5 +1,8 @@
 # `CLASS2_STALL` gates on a TIMING bound in a CORRECTNESS suite
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 ## The critique
 
 The chaos suite exists to establish correctness: no record lost, duplicates bounded, ordering held,
