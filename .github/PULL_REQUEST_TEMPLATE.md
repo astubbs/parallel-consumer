@@ -23,4 +23,10 @@
 - [ ] Docs updated - or `N/A`
 - [ ] User-facing feature documentation data added under `docs/features/` - or `N/A - <reason>`
 - [ ] Tests added/updated - or `N/A`
+<!-- The working note: a PR earns its docs/inflight/ note at its FIRST commit, not its last - a note
+     opened at the end is a reconstruction. docs/inflight/AGENTS.md owns the rule. If no note is
+     needed (nothing here that `gh` cannot show), replace this box's tail with "N/A - <reason>", on
+     the box's own line. This box deliberately omits the usual placeholder: the gate reads the box
+     line, and a pre-written placeholder satisfies it untouched. -->
+- [ ] `docs/inflight/` working note (`pr-`/`branch-`) started at the PR's first commit - or say why none is needed
 - [ ] Title & body reflect the final content of this PR

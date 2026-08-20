@@ -149,6 +149,12 @@ left the live threads without a home. Append here as you go rather than reconstr
   superseded; the rejected move is unchanged - nudging a threshold until a run goes green, which the
   July recalibration already did once. Background:
   `test-class2-probe-asserts-timing-not-correctness.md`.
+  <br>
+  **Still unimplemented on this branch as of 2026-08-20, deliberately.** Flipping the gate right
+  after the sightings above, with no demonstrating chaos run (fires on a wedge, silent on a
+  slow-but-correct drain), would be indistinguishable in the history from tuning-to-green - the
+  rejected move. It wants its own small change where that demonstration is the content; the
+  principle itself is now durable in `docs/investigating.md` ("Designing a liveness check").
 - **Whether the ordering ledger should gate.** `ChaosKeyOrderIT` is `@Tag("chaos")`, so ordering
   under real churn runs only on demand; what gates every build is `KeyOrderLedgerIT`, which checks
   the ledger's LOGIC against synthetic histories. So a genuine ordering regression under churn would
@@ -235,12 +241,17 @@ owner asked the right question at the right moment. **A PR earns its working not
 commit, not its last.** The cost is one file; the thing it buys is that a finding gets written where
 it happens rather than recalled later.
 
+**Landed 2026-08-20**: the rule now lives in `docs/inflight/AGENTS.md` ("A PR earns its working
+note at its first commit") and `.github/PULL_REQUEST_TEMPLATE.md` carries a checklist box for it,
+which the existing `PR Checklist` gate enforces on every human PR - so a missing note is caught at
+PR-open rather than never.
+
 
 Kept here rather than in `next-candidates.md` because they belong to this PR until it lands. Each
 came from an INSTRUMENT being wrong rather than the product, which is why they generalise.
-
-Each of these came out of an instrument being wrong rather than the product being wrong, which is
-why they generalise past this investigation.
+**Promoted 2026-08-20**: the both-ends, assert-the-property and granularity lessons now have their
+durable home in `docs/investigating.md` ("Designing a liveness check") - do not promote them again
+at merge; the remaining items below keep their existing owners or await promotion.
 
 - **Truth probes for internal state, made routine** (`next-truth-probes-for-internal-state.md` owns
   this) - the chaos suite judged PC from outside, via committed offsets read by an admin client,
