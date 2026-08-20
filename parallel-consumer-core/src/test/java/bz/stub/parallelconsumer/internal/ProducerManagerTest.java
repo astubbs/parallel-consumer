@@ -396,7 +396,7 @@ class ProducerManagerTest {
             }, () -> {
                 log.debug("Unblocking offset processing offset1Mutex...");
                 offset1Mutex.countDown();
-            }, ofSeconds(20)); // was 10s; too tight under PIT
+            });
 
             //
             await().atMost(ofSeconds(20))
@@ -674,8 +674,14 @@ class ProducerManagerTest {
      * The commit lock is taken and held on a dedicated thread, because
      * {@link java.util.concurrent.locks.ReentrantReadWriteLock} only lets the acquiring thread release it -
      * {@code releaseCommitLock} throws otherwise. The unblocking function therefore only tells that thread to let
-     * go. {@link BlockedThreadAsserter#assertUnblocksAfter} then asserts both halves of the claim in one measured
-     * run: production was blocked for the whole hold, and resumed once it ended.
+     * go. {@link BlockedThreadAsserter#assertUnblocksAfter} then asserts both halves of the claim in one run:
+     * production was still parked when the commit released, and returned only after it.
+     * <p>
+     * That is a <em>causal</em> assertion, not a duration one, since astubbs#265 rewrote the helper - and for this
+     * claim that is the stronger of the two. C10 is about production being blocked <em>by</em> the commit; a
+     * wall-clock minimum would also pass for production that was merely slow for unrelated reasons. The return
+     * budget is left at the helper's 20s default deliberately: it is sized for PIT's instrumented JVM, where a
+     * tighter one flakes.
      * <p>
      * Non-vacuity: the commit lock is asserted to actually be held before the produce attempt starts, and the
      * acquired {@link ProducerManager.ProducingLock} is asserted non-null afterwards - {@code assertUnblocksAfter}
@@ -710,26 +716,36 @@ class ProducerManagerTest {
         assertThat(producerManager).isTransactionCommittingInProgress();
         assertThat(producerManager).hasNoProduceLockHolders();
 
+        // Acquired AND released inside the blocked function, on the one thread, because a read lock's hold count
+        // is per-thread: ReadLock#unlock decrements the calling thread's count and throws
+        // IllegalMonitorStateException at zero. astubbs#265 moved the blocked function off the calling thread and
+        // onto its own, so releasing from the test thread here would fail on a lock the test thread never held -
+        // which it did, as "Need to call #beginProducing first" out of ensureProduceStarted.
         var acquired = new AtomicReference<ProducerManager<String, String>.ProducingLock>();
+        var released = new AtomicBoolean();
         var producing = new BlockedThreadAsserter();
         producing.assertUnblocksAfter(
                 () -> {
                     try {
-                        acquired.set(producerManager.beginProducing(mock(PollContextInternal.class)));
+                        var lock = producerManager.beginProducing(mock(PollContextInternal.class));
+                        acquired.set(lock);
+                        producerManager.finishProducing(lock);
+                        released.set(true);
                     } catch (TimeoutException e) {
                         throw new RuntimeException(e);
                     }
                 },
-                releaseCommitLock::countDown,
-                ofSeconds(1));
+                releaseCommitLock::countDown);
 
         Truth.assertWithMessage("producing must have resumed by acquiring the produce lock once the commit released "
                 + "it - a swallowed timeout would otherwise look identical to a pass")
                 .that(acquired.get())
                 .isNotNull();
-        assertThat(producerManager).hasProduceLockHoldCount(1);
-
-        producerManager.finishProducing(acquired.get());
+        Truth.assertWithMessage("and it must have given the produce lock back - finishProducing runs its "
+                + "ensureProduceStarted check, so reaching here proves the lock was genuinely held by the "
+                + "thread that took it")
+                .that(released.get())
+                .isTrue();
         assertThat(producerManager).hasNoProduceLockHolders();
 
         committer.join(ofSeconds(20).toMillis());

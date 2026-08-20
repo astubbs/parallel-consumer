@@ -17,6 +17,35 @@
     <artifactId>parallel-consumer-core</artifactId>
     <name>Parallel Consumer - Core</name>
 
+    <properties>
+        <!-- JUnit 5 thread-parallelism for THIS module's tests. Declared once here because surefire and
+             failsafe both need it verbatim, and a copy in each drifted the moment one gained a comment.
+             A property is the right home: property values preserve newlines, which the JUnit
+             configurationParameters format needs.
+
+             The high dynamic.factor is deliberate: most of these tests are io bound, not cpu bound.
+
+             This used to live in src/test/resources/junit-platform.properties, which was a bug: that file
+             is packaged at the ROOT of the core tests jar, and eight modules depend on that jar (the four
+             integrations plus every example). JUnit reads the first junit-platform.properties on the
+             classpath, so all eight silently ran with whatever value ${parallel-tests} happened to hold
+             WHEN CORE WAS BUILT - their own setting was never consulted.
+
+             That inverted the intent of the settings: the `ci` profile sets parallel-tests=false on
+             purpose, because JUnit thread parallelism contends on static state and CI parallelises by
+             forking JVMs instead. A downstream module could nonetheless inherit enabled=true, factor=20
+             from a locally-built jar.
+
+             As surefire/failsafe configurationParameters the setting is per-module by construction - each
+             module evaluates its own ${parallel-tests}, nothing is packaged, nothing leaks, and these
+             outrank a properties file if one is ever reintroduced. -->
+        <junit.parallelism.configuration.parameters>
+            junit.jupiter.execution.parallel.enabled=${parallel-tests}
+            junit.jupiter.execution.parallel.mode.default=concurrent
+            junit.jupiter.execution.parallel.config.dynamic.factor=20
+        </junit.parallelism.configuration.parameters>
+    </properties>
+
     <dependencies>
         <!-- Main -->
         <dependency>
@@ -121,6 +150,27 @@
 
     <build>
         <plugins>
+            <!-- Per-module JUnit thread-parallelism - see junit.parallelism.configuration.parameters above
+                 for why it lives in the build rather than in a packaged properties file. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <properties>
+                        <configurationParameters>${junit.parallelism.configuration.parameters}</configurationParameters>
+                    </properties>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <properties>
+                        <configurationParameters>${junit.parallelism.configuration.parameters}</configurationParameters>
+                    </properties>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>io.stubbs.truth</groupId>
                 <artifactId>truth-generator-maven-plugin</artifactId>

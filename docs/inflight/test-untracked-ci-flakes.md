@@ -15,7 +15,7 @@ product behaviour and the assertion was wrong, so no product change was needed.
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined (owner astubbs#265) - see below |
-| `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#262**; quarantine lifted and registry entry deleted when that branch merged master - see below |
+| `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it; quarantine lifted and registry entry deleted by astubbs#262, its owner - see below |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
@@ -44,18 +44,21 @@ however long arming plus lambda setup takes. Under load that gap widens past a m
 `isAtLeast` fails a correct implementation. Any test using this helper can show the same signature,
 which is why it is filed against the helper.
 
-**Fixed in astubbs#262**, which stamps `armedAtNanos` immediately before `schedule()` and asserts
-against that instead. Its own comment is honest about the residual: the window measured is now
-slightly *longer* than the true one, so the error is sub-millisecond and in the safe direction - a
-genuinely early return is still caught unless it is early by less than the arming cost.
+**Fixed by astubbs#265**, and the way it was fixed settled the open question this entry used to pose.
+Two answers were live - measure it correctly, or stop measuring it. astubbs#262 had taken the first,
+anchoring the elapsed window to a nanos stamp taken just before `schedule()`; astubbs#265 took the
+second, deleting the wall-clock assertion outright and replacing it with a causal one (still parked
+when the unblocker ran, return ordered after it), plus `BlockedThreadAsserterTest` to hold it.
 
-That branch has now merged master, so under rule 3 it carries the re-enable: the `@Quarantined`
-annotation and the `docs/quarantined-tests.md` entry are both deleted, returning the test to the
-gating lane.
+astubbs#265 reached master first, so astubbs#262 resolved the collision by taking it wholesale and
+dropping its own anchoring. That is the better outcome and not a reluctant one: anchoring shrank the
+error and kept the run slow, while removing the assertion ends the whole class of scheduler-jitter
+failure and stops the helper sleeping out its own timeout. The residual astubbs#262's approach had to
+disclose no longer exists, because nothing is measured.
 
-**Note astubbs#265 touches the same line differently**, deleting the assertion along with the sleeps
-it removes. astubbs#262 landed the fix first, so that conflict is now astubbs#265's to resolve - and
-it is still a real decision, measure it correctly or stop measuring it, not a mechanical merge.
+astubbs#262 still carries the re-enable under rule 3, being the entry's owner: it has merged master,
+and the `@Quarantined` annotation and the `docs/quarantined-tests.md` entry are both deleted,
+returning the test to the gating lane.
 
 **Why it was not in this ledger already.** The 2026-08-07 scan read surefire `Flakes:` markers, which
 only appear when the retry re-ran a test and it then passed. This one failed the run outright, so it
