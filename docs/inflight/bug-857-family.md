@@ -609,3 +609,10 @@ argument astubbs#323's head makes and this time on the branch that owns the chao
 the first time both arms fired in one run and said "these are unrelated signatures can no longer be
 assumed for free"; this is the third such run in the ledger, so that caution has now outlived being
 a one-off.
+
+**And then the next commit ran green, which is the tightest control this file has.** Head
+`41c8cda26` differs from the red `202da9d0a` by **one markdown file** - the paragraph above - and
+[run 32323037970](https://github.com/astubbs/parallel-consumer/actions/runs/32323037970/job/96288770167)
+passed all seven chaos scenarios. Two adjacent commits, a prose-only diff between them, red then
+green: whatever draws this signature is drawn per seed, and no tree-content explanation survives that
+pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
