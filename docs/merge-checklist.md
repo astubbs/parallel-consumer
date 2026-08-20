@@ -80,6 +80,13 @@ Rewriting history someone else may have pulled is not reversible from inside a P
 
 - **Is the PR description still true?** Long-running branches drift; a description written before
   three rounds of review usually describes a PR that no longer exists.
+- **Is background work from this session still writing?** A subagent mid-task may hold work that
+  belongs IN this PR; merged without it, that work becomes a second PR and whatever the description
+  or the inflight notes said about the gap goes stale on master.
+  `.claude/hooks/check-merge-outstanding-work.sh` refuses the merge while task output is still
+  being written (override by prefixing the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) -
+  but a STALLED agent writes nothing and is not detected, so run `ListAgents` when the answer
+  matters.
 - **Has a human reviewed it and said LGTM?** Automated review is not approval, and neither is green
   CI.
 - **Do the commit messages explain WHY?** The diff already says what.
