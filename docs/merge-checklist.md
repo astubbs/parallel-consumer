@@ -30,10 +30,23 @@ title plus every commit subject concatenated - is a log of how the work happened
 explanation of what changed and why, and the PR discussion is not in `git log`, so the squash message
 is all a future reader gets. **Write a real one.**
 
-**Write it where it is used, not into the conversation.** Put it in the merge when you perform it, or
-in the PR body if the author is merging. Do not print it out in chat unless asked - it is long, the
-author is being asked for a decision rather than a proofread, and pasting it makes them scroll past
-the thing they actually have to answer. Say the strategy and why in a line or two; offer the message.
+**Write it to a scratch file and say where it is.** Put it in the merge when you perform it;
+otherwise write it to a file under the session's scratchpad and give the author the path. Say the
+strategy and why in a line or two.
+
+**Never the PR body.** It is what reviewers read to understand the change, so a squash message there
+is a second description of the same PR and the two drift the moment either is touched. It is also
+not where any merge command reads from, so it buys nothing at the point of use.
+
+**Print it in chat once the strategy is settled** - it is a few KB, and making the author open a file
+to read the thing they asked for is friction with nothing behind it. The one time to withhold it is
+while you are still *asking* which strategy to use: then the author owes you an answer, and a long
+message above the question buries it. Decided, print it; undecided, offer it.
+
+This paragraph previously said "or in the PR body if the author is merging", and it is injected into
+every merge-prep prompt, so it produced the same wrong move repeatedly - the last time on
+astubbs/parallel-consumer#323, whose description carried a squash message until it was removed by
+hand.
 
 That is a delivery rule, not a licence to skip it: the message still gets written, and written
 properly.

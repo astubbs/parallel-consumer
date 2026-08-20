@@ -543,7 +543,7 @@ Only the items needing a decision are listed here - do not restate the inventory
 - **Three deleted stubs are missing *features*, not missing tests** - record them as issues, never as
   test debt. `poisonPillGoesToDeadLetterQueue`: PC has no dead-letter-queue concept and never has
   (zero DLQ occurrences in any `src/main/java`); tracked as astubbs#149, and already the
-  most-demanded missing feature in `docs/inflight/next-candidates.md`. `maxPerPartition` and
+  most-demanded missing feature in `docs/inflight/process-candidate-ranking.md`. `maxPerPartition` and
   `maxPerTopic`: no per-partition or per-topic in-flight limit exists - `ParallelConsumerOptions` has
   only the global `maxConcurrency`, and `ShardKey` never keys by topic. Nearest tracked: astubbs#160
   and astubbs#236. **They were written as a trio with `maxOverall`, and only the global scope was

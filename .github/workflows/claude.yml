@@ -463,7 +463,7 @@ jobs:
           # No head-moved comparison any more, and none is needed: the gate asks only whether a
           # finished review exists on this PR, so a head that moved mid-review does not change
           # the answer. It went with the freshness rule - see
-          # docs/inflight/parked-strict-review-gate-freshness.md.
+          # docs/inflight/ci-strict-review-gate-freshness.md.
 
           # head_sha ALONE DOES NOT IDENTIFY THIS PR'S GATE RUN. One head can back more than one
           # PR - the same branch opened against `master` and a release branch - and the gate runs

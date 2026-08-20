@@ -15,6 +15,34 @@ working on this repo, and the set is nowhere near complete - see *Worth adding* 
 find yourself writing a rule into a document and wondering whether anyone will read it, that is the
 signal to come here and give it a mechanism instead.
 
+## `.claude/hooks/` is runtime programming, not tooling
+
+The framing that should govern every change in here: **the hooks are how the agent is programmed at
+runtime.** Not a lint layer bolted on the side - the mechanism by which behaviour is actually
+determined at the moment it matters, when nobody remembers the rule.
+
+That is not a metaphor about documentation being important. It is a statement about *when* each
+layer fires. A rule in a document only takes effect if someone opens the document and thinks to
+apply it. `docs/merge-checklist.md` was injected into the very turn in which astubbs#31 was merged
+with work still outstanding, and it did not help - a checklist prompts for the things you think to
+check against it, never for the thing you have forgotten you are waiting on. The hook that now
+catches that case fires whether or not anyone remembers it exists.
+
+Four consequences, and they are why the sections below are as strict as they are:
+
+- **A hook is production code.** It gets a header naming the trap and the incident that produced it,
+  self-tests in `bin/test-check-agent-hooks.sh`, and a **negative control** for each - break the
+  guarded thing, watch it go red, restore. Rule 3 below says so, and this harness once shipped
+  without applying that rule to itself: the suite printed `FAIL` and exited `0`.
+- **Fail open on your own bugs.** A guard that blocks when it is itself broken jams the tool call
+  shut, which is worse than the mistake it was written to prevent.
+- **Remove an arm rather than scope it** when its claim cannot be made honest. The merge guard's
+  live-build arm was deleted, not narrowed: scoping it would have blinded the guard to the very case
+  it existed for.
+- **A hook that only reaches the shapes you thought of is a documented bypass.** Match tokens, not
+  substrings; basenames, not exact strings. Both merge guards here still miss
+  `gh -R owner/repo pr merge`, and that is recorded rather than quietly tolerated.
+
 ## The problem it solves
 
 Every convention in this repo was already written down, correctly, before this harness existed. They
@@ -141,6 +169,7 @@ So the two hooks are registered differently, on purpose:
 | Hook | `if` | Why |
 |---|---|---|
 | `check-squash-subject.sh` | **none** - runs on every Bash call | It can only ever allow, or deny a real `gh pr merge`. A `grep` for `merge` in the payload rejects the overwhelming majority before python starts, so the cost is a shell test. |
+| `check-merge-outstanding-work.sh` (astubbs#324) | **none** - runs on every Bash call | Same reasoning as the squash guard, and the same shapes must reach it: `echo ready && gh pr merge ...` is exactly the case a prefix `if` would miss. A cheap `*merge*` pre-filter skips the interpreter on everything else; the decision itself is tokenised with `shlex`, so `gh pr comment --body "run gh pr merge later"` is not a merge. It watches this session's background TASKS only - it deliberately does not scan the process table for builds. |
 | `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`. Firing it on every Bash call is the outage described above - and it must stay prefix-matched anyway, because it gates *the session's* repository, which is only the right one when the command has no `cd` in front of it. |
 
 The `git commit` case that `if` therefore misses (`cd sub && git commit`) is covered by
