@@ -125,6 +125,19 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
 
     static final int RECORDS = Integer.getInteger("demo.records", 5_000);
 
+    /**
+     * Partitions on the demo topic. <b>Not the inherited default of 1</b>, which quietly voided the
+     * whole PC_PARTITION lane: partition ordering gives one shard per partition, so on a
+     * single-partition topic that lane is serial by construction and cannot beat the vanilla arm at
+     * any volume or any concurrency. It was measured doing exactly that - 0.1x, with the retry
+     * backoff of each failed record serialising behind it - before this knob existed.
+     * <p>
+     * Ten is also the shape the README's own argument takes: one plain consumer gets no parallelism
+     * from ten partitions, while Parallel Consumer gets ten-way from a single consumer without
+     * raising the partition count.
+     */
+    static final int PARTITIONS = Integer.getInteger("demo.partitions", 10);
+
     /** The simulated per-record service time. 2ms is the classic cast's value. */
     static final int DELAY_MS = Integer.getInteger("demo.delayMs", 2);
 
@@ -144,6 +157,11 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
      * Percentage of records that fail their FIRST attempt and succeed on retry. A permanent failure
      * would end the run rather than exercise the retry path, and a randomly-retrying one would make
      * the lanes incomparable - so the rule is deterministic and identical in every lane.
+     * <p>
+     * Expect this to cost the ORDERED lanes far more than the unordered one, and expect that to be
+     * real rather than an artefact: a failed record holds its shard until it succeeds, so the retry
+     * backoff serialises behind it, while an unordered lane simply works on something else. At small
+     * volumes the backoff can dominate the whole lane.
      */
     static final int FAILURE_PERCENT = Integer.getInteger("demo.failurePercent", 0);
 
@@ -229,6 +247,7 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
     @SneakyThrows
     void compareLanes() {
         int uniqueKeys = Math.max(1, (int) (RECORDS * (KEYS_PERCENT / 100d)));
+        numPartitions = PARTITIONS; // read by setupTopic, and the PARTITION lane is meaningless below it
         String topic = setupTopic("comparison-demo-" + RandomUtils.nextInt());
 
         logRunFingerprint(uniqueKeys, topic);
@@ -340,7 +359,11 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
             pc.poll(context -> {
                 simulateWork(recordId(context.getSingleConsumerRecord()),
                         context.getSingleRecord().getNumberOfFailedAttempts());
-                bar.stepTo(processed.incrementAndGet());
+                processed.incrementAndGet();
+                // step(), not stepTo(count): concurrent completions interleave, so a thread that
+                // read 5 can call stepTo AFTER the thread that read 6, and the bar jumps backwards
+                // in a demo whose whole job is to look right.
+                bar.step();
             });
 
             awaitCompletion(lane, processed);
@@ -423,6 +446,7 @@ public class ComparisonDemo extends BrokerIntegrationTest<String, String> {
     private void logRunFingerprint(int uniqueKeys, String topic) {
         Map<String, Object> fingerprint = new HashMap<>();
         fingerprint.put("records", RECORDS);
+        fingerprint.put("partitions", PARTITIONS);
         fingerprint.put("delayMs", DELAY_MS);
         fingerprint.put("keysPercent", KEYS_PERCENT);
         fingerprint.put("uniqueKeys", uniqueKeys);
