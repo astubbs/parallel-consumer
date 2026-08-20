@@ -199,11 +199,39 @@ number taken beside one is worthless in both directions.
 
 - **Where the Java comparison demo lives.** It needs core *and* the sidecar. The rescued Vert.x demo
   is in `parallel-consumer-vertx`; decision 12 puts per-language demos under their client module.
-  Java's comparison spans both.
-- **What the concurrency dial's cap actually is.** Above roughly 1000 the blocking-sleep model stops
-  scaling, so the cap is a real number that has to be chosen and stated.
-- **Whether the keyspace dial changes the default ordering mode.** The dial only means anything under
-  `KEY`; the classic is `UNORDERED`. Decision 8 runs all four lanes, which may dissolve this - confirm.
+  Java's comparison spans both. **Still open** - the core/sleep demo below settled only its own half.
+
+### Settled while building the core/sleep demo (agent, 2026-08-21)
+
+The owner said "proceed with the sleep core version" rather than answering these individually, so
+they were decided in the work and are recorded here with the reasoning, as the decisions above are.
+Overturn any of them by editing here, not by arguing with the code.
+
+- **The core/sleep demo lives in `parallel-consumer-core/src/test-integration`**, as
+  `ComparisonDemo`, beside the Vert.x demo's own module placement. This settles the core-only half
+  of the open question above and *not* the Java-spanning-the-sidecar half, which is still blocked on
+  U10 and stays open. Decision 12's `<client-module>/demo/` layout governs the per-language proxy
+  demos; nothing in it reaches core.
+- **The concurrency cap is 1000** (decision 16 demanded a number). Chosen because it is where this
+  demo's own model stops being honest, which is the only defensible place for it: simulated work is
+  a blocking sleep, so in-flight records are threads, and the thread-per-record cost starts showing
+  up in the reported number above roughly a thousand. That is the same line this file's arithmetic
+  section already identified as where Vert.x starts to earn its keep - so the cap is also the point
+  at which the sibling demo becomes the one worth running. Requests above it are capped and the run
+  says so rather than silently obeying.
+- **The keyspace dial does not change the ordering mode**, and decision 8 dissolved the question as
+  predicted. Running all four lanes makes the dial orthogonal: it sets the shard count under
+  `PC_KEY` and is inert everywhere else. The report labels where it bites instead of leaving a
+  reader to assume it bites everywhere.
+- **The demo reports throughput and deliberately reports no latency.** Every record is on the topic
+  before any lane starts, so the workload is closed-loop and per-record timings would be flattered
+  by exactly the amount a lane fell behind. The coordinated-omission constraint both perf tracks
+  agreed requires open-loop arrival at a fixed rate, measured from intended send time; this demo
+  does not do that, so it does not publish the number rather than publishing a wrong one. Anything
+  wanting latency needs the what-if machine, not this.
+- **No `main` method.** The Vert.x demo has one and paid for it twice - a hand-built classpath hid a
+  real dependency, and the `System.exit` it needs reports as a crashed VM when it runs inside a
+  failsafe fork. Maven owns the classpath.
 
 ## Open thread: the branch-archaeology gap this uncovered
 
