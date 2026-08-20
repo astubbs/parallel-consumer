@@ -121,6 +121,7 @@ EXEMPT_PATHS="
 */go.sum|dependency checksum file, written by the go toolchain
 */Package.resolved|SwiftPM dependency lockfile, written by swift package resolve - JSON, so no comment syntax either
 *.json|JSON has no comment syntax - see docs/copyright.md for the in-band conventions that fit
+bench/results/*.csv|measurement data written by bench/run-bisect.sh - CSV has no comment syntax, and a leading notice would be parsed as a data row
 *.sln|Visual Studio solution format carries no comment syntax
 *.bin|binary test fixture
 */py.typed|PEP 561 marker, required by the spec to be empty

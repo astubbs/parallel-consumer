@@ -18,6 +18,12 @@
 # Pinning kafka-clients separates them: sweep PC versions at a fixed client, and sweep clients at a
 # fixed PC.
 #
+# DELAY IS AN AXIS, NOT A SETTING. The version bisect pinned it at 2ms because it was asking a
+# question about versions. Comparing engines is a different question: at delay 0 the number is
+# almost entirely per-record framework overhead, and at 100ms the sleep dominates and every engine
+# converges on records*delay/concurrency. One delay therefore says nothing about an engine's shape -
+# only a sweep does. Hence DELAYS, and hence delay_ms is a column in the results.
+#
 # Usage:  bench/run-bisect.sh [records] [delayMs] [concurrency] [repeats]
 set -uo pipefail
 
@@ -25,14 +31,24 @@ RECORDS=${1:-100000}
 DELAY_MS=${2:-2}
 CONCURRENCY=${3:-100}
 REPEATS=${4:-2}
-# "pc" = the Vert.x engine (an ExternalEngine); "core" = ParallelEoSStreamProcessor. Different code
-# paths through the control loop, so a result from one says nothing about the other.
+# "pc" = the Vert.x engine (an ExternalEngine); "core" = ParallelEoSStreamProcessor; "vanilla" = a
+# plain KafkaConsumer. Different code paths through the control loop, so a result from one says
+# nothing about the other. "llingr" is not PC at all - see the llingr arm below.
 MODE=${MODE:-pc}
+# Modes to sweep. Listing more than one is how a comparison table is produced in a single run, e.g.
+#   MODES="core llingr" DELAYS="0 2 20 100" PC_VERSIONS=LOCAL bench/run-bisect.sh
+MODES=${MODES:-$MODE}
+# Delays to sweep, in milliseconds. Defaults to the single value given positionally, so the old
+# invocation still means exactly what it used to.
+DELAYS=${DELAYS:-$DELAY_MS}
 BUFFER=${BUFFER:-0}
 
 BROKER_NAME=pc-bench-broker
 BOOTSTRAP=localhost:19092
 WORK=${BENCH_WORK:-$(mktemp -d)}
+# mktemp -d creates its directory; a caller-supplied BENCH_WORK is just a path, and every write
+# below assumed otherwise - results.csv and the Go build log both failed on a first-run directory.
+mkdir -p "$WORK"
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 RESULTS=$WORK/results.csv
@@ -118,25 +134,88 @@ POM
 }
 
 # RESULT <mode> <count> <ms> <msgPerSec> peak=<n>  ->  "<msgPerSec> <n>"
-run_one() { java -cp "$1" Bench "${@:2}" 2>/dev/null | grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; }
+# One parser for every arm, which is the point of making the Go arm print the identical line.
+parse_result() { grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; }
+run_one() { java -cp "$1" Bench "${@:2}" 2>/dev/null | parse_result; }
+
+# --- the llingr arm --------------------------------------------------------------------------
+#
+# PRIVATE RESEARCH ONLY. llingr-demux is AGPL-3.0 and patent pending; read bench/llingr/NOTICE.md
+# before running this, and publish nothing it produces.
+#
+# It is an external reference point, not another PC version, so the PC_VERSIONS and CLIENT_PINS
+# dimensions do not apply to it - a Go engine has neither. It reuses everything that makes the
+# comparison honest: the same broker, the same topic, the same bytes, a fresh consumer group per
+# run, and the same result line.
+LLINGR_DIR=$HERE/llingr
+
+# Builds the Go arm to $WORK, deliberately outside the repo: the binary links AGPL code and must
+# not be distributable from a checkout. Returns non-zero, quietly, if Go is missing - a machine
+# without Go should skip this arm, not fail the sweep it was in the middle of.
+prepare_llingr() {
+  command -v go >/dev/null 2>&1 || return 1
+  local bin=$WORK/llingr-bench
+  [ -x "$bin" ] && { echo "$bin"; return 0; }
+  # GOTOOLCHAIN=auto because llingr's modules require a newer Go than most machines have installed,
+  # and Go can fetch its own toolchain; without it the build fails with a bare version complaint.
+  (cd "$LLINGR_DIR" && GOTOOLCHAIN=auto go build -o "$bin" .) >"$WORK/llingr-build.log" 2>&1 || return 1
+  echo "$bin"
+}
+
+# The engine version goes in the pc_version column, so a results file records WHICH llingr was
+# measured. Read from go.mod rather than hardcoded, so a dependency bump cannot silently mislabel.
+llingr_version() { awk '/llingr-demux v/ {print "llingr-demux-" $2; exit}' "$LLINGR_DIR/go.mod"; }
+
+run_llingr() {
+  "$1" -bootstrap "$2" -topic "$3" -count "$4" -delay "${5}ms" -concurrency "$6" 2>/dev/null | parse_result
+}
 
 start_broker
 
-# The dataset: produced once, by the local build, and reused by every arm.
-LOCAL_CP=$(prepare LOCAL NATIVE) || { log "FATAL: cannot build local arm"; exit 1; }
 TOPIC=${BENCH_TOPIC:-bench-$RECORDS}
-log "producing $RECORDS records into $TOPIC (once)"
-run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null
 
-echo "pc_version,client_pin,mode,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
-for pin in $CLIENT_PINS; do
-  for pcv in $PC_VERSIONS; do
-    CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,pc,,COMPILE_FAILED" >> "$RESULTS"; continue; }
-    for r in $(seq 1 "$REPEATS"); do
-      read -r rate peak <<< "$(run_one "$CP" "$MODE" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$DELAY_MS" "$CONCURRENCY" "$BUFFER")"
-      [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
-      log "$pcv/$pin $MODE run$r = $rate msg/s, peak in flight $peak"
-      echo "$pcv,$pin,$MODE,$r,$rate,$peak" >> "$RESULTS"
+# The dataset: produced once, by the local build, and reused by every arm - including the Go one,
+# which is the only way an engine comparison means anything.
+if [ "${BENCH_SKIP_PRODUCE:-0}" = 1 ]; then
+  log "BENCH_SKIP_PRODUCE=1: assuming $TOPIC already holds >= $RECORDS records"
+else
+  LOCAL_CP=$(prepare LOCAL NATIVE) || { log "FATAL: cannot build local arm"; exit 1; }
+  log "producing $RECORDS records into $TOPIC (once)"
+  run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null
+fi
+
+# delay_ms is a column because it is now a swept axis; without it a multi-delay results file cannot
+# be read back. Everything else is unchanged, so llingr rows and PC rows sit in one table.
+echo "pc_version,client_pin,mode,delay_ms,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+for mode in $MODES; do
+  if [ "$mode" = llingr ]; then
+    BIN=$(prepare_llingr) || {
+      log "SKIP llingr: $(command -v go >/dev/null 2>&1 && echo "build failed, see $WORK/llingr-build.log" || echo "no 'go' on PATH - install Go to measure this arm")"
+      continue
+    }
+    ver=$(llingr_version)
+    for d in $DELAYS; do
+      for r in $(seq 1 "$REPEATS"); do
+        read -r rate peak <<< "$(run_llingr "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$CONCURRENCY")"
+        [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
+        log "$ver llingr delay=${d}ms run$r = $rate msg/s, peak in flight $peak"
+        echo "$ver,franz,llingr,$d,$r,$rate,$peak" >> "$RESULTS"
+      done
+    done
+    continue
+  fi
+
+  for pin in $CLIENT_PINS; do
+    for pcv in $PC_VERSIONS; do
+      CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,$mode,,,COMPILE_FAILED" >> "$RESULTS"; continue; }
+      for d in $DELAYS; do
+        for r in $(seq 1 "$REPEATS"); do
+          read -r rate peak <<< "$(run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$CONCURRENCY" "$BUFFER")"
+          [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
+          log "$pcv/$pin $mode delay=${d}ms run$r = $rate msg/s, peak in flight $peak"
+          echo "$pcv,$pin,$mode,$d,$r,$rate,$peak" >> "$RESULTS"
+        done
+      done
     done
   done
 done
