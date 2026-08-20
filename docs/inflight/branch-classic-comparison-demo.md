@@ -161,11 +161,44 @@ bite. All four are fixed; the last one had already reached a required test.
    `NoClassDefFoundError` at runtime having compiled cleanly, and `VertxConcurrencyIT` is in the
    required lane. `threeten-extra` is now managed in the parent and declared by the vertx module.
 
-**Outstanding: the timed re-measurement.** The numbers in commit `ef698d1c9` (263 msg/s vanilla,
-20,588 msg/s PC, 78.2x) were taken before these fixes, from `main()`. They should be re-taken from
-the Maven entry point before any of them are quoted anywhere a reader sees. That run needs an idle
-machine - it was deferred here because a throughput bisect was using the same host, and a perf
-number taken beside one is worthless in both directions.
+**Re-measured from the Maven entry point, 2026-08-21** (idle host, ~85% CPU idle; Time Machine was
+running, so treat these as soft):
+
+|                | 2021 cast | port, from `main()` | now, via Maven |
+|----------------|-----------|---------------------|----------------|
+| vanilla        | 333 msg/s | 263 msg/s           | 250 msg/s      |
+| PC (350k)      | 27,201    | 20,588              | ~19,400        |
+| **ratio**      | **81.7x** | **78.2x**           | **~77.8x**     |
+
+The ratio is what the README actually claims, and it holds. Absolute throughput is lower on a laptop
+also running Docker, as it was for the earlier port.
+
+## The core demo's first real numbers, and what they expose
+
+`ComparisonDemo` at its defaults - 5,000 records, 2ms, `maxConcurrency` 100, 10 partitions:
+
+| lane | elapsed | msg/s | vs vanilla |
+|---|---|---|---|
+| VANILLA | 15s | 325 | 1.0x |
+| PC_UNORDERED | 1s | 4,229 | 13.0x |
+| PC_KEY | 1s | 4,426 | 13.6x |
+| PC_PARTITION | 2s | 1,712 | 5.3x |
+
+The shape is right - the ordering lanes rank as decision 8 predicted, `PC_PARTITION` sits between the
+serial arm and the ceiling. **But 13x is not the same engine's 78x above, and the gap is a
+measurement artefact, not a finding.**
+
+At 100 concurrent and a 2ms service time the ceiling is 50,000 msg/s, so 5,000 records is a tenth of
+a second of actual work. Everything the parallel lanes report is engine start-up and the first
+rebalance. That is exactly why the 2021 demo ran its PC arm over a **350,000** backlog while the
+vanilla arm did 5,000 - at any volume a serial arm can finish in a sane wall-clock, a parallel arm is
+already done.
+
+**This collides with decision 7** ("same topic, two group ids, so both arms process identical
+records"), which the classic demo did not honour and could not have. Resolving it needs the owner:
+either the parallel lanes get a larger backlog than the serial one and "identical records" becomes
+"identical workload definition", or the demo keeps one volume and publishes a ratio it knows to be
+understated by roughly 6x. Recorded rather than decided, because decision 7 was made deliberately.
 
 ## Constraints inherited from elsewhere - do not re-derive
 
