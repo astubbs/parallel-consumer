@@ -502,6 +502,14 @@ clean". This one does not:
 | Local replay | `2b8b89183` (astubbs#204) | RED | 5 | 154429ms |
 | **Local control** | **`5c377ec04` (master)** | **RED** | **10** | **154387ms** |
 
+**A RED here does NOT mean every `CLASS2_STALL` is a family occurrence.**
+[`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
+records one with this same ~154s signature whose seed replays **green** on an uncontended box,
+peaking at 121.3s - self-hosted runner contention, from `Performance` and `Chaos Pain Suite` sharing
+the box. That note owns the discriminator; the short version is that ~154s is what a crossed 150s
+bound looks like regardless of cause, so only an uncontended replay of the seed separates the two.
+This arm earns its place precisely because it replayed RED.
+
 **The master arm is the point.** The same seed fails on plain master with no astubbs#204 code in the
 tree, so this is the family's own defect and not something that PR introduced. Two further checks
 agree: astubbs#204's tree at the passing run `45fd8f6f9` and the failing run `6b2d91370` have the
@@ -532,3 +540,109 @@ with `-Dit.test=ChaosRevokeUnderWorkIT` needs `-Dfailsafe.failIfNoSpecifiedTests
 `-am` puts the parent module in the reactor and its own failsafe execution then fails the build with
 "No tests matching pattern"; dropping `-am` instead fails the enforcer's `ReactorModuleConvergence`.
 The unnarrowed command above has neither problem.
+
+**Twelfth sighting, 2026-08-20 - three `Chaos Pain Suite` reds inside twenty minutes across two
+branches, and the first one is on the DRAIN control arm.** Four scenarios fired between 01:05 and
+01:21Z. All the numbers below come from the uploaded failsafe artifacts, per the retrieval note
+above, not from the console.
+
+| Time (Z) | Branch | Head | Run | Arm that fired | Violations | `lagStagnation` peak | Seed |
+|---|---|---|---|---|---|---|---|
+| 01:05 | `test/chaos-instrumentation` (astubbs#325) | `9698012d9` | [32319767471](https://github.com/astubbs/parallel-consumer/actions/runs/32319767471/job/96279438153) | `ChaosKeyOrderIT` | 1 `ZOMBIE_MEMBER` | 44074ms (dwell 15452ms) | `1055565754928226840` |
+| 01:05 | as above | as above | as above | `ChaosRevokeUnderWorkDrainIT` | 12 `CLASS2_STALL` | 154321ms | `3426636341371267227` |
+| 01:12 | `split/docs-ledger-and-plans` (astubbs#323) | `c748ca667` | [32320198063](https://github.com/astubbs/parallel-consumer/actions/runs/32320198063) | `ChaosChurnStormIT` | 23 `CLASS2_STALL` | 154064ms | `4156620401101833712` |
+| 01:12 | as above | as above | as above | `ChaosRevokeUnderWorkIT` | 3 `CLASS2_STALL` | 154360ms | `1680705091015468437` |
+| 01:21 | `test/chaos-instrumentation` (astubbs#325) | `4b7ffc6e6` | [32320705139](https://github.com/astubbs/parallel-consumer/actions/runs/32320705139/job/96282172263) | `ChaosRevokeUnderWorkDrainIT` | 34 `CLASS2_STALL` | 154239ms | `4044221734199516240` |
+
+Every `CLASS2_STALL` line is the familiar one - 154s of stagnation against the 150s bound, group
+STABLE with heartbeats flowing. Replay any of them with:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=<seed>
+
+**The four stagnation peaks land within 300ms of each other** (154064-154360ms), which is the same
+constant the eleventh sighting measured across CI, a local replay and a local master control
+(154627 / 154429 / 154387ms). That is corroboration of a known characteristic of the signature, and
+it is **not** evidence about the machine: the eleventh sighting produced ~154.4s from a single
+uncontended local run on plain master. Its warning applies here too - the same seed there yielded
+5, 7 and 10 violations, so the count is not a per-partition fingerprint and the 34-vs-12 difference
+between the two drain-arm runs says nothing on its own.
+
+**astubbs#323's head is the cleanest not-PR-introduced control this file has recorded.** Against the
+merge base, `c748ca667` changes exactly three lines of main code and they are all inside
+`// TODO(refactor):` comments - a `docs/inflight/` filename repointed after a rename, in
+`ConsumerManager` and `ConsumerOffsetCommitter` - plus one `@Quarantined` annotation on
+`PCMetricsTest`, which the chaos lane does not run. No executable main-code change exists on that
+branch to reach a broker with. Prior entries argued branch innocence from "docs and one constant";
+this one is a comment-only diff, and it agrees with the eleventh sighting's master arm rather than
+proposing anything new.
+
+**The new observation is the drain control arm.** `ChaosRevokeUnderWorkDrainIT` arrives with
+astubbs#325 and exists precisely to test the leading explanation for this signature: that the
+watermark pinning is redelivery of heavy work abandoned by a non-draining stop. Its own javadoc
+pre-declares both outcomes, and this is the second one - *"Drain arm ALSO red - the abandoned-work
+explanation is wrong and something else pins the watermark."*
+
+**Do not cash that in yet, for two reasons.** The arm is brand new and has four CI exposures in
+total: green at 21:17 on 2026-08-19 (run 32303069710, seed `754504705742948700`, all seven scenarios
+green), then red three times tonight on three different seeds (01:05, 01:21 and the 01:41 run
+below). One green and three reds is a rate worth noticing, not a calibration.
+More importantly, a fail-fast red proves the *bound* was crossed, not that the backlog never drained
+- which is exactly the critique in
+[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md),
+where seed `4734674029169027864` trips this bound 53 times on the eager arm and still drains
+completely. Until one of tonight's drain seeds is replayed with
+`-Dchaos.diagnoseStallRecovery=true`, "the drain arm is also red" and "the drain arm is also slow"
+are the same observation.
+
+**What would settle it, and it is cheap:** replay `4044221734199516240` (34 violations, the larger
+sample) with `-Dchaos.diagnoseStallRecovery=true` and read whether the backlog drains. Drains ->
+this is the timing-proxy problem the probe note owns, and the abandoned-work explanation survives
+untouched. Does not drain -> the drain arm has done its job and the family has its first real lead
+on a Class 2 mechanism.
+
+**Every cooperative arm passed, in all three runs.** `ChaosRevokeUnderWorkCooperativeIT` was green
+each time (seed `4001744813866842738` in the astubbs#323 run, alongside the two eager reds), and
+`ChaosRevokeUnderWorkCooperativeDrainIT` green in both astubbs#325 runs. Each arm that fired
+`CLASS2_STALL` is an eager one. That is consistent with the second and sixth sightings'
+eager-protocol-specific reading and adds a third occasion to it - though the note recorded above the
+fifth sighting, of a `CLASS2_STALL` on the *cooperative* variant locally, still stands against
+treating it as settled.
+
+**Two sibling tests failed together in one run for the first time in this arm.** In the astubbs#323
+run, `ChaosChurnStormIT` and `ChaosRevokeUnderWorkIT` both fired `CLASS2_STALL` while the cooperative
+sibling passed. Earlier entries record the siblings as a *passing* control arm within the run (fourth,
+ninth, tenth, eleventh sightings all name two green siblings). Recorded as an observation; two of
+three arms drawing the signature on one broker in one run is not by itself evidence of anything the
+per-arm entries do not already say, but "the siblings always pass" is no longer true.
+
+**astubbs#325 is not a suspect for its own two reds, and the second one has a specific check.** That
+branch adds test-integration code only. The 01:21 run is at `4b7ffc6e6`, whose only change over
+`9698012d9` moves the drain arms' identical action-mix map into
+`AbstractRevokeUnderWorkScenario#drainOnlyChaosWeights()`; the run's own log confirms the mix is
+unchanged - `weights={STOP_DRAIN=3, RESTART=3, JOIN_NEW=2} tick=PT0.3S..PT1S joinAfterDrainBias=0.0`
+- and the same arm had already fired at 01:05, before that commit existed.
+
+**A fourth red the same night, on a documentation-only commit.** Run
+[32321963226](https://github.com/astubbs/parallel-consumer/actions/runs/32321963226/job/96285796525)
+at 01:41Z, head `202da9d0a` on astubbs#325 - which differs from `4b7ffc6e6` by two markdown files and
+nothing else. Three arms fired, all eager: `ChaosChurnStormIT` 23 `CLASS2_STALL` plus 2
+`ZOMBIE_MEMBER` (peaks `rebalanceDwell=15602ms lagStagnation=151882ms`, seed `989468380938115993`),
+`ChaosRevokeUnderWorkDrainIT` 43 `CLASS2_STALL` (`lagStagnation=152433ms`, seed
+`6334815371835997501`), `ChaosRevokeUnderWorkIT` 4 `CLASS2_STALL` (`lagStagnation=154211ms`, seed
+`2553818384688673562`). Both cooperative arms passed again, on seeds `7815585942040470933` and
+`2549365579181485261`.
+
+**Two things this adds.** A commit whose entire diff is prose cannot be a suspect, which is the same
+argument astubbs#323's head makes and this time on the branch that owns the chaos code. And the two
+`ZOMBIE_MEMBER` violations arrive **inside** a `CLASS2_STALL` autopsy again - the sixth sighting was
+the first time both arms fired in one run and said "these are unrelated signatures can no longer be
+assumed for free"; this is the third such run in the ledger, so that caution has now outlived being
+a one-off.
+
+**And then the next commit ran green, which is the tightest control this file has.** Head
+`41c8cda26` differs from the red `202da9d0a` by **one markdown file** - the paragraph above - and
+[run 32323037970](https://github.com/astubbs/parallel-consumer/actions/runs/32323037970/job/96288770167)
+passed all seven chaos scenarios. Two adjacent commits, a prose-only diff between them, red then
+green: whatever draws this signature is drawn per seed, and no tree-content explanation survives that
+pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
