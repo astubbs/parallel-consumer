@@ -61,14 +61,18 @@ echo "--- check-squash-subject.sh ---"
 
 fails=${fails:-0}
 
-verdict() { # <bash-command> -> ALLOW | DENY
+# Which hook verdict()/expect() drive - each section points it at its own hook, so the harness
+# below is written once (it was cloned per hook until review flagged the drift risk).
+HOOK_UNDER_TEST="$HOOKS/check-squash-subject.sh"
+
+verdict() { # <bash-command> -> ALLOW | DENY, from $HOOK_UNDER_TEST
     # The command goes to the JSON builder on STDIN, never argv: one case here is a 150 KB command,
     # and passing that as an argument hits the same E2BIG the case exists to detect - the harness
     # would die and the failure would read as the hook's.
     local out tmp
     tmp=$(mktemp)
     printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
-    out=$("$HOOKS/check-squash-subject.sh" < "$tmp" 2>/dev/null)
+    out=$("$HOOK_UNDER_TEST" < "$tmp" 2>/dev/null)
     rm -f "$tmp"
     case "$out" in
         *'"deny"'*) echo DENY ;;
@@ -106,6 +110,22 @@ expect DENY  "squash --body-file without trailer"           "gh pr merge 2999 --
 expect ALLOW "squash --body-file unreadable fails open"     'gh pr merge 2999 --squash --body-file /nonexistent/nope.txt'
 expect ALLOW "non-squash merge body needs no trailer"       'gh pr merge 2999 --merge --body "no trailer needed"'
 rm -f "$body_ok" "$body_bare" "$body_sess"
+# The same global-flag gap the outstanding-work guard had, in the other implementation: this one
+# detects the command with a regex, so `gh -R owner/repo pr merge` was not a merge as far as it was
+# concerned and the subject went unchecked. Found by sweeping for the defect CLASS after fixing the
+# sibling (AGENTS.md -> "look for other instances of the same defect"), astubbs#324.
+expect DENY  "leading -R, --subject with no (#N)"  'gh -R astubbs/parallel-consumer pr merge 2999 --squash --subject "foo"'
+expect DENY  "leading --repo, --subject no (#N)"   'gh --repo astubbs/parallel-consumer pr merge 2999 --squash --subject "foo"'
+expect DENY  "attached --repo=, --subject no (#N)" 'gh --repo=astubbs/parallel-consumer pr merge 2999 --squash --subject "foo"'
+expect DENY  "attached -RVALUE, squash body bare"  'gh -Rastubbs/parallel-consumer pr merge 2999 --squash --body "no trailer here"'
+expect ALLOW "leading -R, subject ends with (#N)"  'gh -R astubbs/parallel-consumer pr merge 2999 --squash --subject "foo (#2999)"'
+expect ALLOW "leading -R on a non-merge command"   'gh -R astubbs/parallel-consumer pr view 2999 --json title'
+# gh also accepts the flag BETWEEN `pr` and `merge` (`gh pr -R owner/repo merge`), and the first
+# global-flag fix only covered the leading position - found by the astubbs#324 review, live-proven
+# against gh itself. Same defect class, third position.
+expect DENY  "mid-position -R, --subject no (#N)"  'gh pr -R astubbs/parallel-consumer merge 2999 --squash --subject "foo"'
+expect ALLOW "mid-position -R on a non-merge cmd"  'gh pr -R astubbs/parallel-consumer view 2999 --json title'
+
 expect ALLOW "--subject ending with (#N)"          'gh pr merge 2999 --squash --subject "foo (#2999)"'
 expect ALLOW "-t ending with (#N)"                 'gh pr merge 2999 --squash -t "foo (#2999)"'
 expect ALLOW "--subject mentioned inside --body"   'gh pr merge 2999 --squash --body "why --subject matters
@@ -227,6 +247,16 @@ empty="$TMP/empty$RANDOM"; mkdir -p "$empty"
 assert "absent gate script fails OPEN" 0 \
     "$(gate_rc "$empty" 'git commit -m "ordinary"')"
 
+# NOT A COMMIT AT ALL: the hook must self-filter. The registration's `if: Bash(git commit *)` is
+# supposed to scope it, but the script cannot rely on that - observed live (astubbs#324 babysit):
+# with the gate red, a plain `ls` and a read-only `cat` of the gate itself were blocked with the
+# gate's own error, because "no commit found" fell into "run the gate". Self-filtering in the
+# script is the contract every other hook in this directory follows.
+assert "a non-commit command is not gated" 0 \
+    "$(gate_rc "$red" 'ls -la')"
+assert "a read-only command naming the gate is not gated" 0 \
+    "$(gate_rc "$red" 'cat .githooks/pre-commit')"
+
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh
 # ---------------------------------------------------------------------------------------------
@@ -329,25 +359,77 @@ if [ -n "$quoted" ]; then
     assert "strips YAML quoting from a quoted title" quotes_stripped "$got"
 fi
 
-# A marked note must be lifted WITH its reason - the reason is what tells an agent when the note
-# applies, and a filename cannot. Asserted against the real corpus so the case tracks the convention
-# rather than one file's wording.
-case "$knowledge_out" in
-    *"Read these first"*) got=has_priority_block ;;
-    *)                    got=no_priority_block ;;
-esac
-assert "lifts high-priority notes into their own block" has_priority_block "$got"
+# Open work must be grouped by CONSEQUENCE across every type, in the order docs/inflight/AGENTS.md defines - and
+# signal-integrity classes must come FIRST: you cannot judge the code through instruments that lie,
+# so `misdirection` before any product defect. Asserted against the FIXTURE corpus built below, not
+# the real one - the real-corpus assertion required a live bug/misdirection note to exist on master
+# forever, so the PR deleting the last one (deletion is the directory's prescribed lifecycle) would
+# have turned Repo Hygiene red for doing its job (astubbs#324 review). The fixture carries one
+# well-tagged bug and one feature, so grouping and ordering are asserted on controlled input.
 
-marked=$(grep -rl 'inflight-priority:[[:space:]]*high' "$REPO_ROOT/docs/inflight" 2>/dev/null | head -1)
-if [ -n "$marked" ]; then
-    marked_why=$(sed -n 's/.*inflight-priority:[[:space:]]*high[[:space:]]*-[[:space:]]*//p' "$marked" \
-                   | head -1 | sed 's/[[:space:]]*-->.*//')
-    case "$knowledge_out" in
-        *"$marked_why"*) got=reason_shown ;;
-        *)               got=reason_missing ;;
-    esac
-    assert "shows a marked note's reason, not just its path" reason_shown "$got"
+# A note with no class must still appear. A marker someone forgot to add must be VISIBLE, never a
+# way for a note to drop silently out of the index - that failure mode is the one the whole hook
+# exists to prevent.
+class_tmp=$(mktemp -d)
+mkdir -p "$class_tmp/docs/inflight" "$class_tmp/docs/solutions/x"
+printf -- '---\ntitle: "s"\n---\n' > "$class_tmp/docs/solutions/x/s.md"
+printf '# An unclassified note\n' > "$class_tmp/docs/inflight/bug-no-class.md"
+printf '# A closed note\n\n<!-- inflight-type: task -->\n<!-- inflight-state: closed - will not do -->\n' > "$class_tmp/docs/inflight/task-closed.md"
+# Open + mistagged + prose that MENTIONS `inflight-state:` without carrying the marker. The safety
+# net must judge open/closed by the whole `-->` marker exactly as the groups do: its first version
+# used a bare substring grep, so this exact shape vanished - not grouped, not unmatched, not counted.
+printf '# A prose mention of the marker\n\nThe gate greps for inflight-state: markers.\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirekshun -->\n' > "$class_tmp/docs/inflight/bug-prose-mention.md"
+printf '# A well-tagged bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirection -->\n' > "$class_tmp/docs/inflight/bug-well-tagged.md"
+printf '# A proposed feature\n\n<!-- inflight-type: feature -->\n' > "$class_tmp/docs/inflight/feature-idea.md"
+unclassified_out=$(CLAUDE_PROJECT_DIR="$class_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+
+# Grouped by IMPACT across every type, and rendered as REAL markdown headings. Both changed together:
+# a feature that exists to prevent a crash has to sort beside the crashes rather than under "proposed
+# work", and an agent has to be able to filter the index structurally instead of reading it whole.
+# Asserted as ORDER and STRUCTURE, never as one literal heading string - the previous version matched
+# `**bug / misdirection**` exactly and so went red the moment either changed, which is what a
+# string-matching test does in place of catching a regression.
+mis_at=$(grep -n '^## misdirection$' <<<"$unclassified_out" | head -1 | cut -d: -f1)
+feat_at=$(grep -n '^## feature - proposed' <<<"$unclassified_out" | head -1 | cut -d: -f1)
+if [ -n "$mis_at" ] && [ -n "$feat_at" ] && [ "$mis_at" -lt "$feat_at" ]; then
+    got=signal_integrity_first
+elif [ -z "$mis_at" ] || [ -z "$feat_at" ]; then
+    got=group_missing
+else
+    got=proposed_work_first
 fi
+assert "groups open work by impact, signal integrity first" signal_integrity_first "$got"
+
+case "$unclassified_out" in
+    *$'\n## '*) got=real_headings ;;
+    *)          got=bold_pseudo_headings ;;
+esac
+assert "groups are markdown headings, not bold text" real_headings "$got"
+
+case "$unclassified_out" in
+    *"An unclassified note"*) got=listed ;;
+    *)                        got=dropped ;;
+esac
+assert "a note whose tags match no group is still listed" listed "$got"
+case "$unclassified_out" in
+    *"A prose mention of the marker"*) got=listed ;;
+    *)                                 got=dropped ;;
+esac
+assert "an open note mentioning inflight-state: in prose is still listed" listed "$got"
+
+# A stated note is excluded from the index - but the exclusion must COUNT itself, or a view that
+# silently shrinks is indistinguishable from one with nothing to hide.
+case "$unclassified_out" in
+    *"A closed note"*) got=leaked ;;
+    *)                 got=excluded ;;
+esac
+assert "a closed note is excluded from the index" excluded "$got"
+case "$unclassified_out" in
+    *"note(s) not shown"*) got=counted ;;
+    *)                     got=hidden_silently ;;
+esac
+assert "the exclusion says how many it hid" counted "$got"
+rm -rf "$class_tmp"
 
 # A session must survive a repo that does not look like this one. Two shapes: no docs at all, and
 # a docs/ with no solutions - both are "say nothing, exit 0", never a stack trace into the session.
@@ -361,7 +443,13 @@ assert "a docs/ with no solutions exits 0" 0 "$?"
 assert "a docs/ with no solutions emits nothing" "" "$out_nosol"
 rm -rf "$empty_dir"
 
-echo
+# check-merge-outstanding-work.sh
+#
+# The negative controls matter more than the positive one here. The guard's whole risk is that it
+# either fires on ordinary commands (and gets routed around) or fails to fire when it counts. The
+# substring-vs-token case below is not hypothetical: the first draft grepped for "gh pr merge" and
+# blocked `gh pr comment --body "run gh pr merge later"`.
+# ---------------------------------------------------------------------------------------------
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
     exit 0
