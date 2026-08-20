@@ -82,7 +82,7 @@ class VertxConcurrencyIT extends BrokerIntegrationTest {
     public static AtomicInteger highestConcurrency = new AtomicInteger(0);
     public AtomicInteger httpResponseReceivedCount = new AtomicInteger(0);
 
-    public static WireMockServer stubServer;
+    public static VertxHttpStub stubServer;
 
     static CountDownLatch responseLock = new CountDownLatch(1);
 
@@ -94,38 +94,25 @@ class VertxConcurrencyIT extends BrokerIntegrationTest {
 
     @BeforeAll
     static void setupWireMock() {
-        WireMockConfiguration options = wireMockConfig().dynamicPort()
-                .containerThreads(expectedConcurrentCount * 2); // ensure wiremock has enough threads to respond to everything in parallel
-
-        stubServer = new WireMockServer(options);
-        MappingBuilder mappingBuilder = get(urlPathEqualTo("/"))
-                .willReturn(aResponse());
-
-        stubServer.stubFor(mappingBuilder);
-
-        stubServer.addMockServiceRequestListener(new RequestListener() {
-
-            @Override
-            public void requestReceived(final Request request, final Response response) {
-                log.debug("req: {}", request);
-                numberRequestsProcessing.getAndIncrement();
-                requestsReceivedOnServer.add(request);
-                bar.stepBy(1);
-                awaitLatch(responseLock, 30); // latch timeout should be longer than awaitility's
-                log.trace("unlocked");
-                int highest = highestConcurrency.get();
-                highestConcurrency.set(Math.max(highest, numberRequestsProcessing.get()));
-                ThreadUtils.sleepLog(400); // slow down responses to cause concurrency limits to be reached
-                numberRequestsProcessing.getAndDecrement();
-            }
+        // The pool must exceed the concurrency being asserted, or the stub caps what the engine can
+        // reach and the assertion fails on the harness rather than on the engine.
+        stubServer = VertxHttpStub.start(expectedConcurrentCount * 2, request -> {
+            log.debug("req: {}", request);
+            numberRequestsProcessing.getAndIncrement();
+            requestsReceivedOnServer.add(request);
+            bar.stepBy(1);
+            awaitLatch(responseLock, 30); // latch timeout should be longer than awaitility's
+            log.trace("unlocked");
+            int highest = highestConcurrency.get();
+            highestConcurrency.set(Math.max(highest, numberRequestsProcessing.get()));
+            ThreadUtils.sleepLog(400); // slow down responses to cause concurrency limits to be reached
+            numberRequestsProcessing.getAndDecrement();
         });
-
-        stubServer.start();
     }
 
     @AfterAll
     static void close() {
-        stubServer.stop();
+        stubServer.close();
     }
 
     /**
@@ -150,26 +137,8 @@ class VertxConcurrencyIT extends BrokerIntegrationTest {
 
 
         log.info("Producing {} messages before starting test", expectedMessageCount);
-        List<Future<RecordMetadata>> sends = new ArrayList<>();
-        try (Producer<String, String> kafkaProducer = getKcu().createNewProducer(false)) {
-            for (int i = 0; i < expectedMessageCount; i++) {
-                String key = "key-" + i;
-                Future<RecordMetadata> send = kafkaProducer.send(new ProducerRecord<>(inputName, key, "value-" + i), (meta, exception) -> {
-                    if (exception != null) {
-                        log.error("Error sending, ", exception);
-                    }
-                });
-                sends.add(send);
-                expectedKeys.add(key);
-            }
-            log.debug("Finished sending test data");
-        }
-        // make sure we finish sending before next stage
-        log.debug("Waiting for broker acks");
-        for (Future<RecordMetadata> send : sends) {
-            send.get();
-        }
-        assertThat(sends).hasSize(expectedMessageCount);
+        expectedKeys.addAll(getKcu().produceMessages(inputName, expectedMessageCount));
+        assertThat(expectedKeys).hasSize(expectedMessageCount);
 
         // run parallel-consumer
         log.debug("Starting test");

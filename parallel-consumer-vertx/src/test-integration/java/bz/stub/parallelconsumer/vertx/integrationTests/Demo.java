@@ -26,6 +26,8 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.io.IOException;
@@ -62,6 +64,9 @@ public class Demo extends BrokerIntegrationTest<String, String> {
         demo.testVertxConcurrency();
     }
 
+    /** Set to {@code true} to run the demo; see {@link #testVertxConcurrency()}. */
+    static final String DEMO_ENABLED_PROPERTY = "pc.demo";
+
     //    static final int expectedMessageCount = 1_000_000;
     static final int expectedMessageCount = 5_000;
     static final int bigExpectedMessageCount = expectedMessageCount * 70;
@@ -72,7 +77,7 @@ public class Demo extends BrokerIntegrationTest<String, String> {
     public AtomicInteger processedCount = new AtomicInteger(0);
     public AtomicInteger httpResponceReceivedCount = new AtomicInteger(0);
 
-    public static WireMockServer stubServer;
+    public static VertxHttpStub stubServer;
 
     static CountDownLatch responseLock = new CountDownLatch(1);
 
@@ -90,29 +95,12 @@ public class Demo extends BrokerIntegrationTest<String, String> {
     ProgressBar bar;
 
     void setupWireMock() {
-        int minThreadsJettyNeeds = 6;
-        WireMockConfiguration options = wireMockConfig().dynamicPort()
-//                .containerThreads(Math.max(concurrencyTarget, minThreadsJettyNeeds));
-                .containerThreads(Math.max(concurrencyTarget, minThreadsJettyNeeds));
-
-        stubServer = new WireMockServer(options);
-        MappingBuilder mappingBuilder = get(urlPathEqualTo("/"))
-                .willReturn(aResponse());
-
-        stubServer.stubFor(mappingBuilder);
-
         bar = ProgressBarUtils.getNewMessagesBar(log, expectedMessageCount);
         bar.pause();
-        stubServer.addMockServiceRequestListener((request, response) -> {
-//                log.debug("req: {}", request);
-//                parallelRequests.add(request);
+        stubServer = VertxHttpStub.start(concurrencyTarget, request -> {
             bar.stepBy(1);
             ThreadUtils.sleepQuietly(simulatedDelayMs);
-//                awaitLatch(responseLock, 30); // latch timeout should be longer than awaitility's
-//                log.trace("unlocked");
         });
-
-        stubServer.start();
     }
 
     /**
@@ -123,6 +111,17 @@ public class Demo extends BrokerIntegrationTest<String, String> {
      * This is used to sanity test that the PC vertx module is indeed sending the number of concurrent requests that we
      * would expect.
      */
+    /**
+     * Off by default. This lane collects by PACKAGE PATH - failsafe includes
+     * {@code **&#47;integrationTest*&#47;**&#47;*.java} - so living in this package is what decides
+     * collection, and a multi-minute measurement with no assertions would otherwise run on every
+     * build. {@code VertxConcurrencyIT} is the sibling that does assert, and it stays in the lane.
+     * <p>
+     * Run it with:
+     * <pre>./mvnw verify -pl parallel-consumer-vertx -Dit.test=Demo -Dpc.demo=true</pre>
+     */
+    @Test
+    @EnabledIfSystemProperty(named = DEMO_ENABLED_PROPERTY, matches = "true")
     @SneakyThrows
     void testVertxConcurrency() {
         var commitMode = PERIODIC_CONSUMER_ASYNCHRONOUS;
@@ -135,29 +134,9 @@ public class Demo extends BrokerIntegrationTest<String, String> {
 
         log.info("Simulating a server side request delay of {}ms - expected ideal msg rate of {}msg/s", simulatedDelayMs, 1000 / simulatedDelayMs);
 
-        {
-            log.info("\nProducing {} messages for test...", format(expectedMessageCount));
-            List<Future<RecordMetadata>> sends = new ArrayList<>();
-            try (Producer<String, String> kafkaProducer = getKcu().createNewProducer(false)) {
-                for (int i = 0; i < expectedMessageCount; i++) {
-                    String key = "key-" + i;
-                    Future<RecordMetadata> send = kafkaProducer.send(new ProducerRecord<>(inputName, key, "value-" + i), (meta, exception) -> {
-                        if (exception != null) {
-                            log.error("Error sending, ", exception);
-                        }
-                    });
-                    sends.add(send);
-                    expectedKeys.add(key);
-                }
-                log.debug("Finished sending test data");
-            }
-            // make sure we finish sending before next stage
-            log.debug("Waiting for broker acks");
-            for (Future<RecordMetadata> send : sends) {
-                send.get();
-            }
-            assertThat(sends).hasSize(expectedMessageCount);
-        }
+        log.info("\nProducing {} messages for test...", format(expectedMessageCount));
+        expectedKeys.addAll(getKcu().produceMessages(inputName, expectedMessageCount));
+        assertThat(expectedKeys).hasSize(expectedMessageCount);
 
         // run parallel-consumer
         log.debug("Starting test");
@@ -269,30 +248,9 @@ public class Demo extends BrokerIntegrationTest<String, String> {
 //        assertNumberOfThreads();
 
 
-        {
-            log.info("\nProducing {} messages for a longer PC test...", format(bigExpectedMessageCount));
-            List<Future<RecordMetadata>> sends = new ArrayList<>();
-            int bigTestMessagesToProduce = bigExpectedMessageCount - expectedMessageCount;
-            try (Producer<String, String> kafkaProducer = getKcu().createNewProducer(false)) {
-                for (int i = 0; i < bigTestMessagesToProduce; i++) {
-                    String key = "key-" + i;
-                    Future<RecordMetadata> send = kafkaProducer.send(new ProducerRecord<>(inputName, key, "value-" + i), (meta, exception) -> {
-                        if (exception != null) {
-                            log.error("Error sending, ", exception);
-                        }
-                    });
-                    sends.add(send);
-                    expectedKeys.add(key);
-                }
-                log.debug("Finished sending test data");
-            }
-            // make sure we finish sending before next stage
-            log.debug("Waiting for broker acks");
-            for (Future<RecordMetadata> send : sends) {
-                send.get();
-            }
-            assertThat(sends).hasSize(bigTestMessagesToProduce);
-        }
+        log.info("\nProducing {} messages for a longer PC test...", format(bigExpectedMessageCount));
+        int bigTestMessagesToProduce = bigExpectedMessageCount - expectedMessageCount;
+        assertThat(getKcu().produceMessages(inputName, bigTestMessagesToProduce)).hasSize(bigTestMessagesToProduce);
 
 
         log.info("\nPC run starting with concurrency setting of {}...", format(concurrencyTarget));
