@@ -1,7 +1,7 @@
-# Extract the agent harness as its own FOSS project
+# Extracting the agent harness as FOSS - researched, and mostly answered NO
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: deferred - after v6, and after the harness stops changing weekly -->
+<!-- inflight-state: closed - the space is occupied; what is left is one hook to steal and a convention worth contributing -->
 
 **Signpost, not a plan.** The agent harness has grown into something product-shaped and nothing
 tracked that, so this exists to stop it being rediscovered.
@@ -18,7 +18,47 @@ once, and those are examples in comments. The gates are about *how a repository 
 citations resolve, has a human reviewed it, can this gate fail, is work in flight - not about
 consumers or offsets.
 
-## Why it might be worth extracting
+## Researched 2026-08-19: do not build this
+
+Prior-art search found the category already has a name we did not give it - **"harness engineering"**,
+coined February 2026, with an awesome-list, a compatibility matrix and published pieces from Anthropic
+and Martin Fowler. Two of our three layers are crowded:
+
+- **Hooks as a product: occupied.** [`sd0xdev/sd0x-dev-flow`](https://github.com/sd0xdev/sd0x-dev-flow)
+  (188 stars) describes itself as "the harness layer for Claude Code" - six hooks over five events, a
+  five-layer chain, state gates that survive context compaction.
+  [`karanb192/claude-code-hooks`](https://github.com/karanb192/claude-code-hooks) (480 stars) ships
+  twenty marketplace-installable plugins. Its `dead-rules-audit` tallies which rules the agent ignores
+  and flags them "to promote into a deterministic hook" - **that is our central thesis, already
+  shipping as someone else's product.**
+- **The tracker: decisively occupied.** [Beads](https://github.com/steveyegge/beads) has 26.5k stars,
+  dependency graphs, context injection and memory decay. Backlog.md, git-issues, tkr and ai-trackdown
+  cover the markdown-file variant. A fifth is not defensible.
+
+**And the differentiator is weaker than this note originally claimed.** "Gates that prove they can
+fail" is known and advocated - tslint documented rule-testing years ago, and
+[`dshakes/compass`](https://github.com/dshakes/compass) is eval-gated in CI against a 61-case labelled
+corpus plus a 147-case *bypass* corpus. What nobody matches is the density - thirteen
+`test-check-*.sh` paired one-to-one with their gates - so the **discipline** is distinctive while the
+**idea** is not. Two smaller claims did survive the search: nothing found makes a filtered view
+declare what it hid, and nothing carries incident provenance inside the guard itself. Both are real
+and both are thin as a product thesis.
+
+## What to do instead
+
+- **Steal one hook.** `karanb192`'s `config-guard` / `instructions-audit` stop the agent editing its
+  own hooks and settings. We have no such guard, and every hook here was written by an agent - that is
+  a real hole, and one hook closes it.
+- **Contribute the pairing convention rather than launch a project.** "A gate you have not watched go
+  red is not a gate" is small enough to land in an existing collection, where it would reach people.
+- Everything comparable is MIT, so adopting rather than rebuilding is open. One exception:
+  `netresearch/agent-harness-skill` dual-licenses its *documentation* CC-BY-SA-4.0, so lifting its
+  prose would infect ours.
+
+Full search list, negative results with the searches that produced them, and the eight repositories
+read are in the research output; the conclusions above are what survived.
+
+## Why it looked worth extracting
 
 The differentiator is the same one [`process-quarantine-lane-foss.md`](process-quarantine-lane-foss.md)
 claims for its subset: the loop is closed **in CI**, not in a document. Every gate has a self-test
