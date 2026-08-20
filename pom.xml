@@ -546,6 +546,16 @@
                 <version>4.3.0</version>
                 <scope>test</scope>
             </dependency>
+            <!-- MutableClock, reached through PCModuleTestEnv - so every module that consumes
+                 parallel-consumer-core's tests jar and produces messages needs it, not just core.
+                 Managed here rather than versioned in each: test scope is not transitive, so the
+                 second consumer is a copy, and a copy is where the versions drift apart. -->
+            <dependency>
+                <groupId>org.threeten</groupId>
+                <artifactId>threeten-extra</artifactId>
+                <version>1.10.0</version>
+                <scope>test</scope>
+            </dependency>
             <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>

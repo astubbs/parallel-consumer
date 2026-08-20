@@ -34,6 +34,15 @@
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
+        <!-- KafkaClientUtils#produceMessages, in the tests jar above, builds its records through
+             PCModuleTestEnv, which needs MutableClock. Test-scoped dependencies are not transitive,
+             so consuming that jar means declaring what its classes reach for: without this the
+             integration tests here compile and then die at runtime on NoClassDefFoundError. -->
+        <dependency>
+            <groupId>org.threeten</groupId>
+            <artifactId>threeten-extra</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- External-->
         <dependency>
             <groupId>io.vertx</groupId>
