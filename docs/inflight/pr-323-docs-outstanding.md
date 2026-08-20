@@ -29,9 +29,10 @@ red on this PR for exactly that reason, which is what forced the move.
   stands on its own; the sentence overstates its evidence.
 - **`STRATEGY.md` repeats two concrete incidents that `docs/compound-engineering.md` owns.** Arguably
   a claims document earns its own evidence; left alone deliberately.
-- **Unverifiable as written:** the CI failure values quoted in the PCMetrics note (internally
-  consistent with the test's constants, not re-derivable), and the third NPE-ing fixture in the
-  stale-arrival note, which is never named.
+- **Unverifiable as written:** the third NPE-ing fixture in the stale-arrival note, which is never
+  named. The other half of this - the CI failure values quoted in the PCMetrics note - is moot: that
+  note is deleted, its defect fixed, and what survives of it is
+  [`docs/solutions/test-issues/metrics-test-compared-a-commit-offset-to-a-completion-counter-2026-08-20.md`](../solutions/test-issues/metrics-test-compared-a-commit-offset-to-a-completion-counter-2026-08-20.md).
 
 ## Already fixed
 
