@@ -77,6 +77,19 @@ Every entry below is a timing flake rather than a deterministic failure, so all 
 `flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
 were hidden by the surefire retry until astubbs#224 removed it.
 
+- [ ] `PCMetricsTest.metricsRegisterBinding` - asserts `PARTITION_LAST_COMMITTED_OFFSET` equals a
+  **completion counter** while the suite runs `UNORDERED`. Commits are contiguous and bounded by the
+  lowest incomplete offset; completions are not ordered, and workers call `latch.await()` *before*
+  `counter.incrementAndGet()`, so a latched worker's offset never completes and the gap is
+  **permanent**. The 120s `atMost` cannot close it - it only makes the failure cost 140s of every CI
+  run. Quarantined on a **diagnosed mechanism**, which is the stronger half of rule 1, not on a
+  sighting ledger. The fix is one comparand -
+  `PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED_OFFSET` is the contiguous high-water mark the commit metric
+  actually tracks - but the sibling assertions on `PARTITION_HIGHEST_COMPLETED_OFFSET` and
+  `PARTITION_INCOMPLETE_OFFSETS` derive from the same counters and want reading as a set first, so it
+  is not a one-line change. Diagnosis in
+  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`. No Owner yet.
+
 - [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
   the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
   assertions, so the same signature can surface from any test that uses it. The unblocker is
