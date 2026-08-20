@@ -204,6 +204,38 @@ left the live threads without a home. Append here as you go rather than reconstr
 
 ## Compounding ideas this work produced, 2026-08-19
 
+Four more from the split and hand-off, 2026-08-20 - these came from the PROCESS rather than the
+defect, which is why they were not in the first list.
+
+- **Extracting code to a minimal branch is a bug-finding technique, not just a review-simplification
+  one.** `PCMetrics.close()` iterates the registry directly instead of going through the guarded
+  `removeMeter`, and that hole was invisible where it was written, because its only caller wraps the
+  call in a try/catch. It surfaced the moment the change was lifted onto a branch without that
+  wrapper. **A contract that holds only because every caller guards it is not a contract** - and the
+  cheapest test of whether one is real is to move it somewhere its callers are not. Worth doing
+  deliberately for any guarantee that matters, not just when a PR needs splitting.
+- **Verify the assumption a split rests on before offering it.** The metrics extraction was offered
+  on the belief that its test would pass on master without this branch's `doClose` guards. It did
+  not. Two minutes of checking found a real hole; asserting it would have shipped a fix that only
+  worked in the place it came from.
+- **A test that fails for the "wrong" reason is often the one earning its keep.** The exploding-registry
+  test failed twice before it passed, and the first failure - the registry killing the instance before
+  the close path was reached - IS how the revoke-path exposure was found. A narrower test written to
+  pass first time would have shipped the `finally` guard and missed the larger defect. Ask why a test
+  fails before making it not fail.
+- **Encode a merge order as `depends on` lines, not as prose.** The PR-dependency gate blocks a child
+  until every parent merges, so an ordering that matters becomes mechanically impossible to get wrong
+  rather than merely written down. This is `docs/agent-harness.md`'s principle applied to PROCESS
+  instead of code, and it replaced a note that was already being ignored - by its own author, who
+  merged master early anyway.
+
+**And one about this file.** It did not exist until the work was nearly done, so learnings landed in
+topic docs or nowhere and had to be reconstructed at the end - several survived only because the
+owner asked the right question at the right moment. **A PR earns its working note at its first
+commit, not its last.** The cost is one file; the thing it buys is that a finding gets written where
+it happens rather than recalled later.
+
+
 Kept here rather than in `next-candidates.md` because they belong to this PR until it lands. Each
 came from an INSTRUMENT being wrong rather than the product, which is why they generalise.
 
