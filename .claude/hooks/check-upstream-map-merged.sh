@@ -31,6 +31,11 @@ payload_file=$(mktemp)
 trap 'rm -f "$payload_file"' EXIT
 cat > "$payload_file"
 
+# Cheap pre-filter before forking a Python interpreter: this hook is matcher-less, so without
+# it every Bash call in every session pays for an interpreter start. Same guard the sibling
+# hooks carry.
+grep -q merge "$payload_file" || exit 0
+
 python3 - "$payload_file" <<'PY'
 import json, re, shlex, sys
 
@@ -44,7 +49,16 @@ if tool.get("tool_name") != "Bash":
     sys.exit(0)
 
 cmd = tool.get("tool_input", {}).get("command", "")
-if not re.search(r"\bgh\s+pr\s+merge\b", cmd):
+
+# `-R owner/repo` / `--repo=...` may sit between `gh` and `pr` OR between `pr` and `merge`, and
+# AGENTS.md tells every agent in this repo to qualify gh commands - so a matcher that only accepts
+# the bare form misses the shape the conventions actively train. Borrowed verbatim from
+# check-squash-subject.sh, which grew this after the astubbs#324 review; a guard is only as good as
+# the command forms it recognises.
+_REPO_FLAG = r"(?:(?:-R|--repo)(?:\s+|=)?\S*\s+)*"
+MERGE = re.compile(r"\bgh\s+" + _REPO_FLAG + r"pr\s+" + _REPO_FLAG + r"merge\b")
+
+if not MERGE.search(cmd):
     sys.exit(0)
 
 try:
@@ -54,14 +68,24 @@ try:
 except Exception:
     sys.exit(0)                       # no manifest here, or no parser - nothing to assert
 
-for m in re.finditer(r"\bgh\s+pr\s+merge\b", cmd):
+for m in MERGE.finditer(cmd):
     try:
         tokens = shlex.split(cmd[m.start():])
     except ValueError:
         continue
+    def _pr_number(token):
+        """A bare number, or the trailing number of a PR URL - gh accepts both interchangeably."""
+        if token.isdigit():
+            return token
+        u = re.search(r"/pull/(\d+)(?:[/?#]|$)", token)
+        return u.group(1) if u else None
+
     try:
-        pr = next(t for t in tokens[tokens.index("merge") + 1:] if t.isdigit())
-    except (ValueError, StopIteration):
+        after = tokens[tokens.index("merge") + 1:]
+    except ValueError:
+        continue
+    pr = next((n for n in (_pr_number(t) for t in after) if n), None)
+    if pr is None:
         continue                      # merging the current branch's PR by name; number unknown
 
     for e in (manifest.get("entries") or []):

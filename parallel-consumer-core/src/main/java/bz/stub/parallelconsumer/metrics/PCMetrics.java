@@ -313,7 +313,8 @@ public class PCMetrics {
 
     /**
      * Removes a meter, and <b>never throws</b> - see the class-level note on why teardown is
-     * best-effort. Guarded HERE rather than at the call sites because there are eleven of them,
+     * best-effort. Guarded centrally - in {@link #removeQuietly} - rather than at the call sites,
+     * because there are eleven of them,
      * across {@link bz.stub.parallelconsumer.state.PartitionState},
      * {@link bz.stub.parallelconsumer.state.PartitionStateManager} and
      * {@link bz.stub.parallelconsumer.state.WorkManager}, and one missed site is enough to reproduce
@@ -365,12 +366,21 @@ public class PCMetrics {
             log.debug("Trying to remove meters when metrics subsystem is already closed.");
             return;
         }
-        // TWO guards, and both are load-bearing. The inner one is per meter, not around the loop, so one
-        // hostile meter cannot stop the rest being untracked - the confluentinc#859 leak lives in
-        // registeredMeters, and a loop-level guard would leave its tail un-pruned. The outer one covers
-        // the parts removeAndUntrack cannot reach: enumerating the registry (getMeters() is the user's
-        // code too) and Meter.getId(). Narrowing to per-meter alone would drop enumeration cover that the
-        // whole-body try/catch this merged from did have.
+        // TWO guards, and they cover different failures - state them precisely, because the next editor
+        // will trust this comment rather than re-derive it.
+        //
+        // The inner one, inside removeAndUntrack, covers `remove()` THROWING: one meter the registry
+        // refuses to remove does not stop the rest being untracked, and that matters because the
+        // confluentinc#859 leak lives in registeredMeters, so a loop-level guard alone would leave its
+        // tail un-pruned.
+        //
+        // The outer one covers what removeAndUntrack cannot reach - enumerating the registry, and
+        // Meter.getId(). It is NOT per meter, so a meter whose getId() throws aborts this sweep and
+        // leaves the rest of the prefix un-swept for this call. That is deliberate rather than
+        // overlooked: Search.meters() must read every candidate's id to filter by name and tags, so a
+        // deterministically hostile getId() dies during enumeration however the forEach is written -
+        // a per-meter getId() guard would buy nothing. Nothing escapes either way, and the meters left
+        // behind stay in registeredMeters, so the next full close() sweeps them.
         String context = "removing meters with prefix '" + meterNamePrefix + "'";
         try {
             Search.in(meterRegistry).name(name -> name.startsWith(meterNamePrefix))

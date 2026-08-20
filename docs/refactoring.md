@@ -311,7 +311,7 @@ Do not start one casually.
 
 ### state/ShardManager.java
 - The confluentinc#905 `SHARDS_MAX_SIZE` gauge re-walks every shard queue
-  (`getEntries().size()` is O(n) on a `ConcurrentSkipListMap`), duplicating the traversal
+  (`getCountOfWorkTracked()` is `entries.size()`, O(n) on a `ConcurrentSkipListMap`), duplicating the traversal
   `SHARDS_SIZE` already does - so each metrics scrape walks the shard queues twice.
   Negligible now; if it ever matters, derive both gauges from a single scan - see
   **Shard-count caching** under [Performance](#performance) above for the upstream design draft

@@ -119,6 +119,7 @@ expect DENY  "leading --repo, --subject no (#N)"   'gh --repo astubbs/parallel-c
 expect DENY  "attached --repo=, --subject no (#N)" 'gh --repo=astubbs/parallel-consumer pr merge 2999 --squash --subject "foo"'
 expect DENY  "attached -RVALUE, squash body bare"  'gh -Rastubbs/parallel-consumer pr merge 2999 --squash --body "no trailer here"'
 expect ALLOW "leading -R, subject ends with (#N)"  'gh -R astubbs/parallel-consumer pr merge 2999 --squash --subject "foo (#2999)"'
+
 expect ALLOW "leading -R on a non-merge command"   'gh -R astubbs/parallel-consumer pr view 2999 --json title'
 # gh also accepts the flag BETWEEN `pr` and `merge` (`gh pr -R owner/repo merge`), and the first
 # global-flag fix only covered the leading position - found by the astubbs#324 review, live-proven
@@ -157,6 +158,63 @@ fi
 #
 # CLAUDE_PROJECT_DIR points at a fixture holding a stub `.githooks/pre-commit`, so the gate's
 # pass/fail is controlled by the test rather than by the state of the real tree.
+# ---------------------------------------------------------------------------------------------
+# check-upstream-map-merged.sh
+#
+# Refuses `gh pr merge <N>` while upstream-map.yaml still records that PR as `status: pr-open`.
+# It reads the manifest from the CWD, so each case runs inside a fixture directory rather than
+# against the live manifest - a test whose expected verdict changes when someone edits the real
+# manifest is a test that will be deleted the first time it goes red for the wrong reason.
+#
+# It shipped with no self-test and reproduced two defects its siblings had already fixed: the
+# regex missed `gh -R owner/repo pr merge`, and the URL form fell open with the number in plain
+# sight. Those are the first cases below, and they are why this section exists.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- check-upstream-map-merged.sh ---"
+
+HOOK_UNDER_TEST="$HOOKS/check-upstream-map-merged.sh"
+
+umm_fixture=$(mktemp -d)
+mkdir -p "$umm_fixture/src/docs/development"
+cat > "$umm_fixture/src/docs/development/upstream-map.yaml" <<'YAML'
+entries:
+  - id: still-open
+    fork:
+      prs: [2999]
+      status: pr-open
+  - id: already-merged
+    fork:
+      prs: [2998]
+      status: merged
+YAML
+umm_prev_pwd=$PWD
+cd "$umm_fixture"
+
+expect DENY  "bare form, entry still pr-open"      'gh pr merge 2999 --squash'
+expect DENY  "leading -R (the astubbs#324 gap)"    'gh -R astubbs/parallel-consumer pr merge 2999 --squash'
+expect DENY  "leading --repo long form"            'gh --repo astubbs/parallel-consumer pr merge 2999 --squash'
+expect DENY  "attached --repo= form"               'gh --repo=astubbs/parallel-consumer pr merge 2999 --squash'
+expect DENY  "-R between pr and merge"             'gh pr -R astubbs/parallel-consumer merge 2999 --squash'
+expect DENY  "PR URL instead of a bare number"     'gh pr merge https://github.com/astubbs/parallel-consumer/pull/2999 --squash'
+
+# Negative controls - each names the reason the hook must NOT fire, so a future change that makes
+# it deny everything shows up here rather than by jamming somebody's merge shut.
+expect ALLOW "entry already says merged"           'gh pr merge 2998 --squash'
+expect ALLOW "PR absent from the manifest"         'gh pr merge 2997 --squash'
+expect ALLOW "no PR number: current branch's PR"   'gh pr merge --squash'
+expect ALLOW "not a merge command at all"          'gh pr view 2999'
+expect ALLOW "merge in prose, not a gh command"    'echo "remember to merge 2999 later"'
+
+cd "$umm_prev_pwd"
+rm -rf "$umm_fixture"
+
+# Fails open rather than jamming the tool shut when it cannot know: no manifest in this directory.
+umm_empty=$(mktemp -d); umm_prev_pwd=$PWD; cd "$umm_empty"
+expect ALLOW "no manifest here - fails open"       'gh pr merge 2999 --squash'
+cd "$umm_prev_pwd"; rm -rf "$umm_empty"
+
 # ---------------------------------------------------------------------------------------------
 
 echo

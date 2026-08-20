@@ -30,11 +30,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * through the tracked-meter count: the {@code Set} de-dup already collapses the duplicate
  * registrations the caching would avoid, and {@link PartitionState}'s own per-instance
  * {@code OffsetMapCodecManager} (constructed per assignment) re-registers the same fixed-id meter
- * regardless. Reverting the caching leaves this test green. The caching is an allocation/#233
+ * regardless. Reverting the caching leaves this test green. The caching is an allocation/confluentinc#233
  * optimization, redundant for the leak, with no clean behavioural seam to assert here - see
  * {@code docs/refactoring.md}.
  *
- * <p>Runs {@link ExecutionMode#SAME_THREAD} because {@link WorkContainer} holds static module state
+ * <p>Runs {@link ExecutionMode#SAME_THREAD} for the same reason {@link WorkManagerTest} does - these
+ * tests share process-wide module state
  * (same reason as {@link WorkManagerTest}).
  *
  * @see PartitionStateManager
