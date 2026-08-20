@@ -194,6 +194,30 @@ rebalance. That is exactly why the 2021 demo ran its PC arm over a **350,000** b
 vanilla arm did 5,000 - at any volume a serial arm can finish in a sane wall-clock, a parallel arm is
 already done.
 
+### Logging was on for all of these, and it does not matter (controlled, 2026-08-21)
+
+Asked whether logging had been turned off - it had not. The default test config runs the root logger
+and `bz.stub.parallelconsumer` at INFO to a console appender, and the progress bar emits through the
+demo's own logger, so every number above was taken with all of it on. Tested rather than argued,
+three arms of `ComparisonDemo` at identical settings:
+
+| logging | per-lane rates | failsafe elapsed |
+|---|---|---|
+| full (engine INFO + progress bar) | 325 / 4,229 / 4,426 / 1,712 | 25.64s |
+| engine off, progress bar on | 320 / 4,235 / 4,434 / 1,731 | 25.38s |
+| everything off | (no report - it is logged) | 26.78s |
+
+Under 1.5% between arms, no monotonic relationship to log volume, and the fully silent run was the
+*slowest*. Logging is not a confound here; the lanes are start-up bound, which is the same finding
+the volume section above reaches from the other direction.
+
+**A trap worth not repeating:** the first instrumentation check compared `grep -c 'ProgressBar'`
+between arms and read 29 -> 0 as proof the progress bar had been silenced. It had not. The quiet
+config also changed the log PATTERN, so the thread name stopped being printed and the grep was
+counting the pattern, not the logging. Verify a silenced logger by a MESSAGE string it emits
+(`Close complete`), never by anything the pattern contributes - and prefer a measure the logging
+config cannot touch at all, which is why the table above ends in failsafe's own elapsed time.
+
 **This collides with decision 7** ("same topic, two group ids, so both arms process identical
 records"), which the classic demo did not honour and could not have. Resolving it needs the owner:
 either the parallel lanes get a larger backlog than the serial one and "identical records" becomes
