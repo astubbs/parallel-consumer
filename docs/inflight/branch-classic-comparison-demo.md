@@ -195,15 +195,44 @@ also running Docker, as it was for the earlier port.
 | PC_KEY | 1s | 4,426 | 13.6x |
 | PC_PARTITION | 2s | 1,712 | 5.3x |
 
-The shape is right - the ordering lanes rank as decision 8 predicted, `PC_PARTITION` sits between the
-serial arm and the ceiling. **But 13x is not the same engine's 78x above, and the gap is a
-measurement artefact, not a finding.**
+**That table was one volume, and it understated by six.** Superseded by the two-replay design below;
+kept here because the number it produced is what exposed the problem.
 
-At 100 concurrent and a 2ms service time the ceiling is 50,000 msg/s, so 5,000 records is a tenth of
-a second of actual work. Everything the parallel lanes report is engine start-up and the first
-rebalance. That is exactly why the 2021 demo ran its PC arm over a **350,000** backlog while the
-vanilla arm did 5,000 - at any volume a serial arm can finish in a sane wall-clock, a parallel arm is
-already done.
+### Resolved: two replays, and decision 7 stands (owner, 2026-08-21)
+
+I put this up as a choice - honour decision 7 and publish an understated ratio, or break it for a
+real number. **That framing was wrong.** The classic does both, and decision 7 is never violated,
+because the big run is not a comparison at all:
+
+- **Small replay** - every lane, identical records, one topic, a group id each. Decision 7 to the
+  letter. This is the honest side-by-side.
+- **Big replay** - the same topic grown to a real backlog, dial-bound lanes only. Answers a
+  different question: what the engine sustains once start-up stops dominating.
+
+Both are printed. Neither is averaged into a figure true of nothing. At the classic's own settings
+(5,000 compared, 350,000 replayed, 2ms, 100 concurrency, 10 partitions):
+
+| lane | small replay | big replay |
+|---|---|---|
+| AK_CORE | 338 msg/s (1.0x) | excluded |
+| PC_UNORDERED | 4,268 (12.6x) | 31,909 (**94.1x**) |
+| PC_KEY | 4,527 (13.4x) | 24,593 (72.6x) |
+| PC_PARTITION | 1,823 (5.4x) | excluded |
+
+The ~80x the 2021 cast quoted comes straight back out, from a sleep and no HTTP server.
+
+**Which lanes the big replay drops is one rule, not two exceptions:** a lane joins only if it can
+use the concurrency dial. AK core is capped at one. **Partition ordering is capped at the partition
+count** - one in-flight record per partition - so at ten partitions it performs in the AK core
+client's class however high the dial goes. Measured at ~370 msg/s when an earlier version tried to
+replay it: fifteen minutes for the backlog the unordered lane clears in ten seconds. Expressed as
+the property, so raising `demo.partitions` past `demo.maxConcurrency` readmits that lane on merit.
+
+That attempt also found a defect worth keeping in mind for any future deadline here: it divided the
+ideal time by the *configured* concurrency, which no ordered lane can reach, so PC_PARTITION got a
+deadline ten times tighter than its own best case and was reported as stalled. A deadline must be
+derived from what a lane can achieve - the number of independent ordering units, or the dial,
+whichever is lower.
 
 ### Logging was on for all of these, and it does not matter (controlled, 2026-08-21)
 
