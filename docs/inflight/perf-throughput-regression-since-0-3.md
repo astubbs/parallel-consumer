@@ -91,139 +91,122 @@ so it fails with `Unsupported class file major version 61` regardless of how man
 opened. Consuming the **published artifact** from Central sidesteps all of it and is more faithful,
 since it is the jar users actually got.
 
-## The first cliff: 0.3.2.0 -> 0.4.0.0, and what it is NOT
+## The curve, measured under a harness that pins logging
 
-The bisect showed a step, not a slope. Throughput halves at exactly one release boundary and stays
-down:
+Everything below is `bench/run-bisect.sh` at 350,000 records, 2ms simulated delay, `UNORDERED`, over
+Vert.x, two runs per point, logging pinned to WARN for every arm. **`peak` is observed at the stub** -
+what the engine actually had outstanding, not what it was configured to allow.
 
-| version | run 1 | run 2 |
+| version | run 1 | run 2 | peak in flight |
+|---|---|---|---|
+| 0.3.0.2 | 22,178 | 22,025 | 100 |
+| 0.3.2.0 | 21,987 | 20,936 | 100 |
+| **0.4.0.0** | **11,878** | **11,662** | 98 / 99 |
+| 0.5.0.0 | 9,999 | 9,644 | 100 |
+| 0.5.2.0 | 9,610 | 8,581 | 100 |
+| 0.5.2.4 | 15,267 | 14,978 | 100 |
+| 0.5.2.8 | 16,657 | 14,947 | 100 |
+| 0.5.3.2 | 16,094 | 16,224 | 100 |
+| 0.6.0.0-SNAPSHOT | 16,139 | 16,276 | 100 |
+
+**Net: about 22,100 then, about 16,200 now - a 27% regression at `maxConcurrency` 100**, with both
+ends verified to be holding exactly 100 requests in flight.
+
+Shape: one sharp cliff at **0.3.2.0 -> 0.4.0.0** (-45%), a slow decline to a trough at 0.5.2.0, a
+**recovery between 0.5.2.0 and 0.5.2.4** (+65%), and flat since. The current build is not the worst
+point in the range; the trough is.
+
+### An earlier version of this curve was wrong, and the cause is worth keeping
+
+The first sweep reported a second cliff - 0.5.2.8 at ~2,500 msg/s - and a dramatic recovery in the
+current build. **Both were artefacts of logging configuration**, and the same figures under a pinned
+harness go *up* rather than down:
+
+| version | unpinned (logback default DEBUG) | pinned WARN |
 |---|---|---|
-| 0.3.0.2 | 22,079 | 22,655 |
-| 0.3.1.0 | 22,338 | 22,611 |
-| 0.3.2.0 | 22,451 | 22,247 |
-| **0.4.0.0** | **11,334** | **11,551** |
-| 0.4.0.1 | 11,321 | 11,388 |
-| 0.5.0.0 | 10,457 | 10,260 |
-| 0.5.1.0 | 10,309 | 10,907 |
-| 0.5.2.0 | 9,858 | 10,721 |
-| **0.5.2.8** | **2,583** | **2,467** |
-| 0.5.3.2 | 2,536 | - |
+| 0.3.2.0 | 22,451 | 21,987 |
+| 0.5.2.8 | 2,583 | 16,657 |
+| 0.6.0.0-SNAPSHOT | 2,595 | 16,231 |
 
-(Sweep-harness numbers, internally consistent. Compare within a table, never across tables - the
-control run further up used a different produce configuration and different harness instrumentation.)
+With no logback config on the classpath, logback defaults to DEBUG and PC logs per record. Old
+versions barely notice (0.3.2.0 moves 2%); modern ones are crushed (6.3x). So the confound does not
+cancel between arms - **it manufactures a cliff exactly where per-record logging was added.** It hid
+because the local arm resolved `parallel-consumer-core`'s tests jar, which ships a `logback-test.xml`,
+while every arm from Central did not.
 
-19 commits sit in the first gap, and one introduces `internal/ExternalEngine.java` - the shared base
-for Vert.x and Reactor, which is what this benchmark drives. It changes how much work is requested:
-
-```java
-// 0.3.2.0, via the core path
-getQueueTargetLoaded() = options.getMaxConcurrency() * DynamicLoadFactor.getCurrentFactor();  // factor: 2 -> 100
-
-// 0.4.0.0, ExternalEngine
-protected int calculateQuantityToRequest() {
-    return Math.max(0, maxConcurrency - wm.getNumberRecordsOutForProcessing());
-}
-protected void checkPressure() { }   // no-op: the load factor never steps up
-```
+That is itself a finding worth acting on independently of the regression: **modern PC at DEBUG is
+about six times slower than modern PC at WARN.** Anyone who turns on debug logging to investigate a
+throughput problem will change the thing they are measuring.
 
 ### REFUTED: "the old build was over-dispatching"
 
-An earlier revision of this note claimed the old build ignored `maxConcurrency` and ran up to 10,000
-requests in flight, making the first cliff the price of a correctness fix. **That was wrong, and it
-was wrong because it was inferred from the diff instead of measured.**
+An earlier revision claimed 0.3.2.0 ignored `maxConcurrency`, ran up to 10,000 requests in flight,
+and that the first cliff was therefore the price of a correctness fix. Measured peak in flight kills
+it: **0.3.2.0 peaks at exactly 100, the same as today**, at every point in the curve above. The
+`maxConcurrency x loadFactor` figure governs the worker pool **queue depth** - records queued ahead
+of the dispatch thread - not concurrent requests. The two were conflated.
 
-The harness now measures peak in-flight **at the stub**, which is what the engine actually had
-outstanding rather than what it was configured to allow:
+The `ExternalEngine` change is still the boundary throughput drops at, and its overrides
+(`calculateQuantityToRequest`, a no-op `checkPressure`) are still the most likely mechanism. But "it
+used to cheat" is not the explanation, and the cost is real work per record rather than accounting.
 
-| arm | maxConcurrency | msg/s | peak in flight |
-|---|---|---|---|
-| 0.3.2.0 | 100 | 21,178 / 22,054 | **100** |
-| 0.6.0.0-SNAPSHOT | 100 | 16,563 / 16,532 | **100** |
-| 0.6.0.0-SNAPSHOT | 1,000 | 30,435 / 32,270 | 327 / 340 |
-| 0.6.0.0-SNAPSHOT | 10,000 | 23,361 / 23,421 | 390 / 381 |
+### Matched concurrency: the gap is real at every ceiling
 
-**0.3.2.0 peaked at exactly 100, the same as today.** It was not over-dispatching to the HTTP layer.
-The `maxConcurrency x loadFactor` figure governs the **worker pool queue depth** - how many records
-may sit queued ahead of the dispatch thread - not the number of concurrent requests. Those two were
-conflated. The `ExternalEngine` change is still the boundary the throughput drops at, but "it used to
-cheat" is not the explanation.
+Both arms, same harness, same workload, only the ceiling varies:
 
-### What the measurement does establish
+| maxConcurrency | 0.3.2.0 | peak | 0.6.0.0-SNAPSHOT | peak | delta |
+|---|---|---|---|---|---|
+| 100 | 22,271 | 100 | 16,304 | 100 | **-26.8%** |
+| 1,000 | 33,952 | 340 | 28,338 | 340 | **-16.5%** |
+| 10,000 | 30,370 | 398 | 23,785 | 423 | **-21.7%** |
 
-1. **At matched concurrency there is a real per-record cost.** Same 100 in, same 100 observed
-   in flight, and current is ~24% slower (16,550 vs 21,600). That is not accounting - it is work
-   being done per record that was not being done before. **This is where the locking / thread-safe
-   collection hypothesis belongs**, and it is now the leading explanation rather than a guess.
-2. **The throughput is recoverable by configuration, and then some.** At `maxConcurrency=1000` the
-   current build reaches ~31,350 msg/s - faster than 0.3.2.0 ever measured here, and faster than the
-   2021 cast.
-3. **More concurrency is not monotonically better.** At 10,000 it falls back to ~23,400, and observed
-   peak in-flight only reaches ~385 either way, so the engine saturates around 300-400 concurrent and
-   further ceiling only adds overhead. A demo or a doc that recommends a number should recommend one
-   near that knee, not the largest one.
+Three things follow.
 
-### The release gate, answered in part
+1. **The regression is not an artefact of the ceiling.** It holds at every level, with observed
+   in-flight matched between arms.
+2. **It narrows as concurrency rises** (-27% at 100, -16% at 1,000). Whatever the per-record cost is,
+   more work in flight partially hides it - which fits a fixed serialised cost per record rather than
+   something that scales with load.
+3. **Both versions saturate around 340-420 in flight and both are slower at 10,000 than at 1,000.**
+   The knee is a property of the engine, not of the version.
 
-The number **is** recoverable without going back to any old behaviour: raise `maxConcurrency`. What
-is not resolved is the ~24% per-record cost at matched concurrency, which is a genuine regression
-sitting underneath the recoverable part, and which nothing here has diagnosed yet.
+### The release gate, answered
 
-### There is at least one more cliff
+**The 2021 headline number is reachable on the current build**: `maxConcurrency` 1,000 gives ~28,300
+msg/s against the cast's 27,201. Nothing needs reverting - it is a configuration change, and the
+demo and README should state the concurrency they used.
 
-`0.5.2.8` measured ~2,500 against `0.5.2.0`'s ~10,300 - a further 4x drop - and `0.5.3.2` stays
-there, while the current build recovers to ~16,500-19,300. So the curve is at least three events, and
-none of them is diagnosed. Narrowing that one to a single patch release is the next measurement;
-every intermediate tag (`0.5.2.1` ... `0.5.2.7`) exists, and the diff across the whole 0.5.2.0-0.5.2.8
-range is 152 commits over 69 files, which is why narrowing has to come before reading.
+**What remains is a genuine 16-27% per-record regression** that no configuration removes. That is the
+part still undiagnosed, and it is the part worth a decision before v6: ship with it and record it, or
+hold the release to chase it.
 
-Visible in that range and worth suspicion once narrowed, because they sit on the per-record path:
-`ShardKey` (+90), `ShardManager` (+153), `ProcessingShard`, `PartitionState` (+518).
+## Feeds the auto-scaling / dynamic concurrency work
 
-## The owner's original hypothesis, and where it still might apply
+The concurrency sweep produced the most directly useful data here, and it belongs to that track
+rather than this one:
 
-Recorded before any code was read, deliberately, so it could be refuted rather than fitted:
+- **The engine saturates well below the configured ceiling.** At `maxConcurrency` 1,000 and 10,000
+  the observed peak in flight was ~330 and ~385 respectively. Asking for 10,000 does not produce
+  10,000 outstanding requests; it produces about 385 and a slower result.
+- **Throughput is non-monotonic in the ceiling**, with a knee: 100 -> ~16,500, 1,000 -> ~31,350,
+  10,000 -> ~23,400 on the same build and workload. A wrong `maxConcurrency` costs about as much as
+  the regression this note is about, in either direction.
+- **That is the argument for tuning it automatically**, and it is measured rather than asserted. A
+  user cannot be expected to find a knee that moves with their workload, and the current failure mode
+  is silent: too high looks like a reasonable setting and simply runs slower.
 
-> More collections became thread-safe over the range, and there is more locking. The slow path could
-> plausibly be reorganised so it does not need the thread-safe collection variants at all - in the
-> same spirit as the actor IPC work, which isolated threads and state and pushed work onto message
-> passing rather than shared state.
+Where that work already lives, none of it referenced by any other document (see
+[`next-fork-branch-archaeology.md`](next-fork-branch-archaeology.md)):
 
-That is a specific, falsifiable claim with a named mechanism, and it predicts particular things: the
-regression should track commits that introduced concurrent collection types or lock scopes on the
-per-record path, and it should be roughly proportional to records processed rather than to
-partitions or rebalances.
-
-**It is now the leading explanation rather than a guess, and the measurement is what promoted it.**
-The ~24% gap at *matched* in-flight concurrency is precisely the shape this hypothesis predicts:
-identical concurrency, identical work requested, identical records - and more time spent per record.
-No dispatch-accounting difference can produce that, because there is no accounting difference left
-once both arms are observed holding 100 requests at once.
-
-A competing hypothesis that has NOT been ruled out and must be, before any code is blamed: the two
-arms are five years apart in every dependency, not just PC. The vanilla control covers the Kafka
-client, but not Vert.x itself, whose own version moved across the range and which is doing the actual
-HTTP work in both arms.
-
-**The analysis waits on the bisect**, because the bisect narrows the diff to read from five years to
-one release, and reading the wrong five years is the expensive mistake here - as the refuted
-over-dispatch reading above demonstrates, at the cost of one wrong committed conclusion. It is then
-done by reading the attributed diff directly - in session, not delegated (owner's instruction,
-2026-08-20).
-
-## Method note, learned the hard way
-
-**Measure the thing, do not infer it from the diff.** The over-dispatch conclusion was reached by
-reading `ExternalEngine` against the code it replaced, it was coherent, it explained the magnitude,
-and it was wrong. What killed it was two lines of instrumentation in the stub counting concurrent
-requests. Anything this analysis claims about what the engine *does* should be observable from
-outside the engine before it is written down.
-
-The actor work is relevant prior art either way - `improvements/lambda-actor-bus`,
-`improvements/commit-command-actor`, `improvements/poller-bus-actor` and
-`improvements/actor-scheduled` all exist as branches, and per
-[`next-fork-branch-archaeology.md`](next-fork-branch-archaeology.md) none of them are referenced by
-any document. If the diagnosis is shared-state contention, that is the body of work that was already
-aimed at it.
+- **astubbs#227** (`confluentinc#21`) - "Dynamic concurrency control with flow control or tcp
+  congestion control theory", open. The congestion-control framing is exactly what a knee that moves
+  with the workload calls for.
+- **`origin/feature/auto-tuning-pressure`** (2020-12-01, "Wip! Experiments in self tuning") and
+  **`origin/features/dynamic-concurrency-control`** (2020-11-05) - prior attempts, unmerged and
+  unread.
+- `DynamicLoadFactor` is the shipped mechanism, and it is **not** this: it sizes the buffer feeding a
+  fixed pool rather than the pool itself, and `ExternalEngine.checkPressure()` no-ops it entirely for
+  Vert.x and Reactor. So on the external engines there is currently no adaptive element at all.
 
 ## Related
 
