@@ -150,7 +150,12 @@ is_open()    { ! grep -q 'inflight-state:[^>]*-->' "$1" 2>/dev/null; }
 # deferred work, so running out of open work IS the trigger to re-read this section. It also means
 # nothing needs re-tagging when a version ships - a note is only touched when the decision about it
 # actually changes.
-is_deferred() { grep -q 'inflight-state:[[:space:]]*deferred' "$1" 2>/dev/null; }
+# ANYWHERE INSIDE THE MARKER, not anchored to the front. Requiring the word immediately after the
+# colon meant `parked - deferred` matched neither this nor is_open, and two notes fell out of the
+# index entirely. The position of the word carries no meaning - only its presence does - so matching
+# on position was inventing a rule the writer never agreed to. Bounded by `-->` so prose mentioning
+# the word elsewhere in the note cannot trigger it.
+is_deferred() { grep -q 'inflight-state:[^>]*deferred[^>]*-->' "$1" 2>/dev/null; }
 deferred_reason() { sed -n 's/.*inflight-state:[[:space:]]*\(deferred[^>]*\)-->.*/\1/p' "$1" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
 
 emit_group_impactless() { # <type> <full-heading-incl-hashes> - only notes of this type carrying NO impact
@@ -296,9 +301,26 @@ fi
 # visible without letting it occupy the index. Same rule as "no silent caps" for a bounded workflow.
 # Deferred notes are NOT in this count - they have their own section below. Counting them here would
 # tell you to delete work that was deliberately scheduled.
-stated=$(grep -rl 'inflight-state:[^>]*-->' docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' \
-           | xargs -r grep -L 'inflight-state:[[:space:]]*deferred' 2>/dev/null | grep -c . || true)
-[ "${stated:-0}" -gt 0 ] && emit "_${stated} note(s) not shown: closed, parked or blocked. Delete or migrate them - \`grep -rln inflight-state: docs/inflight\`._" && emit ""
+# NAMED, NOT COUNTED. A bare number is how a note disappears: two notes tagged `parked - deferred`
+# matched neither `is_open` nor `is_deferred` - the latter wants the word immediately after the colon -
+# so they fell out of both sections into this line and lost their titles entirely. Found in review of
+# astubbs#323, introduced by that PR's own tagging pass. Counting is the filter hiding its own
+# omissions, which is the exact failure this index claims it cannot make; listing them by name means
+# a note whose state nothing recognises still appears, wearing the state that stranded it.
+excluded=$(grep -rl 'inflight-state:[^>]*-->' docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' \
+           | xargs -r grep -L 'inflight-state:[^>]*deferred[^>]*-->' 2>/dev/null | sort || true)
+if [ -n "$excluded" ]; then
+    emit "# Not shown above - closed, parked or blocked"
+    emit ""
+    emit "Listed rather than counted: a number cannot tell you a note fell here by accident. Delete or migrate them."
+    emit ""
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        st=$(sed -n 's/.*inflight-state:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
+        emit "- $(inflight_title "$f")  _${st}_  \`${f}\`"
+    done <<< "$excluded"
+    emit ""
+fi
 
 # DEFERRED WORK, last, and never merely counted. It is decided work with a stated trigger, so hiding
 # it behind a number would lose the schedule; putting it above open work would compete with it.

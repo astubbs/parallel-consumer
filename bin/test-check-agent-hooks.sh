@@ -417,18 +417,35 @@ case "$unclassified_out" in
 esac
 assert "an open note mentioning inflight-state: in prose is still listed" listed "$got"
 
-# A stated note is excluded from the index - but the exclusion must COUNT itself, or a view that
-# silently shrinks is indistinguishable from one with nothing to hide.
-case "$unclassified_out" in
+# THE WORD ANYWHERE IN THE MARKER, not anchored to the front. `parked - deferred` is as deferred as
+# `deferred - parked`; position carries no meaning, and requiring it invented a rule nobody agreed to.
+pos_tmp=$(mktemp -d); mkdir -p "$pos_tmp/docs/inflight" "$pos_tmp/docs/solutions/x"
+printf -- '---\ntitle: "s"\n---\n' > "$pos_tmp/docs/solutions/x/s.md"
+printf '# Deferred with the word at the FRONT\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: deferred - parked -->\n' > "$pos_tmp/docs/inflight/ci-front.md"
+printf '# Deferred with the word in the MIDDLE\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: parked - deferred, gated on a user base -->\n' > "$pos_tmp/docs/inflight/ci-middle.md"
+pos_out=$(CLAUDE_PROJECT_DIR="$pos_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+def_block=$(sed -n '/^# Deferred/,/^# /p' <<<"$pos_out")
+case "$def_block" in *"word at the FRONT"*) got=found ;; *) got=missing ;; esac
+assert "a state beginning 'deferred' is deferred" found "$got"
+case "$def_block" in *"word in the MIDDLE"*) got=found ;; *) got=missing ;; esac
+assert "a state with 'deferred' later is equally deferred" found "$got"
+rm -rf "$pos_tmp"
+
+# A stated note leaves OPEN WORK but must still be NAMED. Counting was the previous contract and it
+# hid two notes tagged `parked - deferred`, which matched neither filter and lost their titles to a
+# bare number - the filter making exactly the omission this index claims it cannot make.
+open_block=$(sed -n '/^# Open work/,/^# /p' <<<"$unclassified_out")
+case "$open_block" in
     *"A closed note"*) got=leaked ;;
     *)                 got=excluded ;;
 esac
-assert "a closed note is excluded from the index" excluded "$got"
+assert "a closed note is kept out of open work" excluded "$got"
+
 case "$unclassified_out" in
-    *"note(s) not shown"*) got=counted ;;
-    *)                     got=hidden_silently ;;
+    *"A closed note"*) got=named ;;
+    *)                 got=hidden_silently ;;
 esac
-assert "the exclusion says how many it hid" counted "$got"
+assert "an excluded note is still named, not just counted" named "$got"
 rm -rf "$class_tmp"
 
 # A session must survive a repo that does not look like this one. Two shapes: no docs at all, and
@@ -443,13 +460,6 @@ assert "a docs/ with no solutions exits 0" 0 "$?"
 assert "a docs/ with no solutions emits nothing" "" "$out_nosol"
 rm -rf "$empty_dir"
 
-# check-merge-outstanding-work.sh
-#
-# The negative controls matter more than the positive one here. The guard's whole risk is that it
-# either fires on ordinary commands (and gets routed around) or fails to fire when it counts. The
-# substring-vs-token case below is not hypothetical: the first draft grepped for "gh pr merge" and
-# blocked `gh pr comment --body "run gh pr merge later"`.
-# ---------------------------------------------------------------------------------------------
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
     exit 0

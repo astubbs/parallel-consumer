@@ -11,10 +11,13 @@ interesting move is adopting one, not competing with it.
 
 ## What we have, and what it cost
 
-Seven hooks in `.claude/hooks/`, fifteen `bin/check-*.sh` gates, thirteen `bin/test-check-*.sh`
-self-tests, and the `docs/inflight/` tracker with its vocabulary, gate and session index. Almost none
-of it is parallel-consumer-specific: each hook mentions Kafka or this project at most once, in a
-comment. It was all written by hand, by agents, in this repo.
+Hooks in `.claude/hooks/` covering session start, pre-tool-use and prompt submission; a family of
+`bin/check-*.sh` gates, each paired one-to-one with a `bin/test-check-*.sh` self-test; and the
+`docs/inflight/` tracker with its vocabulary, gate and session index. Deliberately not counted - the
+totals change most weeks, and a number in a note is wrong the moment one lands.
+
+Almost none of it is parallel-consumer-specific: each hook mentions Kafka or this project at most
+once, in a comment. It was all written by hand, by agents, in this repo.
 
 ## What exists already (researched 2026-08-19)
 

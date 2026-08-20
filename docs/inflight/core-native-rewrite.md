@@ -1,7 +1,7 @@
-# Parked: native-core rewrite of the engine
+# A native-core rewrite of the engine
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: parked - deferred, gated on re-establishing a user base -->
+<!-- inflight-state: deferred - parked, gated on re-establishing a user base -->
 
 
 Rewriting the core engine as a native shared core (Rust or C, librdkafka-style) with per-language

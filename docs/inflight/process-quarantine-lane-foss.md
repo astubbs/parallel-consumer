@@ -1,7 +1,7 @@
-# Parked: extract the quarantine lane as its own FOSS project
+# Extract the quarantine lane as its own FOSS project
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: parked - deferred -->
+<!-- inflight-state: deferred - parked; decide together with process-adopt-external-harness.md -->
 
 
 The `@Quarantined` lane - annotation, enforced registry, owner-claim verification, non-gating CI job,
