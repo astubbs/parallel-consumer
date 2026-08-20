@@ -429,6 +429,20 @@ case "$def_block" in *"word at the FRONT"*) got=found ;; *) got=missing ;; esac
 assert "a state beginning 'deferred' is deferred" found "$got"
 case "$def_block" in *"word in the MIDDLE"*) got=found ;; *) got=missing ;; esac
 assert "a state with 'deferred' later is equally deferred" found "$got"
+
+# PARKED IS DEFERRED - the two words name one disposition, so a note using either must land in the
+# same section. Before this, `parked` alone matched neither is_open nor is_deferred and fell in with
+# closed and blocked under "not shown", which is how notes went missing on astubbs#323.
+printf '# Parked with no other keyword\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n<!-- inflight-state: parked - nobody has argued for it -->\n' > "$pos_tmp/docs/inflight/ci-parked.md"
+park_out=$(CLAUDE_PROJECT_DIR="$pos_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+park_def=$(awk '/^# Deferred/{f=1;next} f&&/^# /{exit} f' <<<"$park_out")
+case "$park_def" in *"Parked with no other keyword"*) got=deferred ;; *) got=stranded ;; esac
+assert "a bare 'parked' state is deferred" deferred "$got"
+
+# ...and its reason must survive. Anchoring the extractor to the word `deferred` printed an EMPTY
+# reason for every note that said `parked` instead, which is a note in the right section saying nothing.
+case "$park_def" in *"nobody has argued for it"*) got=reason_shown ;; *) got=reason_lost ;; esac
+assert "a parked note still shows its reason" reason_shown "$got"
 rm -rf "$pos_tmp"
 
 # A stated note leaves OPEN WORK but must still be NAMED. Counting was the previous contract and it
@@ -460,6 +474,341 @@ assert "a docs/ with no solutions exits 0" 0 "$?"
 assert "a docs/ with no solutions emits nothing" "" "$out_nosol"
 rm -rf "$empty_dir"
 
+# check-merge-outstanding-work.sh
+#
+# The negative controls matter more than the positive one here. The guard's whole risk is that it
+# either fires on ordinary commands (and gets routed around) or fails to fire when it counts. The
+# substring-vs-token case below is not hypothetical: the first draft grepped for "gh pr merge" and
+# blocked `gh pr comment --body "run gh pr merge later"`.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- check-merge-outstanding-work.sh ---"
+
+HOOK_UNDER_TEST="$HOOKS/check-merge-outstanding-work.sh"
+
+# Isolate every case from the caller's shell: an exported override there must not flip a DENY case.
+unset MERGE_DESPITE_OUTSTANDING_WORK
+
+# A session dir holding a task file written just now == background work in flight.
+ow_session="ow-selftest-$$"
+ow_tasks="/tmp/claude-$(id -u)/selftest/$ow_session/tasks"
+mkdir -p "$ow_tasks"
+printf 'still writing\n' > "$ow_tasks/agent-live.output"
+export CLAUDE_CODE_SESSION_ID="$ow_session"
+
+expect DENY  "a merge is refused while a task is still writing"            'gh pr merge 31 -R astubbs/parallel-consumer --rebase'
+expect DENY  "a merge later in a compound command is still seen"           'echo hi && gh pr merge 31 --squash'
+expect DENY  "a full-path gh is still a merge"                             '/usr/local/bin/gh pr merge 31 --rebase'
+expect ALLOW "a binary merely ENDING in gh is not gh"                      '/usr/local/bin/sleigh pr merge 31'
+
+# GLOBAL FLAGS BEFORE THE SUBCOMMAND. gh takes --repo/-R either side of `pr`, and only the trailing
+# form keeps `gh pr merge` adjacent - so a three-token check passes the leading form straight
+# through. It is the shape house style produces: AGENTS.md writes every prior-art command as
+# `gh issue list -R astubbs/parallel-consumer`, and this repo's `gh` resolves to the WRONG repo
+# without one, so an agent is actively encouraged to type it. Found babysitting astubbs#324; all
+# four spellings were silently allowed before the fix.
+expect DENY  "a -R before the subcommand is still a merge"                 'gh -R astubbs/parallel-consumer pr merge 31 --squash'
+expect DENY  "a --repo before the subcommand is still a merge"             'gh --repo astubbs/parallel-consumer pr merge 31'
+expect DENY  "an attached --repo=VALUE is still a merge"                   'gh --repo=astubbs/parallel-consumer pr merge 31'
+expect DENY  "an attached -RVALUE is still a merge"                        'gh -Rastubbs/parallel-consumer pr merge 31'
+expect ALLOW "a leading -R on a NON-merge subcommand still passes"         'gh -R astubbs/parallel-consumer pr view 31'
+expect ALLOW "a leading -R on an unrelated subcommand still passes"        'gh -R astubbs/parallel-consumer issue list'
+expect DENY  "a mid-position -R (between pr and merge) is still a merge"   'gh pr -R astubbs/parallel-consumer merge 31 --squash'
+expect ALLOW "a mid-position -R on a non-merge subcommand still passes"    'gh pr -R astubbs/parallel-consumer view 31'
+expect ALLOW "the words gh pr merge inside --body are not a merge"         'gh pr comment 5 --body "remember to run gh pr merge later"'
+# QUOTE-SPLIT SPELLINGS. shlex joins mer""ge / mer'ge' / mer\ge back into the token `merge`, so
+# the token scan sees a merge - but the cheap pre-filter used to test the RAW payload for the
+# substring `merge` and exited first, making the pre-filter the decider its own comment says it
+# must never be. Found by the astubbs#324 review; verified red before the quote-strip fix.
+expect DENY  "a quote-split merge (mer\"\"ge) is still a merge"            'gh pr mer""ge 31 --squash'
+expect DENY  "a single-quote-split merge is still a merge"                 "gh pr me'rge' 31 --squash"
+expect DENY  "a backslash-split merge is still a merge"                    'gh pr mer\ge 31 --squash'
+expect ALLOW "a non-merge gh command passes"                               'gh pr view 31'
+expect ALLOW "an unrelated command passes"                                 'git status'
+
+# THE DOCUMENTED OVERRIDE, delivered the only way an agent can deliver it: as an env-prefix on the
+# merge command, which reaches the hook as command TOKENS - a hook only ever sees the HARNESS's
+# process env. The first version of this suite asserted only the process-env form (kept at the
+# bottom as the human-wrapping-the-harness path), which hid that the in-session route was dead.
+expect ALLOW "env-prefix override on the command releases the guard"       'MERGE_DESPITE_OUTSTANDING_WORK=1 gh pr merge 31 --rebase'
+expect DENY  "an env-prefix set to 0 is not an override"                   'MERGE_DESPITE_OUTSTANDING_WORK=0 gh pr merge 31 --rebase'
+expect DENY  "the override token AFTER the command is not a prefix"        'gh pr merge 31 --body "MERGE_DESPITE_OUTSTANDING_WORK=1"'
+
+# THE PR'S OWN INFLIGHT NOTE, surfaced at merge. A note recording what is still open is written so
+# the items are not forgotten and is then read by nobody at the moment it could still change the
+# outcome. These cases prove the arm fires, quotes the right part, and stays out of the way otherwise.
+touch -d '@1000000000' "$ow_tasks/agent-live.output"   # nothing in flight, so only the note arm can fire
+mkdir -p docs/inflight
+cat > docs/inflight/pr-90001-selftest.md <<'NOTE'
+# astubbs#90001 - self-test fixture
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+## Open
+- SELFTEST_OPEN_ITEM
+## Already fixed
+- SELFTEST_RESOLVED_ITEM
+NOTE
+expect DENY  "a PR with an open inflight note is stopped at merge"          'gh pr merge 90001 --squash'
+expect ALLOW "a PR with no inflight note is not stopped"                    'gh pr merge 90002 --squash'
+expect ALLOW "the documented override releases the note arm too"            'MERGE_DESPITE_OUTSTANDING_WORK=1 gh pr merge 90001 --squash'
+
+# The note arm must quote the OPEN section and stop at "Already fixed" - a note whose resolved
+# section has grown must not bury the two lines that still matter.
+note_out="$(printf '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 90001 --squash"}}' \
+    | CLAUDE_CODE_SESSION_ID="$ow_session" bash "$HOOK_UNDER_TEST" 2>/dev/null)"
+case "$note_out" in *SELFTEST_OPEN_ITEM*) got=quoted ;; *) got=missing ;; esac
+assert "the open item is quoted into the deny reason" quoted "$got"
+case "$note_out" in *SELFTEST_RESOLVED_ITEM*) got=leaked ;; *) got=stopped ;; esac
+assert "the Already-fixed section is NOT quoted" stopped "$got"
+rm -f docs/inflight/pr-90001-selftest.md
+
+# Stale task file == nothing in flight. Proves the window is load-bearing rather than "any file".
+touch -d '@1000000000' "$ow_tasks/agent-live.output"
+expect ALLOW "a task that stopped writing long ago does not block"         'gh pr merge 31 --rebase'
+
+# Fail-open paths. A guard that blocks on its own bug jams the tool call shut.
+printf 'still writing\n' > "$ow_tasks/agent-live.output"
+export CLAUDE_CODE_SESSION_ID=""
+expect ALLOW "no session id fails OPEN"                                    'gh pr merge 31 --rebase'
+export CLAUDE_CODE_SESSION_ID="$ow_session"
+# The payload must CONTAIN "merge", or the cheap pre-filter exits before python3 ever runs and
+# this case tests the pre-filter instead of the parser's except branch it names (astubbs#324
+# review: the original 'not json' payload never reached json.load).
+got=$(printf 'not json but merge' | "$HOOK_UNDER_TEST" 2>/dev/null); \
+    case "$got" in *'"deny"'*) got=DENY ;; *) got=ALLOW ;; esac
+assert "unparseable payload fails OPEN" ALLOW "$got"
+
+# The process-env form of the override is kept for a human whose own shell wraps the harness.
+got=$(printf '%s' '{"tool_input":{"command":"gh pr merge 31 --rebase"}}' \
+    | MERGE_DESPITE_OUTSTANDING_WORK=1 "$HOOK_UNDER_TEST" 2>/dev/null); \
+    case "$got" in *'"deny"'*) got=DENY ;; *) got=ALLOW ;; esac
+assert "the process-env override releases the guard" ALLOW "$got"
+
+rm -rf "/tmp/claude-$(id -u)/selftest/$ow_session"
+
+echo
+# The squash-subject section counts into `fails` (its harness predates `assert`); fold it in so a
+# failure there fails the script rather than printing FAIL and exiting 0.
+failures=$((failures + fails))
+# DEFERRED IS NOT CLOSED. A state beginning with `deferred` means decided-but-not-now: kept out of
+# open work, listed in its own section at the BOTTOM with its reason, and NOT rolled into the
+# "not shown" count - counting it there would tell you to delete work that was deliberately scheduled.
+def_tmp=$(mktemp -d)
+mkdir -p "$def_tmp/docs/inflight" "$def_tmp/docs/solutions/x"
+printf -- '---\ntitle: "s"\n---\n' > "$def_tmp/docs/solutions/x/s.md"
+printf '# An open bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n' > "$def_tmp/docs/inflight/bug-open.md"
+printf '# A deferred bug\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: misdirection -->\n<!-- inflight-state: deferred - after v6 -->\n' > "$def_tmp/docs/inflight/bug-deferred.md"
+printf '# A closed note\n\n<!-- inflight-type: task -->\n<!-- inflight-state: closed - will not do -->\n' > "$def_tmp/docs/inflight/task-closed.md"
+def_out=$(CLAUDE_PROJECT_DIR="$def_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+
+case "$(sed -n '/^# Open work/,/^# Deferred/p' <<<"$def_out")" in
+    *"A deferred bug"*) got=leaked ;; *) got=excluded ;;
+esac
+assert "a deferred note is kept out of open work" excluded "$got"
+case "$def_out" in *"# Deferred - decided, not now"*) got=has_section ;; *) got=no_section ;; esac
+assert "deferred work gets its own section" has_section "$got"
+case "$def_out" in *"_deferred - after v6_"*) got=reason_shown ;; *) got=reason_lost ;; esac
+assert "the deferral reason is shown, greppable by version" reason_shown "$got"
+# The not-shown section takes the CLOSED note and leaves the deferred one alone. This was a count
+# ("1 note(s) not shown") until astubbs#323's review found the count hiding two notes that matched
+# neither filter; the intent is unchanged - a deferred note must never be swept in with the abandoned
+# ones - but it is now checked by name, which is what makes a miscategorised note visible at all.
+# Bounded to its OWN section: "Not shown above" is emitted BEFORE "Deferred", so an open-ended range
+# swallows the deferred section and every deferred note reads as swept in.
+not_shown=$(awk '/^# Not shown above/{f=1;next} f&&/^# /{exit} f' <<<"$def_out")
+case "$not_shown" in *"A closed note"*) got=listed ;; *) got=missing ;; esac
+assert "the closed note is named in the not-shown section" listed "$got"
+case "$not_shown" in *"A deferred bug"*) got=swept_in ;; *) got=left_alone ;; esac
+assert "a deferred note is not swept into the not-shown section" left_alone "$got"
+d_at=$(grep -n '^# Deferred' <<<"$def_out" | head -1 | cut -d: -f1)
+o_at=$(grep -n '^# Open work' <<<"$def_out" | head -1 | cut -d: -f1)
+{ [ -n "$d_at" ] && [ -n "$o_at" ] && [ "$o_at" -lt "$d_at" ]; } && got=below || got=above
+assert "deferred is listed below open work" below "$got"
+rm -rf "$def_tmp"
+
+# INVOKED BY A RELATIVE PATH - the exact command the index prints for an agent to re-run. The script
+# cd's to the project root, so anything resolved from BASH_SOURCE afterwards silently resolves to
+# nothing and the whole index comes back empty.
+rel_out=$( cd "$REPO_ROOT" && bash .claude/hooks/inject-recorded-knowledge.sh 2>/dev/null )
+case "$rel_out" in *"# Open work"*) got=works ;; *) got=silently_empty ;; esac
+assert "the hook works when invoked by a relative path" works "$got"
+
+echo
+echo "--- remind-inflight-on-push.sh ---"
+
+# The PUSH-time complement to the merge guard. Informational (`additionalContext`), never a deny - a
+# hook that blocked pushes would be routed around within a day. `gh` is stubbed so the case does not
+# depend on a live PR, and the stub is first on PATH rather than mocked inside the hook.
+PUSH_HOOK="$HOOKS/remind-inflight-on-push.sh"
+
+# ITS OWN REPO, ON A REAL BRANCH. Both hooks resolve the PR from `git rev-parse --abbrev-ref HEAD`
+# and exit silently when that returns "HEAD" - correct behaviour, since a detached checkout has no
+# branch to look a PR up by. GitHub Actions checks PRs out DETACHED, so these cases passed on every
+# developer machine and failed only in CI, which is the worst possible place to learn it. Running
+# them inside a scratch repo on a named branch makes the ambient checkout irrelevant.
+push_repo="$(mktemp -d)"
+(
+  cd "$push_repo" || exit 1
+  git init -q .
+  git checkout -q -b selftest/push-fixture 2>/dev/null || git branch -q -m selftest/push-fixture
+  # An UNBORN branch reads as empty from `rev-parse --abbrev-ref HEAD`, which trips the same silent
+  # exit as a detached one - so the fixture needs a commit, not just a branch name.
+  : > .keep
+  git add .keep
+  git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "fixture"
+)
+cd "$push_repo" || exit 1
+push_stub="$(mktemp -d)"
+printf '#!/usr/bin/env bash\necho 90003\n' > "$push_stub/gh"
+chmod +x "$push_stub/gh"
+mkdir -p docs/inflight
+cat > docs/inflight/pr-90003-selftest.md <<'NOTE'
+# astubbs#90003 - self-test fixture
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+## Open
+- PUSH_OPEN_ITEM
+## Already fixed
+- PUSH_RESOLVED_ITEM
+NOTE
+
+push_fire() { # <command> -> stdout of the hook
+    rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+    printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
+        | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null
+}
+
+out="$(push_fire 'git push')"
+case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+assert "a push on a PR with an open note reminds" reminded "$got"
+
+# GLOBAL FLAGS THAT TAKE A VALUE. Dropping the flag but not its value left the value where the
+# subcommand should be, so `git -C <path> push` matched nothing and the hook was silently dead for
+# the form an agent uses most. Review of astubbs#324 found it; the session that wrote the hook had
+# been pushing with `git -C` all along and never saw a reminder.
+for form in 'git -C /some/path push' 'git -c user.name=x push' 'git --git-dir=/d push' 'git -C /p -c a=b push'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+    assert "reminds on: $form" reminded "$got"
+done
+
+# The negative controls matter as much: a hook that fires on any mention of the word is noise, and
+# noise is how a reminder gets ignored.
+out="$(push_fire 'git commit -m "push later"')"
+case "$out" in *PUSH_OPEN_ITEM*) got=fired ;; *) got=silent ;; esac
+assert "a commit MESSAGE mentioning push does not fire" silent "$got"
+case "$out" in *PUSH_RESOLVED_ITEM*) got=leaked ;; *) got=stopped ;; esac
+assert "the Already-fixed section is not quoted" stopped "$got"
+case "$out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "the push reminder never denies" advisory "$got"
+
+# TOKENS, NOT SUBSTRINGS - the rule the other two hooks state. A commit message mentioning a push,
+# and a non-git binary, must both stay silent.
+out="$(push_fire 'git commit -m "ready to push"')"
+[ -z "$out" ] && got=silent || got=fired
+assert "a commit message mentioning push does not fire" silent "$got"
+out="$(push_fire 'npm push')"
+[ -z "$out" ] && got=silent || got=fired
+assert "a non-git binary does not fire" silent "$got"
+
+# THROTTLED, or a push loop repeats the whole note and teaches the reader to skip it.
+printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" >/dev/null 2>&1
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null)"
+[ -z "$out" ] && got=throttled || got=repeated
+assert "an immediate second push is throttled" throttled "$got"
+
+rm -f docs/inflight/pr-90003-selftest.md
+rm -rf "$push_stub"
+rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+
+echo
+echo "--- check-history-rewrite.sh ---"
+
+# A force-push re-anchors every inline review comment and destroys the incremental diff a reviewer
+# works from. This guard exists because docs/merge-checklist.md already said "re-cut at the end" and
+# that did not prevent it happening twice in one session - once costing a reviewer their diff, once
+# starting a re-cut with three reviews mid-flight.
+HIST_HOOK="$HOOKS/check-history-rewrite.sh"
+# STUBBED `gh`, because the enriched refusal only renders when a PR is found - and "found" depends on
+# a branch, a PR and a network. Unstubbed, CI took the generic-refusal path and the quiet-PR case
+# below read as reads_as_safe while every developer machine passed. The stub answers a PR with zero
+# threads and zero running jobs, which is precisely the quiet PR that case exists to test.
+hist_stub="$(mktemp -d)"
+cat > "$hist_stub/gh" <<'GH'
+#!/usr/bin/env bash
+case "$*" in
+    *"pr list"*)  echo 90003 ;;
+    *"/comments"*) echo 0 ;;
+    *"run list"*) echo 0 ;;
+    *)            echo "" ;;
+esac
+GH
+chmod +x "$hist_stub/gh"
+hist() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" | PATH="$hist_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null; }
+hist_expect() { # <DENY|ALLOW> <desc> <command>
+    local out got
+    out="$(hist "$3")"
+    [ -n "$out" ] && got=DENY || got=ALLOW
+    assert "$2" "$1" "$got"
+}
+
+hist_expect DENY  "a force-push is refused"                      'git push --force origin main'
+hist_expect DENY  "short -f at end of command is refused"        'git push -f'
+hist_expect DENY  "--force-with-lease is still a rewrite"        'git push --force-with-lease origin main'
+hist_expect DENY  "a rebase is refused"                          'git rebase --onto master abc branchname'
+hist_expect DENY  "an amend is refused"                          'git commit --amend -m x'
+hist_expect DENY  "filter-branch is refused"                     'git filter-branch --tree-filter x'
+
+# Finishing a rebase already in progress is not starting one - blocking it would strand the tree
+# mid-operation, which is worse than the rewrite.
+hist_expect ALLOW "rebase --abort is not a rewrite"              'git rebase --abort'
+hist_expect ALLOW "rebase --continue is not a rewrite"           'git rebase --continue'
+hist_expect ALLOW "an ordinary push is untouched"                'git push origin main'
+hist_expect ALLOW "reset --hard to a remote ref is untouched"    'git reset --hard origin/main'
+
+# TOKENS, NOT SUBSTRINGS - prose about force-pushing must not fire, or the guard gets routed around.
+hist_expect ALLOW "a commit message mentioning rebase"           'git commit -m "notes on rebase and force-push"'
+hist_expect ALLOW "a gh comment mentioning force-push"           'gh pr comment 1 --body "we should force-push"'
+hist_expect ALLOW "a non-git -f flag"                            'grep -f patterns.txt file'
+
+# The override is delivered as an env PREFIX, which reaches a hook as command tokens - a hook only
+# ever sees the harness process env.
+hist_expect ALLOW "the documented override releases it"          'REWRITE_HISTORY_CONFIRMED=1 git push --force'
+hist_expect DENY  "an override set to 0 is not an override"      'REWRITE_HISTORY_CONFIRMED=0 git push --force'
+
+# EVERY OTHER WAY TO MOVE A REF. The first version caught four shapes and let seven through - a
+# guard that reaches only what you thought of is a documented bypass, so each is pinned here.
+hist_expect DENY  "reset backwards drops commits"                'git reset --hard HEAD~3'
+hist_expect DENY  "reset to a bare SHA drops commits"            'git reset --hard 1a2b3c4d'
+hist_expect DENY  "branch -f moves a ref"                        'git branch -f main abc1234'
+hist_expect DENY  "checkout -B with a start point moves a ref"   'git checkout -B main abc1234'
+hist_expect DENY  "switch -C with a start point moves a ref"     'git switch -C main abc1234'
+hist_expect DENY  "update-ref writes a branch directly"          'git update-ref refs/heads/main abc1234'
+hist_expect DENY  "deleting a remote branch"                     'git push origin --delete topic'
+hist_expect DENY  "the colon form of remote deletion"            'git push origin :topic'
+
+# Forward sync and ordinary branch creation are routine and must stay silent, or the guard becomes
+# noise and gets waved through.
+hist_expect ALLOW "reset --hard to a remote ref is a sync"       'git reset --hard origin/main'
+hist_expect ALLOW "reset --hard HEAD discards local edits only"  'git reset --hard HEAD'
+hist_expect ALLOW "checkout -B with no start point"              'git checkout -B tmp'
+hist_expect ALLOW "creating a branch"                            'git branch newbranch'
+
+# A QUIET PR MUST NOT READ AS SAFE. Zero threads and zero running jobs is what a reviewer part-way
+# through the diff looks like - the case that loses most from a rewrite - so the refusal has to say
+# that absence was measured rather than implying nothing is at risk.
+quiet_out="$(hist 'git push --force origin main')"
+case "$quiet_out" in
+    *"NOT evidence that a rewrite is safe"*|*"inline review comment"*|*"IN PROGRESS"*) got=states_the_risk ;;
+    *) got=reads_as_safe ;;
+esac
+assert "a PR with nothing outstanding still states the risk" states_the_risk "$got"
+
+# The deny must NAME what would be lost, not just refuse.
+hist_out="$(hist 'git push --force origin main')"
+case "$hist_out" in *"LAST step before a merge"*) got=explains ;; *) got=bare_refusal ;; esac
+assert "the refusal says when a rewrite IS allowed" explains "$got"
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
     exit 0
