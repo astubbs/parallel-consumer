@@ -213,7 +213,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - three hooks, and the file is **tracked**. `.gitignore` excludes
+**`.claude/settings.json`** - five hooks, and the file is **tracked**. `.gitignore` excludes
 `/.claude/*` by contents rather than excluding the directory, with a comment anticipating exactly
 this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
 grants stay in `settings.local.json`, still ignored.
@@ -232,6 +232,14 @@ grants stay in `settings.local.json`, still ignored.
   *`if` matches a PREFIX* above for the reasoning and the measured cost of removing it. Because it
   now sees every command, it only matches `gh` in **command position**, so `echo gh pr merge ...`
   is text rather than a merge.
+- `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
+  `.claude/hooks/check-merge-outstanding-work.sh`, which refuses a `gh pr merge` while this
+  session's background tasks are still writing output. A green PR is not a finished PR when a
+  subagent is mid-way through work that belongs in it; merged anyway, that work becomes a second
+  PR and the first one's description goes stale on master the moment it lands. The override
+  (prefix the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) and the stated limits - a
+  stalled agent writes nothing and is not detected; `bash -c` wrapping and REST-API merges are not
+  seen - are documented in the hook's own header.
 - `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
   `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
   "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to
@@ -241,7 +249,8 @@ grants stay in `settings.local.json`, still ignored.
 
 - `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
   every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
-  `docs/plans/`. About 70 lines, once per session, no bodies.
+  `docs/plans/`. Titles only, once per session, no bodies - the length tracks the corpus, so no
+  line count is promised here.
 
   It exists because the prior-art check in `AGENTS.md` is the one most often skipped, and skipping
   it is **invisible**: an agent that never learns a document exists cannot notice it is missing, so
@@ -261,7 +270,7 @@ The checklist itself is a plain doc, not embedded in the hook, so Codex and anyt
 hook injects the file's bytes with a one-line pointer, not a summary of them, because a summary is a
 second copy in the one place nobody would think to check for drift.
 
-**`bin/test-check-agent-hooks.sh`** - the negative control for all three hooks, feeding each one
+**`bin/test-check-agent-hooks.sh`** - the negative control for the hooks, feeding each one
 crafted payloads and asserting its verdict. It is what rule 3 below asks for, and the harness
 shipped its first version without it: a review then found six defects in one 25-line parser, four
 letting the exact mistake it was named after through and two hard-blocking legitimate merges. Every
