@@ -29,9 +29,12 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
  * <ol>
  *   <li>destroy the real shutdown failure, substituting a metrics error for the actual cause;</li>
  *   <li>skip the remaining teardown, so the meters it was cleaning up leak anyway;</li>
- *   <li>never reach {@code state = CLOSED} - stranding every caller that polls
- *   {@code isClosedOrFailed()}, which would then never become true. That is not a hypothetical
- *   caller: the chaos harness gates instance restarts on exactly that method.</li>
+ *   <li>never reach {@code state = CLOSED}. That does NOT strand a caller polling
+ *   {@code isClosedOrFailed()} - it also returns true once the control thread's future completes,
+ *   which an escape from the {@code finally} does, exceptionally. The harm is quieter: callers get a
+ *   premature true that means "the control thread finished, somehow", not "closed cleanly", and
+ *   nothing distinguishes them. The chaos harness gates instance restarts on exactly that method, so
+ *   it proceeds against a half-torn-down predecessor immediately rather than waiting.</li>
  * </ol>
  * Each is worse than the metrics problem that triggered it, and all three are silent.
  * <p>

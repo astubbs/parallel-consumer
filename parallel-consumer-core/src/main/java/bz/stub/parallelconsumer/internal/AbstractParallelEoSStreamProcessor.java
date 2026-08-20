@@ -837,9 +837,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // which is usually the USER'S - so this is third-party code running inside PC's close.
             // An exception thrown from a finally REPLACES the one already in flight, so an unguarded
             // failure here would destroy the real shutdown error, skip the remaining teardown, and
-            // leave state short of CLOSED - stranding every caller that polls isClosedOrFailed(),
-            // which never becomes true. A metrics problem must not be able to do any of that: it is
-            // reporting, and it cannot be allowed to break shutting down.
+            // leave state short of CLOSED. Note the last one does NOT strand a caller polling
+            // isClosedOrFailed(): that method also returns true once this thread's future completes,
+            // which an escape from here does - exceptionally. The harm is the opposite and quieter,
+            // a premature true meaning "the control thread finished, somehow" rather than "closed
+            // cleanly", which no caller can tell apart. A metrics problem must not be able to do any
+            // of that: it is reporting, and it cannot be allowed to break shutting down.
             try {
                 deregisterMeters();
             } catch (Exception e) {

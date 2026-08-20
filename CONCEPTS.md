@@ -59,6 +59,16 @@ work whose stamp no longer matches is stale — fetched under an assignment that
 revoked — and is discarded rather than completed or committed. This is what stops work still in
 flight across a rebalance from acting on a partition the instance no longer owns.
 
+**Revoke path**
+The work an instance performs while the group is taking partitions away from it. It runs inside the
+consumer's revocation callback, which the broker poller executes as part of its own fetch call — so
+everything done there is charged against the interval the group allows between fetches, and an
+instance that dwells too long is judged dead and evicted. That budget is why the revoke path commits
+opportunistically rather than waiting: it prefers to let uncommitted work be redelivered to the new
+owner over risking the member's membership. It is also where several of this project's hardest
+defects have clustered, because it is the one place where rebalance handling, committing, and
+in-flight work meet on a thread that must not block.
+
 **Back-pressure pause**
 The broker poller pausing its own subscription because the engine's internal buffers are full —
 self-imposed, invisible to the user, and expected to release itself once processing catches up.

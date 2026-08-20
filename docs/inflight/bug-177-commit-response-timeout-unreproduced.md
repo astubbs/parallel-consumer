@@ -45,7 +45,9 @@ So the candidate list is now three, all producing one trace:
 
 1. **Poller died** from an unhandled `RebalanceInProgressException` - astubbs#100, landed.
 2. **Poller wedged but alive** - uncharacterised, and still nobody's.
-3. **Poller died from a throwing metrics registry** - fixed on astubbs#29, and only reachable by a
+3. **Poller died from a throwing metrics registry** - found on astubbs#29 and landing on
+   astubbs#57, which owns `PCMetrics`; **neither has merged**, so master still carries the exposure.
+   Only reachable by a
    user who configured one.
 
 **The useful part is that candidate 3 is self-identifying from now on.** With astubbs#204's change,
