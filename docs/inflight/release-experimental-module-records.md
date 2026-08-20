@@ -24,7 +24,9 @@ here. Where each draft actually is:
   committed on the module-landing PR itself (astubbs#269, as `docs/features/staging/kafka-connect-experimental.yaml`).
 <!-- file-refs: N/A - the staging feature record is created by the module-landing PR astubbs#269, not this one -->
 
-Tracking: astubbs#255 for Streams, astubbs#240 for Connect.
+Tracking: astubbs#255 for Streams, astubbs#240 for Connect. What each workstream actually is,
+and where its branches are, is in [`branch-ks-streams-workstream.md`](branch-ks-streams-workstream.md)
+and [`branch-connect-on-pc-workstream.md`](branch-connect-on-pc-workstream.md).
 
 ## Delete when
 
