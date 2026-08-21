@@ -134,11 +134,12 @@ records that it governs the reading demo only. That reconciliation, not the code
 
 ## What is next, in order (2026-08-22)
 
-1. **The Java demo does not exit on the container path** -
-   [`bug-java-demo-hangs-on-exit.md`](bug-java-demo-hangs-on-exit.md). This blocks CI rather than
-   failing it: nothing in either harness wraps a run in a timeout, so a hang burns the job. The
-   native path exits cleanly on macOS, which does **not** clear CI, because CI is Linux and Linux's
-   native path carries the UDS arm too. Highest priority of anything here.
+1. **`close()` reports success and leaves non-daemon threads running** -
+   [`bug-engine-close-leaves-non-daemon-threads.md`](bug-engine-close-leaves-non-daemon-threads.md).
+   Surfaced as the Java demo hanging forever on the container path, but the defect is in
+   `parallel-consumer-core` and a user's application would hang the same way. It blocks CI rather
+   than failing it: nothing in either harness wraps a run in a timeout, so a hang burns the job.
+   Highest priority of anything here.
 2. **Run the conformance harness across more than two languages.** Its patterns were repaired and
    verified against real output from two languages, but the drift check still has not proved
    anything at the width it exists for. This is the first thing the merged branch makes possible.
