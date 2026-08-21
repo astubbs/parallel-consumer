@@ -91,13 +91,57 @@ public class Bench {
         } else if ("core".equals(mode)) {
             ms = runCore(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         } else {
-            startStub(delayMs, concurrency * 2);
+            if (System.getenv("BENCH_ASYNC_STUB") != null) {
+                startAsyncStub(delayMs);
+            } else {
+                startStub(delayMs, concurrency * 2);
+            }
             ms = runPc(bootstrap, topic, count, concurrency, bufferSize);
         }
         System.out.printf("RESULT %s %d %d %.1f peak=%d%n",
                 mode, count, ms, count * 1000.0 / ms, peakInFlight.get());
         if (stub != null) stub.stop();
+        if (asyncStubVertx != null) asyncStubVertx.close();
         System.exit(0);
+    }
+
+    /**
+     * An HTTP stub that holds NO THREAD for the duration of its delay.
+     * <p>
+     * The WireMock stub below is thread-per-request: its listener sleeps on a Jetty container thread,
+     * so serving N concurrent requests needs N sleeping platform threads - and platform threads stop
+     * scaling somewhere under 3,000 (bench/threads/ThreadCeiling.java). That makes it impossible to
+     * tell whether an engine reached its concurrency or the STUB refused to. Every Vert.x measurement
+     * taken against WireMock is capped by the harness, not by Parallel Consumer.
+     * <p>
+     * This one answers on a Vert.x timer: the response is registered to fire later and the event-loop
+     * thread returns immediately. A handful of threads serve any concurrency, so whatever ceiling is
+     * then observed belongs to the engine under test.
+     */
+    static io.vertx.core.Vertx asyncStubVertx;
+    static int asyncStubPort;
+
+    static void startAsyncStub(int delayMs) throws Exception {
+        asyncStubVertx = io.vertx.core.Vertx.vertx();
+        var latch = new java.util.concurrent.CountDownLatch(1);
+        asyncStubVertx.createHttpServer().requestHandler(req -> {
+            int now = inFlight.incrementAndGet();
+            peakInFlight.accumulateAndGet(now, Math::max);
+            if (delayMs <= 0) {
+                inFlight.decrementAndGet();
+                req.response().setStatusCode(200).end();
+            } else {
+                asyncStubVertx.setTimer(delayMs, id -> {
+                    inFlight.decrementAndGet();
+                    req.response().setStatusCode(200).end();
+                });
+            }
+        }).listen(0).onComplete(ar -> {
+            if (ar.succeeded()) asyncStubPort = ar.result().actualPort();
+            latch.countDown();
+        });
+        latch.await();
+        if (asyncStubPort == 0) throw new IllegalStateException("async stub failed to bind");
     }
 
     static void startStub(int delayMs, int threads) {
@@ -250,7 +294,8 @@ public class Bench {
         responses.set(0);
         long start = System.currentTimeMillis();
         pc.vertxHttpReqInfo(
-                record -> new VertxParallelEoSStreamProcessor.RequestInfo("localhost", stub.port(), "/", new HashMap<>()),
+                record -> new VertxParallelEoSStreamProcessor.RequestInfo("localhost",
+                        stub != null ? stub.port() : asyncStubPort, "/", new HashMap<>()),
                 onSend -> { },
                 onResponse -> responses.incrementAndGet());
         while (responses.get() < expected) sleep(25);
