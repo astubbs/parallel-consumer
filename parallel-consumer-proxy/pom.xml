@@ -76,6 +76,33 @@
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
+
+        <!-- What core's tests jar above REACHES FOR at runtime. Test scope is not transitive, so
+             depending on that jar brings the classes but none of what they need: BrokerIntegrationTest
+             starts a Testcontainers broker, and KafkaClientUtils#produceMessages builds its records
+             through PCModuleTestEnv, which needs MutableClock. Every one of these compiles fine when
+             absent and dies at runtime on NoClassDefFoundError - the same break that reached
+             VertxConcurrencyIT when the vertx module consumed this jar without them. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.threeten</groupId>
+            <artifactId>threeten-extra</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!--
             Declared explicitly rather than leaned on transitively: core's test-jar reaches for
             commons-lang3, and test scope is not transitive, so relying on core to supply it here
