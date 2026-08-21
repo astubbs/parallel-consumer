@@ -154,6 +154,15 @@
                         <fileset>
                             <directory>${project.basedir}/dist</directory>
                         </fileset>
+                        <!--
+                            The demo (demo/) is a SEPARATE npm package with its own tsconfig, so
+                            its output is its own directory rather than a subdirectory of the one
+                            above. Same reasoning throughout: its node_modules is not listed,
+                            because that is fetched dependencies and not build output.
+                        -->
+                        <fileset>
+                            <directory>${project.basedir}/demo/dist</directory>
+                        </fileset>
                     </filesets>
                 </configuration>
             </plugin>

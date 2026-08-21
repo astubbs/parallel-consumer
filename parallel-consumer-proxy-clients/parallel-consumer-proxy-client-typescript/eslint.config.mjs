@@ -25,7 +25,15 @@ export default tseslint.config(
     // Build output, dependencies, and protoc's own output. The generated stubs are the generator's
     // code, not this project's: linting them would either fail on style this project does not own
     // or be undone by the next `npm run proto`. They ARE type-checked - see tsconfig.json.
-    ignores: ["dist/**", "node_modules/**", "src/generated/**"],
+    // `demo/**` IS IGNORED HERE, AND IT COST A DELIBERATE CLIMB-DOWN TO GET THERE. The demo is a
+    // SEPARATE npm package with its own dependencies, so the typed rules can only see it when
+    // demo/node_modules exists - and the CI matrix row installs this package's dependencies only.
+    // Measured: with the demo's tsconfig in the project list below and its node_modules absent,
+    // `npx --no-install eslint .` reports 62 no-unsafe-* errors and exits 1. A lint that passes on
+    // a developer's machine and fails in CI is worse than one that does not run, and making it
+    // conditional on the directory existing would be a gate that silently disappears. The demo's
+    // own gate is `tsc` under the same strict settings, in demo/tsconfig.json.
+    ignores: ["dist/**", "demo/**", "node_modules/**", "src/generated/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

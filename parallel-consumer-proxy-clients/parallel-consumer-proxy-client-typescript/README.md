@@ -15,11 +15,25 @@ proxy process running the Java engine, which this library speaks to over one gRP
 outcome with the token echoed verbatim, produce records back on success, shut down cleanly - proven
 end to end against the real test-mode sidecar. Not implemented, and **un-negotiated rather than
 half-built**: leases and heartbeats, the manifest reconnect, worker-death reporting, terminal
-outcomes, the `Shutdown` drain, the demo, and npm publishing. This client declares
+outcomes, the `Shutdown` drain, and npm publishing. This client declares
 `capabilities: ["dispatch"]`, so the proxy grants it nothing it does not perform.
 
 The plan is `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` (astubbs#242); what this wave
 learned is in `docs/inflight/clients/typescript.md`.
+
+## See it work
+
+```bash
+demo/run.sh
+```
+
+The same records through kafkajs one record at a time, and through this library over a sidecar,
+with the two throughput tables every language's demo prints. Needs Docker; Node and a JDK are
+optional, because it will run itself in a container when they are missing.
+[`demo/README.md`](demo/README.md) records what is specific to TypeScript - above all that the
+simulated work is an **awaited timer**, since a blocking sleep on a single event loop would stop
+the very concurrency the demo exists to show. The contract it keeps is
+[`parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md).
 
 ## The surface
 

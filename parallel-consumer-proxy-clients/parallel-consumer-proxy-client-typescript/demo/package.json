@@ -1,0 +1,24 @@
+{
+  "name": "@parallel-consumer/proxy-client-demo",
+  "version": "0.6.0-0",
+  "private": true,
+  "description": "The TypeScript demo for Parallel Consumer's language proxy: the same records through kafkajs one at a time, and through this repository's TypeScript client library over a sidecar. JSON allows no comments, so: this is a SEPARATE package from the client library beside it on purpose - the demo is an application that depends on the library, and kafkajs is the demo's dependency and never the library's, because the whole point of the sidecar arm is that a foreign application needs no Kafka client at all. It reaches the library through `file:..`, which npm resolves to a symlink, so the demo consumes the built dist/ a user would install rather than the sources. Entry point is demo/run.sh, never `node` by hand. Copyright (C) 2026 Antony Stubbs and contributors.",
+  "license": "Apache-2.0",
+  "author": "Antony Stubbs and contributors",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "compile": "tsc --build",
+    "check": "tsc --build",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@parallel-consumer/proxy-client": "file:..",
+    "kafkajs": "2.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "5.9.3"
+  }
+}
