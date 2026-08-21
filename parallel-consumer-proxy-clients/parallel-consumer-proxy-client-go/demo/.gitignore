@@ -1,0 +1,6 @@
+# `go build ./...` in the PARENT module writes nothing, because it matches several packages and the
+# toolchain then compiles as a check and discards the objects - the module's pom says so at length.
+# THIS directory is one `main` package, so the same command DOES write a binary here, named after
+# the directory. run.sh and the Dockerfile both use `go build -o` and put theirs in target/; this
+# catches the one a developer produces by hand.
+/demo

@@ -143,11 +143,19 @@
                 repo forbids, not the one it wants. `go vet` and `go tool staticcheck` are the same
                 story.
 
-                THE ONE BUILT ARTEFACT IS ALREADY COVERED. The shared conformance suite prebuilds
+                THE BUILT ARTEFACTS ARE ALREADY COVERED, because every one of them lands in target/.
+                The shared conformance suite prebuilds
                 `go build -o target/conformance-runner ./cmd/conformance-runner` - grep
-                `target/conformance-runner` in the conformance module's LanguageRunners - and Maven's
-                default clean takes target/ whole, no configuration needed. Proven both ways: the
-                binary is there after the suite's prebuild and gone after `mvn clean`.
+                `target/conformance-runner` in the conformance module's LanguageRunners - and the
+                demo's run.sh writes `target/pc-go-demo` and `target/demo-sidecar-classpath.txt`.
+                Maven's default clean takes target/ whole, no configuration needed. Proven both ways:
+                the conformance binary is there after the suite's prebuild and gone after
+                `mvn clean`.
+
+                THE DEMO IS A NESTED GO MODULE (demo/go.mod), so `go build ./...` above does not
+                descend into it and this module's Maven build never compiles it - demo/run.sh and
+                demo/Dockerfile do. demo/README.md says why the module is nested: franz-go must not
+                reach an application that uses the client library.
 
                 gen/ IS SOURCE, NOT OUTPUT. The protobuf stubs under gen/ are committed on purpose,
                 because Go has no codegen step at `go get` time - scripts/generate-proto.sh says so
