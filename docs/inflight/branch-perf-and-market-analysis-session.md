@@ -43,8 +43,32 @@ below came from.
 | `perf/direct-pull-measured` | Finished the blocking wait the 2022 branch left commented out. **3.2x at 10 workers** (26,869 to 86,179 msg/s) and **-95% at 5,000** | **yes** |
 | `test/direct-pull-coverage` | The tests that should have been written before direct pull was merged, not after | **yes** |
 | `feats/virtual-threads` | `ExecutionMode` option and the pool-queue gate that blocked virtual threads. **1.8x at 100ms/5,000 and 3.0x at 2ms/5,000** | **yes**, `cb657b07b` |
-| `test/bench-all-engine-arms` | Reactor, Mutiny and `ProxyProcessor` arms. Every cross-engine claim previously rested on Vert.x plus an assumption | **not yet** - two commits, unpushed |
-| `fix/reactor-empty-publisher-stall` | Dispatched 2026-08-22 to fix the defect the arms branch found (below) | in flight |
+| `test/bench-all-engine-arms` | Reactor, Mutiny and `ProxyProcessor` arms. Every cross-engine claim previously rested on Vert.x plus an assumption | **not yet** |
+| `fix/reactor-empty-publisher-stall` | The defect the arms branch found. **Cut from `master`, so it is independently mergeable** | **yes**, and it has its own PR |
+
+## Independent fixes get their own branch off master, and their own PR
+
+**Antony's rule, 2026-08-22.** A fix that stands on its own and applies to `master` is cut **from
+`master`** and then **merged into** the active work - never developed on top of it. It keeps the fix
+isolatable, so it can land on `master` long before the large research branch it happened to be found
+during.
+
+**And it earns its own PR, which is the exception to "PRs are expensive."** The asymmetry is the
+argument: a complex PR may not merge for a long time, while *every* open PR and `master` benefit from
+the independent fix the moment it lands. Folding it into the big PR makes the big PR's merge date the
+fix's merge date, for everyone.
+
+**Expect the merge back into the trunk to drag in whatever `master` has moved on by, and expect
+conflicts where `master` and the trunk touched the same methods. That cost is the point, not a reason
+to cherry-pick** - cherry-picking looks cleaner and destroys the property being bought. Merging
+`fix/reactor-empty-publisher-stall` produced four semantic conflicts, none of them caused by the
+reactor change itself; see commit `416ee19f6` for what each one was and how it was resolved.
+
+| Branch, cut from `master` | PR | What it is |
+|---|---|---|
+| `fix/reactor-empty-publisher-stall` | astubbs#329 | `ReactorProcessor` completed a record on its first emitted item rather than the terminal signal, so an empty publisher stalled the consumer silently |
+| `docs/release-note-trailer-convention` | astubbs#330 | The `Release-Note:` commit trailer. It existed only on this trunk, so it was invisible to any branch cut from `master` - which is exactly how astubbs#329's author came to look for it, find nothing, and correctly decline to invent it |
+| `fix/close-shuts-down-worker-pool` | - | In flight. `innerDoClose` shuts the worker pool down outside any `finally`, so a close whose drain throws leaks non-daemon threads for the life of the JVM |
 
 ## The open regression the merge produced
 
