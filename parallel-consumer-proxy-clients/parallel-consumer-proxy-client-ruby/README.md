@@ -25,8 +25,9 @@ reconnect, worker-death reporting, terminal outcomes and RubyGems packaging are 
 demo/run.sh          # needs Docker; Ruby and a JDK are optional
 ```
 
-The same records through Ruby's own Kafka client and through this library over a sidecar, with the
-throughput of each. [`demo/README.md`](demo/README.md) is its own documentation; the contract it
+The same records through Ruby's own Kafka client (`rdkafka`) and through this library over a
+sidecar, reporting each arm's throughput along with the records it processed and the distinct keys
+it saw. [`demo/README.md`](demo/README.md) is its own documentation; the contract it
 keeps, which every language's demo keeps, is
 [`parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md).
 
