@@ -90,8 +90,17 @@ so a session negotiates nothing else and the proxy sends nothing else.
 
 Not implemented, and not silently half-implemented - the capability is simply not declared:
 heartbeats and the liveness lease, the `Manifest` reconnect and `Drop`, `WorkerDied`, `Terminal`
-outcomes, the proxy-initiated `Shutdown` drain and the `Released` outcome. Also absent: the demo
-and its container, packaging, and the rest of the conformance suite.
+outcomes, the proxy-initiated `Shutdown` drain and the `Released` outcome. Also absent: packaging,
+and the rest of the conformance suite.
+
+**The demo has landed** - [`demo/`](demo/), with its container. It is the one artefact here that a
+reader runs rather than reads, and it drives *this* library over a real sidecar against a real
+broker, alongside an arm using Go's own Kafka client for comparison:
+
+```bash
+demo/run.sh              # native or container, whichever this machine can do
+cd demo && docker compose up   # the plain container path, nothing else needed
+```
 
 The current findings, including the ones the frozen documents could not answer, are in
 [`docs/inflight/clients/go.md`](../../docs/inflight/clients/go.md).
