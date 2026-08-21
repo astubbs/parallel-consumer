@@ -19,14 +19,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -54,88 +49,6 @@ class SidecarLifecycleIT extends BrokerIntegrationTest<byte[], byte[]> {
 
     private static final Duration STARTUP_BUDGET = Duration.ofSeconds(60);
 
-    private final List<Process> spawned = new ArrayList<>();
-
-    /**
-     * Spawns the sidecar the way a client library must: directly, with no shell between, so the pipe this
-     * process holds is the one the sidecar watches.
-     */
-    private Sidecar spawnSidecar() throws IOException {
-        var java = Paths.get(System.getProperty("java.home"), "bin", "java").toString();
-        var process = new ProcessBuilder(java, "-cp", System.getProperty("java.class.path"),
-                Main.class.getName())
-                .redirectErrorStream(false)
-                .start();
-        spawned.add(process);
-        pumpStderr(process);
-
-        var stdout = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-        long deadline = System.nanoTime() + STARTUP_BUDGET.toNanos();
-        while (System.nanoTime() < deadline) {
-            var line = stdout.readLine();
-            if (line == null) {
-                throw new IllegalStateException("the sidecar exited before announcing a port");
-            }
-            if (line.startsWith(Main.PORT_LINE_PREFIX)) {
-                int port = Integer.parseInt(line.substring(Main.PORT_LINE_PREFIX.length()).trim());
-                log.info("Sidecar pid {} announced port {}", process.pid(), port);
-                // Keep draining what follows. Abandoning the reader here fills the pipe and the child
-                // BLOCKS on its next write - a sidecar that merely logs enough would hang the test, and
-                // it would look like the lifecycle failing rather than the fixture starving it.
-                pump(process, stdout, "stdout");
-                return new Sidecar(process, port);
-            }
-        }
-        throw new IllegalStateException("no port line within " + STARTUP_BUDGET);
-    }
-
-    /**
-     * Forwards the child's output into this test's log. Two reasons, and the second is not optional: a
-     * failing IT would otherwise report only that the sidecar exited while the reason - a bind failure, a
-     * refused Configure, a stack trace - died inside a pipe nobody read; and an undrained pipe eventually
-     * fills, at which point the child blocks on write and the fixture starves the thing it is testing.
-     * Daemon threads, so a stuck child cannot hold the JVM open.
-     */
-    private static void pumpStderr(Process process) {
-        pump(process, new BufferedReader(
-                new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8)), "stderr");
-    }
-
-    private static void pump(Process process, BufferedReader reader, String which) {
-        var thread = new Thread(() -> {
-            try (reader) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    log.info("[sidecar pid {} {}] {}", process.pid(), which, line);
-                }
-            } catch (IOException closed) {
-                // the child went away; nothing left to forward
-            }
-        }, "sidecar-" + which + "-" + process.pid());
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    private static final class Sidecar implements AutoCloseable {
-        final Process process;
-        final int port;
-
-        Sidecar(Process process, int port) {
-            this.process = process;
-            this.port = port;
-        }
-
-        /** The parent dying, for real: closing our end of its stdin is what the kernel does on process death. */
-        void killTheParentSide() throws IOException {
-            process.getOutputStream().close();
-        }
-
-        @Override
-        public void close() {
-            process.destroyForcibly();
-        }
-    }
-
     /**
      * The whole spawning contract end to end: a real process binds a real port, accepts a real gRPC session,
      * builds real Kafka clients from the properties that travelled the wire, and dispatches a record that was
@@ -147,8 +60,8 @@ class SidecarLifecycleIT extends BrokerIntegrationTest<byte[], byte[]> {
         String topic = setupTopic("sidecar-lifecycle");
         getKcu().produceMessages(topic, 1);
 
-        try (var sidecar = spawnSidecar()) {
-            var channel = ManagedChannelBuilder.forAddress("127.0.0.1", sidecar.port).usePlaintext().build();
+        try (var sidecar = SidecarProcess.spawn()) {
+            var channel = ManagedChannelBuilder.forAddress("127.0.0.1", sidecar.port()).usePlaintext().build();
             try {
                 var responses = new LinkedBlockingQueue<ProxyMessage>();
                 var streamError = new AtomicReference<Throwable>();
@@ -181,8 +94,8 @@ class SidecarLifecycleIT extends BrokerIntegrationTest<byte[], byte[]> {
 
                 sidecar.killTheParentSide();
                 assertWithMessage("the sidecar outlived the parent that spawned it")
-                        .that(sidecar.process.waitFor(60, TimeUnit.SECONDS)).isTrue();
-                assertThat(sidecar.process.exitValue()).isEqualTo(0);
+                        .that(sidecar.process().waitFor(60, TimeUnit.SECONDS)).isTrue();
+                assertThat(sidecar.process().exitValue()).isEqualTo(0);
             } finally {
                 channel.shutdownNow();
             }
@@ -195,13 +108,13 @@ class SidecarLifecycleIT extends BrokerIntegrationTest<byte[], byte[]> {
     @Test
     @Timeout(value = 5, unit = TimeUnit.MINUTES)
     void twoSpawnedSidecarsBindDifferentPorts() throws Exception {
-        try (var first = spawnSidecar(); var second = spawnSidecar()) {
-            assertThat(first.port).isNotEqualTo(second.port);
+        try (var first = SidecarProcess.spawn(); var second = SidecarProcess.spawn()) {
+            assertThat(first.port()).isNotEqualTo(second.port());
 
             first.killTheParentSide();
             second.killTheParentSide();
-            assertThat(first.process.waitFor(60, TimeUnit.SECONDS)).isTrue();
-            assertThat(second.process.waitFor(60, TimeUnit.SECONDS)).isTrue();
+            assertThat(first.process().waitFor(60, TimeUnit.SECONDS)).isTrue();
+            assertThat(second.process().waitFor(60, TimeUnit.SECONDS)).isTrue();
         }
     }
 
