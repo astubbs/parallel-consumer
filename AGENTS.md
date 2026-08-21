@@ -85,6 +85,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 | [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+| [`parallel-consumer-proxy-clients/AGENTS.md`](parallel-consumer-proxy-clients/AGENTS.md) | Changing a client or its demo - the two test suites over them, which one your feature needs, and why neither substitutes for the other |
 
 **A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
 there, not after review catches you.** The table above routes the ones that exist today; `find . -name
