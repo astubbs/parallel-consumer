@@ -87,6 +87,35 @@ and a losing claim skips. The check costs one comparison that is never true.
 remains its own question - see
 [`next-direct-pull-unordered-selection.md`](next-direct-pull-unordered-selection.md).
 
+## 5. Work that is queued, and what each is waiting for
+
+**Three of these are blocked on the same thing: a quiet machine.** That constraint has been worked
+around all day rather than named, and it is worth naming because parallel agents generate most of the
+load themselves - so running them concurrently has been buying less than it appears.
+
+| Item | Blocked on | Why it matters |
+|---|---|---|
+| **Bisect the `UNORDERED` regression** (item 1) | a quiet machine | Conservation and direct pull landed separately; either could be responsible, or the busy-shard count may remove the cause |
+| **Cover the three redelivery paths** (item 2) | nothing - do this next | Retry, abandonment, stale sweep. A record that fails, retries, then is abandoned mid-flight crosses all three |
+| **Fix `innerDoClose`'s missing `finally`** (item 3) | nothing - smallest fix on the list | Non-daemon threads hold the JVM open after a failed close |
+| **Implement the busy-shard count** (item 4) | item 2 landing first | May resolve item 1 as a side effect |
+| **Measure Reactor / Mutiny / ProxyProcessor** | the arms being wired, then a quiet machine | **Every cross-engine claim currently rests on Vert.x plus an assumption that `ExternalEngine` makes the family behave alike** |
+| **Re-take the direct-pull crossover** | a quiet machine | The 3.2x at ten workers and the collapse at five thousand were measured at load 7-860 |
+| **Virtual threads** (astubbs#51) | in progress | The one change proven to lift the platform-thread ceiling |
+| **A CI matrix axis over execution modes** | the JDK 21 lane existing | [`test-opt-in-engine-paths-are-unexercised.md`](test-opt-in-engine-paths-are-unexercised.md) - direct pull is exercised by nothing |
+
+## 6. Not performance, and not to be lost behind it
+
+| Item | Note |
+|---|---|
+| **The landing page's visual identity** | Content, evidence discipline and both animations are sound; palette and type landed on the most recognisable generated look there is. Two token blocks - [`next-landing-page.md`](next-landing-page.md) |
+| **Three sections blocked on evidence** | A Kafka version support matrix that does not exist, the key-distribution sweep, and a public defect record. Same note |
+| **The key-distribution axis** | Every published number uses all-distinct keys, which is a best case for any key-sharded design - [`next-performance-regression-testing.md`](next-performance-regression-testing.md) |
+| **The engine comparison in the docs** | Needs the EoS axis, not just throughput, or it steers users off the only engine that supports it - [`next-docs-publish-the-engine-comparison.md`](next-docs-publish-the-engine-comparison.md) |
+| **`ThreadCeiling` on Linux** | Forty lines, no broker, no dependencies. Until it runs, every ceiling figure here is one operating system's - [`next-benchmark-a-model-of-work-not-work.md`](next-benchmark-a-model-of-work-not-work.md) |
+| **Read astubbs#260's reasoning** | It corrected one shutdown-commit assertion; a sibling test makes a similar one and nobody checked. Five minutes, may close two flake entries |
+| **The `ExternalEngine` regression** | Reclassified: it is a tax on the one engine family that is not thread-bound, and its true size is unknown because every measurement went through the capped stub |
+
 ## Operational: take toolchains locally, never globally
 
 A subagent switched sdkman's global `current` symlink from JDK 17 to 21 and **broke the build in an
