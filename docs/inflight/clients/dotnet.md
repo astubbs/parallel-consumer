@@ -11,8 +11,12 @@ report, and a clean client-initiated shutdown, proven by one end-to-end test aga
 sidecar. The module is at
 `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/`; its maturity and
 testing-evidence deferrals are lifted. Later waves: leases and heartbeats, the manifest reconnect,
-worker death, terminal outcomes, the shutdown drain, the demo and its container, NuGet packaging,
-and the rest of the conformance suite.
+worker death, terminal outcomes, the shutdown drain, NuGet packaging, and the rest of the
+conformance suite.
+
+**The demo has landed** at `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/demo/`
+- two arms, both entry points, container included. What it found, what it diverges on, and what it
+left open are in [The demo](#the-demo) below.
 
 ## The falsification result
 
@@ -149,6 +153,79 @@ Formatting is checked by `dotnet format`, correctness by the build.
 **The CI row runs the `analyzers` subset** (`dotnet format analyzers --verify-no-changes`), which is
 green here. `dotnet format --verify-no-changes` - whitespace, style and analyzers together - is
 green too, and is the stricter command a local check should use.
+
+## The demo
+
+`demo/run.sh` in this module, mirroring the contract in `parallel-consumer-proxy/demo/README.md`:
+the same flags and defaults, the same `PC_DEMO_*` variables with the same precedence, the
+fingerprint first and without the bootstrap address, the same two tables, no latency anywhere. Two
+arms - `AK core` (`Confluent.Kafka`, serial) and `dotnet-grpc` (this module's client library over a
+sidecar it spawns). The demo project joined the module's one solution, so the ordinary
+`dotnet build` and the clients CI row keep it compiling under the same analyzers-as-errors lint as
+the library.
+
+### The divergence: an awaited timer, not a blocking sleep
+
+The contract lists C# among the languages where a blocking sleep is fine, and names Python and
+TypeScript as the exceptions. **For this client that list is wrong, and the demo diverges.** The
+library's executors are `Task`s on the thread pool, so `Thread.Sleep` in the user's function
+occupies a pool thread; at the contract's default `--concurrency 100` the pool would be injecting
+replacement threads at roughly one a second and the sidecar arm would report the injection rate
+rather than the engine's throughput. Both arms use `await Task.Delay(...)`, because the serial arm
+is the denominator of every ratio and must not differ from its numerator by the wait primitive as
+well as by the transport.
+
+**Recorded rather than edited into the contract**, as instructed. The contract's own reasoning
+already covers this case - it exempts Python for worker *processes* and TypeScript for a single
+event loop - so the rule it should state is about the client's concurrency *shape*, not the
+language's name: any client whose executors are pooled tasks needs the non-occupying wait. Kotlin
+(coroutines) and Swift (structured concurrency) are the likely neighbours of this, and both are
+currently on the blocking-sleep list.
+
+### Two findings against the product, both from running it
+
+- **The sidecar's own log is unreachable from the client, in every language.** The proxy's `Main`
+  prints `port: <n>` on stdout and that channel belongs to the client library, which drains and
+  discards everything else on it. `logback-classic` is on the sidecar's runtime classpath with no
+  configuration file anywhere in `parallel-consumer-proxy/src/main`, so its default
+  `ConsoleAppender` writes to **stdout** - into the channel that is discarded. `ClientOptions`
+  offers `SidecarErrorLog`, and it carries stderr, which is empty. Measured: a failing sidecar arm
+  with `PC_DEMO_SIDECAR_LOG` set produced not one line. Either the sidecar should log to stderr, or
+  the lifecycle channel's non-port lines should be offered to the client; today a sidecar that
+  refuses a session can only be debugged by rebuilding it.
+- **R48's reason-free rejection is correct and still costs an hour.** `Configure` failed with
+  "constructing the session's Kafka clients and engine failed with
+  `org.apache.kafka.common.KafkaException`" and nothing else, deliberately, because a Kafka
+  `ConfigException` embeds property values and those may be credentials. The actual cause was the
+  bootstrap address (below). **Naming the offending property KEY without its value would have
+  settled it immediately** and gives nothing away - the keys are the client's own and travel in
+  `Configure`; it is the values R48 protects. Worth putting to the protocol documents.
+
+### The trap the next .NET reader will hit
+
+Testcontainers for .NET returns its address as a URI: measured here,
+`plaintext://127.0.0.1:62347/` - lower-cased scheme and **trailing slash**. librdkafka accepts that
+string verbatim, so the AK core arm worked with it untouched; the Java client behind the sidecar
+rejects it, and the trailing slash survives naive scheme-stripping. `DemoBroker.NormaliseBootstrap`
+reduces each comma-separated entry to `host:port`. Two clients, two parsers, one address that
+travels between them - the same shape will bite any language whose Kafka client is librdkafka-based
+(Python, Ruby, C++, Go's confluent-kafka-go) if it starts its broker with that language's
+Testcontainers.
+
+### What is open
+
+- **No CI runs this demo.** `bin/ci-demo-test.sh` drives the Java demo through both entry points and
+  is Java-only; extending it - or adding a sibling - was out of this session's ownership
+  (`bin/**` was off limits). Until then the .NET demo has exactly the untested entry points that
+  script exists to prevent, and the contract says both entry points being tested is part of it.
+- **No default-scale run has ever happened.** Every run was at `--records 20`, chosen to prove the
+  machinery on a machine running ten agents at once. At that volume both arms are dominated by
+  consumer-group join time and the ratios in the tables are meaningless; nothing in this branch
+  should be read as a measurement. A run at the contract's defaults on an unloaded machine is
+  outstanding.
+- **`shared/JvmToolchain.cs` is compiled into two projects by `Compile Include` link** - the test
+  harness and the demo both have to find a JVM, and neither is a library anyone references. If a
+  third consumer appears, that is the moment to reconsider an assembly.
 
 ## Plan defects (same as Go's, restated because they are still open)
 
