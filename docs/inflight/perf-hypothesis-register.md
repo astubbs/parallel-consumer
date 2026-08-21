@@ -63,6 +63,28 @@ gun and were normal operation.
 takes a lock and parks immediately. At maxConcurrency 1,000 on twelve cores - **about eighty threads per
 core** - spinning burns exactly the cores the working threads need. Removing the lock cost 69%.
 
+## Session decisions - what was settled, by whom, and on what basis
+
+| Decision | Basis |
+|---|---|
+| **The ceiling is stated as a law, not a thread count** - `min(maxConcurrency, r x handler_latency)`, `r ~ 20-27k activations/sec` | 400ms held 5,000 threads in sleep, so no count limit exists. Quoting "2,500 threads" would mislead; the useful figure is **~25k records/sec per instance for thread-per-record work, whatever the handler duration** |
+| **Block exactly-once on any future-returning API, if need be** - *owner* | Takes the sharpest constraint off the critical path. The restriction lands on the new entry point only; the classic `poll` keeps EoS because its future completes inline before the commit path runs |
+| **Direct pull is a measurement, not a merge candidate** | And it was merged anyway - see the correction below |
+| **The mechanism behind the ceiling is recorded as OPEN, not solved** | Every candidate tested is out. Further attribution needs kernel tooling, and the fix does not depend on the cause |
+| **Opt-in execution paths get a CI matrix axis, not per-path test suites** | They are meant to be behaviourally *equivalent*; what needs asserting is agreement with the default, which is the existing suite run again |
+
+## Process corrections, recorded because each cost real time
+
+| What went wrong | The rule it produced |
+|---|---|
+| Compared a 100k-record run against a 500k one and published a 21% finding | **Fix every axis the harness sweeps, not just the one under test** |
+| Drew three conclusions from single runs at a point with 21% spread | **A single run is not a measurement at a noisy operating point** |
+| Repeated "1/3 as fast" and "mostly dead-ends" three times without opening the file | **Read the code before repeating a verdict on it.** A recorded outcome with no recorded cause is not prior art |
+| Found astubbs#155 by title and never read the body | The body said the stall was fixed years ago and named a **different**, unreported bug |
+| Read a profile's top frames and inferred the rest; `jfr print` truncates to 5 frames by default | **31,000 parks is not evidence of a problem** - a park is where a thread *waits* |
+| Briefed direct pull as "a measurement, not production code", then merged the production code | **Either it is a measurement and does not merge, or it is code and needs tests first.** ~500 lines of engine went in with none |
+| Resolved a merge conflict by concatenating both sides, dropping a brace | **Diff the resolution against *each* parent** - the compiler blamed an unrelated file |
+
 ## Verdicts withdrawn on inspection
 
 | Claim | Why it fell |
