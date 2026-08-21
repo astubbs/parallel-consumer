@@ -1,0 +1,99 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# THE ONE-COMMAND PATH for the Swift demo (astubbs#242, plan unit U35, R20).
+#
+# THE BROKER IS A SIBLING, AND THAT IS A RULE RATHER THAN A LAYOUT CHOICE. A demo container is never
+# granted the host Docker socket - a documented socket mount is root-equivalent host access taught
+# as the normal way to run the product - so broker mode inside a container reaches a compose sibling
+# on the demo's own network, and the demo container is given an address instead of a socket. The
+# Java seed can also start its own broker with Testcontainers on its native path; Swift has no
+# native path here, because there is no Swift toolchain on a developer box, so this file is the only
+# broker the demo ever meets.
+#
+# THE SIDECAR IS NOT A SERVICE HERE, deliberately. It would be easy to add one and it would teach
+# the wrong thing: KTD41's product model is that the client library spawns and supervises the
+# sidecar itself, so the user never installs, deploys or operates a process. A compose service would
+# show a deployment the product does not ask for. The demo spawns it as a child process inside its
+# own container - /opt/parallel-consumer/sidecar, put there by demo/Dockerfile.
+#
+# TWO WAYS IN, AND BOTH ARE SUPPORTED:
+#
+#   cd <this directory> && docker compose up      # the plain one, defaults, nothing else needed
+#   demo/run.sh [--records N ...]                 # the same thing with the demo's flags
+#
+# `docker compose up` on its own is the path to keep working: it is what a reader who has never seen
+# this repository will type. Add --build after changing any source, and `docker compose down` to
+# remove the broker afterwards. The demo container exits when the run finishes; the broker keeps
+# running until you stop it. run.sh passes --abort-on-container-exit --exit-code-from demo so a
+# scripted run stops on its own and reports the demo's exit code rather than compose's.
+
+name: pc-swift-demo
+
+services:
+  broker:
+    # Pinned as a literal because a compose file cannot derive anything. It must track
+    # <kafka.version> in the root pom - the mapping is CP major = AK major + 4, so AK 3.9.x means
+    # CP 7.9 - exactly as the Java demo's compose file does.
+    image: confluentinc/cp-kafka:7.9.0
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Bound to the service name, not 0.0.0.0: this image formats its KRaft storage with the same
+      # config it boots with, and the format step refuses a non-routable advertised address.
+      KAFKA_LISTENERS: PLAINTEXT://broker:9092,CONTROLLER://broker:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # The demo forms one consumer group per arm, one after another, and the default three-second
+      # settling delay would be charged to every one of them.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 500
+      # ── THIS IS WHERE `--partitions` LANDS IN SWIFT, AND IT IS A REAL DIVERGENCE ──
+      # The Java demo creates its topic with an AdminClient and asserts the partition count it got.
+      # swift-kafka-client has no admin client at all, so the Swift demo's topic is created by its
+      # first produce, by the broker, with the broker's own num.partitions - which is what this line
+      # sets. run.sh forwards `--partitions N` here as well as to the demo, so the flag works; what
+      # it cannot do is verify. demo/README.md states the consequence for `--bootstrap`.
+      KAFKA_NUM_PARTITIONS: ${PC_DEMO_PARTITIONS:-10}
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      # The demo must not start before the broker can serve an API request. Listing topics is the
+      # cheapest call that proves that, and it proves more than a port being open does.
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "broker:9092", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  demo:
+    build:
+      # The repository, because the sidecar stage builds a Maven reactor module that cannot be built
+      # without its parents and siblings. The root .dockerignore is what keeps this from uploading
+      # every target/ directory in the tree; the Dockerfile explains why that pair had to exist.
+      context: ../../..
+      dockerfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/demo/Dockerfile
+    # A demo that has printed its tables is done. Without this, compose's default would restart a
+    # container that exited cleanly and the reader would watch the whole run happen again.
+    restart: "no"
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      # Supplying this is what stops the demo looking for a broker it cannot start.
+      PC_DEMO_BOOTSTRAP: broker:9092
+      # The flags demo/run.sh was called with, forwarded as one string.
+      PC_DEMO_ARGS: ${PC_DEMO_ARGS:-}
+      # Every flag has an environment variable, and the contract means it on this path too: a
+      # reader who types `PC_DEMO_RECORDS=50 docker compose up` gets 50 records. Unset variables
+      # arrive as the empty string, which the demo's parser reads as absent.
+      PC_DEMO_RECORDS: ${PC_DEMO_RECORDS:-}
+      PC_DEMO_DELAY_MS: ${PC_DEMO_DELAY_MS:-}
+      PC_DEMO_CONCURRENCY: ${PC_DEMO_CONCURRENCY:-}
+      PC_DEMO_PARTITIONS: ${PC_DEMO_PARTITIONS:-}
+      PC_DEMO_REPLAY_FACTOR: ${PC_DEMO_REPLAY_FACTOR:-}
+      PC_DEMO_TOPIC: ${PC_DEMO_TOPIC:-}
