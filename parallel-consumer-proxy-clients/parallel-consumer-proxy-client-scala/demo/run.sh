@@ -34,7 +34,7 @@ usage: demo/run.sh [options]
   -h, --help         this
 
 With neither --docker nor --native, the demo picks: native when a JDK toolchain is present,
-a container otherwise. It says which it chose, and why, on the first line of output.
+a container otherwise. It says which it chose, and why, on standard error before it starts.
 
 Every flag also has an environment variable: --delay-ms is PC_DEMO_DELAY_MS.
 USAGE
@@ -66,16 +66,23 @@ have_jdk_toolchain() {
     [ -x ./mvnw ] && ./mvnw -v >/dev/null 2>&1
 }
 
+# LAUNCHER CHATTER GOES TO STANDARD ERROR, and that is the contract rather than taste. The first
+# thing printed must name the product - a reader who runs this and is met by a configuration line has
+# been told nothing about what they are looking at. The banner belongs to the DEMO, because it must
+# appear on the container path too, where this script is not in the picture; printing it here as well
+# would show it twice. So standard output opens with the demo's banner either way, and this script's
+# own "which mode, and why" stays a diagnostic on standard error where a launcher's diagnostics
+# belong.
 if [ "$mode" = "auto" ]; then
     if have_jdk_toolchain; then
         mode="native"
-        echo "Mode: native - a JDK toolchain is present on this machine."
+        echo "Mode: native - a JDK toolchain is present on this machine." >&2
     else
         mode="docker"
-        echo "Mode: container - no JDK toolchain here, so the demo brings its own."
+        echo "Mode: container - no JDK toolchain here, so the demo brings its own." >&2
     fi
 else
-    echo "Mode: $mode - asked for explicitly."
+    echo "Mode: $mode - asked for explicitly." >&2
 fi
 
 if ! docker info >/dev/null 2>&1; then
@@ -108,7 +115,13 @@ fi
 #
 # test-compile rather than package: the demo is a test source root, so it is compiled by then, and
 # the profile's own dependency:build-classpath execution has already written the classpath file.
-./mvnw --batch-mode -q -pl "$MODULE" -am -DskipTests -Dpc.scalaDemo test-compile
+#
+# ITS OUTPUT GOES TO STANDARD ERROR for the same reason the mode line above does. Even at -q this
+# build prints - the copyright check's summary, one "Jabel: initialized" per compiled module - and on
+# standard output every one of those lines lands in front of the demo's banner, which is exactly the
+# opening the contract forbids. Nothing is suppressed: a failing build still explains itself, and
+# `set -e` still stops the script.
+./mvnw --batch-mode -q -pl "$MODULE" -am -DskipTests -Dpc.scalaDemo test-compile >&2
 
 # A REAL FORKED JVM, and this is load-bearing rather than stylistic. The client library spawns the
 # sidecar as a child process and this demo hands it System.getProperty("java.class.path"). Under

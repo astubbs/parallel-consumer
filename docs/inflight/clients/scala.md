@@ -162,12 +162,12 @@ row to un-defer. Two facts the row's owner may want:
 `docker-compose.yml`, a `README.md` recording what is Scala's own, a `logback.xml`, and the sources
 under `demo/src/main/scala`. It keeps the contract in `parallel-consumer-proxy/demo/README.md`
 exactly: the seven flags with the same defaults, the same `PC_DEMO_*` variables with flags beating
-environment beating defaults, the effective-configuration fingerprint printed first and never
-carrying the bootstrap address, the two tables in the same order with the same columns, and no
-latency anywhere.
+environment beating defaults, the banner first and the effective-configuration fingerprint straight
+after it, never carrying the bootstrap address, the two tables in the same order with the same
+columns, and no latency anywhere.
 
-**Two arms - `AK core` and `scala-grpc` - and the four extra ones the Java seed carries are absent on
-purpose.** Scala is a JVM language, so it *could* run `pc-core`, `java-direct` and the rest against
+**Two arms - `AK core (KafkaConsumer)` and `scala-grpc (this client)` - and the four extra ones the
+Java seed carries are absent on purpose.** Scala is a JVM language, so it *could* run `pc-core`, `java-direct` and the rest against
 the same broker in the same process, which is exactly why the temptation had to be named and
 declined: the contract's value is that a reader who has run one language's demo has run them all, and
 a six-row Scala table beside a two-row Ruby table would not be that. `scala-grpc` goes through
@@ -221,19 +221,94 @@ edit.
   exists because own-cluster mode puts a user's real broker there - and the demo's own fingerprint
   honours it, while the client's dump prints it anyway, several times a run. `org.apache.kafka` is at
   `WARN` in this demo's logging configuration for that reason and not for noise. **Whoever owns the
-  Java seed should check the same thing**, and the contract may be worth a sentence saying the rule
-  binds the whole run rather than only the fingerprint block.
+  Java seed should check the same thing.** *Settled since:* the contract now says the rule binds the
+  whole run rather than only the fingerprint block, and `bin/ci-demo-conformance.sh` enforces it by
+  grepping every line the demo prints. So this is closed as a contract question and stays open only
+  as something each language's logging configuration has to keep honouring.
 - **`SidecarCommand` requires an absolute path to an executable, and a JVM sidecar is a jar**, so
   every JVM caller writes "this JVM's `java` plus a `-cp` argument" again. That is now in three places
   in this module's orbit: `OneRecordThroughTheSidecarTest`, the Java seed's `SidecarProcess`, and this
   demo. It reinforces the note above that spawning belongs to the Java lifecycle unit rather than to
   each client.
 
+### The reader-experience wave: banner, arm labels, and the two deterministic columns
+
+Applied from the rewritten contract, after someone watched a demo run and found it unimpressive.
+Four things changed in this module, and two of them cost a decision worth recording.
+
+- **The banner is printed by the demo, not by `run.sh`.** It has to appear on the container path too,
+  where `run.sh` is not in the picture, so the application owns it - and printing it in both places
+  would show it twice on the native path. `println` rather than the logger: a timestamp and a logger
+  name in front of the rule line would put a configuration line first again, which is the exact
+  failure the banner exists to fix.
+- **Which forced the launcher's own output to standard error.** `Mode: native - a JDK toolchain is
+  present` is a configuration line, and it was the first thing on standard output. So was the Maven
+  build's: even at `-q` it prints the copyright check's summary and one `Jabel: initialized` per
+  compiled module, and on the first run of this change **four `Jabel` lines and two copyright lines
+  sat above the banner**. Both now go to standard error. Nothing is suppressed - a failing build still
+  explains itself and `set -e` still stops the script - and standard output now opens with the banner
+  on both paths. Any JVM demo whose `run.sh` shells out to Maven has this, because the build's
+  chatter is not the demo's output.
+- **The fingerprint moved ahead of the broker.** It used to be the first thing `runFor` did, which put
+  it *after* `DemoBroker.resolve` had pulled and started a Kafka image - so a reader waited the better
+  part of a minute before learning what settings the numbers were produced with. `main` now prints it
+  before resolving, which is also the contract's stated order: banner, configuration, run.
+- **Arm labels name the client**, so `AK core (KafkaConsumer)` and `scala-grpc (this client)`. The
+  group ids are unaffected: they were always built from separate literals rather than from these
+  constants, which is lucky rather than designed - a label carrying spaces and parentheses into a
+  `group.id` would have been an unpleasant way to find that out.
+
+**Scala's answer to "does this language have more than one serious client" is unusual and is recorded
+in the demo's README**, as the contract asks. Alpakka/Pekko Kafka, FS2 Kafka, ZIO Kafka and
+`kafka-streams-scala` are what a Scala team actually uses, and every one of them **wraps
+`org.apache.kafka.clients.consumer.KafkaConsumer`** rather than speaking the protocol. So unlike Go or
+Ruby there is no second independent client to run as a second arm - a second row would measure a
+streaming façade's own scheduling on top of the same consumer, which is a different question.
+
+#### The column order was chosen without coordination, and the integrator has to reconcile it
+
+Eleven agents applied this contract at once, in eleven worktrees, and the contract fixes *which*
+columns exist without fixing where the two new ones go. This module chose:
+
+```
+arm | records | keys | elapsed | msg/s | vs AK core
+```
+
+`records` and `keys` come immediately after the arm because they are what shows the work happened,
+and the contract's own argument for them is that the table should demonstrate the run rather than
+assert it. **If another language put them at the end, one of the two has to move** - the contract's
+"same columns, same order" is the binding clause and neither choice is more correct.
+
+**`bin/ci-demo-conformance.sh` cannot read the new table**, and that file is not this branch's to
+edit. Two of its `awk` patterns were written against the old shape:
+
+- its `HEADER` pattern matches `arm elapsed msg/s vs AK core` as a prefix, which no longer describes
+  the header row under this column order;
+- its `ROW` pattern is `^ <name> <elapsed>s <rate> <ratio>$` with the name constrained to
+  `[A-Za-z][A-Za-z0-9 _-]*`. **The arm labels alone break it** - `AK core (KafkaConsumer)` contains
+  parentheses - and it is anchored at the end, so trailing columns break it too. Its
+  `normalise_arms` sed, `^ROW [a-z0-9]+-grpc$`, does not match `scala-grpc (this client)` either.
+
+None of that is fixable from a language branch without eleven conflicting edits to one shared file.
+Whoever integrates the fan-out should update those three patterns once, against whatever column order
+is settled on, and then re-run the drift check - which is the point at which any disagreement between
+the eleven becomes visible rather than theoretical.
+
+#### One blemish observed and deliberately not fixed here
+
+The big replay's heading computes the serial arm's cost as `total * delayMs / 1000` in integer
+seconds, so at the conformance harness's own volume it reads **"AK core is serial and would take
+0s+"** - which is both untrue and the sort of thing that makes a demo look unfinished. It is
+pre-existing, it is in the shared table title rather than in anything this wave touched, and the
+wording is almost certainly identical in the other ten languages. Changing it unilaterally would
+introduce exactly the cross-language prose drift the contract exists to prevent, so it is reported
+rather than fixed.
+
 ### What was run, and what was not
 
-Run natively on macOS, under heavy concurrent load from the parallel client fan-out, so **no
-throughput figure from these runs means anything and none is recorded here**. What they prove is that
-the machinery works:
+Run natively on macOS, under heavy concurrent load from the parallel client fan-out - load average
+above 100 on twelve cores at the time of the second run - so **no throughput figure from these runs
+means anything and none is recorded here**. What they prove is that the machinery works:
 
 - `demo/run.sh --records 20 --replay-factor 2 --partitions 2 --concurrency 8` - both arms completed,
   both tables rendered, exit 0, 59 lines of output end to end. The `--replay-factor 2` was chosen over
@@ -244,6 +319,17 @@ the machinery works:
   broken before - `bash 3.2` under `set -u` treats an empty array expansion as an unbound variable -
   and it proves the environment layer at the same time.
 - `--help` and a misspelled flag both reach the usage text; the misspelled flag exits 2.
+
+Re-run twice after the reader-experience wave, as
+`demo/run.sh --records 20 --concurrency 4 --partitions 2 --replay-factor 2` - the flags
+`bin/ci-demo-conformance.sh` uses. Exit 0 both times, both tables rendered, and:
+
+- standard output opens with the banner, with nothing above it;
+- both arms report **20 records over 20 keys** in the small replay and the sidecar arm **40 over 40**
+  in the big one, identical across the two runs while every timing moved - which is the determinism
+  claim actually observed rather than asserted;
+- the two absolute assertions the conformance harness makes hold on the captured output: no
+  `bootstrap.servers` anywhere in the demo's own lines, and no latency, percentile, `p95` or `p99`.
 
 **The container path was not run**, and that is the one gap. `Dockerfile` and `docker-compose.yml` are
 written and mirror the Java seed's, including the two rules that are not negotiable - the broker is a
