@@ -171,6 +171,64 @@ the CAS.
   `isUserFunctionSucceeded()` (a plain read), so the acquire semantics of the first make the verdict
   visible. Get that order backwards and there would be a second, independent hole.
 
+## The fix, and the questions it has to answer
+
+**Two candidates. The second is the recommendation.**
+
+### (a) Re-check the verdict after winning the CAS, and roll back
+
+Smallest possible change: having won `onQueueingForExecution()`, re-read the success verdict, and if
+it is now set, `endFlight()` and skip the record. **Measured: 0 double completions in 10,800,000
+record completions, with no records lost**, against 4 in 14,400,000 for the control.
+
+**It works, and it is still the wrong shape.** It adds a second term to a claim that already had two
+terms in two places, which is precisely the accretion that produced the defect. The next term added
+to `isAvailableToTakeAsWork()` will not automatically be re-validated either, and nothing in the code
+will say it should have been.
+
+### (b) Make the claim one atomic transition - RECOMMENDED
+
+Replace the `inFlight` `AtomicBoolean` plus the separate `maybeUserFunctionSucceeded` `Optional` with
+**one atomic state field** whose legal transitions are explicit - roughly
+`AVAILABLE -> CLAIMED -> SUCCEEDED | FAILED | ABANDONED`, with retry-delay expiry returning a failed
+record to `AVAILABLE`. A claim becomes a single compare-and-set from `AVAILABLE` to `CLAIMED`, and
+**there is no check-then-act left to get wrong**, because the check *is* the act. A caller that loses
+learns so from the transition rather than from a boolean that answers a narrower question than the
+one that was asked.
+
+This also removes the thing that makes the current bug silent: `onQueueingForExecution()` today
+*clears* `maybeUserFunctionSucceeded`, so a stale claim erases the very evidence that would have
+refused it. With a state machine, a claim from `SUCCEEDED` is simply an illegal transition.
+
+## Open questions the fix has to settle
+
+- **Moving `endFlight()` later does NOT close this**, and it is the first thing anyone will try.
+  `WorkManager#onSuccessResult` calls `endFlight()` before `pm.onSuccess` and `sm.onSuccess`, so the
+  obvious idea is to end the flight only after the container has left the shard. **It does not work:
+  the losing puller already holds the container reference from its own iteration**, so removing it
+  from the shard's map does not stop it being returned. The fix has to live in the container's state,
+  not in the removal order. Worth trying anyway as a control arm, precisely because it should fail.
+- **What does the default engine pay?** The control loop is the only selector there, so no claim is
+  ever contested and this defect cannot occur. Whatever replaces the boolean must not make the
+  uncontended path slower - measure it, do not assume a state field is free.
+- **Should a lost claim be visible?** Today `onQueueingForExecution()` returning false is a `trace`
+  log and nothing else. Under direct pull a lost claim is normal; a lost claim under the default
+  engine would mean the single-selector invariant has been broken, and that is worth knowing loudly.
+  One counter, two very different meanings depending on engine.
+- **Retry and abandonment cross the same states**, and neither is covered by any test. See item 2 of
+  `next-open-items-from-the-perf-session.md`. A state machine makes the illegal transitions
+  assertable, which is most of the value - but only if something exercises them.
+- **The busy-shard in-flight count lands in the same code.** It gives an ordered shard O(1)
+  selectability instead of a walk-to-head that exists only to discover the head is in flight. It does
+  **not** fix this defect - the reproduction is in `UNORDERED`, which ignores the count by design -
+  but it is the same surgery on the same methods, and doing the two separately means opening the most
+  concurrency-sensitive code in the engine twice.
+
+**Do not fix this without a test that fails against the current code.** The deterministic proof in
+this note runs the interleaving directly with no threads and takes milliseconds; the concurrent
+reproduction needs roughly 14 million completions to show 4 occurrences, so it is a soak, not a gate.
+Both have their place - the deterministic one belongs in the suite.
+
 ## A second, latent instance of the same shape - not the cause here, but the same assert
 
 `PartitionState#maybeRegisterNewPollBatchAsWork` does
