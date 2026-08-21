@@ -375,7 +375,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // The known cost: LinkedTransferQueue.size() is O(n) where LinkedBlockingQueue keeps a counter,
         // and getNumberOfUserFunctionsQueued() reads it every control loop. If this trades lock
         // contention for a linear scan it will show as a LOSS, which is itself a useful result.
-        BlockingQueue<Runnable> workQueue = new LinkedTransferQueue<>();
+        BlockingQueue<Runnable> workQueue = new CountedTransferQueue<>();
         return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
                 namingThreadFactory, rejectionHandler);
     }
