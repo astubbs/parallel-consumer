@@ -48,6 +48,7 @@ import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUT
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static lombok.AccessLevel.PACKAGE;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
 
@@ -263,6 +264,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private final RateLimiter queueStatsLimiter = new RateLimiter();
 
+    /**
+     * Limits how often {@link #maybeReportLoadFactorCeiling()} speaks. Matches the interval used for the equivalent
+     * steady-state warning in {@code ProcessingShard}'s slow-work check.
+     */
+    private final RateLimiter loadFactorCeilingLimiter = new RateLimiter(5);
+
     @Getter(PROTECTED)
     PCModule<K, V> module;
 
@@ -270,7 +277,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
+     * <p>
+     * Package-private setter so that pipeline-pressure tests can drive {@link #checkPipelinePressure()} directly,
+     * without having to run a whole control loop to get the flag set.
      */
+    @Setter(PACKAGE)
     private boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
@@ -1142,9 +1153,40 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 log.debug("isPoolQueueLow(): Executor pool queue is not loaded with enough work (queue: {} vs target: {}), stepped up loading factor to {}",
                         getNumberOfUserFunctionsQueued(), getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
             } else if (dynamicExtraLoadFactor.isMaxReached()) {
-                log.warn("isPoolQueueLow(): Max loading factor steps reached: {}/{}", dynamicExtraLoadFactor.getCurrentFactor(), dynamicExtraLoadFactor.getMaxFactor());
+                maybeReportLoadFactorCeiling();
             }
         }
+    }
+
+    /**
+     * Reports that the extra load factor has nothing left to give: the pool queue is running dry, but the factor is
+     * already at its ceiling, so PC will not queue any more work than it already is.
+     * <p>
+     * Rate limited, because the calling {@link #checkPipelinePressure()} runs once per control-loop pass and the
+     * condition it describes is a steady state, not an event - unlimited, it repeats for as long as the pipeline stays
+     * hungry.
+     */
+    private void maybeReportLoadFactorCeiling() {
+        loadFactorCeilingLimiter.performIfNotLimited(() -> {
+            int factor = dynamicExtraLoadFactor.getCurrentFactor();
+            if (dynamicExtraLoadFactor.isStatic()) {
+                // Demoted rather than suppressed. There is nothing here for an operator to act on - they pinned the
+                // buffer themselves, and the factor has been "at its maximum" since startup - so it must not be a
+                // WARN. It is not deleted, because it is still the direct answer to "why isn't PC fetching more?",
+                // which is a question people turn debug logging on to answer.
+                log.debug("Work queue is running low, but the load factor is pinned at {} by the configured " +
+                                "messageBufferSize, so PC won't queue more than {} records. This is the requested " +
+                                "behaviour - raise ParallelConsumerOptions#messageBufferSize to hold more in flight.",
+                        factor, getQueueTargetLoaded());
+            } else {
+                log.warn("Work queue is running low, but the extra load factor has reached its ceiling ({} of a " +
+                                "maximum {}), so PC won't queue more than {} records ({} in-flight target x {}). " +
+                                "Processing is keeping up with everything PC is allowed to buffer; if you want more " +
+                                "in flight, raise ParallelConsumerOptions#maximumLoadFactor, or the concurrency and " +
+                                "batch size that set the in-flight target.",
+                        factor, dynamicExtraLoadFactor.getMaxFactor(), getQueueTargetLoaded(), getPoolLoadTarget(), factor);
+            }
+        });
     }
 
     /**

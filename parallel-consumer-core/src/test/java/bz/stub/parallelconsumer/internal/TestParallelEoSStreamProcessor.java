@@ -26,6 +26,13 @@ public class TestParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStr
         super(newOptions);
     }
 
+    /**
+     * Lets a test supply its own {@link PCModule}, e.g. to inject a specific {@link DynamicLoadFactor}.
+     */
+    public TestParallelEoSStreamProcessor(final ParallelConsumerOptions<K, V> newOptions, final PCModule<K, V> module) {
+        super(newOptions, module);
+    }
+
     public int getTargetLoad() { return getQueueTargetLoaded(); }
 
     public  <R> List<Tuple<ConsumerRecord<K, V>, R>> runUserFunc(

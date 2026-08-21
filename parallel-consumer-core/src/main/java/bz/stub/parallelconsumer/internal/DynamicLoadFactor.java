@@ -68,11 +68,19 @@ public class DynamicLoadFactor {
 
     @Getter
     private int currentFactor;
+
+    /**
+     * The factor this instance started at. Retained (rather than only being written into {@link #currentFactor}) so
+     * that {@link #isStatic()} can answer whether this factor was ever able to move.
+     */
+    private final int initialFactor;
+
     private long lastSteppedFactor = currentFactor;
     private Instant lastStepTime = Instant.MIN;
 
     public DynamicLoadFactor(int initial, int maximum) {
         this.currentFactor = initial;
+        this.initialFactor = initial;
         this.maxFactor = maximum;
     }
 
@@ -140,5 +148,20 @@ public class DynamicLoadFactor {
 
     public boolean isMaxReached() {
         return currentFactor >= maxFactor;
+    }
+
+    /**
+     * Is this factor pinned, i.e. not actually dynamic?
+     * <p>
+     * When the initial factor already equals (or exceeds) the maximum there is nowhere to step up to, so
+     * {@link #isMaxReached()} is true from construction onwards and stays true forever. That is the normal result of a
+     * user setting {@link bz.stub.parallelconsumer.ParallelConsumerOptions#messageBufferSize} - see
+     * {@link PCModule} - and so "the maximum has been reached" is not news about the system, it is a restatement of
+     * the configuration.
+     *
+     * @return true if the factor can never move from where it started
+     */
+    public boolean isStatic() {
+        return initialFactor >= maxFactor;
     }
 }
