@@ -67,7 +67,7 @@ class ShardManagerTest {
         ConsumerRecord<String, String> consumerRecord = new ConsumerRecord<>(topic, partition, 1, null, "test1");
 
         Map<ShardKey, ProcessingShard<String, String>> processingShards = new ConcurrentHashMap<>();
-        processingShards.put(ShardKey.ofKey(consumerRecord), new ProcessingShard<>(ShardKey.ofKey(consumerRecord), module.options(), wm.getPm()));
+        processingShards.put(ShardKey.ofKey(consumerRecord), new ProcessingShard<>(ShardKey.ofKey(consumerRecord), module.options(), wm.getPm(), sm.getDispatchScanMeter()));
         sm.setProcessingShards(processingShards);
         incompleteOffsets.put(1L, Optional.of(consumerRecord));
         state.setIncompleteOffsets(incompleteOffsets);

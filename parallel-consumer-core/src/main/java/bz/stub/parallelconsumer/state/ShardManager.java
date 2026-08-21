@@ -72,6 +72,14 @@ public class ShardManager<K, V> {
 
 
     /**
+     * Shared by every shard this manager creates, so it survives the removal of emptied shards.
+     *
+     * @see DispatchScanMeter
+     */
+    @Getter
+    private final DispatchScanMeter dispatchScanMeter = new DispatchScanMeter();
+
+    /**
      * View of {@link WorkContainer}s that need retrying sorted by retryDue.
      */
     @Getter(AccessLevel.PACKAGE) // visible for testing
@@ -183,7 +191,7 @@ public class ShardManager<K, V> {
 
         // don't need to synchronise on /adding/ elements, as the iterator would just stop early
         var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm()));
+                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), dispatchScanMeter));
         shard.addWorkContainer(wc);
     }
 
