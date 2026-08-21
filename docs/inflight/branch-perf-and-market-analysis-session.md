@@ -10,12 +10,28 @@ and are deliberately not recorded here; they go stale within a day.
 
 | Branch | On origin | What it is |
 |---|---|---|
-| `feats/classic-vertx-demo` | yes | The 2021 asciinema demo, rescued from the stranded `presentation` branch and made to run again. First commit is the original verbatim, author and date preserved. |
-| `perf/throughput-regression-since-0-3` | yes | The version bisect, the `bench/` harness, and the five-year `ExternalEngine` regression it found. **History was rewritten and force-pushed** - see below. |
-| `research/market-analysis-recut` | no | The market analysis, the four-arm benchmark comparison, licensing, franz-go, the landing page and its content plan. Two commits, re-cut clean. **Not pushed.** |
-| `research/market-analysis` | no | **Superseded. Delete.** The pre-re-cut version, whose history carries material that was redacted. Kept only until the re-cut is accepted. |
-| `perf/resume-shard-scan` | no | **Parked, measured, does nothing.** First attempt at the shard dispatch scan - resume rather than restart. See [`parked-resume-shard-dispatch-scan.md`](parked-resume-shard-dispatch-scan.md). |
-| `perf/split-shard-inflight` | no | **Parked, measured, 10x dispatch and 0% end to end.** Second attempt - split the shard into selectable and in-flight state. Same note. Found that the in-flight walk is how ordering is enforced. |
+| `feats/classic-vertx-demo` | **yes** | The 2021 asciinema demo, rescued from the stranded `presentation` branch and made to run again. First commit is the original verbatim, author and date preserved. **The only branch here with finished, shippable work on it.** |
+| `perf/throughput-regression-since-0-3` | **yes** | The version bisect, the `bench/` harness, and the five-year `ExternalEngine` regression it found. **History was rewritten and force-pushed** - see below. |
+| `research/market-analysis-recut` | no | The market analysis, the four-arm benchmark comparison, the thread-ceiling investigation, licensing, franz-go, the landing page. **The trunk for everything below.** |
+| `research/market-analysis` | no | **Superseded. Delete.** Pre-re-cut, its history carries redacted material. |
+
+**Experiments - each a hypothesis, an implementation, a measurement, and a reason it did not ship.**
+None is a merge candidate; they exist so the negative results keep their evidence.
+
+| Branch | Base | What it measured |
+|---|---|---|
+| `perf/resume-shard-scan` | `rename/master-packages` | Resume the dispatch scan instead of restarting it. **+0.2%.** Also on the wrong base - see the base trap below |
+| `perf/split-shard-inflight` | recut | Split shard state into selectable and in-flight. **10x cheaper dispatch, 0% end to end.** Found that in-flight records staying in the shard is how ordering is enforced |
+| `perf/lock-free-worker-queue` | recut | `LinkedTransferQueue` for the pool queue, then a counted variant. **69% and 71% WORSE** - a lock can be the cheap way to park |
+| `perf/lock-free-mailbox` | recut | Lock-free mailbox. **+3.3% at 100ms, -2.7% at 0ms** - real, tiny, a trade |
+
+**In flight, dispatched 2026-08-21.**
+
+| Branch | What it is doing |
+|---|---|
+| `fix/conservation-load-gate` | Replace the drifting per-shard counter feeding the broker-poller gate with a conservation figure. The risk is exhaustiveness: revocation and stale-removal paths must be counted or it drifts silently, with no clamp |
+| `perf/direct-pull-measured` | Finish the blocking wait the 2022 branch left commented out, and measure the one objection that survives - whether N-way concurrent shard access costs anything |
+| `test/bench-all-engine-arms` | Add Reactor, Mutiny and `ProxyProcessor` arms to the harness. **Every cross-engine claim currently rests on Vert.x plus an assumption** |
 
 ## The force-push, and what it does not fix
 
