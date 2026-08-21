@@ -116,6 +116,8 @@ cd demo && npm ci && npm run compile   # what run.sh does; needs `npm ci && npm 
 npm run clean                          # remove dist/
 ```
 
-The library's `npm run lint` covers these files too - `eslint.config.mjs` lists `demo/tsconfig.json`
-in its typed-lint projects, so the floating-promise rules that matter most to an async demo apply
-here as well.
+**`tsc` is this package's whole gate**, under the same `strict` plus `noUnusedLocals` /
+`noImplicitReturns` settings the library uses. The library's type-aware eslint deliberately ignores
+`demo/**`: it would need this package's dependencies installed to resolve kafkajs, and the CI
+matrix row installs the library's only - so including it turned `eslint .` red in CI and green
+locally, which is worse than not running it. `eslint.config.mjs` records the measurement.

@@ -197,11 +197,17 @@ Nothing in the demo tests that failure mode - it remains untested here as it was
   pack or reinstall the parent's dependencies), so the demo loads the library's built `dist/` - the
   artifact a user would install - and **kafkajs is the demo's dependency and never the library's**.
   A client library that pulled in a Kafka client would contradict the arm it exists to demonstrate.
-- **`eslint.config.mjs` now lists `./demo/tsconfig.json` in its typed-lint projects.** Without it
-  `eslint .` - the CI matrix row's exact command - reports every demo file as "not found in any of
-  the provided project(s)" and goes red. Adding the project rather than ignoring the directory was
-  the deliberate choice: `no-floating-promises` is exactly what an arm racing a countdown against a
-  session's end needs, and it immediately caught an unused processor parameter.
+- **`eslint.config.mjs` ignores `demo/**`, after trying not to.** Adding the demo's tsconfig to the
+  typed-lint projects is the version that *should* be right - `no-floating-promises` is exactly what
+  an arm racing a countdown against a session's end needs, and while it was wired up it immediately
+  caught an unused processor parameter. But the demo is a separate npm package, so the typed rules
+  can only resolve kafkajs when `demo/node_modules` exists, and the CI matrix row installs the
+  library's dependencies only. **Measured both ways:** with the demo's project listed and its
+  node_modules present, `npx --no-install eslint .` exits 0; with it absent, 62 `no-unsafe-*` errors
+  and exit 1. Green locally and red in CI is worse than not running, and a config that includes the
+  project only when the directory exists is a gate that silently disappears - so the directory is
+  ignored and the reasoning is written into the config. **If an integrator wants the demo linted,
+  the lever is the CI row installing `demo/`'s dependencies**, not the eslint config.
 
 ### Measured, and what these numbers are NOT
 
