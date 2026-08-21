@@ -17,6 +17,38 @@ product behaviour and the assertion was wrong, so no product change was needed.
 | `PCMetricsTest.metricsRegisterBinding` | 4 seen | Released by astubbs#265, failed twice consecutively on one head, **re-quarantined unowned** in astubbs#116. Mechanism only half-known: the fix closed the metric-ahead direction, the failures are metric-behind-and-never-converging - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
+### `ConformanceSuiteTest.conforms[5]` on the **core** binding - a record dispatched and never settled (2026-08-21, astubbs#328)
+
+Seen on astubbs#328's CI, on the `clients: kotlin` and `clients: rust` jobs. **Eight other language
+jobs ran the same suite in the same workflow and passed**, which is most of what makes this a flake
+rather than a breakage.
+
+- Scenario: `the-in-flight-ceiling-bounds-unresolved-records`, behaviour `hold-until-ceiling-full`,
+  `--expect-dispatches 6 --max-concurrency 2`.
+- Assertion: "every delivery was settled". Expected offsets `[0, 1, 2, 3, 4, 5]`, observed
+  `[0, 5, 2, 1, 4]` - **offset 3 (`ceiling-d`) was DISPATCHED and never SETTLED** before the run
+  ended. The runner exited 0.
+
+**The runner is `core`, not the language named in the job.** Every language job runs the whole
+conformance suite, and that suite includes the in-process core binding - so the failing arm involves
+no proxy, no client library and no sidecar, and which job reports it is only which one lost the
+race. Do not read "kotlin failed" as a Kotlin defect; the same sighting will appear under whichever
+language job happens to hit it next.
+
+**Not diagnosed, and the two candidates are not equivalent.** Either the CI runner is loaded enough
+that the last dispatch does not settle inside the scenario's window - ten language jobs run
+concurrently in that workflow - or core's in-flight accounting can genuinely leave a record
+unresolved at the ceiling boundary, which is the bug class this scenario exists to catch. **The
+second is the reason not to paper over it**: this scenario's whole job is to prove the in-flight
+ceiling bounds unresolved records, so a record left unresolved is exactly what it is watching for.
+
+The separating experiment is the usual one: run the scenario alone on an uncontended runner. Passing
+means contention; still failing means core, and the observation above is already the reproduction.
+
+**Do not "fix" it by extending the window or retrying.** A retry destroys the signal - the repo has
+already lost three flakes that way - and a longer window would turn a real accounting bug into a
+slower one.
+
 ### Four more seen under concurrent agent load, 2026-08-15 - unclassified
 
 Recorded because this ledger exists so a flake is not met twice as a surprise, not because any of
