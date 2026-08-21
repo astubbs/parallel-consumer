@@ -10,10 +10,10 @@ shared note.
 `Configure`, one `Dispatch` wave, the user's function, the report with the token echoed verbatim,
 and a clean client-initiated shutdown - proven by one end-to-end test against the real test-mode
 sidecar. The module is at `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/`;
-its maturity and testing-evidence deferrals are lifted. Later waves: leases and heartbeats, the
-manifest reconnect, worker death, terminal outcomes, the `Shutdown` drain, the demo and its
-container, publishing, and the rest of the conformance suite - **most of which this client now
-inherits rather than implements.**
+its maturity and testing-evidence deferrals are lifted. **The demo and its container have since
+landed** - see "The demo" below for what is open about them. Later waves: leases and heartbeats, the
+manifest reconnect, worker death, terminal outcomes, the `Shutdown` drain, publishing, and the rest
+of the conformance suite - **most of which this client now inherits rather than implements.**
 
 ## It wraps `java-grpc`, and the two reasons it did not are fixed at source
 
@@ -171,3 +171,104 @@ implementation - and the registry did want a resolved classpath rather than a tw
 objects by `JvmClientBindings` in the conformance module, whose README section *A JVM client is a binding,
 not a subprocess* owns the reasoning. Kotlin is the JVM client that keeps the spawn path covered, because
 `Sidecar.kt` is the only JVM spawn there is.
+
+## The demo, and the three things still open about it
+
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin/demo/` - `run.sh`,
+`Dockerfile`, `docker-compose.yml`, `README.md` and Kotlin sources under `demo/src`. Two arms, per
+the shared contract: AK core, and Kotlin over the sidecar through this module's own client. It
+keeps the contract's flags, `PC_DEMO_*` variables, precedence, defaults, fingerprint and two tables.
+
+**It is not a Maven module, and that was forced.** A new module needs a line in the clients
+aggregator pom, which the parallel language waves all share. So the demo lives inside this module,
+compiled by a `kotlin-demo` profile activated by `-Dpc.kotlinDemo`, into `target/test-classes` -
+the module's published surface is guarded by `-Xexplicit-api=strict` and a demo is not part of it.
+**Scala should copy this arrangement rather than re-deciding it**: it is one profile, one extra
+Kotlin/Scala compile execution, and one `build-classpath` execution.
+
+- **No CI entry-point test.** `bin/ci-demo-test.sh` runs the *Java* demo through both entry points
+  on every pull request; nothing does that for Kotlin, so the contract's "both entry points are
+  tested" clause is unmet here. That script is `bin/**` and shared, so extending it belongs to
+  whoever owns the fan-out's CI, not to this module. **This is the largest open item.**
+- **The engine reactor edge is now reachable, on purpose.** `-Dpc.kotlinDemo` puts
+  `parallel-consumer-proxy` in this module's reactor, because the demo hands the spawned sidecar
+  its own classpath. The module's standing invariant - `./mvnw -pl
+  :parallel-consumer-proxy-client-kotlin -am validate` must not print `parallel-consumer-proxy` -
+  still holds for the DEFAULT lane, and was re-measured after the profile was added. Any future
+  change here must re-measure it rather than assume it.
+- **The demo profile also widens `conformance-classpath.txt`**, because that execution takes test
+  scope and the profile adds the harness to it. Harmless - the conformance runner never names the
+  engine artifacts, exactly as in the harness lane - but worth knowing before wondering why the
+  file changes size under `-Dpc.kotlinDemo`.
+
+### The one divergence from the shared contract, and why
+
+**The simulated work is `delay`, not `Thread.sleep`.** The contract's rule is "the simulated work
+must use that language's non-occupying wait", and its list then says a blocking sleep is fine in
+Kotlin. The list is written for a thread-per-record client; this one runs each record as a coroutine
+on `Dispatchers.IO`, whose default parallelism is 64. A blocking sleep there caps in-flight records
+at 64 however high `--concurrency` is set, while the fingerprint keeps printing the number the
+reader asked for - a throughput figure reported against settings that did not apply, which is the
+exact failure the fingerprint exists to prevent.
+
+Measured, on a heavily loaded machine (load average 23 on 12 cores, ten agents): at
+`--records 4000 --delay-ms 50 --concurrency 200 --replay-factor 1` the sidecar arm finished in
+**2.7s**, which is 200 record-seconds of work in 2.7s, so about **74 records in flight** - above the
+64 ceiling a blocking sleep could ever reach. It is an inference from one arm rather than a two-arm
+controlled experiment, and the control arm was not run; contention can only push the in-flight
+figure *down*, never above the thread ceiling, so the direction survives the load even though the
+absolute rate does not.
+
+**This may be a defect in the shared contract rather than a Kotlin exception.** The contract names
+only Python and TypeScript as languages where a blocking sleep is not the non-occupying wait; the
+real predicate is not the language but whether the client's execution model is thread-per-record.
+Any coroutine-, fiber- or async-native client - Kotlin here, and plausibly Swift's structured
+concurrency and C#'s `async` - is in the same position. Recorded here rather than edited into
+`parallel-consumer-proxy/demo/README.md`, which is the fan-out's shared contract file and not this
+wave's to change.
+
+### What was actually run, and under what load
+
+All on the loaded box described above. **Absolute throughput here is contended and should be
+re-measured on an idle machine before it is quoted anywhere.**
+
+- Native, `--records 20 --delay-ms 1 --concurrency 4 --partitions 2 --replay-factor 1`: both arms
+  completed, tables printed, exit 0.
+- Native, **no arguments at all** - the double-click case, and the one that has broken before: both
+  replays ran and exit was 0. AK core 2000 records in 6.7s; kotlin-sidecar 2000 in 1.3s, then 40000
+  in 3.5s.
+- Container, `demo/run.sh --docker --records 20 ...`: image built from the repository context
+  (9.17MB uploaded, so `.dockerignore` is doing its job), broker came up as a compose sibling, the
+  sidecar was spawned inside the demo container with no host Docker socket anywhere, both arms
+  completed, exit 0.
+- Container, **`docker compose up` with no arguments and no environment** - the second documented
+  entry point, and the one a reader who has never seen this repository types: both replays ran,
+  demo container exited 0. AK core 2000 in 7.6s; kotlin-sidecar 2000 in 1.1s, then 40000 in 5.0s.
+- Argument handling, without a broker: an unknown flag exits **2** with the usage text rather than
+  reporting numbers for settings nobody asked for; and `PC_DEMO_RECORDS=7 PC_DEMO_DELAY_MS=9
+  --records 11` printed `records = 11, delayMs = 9`, which is the contract's precedence - flags beat
+  the environment beats the defaults - and no bootstrap address anywhere in the fingerprint.
+
+### A sighting that is not the Kotlin client's, recorded here only because of file ownership
+
+Running this module's default lane (`./mvnw -pl :parallel-consumer-proxy-client-kotlin -am test`)
+during the demo wave, on a machine at **load average 83 of 12 cores**, failed one test in
+`parallel-consumer-core`:
+
+```
+BlockedThreadAsserterTest.functionThatReturnsOnItsOwnScheduleIsRejected
+  BlockedThreadAsserter accepted a function that returns on a timer rather than on the unblocker,
+  but it must have rejected it
+```
+
+**Contention, established by control rather than asserted**: the same class re-run on its own
+passed 7/7 immediately afterwards, and the Kotlin module's own tests are green (20/20). This is the
+helper's *self-test* - it feeds the asserter a function that returns on its own timer and expects
+rejection - so under enough load the timer-returning function is late enough to look like a genuine
+unblock.
+
+`docs/inflight/test-untracked-ci-flakes.md` already carries `BlockedThreadAsserter` prior art, but
+for a **different** test and a different signature (`assertUnblocksAfter` measuring a window two
+milliseconds short, owned by astubbs#262). This one is a new signature on the same helper.
+**It belongs in that file, not this one** - it is recorded here because the Kotlin demo wave owns
+only `clients/kotlin.md`, and the fan-out's integrator should move it.
