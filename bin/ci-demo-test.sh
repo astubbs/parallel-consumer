@@ -86,6 +86,37 @@ grep -qE "^[[:space:]]*java-grpc-uds[[:space:]]+[0-9]" "$LOG_DIR/docker.log.plai
         legitimately absent - see $LOG_DIR/docker.log.plain"
 echo "ci-demo-test: container ran the java-grpc-uds arm"
 
+# TWO CONTAINER-ONLY PROMISES THAT NOTHING USED TO CHECK, both of which were broken when these
+# assertions were written. Found by a language agent transcribing the seed's compose file, which is
+# the whole argument for the fan-out: a second implementer reads a contract literally and discovers
+# the reference does not keep it.
+#
+# 1. "environment beats defaults" is contract, and compose forwards NOTHING it is not told to. The
+#    seed's compose file listed two variables, so the other six were silently dropped on the path a
+#    reader without a JDK toolchain always takes.
+echo "ci-demo-test: === container honours the environment, not just flags ==="
+PC_DEMO_RECORDS=7 PC_DEMO_REPLAY_FACTOR=1 PC_DEMO_DELAY_MS=1 PC_DEMO_CONCURRENCY=2 \
+    "$RUN_SH" --docker > "$LOG_DIR/docker-env.log" 2>&1 \
+    || fail "container: an environment-configured run exited non-zero - see $LOG_DIR/docker-env.log"
+normalise "$LOG_DIR/docker-env.log" "$LOG_DIR/docker-env.log.plain"
+grep -qE "^[[:space:]]*records = 7$" "$LOG_DIR/docker-env.log.plain" \
+    || fail "container: PC_DEMO_RECORDS did not reach the demo - compose forwards only what it is
+        told to, so a new dial needs a line in docker-compose.yml - see $LOG_DIR/docker-env.log.plain"
+echo "ci-demo-test: container honoured PC_DEMO_RECORDS"
+
+# 2. An argument appended by the caller must reach the parser. Under `sh -c "<script>"` the first
+#    appended argument becomes $0 and vanishes unless the entry point ends with "$@".
+echo "ci-demo-test: === appended arguments reach the parser ==="
+if docker compose -f "$DEMO_DIR/docker-compose.yml" run --rm --no-deps demo --help \
+        > "$LOG_DIR/docker-help.log" 2>&1; then
+    grep -q "usage: run.sh" "$LOG_DIR/docker-help.log" \
+        || fail "container: 'compose run demo --help' did not reach the parser - the entry point
+            must end with \"\$@\" or the flag becomes \$0 - see $LOG_DIR/docker-help.log"
+    echo "ci-demo-test: container passed --help through to the parser"
+else
+    fail "container: 'compose run demo --help' exited non-zero - see $LOG_DIR/docker-help.log"
+fi
+
 docker compose -f "$DEMO_DIR/docker-compose.yml" down --remove-orphans >/dev/null 2>&1 || true
 
 echo "ci-demo-test: BOTH entry points ran the demo end to end"

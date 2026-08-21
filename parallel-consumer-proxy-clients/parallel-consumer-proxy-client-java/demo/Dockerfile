@@ -65,5 +65,10 @@ RUN ./mvnw --batch-mode -q -DskipTests -Dcopyright.skip=true \
 #
 # PC_DEMO_ARGS is unquoted on purpose: it carries the caller's flags through compose as a single
 # string and must word-split into separate arguments.
+# The trailing "--" is load-bearing: it becomes $0 for the shell, so arguments a caller appends -
+# `docker compose run demo --help` - land in "$@" and reach the parser. Without it the first such
+# argument becomes $0 and is silently invisible, which is exactly what this image used to do while
+# the demo's own javadoc claimed that invocation worked.
 ENTRYPOINT ["/bin/sh", "-c", \
-    "exec java -cp \"$(cat /app/cp.txt)\" bz.stub.parallelconsumer.client.demo.ReferenceDemo $PC_DEMO_ARGS"]
+    "exec java -cp \"$(cat /app/cp.txt)\" bz.stub.parallelconsumer.client.demo.ReferenceDemo $PC_DEMO_ARGS \"$@\"", \
+    "--"]

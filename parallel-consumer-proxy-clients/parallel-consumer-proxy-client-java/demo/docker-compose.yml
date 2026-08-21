@@ -78,7 +78,19 @@ services:
       broker:
         condition: service_healthy
     environment:
-      # Supplying this is what stops the demo trying to start a broker of its own.
+      # Supplying this is what stops the demo trying to start a broker of its own. It is pinned
+      # rather than forwarded from the host DELIBERATELY: a host-side address is not reachable from
+      # this container's network, so honouring one here would break the run rather than configure it.
       PC_DEMO_BOOTSTRAP: broker:9092
       # The flags demo/run.sh was called with, forwarded as one string.
       PC_DEMO_ARGS: ${PC_DEMO_ARGS:-}
+      # EVERY OTHER DIAL, forwarded explicitly. Compose passes nothing it is not told to, so this
+      # block is the whole reason "environment beats defaults" is true on the container path - and
+      # this file previously listed only the two above, which silently dropped all six of these on
+      # the path a reader without a JDK toolchain always takes. Adding a flag means adding it here.
+      PC_DEMO_RECORDS: ${PC_DEMO_RECORDS:-}
+      PC_DEMO_DELAY_MS: ${PC_DEMO_DELAY_MS:-}
+      PC_DEMO_CONCURRENCY: ${PC_DEMO_CONCURRENCY:-}
+      PC_DEMO_PARTITIONS: ${PC_DEMO_PARTITIONS:-}
+      PC_DEMO_REPLAY_FACTOR: ${PC_DEMO_REPLAY_FACTOR:-}
+      PC_DEMO_TOPIC: ${PC_DEMO_TOPIC:-}
