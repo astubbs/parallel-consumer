@@ -7,8 +7,9 @@ anything the Ruby wave learns that a later session needs go HERE - never appende
 shared note.
 
 **Wave one landed:** connect, configure, one dispatched record through a worker thread, report,
-clean drain. Leases, heartbeats, reconnect, worker death, terminal outcomes, the demo and RubyGems
-publishing are all deferred and named in the module's testing-evidence `limitation`.
+clean drain. Leases, heartbeats, reconnect, worker death, terminal outcomes and RubyGems publishing
+are all deferred and named in the module's testing-evidence `limitation`. The demo has since landed
+- see below.
 
 ## Two decisions the specification does not make, taken here
 
@@ -137,6 +138,59 @@ undrained pipe either.
   waiting thread leaves a window in which a wave arrives and finds no queue.
 - **`send` is `Object#send`.** The method that puts a message on the stream is called `emit`.
 
+## The demo, and the five decisions it took (astubbs#242, plan unit U35)
+
+`demo/` in this module, keeping the contract in `parallel-consumer-proxy/demo/README.md`. Two arms -
+`AK core` (the `rdkafka` gem, serial) and `ruby-grpc` (this module's client library over a sidecar it
+spawns). The decisions below are the ones a later session would otherwise re-litigate; the ones that
+are purely Ruby-facing live in `demo/README.md`, beside the code they explain.
+
+- **`rdkafka`, not `ruby-kafka`, for the serial arm.** librdkafka behind FFI is what a Ruby
+  application actually consumes Kafka with (Karafka is built on it); `ruby-kafka` has been archived
+  by its authors since 2023. A comparison whose serial arm is an unmaintained gem flatters the
+  sidecar for a reason that has nothing to do with Parallel Consumer. It ships **precompiled for
+  linux-gnu**, so the demo image installs it without a C toolchain - the reason the container path
+  is not slow to build for a native extension.
+- **The blocking sleep was checked rather than inherited.** The contract lists Ruby among the
+  languages where a blocking sleep is fine, and names Python and TypeScript as the exceptions. It is
+  fine here for a reason that had to be confirmed against *this* client's own design: the executors
+  are **threads**, and MRI releases the GVL around `sleep`. Had this wave taken Python's answer -
+  worker processes - the contract's own list would have been wrong for Ruby, so the list is right by
+  agreement rather than by luck.
+- **The demo does not start a broker; `demo/run.sh` does.** The Java seed uses Testcontainers. Ruby
+  has no equivalent this demo would rather depend on, so the entry point starts the *compose* broker
+  - the same service the container path uses, one definition rather than two - and hands the address
+  in. Natively that broker publishes a **host listener on 29092**, which is the one thing in the
+  compose file the Java seed's does not have.
+- **Two `PC_DEMO_` variables with no flag**, `PC_DEMO_SIDECAR_CLASSPATH` and `PC_DEMO_SIDECAR_JAVA`.
+  The sidecar is a JVM program and Ruby cannot build one, so the launcher and classpath are computed
+  by the entry point (Maven natively, baked in at image build) and handed over. They are plumbing,
+  deliberately not dials: a flag would invite pointing the demo at an arbitrary binary, which is the
+  decision `SidecarCommand` refuses to make on the library's side.
+- **A native run needs two toolchains** - Ruby 3.2+ *and* a JDK - so `run.sh`'s auto-detection tests
+  for both and says which one is missing. Only one of the ten languages avoids this; it is worth
+  knowing before reading the mode line as a Ruby problem.
+
+### The contract's environment precedence does not survive the seed's container path
+
+Recorded rather than edited, since `parallel-consumer-proxy/demo/README.md` is the shared contract:
+it promises that every flag has a `PC_DEMO_` variable and that **the environment beats the
+defaults**. Compose forwards nothing it is not told to, and the Java seed's `docker-compose.yml`
+declares only `PC_DEMO_BOOTSTRAP` and `PC_DEMO_ARGS` - so on the container path every other
+`PC_DEMO_` variable is silently dropped, and that is the path a reader without the language's
+toolchain always takes. This module's compose file forwards all of them explicitly and reads a blank
+one as "not supplied". **Either the seed should do the same or the contract should say the
+environment is a native-path feature**; an owner decision, and the same gap will be in whichever of
+the ten demos transcribed the seed's compose file literally.
+
+### `blocker-executor-count-formula.md` does not block Ruby
+
+The identity executor-count function means `--concurrency 100` becomes 100 executors. In Python that
+is 100 worker *processes*, which is why it blocks that demo; here they are threads, and the demo
+observed the proxy granting exactly the number asked for (`--concurrency 4` -> 4 executor threads,
+ceiling 4). Ruby therefore needs no cap invented in a demo. It does mean **the demo prints the
+granted executor count**, which is the one place a reader can see the formula's effect.
+
 ## Local verification, and what it is pinned to
 
 From `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/`:
@@ -172,6 +226,42 @@ The wave's own reasoning therefore lives in the commit that added this section, 
 as the ledger states it: **`git commit -- <paths>`, never `git add` then commit.**
 
 ## Owed to whoever picks this module up
+
+### The demo's native path has never been executed
+
+**The container path was run end to end and the native path was not.** What ran, on a machine shared
+with nine other demo builds: `run.sh --docker` at `--records 20 --delay-ms 1 --concurrency 4
+--partitions 2` with `--replay-factor 1` and again with `--replay-factor 2` (so the big-replay branch
+and its footnote ran too); the **no-argument** invocation with the same values supplied through
+`PC_DEMO_*`, which is what proved compose's environment forwarding; `--help` and an unknown flag
+through both `run.sh` and the image's own entrypoint (exit 0 and exit 2). Both arms completed every
+time and the process exited 0. **No throughput figure from those runs means anything** - twenty
+records at 1ms is group-join cost, and the machine was carrying nine other agents.
+
+The native path is unrun because **this machine ships Ruby 2.6.10 and has no other**, and the
+library's floor is 3.2. Three things in it are therefore unexercised: the Maven build that computes
+`PC_DEMO_SIDECAR_CLASSPATH`, the compose broker's **HOST listener on 29092**, and `bundle install`
+building `rdkafka` from source on a platform with no precompiled gem (macOS). The first reader with
+a modern Ruby should run `demo/run.sh --native` before trusting any of it.
+
+Also never run: **the demo at its own defaults** (2000 records, replay factor 20), deliberately -
+a full-scale measurement belongs on an unloaded machine.
+
+### The demo has no CI coverage, and the contract says it should
+
+`bin/ci-demo-test.sh` runs the Java demo through both entry points on every pull request, and the
+contract is explicit that a per-language demo inherits that: "mirroring the flags and the tables is
+not enough if nobody ever runs the container you shipped". That script is Java-only and outside this
+wave's file scope, so **nothing runs this demo automatically**. Whoever owns `bin/` should decide
+whether it grows a per-language loop or each language gets its own script - a decision that wants
+making once for all ten rather than ten times.
+
+### The demo image is 1.38GB
+
+`ruby:3.4-bookworm` (1.0GB) plus a JRE plus the sidecar's jars. `-slim` would take most of it back
+but removes the C toolchain that `rdkafka` needs where no precompiled gem exists, so it is a trade
+rather than a saving. `docs/inflight/next-container-image-cache-and-size.md` is where that belongs
+if it is worth doing across the fan-out.
 
 - **The CI matrix row pins Ruby 3.4.4; every run behind this wave happened on 4.0.6.** The library
   targets 3.2 (`Thread::Queue#pop(timeout:)` is the binding floor) and nothing used is newer, but
