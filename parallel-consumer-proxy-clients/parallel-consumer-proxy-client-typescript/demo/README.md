@@ -96,6 +96,19 @@ for.
 end-to-end test harness already uses. It is deliberately not `PC_DEMO_SIDECAR_CLASSPATH`: `PC_DEMO_`
 is the flag namespace, one variable per flag and no others, and a classpath is not a flag.
 
+### Noise you should expect, and why it is not filtered
+
+- **`SLF4J(W): No SLF4J providers were found`**, once per sidecar. `logback-classic` is `test` scope
+  throughout this repository, so the sidecar a user deploys has no logging provider - and the demo
+  runs it on exactly that classpath, on both entry points, rather than the flattered test one. It is
+  recorded as a finding against the proxy module in
+  [`docs/inflight/clients/typescript.md`](../../../docs/inflight/clients/typescript.md).
+- **One kafkajs `The group coordinator is not available` error** while `__consumer_offsets` is being
+  created. It retries and succeeds. Suppressing a broker error class to tidy a demo's output is how
+  a real one gets hidden, so it stays visible.
+- **`TimeoutNegativeWarning`** from kafkajs 2.2.4 on Node 25. Cosmetic; not seen on the Node 22 CI
+  pins.
+
 ## Building and checking it
 
 ```bash

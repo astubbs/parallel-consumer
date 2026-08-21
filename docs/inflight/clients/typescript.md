@@ -212,15 +212,23 @@ quoted as any**: at 60-100 records the group join dominates every arm, and the h
 
 | run | arm | records | elapsed | msg/s |
 |---|---|---|---|---|
-| `--records 100 --replay-factor 1 --partitions 4` | AK core | 100 | 1.4s | 70 |
+| native, `--records 100 --replay-factor 1 --partitions 4` | AK core | 100 | 1.4s | 70 |
 | same | typescript-grpc | 100 | 0.7s | 140 |
-| no arguments, `PC_DEMO_RECORDS=60 PC_DEMO_REPLAY_FACTOR=2 PC_DEMO_PARTITIONS=4` | AK core | 60 | 1.3s | 45 |
+| native, **no arguments**, `PC_DEMO_RECORDS=60 PC_DEMO_REPLAY_FACTOR=2 PC_DEMO_PARTITIONS=4` | AK core | 60 | 1.3s | 45 |
 | same, small replay | typescript-grpc | 60 | 0.8s | 76 |
 | same, big replay | typescript-grpc | 120 | 0.7s | 164 |
+| native, `--records 80 --replay-factor 2 --partitions 4` | AK core | 80 | 3.7s | 21 |
+| same, small replay | typescript-grpc | 80 | 1.2s | 68 |
+| same, big replay | typescript-grpc | 160 | 1.1s | 148 |
+| **container**, `--docker --records 60 --replay-factor 2 --partitions 4` | AK core | 60 | 4.4s | 13 |
+| same, small replay | typescript-grpc | 60 | 1.5s | 40 |
+| same, big replay | typescript-grpc | 120 | 3.1s | 38 |
 
-Both exited 0. A real measurement wants an unloaded machine and the defaults.
+Every one exited 0. The spread between two native runs at the same settings (AK core at 70 then 21
+msg/s) is the load on the box, and it is the clearest possible evidence that none of these are
+measurements. A real one wants an unloaded machine and the defaults.
 
-### Two bugs the run found, which no amount of reading would have
+### Three things the runs found, which no amount of reading would have
 
 - **A KRaft broker started with `KAFKA_LISTENERS=...://0.0.0.0:...` exits 1 during preflight**, with
   `advertised.listeners cannot use the nonroutable meta-address 0.0.0.0`, because the CONTROLLER
@@ -237,6 +245,16 @@ Both exited 0. A real measurement wants an unloaded machine and the defaults.
   `__consumer_offsets` is being created; it retries and succeeds, and it is left visible rather
   than filtered, because suppressing a broker error class to tidy a demo's output is how a real one
   gets hidden.
+- **The sidecar the product SHIPS has no SLF4J provider**, and the demo is how that surfaced.
+  `logback-classic` is `test` scope repository-wide, so a runtime-scoped classpath for
+  `bz.stub.parallelconsumer.proxy.Main` prints `No SLF4J providers were found` and every `log.info`
+  in the sidecar goes nowhere. This is a property of the proxy module, not of the demo, and fixing
+  it is not a demo wave's call - but the demo was about to hide it: `build-classpath` with no
+  `includeScope` writes *every* scope, so the native path was quietly flattered by test-scope
+  logback while the container was not. `run.sh` now passes `-DincludeScope=runtime`, so both entry
+  points run the sidecar on the classpath a user would get, and both print the warning. **For the
+  proxy's owners:** a shipped sidecar that cannot log is a diagnosability problem well beyond this
+  demo.
 
 ### Open, and NOT done by this wave
 
@@ -246,8 +264,13 @@ Both exited 0. A real measurement wants an unloaded machine and the defaults.
   shipped and never executed again.
 - **There is no `ReferenceDemoIT` equivalent.** The Java demo has a test that calls its entry method
   and asserts what the arms did. Nothing here does; the evidence is the runs recorded above.
-- **The container path.** Recorded separately below, because its status at the time of writing is
-  the honest question.
+- **CHANGELOG and any cross-language index.** Not this agent's files.
+
+The container path is **not** on this list: `demo/run.sh --docker` built the image and ran both
+arms and both replays to exit 0, on a repository-context two-stage build (a JDK stage that
+materialises a flat `/sidecar/lib`, then a Node image with a Temurin JRE copied in beside it). The
+broker is a compose sibling and the demo container is given an address, never the Docker socket;
+the sidecar is spawned as a child process inside the demo container and is not a compose service.
 
 ### Things in the shared contract that look wrong from here (recorded, not edited)
 

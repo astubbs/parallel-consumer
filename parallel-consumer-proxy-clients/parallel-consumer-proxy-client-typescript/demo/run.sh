@@ -124,9 +124,15 @@ fi
 #
 # -am is not optional: this module's parent is not in a single-module reactor and the enforcer's
 # ReactorModuleConvergence rule fails the build before anything runs without it.
+#
+# -DincludeScope=runtime IS NOT A TIDY-UP. Without it build-classpath writes every scope, which puts
+# TEST-scope logback on the sidecar's classpath - and logback is test-scoped repository-wide, so the
+# sidecar a user actually deploys has no SLF4J provider at all. The container path never had one and
+# says so ("No SLF4J providers were found"); scoping here is what stops the two entry points running
+# the sidecar with different classpaths and calling it the same demo.
 echo "Building the sidecar from the proxy module..."
 ./mvnw --batch-mode -q -pl :parallel-consumer-proxy -am -DskipTests package dependency:build-classpath \
-    '-Dmdep.outputFile=${project.build.directory}/sidecar-classpath.txt'
+    -DincludeScope=runtime '-Dmdep.outputFile=${project.build.directory}/sidecar-classpath.txt'
 
 # The classes directory is appended because build-classpath writes DEPENDENCIES only - the proxy's
 # own compiled output is not on it, and a sidecar without its main class does not start.
