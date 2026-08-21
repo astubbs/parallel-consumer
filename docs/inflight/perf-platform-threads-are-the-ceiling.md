@@ -286,9 +286,10 @@ obstacle is real and my control says nothing about it.**
    verified nothing, the failure mode this repo has shipped before.
 3. **Settle what the pressure system observes - and note that direct pull would dissolve this.** `isPoolQueueLow()` reads
    `workerThreadPool.getQueue().size()` and `getActiveCount()` off the `ThreadPoolExecutor`. A
-   virtual-thread executor exposes neither, so the pressure system must move onto PC's own accounting -
-   which is [the counter with a drift clamp](bug-available-work-counter-needs-a-clamp.md). **That
-   dependency is the real work**, and it is why this is not a one-line change.
+   virtual-thread executor exposes neither, so the pressure system must move onto PC's own accounting.
+   The load gate's half of that accounting is now conservation-derived (`ShardManager.getNumberOfRecordsInShards`);
+   the shard's available-work counter is [still an approximation](bug-available-work-counter-is-still-an-approximation.md).
+   **That dependency is the real work**, and it is why this is not a one-line change.
 
 **And the honest boundary:** this was measured on a 12-core laptop with `Thread.sleep` as the handler.
 A real handler blocks on I/O rather than sleeping, and a server has more cores. The *mechanism* -
