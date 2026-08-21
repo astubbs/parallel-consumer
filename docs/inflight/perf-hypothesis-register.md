@@ -62,6 +62,14 @@ gun and were normal operation.
 takes a lock and parks immediately. At maxConcurrency 1,000 on twelve cores - **about eighty threads per
 core** - spinning burns exactly the cores the working threads need. Removing the lock cost 69%.
 
+## Verdicts withdrawn on inspection
+
+| Claim | Why it fell |
+|---|---|
+| "The 2022 direct-pull rework was 1/3 as fast, so the design is slow" | Its worker idle path is a **busy-spin** - the blocking wait is commented out with an unresolved race. The branch was unfinished; the design was never measured |
+| "Every Vert.x measurement in the repo was harness-capped" | Too broad. The bisect ran at concurrency 100, nowhere near the stub's ceiling. **The 0.4.0.0 cliff, the buffer finding and the 35% recovery all stand** - only the high-concurrency Vert.x cells were capped |
+| "The async stub shows the Vert.x engine is 65% faster than core" | Conflates ceiling removal with **machine relief** - the WireMock stub's 2,600 sleeping Jetty threads were competing for the same 12 cores on localhost. It is a threading-model comparison, not an engine comparison |
+
 ## Still open
 
 - **Too many platform threads for the machine.** Raised by the owner early, argued down by me on

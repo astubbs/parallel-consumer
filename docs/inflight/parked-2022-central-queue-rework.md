@@ -39,15 +39,68 @@ var shardQueue = shardQueueMap.computeIfAbsent(Thread.currentThread().getId(),
         aLong -> new LinkedBlockingQueue<>());
 ```
 
+## RETRACTED: the "1/3 as fast" verdict does not measure the design. The blocking wait was never wired up.
+
+**Read the code, 2026-08-21, after the owner objected to this note taking his own four-year-old
+verdict at face value.** He was right to object. `QueuedShardManager.inner()`, with the comments
+stripped, is the entire live path a worker takes to get its next record:
+
+```java
+private List<WorkContainer<K, V>> inner() throws InterruptedException {
+    List<WorkContainer<K, V>> element = null;
+    while (element == null) {
+        element = tryOneIterationQueueRemoval();
+    }
+    return element;
+}
+```
+
+**That is a busy-spin.** When a worker finds no work it loops immediately and tries again. The
+blocking wait sits directly beneath it, commented out, with an unresolved race condition noted in a
+`todo`:
+
+```java
+// monitor.wait(1000); // NOSONAR
+// boolean wasSignaled = newWorkEvent.await(1, SECONDS);
+// todo move out of sync, use Lock? - fix race condition between adding, and notifying
+```
+
+**So N workers with no work available burn N cores.** The sibling commit is titled `WIP!`; this is
+what the WIP was.
+
+**And this session measured that exact pathology independently, four years later.** Replacing the
+worker pool's `LinkedBlockingQueue` with a lock-free `LinkedTransferQueue` - which **spins before
+parking** - cost **69% of throughput** on a machine with far more threads than cores
+([`parked-worker-pool-queue-lock-is-not-the-cost.md`](parked-worker-pool-queue-lock-is-not-the-cost.md)).
+Same failure mode, same class of machine. A design whose idle path spins is not being measured on its
+design.
+
+**Therefore: "~1/3 as fast as the ThreadPoolExecutor version" is evidence the branch was unfinished,
+not evidence the architecture is slow.** Everything below that treats it as a verdict on the design is
+withdrawn. What remains true is that the branch was *not proven* - which is a different and much
+weaker statement than *disproven*.
+
+**The lesson worth keeping, because it cost real time here:** a register entry that records an outcome
+without a cause invites exactly this. `docs/refactoring.md` said "mostly dead-ends", this note repeated
+"1/3 as fast", and the recommendation to leave it alone was made three times before anyone opened the
+file. **Read the code before repeating a verdict on it.**
+
+## What still stands against direct pull, and is untested
+
+One objection survives the retraction, and it is architectural rather than incidental: **direct pull
+turns shard access from single-consumer into N-way concurrent.** Today the control loop is the only
+thread selecting work; under direct pull every worker contends on shared shard state per record. The
+branch's own commits record fighting an O(n) count in exactly that path (`e12ba8a8b`). **That cost
+grows with concurrency, which is the direction that matters.**
+
+**It has never been measured, because the spin masked it.** A finished implementation with a real
+blocking wait would measure it for the first time.
+
 ## The three results, and what each one settles
 
-**1. The rework was three times SLOWER.** *"Inefficient routines in control loop fixed, still only
-1/3~ a fast as ThreadPoolExecutor version."* Direct pull, per-thread queues and a central facade,
-built and working, and still a third of the speed of the plain `ThreadPoolExecutor`.
-
-**That is a much stronger result than anything measured today.** Today's experiments made the existing
-design cheaper and found it did not matter. This one replaced the design and found the replacement
-worse.
+**1. ~~The rework was three times SLOWER.~~ RETRACTED - see above.** The measurement is real; what it
+measured is a busy-spin, not the architecture. Kept here only so the retraction has something to point
+at.
 
 **2. The O(n) shard count was suspected then, and is refuted now.** *"cache counts of work awaiting
 selection - the slowest stage of controller loop and broker poller loop - because it's O(n) shards."*

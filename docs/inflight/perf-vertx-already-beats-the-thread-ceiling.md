@@ -23,7 +23,21 @@ reaches 1,000 exactly, twice.
 **Against the core engine at the same operating point - 19,577 msg/s, peak 2,751 - the Vert.x engine
 with an async callee is 1.65x.** Core is not slow; core is thread-bound.
 
-## Every previous Vert.x number in this repository was capped by the harness
+## Which Vert.x numbers were capped - and, importantly, which were not
+
+**Scope this carefully.** An earlier draft of this note said "every previous Vert.x number in this
+repository was capped by the harness". **That is too broad and would discard five valid findings.**
+
+The WireMock stub's ceiling binds only where the configured concurrency approaches its own
+`r x delay` - about 2,600 at a 100ms handler. **The version bisect ran at maxConcurrency 100 with a
+2ms delay and measured peak in flight of exactly 100.** Nowhere near the stub's ceiling. So **the
+0.4.0.0 cliff, the load-factor buffer finding, the `ExternalEngine` override attribution and the 35%
+recovery all stand.**
+
+**What was capped: the high-concurrency, long-delay Vert.x cells only** - which is to say, the ones
+this note is about, and no others.
+
+## How the stub capped them
 
 `VertxHttpStub` is WireMock configured with `containerThreads(maxConcurrency)`, and the caller's
 listener **sleeps on the serving thread**. Its javadoc sizes that pool to the caller's concurrency
@@ -62,6 +76,18 @@ that registers the response on `setTimer` and returns the event-loop thread imme
 - **Nothing at 0ms or 2ms**, which were not run here.
 - **Not a quiet-machine number.** Taken at load average ~100 on twelve cores. The ratio is the result;
   treat 32,332 as approximate.
+- **The 2.3x is not pure ceiling-removal.** Everything is on localhost, so the WireMock stub's ~2,600
+  sleeping Jetty threads were competing for the same twelve cores as the system under test. **Part of
+  that delta is the machine being relieved, not concurrency being unlocked.** Splitting the two needs a
+  sharded or remote stub. The honest claim is "the async stub removed a server-side ceiling *and* a
+  co-located thread burden".
+- **32,332 is 64% of the 50,000 theoretical, and the remaining 36% is unattributed.** The pure async
+  control reached 47,000 on four threads, so there is a real ~15,000/s gap owned by something in the
+  PC + Vert.x + client stack - possibly the Vert.x WebClient's connection pool, which nobody configured
+  deliberately. **Check that before quoting 32k as the engine's capability.**
+- **It also weakens what remained of "the client cannot supply".** The same `kafka-clients` fed 32,000
+  records/second at 100ms and 5,000 concurrent through Vert.x. **The client floor at this operating
+  point is at least 32k, not 20k.**
 - **Reactor and Mutiny are assumed, not measured.** They share `ExternalEngine`, so the argument
   carries, but only Vert.x was run.
 
