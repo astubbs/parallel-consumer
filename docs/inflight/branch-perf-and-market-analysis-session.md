@@ -14,7 +14,8 @@ and are deliberately not recorded here; they go stale within a day.
 | `perf/throughput-regression-since-0-3` | yes | The version bisect, the `bench/` harness, and the five-year `ExternalEngine` regression it found. **History was rewritten and force-pushed** - see below. |
 | `research/market-analysis-recut` | no | The market analysis, the four-arm benchmark comparison, licensing, franz-go, the landing page and its content plan. Two commits, re-cut clean. **Not pushed.** |
 | `research/market-analysis` | no | **Superseded. Delete.** The pre-re-cut version, whose history carries material that was redacted. Kept only until the re-cut is accepted. |
-| `perf/resume-shard-scan` | no | **Parked, measured, does nothing** - see [`parked-resume-shard-dispatch-scan.md`](parked-resume-shard-dispatch-scan.md). |
+| `perf/resume-shard-scan` | no | **Parked, measured, does nothing.** First attempt at the shard dispatch scan - resume rather than restart. See [`parked-resume-shard-dispatch-scan.md`](parked-resume-shard-dispatch-scan.md). |
+| `perf/split-shard-inflight` | no | **Parked, measured, 10x dispatch and 0% end to end.** Second attempt - split the shard into selectable and in-flight state. Same note. Found that the in-flight walk is how ordering is enforced. |
 
 ## The force-push, and what it does not fix
 
