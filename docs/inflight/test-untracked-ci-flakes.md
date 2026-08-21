@@ -105,6 +105,42 @@ sabotaged. **That rules out the selection layer only.** It says nothing about th
 retry, abandonment, the stale sweep - and the failing test's own arithmetic cannot say which of its
 two record sets the extra delivery belonged to, because it resets its counter between them.
 
+**2026-08-22: the same defect caught by a PRODUCTION ASSERT, which is far better evidence than the
+sighting above.** `DirectPullConcurrentSelectionTest.theInFlightCounterNetsBackToZeroWithPullsAndReturnsOverlapping`
+failed in a full core unit run - not a timeout, not an assertion of the test's own, but a raw
+`java.lang.AssertionError` thrown out of product code:
+
+```
+Caused by: java.lang.AssertionError
+    at bz.stub.parallelconsumer.state.PartitionState.onSuccess(PartitionState.java:261)
+    at bz.stub.parallelconsumer.state.PartitionStateManager.onSuccess(PartitionStateManager.java:315)
+    at bz.stub.parallelconsumer.state.WorkManager.onSuccessResult(WorkManager.java:177)
+    at bz.stub.parallelconsumer.state.WorkManager.handleFutureResult(WorkManager.java:384)
+```
+
+`PartitionState#onSuccess` is `assert (removedFromIncompletes);` - it fires when a record is completed
+whose offset is **no longer in `incompleteOffsets`**. That is a record succeeding twice, which is the
+same arithmetic as the `1001 for 1000` sighting above and the thing direct pull most needs not to do.
+Java `assert` is enabled under surefire, which is the only reason this was visible at all; **in
+production, with assertions off, this completes silently and the offset is committed twice.**
+
+**Why this sighting is worth more than the last one.** The 2026-08-22 pause/resume sighting could say
+only that a count was wrong. This one names the class, the method and the invariant, and it is on the
+test built specifically to overlap pulls with returns - so the interleaving is deliberate rather than
+incidental.
+
+**Reproduction: NOT reproduced in isolation - 4 clean runs of the whole class at the time of writing,
+with more still running.** Both sightings are therefore suite-only so far, which points at load or
+interleaving rather than a deterministic path.
+
+**What has NOT been ruled out, and must be before this is called a test bug.** The test's returner
+thread is single, and each `WorkContainer` reaches it once per `toReturn` insertion, so a double
+completion means either (a) `getWorkIfAvailable` handed the same container to two pullers - which the
+claim CAS is supposed to prevent and which `takenCount` would also have caught - or (b) an offset was
+completed once through the returner and once through some other path. **(b) is the unexamined one**,
+and it is the same gap the earlier entry names: the redelivery paths (retry, abandonment, the stale
+sweep) were never covered.
+
 **The guard that now exists**, so a recurrence is a diagnosis rather than another sighting:
 `DirectPullEngineParityTest.pausingStopsDeliveryAndResumingDeliversTheRestExactlyOnce` runs the same
 pause/resume shape against the direct-pull engine and asserts the delivered count is **exactly** the
