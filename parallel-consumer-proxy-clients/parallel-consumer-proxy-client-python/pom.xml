@@ -200,6 +200,13 @@
                                 <include>**/__pycache__/**</include>
                             </includes>
                         </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/demo</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
                     </filesets>
                 </configuration>
             </plugin>

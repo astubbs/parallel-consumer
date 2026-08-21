@@ -10,18 +10,19 @@ BIN := $(VENV)/bin
 REPO_ROOT := ../..
 CLASSPATH_FILE := target/sidecar-classpath.txt
 
-.PHONY: all build compile deps test lint ruff typecheck proto proto-check install clean distclean help
+.PHONY: all build compile deps demo-build test lint ruff typecheck proto proto-check install clean distclean help
 
 all: build test
 
 help:
 	@echo "build       deps + compile - what Maven's compile phase runs, and the whole of it"
 	@echo "deps        install the package and its dev tools into $(VENV)"
+	@echo "demo-build  build, plus the demo/ extra (confluent-kafka) - what demo/run.sh runs"
 	@echo "compile     parse every source file - the syntax check Maven's compile phase must fail on"
 	@echo "test        run the suite (spawns the test-mode sidecar for the end-to-end test)"
 	@echo "lint        ruff + mypy - the whole static analysis, and exactly what the CI row runs"
 	@echo "ruff        the linter alone (pyflakes, bugbear, bandit)"
-	@echo "typecheck   mypy alone: --strict over src, --check-untyped-defs over tests, tools and scripts"
+	@echo "typecheck   mypy alone: --strict over src, --check-untyped-defs over tests, tools, scripts, demo"
 	@echo "proto       regenerate the committed stubs from the frozen proxy.proto"
 	@echo "proto-check regenerate and fail if the committed stubs have drifted"
 	@echo "clean       remove the build tree, the caches and the cached sidecar classpath - NOT $(VENV)"
@@ -57,14 +58,23 @@ deps: $(BIN)/python
 # interpreter accepts but the declared floor (requires-python = ">=3.10") does not, since it parses
 # with whatever $(PYTHON) built $(VENV). Both belong to `make lint`.
 #
-# THE SAME FOUR DIRECTORIES AS `typecheck`, for the reason given there, and poc/ is excluded for the
+# THE SAME FIVE DIRECTORIES AS `typecheck`, for the reason given there, and poc/ is excluded for the
 # reason given in [tool.ruff] and [tool.mypy] in pyproject.toml: it is preserved evidence, not
 # maintained source. Keep the three lists in step.
 #
 # Output lands in __pycache__ beside each source, which is already on both clean lists - the `clean`
 # target below and the maven-clean-plugin filesets in pom.xml.
 compile: deps
-	$(BIN)/python -m compileall -q src tests tools scripts
+	$(BIN)/python -m compileall -q src tests tools scripts demo
+
+# THE DEMO'S OWN INSTALL, and the only target that installs anything `make build` does not.
+# confluent-kafka is the AK core arm's Kafka client and what seeds the backlog; it is not a
+# dependency of the library, of its tests, or of the conformance runner, so it lives in its own
+# extra and off the CI row's critical path. demo/run.sh calls THIS rather than repeating the pip
+# line, so a developer and the demo install identically - the same rule that makes `make` the one
+# recipe everywhere else here.
+demo-build: build
+	$(BIN)/pip install --quiet --editable '.[demo]'
 
 test: build $(CLASSPATH_FILE)
 	$(BIN)/python -m pytest -q
@@ -85,7 +95,7 @@ ruff: build
 # so a runner that stopped compiling must redden this lane rather than the Java module's.
 typecheck: build
 	$(BIN)/mypy --strict src
-	$(BIN)/mypy --check-untyped-defs tests tools scripts
+	$(BIN)/mypy --check-untyped-defs tests tools scripts demo
 
 proto: build
 	$(BIN)/python tools/generate_proto.py
@@ -121,7 +131,7 @@ $(CLASSPATH_FILE):
 # one, change the other.
 clean:
 	rm -rf target build dist src/*.egg-info .pytest_cache .ruff_cache .mypy_cache
-	find src tests tools scripts -type d -name '__pycache__' -prune -exec rm -rf {} +
+	find src tests tools scripts demo -type d -name '__pycache__' -prune -exec rm -rf {} +
 
 # The deeper clean, kept because the old `clean` did it and it is genuinely wanted when a
 # dependency pin changes under an existing venv. Not what Maven runs.

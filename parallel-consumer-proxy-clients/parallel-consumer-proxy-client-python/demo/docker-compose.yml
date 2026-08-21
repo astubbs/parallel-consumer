@@ -1,0 +1,98 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# THE ONE-COMMAND PATH for the Python demo (astubbs#242, plan unit U35, R20).
+#
+# THE BROKER IS A SIBLING, AND THAT IS A RULE RATHER THAN A LAYOUT CHOICE. Starting a broker from
+# inside a container requires mounting the host Docker socket, and U35 forbids it: a documented
+# socket mount is root-equivalent host access taught as the normal way to run the product. So the
+# demo container is given an ADDRESS instead of a socket, and reaches a compose sibling on the
+# demo's own network.
+#
+# THE SIDECAR IS NOT A SERVICE HERE, deliberately. It would be easy to add one, and it would teach
+# the wrong thing: KTD41's product model is that the client library spawns and supervises the
+# sidecar itself, so the user never installs, deploys or operates a process. A compose service
+# would show a deployment the product does not ask for. The Python client spawns it as a child
+# process inside its own container, exactly as it does natively.
+#
+# THIS FILE SERVES BOTH PATHS, WHICH THE SEED'S DOES NOT. demo/run.sh --native also brings up the
+# `broker` service here rather than starting a Testcontainers broker of its own, because the
+# alternative is putting a Docker client library into the demo of a Kafka client library. That is
+# why the broker publishes a HOST listener as well as the internal one - the native demo runs
+# outside this network.
+#
+# TWO WAYS IN, AND BOTH ARE SUPPORTED:
+#
+#   cd <this directory> && docker compose up      # the plain one, defaults, nothing else needed
+#   demo/run.sh --docker [--records N ...]        # the same thing with the demo's flags
+#
+# `docker compose up` on its own is the path to keep working: it is what a reader who has never seen
+# this repository will type. It needs no arguments, no environment and no wrapper script - the demo
+# service runs with the demo's own defaults, and PC_DEMO_ARGS below is empty unless run.sh sets it.
+# Add --build after changing any source, and `docker compose down` to remove the broker afterwards.
+#
+# The demo container exits when the run finishes; the broker keeps running until you stop it. run.sh
+# passes --abort-on-container-exit --exit-code-from demo so that a scripted run stops on its own and
+# reports the demo's exit code rather than compose's.
+
+name: pc-python-demo
+
+services:
+  broker:
+    # Pinned as a literal because a compose file cannot derive anything. It must track
+    # <kafka.version> in the root pom the same way the Java demo's DemoBroker#brokerImage does at
+    # run time - the mapping is CP major = AK major + 4, so AK 3.9.x means CP 7.9.
+    image: confluentinc/cp-kafka:7.9.0
+    ports:
+      # PUBLISHED AND INTERNAL MUST BE THE SAME NUMBER. An advertised listener carries a port as
+      # well as a host, so a remapped published port would advertise one the host cannot reach and
+      # the native demo's first metadata refresh would send it somewhere with nothing listening.
+      - "${PC_DEMO_BROKER_PORT:-19095}:${PC_DEMO_BROKER_PORT:-19095}"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # THREE LISTENERS, and the third is what the native path needs. PLAINTEXT is bound to the
+      # service name rather than 0.0.0.0 because this image formats its KRaft storage with the same
+      # config it boots with, and the format step refuses a non-routable advertised address. HOST is
+      # bound to 0.0.0.0 - it must accept a connection arriving through Docker's published port -
+      # and ADVERTISED as 127.0.0.1, which is where a process on the host actually reaches it.
+      KAFKA_LISTENERS: PLAINTEXT://broker:9092,HOST://0.0.0.0:${PC_DEMO_BROKER_PORT:-19095},CONTROLLER://broker:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092,HOST://127.0.0.1:${PC_DEMO_BROKER_PORT:-19095}
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # The demo forms one consumer group per arm, one after another, and the default three-second
+      # settling delay would be charged to every one of them.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 500
+    healthcheck:
+      # The demo must not start before the broker can serve an API request. Listing topics is the
+      # cheapest call that proves that, and it proves more than a port being open does.
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "broker:9092", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  demo:
+    build:
+      # The repository, because the sidecar is built from the Maven reactor and a reactor module
+      # cannot build without its parents and siblings. The root .dockerignore is what keeps this
+      # from uploading every target/ directory in the tree; the Dockerfile explains the pair.
+      context: ../../..
+      dockerfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/demo/Dockerfile
+    # A demo that has printed its tables is done. Without this, compose's default would restart a
+    # container that exited cleanly and the reader would watch the whole run happen again.
+    restart: "no"
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      # Supplying this is what stops the demo asking to be run through run.sh: unlike the seed, this
+      # demo never starts a broker itself, in a container or out of one.
+      PC_DEMO_BOOTSTRAP: broker:9092
+      # The flags demo/run.sh was called with, forwarded as one string.
+      PC_DEMO_ARGS: ${PC_DEMO_ARGS:-}
