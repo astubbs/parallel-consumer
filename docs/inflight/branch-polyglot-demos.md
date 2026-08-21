@@ -196,3 +196,38 @@ assertion in the harness would close that.
   `Formatting metadata directory ... No space left on device`, and the demo reports only "starting
   the broker failed". Worth a friendlier message, and worth knowing before running the full eleven
   again on one machine.
+
+
+## A third wave is owed: every serious client, as its own arm
+
+Owner correction (2026-08-21): **excluding sarama from the Go demo was wrong, and so is the
+equivalent exclusion in every other language.** The contract said "consider running both"; it now
+says run them all. Each of these is somebody's production choice, and answering "is this fast in my
+language" for one client out of three leaves two thirds of readers guessing.
+
+Known to be missing, from the agents' own READMEs:
+
+| language | runs | also serious, not yet an arm |
+|---|---|---|
+| Go | franz-go | **sarama**; confluent-kafka-go (blocked by `CGO_ENABLED=0` in its image - a real constraint, and the kind worth writing down) |
+| Python | confluent-kafka | kafka-python, aiokafka |
+| TypeScript | kafkajs | confluentinc-kafka-javascript (librdkafka binding) |
+| Ruby | rdkafka | ruby-kafka is archived - a legitimate exclusion, and it belongs in the README with its reason |
+| others | one each | unaudited; each demo's README must now name what it found and what it skipped, with reasons |
+
+Two things had to change before this was even possible, and both are done: the harness compares the
+**required** arms and permits extras, and Java is no longer exempt from that comparison. Go had
+already costed a sarama arm, found it cheap, and declined **because the harness would have failed it
+for obeying the contract** - so the rule and the check were in direct conflict.
+
+## And the internals are NOT the seed's to dictate
+
+Owner correction, same conversation: **the Java demo is a seed, not a template.** Uniformity is owed
+on everything the contract specifies - flags, banner, tables, arms, container rules, exit codes - and
+on nothing below that line. Each demo should be written the way someone fluent in that language would
+write it: its idioms, its concurrency primitives, its layout, its test framework.
+
+This is now stated in the contract under "Idiomatic inside, identical outside", because the risk was
+live rather than theoretical: eleven agents were handed a Java reference and told to mirror a
+contract, and the natural failure mode is transliteration. A Java program rewritten in Ruby teaches a
+Ruby reader nothing about using this client in Ruby.

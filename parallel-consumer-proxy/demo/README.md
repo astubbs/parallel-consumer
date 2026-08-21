@@ -114,15 +114,38 @@ AK core (franz-go)          rather than   AK core
 go-grpc (this client)       rather than   go-grpc
 ```
 
-**Where a language has more than one serious client, say so in the demo's own README**, and consider
-running both as separate arms - the choice materially changes the number, and a reader evaluating
-"is this fast in my language" is really asking about the client they already use.
+**Where a language has more than one serious Kafka client, RUN THEM ALL, each as its own arm.** Not
+"consider" - run them. A reader asking "is this fast in my language" is really asking about the
+client they already use, and answering for one of three leaves two thirds of them guessing. Go has
+franz-go, confluent-kafka-go and sarama; Python has confluent-kafka, kafka-python and aiokafka;
+TypeScript has kafkajs and confluentinc-kafka-javascript. Each is somebody's production choice.
 
-An extra arm is a **legitimate addition, not drift**. `bin/ci-demo-conformance.sh` compares the two
-arms every language must have and permits additional ones, reporting them rather than failing them.
-That had to be said out loud: the first version of that script required every language's output to
-match exactly, so a language adding the second client this section invites would have been failed for
-obeying it.
+Name the clients you found in the demo's own README, including any you deliberately did **not** run,
+with the reason. A client excluded for a real constraint - it needs cgo and the image is
+`CGO_ENABLED=0`, it is archived and unmaintained - is a finding worth writing down. A client excluded
+because one arm felt tidier is not.
+
+Extra arms are a **legitimate addition, not drift**. `bin/ci-demo-conformance.sh` compares the arms
+every language must have and permits additional ones, reporting them rather than failing them. That
+had to be said out loud: its first version required every language's output to match exactly, so a
+language adding a second client would have been failed for doing what this section asks.
+
+## Idiomatic inside, identical outside
+
+**The Java demo is a seed, not a template.** What must match across eleven languages is everything
+this document specifies: the flags and their precedence, the banner, the tables, the arms, the
+container rules, the exit codes. **Nothing about the internals must match, and trying to make them
+match makes every demo worse.**
+
+Write each demo the way someone fluent in that language would write it. Use its idioms, its
+concurrency primitives, its error handling, its project layout, its test framework. If the Java
+version uses a class where your language wants a function, use a function. If it threads a value
+through three objects and your language has a better way, take the better way. A Java program
+transliterated into Ruby is not a Ruby demo - it is a Java demo that happens to run under Ruby, and
+it teaches a Ruby reader nothing about using this client in Ruby.
+
+This is not licence to diverge on behaviour. The contract above is exactly the part that is not
+yours to reinterpret; everything below the output is.
 
 ### Every arm reports what it did, not just how fast
 

@@ -178,9 +178,13 @@ done
 required_only() { grep -E "^(DIAL|TITLE|HEADER|ROW (AK-CORE|SIDECAR))" "$1"; }
 extra_arms() { grep -E "^ROW " "$1" | grep -vE "^ROW (AK-CORE|SIDECAR)" || true; }
 
+# Java is NOT exempt any more. It used to be, because it carries diagnostic arms no other language
+# has - but that is exactly what the required-arms comparison above now handles: its AK core and
+# sidecar arms are compared like everyone else's, and pc-core, java-direct, java-grpc-uds and
+# java-raw-grpc are reported as extras. The seed being outside its own contract's check was never
+# defensible; it is the one demo most likely to drift, since it is where changes start.
 reference=""; drifted=0
 for lang in "${ran[@]}"; do
-    [ "$lang" = "java" ] && continue
     normalise_arms "$WORK/$lang.skel" > "$WORK/$lang.norm.all"
     required_only "$WORK/$lang.norm.all" > "$WORK/$lang.norm"
     if [ -s "$WORK/$lang.extra" ] || extra_arms "$WORK/$lang.norm.all" > "$WORK/$lang.extra"; then
