@@ -22,9 +22,13 @@ The same records through two arms:
 - **AK core** - that language's own Kafka client, one record at a time. In Java that is a plain
   `KafkaConsumer`. Always spelled "AK core", never bare "core", which reads as
   `parallel-consumer-core` ([`CONCEPTS.md`](../../CONCEPTS.md)).
-- **The sidecar arm** - the application as a *foreign client*: it never touches Kafka. Its client
-  library spawns the sidecar, receives records over a socket, runs its own function on them, and
-  reports outcomes back.
+- **The sidecar arm** - the application as a *foreign client*. Its client library spawns the sidecar,
+  receives records over a socket, runs its own function on them, and reports outcomes back. **The
+  application does no Kafka I/O on this path**: the sidecar owns the consumer, the producer, the
+  group membership and the offsets. In a genuinely foreign language that is the whole story - the
+  application needs no Kafka client library at all. In *this* demo it is a statement about the path,
+  not about the process: the same JVM creates the topic, produces the backlog, and runs the AK core
+  and pc-core arms with ordinary Kafka clients, because a comparison needs both sides.
 
 **Java is the seed because it is the only place the sidecar hop can be priced honestly.** In every
 other language the two arms are different client libraries as well as different engines. Here every

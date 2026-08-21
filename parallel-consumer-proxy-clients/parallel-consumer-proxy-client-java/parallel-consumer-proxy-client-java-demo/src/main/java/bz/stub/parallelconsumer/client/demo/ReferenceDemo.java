@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -107,6 +108,13 @@ public final class ReferenceDemo {
 
     private static final String AK_CORE = "AK core";
 
+    /**
+     * The capability the client library declares (WireMapping's own {@code DISPATCH_CAPABILITY}).
+     * Named here so the hand-written arm and the test that guards it cannot drift from each other
+     * by a spelling.
+     */
+    static final String DISPATCH_CAPABILITY = "dispatch";
+
     private final DemoOptions options;
 
     private final DemoBroker broker;
@@ -139,7 +147,7 @@ public final class ReferenceDemo {
         try (DemoBroker broker = DemoBroker.resolve(options.bootstrap().orElse(null))) {
             String topic = options.topic()
                     .orElseGet(() -> "pc-demo-" + System.nanoTime());
-            new ReferenceDemo(options, broker, topic).run();
+            runFor(options, broker, topic);
         }
     }
 
@@ -156,7 +164,24 @@ public final class ReferenceDemo {
                 + "Flags beat the environment beats the defaults.");
     }
 
-    private void run() throws Exception {
+    /**
+     * Runs the whole demo and hands back every arm's result.
+     *
+     * Returns the results rather than only printing them, so that {@code ReferenceDemoIT} can
+     * assert what the arms actually did. It is the single entry point for both callers, so the
+     * test drives the same code the reader runs rather than a parallel path that could pass while
+     * the real one is broken.
+     * <p>
+     * Public because this module's convention puts integration tests in their own
+     * {@code integrationTests} package - the rule that stops surefire silently not collecting them -
+     * and this module publishes no artifact, so the wider visibility costs nothing.
+     */
+    public static List<ArmResult> runFor(DemoOptions options, DemoBroker broker, String topic)
+            throws Exception {
+        return new ReferenceDemo(options, broker, topic).run();
+    }
+
+    private List<ArmResult> run() throws Exception {
         log.info("\nEffective configuration:\n  {}\n  topic = {}", options, topic);
 
         broker.ensureTopic(topic, options.partitions());
@@ -173,7 +198,7 @@ public final class ReferenceDemo {
 
         if (!options.bigReplayWanted()) {
             log.info("\nBig replay skipped (--replay-factor {}).", options.replayFactor());
-            return;
+            return small;
         }
 
         int total = options.bigReplayRecords();
@@ -189,6 +214,10 @@ public final class ReferenceDemo {
         big.add(javaRawGrpc(total));
         report("Big replay - " + total + " records, parallel arms only (AK core is serial and would"
                 + " take " + (total * options.delayMs() / 1000) + "s+)", big, baselineOf(small), true);
+
+        var everything = new ArrayList<ArmResult>(small);
+        everything.addAll(big);
+        return everything;
     }
 
     private static ArmResult baselineOf(List<ArmResult> results) {
@@ -274,8 +303,12 @@ public final class ReferenceDemo {
     /**
      * The client library over a real sidecar - the arm the whole design exists for.
      * <p>
-     * This process is a foreign client: it spawns a binary, receives records over a socket, runs
-     * its own function on them, and reports outcomes back. It never touches Kafka itself.
+     * On this path the application does no Kafka I/O: it spawns a binary, receives records over a
+     * socket, runs its own function on them, and reports outcomes back, while the sidecar owns the
+     * consumer, the producer, the group membership and the offsets. That is a claim about the
+     * <em>path</em>, not about this process - the same JVM seeds the topic and runs the AK core and
+     * pc-core arms with ordinary Kafka clients. A genuinely foreign application carries no Kafka
+     * client library at all, which is the property this arm stands in for.
      */
     private ArmResult javaGrpc(int target) throws Exception {
         log.info("\n=== java-grpc starting over {} records ===", target);
@@ -366,17 +399,8 @@ public final class ReferenceDemo {
                 // for as long as the line was missing - a hand-written protocol message gets no
                 // help from the client library, which is itself part of what this control arm
                 // demonstrates.
-                var configure = Configure.newBuilder()
-                        .addTopics(topic)
-                        .setOrdering(bz.stub.parallelconsumer.proxy.protocol.v1.ProcessingOrder
-                                .PROCESSING_ORDER_UNORDERED)
-                        // Declared for the same reason as the ordering above: the client library
-                        // sends this token (WireMapping's DISPATCH_CAPABILITY) and an omitted list
-                        // negotiates something else, so leaving it out would compare two different
-                        // sessions and call the difference the library's cost.
-                        .addCapabilities("dispatch")
-                        .setMaxConcurrency(options.maxConcurrency());
-                configure.putAllKafkaProperties(broker.consumerProperties(groupId("java-raw-grpc")));
+                var configure = rawConfigure(options, topic,
+                        broker.consumerProperties(groupId("java-raw-grpc")));
                 stream.onNext(ClientMessage.newBuilder().setConfigure(configure).build());
 
                 return awaited("java-raw-grpc", startedAt, processed, done, target);
@@ -400,11 +424,42 @@ public final class ReferenceDemo {
     }
 
     private ClientOptions clientOptions(String groupId) {
+        return libraryOptions(options, topic, broker.consumerProperties(groupId));
+    }
+
+    /**
+     * What the client-library arms ask for. Extracted, with {@link #rawConfigure} below, so that a
+     * test can hold the two side by side - see {@code ConfigureParityTest}.
+     */
+    static ClientOptions libraryOptions(DemoOptions options, String topic,
+                                        Map<String, String> kafkaProperties) {
         return ClientOptions.builder()
                 .topics(Collections.singletonList(topic))
                 .maxConcurrency(options.maxConcurrency())
                 .ordering(ProcessingOrder.UNORDERED)
-                .kafkaProperties(broker.consumerProperties(groupId))
+                .kafkaProperties(kafkaProperties)
+                .build();
+    }
+
+    /**
+     * The same request, written by hand for the control arm.
+     *
+     * <b>This method exists because getting it wrong is not hypothetical.</b> Twice now the
+     * hand-written message has silently differed from what the library sends - first with
+     * {@code ordering} unset, which meant that arm ran key-ordered against four unordered ones,
+     * and then with the capability list omitted, which negotiated a different session. Both looked
+     * exactly like a working arm and both changed what the numbers meant. Building it here rather
+     * than inline is what lets a test assert the two agree.
+     */
+    static Configure rawConfigure(DemoOptions options, String topic,
+                                  Map<String, String> kafkaProperties) {
+        return Configure.newBuilder()
+                .addTopics(topic)
+                .setOrdering(bz.stub.parallelconsumer.proxy.protocol.v1.ProcessingOrder
+                        .PROCESSING_ORDER_UNORDERED)
+                .addCapabilities(DISPATCH_CAPABILITY)
+                .setMaxConcurrency(options.maxConcurrency())
+                .putAllKafkaProperties(kafkaProperties)
                 .build();
     }
 
@@ -414,7 +469,7 @@ public final class ReferenceDemo {
         }
     }
 
-    private static ArmResult awaited(String arm, long startedAt, AtomicInteger processed,
+    static ArmResult awaited(String arm, long startedAt, AtomicInteger processed,
                                      CountDownLatch done, int target) throws InterruptedException {
         if (!done.await(ARM_BUDGET.toMillis(), TimeUnit.MILLISECONDS)) {
             throw new IllegalStateException(arm + " stalled at " + processed.get() + " of " + target);
