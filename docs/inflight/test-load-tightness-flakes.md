@@ -11,6 +11,7 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `DbTest` | 2/20 | postgres container start under contention |
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 1 sighting (2026-08-21) | `checkHowManyRecordsWithKeyPresent` saw 1 record where 2 were expected |
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
 `TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,
@@ -66,6 +67,31 @@ since been *solved* and left the family, which gives you their signatures to rul
 is an unwinnable await plus a `SubscriptionState` reset positioned past the data
 (`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`), and the drain zombie is a poll spin
 in `DRAINING` state (`pc-silent-stall-under-contention-2026-07-29.md`).
+
+### `committedOffsetRemoved[1] latest` - same test and parameter as a SOLVED flake, different assertion (2026-08-21, astubbs#328)
+
+Seen once on astubbs#328's Integration Tests job, which had passed on that PR's previous head.
+Not that PR's doing: it changes no `parallel-consumer-core` code, and its one core edit is a javadoc
+comment.
+
+```
+checkHowManyRecordsWithKeyPresent:538  expected: 2  but was: 1
+myCollection was: [ConsumerRecord(topic = LoadTest-1081004001, partition = 0, offset = 202,
+                   key = key-50, value = compactor)]
+```
+
+**Do not file this under the solved `[1] latest` write-up without checking, and here is why.** That
+one - `latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md` - is the same test AND the same
+parameter, which makes it the obvious home. Its signature is a `ConditionTimeoutException` on "not to
+be empty": **zero** records, an await that never completes. This sighting is a *count* - one record
+where two were expected, arriving fast enough to fail the assertion rather than time it out. Same
+door, different failure. Assuming they are one thing would either resurrect a closed investigation or
+bury a new one.
+
+The remaining record is the compaction simulation's own (`value = compactor`), so what is missing is
+the other one the assertion expects to still be present. Whoever picks this up wants the same
+reproduction the `[3] none` sighting names below, pointed at the `latest` parameter - and should
+treat one sighting as one sighting, not a rate.
 
 The `committedOffsetRemoved[3] none` sighting, for whoever picks it up: only the `NONE` parameter runs
 that setup block, where a `subscribe`d raw `KafkaConsumer` gets a single `poll(1s)` to complete its join
