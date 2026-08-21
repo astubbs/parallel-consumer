@@ -16,7 +16,15 @@ and are deliberately not recorded here; they go stale within a day.
 | `research/market-analysis` | no | **Superseded. Delete.** Pre-re-cut, its history carries redacted material. |
 
 **Experiments - each a hypothesis, an implementation, a measurement, and a reason it did not ship.**
-None is a merge candidate; they exist so the negative results keep their evidence.
+They exist so the negative results keep their evidence.
+
+**One of them DID ship, contradicting what this section used to claim.** `perf/lock-free-mailbox` is
+merged into the trunk: `AbstractParallelEoSStreamProcessor#workMailBox` is a `CountedTransferQueue`
+today, carrying an `EXPERIMENT:` comment. Its measurement is **+3.3% at 100ms and -2.7% at 0ms** - a
+trade, not a win, and the losing side is the 0ms operating point that the virtual-threads and
+thread-ceiling work has since made the interesting one. **That is a live decision, not a note:** keep
+it and delete the `EXPERIMENT:` comment, or revert it. It should not stay in the tree labelled as an
+experiment indefinitely.
 
 | Branch | Base | What it measured |
 |---|---|---|
