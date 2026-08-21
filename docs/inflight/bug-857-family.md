@@ -711,3 +711,42 @@ a one-off.
 passed all seven chaos scenarios. Two adjacent commits, a prose-only diff between them, red then
 green: whatever draws this signature is drawn per seed, and no tree-content explanation survives that
 pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
+
+**Fifteenth sighting, 2026-08-21 - both revoke-under-work arms in a single run, and a prose-only
+diff that stayed red.** One `Chaos Pain Suite` red on astubbs#57 at 03:06Z, seven scenarios run, two
+errored. Numbers from the uploaded failsafe artifacts, per the retrieval note above - the console
+log truncated (see `docs/solutions/workflow-issues/gh-run-view-log-truncation.md`), so the artifact
+was the only source that could name the arms at all.
+
+| Time (Z) | Branch | Head | Run | Arm that fired | Violations | `lagStagnation` peak | Seed |
+|---|---|---|---|---|---|---|---|
+| 03:06 | `fix/859-metrics-leak-plus-cherrypicks` (astubbs#57) | `909b865ab` | [32442176015](https://github.com/astubbs/parallel-consumer/actions/runs/32442176015/job/96654903232) | `ChaosRevokeUnderWorkDrainIT` | 1 `CLASS2_STALL` | 153912ms | `257091693002036498` |
+| 03:06 | as above | as above | as above | `ChaosRevokeUnderWorkIT` | 20 `CLASS2_STALL` | 154102ms | `1883070987812776347` |
+
+Both peaks land 190ms apart and inside the band this file has measured repeatedly against the 150s
+bound, so they corroborate the constant rather than adding to it. Both errored as
+`org.awaitility.core.TerminalFailureException: probe violation` at the shared fail-fast probe,
+`AbstractRevokeUnderWorkScenario:277`.
+
+**The new observation is the pair of arms, and the ratio.** The drain arm and the plain arm fired in
+the *same* run on different seeds - the drain arm is the control this file started tracking with
+seed `3426636341371267227`, and it has now fired alongside its own experimental arm rather than
+opposite it. And `ChaosRevokeUnderWorkIT`'s 20 violations span 20 **distinct** partitions, exactly
+one apiece. The entry recorded against seed `4044221734199516240` warns that the violation count is
+not a per-partition fingerprint, having seen 5, 7 and 10 from one seed; a clean 1:1 does not
+overturn that, but it is the first run in this ledger where the two numbers match exactly, so it is
+worth having on record if a mechanism is ever proposed that predicts one from the other.
+
+**The prose-only control repeats, and this time it stayed red.** `909b865ab` differs from its parent
+`3110d0fef` by one markdown file - `docs/inflight/pr-57-metrics-leak.md`, 8 lines added, 9 removed,
+no code - and [run 32352122268](https://github.com/astubbs/parallel-consumer/actions/runs/32352122268)
+on that parent was also red. The pair recorded against seed `4044221734199516240` measured a
+prose-only diff going red then green; this one is the same experiment with the opposite outcome.
+Red→red does not discriminate the way red→green did - it is consistent with seed-dependence without
+being evidence for it - and it is recorded as the weaker half of that pair rather than as
+corroboration.
+
+Note this branch is **not** a branch-innocence control. Unlike the comment-only head recorded for
+astubbs#323, astubbs#57 changes main code (`PCMetrics`, `PartitionState`, `PartitionStateManager`,
+`ShardManager`), so nothing here argues the branch is uninvolved; only the parent-to-head step is
+prose-only.
