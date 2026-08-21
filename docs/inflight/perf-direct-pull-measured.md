@@ -278,6 +278,38 @@ stall. Each failure is an assertion that encodes the pre-loaded-queue design:
   test, both control-loop-latency-bound - but those two numbers were taken under very different load
   and **must not be quoted as a measurement**.
 
+### Correction, 2026-08-22: the count above is wrong, and one of the failures was not on the list
+
+Re-run on `test/direct-pull-coverage` at a one-minute load of 8-13, this section's claim was checked
+rather than inherited. **The suite is 373 tests, not 369, and it produced FOUR distinct failing
+methods, not three.** Two of the three above reproduced. The third did not, and a fourth appeared
+that this section does not mention.
+
+- The pause and the dispatch-granularity failures **reproduced exactly as described**, and both are
+  correctly diagnosed here. They are now fixed in the tests rather than in the engine: the
+  dispatch-granularity one awaits the converged state instead of reading it at the instant the first
+  handler starts (its assertion is unchanged - still exactly 0 awaiting and exactly 2 out), and the
+  pause one is split, with the "strictly more than `maxConcurrency`" claim moved into
+  `pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords`, where it keeps its original
+  strength for the shipped engine and is visibly skipped for direct pull.
+- **`lessKeysThanThreads` did not fail at all**, which is consistent with the load-artefact reading.
+- **`OrderingModeDispatchParityTest.keyAndUnorderedCostTheSameToDispatch` failed - on BOTH engines.**
+  It also fails on the default engine on the same box, so it is not a direct-pull failure at all and
+  belongs in the flake ledger, where it now is.
+- **A fourth failure, which is the one that matters:**
+  `pausingAndResumingProcessingShouldWork` reported **1001 records processed where 1000 were
+  produced**. That is one extra call to the user function, and this section's headline claim of "no
+  double delivery" cannot be made on the evidence available. It did not reproduce in 11 attempts and
+  is recorded in
+  [`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md) with what was and was not ruled out.
+
+**So the sentence "369 tests, three distinct failures, none of them a correctness violation" should
+be read as: a suite run on a busy machine, counted once, with the failures triaged by inspection
+rather than by re-running them.** Selection itself is now covered - see `DirectPullConcurrentSelectionTest`,
+`DirectPullWorkerPoolTest` and `DirectPullEngineParityTest`, each mutation-tested - and no correctness
+violation has been reproduced. But "the suite passed except for three assertions about the old design"
+was a stronger claim than the run supported.
+
 ## Reproducing it
 
 ```sh
