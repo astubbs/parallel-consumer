@@ -345,14 +345,64 @@ Re-run twice after the reader-experience wave, as
 - the two absolute assertions the conformance harness makes hold on the captured output: no
   `bootstrap.servers` anywhere in the demo's own lines, and no latency, percentile, `p95` or `p99`.
 
-**The container path was not run**, and that is the one gap. `Dockerfile` and `docker-compose.yml` are
-written and mirror the Java seed's, including the two rules that are not negotiable - the broker is a
-compose sibling and the host Docker socket is never mounted, and the sidecar is a child process
-rather than a compose service - but building the image means building the whole reactor inside it,
-and the machine was running ten agents. The contract is explicit that "a demo with one tested entry
-point has an untested entry point", so **this is unproven, not proven-elsewhere.**
+**The container path has now been run, and it passes.** This was the gap two earlier sessions left
+open. `demo/run.sh --docker --records 20 --concurrency 4 --partitions 2 --replay-factor 2`, image
+built from scratch, **exit 0**. What it proves, beyond "it runs":
 
-**It is also not wired into `bin/ci-demo-test.sh`**, which runs the Java demo through both entry
+- the banner is the first line the demo container prints, with nothing above it - the container
+  entry point is the `Dockerfile`'s, so this is a genuinely separate proof from the native one;
+- **the sidecar spawns as a child process inside the demo's own container** (`Sidecar listening on
+  loopback port 43325`, then again on a different port for the big replay). That is the rule the
+  compose file declines to break by adding a sidecar service, and until now nothing had shown it
+  actually works in a container;
+- the broker was reached as a compose sibling, with no host Docker socket anywhere;
+- **the same deterministic figures as the two native runs**: 20 records over 20 keys in both arms of
+  the small replay, 40 over 40 in the big one. Three runs, two entry points, one machine state that
+  changed wildly in between - and those four numbers did not move while every timing did. That is
+  the determinism claim tested rather than restated;
+- the two absolute assertions hold on the demo's own 50 lines: no `bootstrap.servers`, no latency.
+
+The image build took **310s of Maven inside the container** plus about two minutes to export and
+load a 288MB layer, on a box carrying eleven agents. That is why earlier sessions skipped it; it is
+worth knowing the cost is real rather than a one-off.
+
+#### The broker is NOT quiet, and the compose fix that was supposed to do it cannot
+
+Measured on this run: the broker emitted **584 `INFO` lines and 1 `WARN`** while
+`KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` and `KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN` were both set and both
+confirmed present in the container's environment. **This is not a Scala problem** - the same two
+lines were added to all eleven compose files by the wave that wrote the contract's "the broker is
+quiet" clause, so all eleven are equally affected, and nothing here is this branch's to change.
+
+Root-caused rather than guessed at, by reading the image's own template
+(`/etc/confluent/docker/log4j.properties.template` in `confluentinc/cp-kafka:7.9.0`):
+
+```
+log4j.rootLogger={{ env["KAFKA_LOG4J_ROOT_LOGLEVEL"] | default('INFO') }}, stdout
+{% set loggers = { 'kafka': 'INFO', 'kafka.controller': 'TRACE',
+                   'kafka.log.LogCleaner': 'INFO', 'state.change.logger': 'TRACE', ... } -%}
+{% if env['KAFKA_LOG4J_LOGGERS'] %} ... merge ... {% endif %}
+```
+
+`KAFKA_LOG4J_ROOT_LOGLEVEL` **worked** - the generated file really does say `log4j.rootLogger=WARN`.
+It is simply outranked: the template then writes a fixed per-logger map, and a named logger beats the
+root in log4j. So `kafka` stays at `INFO`, and `kafka.controller` and `state.change.logger` stay at
+**`TRACE`** - which are, precisely, the "controller elections and log-segment chatter" the contract
+names as the noise it was trying to remove. The one variable that can lower them is
+`KAFKA_LOG4J_LOGGERS`, which merges into that map:
+
+```yaml
+KAFKA_LOG4J_LOGGERS: "kafka=WARN,kafka.controller=WARN,state.change.logger=WARN,kafka.log.LogCleaner=WARN"
+```
+
+Whoever owns the compose files should make that change in all eleven at once and re-measure, rather
+than eleven branches each editing the file they were told not to. **The clause is currently a no-op
+on the noisiest categories**, and nothing would have caught it, because no check counts broker lines
+and the native path never sees them at all - Testcontainers does not attach the broker's stdout to
+the demo's.
+
+**It is still not wired into `bin/ci-demo-test.sh`**, which runs the Java demo through both entry
 points on every pull request. That file is shared across the fan-out and this branch does not own it;
-whoever integrates the eleven demos should add the Scala row, and the container path should be
-considered untested until that row has run once.
+whoever integrates the eleven demos should add the Scala row. The container path has now been proven
+once, by hand, on one machine - which is not the same as being *kept* working, and that is what the
+row is for.
