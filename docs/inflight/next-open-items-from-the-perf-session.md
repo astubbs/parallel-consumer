@@ -7,31 +7,24 @@
 Opened 2026-08-22. **The open items from the session, in the order they deserve attention**, so the
 next person does not have to reconstruct them from forty commits.
 
-## 1. A possible real regression in UNORDERED dispatch - and I nearly tuned it away
+## 1. SETTLED - there was no UNORDERED dispatch regression
 
-`OrderingModeDispatchParityTest` **fails on the merged branch**, and is deliberately left failing.
+This entry used to claim one, on the strength of `OrderingModeDispatchParityTest` failing. **It was
+the test, not the code.** It timed both modes in a suite that runs test methods in parallel, and the
+two arms are not equally sensitive to contention, so the comparison moved without the code moving. A
+bisect across every merge point came back flat. The test now counts entries the scan examines instead
+of timing it, and passes.
 
-| | Before the merge | After |
-|---|---:|---:|
-| `KEY` dispatch | 43ms | **24ms** |
-| `UNORDERED` dispatch | 97ms | **223ms** |
-| Ratio (bound is 4.0) | 2.3 | **9.0** |
+What the counting revealed is worth knowing and lives in
+[`perf-unordered-dispatch-rescans-the-inflight-prefix.md`](perf-unordered-dispatch-rescans-the-inflight-prefix.md):
+UNORDERED genuinely re-walks the whole in-flight prefix on every pass, KEY examines exactly one entry
+per record, and the ratio is workload-dependent rather than a constant.
 
-**This is not flake-shaped.** A flake moves a ratio around; here one arm moved consistently in one
-direction across every run. The merged work - conservation bookkeeping on every admission and
-retirement, plus direct pull's claim CAS - touches the scan path exactly where `UNORDERED` walks
-hardest.
-
-**The process failure is worth recording alongside the number.** I changed the test's method three
-times trying to make it pass: `@Isolated` (wrong tool - it governs in-JVM parallelism, and surefire
-forks are separate JVMs), then interleaving the arms (better methodology, and the ratio got *worse*).
-**Three method changes to make a failing test pass is tuning until it agrees**, which is the exact
-anti-pattern written into two agent briefs the same day.
-
-**What to do:** bisect the merge. Conservation and direct pull landed separately and either could be
-responsible - or the busy-shard count below could remove the cause outright. **Do not widen
-`MAX_RATIO`**: the clean ratio is 2.3 and an injected superlinear regression produced 6.4, so a bound
-that absorbs this would no longer catch what the test exists for.
+**Kept rather than deleted because of the process failure, which is the durable lesson.** The method
+was changed four times to make a failing test pass - fastest-of-three, the ratio, per-thread CPU time,
+`@Isolated` - before anyone questioned the instrument. Three of those were tried after a bisect had
+already shown the code was unchanged. **Changing a test's method repeatedly to make it agree is tuning
+until it agrees**, and it is written into two agent briefs from the same day as an anti-pattern.
 
 ## 2. `1001 deliveries for 1000 records` - and no, the tests did not catch it
 
@@ -54,18 +47,12 @@ now guards the shape with an exact count, but a guard is not a diagnosis.
 **What to do:** cover the three redelivery paths under concurrent pull before anything else on this
 engine. A record that fails, is retried, and is abandoned mid-flight crosses all three.
 
-## 3. Direct pull leaks non-daemon threads on a failed close
+## 3. NOT OURS - the close path is owned by a separate PR
 
-`AbstractParallelEoSStreamProcessor.innerDoClose()` runs `brokerPollSubsystem.drain()` and **then**
-`directPullPool.ifPresent(DirectPullWorkerPool::stop)`, **with no `try`/`finally`**. Verified in the
-code.
-
-If `drain()` throws, the workers are never stopped. Unlike the shipped engine's pool threads sitting
-idle in a queue, direct-pull workers **run a loop of their own**, and `Executors.defaultThreadFactory()`
-makes them **non-daemon** - so `maxConcurrency` threads hold the JVM open after a `close()` that has
-already reported failure.
-
-**Smallest possible fix, and it should not wait for anything else on this list.**
+`innerDoClose` releasing the worker pool outside any `finally` is real, and a sweep found the same
+shape in `VertxParallelEoSStreamProcessor#close`, `BrokerPollSystem#doClose`, `doClose`'s own
+`finally` and `ProducerManager#close`. **Antony has PRs addressing this; do not open another.** The
+merge order is those first, then into this trunk.
 
 ## 4. The busy-shard count - the design that may resolve 1
 
@@ -89,19 +76,17 @@ remains its own question - see
 
 ## 5. Work that is queued, and what each is waiting for
 
-**Three of these are blocked on the same thing: a quiet machine.** That constraint has been worked
+**Several of these are blocked on the same thing: a quiet machine.** That constraint has been worked
 around all day rather than named, and it is worth naming because parallel agents generate most of the
 load themselves - so running them concurrently has been buying less than it appears.
 
 | Item | Blocked on | Why it matters |
 |---|---|---|
-| **Bisect the `UNORDERED` regression** (item 1) | a quiet machine | Conservation and direct pull landed separately; either could be responsible, or the busy-shard count may remove the cause |
 | **Cover the three redelivery paths** (item 2) | nothing - do this next | Retry, abandonment, stale sweep. A record that fails, retries, then is abandoned mid-flight crosses all three |
-| **Fix `innerDoClose`'s missing `finally`** (item 3) | nothing - smallest fix on the list | Non-daemon threads hold the JVM open after a failed close |
-| **Implement the busy-shard count** (item 4) | item 2 landing first | May resolve item 1 as a side effect |
+| **Implement the busy-shard count** (item 4) | item 2 landing first | O(1) selectability for ordered shards, replacing a walk-to-head that exists only to discover the head is in flight |
 | **Measure Reactor / Mutiny / ProxyProcessor** | the arms being wired, then a quiet machine | **Every cross-engine claim currently rests on Vert.x plus an assumption that `ExternalEngine` makes the family behave alike** |
 | **Re-take the direct-pull crossover** | a quiet machine | The 3.2x at ten workers and the collapse at five thousand were measured at load 7-860 |
-| **Virtual threads** (astubbs#51) | in progress | The one change proven to lift the platform-thread ceiling |
+| **Re-measure dispatch cost at 2ms/5000** | a quiet machine | Both attempts at removing the UNORDERED rescan measured 0% and +0.2%, at operating points that predate virtual threads putting the engine at near-zero handler delay |
 | **A CI matrix axis over execution modes** | the JDK 21 lane existing | [`test-opt-in-engine-paths-are-unexercised.md`](test-opt-in-engine-paths-are-unexercised.md) - direct pull is exercised by nothing |
 
 ## 6. Not performance, and not to be lost behind it
