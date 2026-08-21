@@ -111,8 +111,11 @@ is the flag namespace, one variable per flag and no others, and a classpath is n
 
 ## Building and checking it
 
+`run.sh` does all of this; by hand, from the client module's directory, it is:
+
 ```bash
-cd demo && npm ci && npm run compile   # what run.sh does; needs `npm ci && npm run compile` above first
+npm ci && npm run compile              # the LIBRARY first - the file:.. link points at its dist/
+cd demo && npm ci && npm run compile   # then this package
 npm run clean                          # remove dist/
 ```
 
