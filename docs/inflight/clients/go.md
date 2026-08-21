@@ -11,8 +11,12 @@ report, and a clean client-initiated shutdown, proven by one end-to-end test aga
 sidecar. The module is at
 `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/`; its maturity and
 testing-evidence deferrals are lifted. Later waves: leases and heartbeats, the manifest reconnect,
-worker death, terminal outcomes, the shutdown drain, the demo and its container, packaging, and the
-rest of the conformance suite.
+worker death, terminal outcomes, the shutdown drain, packaging, and the rest of the conformance
+suite.
+
+**The demo wave has landed too** - `parallel-consumer-proxy-client-go/demo/`, both entry points run.
+Its divergences from the contract, and what it found in the contract, are the last two sections of
+this file.
 
 ## The falsification result
 
@@ -214,3 +218,88 @@ it cost a negative control:
   naming what is implemented, so it cannot fall out of step by omission.
 - **The token is echoed as the received message**, never rebuilt from parsed fields, so "opaque" is
   structural rather than a rule someone has to remember.
+
+## The demo wave: what it diverges on, and why
+
+The demo is `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/demo/`, keeping
+`parallel-consumer-proxy/demo/README.md`'s contract. Flags, environment variables, precedence,
+defaults, the fingerprint-first rule, the never-print-the-bootstrap rule, the two tables and their
+columns, and no latency anywhere: all mirrored exactly, and `options_test.go` derives the seven
+environment-variable names from the flag list rather than trusting seven hand-written bindings.
+
+Three divergences, all recorded in the demo's own README where a reader meets them:
+
+- **The demo binary never starts a broker; `run.sh` does.** Java's `DemoBroker` falls back to
+  Testcontainers when no `--bootstrap` arrives. Go has no comparable dependency in this repo, and
+  adding one would put a Docker client library and its tree into a demo whose point is that the
+  application needs no infrastructure. So natively `run.sh` starts a `cp-kafka` container on a
+  random free port and removes it on exit, in the container the compose sibling is the broker, and
+  the binary always receives an address. The *user-facing* contract is unchanged - omit
+  `--bootstrap` and a broker appears.
+- **`PC_DEMO_SIDECAR_CLASSPATH`**, which is plumbing rather than an eighth flag: no `--flag`, no
+  default a user would set, and it disappears the day the sidecar ships as a binary.
+- **The demo is a nested Go module.** Go's module graph propagates requirements to every consumer,
+  so franz-go in the library's `go.mod` would hand a Kafka client library to applications whose
+  whole reason for using the proxy is not needing one. The consequence: `go build ./...` and
+  `go test ./...` in the parent do NOT descend into `demo/`, so the module's Maven-driven build
+  never compiles it - `run.sh` and the Dockerfile do.
+
+### Open follow-up: staticcheck does not cover the demo module
+
+`scripts/analyse.sh` runs `go vet` over the demo and stops there. `go tool staticcheck` builds the
+version pinned in the module it runs in, and `demo/go.mod` does not pin it; adding the `tool`
+directive puts staticcheck's dependency tree into the module graph that `demo/Dockerfile` resolves,
+and that image was verified without it. Small, and worth doing on an unloaded machine: add the
+directive, `go mod tidy`, extend the script, then rebuild the demo image once to confirm the
+container path still builds.
+
+### Two things worth knowing before the next Go wave
+
+- **`GOTOOLCHAIN=local` makes the client module unbuildable on an older Go.** The library declares
+  `go 1.25.0` and uses `tool` directives, which Go 1.23 cannot even *parse* (`unknown block type:
+  tool`) - so on a machine pinned to `local` with 1.23 installed, `go build` fails on the go.mod
+  rather than on the code. `run.sh` probes the module with `go list -m`, retries once with
+  `GOTOOLCHAIN=auto`, says out loud that it is doing so, and only then falls back to the container.
+  Measured on the development machine, which is pinned that way.
+- **Kafka refuses `0.0.0.0` as a KRaft controller listener's bind address**, not only as an
+  advertised one: the format step aborts with "advertised.listeners cannot use the nonroutable
+  meta-address" before the broker starts. `run.sh`'s native broker binds `CONTROLLER://localhost`
+  for that reason - measured, not reasoned about. The compose sibling was already correct because
+  it binds the service name.
+
+## Contract defects the demo wave found (report only - do not edit the contract)
+
+Recorded rather than fixed, per KTD23: the shared contract at `parallel-consumer-proxy/demo/README.md`
+is the integrator's to change.
+
+1. **"Omit `--bootstrap` to start one" assumes every language can start a broker, and most cannot
+   cheaply.** The contract inherits Java's Testcontainers fallback without saying *who* starts the
+   broker, and nine of the ten remaining languages will each have to decide it alone - some with a
+   heavyweight dependency, some by moving it into `run.sh` as Go did, some perhaps not at all. The
+   contract should say which layer owns it, or say explicitly that it is the language's choice as
+   long as the user-facing promise holds.
+
+2. **Every non-JVM demo container is a two-toolchain image, and the contract does not mention it.**
+   "A reader with only Docker can run it" is satisfied, but only by shipping a JDK alongside the
+   language's own runtime, because the sidecar is a JVM application spawned as a child of the
+   running demo - it cannot be a build-stage artifact the way the demo binary can. Go's image is a
+   `golang` build stage discarded into an `eclipse-temurin:17-jdk` runtime. Ten languages will each
+   rediscover this; it belongs in the contract's container section beside the socket rule.
+
+3. **The flag/environment table has no room for the sidecar's location, which every non-JVM demo
+   needs.** Go added `PC_DEMO_SIDECAR_CLASSPATH` under the `PC_DEMO_` prefix the contract reserves
+   for flags. An integrator diffing environment variables across languages will see an extra one
+   and cannot tell from the contract whether it is a divergence or a shared necessity. It is the
+   latter, in some spelling, for every language whose demo spawns the JVM sidecar.
+
+4. **`bin/ci-demo-test.sh` runs the Java demo only.** The contract says both entry points are tested
+   "on every pull request" and that "a per-language demo inherits this", but the script hard-codes
+   the Java `run.sh` path and the Java arm list. Nothing yet runs a per-language demo's two entry
+   points in CI, so ten demos can ship untested while the contract says otherwise. Out of this
+   wave's ownership; named here because it is the gap the contract's own closing paragraph warns
+   about.
+
+5. **The big replay's table can be one row, and the `vs AK core*` column then compares the only arm
+   against an arm that is not in the table.** That is what the contract asks for and it is not
+   wrong, but it reads oddly, and it will read identically in every language except Java. Worth a
+   sentence in the contract saying the single-row case is expected rather than a bug.
