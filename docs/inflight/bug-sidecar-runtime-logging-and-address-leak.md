@@ -69,5 +69,18 @@ Doing any one of these alone makes something worse. That is the finding.
 `docs/inflight/clients/scala.md` (root DEBUG, and the client's own config dump),
 `docs/inflight/clients/rust.md` (stdout is the lifecycle channel, so the logs are discarded).
 
-**Four agents, four faces, and each one's proposed fix leaves at least one of the others standing.**
-That is the whole argument for treating it as one defect.
+`docs/inflight/clients/cpp.md` (no binding at all, and the fix demonstrated).
+
+**Five agents, and each one's proposed fix leaves at least one of the others standing.** That is the
+whole argument for treating it as one defect.
+
+## Step 0 is not a guess - one client is already built to receive it
+
+The C++ agent gave its own image an SLF4J binding and watched the sidecar log its port, its
+configuration and its drain. Its note says the missing binding was "silencing exactly the
+diagnostics **the client library inherits stderr to preserve**".
+
+So the two halves fit: the Rust client **discards stdout** because that is the lifecycle channel it
+drains for the port line, and the C++ client **inherits stderr** precisely so the sidecar can be
+diagnosed. Moving the sidecar's own logging to stderr is therefore not a proposal needing a design -
+at least one client already expects it there, and one has demonstrated the chain end to end.
