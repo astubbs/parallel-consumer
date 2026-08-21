@@ -146,8 +146,24 @@ parse_result() { grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; 
 # and no agent path, and answers "which methods and which locks" well enough to point at a suspect.
 # Reach for YourKit when the suspect needs confirming - allocation attribution and lock-contention
 # detail are where it is materially better.
+#
+# THE `-dp` SUFFIX SELECTS THE DIRECT-PULL ENGINE, and it is a mode suffix rather than a new Bench
+# argument for one reason: Bench.java.template is compiled against EVERY released version in the
+# sweep, and none of them has the option. Anything added to the template has to compile against
+# 0.3.0.2 as well as this checkout. So `core-dp` runs the ordinary `core` harness path and passes the
+# engine selection as a JVM system property, which old versions simply ignore.
+#
+# It stays a distinct MODE, rather than an environment variable set around the whole sweep, because
+# the results file has to be able to tell the two arms apart - and because it lets one invocation
+# alternate them, which is the only defence this harness has against machine drift between arms.
 run_one() {
   local cp=$1; shift
+  local engine=()
+  if [ "${1:-}" = "core-dp" ]; then
+    engine=(-Dpc.directPull=true)
+    shift
+    set -- core "$@"
+  fi
   local jfr=()
   if [ -n "${BENCH_JFR:-}" ]; then
     mkdir -p "$BENCH_JFR"
@@ -159,7 +175,7 @@ run_one() {
   # ${jfr[@]+"${jfr[@]}"} rather than "${jfr[@]}": macOS ships bash 3.2, where expanding an EMPTY
   # array under `set -u` is an unbound-variable error. Written the obvious way, this made every
   # unprofiled run fail - silently, as RUN_FAILED rows - while the profiled path worked fine.
-  java ${jfr[@]+"${jfr[@]}"} -cp "$cp" Bench "$@" 2>/dev/null | parse_result
+  java ${engine[@]+"${engine[@]}"} ${jfr[@]+"${jfr[@]}"} -cp "$cp" Bench "$@" 2>/dev/null | parse_result
 }
 
 # --- the llingr arm --------------------------------------------------------------------------

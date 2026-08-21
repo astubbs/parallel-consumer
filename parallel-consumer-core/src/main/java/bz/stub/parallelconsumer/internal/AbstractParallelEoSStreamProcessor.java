@@ -122,6 +122,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
+    /**
+     * MEASUREMENT ONLY. Present when {@link ParallelConsumerOptions#isDirectPullEngine()} selects the direct-pull
+     * engine, in which case the control loop stops distributing work altogether: the workers take it themselves.
+     *
+     * @see DirectPullWorkerPool
+     */
+    private Optional<DirectPullWorkerPool<K, V>> directPullPool = Optional.empty();
+
     // todo make package level
     @Getter(AccessLevel.PUBLIC)
     protected WorkManager<K, V> wm;
@@ -369,6 +377,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
                     "configured GroupId on your Consumer?", e);
         }
+    }
+
+    /**
+     * MEASUREMENT ONLY. Whether this engine can hand work selection over to the workers themselves.
+     * <p>
+     * {@link ExternalEngine} cannot: its "worker pool" is a single thread that only starts the asynchronous work,
+     * with the concurrency living in the external runtime, so there are no worker threads to give the shards to.
+     *
+     * @see DirectPullWorkerPool
+     */
+    protected boolean supportsDirectPull() {
+        return true;
     }
 
     protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
@@ -704,6 +724,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         brokerPollSubsystem.drain();
 
         log.debug("Shutting down execution pool...");
+        // Direct-pull workers occupy their threads in a loop rather than sitting in the pool's queue, so
+        // shutdown() alone would never terminate the pool - it only stops NEW tasks being accepted.
+        directPullPool.ifPresent(DirectPullWorkerPool::stop);
         //Clear scheduled but not started work in execution pool
         workerThreadPool.get().getQueue().clear();
         //request graceful shutdown
@@ -847,6 +870,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
+        // MEASUREMENT ONLY: hand the worker pool over to direct pull, so nothing is ever submitted to its queue and
+        // the pressure system that sizes that queue never runs.
+        if (options.isDirectPullEngine() && supportsDirectPull()) {
+            var pool = new DirectPullWorkerPool<K, V>(wm,
+                    options.getBatchSize(),
+                    () -> state == RUNNING || state == State.DRAINING,
+                    batch -> {
+                        addInstanceMDC();
+                        runUserFunction(userFunctionWrapped, callback, batch);
+                    });
+            this.directPullPool = Optional.of(pool);
+            pool.start(workerThreadPool.get(), options.getMaxConcurrency());
+        }
+
         ExecutorService executorService;
         try {
             executorService = InitialContext.doLookup(options.getManagedExecutorService());
@@ -915,8 +952,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             commitOffsetsThatAreReady();
         }
 
-        // distribute more work
-        retrieveAndDistributeNewWork(userFunction, callback);
+        // distribute more work - or, under direct pull, tell the workers there may be some and let them take it
+        // themselves. The mailbox drain above is where new records are registered and where returned records become
+        // selectable again, so one announcement per pass covers every way work appears.
+        if (directPullPool.isPresent()) {
+            var pool = directPullPool.get();
+            // The direct-pull replacement for checkPipelinePressure(): a worker that was allowed to work and found
+            // nothing means the buffer feeding the shards is too shallow, which is the same conclusion
+            // isPoolQueueLow() reaches by reading the executor's queue depth. What has gone is the ThreadPoolExecutor
+            // reading, not the load factor - see DirectPullWorkerPool#starvedSinceLastCheck.
+            if (pool.consumeStarvationSignal()) {
+                dynamicExtraLoadFactor.maybeStepUp();
+            }
+            pool.onWorkMaybeAvailable((int) Math.min(Integer.MAX_VALUE, wm.getUpperBoundOnSelectableWork()));
+        } else {
+            retrieveAndDistributeNewWork(userFunction, callback);
+        }
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());

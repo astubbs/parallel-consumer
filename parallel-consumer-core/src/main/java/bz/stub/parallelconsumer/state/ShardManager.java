@@ -81,7 +81,10 @@ public class ShardManager<K, V> {
      * Iteration resume point, to ensure fairness (prevent shard starvation) when we can't process messages from every
      * shard.
      */
-    private Optional<ShardKey> iterationResumePoint = Optional.empty();
+    // volatile because the direct-pull engine has every worker running getWorkIfAvailable concurrently. It is a
+    // fairness hint, not state anything depends on, so a lost update is harmless - but a thread reading a stale
+    // reference forever would starve a shard, and volatile costs nothing on a field written once per scan.
+    private volatile Optional<ShardKey> iterationResumePoint = Optional.empty();
 
     private Gauge shardsSizeGauge;
     private Gauge numberOfShardsGauge;
@@ -131,6 +134,26 @@ public class ShardManager<K, V> {
                 .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
                 .sum();
         return retryQueueSizeAndNumberReadyToBeRetried.getRight() + (diffBetweenShardsAndRetrySize < 0 ? 0 : diffBetweenShardsAndRetrySize);
+    }
+
+    /**
+     * An upper bound on how many records could be handed out <em>right now</em>, used by the direct-pull engine to
+     * decide how many parked workers to wake.
+     * <p>
+     * Not the same as {@link #getNumberOfWorkQueuedInShardsAwaitingSelection()}, and the difference is the whole
+     * point: under an ordered mode a shard hands out at most one record at a time, so a shard holding 25,000 queued
+     * records still offers exactly one. Waking a worker per queued record there sends every thread in the pool to
+     * contend over a handful of selectable records, which costs far more than the records are worth.
+     *
+     * @return the number of records that could plausibly be taken now, at most
+     */
+    public long getUpperBoundOnSelectableWork() {
+        long awaitingSelection = getNumberOfWorkQueuedInShardsAwaitingSelection();
+        if (options.getOrdering() == ProcessingOrder.UNORDERED) {
+            // Unordered shards will hand out as many as are asked for, so the queued count IS the bound.
+            return awaitingSelection;
+        }
+        return Math.min(awaitingSelection, processingShards.size());
     }
 
     public boolean workIsWaitingToBeProcessed() {
