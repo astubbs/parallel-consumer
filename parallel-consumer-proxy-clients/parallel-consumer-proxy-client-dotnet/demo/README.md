@@ -73,7 +73,7 @@ anywhere. It cost the sidecar arm a whole run to find, because R48 deliberately 
 from the proxy's error - a Kafka `ConfigException` embeds property values, and those may be
 credentials.
 
-### Two extra environment variables, and neither is part of the contract
+### Three extra environment variables, and none is part of the contract
 
 | variable | what it does |
 |---|---|
@@ -93,9 +93,16 @@ joined `Bz.Stub.ParallelConsumer.Proxy.Client.sln` rather than adding a second s
 means the module's ordinary build keeps the demo compiling, under the same analyzers-as-errors lint
 as the library.
 
-## What is NOT here
+## What has been run, and what has not
+
+Both entry points, by hand, at `--records 20` - the native one twice, once with **no arguments at
+all** (the case that has broken before, scaled down by `PC_DEMO_*` variables) and once with explicit
+flags and a big replay; the container one through `run.sh --docker`. Both arms completed in every
+run and both exited 0.
+
+**No run at the contract's defaults has ever happened**, and nothing here should be read as a
+measurement: at twenty records both arms are dominated by consumer-group join time.
 
 `bin/ci-demo-test.sh` runs the **Java** demo through both of its entry points on every pull request.
-Nothing runs this one in CI yet. Both entry points have been run by hand; the automated equivalent
-is open work, recorded in
-[`docs/inflight/clients/dotnet.md`](../../../docs/inflight/clients/dotnet.md).
+Nothing runs this one in CI yet - which is exactly the gap that script exists to close. Open work,
+with the rest, in [`docs/inflight/clients/dotnet.md`](../../../docs/inflight/clients/dotnet.md).

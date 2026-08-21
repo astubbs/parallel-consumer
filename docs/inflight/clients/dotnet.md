@@ -212,6 +212,27 @@ travels between them - the same shape will bite any language whose Kafka client 
 (Python, Ruby, C++, Go's confluent-kafka-go) if it starts its broker with that language's
 Testcontainers.
 
+### The container could not be built on an arm64 host, and that was a module bug
+
+`Grpc.Tools` **2.71.0** ships a bundled `linux_arm64` `protoc` that segfaults - MSB6006, "exited
+with code 139" - when MSBuild spawns it inside a container on an Apple Silicon machine. The whole
+module, not just the demo, was unbuildable there.
+
+Established with a control arm rather than by upgrading and hoping. In one container, one four-line
+`.proto`, one project, **only the Grpc.Tools version changed**: 2.71.0 died at MSB6006, 2.83.0
+generated the stubs. Two facts make it an environment bug rather than a bad argument: the same
+`protoc`, run **by hand with MSBuild's exact command line** (captured with
+`-consoleLoggerParameters:ShowCommandLine`), succeeded at *both* versions; and the same minimal
+project built under `--platform linux/amd64` at 2.71.0. So it is specific to protoc-spawned-by-
+MSBuild on linux/arm64 - which means **CI's amd64 runners never saw it**, and only a developer on
+Apple Silicon would.
+
+`GrpcVersion` is therefore 2.83.0 with the control written beside it in `Directory.Build.props`.
+The bump is otherwise inert: `ProtobufVersion` stayed at 3.31.1, the library builds warning-free
+under the same analyzers-as-errors lint, `dotnet format --verify-no-changes` is clean, and the
+module's conformance test still passes against the real wire. **If it is ever lowered, re-run the
+control.**
+
 ### What is open
 
 - **No CI runs this demo.** `bin/ci-demo-test.sh` drives the Java demo through both entry points and
@@ -223,6 +244,11 @@ Testcontainers.
   consumer-group join time and the ratios in the tables are meaningless; nothing in this branch
   should be read as a measurement. A run at the contract's defaults on an unloaded machine is
   outstanding.
+- **The image is large and rebuilt from scratch on any source change.** It carries a .NET SDK, a
+  JDK, a populated `/root/.m2` and the built reactor, because the sidecar classpath baked in at
+  build time has to point at files the running container actually has - the same trade the Java
+  demo's image documents. Nothing here has been optimised; a reader on a cold cache waits several
+  minutes.
 - **`shared/JvmToolchain.cs` is compiled into two projects by `Compile Include` link** - the test
   harness and the demo both have to find a JVM, and neither is a library anyone references. If a
   third consumer appears, that is the moment to reconsider an assembly.
