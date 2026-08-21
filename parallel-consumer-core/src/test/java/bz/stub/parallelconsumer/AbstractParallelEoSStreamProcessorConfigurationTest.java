@@ -72,6 +72,12 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
                 .batchSize(batchSize)
                 .maxConcurrency(concurrency)
                 .consumer(consumer)
+                // The multiplication asserted below is specific to the pre-loaded-queue engine: the load factor
+                // sizes the executor's QUEUE, so a factor of 2 means twice as many records buffered, not twice as
+                // many running. A virtual-thread pool has no queue, so it deliberately does not multiply, and this
+                // assertion would be asserting a defect there. The virtual-thread half of the contract is pinned
+                // in VirtualThreadExecutionModeTest#theInFlightTargetIsNotMultipliedByTheLoadFactorInThisMode.
+                .useVirtualThreads(false)
                 .build();
         try (final TestParallelEoSStreamProcessor<String, String> testInstance = new TestParallelEoSStreamProcessor<>(testOptions)) {
             final int defaultLoad = 2;

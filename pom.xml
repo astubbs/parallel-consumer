@@ -107,6 +107,28 @@
         <included.groups></included.groups>
         <excluded.groups>performance,chaos,quarantined</excluded.groups>
 
+        <!-- EXECUTION-MODE AXIS. Parallel Consumer has opt-in execution paths that are meant to be
+             BEHAVIOURALLY EQUIVALENT to the default engine, and the thing worth asserting is not that each
+             one works but that each one AGREES with the default - on ordering, commits, retries, rebalance and
+             shutdown. That is the existing suite, run again with a different selector, so these are a matrix
+             axis over one suite rather than a suite each.
+
+             Each is a plain system property (rather than only a builder option) because the option has to be
+             selectable without editing source: bench/Bench.java.template compiles against every released
+             version in a sweep and cannot reference an option that did not exist in 0.3.0.2, and a CI matrix
+             entry should be a line of config.
+
+             Surefire forks a JVM, and a -D on the Maven command line does NOT reach that fork - it has to be
+             forwarded, which is what the systemPropertyVariables block below does. Without the forwarding,
+             `mvn test -Dpc.virtualThreads=true` runs the entire suite on the DEFAULT engine and reports
+             green: the silent-green shape in
+             docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md.
+
+             ADDING THE NEXT MODE IS A LINE HERE PLUS A LINE IN THE FORWARDING BLOCK - not a second job.
+             docs/inflight/test-opt-in-engine-paths-are-unexercised.md is why that matters. -->
+        <pc.virtualThreads>false</pc.virtualThreads>
+        <pc.directPull>false</pc.directPull>
+
         <!-- version numbers -->
         <!-- plugins -->
         <lombok.version>1.18.46</lombok.version>
@@ -967,6 +989,11 @@
                     </excludes>
                     <jvm>${jvm.location}/bin/java</jvm>
                     <skipTests>${skipUTs}</skipTests>
+                    <!-- Execution-mode axis - see the pc.* properties above. -->
+                    <systemPropertyVariables>
+                        <pc.virtualThreads>${pc.virtualThreads}</pc.virtualThreads>
+                        <pc.directPull>${pc.directPull}</pc.directPull>
+                    </systemPropertyVariables>
                     <!-- Same group filtering as failsafe below - without this binding, surefire ignores
                          the quarantine/performance tags entirely and a @Quarantined UNIT test would
                          still run (and fail) in the gating Unit Tests lane (ce-review P1 finding). -->

@@ -30,7 +30,6 @@ release_validation:
       merged resolution and its named recurrence guard must pass before 0.6.0.0 is cut.
     evidence: testing-evidence.yaml#v6_stability_exception
     explicit_non_defect_deferrals:
-      - Virtual threads
       - Micro-batching
       - Dead-letter queue
   automated:

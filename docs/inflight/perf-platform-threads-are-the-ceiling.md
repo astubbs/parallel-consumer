@@ -262,7 +262,7 @@ possible before designing experiments around it.**
 
 ## What follows
 
-**[PR #51](https://github.com/astubbs/parallel-consumer/pull/51) is now the highest-value performance
+**[PR astubbs#51](https://github.com/astubbs/parallel-consumer/pull/51) is now the highest-value performance
 change available to this project**, by a distance, and its status changes from "a measurement worth
 taking" to "the fix". It adds a `useVirtualThreads` option, generalises `setupWorkerPool` to
 `ExecutorService`, and replaces `synchronized` with `ReentrantLock` to avoid pinning. It reaches the
@@ -276,22 +276,27 @@ references to any PC class. PC's own `setupWorkerPool` is unchanged and contains
 
 **And it sidesteps the hard part entirely**, which is worth being explicit about. The control has **no
 pressure system** - a `Semaphore` is its whole backpressure mechanism. It never asks a question that a
-virtual-thread executor cannot answer, which is precisely the obstacle PR #51's author hit. **That
+virtual-thread executor cannot answer, which is precisely the obstacle PR astubbs#51's author hit. **That
 obstacle is real and my control says nothing about it.**
 
-**Before it can land:**
+**Virtual-thread support has since landed** as the opt-in `useVirtualThreads` option, and the numbers
+this note demanded be re-taken against PC itself were re-taken:
+[`perf-virtual-threads-measured.md`](perf-virtual-threads-measured.md) is the record. The prediction
+held - 5,000 of 5,000 in flight at 100ms against a platform plateau of 2,829-3,770, and 1.8x
+throughput. The widest gap was somewhere nobody had looked: **3.0x at a 2ms handler**, where platform
+threads hold fewer records in flight than at any other point measured.
 
-1. **Rebase across the `io.confluent` -> `bz.stub` package rename.**
-2. **A JDK 21 CI lane.** The PR's own tests skip on JDK 17, which is what CI runs - a green check that
-   verified nothing, the failure mode this repo has shipped before.
-3. **Settle what the pressure system observes - and note that direct pull would dissolve this.** `isPoolQueueLow()` reads
-   `workerThreadPool.getQueue().size()` and `getActiveCount()` off the `ThreadPoolExecutor`. A
-   virtual-thread executor exposes neither, so the pressure system must move onto PC's own accounting.
-   The load gate's half of that accounting is now conservation-derived (`ShardManager.getNumberOfRecordsInShards`);
-   the shard's available-work counter is [still an approximation](bug-available-work-counter-is-still-an-approximation.md).
-   **That dependency is the real work**, and it is why this is not a one-line change.
+**One prerequisite this note stated was wrong, and the correction is worth carrying.** It asked for a
+"JDK 21 CI lane", meaning a JDK 21 *build*. That is impossible here - Jabel 1.0.0 takes javac down on
+21, with two further blockers stacked behind it
+([`bug-the-build-cannot-run-on-jdk-21.md`](bug-the-build-cannot-run-on-jdk-21.md)) - and it was never
+necessary. Virtual threads are a runtime capability reached reflectively, and surefire forks its own
+JVM, so the lane builds on 17 and runs the tests on 21. That exercises the **shipped Java 8 bytecode**
+on a JDK 21 runtime, which is what a user does, rather than a differently-compiled artifact nobody
+ships.
 
 **And the honest boundary:** this was measured on a 12-core laptop with `Thread.sleep` as the handler.
 A real handler blocks on I/O rather than sleeping, and a server has more cores. The *mechanism* -
-blocked work holding an OS thread - is the same, but the **numbers should be re-taken against PC
-itself** with PR #51 before any of them are published.
+blocked work holding an OS thread - is the same. The re-take against PC itself has now happened, and
+carries the same boundary: [`perf-virtual-threads-measured.md`](perf-virtual-threads-measured.md)
+states what it does and does not cover.
