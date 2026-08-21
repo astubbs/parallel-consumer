@@ -418,3 +418,38 @@ all**. A skeleton with dials but no rows is non-empty, so the script does not ev
 "produced no recognisable fingerprint or table" skip - it compares dial lists between languages and
 reports agreement, having silently stopped checking the arms. That is worse than the skip, and it is
 the reason this is written down rather than left for CI to find.
+
+### The container path ran too, and the same two columns came out identical
+
+`demo/run.sh --docker` at the same dials, exit 0. Same banner, same arm labels, and - the point of
+the exercise - **`records` 20 / `keys` 20 and 40/40, exactly as in the native run**, while the
+speed columns disagreed wildly: the sidecar arm was 8.1x the serial arm natively and 0.5x it in the
+container, on the same machine an hour apart. That is not a result about containers; it is eleven
+agents' load, and it is precisely the reason the deterministic pair was added.
+
+### VERIFIED: "The broker is quiet" does not hold, and it is not the compose file's fault
+
+The container run's own log: **883 levelled lines from the broker against 42 from the demo** - 826
+INFO, 56 TRACE, 1 WARN. The tables are buried exactly as the contract's commit says they must not
+be, with `KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` and `KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN` correctly set.
+
+The cause is in the image, read out of `confluentinc/cp-kafka:7.9.0` rather than guessed.
+`/etc/confluent/docker/log4j.properties.template` renders the root logger from the environment
+variable - and then unconditionally emits a hardcoded per-package block that **overrides it**:
+
+```
+{% set loggers = { 'kafka': 'INFO', 'kafka.controller': 'TRACE',
+                   'state.change.logger': 'TRACE', 'kafka.log.LogCleaner': 'INFO', ... } %}
+```
+
+A per-logger level beats the root level in log4j, so `KAFKA_LOG4J_ROOT_LOGLEVEL` cannot silence any
+package under `kafka`. The top emitters in the captured run line up exactly: `kafka.coordinator.group`
+341 lines, `state.change.logger` 233, `kafka.log.UnifiedLog$` 92, `kafka.log.LogManager` 63,
+`kafka.cluster.Partition` 60.
+
+**The lever that would work is `KAFKA_LOG4J_LOGGERS`**, which the same template parses over those
+defaults - something like
+`KAFKA_LOG4J_LOGGERS: "kafka=WARN,kafka.controller=WARN,state.change.logger=WARN,kafka.log.LogCleaner=WARN"`.
+Not applied here: this wave was told explicitly not to touch broker log levels, and the change
+belongs in all eleven compose files at once rather than in Go's alone. `KAFKA_TOOLS_LOG4J_LOGLEVEL`
+is harmless but redundant - the tools template already defaults to WARN.

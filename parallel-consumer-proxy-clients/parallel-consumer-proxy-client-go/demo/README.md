@@ -159,7 +159,8 @@ seeds `key-{n % 1000}`, so `keys` is `min(records, 1000)` everywhere - which is 
 
 **No latency is reported, in any arm.** The backlog is pre-produced, so the workload is closed-loop
 and per-record timings would be flattered by however far an arm had fallen behind. Throughput is the
-only honest number this shape can produce.
+only honest *speed* number this shape can produce - which is exactly why `records` and `keys` sit
+beside it.
 
 The big replay runs **only the arms that go parallel**, which here is `go-grpc` alone: AK core would
 need `records x replay-factor x delay-ms` milliseconds to finish a backlog the sidecar arm clears in
