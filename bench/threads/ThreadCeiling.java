@@ -29,8 +29,18 @@ public class ThreadCeiling {
             pool = (ExecutorService) Executors.class
                     .getMethod("newVirtualThreadPerTaskExecutor").invoke(null);
         } else {
-            pool = new ThreadPoolExecutor(concurrency, concurrency, 0L, TimeUnit.MILLISECONDS,
+            ThreadPoolExecutor tpe = new ThreadPoolExecutor(concurrency, concurrency, 0L, TimeUnit.MILLISECONDS,
                     new LinkedBlockingQueue<>());
+            // prestart removes lazy thread CREATION from the ramp entirely: all threads exist and are
+            // parked in take() before the first submit. If the ceiling is set by creation rate, this
+            // lifts it; if it persists, the same serialisation lives in the park-to-first-run path.
+            if (System.getenv("PRESTART") != null) {
+                long t = System.nanoTime();
+                tpe.prestartAllCoreThreads();
+                System.out.printf("prestarted %d threads in %.0f ms%n",
+                        tpe.getPoolSize(), (System.nanoTime() - t) / 1e6);
+            }
+            pool = tpe;
         }
 
         // Work is INFINITE and free to produce - a semaphore caps in-flight at `concurrency`,
@@ -66,8 +76,9 @@ public class ThreadCeiling {
         long ms = System.currentTimeMillis() - start;
         var os = new java.util.ArrayList<>(overshootNanos);
         java.util.Collections.sort(os);
-        String pct = os.isEmpty() ? "n/a" : String.format("p50=%dms p90=%dms p99=%dms",
-                os.get(os.size()/2), os.get((int)(os.size()*0.9)), os.get((int)(os.size()*0.99)));
+        String pct = os.isEmpty() ? "n/a" : String.format("mean=%.1fms p50=%dms p99=%dms max=%dms",
+                os.stream().mapToLong(Long::longValue).average().orElse(0),
+                os.get(os.size()/2), os.get((int)(os.size()*0.99)), os.get(os.size()-1));
         System.out.printf("sleep overshoot: %s%n", pct);
         System.out.printf("concurrency=%d delay=%dms threads=%s -> %.0f msg/s, peak in flight %d (of %d), mean %.0f%n",
                 concurrency, delayMs, virtual ? "virtual" : "platform",

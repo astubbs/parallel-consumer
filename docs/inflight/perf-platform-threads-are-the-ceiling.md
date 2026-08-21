@@ -54,6 +54,56 @@ have the platform-thread ceiling at all.** That is a strong, cheap prediction an
 (`startStub(delayMs, concurrency * 2)`), so it reproduces the ceiling server-side. **Testing it needs a
 stub that completes asynchronously**, which is a harness change worth making.
 
+## The law: `peak in-flight = min(maxConcurrency, r x handler_latency)`
+
+**Settled by two one-line experiments after a second round of independent review.** The ceiling is not
+a count and not a cap. It is a **rate** times a residence time.
+
+| Prediction | Test | Result |
+|---|---|---|
+| At 400ms the ceiling lifts, because `r x delay` exceeds the cap | run the control at 400ms | **CONFIRMED - peak 5,000 of 5,000** |
+| `prestartAllCoreThreads()` lifts it, if lazy thread *creation* sets it | prestart, then run at 100ms | **REFUTED - peak 2,722 of 5,000** |
+
+**The first kills every fixed-limit explanation.** There is no OS thread cap, no timer-slot limit and no
+wait-queue ceiling at ~2,700: the same JVM on the same machine held **5,000 threads inside a 400ms
+sleep simultaneously**. Whatever binds at 100ms is gone at 400ms.
+
+**The second kills thread creation as the mechanism**, which was the reviewer's leading candidate.
+With all 5,000 threads created and parked in `take()` *before the first submit*, the ceiling is
+unchanged. Creation timing is also arithmetically wrong for the job: `prestartAllCoreThreads()` took
+**3,235ms for 5,000 threads - about 1,546/s**, twenty times too slow to produce a 2,700 ceiling at
+100ms.
+
+**So `r` is a thread ACTIVATION rate - park to running - not a creation rate.** Solving `peak / delay`
+across every run gives a consistent machine constant:
+
+| Run | Peak | Delay | Implied `r` |
+|---|---:|---:|---:|
+| 100ms, prestarted | 2,722 | 0.1s | **27,220/s** |
+| 100ms, lazy | 2,673 | 0.1s | 26,730/s |
+| 200ms, lazy (bench arm) | 3,889 | 0.2s | 19,445/s |
+| 400ms | 5,000 (capped) | 0.4s | >= 12,500/s |
+
+**And it is load-stable where throughput is not.** The ceiling holds at 2,438-2,756 across a 10x range
+of machine load; throughput over the same range moves 4,648 to 22,844. Two quantities, opposite load
+behaviour - which is why no single-mechanism story fitted both.
+
+**Sleep overshoot is now reported as mean and tail, not just p50**, at the reviewer's request, and does
+not hide a heavy tail: at 100ms it is **mean 3.8ms, p99 30ms, max 47ms**. Too small to matter, which
+rules it out properly rather than by median alone.
+
+### Why this matters more than the raw comparison
+
+**It turns the ceiling into a formula a user can apply.** `min(maxConcurrency, r x handler_latency)`
+predicts the whole curve: exact at 250 and 1,000, a knee somewhere between 2,000 and 5,000, and the
+knee moving with the handler's duration. **The 200ms row, which the bug note recorded as unexplained,
+sits on the line.**
+
+**And it corrects the user-facing advice again.** Not "your `maxConcurrency` is ignored", nor even
+"achieved concurrency is throughput-limited", but: **the reachable concurrency is your handler's
+latency times how fast this machine can activate a thread. Raising `maxConcurrency` past that does
+nothing; making the work not hold a thread removes the term entirely.**
+
 ## Independent review, and the corrections it forced
 
 An independent analysis was commissioned on the full evidence set and **found four real errors**. Its
