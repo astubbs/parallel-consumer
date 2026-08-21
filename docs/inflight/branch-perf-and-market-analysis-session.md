@@ -25,13 +25,60 @@ None is a merge candidate; they exist so the negative results keep their evidenc
 | `perf/lock-free-worker-queue` | recut | `LinkedTransferQueue` for the pool queue, then a counted variant. **69% and 71% WORSE** - a lock can be the cheap way to park |
 | `perf/lock-free-mailbox` | recut | Lock-free mailbox. **+3.3% at 100ms, -2.7% at 0ms** - real, tiny, a trade |
 
-**In flight, dispatched 2026-08-21.**
+**Dispatched 2026-08-21, returned by 2026-08-22.** Each was a separate agent and **none of them
+could see any of the others' code**, which is where the merge conflicts and the open regression
+below came from.
 
-| Branch | What it is doing |
-|---|---|
-| `fix/conservation-load-gate` | Replace the drifting per-shard counter feeding the broker-poller gate with a conservation figure. The risk is exhaustiveness: revocation and stale-removal paths must be counted or it drifts silently, with no clamp |
-| `perf/direct-pull-measured` | Finish the blocking wait the 2022 branch left commented out, and measure the one objection that survives - whether N-way concurrent shard access costs anything |
-| `test/bench-all-engine-arms` | Add Reactor, Mutiny and `ProxyProcessor` arms to the harness. **Every cross-engine claim currently rests on Vert.x plus an assumption** |
+| Branch | What it did | Landed on the trunk? |
+|---|---|---|
+| `fix/conservation-load-gate` | Replaced the drifting per-shard counter feeding the broker-poller gate with an `admitted - retired` conservation figure. The risk was exhaustiveness - every in and out path must be counted or it drifts silently, with no clamp. Also found the drift clamp's "race condition" comment was **wrong**: two deterministic conditional-decrement bugs | **yes** |
+| `perf/direct-pull-measured` | Finished the blocking wait the 2022 branch left commented out. **3.2x at 10 workers** (26,869 to 86,179 msg/s) and **-95% at 5,000** | **yes** |
+| `test/direct-pull-coverage` | The tests that should have been written before direct pull was merged, not after | **yes** |
+| `feats/virtual-threads` | `ExecutionMode` option and the pool-queue gate that blocked virtual threads. **1.8x at 100ms/5,000 and 3.0x at 2ms/5,000** | **yes**, `cb657b07b` |
+| `test/bench-all-engine-arms` | Reactor, Mutiny and `ProxyProcessor` arms. Every cross-engine claim previously rested on Vert.x plus an assumption | **not yet** - two commits, unpushed |
+| `fix/reactor-empty-publisher-stall` | Dispatched 2026-08-22 to fix the defect the arms branch found (below) | in flight |
+
+## The open regression the merge produced
+
+`OrderingModeDispatchParityTest` **fails on `cb657b07b`** and is deliberately left failing rather than
+tuned or disabled - it was written to catch this shape and it caught one.
+
+`UNORDERED` dispatch is **2 to 2.3x slower** than before the three branches merged (111-223ms across
+three runs, against a 97ms baseline) while **`KEY` is unchanged or faster** (24-45ms against 43ms).
+Noise moves both arms; this moves one. `UNORDERED` is the mode that walks the whole in-flight prefix
+instead of breaking after the head record, so the suspects are the two changes that added per-entry
+work to that walk: **conservation's admission and retirement bookkeeping**, and **direct pull's claim
+CAS** (`isAvailableToTakeAsWork() && onQueueingForExecution()` now runs on every entry examined, which
+in `UNORDERED` is hundreds per pass).
+
+The three branches landed as separate merges, so `git bisect` over them answers it directly. The
+busy-shard in-flight count in `next-direct-pull-unordered-selection.md` would not fix this one -
+`UNORDERED` ignores it by design.
+
+`DirectPullEngineParityTest` also timed out once in the full suite. It passes 4/4 in isolation; that
+is machine contention, not a merge break.
+
+## What the engine-arms branch found on its way
+
+**A correctness defect in a shipped module**, written up in
+`bug-reactor-stalls-on-a-publisher-that-emits-nothing.md` **on that branch**: `ReactorProcessor.react`
+subscribes without an `onComplete` consumer, so a user function returning `Mono.empty()` or
+`Mono<Void>` never completes its record and the consumer stalls silently. Mutiny does it correctly,
+which makes it a Reactor defect rather than an `ExternalEngine` one.
+
+**Three harness defects, one of which invalidates earlier bench data.** `prepare()` cached compiled
+classes, so a stale `BENCH_WORK` directory could make a whole sweep run a build from hours earlier -
+`BENCH_ASYNC_STUB` ignored and all three new modes falling through the old template's `else` branch
+into **the Vert.x arm**. Four "engines" that were one engine. It was caught only because the Vert.x
+control disagreed with a committed figure. Also: arm artifacts were per-sweep rather than per-mode, so
+adding `mutiny` to a version bisect made *every* mode report `COMPILE_FAILED`; and `run_one` sent
+stderr to `/dev/null`, discarding exactly the signal `bench/conf/logback.xml`'s own header says it is
+pinned at WARN to preserve.
+
+**No numbers were published from that branch, deliberately** - everything gathered was taken while
+another session held ~1,000% CPU against the same broker, and the same operating point returned
+9,050 msg/s and then 1,883 four minutes later. `bench/README.md` now records that `peak_in_flight` is
+the load-robust column and `msg_per_sec` is not. See `branch-parallel-measurement-contamination.md`.
 
 ## The force-push, and what it does not fix
 
@@ -61,4 +108,9 @@ and should not be used as a base.
 - `research/market-analysis` - delete once the re-cut is accepted.
 - `.claude/worktrees/perf-regression` - still pinned to the orphaned pre-rewrite `0473ea520`, which is
   a re-push hazard for the redacted content. Needs resetting to the new head.
-- The GitHub Support purge request, if the old objects should actually be gone.
+- The GitHub Support purge request has been **decided against** - the old objects stay unreachable
+  rather than purged.
+- The returned agent worktrees under `.claude/worktrees/agent-*` still pin their branches. Leave them
+  until the `UNORDERED` bisect is done - the bisect needs those branch tips.
+- `~/.m2` was refreshed by the engine-arms agent installing six modules from the same base another
+  session had installed from an hour earlier. Benign, recorded because shared state should be.
