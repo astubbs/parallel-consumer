@@ -171,3 +171,28 @@ Count the broker lines before believing it.
 Nothing counts broker lines today, and the native path never sees them because Testcontainers does
 not attach the broker's stdout - so this was invisible to every check that exists. A line-count
 assertion in the harness would close that.
+
+
+## Reconciliation items found during the polish wave
+
+- **Rust's column order differs from the other five.** It placed `records | keys` *after*
+  `vs AK core`; python, typescript, scala, kotlin and go all placed them immediately after `arm`.
+  Rust's reasoning was sound from where it stood - that position was the only one that kept the old
+  `HEADER` regex matching - but the contract now fixes the order and the parser has been repaired,
+  so this is one format string to normalise at merge. **Check all eleven**, since the drift check
+  could not distinguish them while its row pattern was broken.
+
+- **Ruby and Rust both publish host port 29092**, so their demos cannot run back to back without
+  `Bind for 0.0.0.0:29092 failed`. Python already parameterises its port
+  (`${PC_DEMO_BROKER_PORT:-19095}`), which is the shape that fixes it. Patching one language alone
+  only moves the collision.
+
+  **This is also an argument for the shared-broker test harness** already agreed: one broker and one
+  reused topic for the whole suite removes per-language ports entirely, rather than allocating eleven
+  non-colliding ones.
+
+- **Eleven concurrent demos exhaust the Docker VM's disk**, and it does not present as a disk
+  problem. Three agents hit it within minutes of each other; the broker exits 1 having logged
+  `Formatting metadata directory ... No space left on device`, and the demo reports only "starting
+  the broker failed". Worth a friendlier message, and worth knowing before running the full eleven
+  again on one machine.
