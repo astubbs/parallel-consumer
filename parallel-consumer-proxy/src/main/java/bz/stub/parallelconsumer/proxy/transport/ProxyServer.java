@@ -7,11 +7,18 @@ import io.grpc.BindableService;
 import io.grpc.Server;
 import io.grpc.ServerInterceptors;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.grpc.netty.shaded.io.netty.channel.EventLoopGroup;
+import io.grpc.netty.shaded.io.netty.channel.epoll.Epoll;
+import io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoopGroup;
+import io.grpc.netty.shaded.io.netty.channel.epoll.EpollServerDomainSocketChannel;
+import io.grpc.netty.shaded.io.netty.channel.unix.DomainSocketAddress;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -58,7 +65,20 @@ public class ProxyServer implements AutoCloseable {
 
     private Server server;
 
+    /**
+     * Set when this listener is a Unix domain socket rather than a loopback TCP port, in which case the
+     * transport owns the socket file and deletes it on close.
+     */
+    private Path socketPath;
+
+    private final boolean domainSocket;
+
+    private EventLoopGroup bossGroup;
+
+    private EventLoopGroup workerGroup;
+
     private ProxyServer(Builder builder) {
+        this.domainSocket = builder.domainSocket;
         this.bindAddress = builder.bindAddress;
         this.requestedPort = builder.port;
         this.sessionService = Objects.requireNonNull(builder.sessionService, "sessionService is required");
@@ -100,12 +120,18 @@ public class ProxyServer implements AutoCloseable {
         var connectionGuard = new SingleConnectionGuard();
         // interceptForward runs interceptors in listed order: the authority check first, so a rejected
         // authority is turned away with PERMISSION_DENIED before it can consume the admission slot.
-        server = NettyServerBuilder
-                .forAddress(new InetSocketAddress(bindAddress, requestedPort))
+        var builder = domainSocket
+                ? domainSocketBuilder()
+                : NettyServerBuilder.forAddress(new InetSocketAddress(bindAddress, requestedPort));
+        server = builder
                 .addService(ServerInterceptors.interceptForward(sessionService, authorityAllowlist, connectionGuard))
                 .build()
                 .start();
-        log.info("Proxy transport listening on {}:{}", bindAddress.getHostAddress(), server.getPort());
+        if (domainSocket) {
+            log.info("Proxy transport listening on Unix domain socket {}", socketPath);
+        } else {
+            log.info("Proxy transport listening on {}:{}", bindAddress.getHostAddress(), server.getPort());
+        }
         return this;
     }
 
@@ -117,7 +143,63 @@ public class ProxyServer implements AutoCloseable {
         if (server == null) {
             throw new IllegalStateException("not started");
         }
+        if (domainSocket) {
+            throw new IllegalStateException("this listener is a Unix domain socket, not a TCP port - "
+                    + "ask for socketPath() instead");
+        }
         return server.getPort();
+    }
+
+    /**
+     * The Unix domain socket this listener bound, when it is one.
+     * <p>
+     * The path is chosen HERE and reported back, deliberately mirroring the ephemeral-port design above:
+     * the parent process does not invent a path any more than it invents a port, so there is no shared
+     * filesystem convention to collide on and no well-known location to guess.
+     */
+    public synchronized Path socketPath() {
+        if (server == null) {
+            throw new IllegalStateException("not started");
+        }
+        if (!domainSocket) {
+            throw new IllegalStateException("this listener is a TCP port, not a Unix domain socket - "
+                    + "ask for port() instead");
+        }
+        return socketPath;
+    }
+
+    /**
+     * A domain-socket listener, which needs an epoll transport for both the channel and its event loops -
+     * gRPC's default NIO groups cannot host an {@link EpollServerDomainSocketChannel}.
+     *
+     * <h2>What this does and does not change about the R17/R29 posture</h2>
+     *
+     * The loopback check above does not apply and is not being weakened: a filesystem socket is not a
+     * network bind at all, so it is strictly narrower than the loopback default rather than wider - no
+     * peer that lacks filesystem access to the path can reach it, and no remote peer can reach it by any
+     * means. The authority allowlist is left in place unchanged rather than special-cased: the browser
+     * threat R29 exists for cannot reach a Unix socket in the first place, so the interceptor is inert
+     * here rather than bypassed, and a client that declares an authority is still held to the list.
+     */
+    private NettyServerBuilder domainSocketBuilder() throws IOException {
+        if (!Epoll.isAvailable()) {
+            throw new IOException("this platform has no epoll domain-socket transport, so the proxy "
+                    + "cannot listen on a Unix domain socket here. grpc-netty-shaded bundles the Linux "
+                    + "epoll natives and no kqueue transport, so this is expected on macOS - run under "
+                    + "Linux, or in a container, or use the loopback listener", Epoll.unavailabilityCause());
+        }
+        // Created under a private directory rather than as a bare file, so the socket is unreachable to
+        // anyone without a traversable path to it - the closest thing this listener has to the peer
+        // identity KTD11 records loopback TCP as lacking entirely.
+        Path directory = Files.createTempDirectory("pc-proxy-");
+        socketPath = directory.resolve("proxy.sock");
+        bossGroup = new EpollEventLoopGroup(1);
+        workerGroup = new EpollEventLoopGroup();
+        return NettyServerBuilder
+                .forAddress(new DomainSocketAddress(socketPath.toFile()))
+                .channelType(EpollServerDomainSocketChannel.class)
+                .bossEventLoopGroup(bossGroup)
+                .workerEventLoopGroup(workerGroup);
     }
 
     @Override
@@ -132,6 +214,31 @@ public class ProxyServer implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
         server = null;
+        // The event loop groups are ours only in domain-socket mode; gRPC owns its own defaults otherwise
+        // and shutting those down would not be ours to do.
+        if (bossGroup != null) {
+            bossGroup.shutdownGracefully();
+            bossGroup = null;
+        }
+        if (workerGroup != null) {
+            workerGroup.shutdownGracefully();
+            workerGroup = null;
+        }
+        deleteSocketFile();
+    }
+
+    /** A socket file outlives the process that bound it, so this listener removes its own. */
+    private void deleteSocketFile() {
+        if (socketPath == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(socketPath);
+            Files.deleteIfExists(socketPath.getParent());
+        } catch (IOException e) {
+            log.warn("Could not remove the domain socket at {}", socketPath, e);
+        }
+        socketPath = null;
     }
 
     public static class Builder {
@@ -140,6 +247,8 @@ public class ProxyServer implements AutoCloseable {
         private BindableService sessionService;
         private final List<String> operatorAllowedAuthorities = new ArrayList<>();
         private boolean exposeUnauthenticatedSurfaceBeyondLoopback = false;
+
+        private boolean domainSocket = false;
 
         /**
          * The session service the transport hosts - the engine's {@code ProxyServiceImplBase}
@@ -159,6 +268,16 @@ public class ProxyServer implements AutoCloseable {
         /** Defaults to 0 - an ephemeral port, so no well-known port is guessable. */
         public Builder port(int port) {
             this.port = port;
+            return this;
+        }
+
+        /**
+         * Listen on a Unix domain socket instead of a loopback TCP port, choosing the path here and
+         * reporting it back through {@link ProxyServer#socketPath()} - the same shape as the ephemeral
+         * port. Needs an epoll transport, so it fails with a named reason on a platform without one.
+         */
+        public Builder domainSocket(boolean domainSocket) {
+            this.domainSocket = domainSocket;
             return this;
         }
 

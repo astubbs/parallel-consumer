@@ -53,8 +53,24 @@ class ReferenceDemoIT {
     /** Small enough to be quick, big enough that every arm has to poll more than once. */
     private static final int RECORDS = 20;
 
-    private static final List<String> EVERY_ARM = List.of(
+    /**
+     * The arms that run everywhere. java-grpc-uds is deliberately not in this list: it needs an epoll
+     * domain-socket transport, so it runs on Linux - including in this demo's own container on any host -
+     * and not on macOS natively. The assertion below adds it exactly when the runtime says it can run,
+     * so this test neither demands it where it cannot exist nor lets it silently vanish where it can.
+     */
+    private static final List<String> ARMS_EVERYWHERE = List.of(
             "AK core", "pc-core", "java-direct", "java-grpc", "java-raw-grpc");
+
+    private static List<String> expectedArms() {
+        if (!ReferenceDemo.domainSocketsAvailable()) {
+            return ARMS_EVERYWHERE;
+        }
+        var withUds = new java.util.ArrayList<>(ARMS_EVERYWHERE);
+        // the demo runs it directly after java-grpc, which is the arm it is compared against
+        withUds.add(withUds.indexOf("java-raw-grpc"), "java-grpc-uds");
+        return withUds;
+    }
 
     @Test
     void everyArmRunsEndToEndAgainstARealBrokerAndProcessesEveryRecord() throws Exception {
@@ -75,7 +91,7 @@ class ReferenceDemoIT {
             assertThat(results)
                     .withFailMessage("every arm must report, or the comparison has a hole in it")
                     .extracting(ArmResult::arm)
-                    .containsExactlyElementsOf(EVERY_ARM);
+                    .containsExactlyElementsOf(expectedArms());
 
             assertThat(results)
                     .allSatisfy(result -> {

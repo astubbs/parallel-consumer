@@ -28,6 +28,33 @@ import static com.google.common.truth.Truth.assertWithMessage;
 class MainTest {
 
     /**
+     * The transport flag must not weaken R39, and the way to check that is that a CONFIGURATION flag is
+     * still refused now that one argument is accepted. {@code --socket} says where to listen, which the
+     * spawning parent must know before a session exists - the same category as the port, and not a knob
+     * the Configure message could carry.
+     */
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    void theTransportFlagIsNamedInTheUsageAndConfigurationIsStillRefused() {
+        var out = new ByteArrayOutputStream();
+        var err = new ByteArrayOutputStream();
+
+        int exit = Main.run(new String[]{"--ordering", "KEY"},
+                new PrintStream(out, true, StandardCharsets.UTF_8),
+                new PrintStream(err, true, StandardCharsets.UTF_8),
+                new PipedInputStream());
+
+        assertThat(exit).isEqualTo(Main.EXIT_USAGE);
+        var usage = err.toString(StandardCharsets.UTF_8);
+        assertWithMessage("a refused argument must name the one that IS accepted")
+                .that(usage).contains(Main.SOCKET_FLAG);
+        assertWithMessage("the refusal must still say where configuration actually goes")
+                .that(usage).contains("Configure");
+        assertWithMessage("a refused start must announce no listener of either kind")
+                .that(out.toString(StandardCharsets.UTF_8)).doesNotContain(Main.SOCKET_LINE_PREFIX);
+    }
+
+    /**
      * R39/U7: the sidecar is configured over the protocol, not the command line. Every knob arrives in
      * {@code Configure}, so an argument here is a caller misunderstanding worth failing loudly on rather than
      * a forward-compatible thing to ignore.

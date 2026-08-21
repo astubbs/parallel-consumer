@@ -60,6 +60,21 @@ public final class Main {
     /** The port line, as the spawning client parses it. Identical to the test-mode binary's. */
     public static final String PORT_LINE_PREFIX = "port: ";
 
+    /**
+     * The stdout announcement when the listener is a Unix domain socket - the exact counterpart of
+     * {@link #PORT_LINE_PREFIX}, because the parent learns where to connect the same way either way.
+     */
+    public static final String SOCKET_LINE_PREFIX = "socket: ";
+
+    /**
+     * The one argument this binary accepts, and it selects a TRANSPORT rather than configuring a session.
+     * That distinction is what keeps R39 intact: bootstrap servers, credentials, ordering, concurrency and
+     * subscription still arrive connect-time in Configure and there is still no flag for any of them. Where
+     * to listen is not one of those - it is what the spawning parent must know before a session exists, the
+     * same category as the port.
+     */
+    public static final String SOCKET_FLAG = "--socket";
+
     /** Brisk enough that an orphan is short-lived, slow enough not to spin on a healthy parent. */
     private static final Duration PARENT_POLL_INTERVAL = Duration.ofMillis(250);
 
@@ -83,16 +98,30 @@ public final class Main {
      * @param parentLifeline the inherited pipe; {@code System.in} in the real sidecar
      */
     public static int run(String[] args, PrintStream out, PrintStream err, InputStream parentLifeline) {
-        if (args.length > 0) {
-            return usage(err, "this binary takes no arguments (got '" + args[0] + "')");
+        boolean domainSocket = false;
+        if (args.length == 1 && SOCKET_FLAG.equals(args[0])) {
+            domainSocket = true;
+        } else if (args.length > 0) {
+            return usage(err, "the only argument this binary accepts is " + SOCKET_FLAG
+                    + " (got '" + args[0] + "')");
         }
 
         var handler = ConfigureHandler.builder().build();
 
-        try (var server = ProxyServer.builder().sessionService(handler).build().start()) {
-            out.println(PORT_LINE_PREFIX + server.port());
-            log.info("Sidecar listening on loopback port {}; waiting for the client to configure it",
-                    server.port());
+        try (var server = ProxyServer.builder()
+                .sessionService(handler)
+                .domainSocket(domainSocket)
+                .build()
+                .start()) {
+            if (domainSocket) {
+                out.println(SOCKET_LINE_PREFIX + server.socketPath());
+                log.info("Sidecar listening on Unix domain socket {}; waiting for the client to configure it",
+                        server.socketPath());
+            } else {
+                out.println(PORT_LINE_PREFIX + server.port());
+                log.info("Sidecar listening on loopback port {}; waiting for the client to configure it",
+                        server.port());
+            }
 
             try (var watchdog = ParentDeathWatchdog.watchingParentOf(parentLifeline, PARENT_POLL_INTERVAL)) {
                 watchdog.start();
@@ -102,7 +131,7 @@ public final class Main {
 
             return exitCodeFor(drain(handler));
         } catch (IOException bindFailed) {
-            err.println("sidecar: could not bind the loopback listener: " + bindFailed.getMessage());
+            err.println("sidecar: could not bind the listener: " + bindFailed.getMessage());
             return EXIT_USAGE;
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -176,12 +205,17 @@ public final class Main {
         err.println();
         err.println("usage: Main");
         err.println();
-        err.println("It takes no arguments. Bootstrap servers, credentials, ordering, concurrency and");
+        err.println("It takes no CONFIGURATION. Bootstrap servers, credentials, ordering, concurrency and");
         err.println("subscription all arrive connect-time in the Configure message over the protocol, so");
-        err.println("there is no flag or environment variable to set here.");
+        err.println("there is no flag or environment variable for any of them.");
         err.println();
-        err.println("Prints '" + PORT_LINE_PREFIX + "<n>' on stdout line one, then serves one client on that");
-        err.println("loopback port until the parent process dies (observed as EOF on stdin).");
+        err.println("The one accepted argument, " + SOCKET_FLAG + ", selects the TRANSPORT: listen on a Unix");
+        err.println("domain socket instead of a loopback TCP port. That needs an epoll transport, so it is");
+        err.println("Linux-only - which includes inside a container on any host.");
+        err.println();
+        err.println("Prints '" + PORT_LINE_PREFIX + "<n>' - or '" + SOCKET_LINE_PREFIX + "<path>' under "
+                + SOCKET_FLAG + " - on stdout");
+        err.println("line one, then serves one client there until the parent process dies (EOF on stdin).");
         err.println();
         err.println("Launch it DIRECTLY, not through a shell: a wrapper process inherits the pipe's write");
         err.println("end and holds it open, which defeats the primary parent-death signal.");

@@ -443,6 +443,58 @@ where any of these differences come from.
   twenty times the records is the shape that fits; a per-record overhead would have persisted. An
   earlier single run appeared to show a flat seven per cent, which was noise being read as a trend.
 
+### The Unix-domain-socket arm, and what it found (2026-08-21)
+
+Added as a sixth arm, `java-grpc-uds`: the same client library over the same spawned sidecar,
+reached through a Unix domain socket instead of loopback TCP. Against `java-grpc` exactly one term
+changes, so the pair prices the TCP/IP stack - the term the `java-direct` to `java-grpc` step
+otherwise lumps together with serialization, the gRPC machinery and the process boundary.
+
+**It runs on Linux, which includes this demo's own container on any host**, so `demo/run.sh --docker`
+gets it on macOS too. The demo asks the runtime (`Epoll.isAvailable()`) rather than guessing from the
+operating system's name, and where it cannot run it says so and names the container. An arm is
+additive: where it is absent every other arm reports exactly what it always reports.
+
+#### The measurement, from two container runs at defaults
+
+Big replay, 40,000 records, which is the volume where start-up stops dominating:
+
+| arm | run 1 | run 2 |
+|---|---|---|
+| java-grpc (loopback TCP) | 10,094 msg/s | 9,215 msg/s |
+| java-grpc-uds | 10,169 msg/s | 10,071 msg/s |
+| java-raw-grpc (loopback TCP, no library) | 10,399 msg/s | 10,278 msg/s |
+
+**The socket type is not where the cost is, and that is the result.** UDS comes out between 0.7% and
+9.3% ahead of loopback TCP across the two runs - a spread wider than most of the effect, so **two
+runs cannot resolve whether there is a real difference at all.** What they do settle is the shape:
+UDS does not change the order of magnitude. Going out of process costs roughly half the throughput
+whether the bytes cross a network stack or a filesystem socket, so that cost is serialization, the
+gRPC machinery and the process boundary - not the wire.
+
+Two caveats before anyone quotes this. These are **container** runs, which are measurably noisier
+than the native ones above - run 2's small replay has a pc-core outlier that no explanation covers -
+and they had to be, because macOS cannot run the arm natively. And the whole comparison is
+workload-specific: at 2 ms of simulated work per record both client arms are overhead-bound, so the
+ratio would shrink toward noise if each record did more real work.
+
+#### What it means for KTD11
+
+KTD11 declines UDS for v1 on parity and scope, and records that loopback TCP has no peer-credential
+mechanism at all. **This removes any performance argument from that decision, in either direction.**
+UDS is worth adopting for peer identity or not at all; nobody should now expect it to buy throughput.
+That is exactly what a demo arm is for - it informs the decision without pre-empting it.
+
+#### What it cost, and what it did not
+
+The sidecar gained an **optional second bind mode**, selected by the one argument `Main` accepts.
+The TCP path, the loopback default and R29's authority interceptor are untouched, so the cleared
+gate was not moved. The UDS client declares the loopback authority rather than the interceptor being
+taught to accept a path - the browser threat R29 exists for cannot reach a filesystem socket, so the
+interceptor is inert there rather than bypassed, and a client that declares an authority is still
+held to the list. The socket path is chosen by the sidecar and announced on stdout, mirroring the
+ephemeral port exactly, so no parent invents a path and there is no well-known location to guess.
+
 ### The AK core baseline moved, and the obvious explanation was wrong
 
 Earlier runs of this demo put AK core at 344 - 346 msg/s; every run of the reviewed code puts it at

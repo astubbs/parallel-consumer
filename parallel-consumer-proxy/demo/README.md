@@ -35,13 +35,31 @@ other language the two arms are different client libraries as well as different 
 arm runs in one JVM, against one broker, with the same sleep as the user function - so the gap is
 what crossing a process boundary costs, and nothing else.
 
-### Java carries three extra arms. Do not mirror them.
+### Java carries four extra arms. Do not mirror them.
 
 Because one JVM can hold all of them at once, the Java demo also runs `pc-core` (the engine
-directly), `java-direct` (the client library with the engine in process) and `java-raw-grpc` (the
-protocol by hand). Each pair isolates one cost: the client library, and going out of process. A language
-whose only Kafka client is its own has nothing to compare a wrapper or a raw wire against, so
-**two arms is the whole contract everywhere else.**
+directly), `java-direct` (the client library with the engine in process), `java-grpc-uds` (the
+client library over a **Unix domain socket**) and `java-raw-grpc` (the protocol by hand). Each
+*pair* changes exactly one term, which is the only way a difference means anything:
+
+| pair | what it isolates |
+|---|---|
+| `pc-core` vs `java-direct` | what reaching the engine through the client library costs |
+| `java-direct` vs `java-grpc` | going out of process at all |
+| `java-grpc` vs `java-grpc-uds` | the TCP/IP stack, with everything else held identical |
+| `java-grpc` vs `java-raw-grpc` | what the client library itself costs on the wire |
+
+A language whose only Kafka client is its own has nothing to compare a wrapper or a raw wire
+against, so **two arms is the whole contract everywhere else.**
+
+**`java-grpc-uds` is absent where it cannot run, and never silently.** It needs an epoll
+domain-socket transport, which means Linux - including inside this demo's own container on any
+host, so `demo/run.sh --docker` gets it on macOS too. The demo asks the runtime whether it can open
+a domain socket rather than guessing from the operating system's name, and when it cannot it says
+so and names the container as the way to include it. **An arm is additive**: where it is absent
+every other arm reports exactly what it always reports, so such a platform is one row short rather
+than running a different comparison. That is why availability did not have to be settled before the
+arm was worth adding.
 
 ## Two replays, because one volume cannot answer both questions
 

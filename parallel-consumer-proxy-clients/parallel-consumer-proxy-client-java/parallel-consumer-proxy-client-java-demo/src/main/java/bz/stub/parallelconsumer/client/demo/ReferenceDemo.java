@@ -20,6 +20,7 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import io.grpc.ManagedChannel;
+import io.grpc.netty.shaded.io.netty.channel.epoll.Epoll;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
@@ -73,6 +74,10 @@ import java.util.concurrent.atomic.AtomicReference;
  *       sidecar's own dispatch model</i>, not the wire alone: the two sides run the engine with
  *       different in-flight pipelining, so attributing the whole gap to the socket would overstate
  *       it.</li>
+ *   <li><b>java-grpc-uds</b> - the same client library over the same sidecar, reached through a
+ *       <b>Unix domain socket</b> instead of loopback TCP. Against java-grpc - one term changed, and
+ *       every other term identical - this prices <b>the TCP/IP stack</b>. It is additive: where it
+ *       cannot run, every other arm reports exactly what it reports now.</li>
  *   <li><b>java-raw-grpc</b> - the protocol spoken by hand, with no client library at all. A
  *       control arm: against java-grpc it prices <b>the client library itself</b>. It is here
  *       because an earlier version of this demo was <em>only</em> this arm, which is precisely why
@@ -183,6 +188,12 @@ public final class ReferenceDemo {
 
     private List<ArmResult> run() throws Exception {
         log.info("\nEffective configuration:\n  {}\n  topic = {}", options, topic);
+        if (!domainSocketsAvailable()) {
+            log.info("\nThe java-grpc-uds arm is NOT running: this JVM has no epoll domain-socket "
+                    + "transport, which is expected outside Linux. Every other arm is unaffected and "
+                    + "reports exactly what it always reports - the comparison is one row shorter, not "
+                    + "different. To include it, run the demo in its container: demo/run.sh --docker");
+        }
 
         broker.ensureTopic(topic, options.partitions());
         broker.seed(topic, 0, options.records());
@@ -192,6 +203,9 @@ public final class ReferenceDemo {
         small.add(pcCore(options.records()));
         small.add(javaDirect(options.records()));
         small.add(javaGrpc(options.records()));
+        if (domainSocketsAvailable()) {
+            small.add(javaGrpcOverDomainSocket(options.records()));
+        }
         small.add(javaRawGrpc(options.records()));
         report("Small replay - every arm over the same " + options.records()
                 + " records (the comparison)", small, baselineOf(small), false);
@@ -211,6 +225,9 @@ public final class ReferenceDemo {
         big.add(pcCore(total));
         big.add(javaDirect(total));
         big.add(javaGrpc(total));
+        if (domainSocketsAvailable()) {
+            big.add(javaGrpcOverDomainSocket(total));
+        }
         big.add(javaRawGrpc(total));
         report("Big replay - " + total + " records, parallel arms only (AK core is serial and would"
                 + " take " + (total * options.delayMs() / 1000) + "s+)", big, baselineOf(small), true);
@@ -324,6 +341,51 @@ public final class ReferenceDemo {
                 return awaited("java-grpc", startedAt, processed, done, target);
             }
         }
+    }
+
+    /**
+     * The same client library and the same sidecar, over a Unix domain socket.
+     *
+     * <h2>What it isolates, and why it is worth a whole arm</h2>
+     *
+     * Against {@link #javaGrpc} exactly one term changes: the socket type. Same library, same protobuf,
+     * same engine, same spawned child, same broker, same workload. So the difference is what the TCP/IP
+     * stack costs, which the java-direct to java-grpc step otherwise lumps together with serialization,
+     * the gRPC machinery and the process boundary.
+     *
+     * <h2>Where it runs</h2>
+     *
+     * Linux, including inside this demo's own container on any host - grpc-netty-shaded bundles the epoll
+     * natives (x86_64 and aarch64) and no kqueue transport. On macOS natively it cannot run, and the demo
+     * routes the whole run through its container rather than dropping the row or, worse, running this one
+     * arm in a container while its comparators run on the host - two environments in one table would read
+     * as a UDS penalty that is really the container.
+     */
+    private ArmResult javaGrpcOverDomainSocket(int target) throws Exception {
+        log.info("\n=== java-grpc-uds starting over {} records ===", target);
+        var processed = new AtomicInteger();
+        var done = new CountDownLatch(1);
+        try (SidecarProcess sidecar = SidecarProcess.spawnOnDomainSocket()) {
+            try (ParallelConsumerClient client = GrpcParallelConsumerClient.builder()
+                    .socketPath(sidecar.socketPath())
+                    .options(clientOptions(groupId("java-grpc-uds")))
+                    .build()) {
+                long startedAt = System.nanoTime();
+                client.poll(sleepingProcessor(processed, target, done));
+                return awaited("java-grpc-uds", startedAt, processed, done, target);
+            }
+        }
+    }
+
+    /**
+     * Whether this JVM can open a Unix domain socket at all, asked of the runtime rather than guessed
+     * from the operating system's name - the shaded jar answers it directly.
+     * <p>
+     * Public for the same reason {@link #runFor} is: the integration test lives in its own
+     * {@code integrationTests} package, and it has to expect exactly the arms this platform can run.
+     */
+    public static boolean domainSocketsAvailable() {
+        return Epoll.isAvailable();
     }
 
     /**

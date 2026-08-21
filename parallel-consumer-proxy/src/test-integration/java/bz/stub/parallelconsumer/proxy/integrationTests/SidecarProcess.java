@@ -10,6 +10,8 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.List;
 import java.nio.file.Paths;
 import java.time.Duration;
 
@@ -33,16 +35,37 @@ public final class SidecarProcess implements AutoCloseable {
 
     private final int port;
 
-    private SidecarProcess(Process process, int port) {
+    private final Path socketPath;
+
+    private SidecarProcess(Process process, int port, Path socketPath) {
         this.process = process;
         this.port = port;
+        this.socketPath = socketPath;
     }
 
     /** Spawns a sidecar and returns once it has announced its port. */
     public static SidecarProcess spawn() throws IOException {
+        return spawn(false);
+    }
+
+    /**
+     * Spawns a sidecar listening on a Unix domain socket instead of a loopback TCP port.
+     * <p>
+     * Linux only, including inside a container on any host - grpc-netty-shaded bundles the epoll natives
+     * and no kqueue transport. The caller is expected to have checked; the child reports the reason if not.
+     */
+    public static SidecarProcess spawnOnDomainSocket() throws IOException {
+        return spawn(true);
+    }
+
+    private static SidecarProcess spawn(boolean domainSocket) throws IOException {
         var java = Paths.get(System.getProperty("java.home"), "bin", "java").toString();
-        var process = new ProcessBuilder(java, "-cp", System.getProperty("java.class.path"),
-                Main.class.getName())
+        var command = new java.util.ArrayList<String>(List.of(java, "-cp",
+                System.getProperty("java.class.path"), Main.class.getName()));
+        if (domainSocket) {
+            command.add(Main.SOCKET_FLAG);
+        }
+        var process = new ProcessBuilder(command)
                 .redirectErrorStream(false)
                 .start();
 
@@ -64,14 +87,25 @@ public final class SidecarProcess implements AutoCloseable {
                 // on its next write - a sidecar that merely logs enough would hang its caller, and it would
                 // look like the lifecycle failing rather than the caller starving it.
                 pump(process, stdout, "stdout");
-                return new SidecarProcess(process, port);
+                return new SidecarProcess(process, port, null);
+            }
+            if (line.startsWith(Main.SOCKET_LINE_PREFIX)) {
+                var path = Paths.get(line.substring(Main.SOCKET_LINE_PREFIX.length()).trim());
+                log.info("Sidecar pid {} announced socket {}", process.pid(), path);
+                pump(process, stdout, "stdout");
+                return new SidecarProcess(process, -1, path);
             }
         }
-        throw new IllegalStateException("no port line within " + STARTUP_BUDGET);
+        throw new IllegalStateException("no port or socket line within " + STARTUP_BUDGET);
     }
 
     public int port() {
         return port;
+    }
+
+    /** The Unix domain socket the child bound, when it was spawned on one. */
+    public Path socketPath() {
+        return socketPath;
     }
 
     public Process process() {
