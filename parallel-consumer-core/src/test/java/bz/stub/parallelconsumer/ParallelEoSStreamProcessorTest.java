@@ -383,9 +383,18 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         //
         awaitLatch(startBarrierLatch);
 
-        // zero records waiting, 2 out for processing
-        assertThat(parallelConsumer.getWm().getNumberOfWorkQueuedInShardsAwaitingSelection()).isZero();
-        assertThat(parallelConsumer.getWm().getNumberRecordsOutForProcessing()).isEqualTo(2);
+        // Zero records waiting, 2 out for processing - AWAITED, not read at the instant the first handler
+        // starts. The property is that both records get out for processing under UNORDERED with nothing left
+        // awaiting selection; how quickly the second one follows the first is dispatch granularity, and the
+        // two engines differ on it. The engine PC ships hands the whole batch out in one control-loop pass,
+        // so it is already true when the first handler runs; under the direct-pull engine
+        // (-Dpc.directPull=true) each worker claims its own record, so the second can be a moment behind and
+        // the immediate read saw 1 record still awaiting selection. Neither number is weakened here - the
+        // converged state is still exactly 0 and exactly 2.
+        await().untilAsserted(() -> {
+            assertThat(parallelConsumer.getWm().getNumberOfWorkQueuedInShardsAwaitingSelection()).isZero();
+            assertThat(parallelConsumer.getWm().getNumberRecordsOutForProcessing()).isEqualTo(2);
+        });
 
         // finish processing 1
         releaseAndWait(locks, 1);
