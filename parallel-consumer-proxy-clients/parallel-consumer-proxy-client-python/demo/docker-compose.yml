@@ -49,6 +49,11 @@ services:
       - "${PC_DEMO_BROKER_PORT:-19095}:${PC_DEMO_BROKER_PORT:-19095}"
     environment:
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      # QUIET. A demo is a thing someone WATCHES, and a KRaft broker at INFO emits hundreds of
+      # lines of its own configuration, controller elections and log-segment chatter - which buries
+      # the two tables the demo exists to show. Kafka's own warnings and errors still come through.
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       # THREE LISTENERS, and the third is what the native path needs. PLAINTEXT is bound to the
@@ -96,3 +101,14 @@ services:
       PC_DEMO_BOOTSTRAP: broker:9092
       # The flags demo/run.sh was called with, forwarded as one string.
       PC_DEMO_ARGS: ${PC_DEMO_ARGS:-}
+      # EVERY OTHER DIAL, forwarded explicitly. Compose passes nothing it is not told to, so a
+      # missing line here is a dial the container silently ignores while the run still prints a
+      # fingerprint claiming otherwise. Caught across seven languages at once by
+      # bin/ci-demo-conformance.sh, which is why that check exists. Adding a flag means adding it
+      # here too.
+      PC_DEMO_RECORDS: ${PC_DEMO_RECORDS:-}
+      PC_DEMO_DELAY_MS: ${PC_DEMO_DELAY_MS:-}
+      PC_DEMO_CONCURRENCY: ${PC_DEMO_CONCURRENCY:-}
+      PC_DEMO_PARTITIONS: ${PC_DEMO_PARTITIONS:-}
+      PC_DEMO_REPLAY_FACTOR: ${PC_DEMO_REPLAY_FACTOR:-}
+      PC_DEMO_TOPIC: ${PC_DEMO_TOPIC:-}
