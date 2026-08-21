@@ -53,6 +53,40 @@ and running a single test still needs the interpreter on the host. Node and Pyth
 someone else's containers. This is a local-and-agent reproducibility question, which lowers its
 stakes.
 
+### MEASURED 2026-08-22: extraction does not work on macOS at all, and the caveat above understates why
+
+The first full local run of the conformance suite got all ten runners built and then failed **20 of
+20 scenarios for exactly the two container-route languages**, cpp and swift, each with **exit 126**
+- "found, but cannot execute":
+
+```
+runner   : swift
+exit     : 126
+file     : ELF 64-bit LSB pie executable, ARM aarch64, dynamically linked
+host     : macOS, arm64
+```
+
+The caveat above frames this as **linking discipline** - "static by default" so a glibc mismatch does
+not bite on a different host. That is the right rule for Linux-to-Linux, and **it does not help
+here**: no amount of static linking makes a Linux ELF execute on Darwin. Build-and-extract is sound
+only when the host OS matches the image OS. On macOS the artifact is unrunnable however it is linked.
+
+**The consequence for the fallback idea is the sharp one.** If a developer without mise is served by
+"build it in a container instead", that fallback is broken precisely on the machines that need it:
+macOS developers are the ones who cannot get Swift and C++ toolchains from mise, and they are the
+ones for whom an extracted Linux binary cannot run. A container **build** fallback therefore has to
+be a container **run** fallback too - which is section 2's question, not section 1's, and is a much
+larger change than pointing an exec at Docker.
+
+**CI is unaffected and will stay green through this**, because its runners are Linux, so an extracted
+Linux binary is native there. That is the trap: the gap is invisible to every check that exists and
+appears only on a developer machine, which is the same shape as the toolchain drift recorded in
+[`ci-toolchain-versions-declared-twice.md`](ci-toolchain-versions-declared-twice.md).
+
+Nothing here argues against the container route for *building* - it built both languages cleanly on a
+host with neither toolchain, which is what it is for. It argues that "built" and "runnable here" are
+different claims, and only the first one is currently true off Linux.
+
 **Cheaper middle path to weigh first:** this repo already manages Java, Go and Node through mise,
 and mise also covers Rust, Ruby and .NET. Extending what exists costs far less than an image fleet;
 containers earn their place for the genuinely awkward two (Swift on Linux, C++ with gRPC dev libs).
