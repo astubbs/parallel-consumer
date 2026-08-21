@@ -46,6 +46,15 @@ public class ProcessingShard<K, V> {
     @Getter
     private final NavigableMap<Long, WorkContainer<K, V>> entries = new ConcurrentSkipListMap<>();
 
+    /**
+     * Offset the next {@code UNORDERED} scan starts from, or null to start at the head.
+     * <p>
+     * Read and advanced by the control loop's dispatch call, which is single threaded. Cleared by
+     * {@link #onFailure()}, which runs on worker threads - hence volatile. A stale read there costs at
+     * most one extra pass before the record is seen.
+     */
+    private volatile Long unorderedResumePoint = null;
+
 
     @Getter(PRIVATE)
     private final ShardKey key;
@@ -74,6 +83,19 @@ public class ProcessingShard<K, V> {
     }
 
     public void onFailure() {
+        // Work has become selectable again BEHIND the dispatch scan's resume point, and this is the only
+        // way that can happen: records are registered in ascending offset order, so nothing else ever
+        // lands earlier than where the scan has already reached. Clearing the point sends the next scan
+        // back to the head so this record is seen.
+        //
+        // Without this, the wrap in scanResuming is not enough on its own. It only fires when the tail
+        // cannot fill the request, and on a live partition new records keep arriving at higher offsets -
+        // so the tail never empties, the resume point advances forever, and a retried record is starved
+        // while the partition sits blocked behind it. Note that a test which fails one record and looks
+        // for it does NOT catch this, because an idle tail resets the point and hides the bug;
+        // UnorderedShardScanResumeTest keeps the shard fed on purpose.
+        unorderedResumePoint = null;
+
         // increase available cnt first to let retry expired calculated later
         availableWorkContainerCnt.incrementAndGet();
     }
@@ -131,8 +153,87 @@ public class ProcessingShard<K, V> {
         var slowWork = new HashSet<WorkContainer<?, ?>>();
         var workTaken = new ArrayList<WorkContainer<K, V>>();
 
-        var iterator = entries.entrySet().iterator();
-        boolean hasStaleWorkContainer = false;
+        if (isOrderRestricted()) {
+            // KEY and PARTITION must always start at the lowest offset, because the lowest offset IS the
+            // next record to run. There is nothing to resume from and nothing to gain: the scan takes at
+            // most one container and stops.
+            scan(entries, workToGetDelta, workTaken, slowWork);
+        } else {
+            scanResuming(workToGetDelta, workTaken, slowWork);
+        }
+
+        if (workTaken.size() == workToGetDelta) {
+            log.trace("Work taken ({}) exceeds max ({})", workTaken.size(), workToGetDelta);
+        }
+
+        logSlowWork(slowWork);
+
+        // Remove from retry queue as picked for submission to work pool - filter to only remove work containers that have
+        // previously failed - as retry queue won't have any that didn't previously fail.
+        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasPreviouslyFailed).collect(Collectors.toList()));
+
+        dcrAvailableWorkContainerCntByDelta(workTaken.size());
+
+        return workTaken;
+    }
+
+    /**
+     * Scans from where the last scan stopped, then wraps to cover what it skipped.
+     * <p>
+     * WHY THIS EXISTS. {@link #entries} keeps a record until it SUCCEEDS, not until it is dispatched - so
+     * every record currently out for processing is still sitting in this map, ahead of the selectable ones.
+     * In {@code UNORDERED} the scan does not stop early, so restarting at the head each pass meant walking
+     * past every in-flight container before reaching any work. That is O(in-flight) per dispatch pass, over
+     * a skip list, and it gets worse exactly as concurrency rises - the shape a measured throughput ceiling
+     * should never have.
+     * <p>
+     * Measured: {@code UNORDERED} ran 21% slower than {@code KEY} at a 100ms handler and 1,000 concurrent -
+     * 7,318 against 8,875 msg/s - despite {@code KEY} being the mode with the stricter guarantee. The
+     * difference is the walk: {@code UNORDERED} shards by topic-partition, so ten shards each held a
+     * thousand records, while {@code KEY} shards by record key, so each shard held one and there was
+     * nothing to walk past. See docs/inflight/perf-throughput-regression-since-0-3.md.
+     * <p>
+     * WHY IT WRAPS RATHER THAN JUST SKIPPING. A record that fails, or returns no verdict, becomes
+     * selectable again via {@link #onFailure()} - and it sits BEHIND the resume point. Advancing
+     * without wrapping would starve it until the point happened to reset. The second pass covers exactly
+     * the range the first one skipped, so every selectable record is still reachable in one call.
+     * <p>
+     * This is the same fairness argument {@link ShardManager} already makes across shards with
+     * {@code LoopingResumingIterator}; this is that idea applied within one shard. It is deliberately NOT
+     * that class: it takes {@code map.size()} up front, which on a {@link ConcurrentSkipListMap} is O(n)
+     * and would reintroduce the cost being removed here. {@link NavigableMap#tailMap} positions in
+     * O(log n) instead.
+     */
+    private void scanResuming(int workToGetDelta,
+                              ArrayList<WorkContainer<K, V>> workTaken,
+                              Set<WorkContainer<?, ?>> slowWork) {
+        Long resume = unorderedResumePoint;
+
+        boolean blocked = scan(resume == null ? entries : entries.tailMap(resume, true),
+                workToGetDelta, workTaken, slowWork);
+
+        // Only wrap if we actually skipped something, and only when the first pass did not stop because the
+        // partition is blocked - if it is blocked, the head of the map is blocked too.
+        if (!blocked && resume != null && workTaken.size() < workToGetDelta) {
+            scan(entries.headMap(resume, false), workToGetDelta, workTaken, slowWork);
+        }
+
+        if (workTaken.isEmpty()) {
+            // Nothing selectable from here - start over rather than creeping forward.
+            unorderedResumePoint = null;
+        } else {
+            unorderedResumePoint = workTaken.get(workTaken.size() - 1).offset() + 1;
+        }
+    }
+
+    /**
+     * @return true if the scan stopped because the partition cannot take work right now
+     */
+    private boolean scan(NavigableMap<Long, WorkContainer<K, V>> range,
+                         int workToGetDelta,
+                         ArrayList<WorkContainer<K, V>> workTaken,
+                         Set<WorkContainer<?, ?>> slowWork) {
+        var iterator = range.entrySet().iterator();
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var workContainer = iterator.next().getValue();
 
@@ -168,24 +269,11 @@ public class ProcessingShard<K, V> {
                     iterator.remove();
                 } else {
                     log.trace("Partition for shard {} is blocked for work taking, stopping shard scan", this);
-                    break;
+                    return true;
                 }
             }
         }
-
-        if (workTaken.size() == workToGetDelta) {
-            log.trace("Work taken ({}) exceeds max ({})", workTaken.size(), workToGetDelta);
-        }
-
-        logSlowWork(slowWork);
-
-        // Remove from retry queue as picked for submission to work pool - filter to only remove work containers that have
-        // previously failed - as retry queue won't have any that didn't previously fail.
-        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasPreviouslyFailed).collect(Collectors.toList()));
-
-        dcrAvailableWorkContainerCntByDelta(workTaken.size());
-
-        return workTaken;
+        return false;
     }
 
     private void logSlowWork(Set<WorkContainer<?, ?>> slowWork) {
