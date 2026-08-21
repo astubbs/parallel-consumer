@@ -197,6 +197,7 @@ go.mod|slash
 CMakeLists.txt|hash
 Dockerfile|hash
 Dockerfile.*|hash
+.dockerignore|hash
 Makefile|hash
 Gemfile|hash
 Rakefile|hash
