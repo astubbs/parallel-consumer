@@ -279,11 +279,23 @@ and the contract's own argument for them is that the table should demonstrate th
 assert it. **If another language put them at the end, one of the two has to move** - the contract's
 "same columns, same order" is the binding clause and neither choice is more correct.
 
-**`bin/ci-demo-conformance.sh` cannot read the new table**, and that file is not this branch's to
-edit. Two of its `awk` patterns were written against the old shape:
+**`bin/ci-demo-conformance.sh` cannot read the new table, and it does not fail - it goes quiet.**
+That file is not this branch's to edit, and this was measured rather than reasoned about: its
+`skeleton` function was run verbatim over this demo's captured output, and what came back was six
+`DIAL` lines and two `TITLE` lines and **nothing else**. No `HEADER`, no `ROW`.
+
+That is the dangerous shape. The skeleton is not empty, so the script's own
+`[ ! -s "$lang.skel" ]` guard does not skip the language; the absolute assertions all still pass;
+and the drift check happily compares eleven skeletons that no longer say anything about the tables.
+**A green run would mean the table columns and the arm order had stopped being checked at all** -
+which is precisely the "narrowed run that reads like a full one" the script's own header says it
+exists to prevent.
+
+Two of its `awk` patterns were written against the old shape:
 
 - its `HEADER` pattern matches `arm elapsed msg/s vs AK core` as a prefix, which no longer describes
-  the header row under this column order;
+  the header row under this column order. Note that a language which *appended* the two columns
+  instead would still match it - so the header line alone cannot be relied on to reveal the drift;
 - its `ROW` pattern is `^ <name> <elapsed>s <rate> <ratio>$` with the name constrained to
   `[A-Za-z][A-Za-z0-9 _-]*`. **The arm labels alone break it** - `AK core (KafkaConsumer)` contains
   parentheses - and it is anchored at the end, so trailing columns break it too. Its
@@ -292,7 +304,9 @@ edit. Two of its `awk` patterns were written against the old shape:
 None of that is fixable from a language branch without eleven conflicting edits to one shared file.
 Whoever integrates the fan-out should update those three patterns once, against whatever column order
 is settled on, and then re-run the drift check - which is the point at which any disagreement between
-the eleven becomes visible rather than theoretical.
+the eleven becomes visible rather than theoretical. **Worth adding while they are in there: a
+`ROW`-count or `HEADER`-present assertion**, so that a skeleton which has quietly stopped recognising
+the tables fails instead of comparing clean.
 
 #### One blemish observed and deliberately not fixed here
 
