@@ -49,6 +49,12 @@ var (
 	processed atomic.Int64
 )
 
+// The ConcurrentKeys dial's hard ceiling; exceeding it panics inside the library rather than
+// clamping, which would abort a sweep halfway through. Clamp loudly instead - a sweep that runs to
+// completion with one arm annotated beats one that dies at arm three. Package scope because
+// scenarios.go clamps against the same ceiling, and a library's hard limit copied twice drifts.
+const concurrentKeysMax = 5000
+
 func main() {
 	bootstrap := flag.String("bootstrap", "localhost:19092", "broker to consume from - the one the Java arms used")
 	topic := flag.String("topic", "", "topic holding the dataset produced by the Java harness")
@@ -64,10 +70,22 @@ func main() {
 		os.Exit(2)
 	}
 
-	// The dial's hard ceiling; exceeding it panics inside the library rather than clamping, which
-	// would abort a sweep halfway through. Clamp loudly instead - a sweep that runs to completion
-	// with one arm annotated beats one that dies at arm three.
-	const concurrentKeysMax = 5000
+	// The divergence scenarios ask a different question from throughput - what committing past gaps
+	// buys - and own their own runners in scenarios.go. Dispatched here so both arms share one flag
+	// set, one broker contract and one RESULT line format.
+	if *scenario != "" {
+		runScenario(scenarioConfig{
+			bootstrap:   *bootstrap,
+			topic:       *topic,
+			group:       *group,
+			count:       *count,
+			delay:       *delay,
+			concurrency: *concurrency,
+			timeout:     *timeout,
+		})
+		return
+	}
+
 	if *concurrency > concurrentKeysMax {
 		fmt.Fprintf(os.Stderr, "llingr-bench: ConcurrentKeys capped at %d by the library; %d requested\n",
 			concurrentKeysMax, *concurrency)

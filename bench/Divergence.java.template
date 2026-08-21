@@ -1,0 +1,522 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import __PKG__.ParallelConsumerOptions;
+import __PKG__.ParallelEoSStreamProcessor;
+import __PKG__.PCRetriableException;
+import __PKG__.PollContext;
+
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Measures what Parallel Consumer's offset-committing architecture buys, against a design that
+ * commits only the highest CONTIGUOUS offset.
+ *
+ * <h2>Why this exists separately from {@code Bench.java.template}</h2>
+ *
+ * {@code Bench} measures steady-state throughput with every record succeeding. That is the workload
+ * that flatters a leaner engine and says nothing about the decision this library is actually built
+ * around: PC encodes the <em>incomplete offset set</em> into the commit metadata and commits PAST
+ * gaps, so a slow or stuck record does not hold the committed position back. An engine that keeps
+ * out-of-order completions in an in-memory buffer and commits only the contiguous frontier has to
+ * freeze its committed offset behind that record, and loses the buffer on restart.
+ *
+ * Throughput cannot see any of that. What can see it is the committed offset over time, and the
+ * number of records a restart redelivers. So both are first-class outputs here, not throughput.
+ *
+ * <h2>The metric, stated honestly</h2>
+ *
+ * {@code divergence = completedThisRun - (committedOffset - baseOffset)}: records this run finished
+ * that lie at or above the committed position. For a contiguous-frontier design that IS the wasted
+ * work on restart. For PC it is an <b>over-estimate</b>, because PC's commit metadata records which
+ * of those records are already done - which is precisely why the {@code crash}/{@code resume}
+ * scenario exists: it measures the redelivered count empirically rather than inferring it.
+ * {@code metadataBytes} is sampled alongside so the encoding's cost is visible too.
+ *
+ * <h2>Invocation</h2>
+ *
+ * <pre>
+ * Divergence stuck  bootstrap=.. topic=.. group=.. count=.. delay=2 concurrency=100 \
+ *                   stall=25000 stallEvery=200000 series=&lt;csv&gt;
+ * Divergence crash  bootstrap=.. topic=.. group=.. haltAfter=100000 delay=2 concurrency=100 \
+ *                   stall=600000 stallEvery=200000 processedOut=&lt;file&gt;
+ * Divergence resume bootstrap=.. topic=.. group=.. processedIn=&lt;file&gt; delay=2 concurrency=100
+ * Divergence retry  bootstrap=.. topic=.. group=.. count=.. delay=2 concurrency=100 \
+ *                   failPercent=10 retryDelay=200
+ * </pre>
+ *
+ * Arguments are {@code key=value} deliberately: the positional list had grown to nine and a
+ * transposed pair is undetectable in a results file.
+ *
+ * <h2>Output</h2>
+ *
+ * Two machine-readable lines on stdout. The first is byte-compatible with the one
+ * {@code bench/run-bisect.sh} already parses, so nothing downstream needs to learn a new format:
+ *
+ * <pre>
+ * RESULT &lt;scenario&gt; &lt;count&gt; &lt;ms&gt; &lt;msgPerSec&gt; peak=&lt;maxInFlight&gt;
+ * RESULT2 key=value key=value ...
+ * </pre>
+ *
+ * {@code RESULT2} is key=value so an arm may add a field without invalidating a parser or a stored
+ * results file. Fields are documented in bench/README.md.
+ */
+public class Divergence {
+
+    static final Map<String, String> ARGS = new LinkedHashMap<>();
+
+    static final AtomicLong completed = new AtomicLong();
+    static final AtomicLong delivered = new AtomicLong();
+    static final AtomicLong redelivered = new AtomicLong();
+    static final AtomicLong retries = new AtomicLong();
+    static final AtomicLong inFlight = new AtomicLong();
+    static final AtomicLong peakInFlight = new AtomicLong();
+    static final AtomicLong highestCompletedOffset = new AtomicLong(-1);
+    static final AtomicLong lastDeliveryAt = new AtomicLong();
+
+    /** Set by the sampler thread; read by the summary. Volatile rather than atomic - single writer. */
+    static volatile long committedOffset = -1;
+    static volatile int metadataBytes = 0;
+    /** The raw committed metadata. Printed verbatim, because "40 bytes" is not evidence of WHAT. */
+    static volatile String metadataRaw = "";
+    static volatile long maxDivergence = 0;
+    /** Longest period the committed offset did not move. The stall, in the units a user feels it. */
+    static volatile long maxCommitFreezeMs = 0;
+
+    static final AtomicBoolean sampling = new AtomicBoolean(true);
+    static long baseOffset = 0;
+
+    /**
+     * The counters as they stood when the run's stop condition was met.
+     * <p>
+     * Not cosmetic: {@code closeDrainFirst()} processes everything still outstanding, so a summary
+     * read after the close reports the whole topic however few records the scenario asked for. The
+     * retry arm claimed 199,004 completions against a target of 50,000 before this existed, and
+     * nothing about that number looked wrong.
+     */
+    static volatile long snapCompleted = -1, snapDelivered, snapRetries, snapCommitted;
+    static volatile int snapMetadataBytes;
+    static volatile String snapMetadataRaw = "";
+
+    /**
+     * Also freezes the COMMITTED side, and that is not tidiness either. Waiting a moment after the
+     * stop so the sampler could take one more reading let a commit that happened AFTER the run land
+     * in the summary: one stuck run reported committedOffset=200000 and metadata=0 bytes, exactly
+     * contradicting its own time series and the two repeats beside it. The last reading taken while
+     * the run was still running is at most one sampling interval stale and cannot be contaminated.
+     */
+    static void snapshot() {
+        snapCommitted = committedOffset;
+        snapMetadataBytes = metadataBytes;
+        snapMetadataRaw = metadataRaw;
+        snapDelivered = delivered.get();
+        snapRetries = retries.get();
+        snapCompleted = completed.get(); // last, so completed is never ahead of delivered
+    }
+
+    public static void main(String[] args) throws Exception {
+        String scenario = args[0];
+        for (int i = 1; i < args.length; i++) {
+            int eq = args[i].indexOf('=');
+            if (eq < 0) throw new IllegalArgumentException("not key=value: " + args[i]);
+            ARGS.put(args[i].substring(0, eq), args[i].substring(eq + 1));
+        }
+
+        switch (scenario) {
+            case "stuck":  runStuck();  break;
+            case "crash":  runCrash();  break;
+            case "resume": runResume(); break;
+            case "retry":  runRetry();  break;
+            case "logend": logEnd();     break;
+            default: throw new IllegalArgumentException("unknown scenario: " + scenario);
+        }
+    }
+
+    // --- scenarios ------------------------------------------------------------------------------
+
+    /**
+     * Prints the topic's end offset, so the orchestrator can tell "already produced" from "not yet".
+     * <p>
+     * Not a nicety: the dataset producer appends, so re-running the harness against an existing topic
+     * silently DOUBLES the log. The restart scenario reads its resume run to quiescence and would
+     * then report twice the redeliveries with nothing going red.
+     */
+    static void logEnd() throws Exception {
+        Properties p = new Properties();
+        p.put("bootstrap.servers", arg("bootstrap"));
+        p.put("group.id", "logend-probe");
+        p.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        p.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        try (KafkaConsumer<String, String> c = new KafkaConsumer<>(p)) {
+            TopicPartition tp = new TopicPartition(arg("topic"), 0);
+            Map<TopicPartition, Long> ends = c.endOffsets(Collections.singletonList(tp));
+            System.out.println("LOGEND " + ends.getOrDefault(tp, 0L));
+        }
+    }
+
+    /**
+     * One record in {@code stallEvery} takes {@code stall} ms while the rest take {@code delay} ms,
+     * and the committed offset is sampled from the BROKER throughout - not from the engine, so the
+     * same number means the same thing for any engine on any runtime.
+     */
+    static void runStuck() throws Exception {
+        String bootstrap = arg("bootstrap"), topic = arg("topic"), group = arg("group");
+        int count = argInt("count", 0), delay = argInt("delay", 2), concurrency = argInt("concurrency", 100);
+        long stall = argInt("stall", 0);
+        int stallEvery = argInt("stallEvery", 0);
+
+        ParallelEoSStreamProcessor<String, String> pc = engine(bootstrap, topic, concurrency, 0);
+        startSampler(bootstrap, topic, group);
+        long start = System.currentTimeMillis();
+        pc.poll(ctx -> work(ctx, delay, stall, stallEvery));
+        while (completed.get() < count) sleep(25);
+        snapshot();
+        sampling.set(false);
+        long ms = System.currentTimeMillis() - start;
+        report("stuck", count, ms, extra("stallMs", stall, "stallEvery", stallEvery, "delayMs", delay));
+        close(pc);
+    }
+
+    /**
+     * Process until {@code haltAfter} records are done with a record stuck, then kill the JVM the
+     * way a crash would - {@link Runtime#halt}, no shutdown hooks, no drain, no final commit.
+     * The offsets completed before the halt are written out first so {@code resume} can tell
+     * redelivered-and-already-done from genuinely-outstanding work.
+     */
+    static void runCrash() throws Exception {
+        String bootstrap = arg("bootstrap"), topic = arg("topic"), group = arg("group");
+        int haltAfter = argInt("haltAfter", 0), delay = argInt("delay", 2), concurrency = argInt("concurrency", 100);
+        long stall = argInt("stall", 0);
+        int stallEvery = argInt("stallEvery", 0);
+        Path out = Path.of(arg("processedOut"));
+
+        // Bounded by the log end, so a bitmap is both smaller and faster than a concurrent Set here,
+        // and it is written in offset order which makes the file readable when a run looks wrong.
+        int logEnd = argInt("logEnd", haltAfter * 4);
+        boolean[] done = new boolean[logEnd + 1];
+
+        ParallelEoSStreamProcessor<String, String> pc = engine(bootstrap, topic, concurrency, 0);
+        startSampler(bootstrap, topic, group);
+        long start = System.currentTimeMillis();
+        pc.poll(ctx -> {
+            long offset = work(ctx, delay, stall, stallEvery);
+            if (offset >= 0 && offset < done.length) done[(int) offset] = true;
+        });
+        while (completed.get() < haltAfter) sleep(10);
+        snapshot();
+        long ms = System.currentTimeMillis() - start;
+        sampling.set(false);
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < done.length; i++) if (done[i]) sb.append(i).append('\n');
+        Files.writeString(out, sb.toString());
+
+        report("crash", (int) completed.get(), ms,
+                extra("stallMs", stall, "stallEvery", stallEvery, "delayMs", delay, "haltAfter", haltAfter));
+        System.out.flush();
+        System.err.flush();
+        // The whole point: no orderly close, so whatever was committed is what a crash would leave.
+        Runtime.getRuntime().halt(0);
+    }
+
+    /**
+     * Rejoin the same group after the crash and count what comes back. {@code redelivered} is the
+     * number of records delivered here that the crashed run had ALREADY completed - wasted work,
+     * which is the number a user pays for.
+     *
+     * No stall this time: the run has to reach the end of the log for the count to be complete.
+     */
+    static void runResume() throws Exception {
+        String bootstrap = arg("bootstrap"), topic = arg("topic"), group = arg("group");
+        int delay = argInt("delay", 2), concurrency = argInt("concurrency", 100);
+        long quiesce = argInt("quiesceMs", 8000);
+        List<String> lines = Files.readAllLines(Path.of(arg("processedIn")));
+        long maxOffset = 0;
+        for (String l : lines) maxOffset = Math.max(maxOffset, Long.parseLong(l));
+        boolean[] wasDone = new boolean[(int) maxOffset + 1];
+        for (String l : lines) wasDone[Integer.parseInt(l)] = true;
+
+        ParallelEoSStreamProcessor<String, String> pc = engine(bootstrap, topic, concurrency, 0);
+        baseOffset = 0; // divergence is meaningless across a restart; the redelivery count is the result
+        startSampler(bootstrap, topic, group);
+        long joinBudget = argInt("joinBudgetMs", 120000);
+        long subscribedAt = System.currentTimeMillis();
+        lastDeliveryAt.set(0);
+        pc.poll(ctx -> {
+            long offset = work(ctx, delay, 0, 0);
+            if (offset >= 0 && offset < wasDone.length && wasDone[(int) offset]) redelivered.incrementAndGet();
+        });
+        // The clock starts at the FIRST redelivered record, not at subscribe. The crashed member's
+        // group slot has to expire before this one is assigned anything, and that wait is a property
+        // of the broker's session timeout - not of either engine's reprocessing cost, which is what
+        // this scenario is measuring.
+        while (lastDeliveryAt.get() == 0 && System.currentTimeMillis() - subscribedAt < joinBudget) sleep(50);
+        if (lastDeliveryAt.get() == 0) System.err.println("NOTE: no records redelivered within joinBudgetMs");
+        long start = lastDeliveryAt.get() == 0 ? System.currentTimeMillis() : lastDeliveryAt.get();
+        // Quiescence, not a target count: how many records come back is the unknown being measured,
+        // so the run cannot be told when to stop.
+        while (System.currentTimeMillis() - lastDeliveryAt.get() < quiesce || inFlight.get() > 0) sleep(50);
+        snapshot();
+        sampling.set(false);
+        long ms = System.currentTimeMillis() - start - quiesce;
+        report("resume", (int) completed.get(), Math.max(ms, 1),
+                extra("alreadyDoneBeforeCrash", lines.size(), "delayMs", delay));
+        close(pc);
+    }
+
+    /**
+     * A percentage of records fail on first delivery and succeed on retry. PC retries them; a design
+     * that dead-letters on first failure sends every one of them to a dead-letter path it did not
+     * need to. Here {@code deadLettered} is always 0 - PC has no such path - and the comparison is
+     * against the llingr arm's count of the same records.
+     */
+    static void runRetry() throws Exception {
+        String bootstrap = arg("bootstrap"), topic = arg("topic"), group = arg("group");
+        int count = argInt("count", 0), delay = argInt("delay", 2), concurrency = argInt("concurrency", 100);
+        int failPercent = argInt("failPercent", 10);
+        int retryDelay = argInt("retryDelay", 200);
+        int every = failPercent <= 0 ? 0 : Math.max(1, 100 / failPercent);
+
+        ParallelEoSStreamProcessor<String, String> pc = engine(bootstrap, topic, concurrency, retryDelay);
+        startSampler(bootstrap, topic, group);
+        long start = System.currentTimeMillis();
+        pc.poll(ctx -> {
+            long offset = ctx.offset();
+            delivered.incrementAndGet();
+            lastDeliveryAt.set(System.currentTimeMillis());
+            long now = inFlight.incrementAndGet();
+            peakInFlight.accumulateAndGet(now, Math::max);
+            sleep(delay);
+            inFlight.decrementAndGet();
+            // Transient: fails once, succeeds on the retry. getNumberOfFailedAttempts is PC's own
+            // count, so "first delivery" is defined by the engine rather than by a side map here.
+            if (every > 0 && offset % every == 0 && ctx.getSingleRecord().getNumberOfFailedAttempts() == 0) {
+                retries.incrementAndGet();
+                throw new PCRetriableException("transient, offset " + offset);
+            }
+            completed.incrementAndGet();
+            highestCompletedOffset.accumulateAndGet(offset, Math::max);
+        });
+        while (completed.get() < count) sleep(25);
+        snapshot();
+        sampling.set(false);
+        long ms = System.currentTimeMillis() - start;
+        report("retry", count, ms, extra("failPercent", failPercent, "retryDelayMs", retryDelay,
+                "delayMs", delay, "deadLettered", 0));
+        close(pc);
+    }
+
+    // --- shared -------------------------------------------------------------------------------
+
+    /** Returns the record's offset, so a caller can record it without re-deriving the context. */
+    static long work(PollContext<String, String> ctx, int delayMs, long stallMs, int stallEvery) {
+        long offset = ctx.offset();
+        delivered.incrementAndGet();
+        lastDeliveryAt.set(System.currentTimeMillis());
+        long now = inFlight.incrementAndGet();
+        peakInFlight.accumulateAndGet(now, Math::max);
+        // offset % stallEvery == 1 rather than == 0, so the stalled record is near the START of the
+        // log. A stall at the end would leave nothing behind it and no divergence to measure.
+        boolean stalls = stallEvery > 0 && stallMs > 0 && offset % stallEvery == 1;
+        sleep(stalls ? stallMs : delayMs);
+        inFlight.decrementAndGet();
+        completed.incrementAndGet();
+        highestCompletedOffset.accumulateAndGet(offset, Math::max);
+        return offset;
+    }
+
+    static ParallelEoSStreamProcessor<String, String> engine(String bootstrap, String topic,
+                                                            int concurrency, int retryDelayMs) {
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps(bootstrap));
+        ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> b =
+                ParallelConsumerOptions.<String, String>builder()
+                        .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                        .consumer(consumer)
+                        .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
+                        .maxConcurrency(concurrency);
+        // COMMIT CADENCE IS A CONTROL, not a setting to leave alone, and the first restart run proved
+        // why: at the shared 5s default the crash landed shortly after the only commit that had
+        // happened, so the run measured five seconds of commit LAG and said nothing about either
+        // engine's commit STRATEGY. Both engines default to 5s (PC's DEFAULT_COMMIT_INTERVAL,
+        // llingr's AutoCommitInterval), so whatever this is set to, it is set to the same thing on
+        // both sides, and the results record it.
+        int commitIntervalMs = argInt("commitIntervalMs", 0);
+        if (commitIntervalMs > 0) b.commitInterval(Duration.ofMillis(commitIntervalMs));
+        if (retryDelayMs > 0) b.defaultMessageRetryDelay(Duration.ofMillis(retryDelayMs));
+        ParallelEoSStreamProcessor<String, String> pc = new ParallelEoSStreamProcessor<>(b.build());
+        pc.subscribe(Collections.singletonList(topic));
+        return pc;
+    }
+
+    /**
+     * Samples the COMMITTED offset from the broker, not from the engine.
+     * <p>
+     * That choice is what makes this comparable across engines and runtimes: it is the same question
+     * a user asks with {@code kafka-consumer-groups.sh}, and neither engine gets to answer it about
+     * itself. It also picks up the commit metadata length, which is where PC's incomplete-offset
+     * encoding actually lives - an engine committing a bare contiguous frontier has none.
+     */
+    static void startSampler(String bootstrap, String topic, String group) throws Exception {
+        int sampleMs = argInt("sampleMs", 250);
+        Path seriesPath = ARGS.containsKey("series") ? Path.of(arg("series")) : null;
+        Properties p = new Properties();
+        p.put("bootstrap.servers", bootstrap);
+        Admin admin = Admin.create(p);
+        TopicPartition tp = new TopicPartition(topic, 0);
+        long t0 = System.currentTimeMillis();
+
+        Thread t = new Thread(() -> {
+            PrintWriter series = null;
+            try {
+                if (seriesPath != null) {
+                    try {
+                        series = new PrintWriter(new BufferedWriter(new FileWriter(seriesPath.toFile())));
+                        series.println("t_ms,completed,delivered,committed_offset,divergence,in_flight,metadata_bytes");
+                    } catch (IOException cannotWriteSeries) {
+                        // The summary line is the result; the series is a chart. Losing the chart must
+                        // not lose the run.
+                        System.err.println("NOTE: cannot write series to " + seriesPath + ": " + cannotWriteSeries);
+                    }
+                }
+                long lastCommitted = -1, lastCommitMovedAt = t0;
+                while (sampling.get()) {
+                    try {
+                        Map<TopicPartition, OffsetAndMetadata> m = admin.listConsumerGroupOffsets(group)
+                                .partitionsToOffsetAndMetadata().get();
+                        OffsetAndMetadata om = m.get(tp);
+                        if (om != null) {
+                            committedOffset = om.offset();
+                            metadataRaw = om.metadata() == null ? "" : om.metadata();
+                            metadataBytes = metadataRaw.length();
+                        }
+                    } catch (Exception transientAdminFailure) {
+                        // A missed sample is a gap in a chart, not a failed measurement. Losing the
+                        // run because the coordinator was briefly unavailable would be worse.
+                    }
+                    long now = System.currentTimeMillis();
+                    long done = completed.get();
+                    long committedCount = committedOffset < 0 ? 0 : committedOffset - baseOffset;
+                    long divergence = done - committedCount;
+                    if (divergence > maxDivergence) maxDivergence = divergence;
+                    if (committedOffset != lastCommitted) {
+                        lastCommitted = committedOffset;
+                        lastCommitMovedAt = now;
+                    } else if (done > 0 && now - lastCommitMovedAt > maxCommitFreezeMs) {
+                        maxCommitFreezeMs = now - lastCommitMovedAt;
+                    }
+                    if (series != null) {
+                        series.printf("%d,%d,%d,%d,%d,%d,%d%n", now - t0, done, delivered.get(),
+                                committedOffset, divergence, inFlight.get(), metadataBytes);
+                        series.flush(); // flushed per sample: a crash scenario halts the JVM by design
+                    }
+                    sleep(sampleMs);
+                }
+            } finally {
+                if (series != null) series.close();
+                admin.close(Duration.ofSeconds(2));
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    static Map<String, Object> extra(Object... kv) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        for (int i = 0; i < kv.length; i += 2) m.put(String.valueOf(kv[i]), kv[i + 1]);
+        return m;
+    }
+
+    static void report(String scenario, int count, long ms, Map<String, Object> extra) {
+        if (snapCompleted < 0) snapshot();
+        long committedCount = snapCommitted < 0 ? 0 : snapCommitted - baseOffset;
+        System.out.printf("RESULT %s %d %d %.1f peak=%d%n",
+                scenario, count, ms, count * 1000.0 / ms, peakInFlight.get());
+        StringBuilder sb = new StringBuilder("RESULT2");
+        sb.append(" scenario=").append(scenario);
+        sb.append(" engine=pc-core");
+        sb.append(" ms=").append(ms);
+        sb.append(" completed=").append(snapCompleted);
+        sb.append(" delivered=").append(snapDelivered);
+        sb.append(" redelivered=").append(redelivered.get());
+        sb.append(" retries=").append(snapRetries);
+        sb.append(" committedOffset=").append(snapCommitted);
+        sb.append(" highestCompletedOffset=").append(highestCompletedOffset.get());
+        sb.append(" divergence=").append(snapCompleted - committedCount);
+        sb.append(" maxDivergence=").append(maxDivergence);
+        sb.append(" maxCommitFreezeMs=").append(maxCommitFreezeMs);
+        sb.append(" metadataBytes=").append(snapMetadataBytes);
+        sb.append(" peakInFlight=").append(peakInFlight.get());
+        sb.append(" commitIntervalMs=").append(argInt("commitIntervalMs", 5000));
+        for (Map.Entry<String, Object> e : extra.entrySet()) sb.append(' ').append(e.getKey()).append('=').append(e.getValue());
+        System.out.println(sb);
+        // Its own line, not a RESULT2 field: base64 contains '=' padding, which would truncate the
+        // value in any key=value parser - including this harness's own.
+        System.out.println("METADATA " + snapMetadataRaw);
+    }
+
+    static void close(ParallelEoSStreamProcessor<String, String> pc) {
+        try {
+            pc.closeDrainFirst();
+        } catch (Exception ignored) {
+            // The measurement is already printed; a slow drain must not turn a good run into a failure.
+        }
+    }
+
+    static Properties consumerProps(String bootstrap) {
+        Properties p = new Properties();
+        p.put("bootstrap.servers", bootstrap);
+        p.put("group.id", arg("group"));
+        p.put("auto.offset.reset", "earliest");
+        p.put("enable.auto.commit", "false");
+        p.put("max.poll.records", "500");
+        // A crash scenario kills the JVM with Runtime.halt, so the dead member never leaves the
+        // group and keeps its assignment until the session expires. At Kafka's 45s default the
+        // restart measurement would be 45 seconds of waiting with no records in it. 6s is the
+        // broker's group.min.session.timeout.ms, and the llingr arm is given the same pair, so the
+        // setting is matched rather than removed.
+        p.put("session.timeout.ms", "6000");
+        p.put("heartbeat.interval.ms", "2000");
+        p.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        p.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        return p;
+    }
+
+    static String arg(String k) {
+        String v = ARGS.get(k);
+        if (v == null) throw new IllegalArgumentException("missing required argument " + k + "=");
+        return v;
+    }
+
+    static int argInt(String k, int dflt) {
+        String v = ARGS.get(k);
+        return v == null ? dflt : Integer.parseInt(v);
+    }
+
+    static void sleep(long ms) {
+        if (ms <= 0) return;
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}

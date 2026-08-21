@@ -184,6 +184,10 @@ go.mod|slash
 *.h|slash
 *.hpp|slash
 *.proto|slash
+# Java source compiled by the bench harnesses after a __PKG__ substitution. Not *.java, so the rule
+# above never saw them, and all three sat unclassified - which the check reports as a violation
+# rather than silently passing, which is how they were found.
+*.java.template|slash
 *.py|hash
 *.pyi|hash
 *.rb|hash

@@ -1,3 +1,7 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
 import __PKG__.ParallelConsumerOptions;
 import __PKG__.ParallelEoSStreamProcessor;
 import __PKG__.vertx.VertxParallelEoSStreamProcessor;

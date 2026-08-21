@@ -599,6 +599,217 @@ committed one. And the `franz` rows in `concurrency-sweep-0ms.csv` were relabell
 field on a single-line `require`; the runs are unaffected, the same binary from the same `go.mod`,
 and the extractor was fixed rather than the label being left to mislead.*
 
+## The other benchmark: what the offset encoding buys, measured
+
+Added 2026-08-21, and it is a different question from everything above. Every measurement in this
+note is steady-state throughput with all records succeeding - which is the one workload where PC's
+central design decision is invisible, and also the workload that flatters a leaner engine. So the
+throughput arms could never say whether PC's hardest subsystem earns its complexity.
+
+Harness: [`bench/run-divergence.sh`](../../bench/run-divergence.sh),
+[`bench/Divergence.java.template`](../../bench/Divergence.java.template) and the scenario runners in
+[`bench/llingr/scenarios.go`](../../bench/llingr/scenarios.go). Format and controls are documented in
+[`bench/README.md`](../../bench/README.md); raw data in
+[`bench/results/divergence-500ms-commit.csv`](../../bench/results/divergence-500ms-commit.csv),
+[`divergence-5s-commit-slow.csv`](../../bench/results/divergence-5s-commit-slow.csv),
+[`divergence-5s-commit-too-short.csv`](../../bench/results/divergence-5s-commit-too-short.csv),
+[`divergence-commit-metadata.csv`](../../bench/results/divergence-commit-metadata.csv) and the two
+`divergence-series-stuck-*.csv` time series. **The llingr arm is internal only** - see
+the llingr market-analysis note and `bench/llingr/NOTICE.md`.
+
+**This scenario is chosen because it favours PC.** That is stated first because it is the same
+selection the pure-throughput benchmark makes in the other direction, and a benchmark that only
+flatters us is not usable. `bench/README.md` lists where it is unfair to llingr, and the two findings
+below that go against PC are in the same section as the ones for it.
+
+### The thesis this set out to test was WRONG, in an instructive way
+
+The premise was: *with a stuck record, PC's committed offset keeps advancing while a contiguous
+frontier freezes.* **It does not.** Both engines' committed offsets freeze at exactly the same place.
+
+200,000 records, one partition, `UNORDERED`, `maxConcurrency`/`ConcurrentKeys` 100, 2ms per record,
+and the record at **offset 1** taking 25 seconds. Committed offset sampled from the **broker**
+(`Admin.listConsumerGroupOffsets` / `kadm.FetchOffsets`) every 250ms - the same question a user asks
+with `kafka-consumer-groups.sh`, so neither engine answers it about itself. n=3, agreeing to within
+1%:
+
+| | PC `core` | llingr |
+|---|---|---|
+| committed offset at end of run | **1** | **1** |
+| longest the committed offset did not move | 24.8s | 24.3s |
+| records completed above the committed offset | 199,998 | 199,998 |
+| **commit metadata** | **12 bytes** | 40 bytes |
+
+PC commits the **lowest incomplete offset**, exactly as a contiguous-frontier design does. The
+committed offset alone therefore cannot distinguish the two architectures, and any comparison that
+quotes it - in either direction - is measuring the wrong thing. It also means the offset lag a user
+sees in `kafka-consumer-groups.sh` overstates PC's exposure, which is worth knowing independently of
+any competitor.
+
+**The difference is entirely in the metadata**, and the harness now records it verbatim:
+
+```
+PC core :  ZQAAAAEAAw0+                              ->  0x65 'e' = RunLengthV2, runs [1, 199998]
+llingr  :  kgo-fca5df11-8e2b-4182-accf-0463e966d73f  ->  a franz-go client instance UUID
+```
+
+Nine bytes describe "offset 1 incomplete, the next 199,998 complete". llingr's forty bytes are its
+Kafka client's identity and carry no completion information at all. **That is the whole differentiator
+in one line of evidence**, and it is stronger than the throughput-shaped argument it replaces.
+
+### Restart: 6,412 wasted records against 100,008
+
+The number a user actually pays. Same workload, the stuck record blocking indefinitely, the process
+killed mid-flight with `Runtime.halt` / `os.Exit` - no drain, no shutdown hook, no final commit -
+then restarted on the same group. Both engines' commit interval set to **500ms** (PC's
+`commitInterval`, llingr's `AutoCommitInterval`; both default to 5s). n=3:
+
+| | PC `core` | llingr |
+|---|---|---|
+| records completed before the crash | 100,426 | 100,009 |
+| committed offset at the crash | 1 | 1 |
+| **already-completed records redelivered** | **6,412** (6.4%), range 5,823-6,978 | **100,008** (100.0%), range 99,999-100,022 |
+| total records the restart had to process | 105,986 | 199,999 |
+| time to finish the topic after the restart | 2.8s | 4.7s |
+
+llingr reprocessed **every single record it had already done**. PC reprocessed 6.4% of them, and
+those 6,412 are not the encoding failing - they are the 500ms of completions that had not yet been
+committed when the process died. The encoding did its job on the other 94,000, from 24 bytes of
+metadata.
+
+**This is measured, not inferred.** The crashed run writes out the offsets it finished and the resume
+run counts how many of those come back. Deriving it from the committed offset would have got PC's
+answer wrong in PC's favour, because for PC the offsets are in the metadata and not in the number.
+
+### Against PC: the advantage is bounded below by the commit interval, and at the shipped default it can vanish
+
+The first restart run left both engines at their shared 5s default and crashed 2.6s after the only
+commit that had happened. Result: PC redelivered 149,983 of 150,250 - **no better than llingr**
+([`divergence-5s-commit-too-short.csv`](../../bench/results/divergence-5s-commit-too-short.csv), kept
+as the negative control). That run was measuring commit **lag**, not commit **strategy**, because it
+was shorter than two commit cycles.
+
+Re-run at that same 5s default but with a **20ms** handler, so the crashed run spans about five
+commit cycles instead of one. 200,000 records, crash after 100,000 completions, n=3:
+
+| | PC `core` | llingr |
+|---|---|---|
+| records completed before the crash | 100,052 | 100,002 |
+| commit metadata at the crash | 35 bytes | 40 bytes |
+| **already-completed records redelivered** | **15,693** (15.7%), range 15,306-16,411 | **100,001** (100.0%), range 99,999-100,004 |
+| total records the restart had to process | 115,641 | 199,999 |
+| time to finish the topic after the restart | 27.2s | 41.9s |
+
+**At the shipped defaults the advantage is 6.4x, not 15.6x.** PC's 15,693 wasted records are
+five seconds of uncommitted completions; llingr's 100,001 are everything it had done since the record
+got stuck.
+
+So the honest statement of the differentiator is a **ratio, not a constant**:
+
+```
+wasted work on crash  ~  commitInterval x throughput + inFlight        (PC)
+                      ~  timeSinceTheStallBegan x throughput           (contiguous frontier)
+```
+
+PC's advantage is the ratio between "how long the record has been stuck" and "how long since the last
+commit". **Crash within one commit interval of the stall starting and the two designs lose the same
+amount.** That is the caveat that has to travel with the headline number, and it is also a
+configuration lever a user can pull: at 500ms the advantage was 15.6x, at 5s with a 20ms handler it was
+6.4x, and on a run shorter than two commit cycles it was 1x.
+
+### Against PC: the committed offset can sit FURTHER back than the competitor's
+
+In the retry scenario PC's committed offset averaged **24,827** against llingr's **40,306** on the
+same workload. PC always has some record in retry-backoff holding the lowest-incomplete position,
+while llingr dead-letters and moves on. Anyone monitoring consumer lag would read PC as further
+behind, and be wrong - the metadata says otherwise - but the alarm would still fire. **That is a real
+operational cost of this design**, it is not fixed by any of the above, and no throughput benchmark
+would ever surface it.
+
+### Retry: 100% completion against 90%, and 5,000 dead letters that a retry would have saved
+
+50,000 records, 10% failing on first delivery and succeeding on retry, PC's retry delay set to 200ms
+(its default is 1s, which would have made the arm fifty seconds of waiting). n=3:
+
+| | PC `core` | llingr |
+|---|---|---|
+| records completed successfully | **50,471 (100%)** | **45,002 (90%)** |
+| deliveries | 55,691 | 50,055 |
+| retried | 5,220 | 0 |
+| **dead-lettered** | **0** | **4,999** |
+| wall clock | 4.75s | 4.24s |
+
+Every one of those 4,999 would have succeeded on a second attempt. **State this as a feature
+difference, not a defect**: llingr dead-letters on first failure by design and commits the record
+anyway - `nexus.WriteDeadLetter`'s own doc comment says so - and a user who wants retries writes them
+into their dead-letter handler. What the number shows is where that work lands by default, and that
+PC's 10% higher completion rate costs 11% more deliveries and 12% more wall clock.
+
+### What this changes in the positioning
+
+the llingr market-analysis note proposed the line *"PC commits past the gaps,
+so one slow key never holds up a partition"*. **The first half of that is now measured and the second
+half is false as written**: the committed offset is held up, identically, on both engines. The
+defensible version is about restart cost, and it has a number:
+
+> One stuck record, one crash: PC reprocessed 6% of the work it had already done; a contiguous-frontier
+> design reprocessed 100% of it. Nine bytes of commit metadata is the difference.
+
+Two items that note lists are now settled by measurement rather than by reading a marketing page:
+
+- **"The buffer is bounded, so the failure mode is a stall"** - not observed. llingr's
+  `CommitPartitionSliceLen` (default 400, min 50, max 2,000) is documented in its own config README as
+  *pre-allocating* space for gap tracking, and a 199,998-record gap did not stall it: it completed the
+  dataset at full speed and simply committed nothing. **The failure mode is silent redelivery on
+  restart, not backpressure.** That is a weaker claim than the note makes, and a more accurate one.
+- **"Restart reprocesses everything after the frontier"** - confirmed exactly, at 100.0% across three
+  repeats.
+
+### Where it is unfair, and what it does not establish
+
+The full list is in [`bench/README.md`](../../bench/README.md) and should be read before any of these
+numbers is quoted, including internally. The short version: the workload is chosen to expose one
+design difference; a stuck record that outlives the whole dataset is the worst case for a contiguous
+frontier and close to the best case for offset encoding; the two engines use different Kafka clients;
+all keys are distinct; there is one partition; and neither engine is tuned.
+
+Not established: anything about **multiple** gaps. Every scenario here has exactly one stuck record,
+so the encoding never leaves run-length's best case. PC's metadata is capped at 4KB
+(`OffsetMapCodecManager.DefaultMaxMetadataSize`) with backpressure above 75% of it
+(`PartitionState.getPressureThresholdValue`), and a scattered incomplete set - many small gaps rather
+than one large one - is where that cap would actually be reached. **That is the scenario most likely
+to falsify the advantage above, it is the one llingr's own docs describe as their tuning case
+("high-jitter workloads where widely varying processing times leave wide gaps"), and it is not
+measured here.** It is the obvious next arm.
+
+### Provenance and contention
+
+Same disclosure the concurrency sweep above makes, from the other side: **these runs shared a
+12-core laptop and one broker with that sweep**, load average around 8-13 for the window. Two things
+bound what that can have done.
+
+**The headline metrics here are counts, not times, and counts do not move with machine load.**
+Redelivered records, committed offsets, metadata bytes and dead-letter counts are what the
+conclusions rest on. The ones that decide anything are stable: llingr's redelivery rate was
+100.0% in every repeat of both configurations, both engines' committed offsets froze at offset 1 in
+every repeat, and llingr's dead-letter count was 4,997-5,002 against a predicted 5,000. **PC's own
+redelivered count is the loose one** - 5,823-6,978 at a 500ms interval, 15,306-16,411 at 5s, a spread
+of about 10% either way - because it depends on where in the commit cycle the crash happened to land.
+That spread is inside the mechanism being described, not noise on top of it, and it is an order of
+magnitude smaller than the gap it is being compared against.
+
+**The one place contention leans, it leans in PC's favour, so the ratio is an optimistic bound.**
+PC's wasted work is roughly `commitInterval x throughput`, while the contiguous-frontier design's is
+fixed by the scenario at everything completed before the crash. A slower machine therefore *shrinks*
+PC's numerator and leaves llingr's alone, inflating the advantage ratio. The model is written out
+above precisely so a reader can recompute it for their own throughput rather than take 15.6x or 6.4x as
+a constant.
+
+Both harnesses were run against the same long-lived broker (`pc-bench-broker`) and their datasets are
+different topics, so neither could read the other's bytes; but they were competing for the same
+broker, the same page cache and the same cores. **Re-take the timing columns on a quiet machine before
+relying on any of them.** The count columns need no such caveat.
+
 ## Related
 
 - [`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) - where this surfaced.

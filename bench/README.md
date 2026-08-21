@@ -13,7 +13,13 @@ This file is only how to run it.
 It since grew a second question it was not built for - **how does Parallel Consumer compare to an
 engine that is not Parallel Consumer?** - because every arm above measures PC against itself and so
 produces numbers with no scale. That is [the `llingr` arm](#the-llingr-arm---private-research-only),
-and it is **private research only**. Asking that question honestly then needed a third thing: a
+and it is **private research only**.
+
+And a third question, which needs a different harness because throughput cannot see it: **what does
+PC's offset encoding actually buy?** That is
+[the divergence harness](#the-divergence-harness---what-committing-past-gaps-actually-buys),
+`bench/run-divergence.sh`, and it measures committed offsets and redelivery rather than messages per
+second. Asking that question honestly then needed a third thing: a
 measurement of the *client* each engine sits on, which is
 [the `franz` arm](#the-franz-arm---the-client-control) and carries no such restriction.
 
@@ -242,3 +248,112 @@ It needs JDK 13, which has no Apple Silicon build; an x86 JDK under Rosetta woul
 measurement worse than the toolchain difference it fixes; and Jabel's 2021 ASM cannot read JDK 17
 class files however many module exports are opened. Consuming the **published artifact** from Central
 avoids all of it, and is more faithful anyway - it is the jar users actually got.
+
+## The divergence harness - what committing PAST gaps actually buys
+
+`bench/run-divergence.sh` with [`bench/Divergence.java.template`](Divergence.java.template) and the
+scenario runners in [`bench/llingr/scenarios.go`](llingr/scenarios.go). It answers a different
+question from everything above, and it exists because **throughput cannot see this project's central
+design decision**.
+
+Parallel Consumer encodes the *incomplete offset set* into the commit metadata and commits past the
+gaps. `llingr-demux` holds out-of-order completions in memory and commits the highest **contiguous**
+offset. On a clean run where every record succeeds - which is every measurement above - those two
+are indistinguishable. With one stuck record, and across a crash, they are not.
+
+**Say it plainly: these scenarios are chosen because they favour Parallel Consumer**, in exactly the
+way the pure-throughput benchmark is chosen (by whoever quotes it) because it favours a leaner
+engine. The unfairness list below is part of the result, not a disclaimer attached to it.
+
+```sh
+bench/run-divergence.sh                                     # all three scenarios, both engines
+SCENARIOS=stuck ENGINES=core bench/run-divergence.sh        # one scenario, PC only
+COMMIT_INTERVAL_MS=5000 DELAY_MS=20 bench/run-divergence.sh # both engines' shipped defaults
+```
+
+Same broker (`bench/lib/broker.sh`, shared with `run-bisect.sh`), same topic, same bytes, one
+partition, a fresh group per run. Needs the local build installed:
+`./mvnw install -DskipTests -Dcopyright.skip=true`.
+
+### The three scenarios
+
+| Scenario | What it does | What it outputs |
+|---|---|---|
+| `stuck` | one record in `stallEvery` takes `STALL_MS` while the rest take `DELAY_MS` | committed offset and completed count over time; the **divergence** between them; the committed metadata verbatim |
+| `restart` | the same workload killed mid-flight (`Runtime.halt` / `os.Exit` - no drain, no final commit), then restarted on the same group | **how many already-completed records are redelivered** - wasted work, which is the number a user pays |
+| `retry` | `FAIL_PERCENT` of records fail on first delivery and succeed on retry | completion rate, and **how much work reaches a dead-letter path a retry would have saved** |
+
+### The output format
+
+Two machine-readable lines plus one evidence line, identical from both engines so one parser reads
+both:
+
+```
+RESULT  <scenario> <count> <ms> <msgPerSec> peak=<maxInFlight>
+RESULT2 scenario=.. engine=.. ms=.. completed=.. delivered=.. redelivered=.. retries=..
+        committedOffset=.. highestCompletedOffset=.. divergence=.. maxDivergence=..
+        maxCommitFreezeMs=.. metadataBytes=.. peakInFlight=.. commitIntervalMs=.. [scenario fields]
+METADATA <the committed offset metadata, verbatim>
+```
+
+`RESULT` is byte-compatible with what `run-bisect.sh` already parses. `RESULT2` is `key=value` so an
+arm can add a field without invalidating a parser or a stored results file. `METADATA` is a separate
+line because base64 padding contains `=`, which truncates the value in any `key=value` parser -
+including this harness's own.
+
+Per-run time series land in `$BENCH_WORK/series-*.csv` as
+`t_ms,completed,delivered,committed_offset,divergence,in_flight,metadata_bytes`; the summary in
+`$BENCH_WORK/divergence.csv`; the verbatim commit metadata in `$BENCH_WORK/metadata.csv`.
+
+### `divergence` is deliberately an over-estimate for PC, and that is why `restart` exists
+
+`divergence = completedThisRun - (committedOffset - baseOffset)`: records finished that sit at or
+above the committed position. For a contiguous-frontier design that *is* the wasted work on restart.
+For PC it is an over-estimate, because PC's metadata records which of those records are already
+done - so the redelivery count is **measured** by crashing and restarting, never inferred from the
+committed offset. Reading the offset alone would flatter PC's competitor and then flatter PC; it is
+the wrong metric in both directions.
+
+### Four things it controls for, each of which was a wrong answer first
+
+- **Commit cadence is a control, not a setting.** Both engines default to 5s (PC's
+  `DEFAULT_COMMIT_INTERVAL`, llingr's `AutoCommitInterval`) and `COMMIT_INTERVAL_MS` sets both. The
+  first restart run left it at the default and crashed 2.6s after the *only* commit that had
+  happened, so it measured five seconds of commit **lag** and said nothing about commit **strategy**.
+  Every results row records the interval that produced it.
+- **The counters are snapshotted at the stop point.** `closeDrainFirst()` processes everything still
+  outstanding, so a summary read after the close reports the whole topic however few records the
+  scenario asked for - the retry arm claimed 199,004 completions against a target of 50,000, and
+  nothing about that number looked wrong.
+- **Sampling stops before the summary is taken.** Waiting for one more reading after the run let a
+  commit that happened *after* the run land in the summary: one stuck run reported a fully-advanced
+  committed offset, contradicting its own time series and the two repeats beside it.
+- **The session timeout is shortened to 6s on both arms.** A crash test kills the process outright,
+  so the dead member holds its assignment until the session expires; at Kafka's 45s default the
+  restart measurement is 45 seconds of waiting with no records in it. The resume clock starts at the
+  first redelivered record, not at subscribe, for the same reason.
+
+### Where this comparison is unfair to llingr - read before quoting any of it
+
+Everything in [the llingr arm's list above](#what-it-shares-with-the-java-arms-and-what-it-cannot)
+still applies (different Kafka clients, all-distinct keys, one partition). These are additional:
+
+- **The workload is chosen to expose one design difference and nothing else.** A stuck record that
+  outlives the entire dataset is the worst case for a contiguous frontier and close to the best case
+  for offset encoding. Real workloads sit somewhere between this and the clean run, and the clean run
+  is the one where llingr is ahead on throughput.
+- **PC's advantage is bounded below by the commit interval**, and the measurement says so: wasted
+  work is roughly `commitInterval x throughput + inFlight` for PC against
+  `timeSinceTheStall x throughput` for a contiguous frontier. **Crash within one commit interval of
+  the stall starting and the two are equal.** The advantage is the ratio between those two times,
+  not a constant.
+- **Retry is a feature comparison, not a defect.** llingr dead-letters on first failure *by design*
+  and commits the record anyway - `nexus.WriteDeadLetter`'s own doc says so. A user who wants retries
+  writes them into their dead-letter handler. What is measured is the work that reaches that path,
+  not a claim that records are lost.
+- **PC's retry delay is set to 200ms, not its 1s default.** At the default the arm would be fifty
+  seconds of pure waiting, and would measure the delay rather than the mechanism. llingr has no
+  equivalent knob because it has no retry, so this one is not matched, and the arm records it.
+- **Neither engine is tuned.** llingr's `CommitPartitionSliceLen` (pre-allocated gap tracking, min
+  50, max 2,000) is left at its default 400, as is PC's `maxConcurrency` relationship to its encoder
+  thresholds. Both would move under tuning.
