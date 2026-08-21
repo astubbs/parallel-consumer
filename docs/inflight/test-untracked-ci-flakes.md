@@ -40,6 +40,78 @@ assertion was simply wrong now has a counter-example, and the next sighting is a
 | `PCMetricsTest.metricsRegisterBinding` | 4 seen | Released by astubbs#265, failed twice consecutively on one head, **re-quarantined unowned** in astubbs#116. Mechanism only half-known: the fix closed the metric-ahead direction, the failures are metric-behind-and-never-converging - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
+### An EXTRA delivery under the direct-pull engine, 2026-08-22 - recorded as unexplained, not as a flake
+
+**`ParallelEoSStreamProcessorPauseResumeTest.pausingAndResumingProcessingShouldWork(PERIODIC_CONSUMER_ASYNC)`**
+failed once in a full core unit run with `-Dpc.directPull=true`, on the branch that adds the
+direct-pull engine:
+
+```
+Condition with alias '1000 records should be processed' didn't complete within 30 seconds
+because ... expected: 1000 but was : 1001
+```
+
+**Read the number before reading the word "flake".** The other entries in this ledger are assertions
+that fired early, or two moving values compared at different instants. This one is the user function
+having been called **one time more than there are records** - the signature of a record delivered
+twice, which is the single thing the direct-pull engine most needs not to do. It is filed here rather
+than as a bug because it could not be reproduced, and it is filed *at all* because a sighting with
+this signature must not be lost.
+
+**Reproduction rate: 0 out of 11.** Five runs of the method alone and six of the whole class, all
+with `-Dpc.directPull=true`, at a one-minute load of 8-13 on twelve cores. The failing run was a full
+suite with surefire's parallel forks. So it is load- or interleaving-dependent, and the arithmetic
+above is all that is known about it.
+
+**What was ruled out, and what was not.** Selection cannot hand the same record to two workers: that
+is guarded by `WorkContainer.onQueueingForExecution()`'s compare-and-set and, under an ordered mode,
+by `ProcessingShard.getWorkIfAvailable` breaking after the head record whether or not it claimed it.
+Both are now covered by `DirectPullConcurrentSelectionTest`, and both were proven to fail when
+sabotaged. **That rules out the selection layer only.** It says nothing about the redelivery paths -
+retry, abandonment, the stale sweep - and the failing test's own arithmetic cannot say which of its
+two record sets the extra delivery belonged to, because it resets its counter between them.
+
+**The guard that now exists**, so a recurrence is a diagnosis rather than another sighting:
+`DirectPullEngineParityTest.pausingStopsDeliveryAndResumingDeliversTheRestExactlyOnce` runs the same
+pause/resume shape against the direct-pull engine and asserts the delivered count is **exactly** the
+number produced, reporting which offsets were duplicated. It runs in the default suite, not only
+under the system property.
+
+### `OrderingModeDispatchParityTest` fails inside a full run and passes alone - and it is not a direct-pull failure
+
+**`OrderingModeDispatchParityTest.keyAndUnorderedCostTheSameToDispatch`**, seen 2026-08-22 in **four
+of four** full core unit runs on the same box, against its `MAX_RATIO` of 4.0:
+
+```
+UNORDERED 204ms / KEY  44ms  ratio 4.559   # default engine
+UNORDERED 188ms / KEY  34ms  ratio 5.428   # -Dpc.directPull=true
+UNORDERED 134ms / KEY  19ms  ratio 7.099   # default engine
+UNORDERED 209ms / KEY  29ms  ratio 7.220   # -Dpc.directPull=true
+```
+
+**Two controls, and between them they name the condition.**
+
+1. **The engine flag is not it.** The test never starts an engine - it drives
+   `WorkManager.getWorkIfAvailable` directly - and it failed on both arms of two engine pairs. Anyone
+   meeting this on a direct-pull run should not spend a minute on the engine.
+2. **Box load is not it either, which is the useful part.** Run **alone, 4 out of 4 passes** at a
+   one-minute load average of ~20 on twelve cores - higher than the load under which it failed. What
+   distinguishes the failing runs is not how busy the machine is but that **surefire is running other
+   forks of the same suite alongside it**. It is fork parallelism, not ambient load.
+
+**The mechanism this points at, stated as a hypothesis.** The two arms are timed **sequentially**
+inside one JVM and compared as a ratio, so the ratio only cancels machine speed if both arms see the
+same machine. A sibling fork starting or finishing between them lands on one arm and not the other,
+and the ratio inherits the whole difference. Consistent with the numbers: the KEY arm is 19-44ms
+where the javadoc's clean run has the ratio at ~2.3, so it is the *short* arm being disturbed that
+moves the ratio most.
+
+**Do not widen `MAX_RATIO` on this evidence.** The margin between the clean 2.3 and the ~6.4 an
+injected regression produced is the whole test, and 7.2 has already crossed it - a wider bound would
+be a bound that cannot detect the regression it is named for. If it is to be fixed, fix the
+measurement: interleave the arms, or take the ratio per-repeat and use the best ratio rather than the
+ratio of the bests.
+
 ### The shutdown-commit family surfaced again, 2026-08-21 - and this time a sibling test
 
 **`ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown`** - failed once
