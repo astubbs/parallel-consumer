@@ -55,21 +55,21 @@ class ReferenceDemoIT {
     private static final int RECORDS = 20;
 
     /**
-     * The arms that run everywhere. java-grpc-uds is deliberately not in this list: it needs an epoll
+     * The arms that run everywhere. pc-java-grpc-uds is deliberately not in this list: it needs an epoll
      * domain-socket transport, so it runs on Linux - including in this demo's own container on any host -
      * and not on macOS natively. The assertion below adds it exactly when the runtime says it can run,
      * so this test neither demands it where it cannot exist nor lets it silently vanish where it can.
      */
     private static final List<String> ARMS_EVERYWHERE = List.of(
-            "AK core", "pc-core", "java-direct", "java-grpc", "java-raw-grpc");
+            "AK core", "pc-core", "pc-java-direct", "pc-java-grpc", "pc-java-raw-grpc");
 
     private static List<String> expectedArms() {
         if (!ReferenceDemo.domainSocketsAvailable()) {
             return ARMS_EVERYWHERE;
         }
         var withUds = new java.util.ArrayList<>(ARMS_EVERYWHERE);
-        // the demo runs it directly after java-grpc, which is the arm it is compared against
-        withUds.add(withUds.indexOf("java-raw-grpc"), "java-grpc-uds");
+        // the demo runs it directly after pc-java-grpc, which is the arm it is compared against
+        withUds.add(withUds.indexOf("pc-java-raw-grpc"), "pc-java-grpc-uds");
         return withUds;
     }
 

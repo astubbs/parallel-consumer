@@ -23,7 +23,7 @@ to Swift.
 | arm, as the table names it | what it is |
 |---|---|
 | `AK core (swift-kafka-client)` | [`swift-kafka-client`](https://github.com/swift-server/swift-kafka-client), one record at a time. No engine, no client library, no sidecar |
-| `swift-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the same function on them, and reports outcomes back |
+| `pc-swift-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the same function on them, and reports outcomes back |
 
 **The client is named in the row because "AK core" is a category, not a client.** The answer differs
 in every language, and a reader cannot judge the comparison without knowing which binding produced
@@ -43,7 +43,7 @@ The key count is **observed, not queried**: each arm counts the keys of the reco
 own user function. Swift could not do it the other way even if that were preferable - see divergence
 2 below, `swift-kafka-client` has no admin client and no public metadata API at all.
 
-On the `swift-grpc` path the application does **no Kafka I/O at all** - the sidecar owns the
+On the `pc-swift-grpc` path the application does **no Kafka I/O at all** - the sidecar owns the
 consumer, the producer, the group membership and the offsets. That the same process also seeds the
 topic and runs the AK core arm with an ordinary Kafka client is a statement about the *path*, not
 about the process: a comparison needs both sides.

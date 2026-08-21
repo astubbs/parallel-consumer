@@ -34,7 +34,7 @@ pub const ARM_BUDGET: Duration = Duration::from_secs(600);
 pub const AK_CORE: &str = "AK core";
 
 /// The sidecar arm's name, in the reference's `<language>-<transport>` shape.
-pub const RUST_GRPC: &str = "rust-grpc";
+pub const RUST_GRPC: &str = "pc-rust-grpc";
 
 /// **The client the AK core arm actually ran.** "AK core" is a *category*, not a client, and the
 /// answer differs in every language - `franz-go` in Go, `kafkajs` in TypeScript, `rdkafka` here. A
@@ -57,7 +57,7 @@ pub const RUST_GRPC_CLIENT: &str = "this client";
 /// when elapsed and msg/s never can be. `bin/ci-demo-conformance.sh` relies on exactly that.
 #[derive(Debug, Clone)]
 pub struct ArmResult {
-    /// The arm's role, and the identity every ratio and message keys off - `AK core`, `rust-grpc`.
+    /// The arm's role, and the identity every ratio and message keys off - `AK core`, `pc-rust-grpc`.
     pub arm: String,
     /// The Kafka client, or client library, the arm actually ran on.
     pub client: String,
@@ -181,7 +181,7 @@ pub async fn rust_grpc(
         // "take parallel-consumer-core's default", which is KEY - so this arm would run key-ordered
         // against an unordered AK core arm and the tables would compare two different workloads.
         ordering: Some(ProcessingOrder::Unordered),
-        kafka_properties: broker.client_properties(&group_id("rust-grpc")),
+        kafka_properties: broker.client_properties(&group_id("pc-rust-grpc")),
         ..Default::default()
     })
     .await

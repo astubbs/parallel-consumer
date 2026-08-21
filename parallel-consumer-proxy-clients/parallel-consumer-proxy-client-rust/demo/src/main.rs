@@ -31,7 +31,7 @@ const EXIT_FAILED: u8 = 1;
 
 /// **The first thing the demo prints, and it names the product.** Not the module, not an arm, not
 /// a configuration line: a reader who runs this and is met with
-/// `rust-grpc: the proxy granted 100 executor threads` has been told nothing about what they are
+/// `pc-rust-grpc: the proxy granted 100 executor threads` has been told nothing about what they are
 /// looking at. Every language prints this same banner, differing only in its own name - contract,
 /// in `parallel-consumer-proxy/demo/README.md`.
 const BANNER: &str = "\
@@ -174,7 +174,7 @@ fn report(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, acro
 fn render(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, across_replays: bool) -> String {
     let mut table = format!("\n\n{title}\n");
     table.push_str(&format!(
-        "  {:<24} {:>10} {:>8} {:>10} {:>14} {:>14}\n",
+        "  {:<28} {:>10} {:>8} {:>10} {:>14} {:>14}\n",
         "arm",
         "records",
         "keys",
@@ -190,7 +190,7 @@ fn render(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, acro
             _ => "-".to_owned(),
         };
         table.push_str(&format!(
-            "  {:<24} {:>10} {:>8} {:>9.1}s {:>14} {:>14}\n",
+            "  {:<28} {:>10} {:>8} {:>9.1}s {:>14} {:>14}\n",
             result.label(),
             thousands(result.processed as u64),
             thousands(result.unique_keys as u64),
@@ -283,7 +283,7 @@ mod tests {
                 ..ak
             }
             .label(),
-            "rust-grpc (this client)"
+            "pc-rust-grpc (this client)"
         );
     }
 
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn the_baseline_is_the_ak_core_arm_and_nothing_else() {
-        let results = vec![result("rust-grpc", 100, 10), result(AK_CORE, 1_000, 10)];
+        let results = vec![result("pc-rust-grpc", 100, 10), result(AK_CORE, 1_000, 10)];
 
         assert_eq!(baseline_of(&results).unwrap().arm, AK_CORE);
         assert!(baseline_of(&results[..1]).is_none(), "no AK core arm, no baseline");

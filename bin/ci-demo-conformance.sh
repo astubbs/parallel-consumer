@@ -70,8 +70,8 @@ normalise_arms() {
     # before comparison. The records and keys figures are NOT masked: they are deterministic, so
     # they are exactly the part worth comparing across languages, and masking them was the mistake.
     sed -E -e 's/^ROW AK core \(.*\) /ROW AK-CORE /' \
-           -e 's/^ROW [a-z0-9]+-(grpc|sidecar) \(.*\) /ROW SIDECAR /' \
-           -e 's/^ROW [a-z0-9]+-(grpc|sidecar) /ROW SIDECAR /' \
+           -e 's/^ROW (pc-)?[a-z0-9-]+-(grpc|sidecar) \(.*\) /ROW SIDECAR /' \
+           -e 's/^ROW (pc-)?[a-z0-9-]+-(grpc|sidecar) /ROW SIDECAR /' \
            -e 's/^ROW AK core /ROW AK-CORE /' "$1"
 }
 

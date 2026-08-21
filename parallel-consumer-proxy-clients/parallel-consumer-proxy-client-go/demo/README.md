@@ -21,13 +21,13 @@ Read that first. This file only records what is specific to Go.
 | arm | what runs |
 |---|---|
 | **AK core (franz-go)** | [franz-go](https://github.com/twmb/franz-go), one record at a time, in this process |
-| **go-grpc (this client)** | this process as a **foreign client**, through the Go client library, over a real sidecar the library spawns as a child process |
+| **pc-go-grpc (this client)** | this process as a **foreign client**, through the Go client library, over a real sidecar the library spawns as a child process |
 
 Both rows name the client that produced them, because **"AK core" is a category and not a client**:
 the answer is franz-go here, `rdkafka` in Ruby, `kafkajs` in TypeScript, and a reader cannot judge
 the comparison without knowing which one ran.
 
-On the `go-grpc` path the application does no Kafka I/O: the sidecar owns the consumer, the
+On the `pc-go-grpc` path the application does no Kafka I/O: the sidecar owns the consumer, the
 producer, the group membership and the offsets. That is a claim about the *path*, not about the
 process - the same binary creates the topic, seeds the backlog and runs the AK core arm with
 franz-go, because a comparison needs both sides.
@@ -139,7 +139,7 @@ its settings is not reproducible, and then one table per replay:
 Small replay - every arm over the same 2000 records (the comparison)
   arm                      records     keys    elapsed        msg/s   vs AK core
   AK core (franz-go)         2,000    1,000       4.1s          487         1.0x
-  go-grpc (this client)      2,000    1,000       0.3s        6,250        12.8x
+  pc-go-grpc (this client)      2,000    1,000       0.3s        6,250        12.8x
 ```
 
 *(the shape of the output, not a measurement: elapsed and msg/s depend entirely on the machine.)*
@@ -162,7 +162,7 @@ and per-record timings would be flattered by however far an arm had fallen behin
 only honest *speed* number this shape can produce - which is exactly why `records` and `keys` sit
 beside it.
 
-The big replay runs **only the arms that go parallel**, which here is `go-grpc` alone: AK core would
+The big replay runs **only the arms that go parallel**, which here is `pc-go-grpc` alone: AK core would
 need `records x replay-factor x delay-ms` milliseconds to finish a backlog the sidecar arm clears in
 seconds, and waiting that long to learn nothing new is not worth the wall clock.
 

@@ -33,7 +33,7 @@ that first. This file only records what is specific to .NET.
 | arm, as the tables label it | what it is |
 |---|---|
 | `AK core (Confluent.Kafka)` | `Confluent.Kafka`, one record at a time, in this process |
-| `dotnet-grpc (this client)` | this module's client library, over a sidecar it spawns itself |
+| `pc-dotnet-grpc (this client)` | this module's client library, over a sidecar it spawns itself |
 
 **Each label carries the role and the client**, because "AK core" is a category rather than a
 client and a reader cannot judge a comparison without knowing what produced it. In .NET the answer
@@ -44,7 +44,7 @@ frameworks built **on top of** `Confluent.Kafka` rather than protocol implementa
 so a second arm would price a wrapper over the same client and not a different client. If that is
 wrong, the fix is a third arm here rather than a footnote.
 
-On the `dotnet-grpc` path **the application does no Kafka I/O**: the sidecar owns the consumer, the
+On the `pc-dotnet-grpc` path **the application does no Kafka I/O**: the sidecar owns the consumer, the
 producer, the group membership and the offsets. That is a statement about the *path*, not about the
 process - the same process creates the topic, produces the backlog and runs the `AK core` arm with
 an ordinary Kafka client, because a comparison needs both sides. A genuinely foreign application
@@ -62,7 +62,7 @@ Five columns, the same five in both tables and in the same order:
 ```
   arm                           elapsed          msg/s     vs AK core    records     keys
   AK core (Confluent.Kafka)        4.9s              4           1.0x         20       20
-  dotnet-grpc (this client)        1.7s             11           2.9x         20       20
+  pc-dotnet-grpc (this client)        1.7s             11           2.9x         20       20
 ```
 
 `records` and `keys` are the **deterministic** pair. Elapsed, msg/s and the ratio describe one

@@ -20,7 +20,7 @@ Read that first. This file only records what is specific to C++.
 | arm | what it is |
 |---|---|
 | `AK core (librdkafka)` | librdkafka, one record at a time, with a blocking sleep as the simulated work. |
-| `cpp-grpc (this client)` | this application as a **foreign client**: the client library in the module above spawns the sidecar, receives records over a socket, runs the same sleep on them and reports outcomes back. On this path the application does no Kafka I/O at all. |
+| `pc-cpp-grpc (this client)` | this application as a **foreign client**: the client library in the module above spawns the sidecar, receives records over a socket, runs the same sleep on them and reports outcomes back. On this path the application does no Kafka I/O at all. |
 
 **Each label names the library that produced the row, because "AK core" is a category rather than a
 client** - it means "that language's own Kafka client", and the answer is different in every
@@ -55,7 +55,7 @@ Both replays print the same six columns in the same order, which every language 
 ```
   arm                         elapsed        msg/s    records     keys   vs AK core
   AK core (librdkafka)           4.1s          487      2,000    1,000         1.0x
-  cpp-grpc (this client)         0.4s        4,761      2,000    1,000         9.8x
+  pc-cpp-grpc (this client)         0.4s        4,761      2,000    1,000         9.8x
 ```
 
 **`records` and `keys` are the deterministic pair**, and they are what makes the demos comparable

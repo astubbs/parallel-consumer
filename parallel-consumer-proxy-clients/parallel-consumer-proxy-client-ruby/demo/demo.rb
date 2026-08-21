@@ -27,7 +27,7 @@ module ParallelConsumer
     EXIT_USAGE = 2
 
     # THE FIRST THING PRINTED, AND IT NAMES THE PRODUCT. It used to be
-    # "ruby-grpc: the proxy granted 100 executor threads, ceiling 100" - a configuration line that
+    # "pc-ruby-grpc: the proxy granted 100 executor threads, ceiling 100" - a configuration line that
     # does not contain the words Parallel Consumer and tells a reader nothing about what they are
     # watching. The shape is contract (`parallel-consumer-proxy/demo/README.md`, "It opens by saying
     # what it is") and every language prints it identically bar its own name, so the banner is not a

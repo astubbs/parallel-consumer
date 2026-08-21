@@ -20,7 +20,7 @@ module ParallelConsumer
     #   (`CONCEPTS.md`) - and always with the gem beside it, because "AK core" is a CATEGORY and
     #   every language fills it with a different library. A reader cannot judge the comparison
     #   without knowing which one produced the number.
-    # - <b>ruby-grpc (this client)</b> - this module's client library, which spawns the sidecar,
+    # - <b>pc-ruby-grpc (this client)</b> - this module's client library, which spawns the sidecar,
     #   receives records over a socket, runs this demo's block on its executor threads and reports
     #   outcomes back.
     #   <b>The application does no Kafka I/O on this path</b>: the sidecar owns the consumer, the
@@ -47,7 +47,7 @@ module ParallelConsumer
       # the table has to answer with the client's name in it.
       AK_CORE = "AK core (rdkafka)"
 
-      SIDECAR_ARM = "ruby-grpc (this client)"
+      SIDECAR_ARM = "pc-ruby-grpc (this client)"
 
       # The same two arms as identifiers rather than labels. Consumer group names and the sidecar's
       # own arm name must stay free of spaces and brackets, so the label is not reused for them -
@@ -55,7 +55,7 @@ module ParallelConsumer
       # topic list rather than a thing to read.
       AK_CORE_GROUP = "ak-core"
 
-      SIDECAR_GROUP = "ruby-grpc"
+      SIDECAR_GROUP = "pc-ruby-grpc"
 
       # How long the AK core arm waits for one record before checking its budget again. It is not a
       # timeout for the arm - that is ARM_BUDGET - only how often a consumer with nothing to hand
@@ -83,11 +83,11 @@ module ParallelConsumer
       # orders from the same document; the contract now states one, and this is it.
       #
       # Column IDENTITY and ORDER are contract; the widths are not, and this arm column is wider
-      # than the Java seed's because "ruby-grpc (this client)" no longer fits in fourteen. Annotated
+      # than the Java seed's because "pc-ruby-grpc (this client)" no longer fits in fourteen. Annotated
       # format tokens are RuboCop's requirement rather than the seed's.
-      HEADER = "  %<arm>-24s %<records>9s %<keys>7s %<elapsed>10s %<rate>14s %<ratio>14s"
+      HEADER = "  %<arm>-28s %<records>9s %<keys>7s %<elapsed>10s %<rate>14s %<ratio>14s"
 
-      ROW = "  %<arm>-24s %<records>9s %<keys>7s %<elapsed>9.1fs %<rate>14s %<ratio>14s"
+      ROW = "  %<arm>-28s %<records>9s %<keys>7s %<elapsed>9.1fs %<rate>14s %<ratio>14s"
 
       def initialize(options, broker, topic)
         @options = options

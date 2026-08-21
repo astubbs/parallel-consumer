@@ -22,7 +22,7 @@ that first. This file records only what is specific to Kotlin.
 | arm, as the table labels it | what it is |
 |---|---|
 | **`AK core (KafkaConsumer)`** | Apache Kafka's own `KafkaConsumer`, driven from Kotlin, one record at a time |
-| **`kotlin-sidecar (this client)`** | this module's `ParallelConsumerClient`: it spawns the sidecar as a child process, receives records over a socket, runs a **suspending** function on them and reports outcomes back |
+| **`pc-kotlin-grpc (this client)`** | this module's `ParallelConsumerClient`: it spawns the sidecar as a child process, receives records over a socket, runs a **suspending** function on them and reports outcomes back |
 
 The labels carry the client and not only the role, because "AK core" is a *category*: it is
 `franz-go` in Go and `rdkafka` in Ruby, and a reader cannot judge a comparison without knowing which

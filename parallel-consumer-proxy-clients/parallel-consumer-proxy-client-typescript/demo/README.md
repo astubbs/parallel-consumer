@@ -25,7 +25,7 @@ Read that first. This file records only what is specific to TypeScript.
 | arm | what it is |
 |---|---|
 | `AK core (kafkajs)` | [kafkajs](https://kafka.js.org), a TypeScript Kafka client, one record at a time |
-| `typescript-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the application's function, and reports outcomes back |
+| `pc-typescript-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the application's function, and reports outcomes back |
 
 **Both halves of each label are load-bearing.** "AK core" is a *category* - the role an arm plays -
 and every language fills it with a different library, so a reader cannot judge the comparison

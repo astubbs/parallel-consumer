@@ -44,7 +44,7 @@ private val ARM_BUDGET = 10.minutes
 private const val AK_CORE = "AK core (KafkaConsumer)"
 
 /** The sidecar arm's label: the role, and what drives it - this module's own client library. */
-private const val KOTLIN_SIDECAR = "kotlin-sidecar (this client)"
+private const val PC_KOTLIN_GRPC = "pc-kotlin-grpc (this client)"
 
 /** The real sidecar's entry point, launched as an ordinary child process by the client library. */
 private const val SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
@@ -56,7 +56,7 @@ private const val NO_KEY = "<no key>"
  * The banner every language prints, differing only in its own name.
  *
  * Contract, not decoration: the demo's job is to be watched, and a first line reading
- * `kotlin-sidecar: the proxy granted 100 executor threads` tells a reader nothing about what they
+ * `pc-kotlin-grpc: the proxy granted 100 executor threads` tells a reader nothing about what they
  * are looking at. The product is named before anything else, including the effective configuration.
  */
 private val BANNER = """
@@ -155,7 +155,7 @@ private fun usage() {
  *   at a time. Always spelled "AK core", never bare "core", which reads as `parallel-consumer-core`
  *   (`CONCEPTS.md`) - and never "AK core" alone in the table, because that is a category rather than
  *   a client and a reader cannot judge a comparison without knowing what ran it.
- * - **kotlin-sidecar (this client)** - this module's own `ParallelConsumerClient`: it spawns the sidecar as a
+ * - **pc-kotlin-grpc (this client)** - this module's own `ParallelConsumerClient`: it spawns the sidecar as a
  *   child process, receives records over a socket, runs a suspending function on them and reports
  *   outcomes back. **On this path the application does no Kafka I/O** - the sidecar owns the
  *   consumer, the producer, the group membership and the offsets. That is a claim about the *path*,
@@ -273,7 +273,7 @@ internal class KotlinDemo(
      * the AK core arm's starts after its consumer is built: neither arm charges itself for start-up.
      */
     private suspend fun kotlinSidecar(target: Int): ArmResult {
-        Console.say("\n=== $KOTLIN_SIDECAR starting over $target records ===")
+        Console.say("\n=== $PC_KOTLIN_GRPC starting over $target records ===")
         val processed = AtomicInteger()
         // Concurrent, because this arm runs maxConcurrency records at once; a HashSet here would
         // silently lose keys and under-report the very figure that proves the backlog was spread.
@@ -283,7 +283,7 @@ internal class KotlinDemo(
         val client = ParallelConsumerClient.open(
             options = ClientOptions(
                 topics = listOf(topic),
-                kafkaProperties = broker.consumerProperties(groupId("kotlin-sidecar")),
+                kafkaProperties = broker.consumerProperties(groupId("pc-kotlin-grpc")),
                 maxConcurrency = options.maxConcurrency,
                 ordering = ProcessingOrder.UNORDERED,
             ),
@@ -308,8 +308,8 @@ internal class KotlinDemo(
                     }
                 }
                 withTimeoutOrNull(ARM_BUDGET) { done.await() }
-                    ?: error("$KOTLIN_SIDECAR stalled at ${processed.get()} of $target")
-                val result = finished(KOTLIN_SIDECAR, startedAt, processed.get(), keys.size)
+                    ?: error("$PC_KOTLIN_GRPC stalled at ${processed.get()} of $target")
+                val result = finished(PC_KOTLIN_GRPC, startedAt, processed.get(), keys.size)
                 // The clock has already stopped, so the teardown - drain, close, reap the child -
                 // is charged to no arm. `use` closes again afterwards; close is idempotent.
                 client.close()

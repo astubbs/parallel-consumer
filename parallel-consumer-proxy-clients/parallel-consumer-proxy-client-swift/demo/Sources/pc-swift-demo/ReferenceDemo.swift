@@ -212,7 +212,7 @@ struct ReferenceDemo {
             ArmTable.akCore, startedAt: startedAt, counter: counter, target: target)
     }
 
-    /// **swift-grpc** - the application as a foreign client, through the client library in this
+    /// **pc-swift-grpc** - the application as a foreign client, through the client library in this
     /// module.
     ///
     /// On this path the application does no Kafka I/O at all: the library spawns the sidecar,
@@ -231,7 +231,7 @@ struct ReferenceDemo {
         // unspecified means "take parallel-consumer-core's default", and that default is KEY - so
         // this arm would run key-ordered against an unordered comparator and nothing would say so.
         clientOptions.ordering = .unordered
-        clientOptions.kafkaProperties = broker.proxyProperties(groupID: groupID("swift-grpc"))
+        clientOptions.kafkaProperties = broker.proxyProperties(groupID: groupID("pc-swift-grpc"))
         clientOptions.instanceTag = "pc-swift-demo"
         clientOptions.logger = libraryLogger
 

@@ -8,7 +8,7 @@
  *   the CLIENT is always named beside it, because "AK core" is a category and a reader cannot judge
  *   a comparison without knowing what produced it. TypeScript has a second serious client;
  *   `demo/README.md` says which, and why this arm is kafkajs.
- * - **typescript-grpc (this client)** - the application as a *foreign client*: this module's library
+ * - **pc-typescript-grpc (this client)** - the application as a *foreign client*: this module's library
  *   spawns the sidecar, receives records over a socket, runs the user's function, and reports
  *   outcomes back. **On this path the application does no Kafka I/O** - the sidecar owns the
  *   consumer, the producer, the group membership and the offsets. That is a statement about the
@@ -166,7 +166,7 @@ export async function typescriptGrpc(
     // all, and the two tables would be comparing two different questions.
     ordering: "unordered",
     // The arm NAME, not its label: a group id and an instance tag are identifiers, and
-    // "typescript-grpc (this client)" is a caption. The label belongs in the table and nowhere else.
+    // "pc-typescript-grpc (this client)" is a caption. The label belongs in the table and nowhere else.
     kafkaProperties: broker.consumerProperties(groupId(SIDECAR_ARM_NAME)),
     instanceTag: `${SIDECAR_ARM_NAME}-demo`,
     onWarning: (message) => process.stderr.write(`sidecar arm: ${message}\n`),

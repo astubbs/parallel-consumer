@@ -24,7 +24,7 @@ import (
 // which on that path is this repository's own Go client library rather than any Kafka client.
 const (
 	armAKCore    = "AK core (franz-go)"
-	armGoSidecar = "go-grpc (this client)"
+	armGoSidecar = "pc-go-grpc (this client)"
 )
 
 // armBudget is how long an arm may take before the demo calls it stalled rather than slow.
@@ -170,7 +170,7 @@ func (d demo) goSidecar(ctx context.Context, target int) (armResult, error) {
 		Topics:          []string{d.topic},
 		Ordering:        parallelconsumer.OrderUnordered,
 		MaxConcurrency:  int32(d.options.maxConcurrency),
-		KafkaProperties: d.broker.consumerProperties(groupID("go-grpc")),
+		KafkaProperties: d.broker.consumerProperties(groupID("pc-go-grpc")),
 		InstanceTag:     "pc-go-demo",
 	})
 	if err != nil {

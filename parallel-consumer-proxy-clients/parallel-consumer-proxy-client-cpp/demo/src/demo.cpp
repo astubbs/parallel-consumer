@@ -6,7 +6,7 @@
 //                 spelled out, because bare "core" reads as parallel-consumer-core (CONCEPTS.md) -
 //                 and never left bare EITHER, because "AK core" is a category rather than a client
 //                 and a reader cannot judge a comparison without knowing what produced it.
-//   - cpp-grpc (this client)   - this application as a FOREIGN CLIENT. The client library in the
+//   - pc-cpp-grpc (this client)   - this application as a FOREIGN CLIENT. The client library in the
 //                 module above spawns the sidecar, receives records over a socket, runs the same
 //                 sleep on them and reports outcomes back. On this path the application does no
 //                 Kafka I/O at all: the sidecar owns the consumer, the producer, the group
@@ -71,7 +71,7 @@ constexpr std::chrono::milliseconds kProgressCheck{200};
 /// than hand-written gRPC. That distinction is the whole point of the arm, and until it was in the
 /// label the output did not carry it.
 constexpr const char* kAkCore = "AK core (librdkafka)";
-constexpr const char* kSidecarArm = "cpp-grpc (this client)";
+constexpr const char* kSidecarArm = "pc-cpp-grpc (this client)";
 
 /// Where the sidecar binary is when nothing said otherwise - the path the demo image installs it
 /// at. `PC_DEMO_SIDECAR` overrides it, which is what a reader running the binary outside that image
@@ -230,7 +230,7 @@ private:
         client_options.topics = {topic_};
         client_options.max_concurrency = options_.max_concurrency;
         client_options.ordering = pcp::ProcessingOrder::Unordered;
-        client_options.kafka_properties = broker_.consumer_properties(group_id("cpp-grpc"));
+        client_options.kafka_properties = broker_.consumer_properties(group_id("pc-cpp-grpc"));
         client_options.instance_tag = "pc-cpp-demo";
         // The library says nothing until an application asks it to, so the demo asks - on stderr,
         // leaving stdout to the tables. Debug is per-record and stays off.

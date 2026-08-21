@@ -51,7 +51,7 @@ enum ArmTable {
     /// This language over the sidecar: the client library in this module, spawning and driving a
     /// proxy the application never installs. "(this client)" is what it drives - the library beside
     /// this demo, not a hand-written wire.
-    static let swiftGrpc = "swift-grpc (this client)"
+    static let swiftGrpc = "pc-swift-grpc (this client)"
 
     /// Renders one replay's table: same columns, same order, same widths as every other language.
     ///

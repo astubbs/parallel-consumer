@@ -30,7 +30,7 @@ Read that first. This file only records what is specific to Scala.
 | arm | what it is |
 |---|---|
 | `AK core (KafkaConsumer)` | `org.apache.kafka.clients.consumer.KafkaConsumer`, driven from Scala, one record at a time |
-| `scala-grpc (this client)` | this module's `ParallelConsumerClient` over a sidecar the client library spawns |
+| `pc-scala-grpc (this client)` | this module's `ParallelConsumerClient` over a sidecar the client library spawns |
 
 **The label names the client because "AK core" is a category, not a client.** It is `rdkafka` in
 Ruby, `franz-go` in Go, `kafkajs` in TypeScript - and in Scala it is the Apache Kafka Java consumer
@@ -47,7 +47,7 @@ second arm: a second row would measure a streaming façade's own scheduling on t
 consumer, which is a different question from the one this demo asks. The AK core row is the floor
 those libraries are built on, and it is the honest one to compare against.
 
-`scala-grpc` goes through **the client library**, not the protocol. Nothing in
+`pc-scala-grpc` goes through **the client library**, not the protocol. Nothing in
 `demo/src/main/scala` names a protobuf message, a channel or a token - the demo opens a
 `ParallelConsumerClient`, hands it a `ClientOptions`, and returns a `Future[Outcome]` per record,
 which is the whole of what a Scala user writes. An earlier version of the Java seed spoke the wire

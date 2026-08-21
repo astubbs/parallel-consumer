@@ -56,7 +56,7 @@ func TestEveryArmNamesTheClientItRan(t *testing.T) {
 	if !strings.Contains(armAKCore, "franz-go") {
 		t.Errorf("the serial arm must name the Kafka client it actually ran: %q", armAKCore)
 	}
-	if !strings.Contains(armGoSidecar, "go-grpc") {
+	if !strings.Contains(armGoSidecar, "pc-go-grpc") {
 		t.Errorf("the sidecar arm keeps its language-and-transport name: %q", armGoSidecar)
 	}
 	if !strings.Contains(armGoSidecar, "(") {

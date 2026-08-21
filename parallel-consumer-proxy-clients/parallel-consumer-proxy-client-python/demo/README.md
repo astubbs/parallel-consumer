@@ -23,7 +23,7 @@ Read that first. This file only records what is specific to Python.
 | arm | what it is |
 |---|---|
 | **AK core (confluent-kafka)** | `confluent_kafka.Consumer`, one record at a time, in this process. |
-| **python-grpc (this client)** | This module's client library. It spawns the sidecar as a child process, receives records over a socket, runs the user's function in **worker processes**, and reports outcomes back. The application does no Kafka I/O on this path. |
+| **pc-python-grpc (this client)** | This module's client library. It spawns the sidecar as a child process, receives records over a socket, runs the user's function in **worker processes**, and reports outcomes back. The application does no Kafka I/O on this path. |
 
 Both labels name the library that actually ran, which is contract: **"AK core" is a category, not a
 client**, and a reader cannot judge a comparison without knowing what produced it.

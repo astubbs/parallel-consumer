@@ -25,7 +25,7 @@ namespace Bz.Stub.ParallelConsumer.Proxy.Client.Demo;
 ///     a time. Always spelled "AK core", never bare "core", which reads as
 ///     <c>parallel-consumer-core</c> - and always carrying the client's own name, because "AK core"
 ///     is a CATEGORY and a reader cannot judge a comparison without knowing what produced it.</item>
-///   <item><b>dotnet-grpc (this client)</b> - this module's client library over a sidecar it spawns
+///   <item><b>pc-dotnet-grpc (this client)</b> - this module's client library over a sidecar it spawns
 ///     itself, which is what the second half of the label names. ON
 ///     THIS PATH THE APPLICATION DOES NO KAFKA I/O: the sidecar owns the consumer, the producer,
 ///     the group membership and the offsets. In a genuinely foreign application that is the whole
@@ -51,7 +51,7 @@ internal static class Program
     /// </summary>
     /// <remarks>
     /// Contract, not decoration. A reader who runs this and is met with
-    /// <c>dotnet-grpc: the proxy granted 100 executor threads</c> has been told nothing about what
+    /// <c>pc-dotnet-grpc: the proxy granted 100 executor threads</c> has been told nothing about what
     /// they are looking at - not the product's name, not what is about to happen. Every language
     /// prints this same banner, differing only in its own name, so a visitor moving between two
     /// demos recognises the second one instantly.
@@ -76,7 +76,7 @@ internal static class Program
     private const string AkCore = "AK core (Confluent.Kafka)";
 
     /// <summary>The sidecar arm's label, naming what drives it: this module's own client library.</summary>
-    private const string SidecarArm = "dotnet-grpc (this client)";
+    private const string SidecarArm = "pc-dotnet-grpc (this client)";
 
     /// <summary>
     /// The sidecar arm's identifier, for places a label cannot go.
@@ -85,7 +85,7 @@ internal static class Program
     /// Consumer group names travel to the broker and end up in metric names, so the label's spaces
     /// and brackets have no business there. The label is for the reader; this is for Kafka.
     /// </remarks>
-    private const string SidecarArmId = "dotnet-grpc";
+    private const string SidecarArmId = "pc-dotnet-grpc";
 
     /// <summary>
     /// Stands in for a null key when counting distinct keys.
@@ -436,7 +436,7 @@ internal static class Program
         var table = new StringBuilder("\n\n").Append(title).Append('\n');
         table.AppendLine(string.Format(
             CultureInfo.InvariantCulture,
-            "  {0,-26} {1,10} {2,8} {3,10} {4,14} {5,14}",
+            "  {0,-30} {1,10} {2,8} {3,10} {4,14} {5,14}",
             "arm",
             "records",
             "keys",
@@ -451,7 +451,7 @@ internal static class Program
                     CultureInfo.InvariantCulture, $"{result.RatePerSecond / baseline.RatePerSecond:F1}x");
             table.AppendLine(string.Format(
                 CultureInfo.InvariantCulture,
-                "  {0,-26} {1,10} {2,8} {3,9:F1}s {4,14} {5,14}",
+                "  {0,-30} {1,10} {2,8} {3,9:F1}s {4,14} {5,14}",
                 result.Arm,
                 result.Processed.ToString("N0", CultureInfo.InvariantCulture),
                 result.UniqueKeys.ToString("N0", CultureInfo.InvariantCulture),

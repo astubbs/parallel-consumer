@@ -19,8 +19,8 @@ Read that first. This file only records what is specific to Java.
 ## What is specific to Java
 
 Java is the one language that can run every arm in a single JVM against a single broker, so its
-demo carries four arms no other language's demo has or needs: `pc-core`, `java-direct`,
-`java-grpc-uds` and `java-raw-grpc`. They exist to price the client library and the wire hop
+demo carries four arms no other language's demo has or needs: `pc-core`, `pc-java-direct`,
+`pc-java-grpc-uds` and `pc-java-raw-grpc`. They exist to price the client library and the wire hop
 separately. Everywhere else the two contract arms - that language's own Kafka client, and that
 language over the sidecar - are the whole demo.
 
@@ -33,17 +33,17 @@ category rather than a client. Java's answers:
 |---|---|---|
 | `AK core` | `KafkaConsumer` | Apache Kafka's own consumer, one record at a time |
 | `pc-core` | `ParallelEoSStreamProcessor` | the engine directly, no client library |
-| `java-direct` | `this client, in process` | the client library, engine bound in process |
-| `java-grpc` | `this client` | **the contract arm**: the client library over a spawned sidecar |
-| `java-grpc-uds` | `this client, over UDS` | the same, over a Unix domain socket |
-| `java-raw-grpc` | `no client library` | the protocol written by hand, as a control |
+| `pc-java-direct` | `this client, in process` | the client library, engine bound in process |
+| `pc-java-grpc` | `this client` | **the contract arm**: the client library over a spawned sidecar |
+| `pc-java-grpc-uds` | `this client, over UDS` | the same, over a Unix domain socket |
+| `pc-java-raw-grpc` | `no client library` | the protocol written by hand, as a control |
 
 **Java has one serious Kafka client**, so unlike Go or Ruby there is no second `AK core` arm worth
 running: `KafkaConsumer` is what a reader asking "is this fast in my language" already uses.
-`java-grpc` keeps the bare `this client` spelling every language uses for that row; the four extra
+`pc-java-grpc` keeps the bare `this client` spelling every language uses for that row; the four extra
 arms qualify themselves against it.
 
-`java-grpc-uds` needs an epoll domain-socket transport, so it is absent on macOS natively and
+`pc-java-grpc-uds` needs an epoll domain-socket transport, so it is absent on macOS natively and
 present in the container. The demo asks the runtime rather than guessing, and says so when it
 cannot run.
 
@@ -70,4 +70,4 @@ test jar's logging config does, not in this module.
 The code lives in `../parallel-consumer-proxy-client-java-demo`, beside the client library it
 exercises rather than beside the sidecar. An earlier version lived in the sidecar module and spoke
 the protocol by hand; it demonstrated that the engine works and said nothing about the client,
-which is the artifact users actually touch. That arm survives as `java-raw-grpc`, as a control.
+which is the artifact users actually touch. That arm survives as `pc-java-raw-grpc`, as a control.

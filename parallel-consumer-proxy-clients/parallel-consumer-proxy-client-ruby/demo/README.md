@@ -25,7 +25,7 @@ Read that first. This file records only what is specific to Ruby.
 | arm | what it is |
 |---|---|
 | `AK core (rdkafka)` | librdkafka through the [`rdkafka`](https://github.com/karafka/rdkafka-ruby) gem, one record at a time |
-| `ruby-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the demo's block on its executor threads and reports outcomes back |
+| `pc-ruby-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the demo's block on its executor threads and reports outcomes back |
 
 Each arm carries the **library it actually ran**, not only its role. "AK core" is a category and
 every language fills it with a different client - `rdkafka` here, `franz-go` in Go, `kafkajs` in

@@ -38,21 +38,21 @@ what crossing a process boundary costs, and nothing else.
 ### Java carries four extra arms. Do not mirror them.
 
 Because one JVM can hold all of them at once, the Java demo also runs `pc-core` (the engine
-directly), `java-direct` (the client library with the engine in process), `java-grpc-uds` (the
-client library over a **Unix domain socket**) and `java-raw-grpc` (the protocol by hand). Each
+directly), `pc-java-direct` (the client library with the engine in process), `pc-java-grpc-uds` (the
+client library over a **Unix domain socket**) and `pc-java-raw-grpc` (the protocol by hand). Each
 *pair* changes exactly one term, which is the only way a difference means anything:
 
 | pair | what it isolates |
 |---|---|
-| `pc-core` vs `java-direct` | what reaching the engine through the client library costs |
-| `java-direct` vs `java-grpc` | going out of process at all |
-| `java-grpc` vs `java-grpc-uds` | the TCP/IP stack, with everything else held identical |
-| `java-grpc` vs `java-raw-grpc` | what the client library itself costs on the wire |
+| `pc-core` vs `pc-java-direct` | what reaching the engine through the client library costs |
+| `pc-java-direct` vs `pc-java-grpc` | going out of process at all |
+| `pc-java-grpc` vs `pc-java-grpc-uds` | the TCP/IP stack, with everything else held identical |
+| `pc-java-grpc` vs `pc-java-raw-grpc` | what the client library itself costs on the wire |
 
 A language whose only Kafka client is its own has nothing to compare a wrapper or a raw wire
 against, so **two arms is the whole contract everywhere else.**
 
-**`java-grpc-uds` is absent where it cannot run, and never silently.** It needs an epoll
+**`pc-java-grpc-uds` is absent where it cannot run, and never silently.** It needs an epoll
 domain-socket transport, which means Linux - including inside this demo's own container on any
 host, so `demo/run.sh --docker` gets it on macOS too. The demo asks the runtime whether it can open
 a domain socket rather than guessing from the operating system's name, and when it cannot it says
@@ -82,7 +82,7 @@ unreadable has failed at the only thing it does.
 ### It opens by saying what it is
 
 The **first thing printed** names the product. Not the module, not the arm, not a configuration
-line - a reader who runs this and sees `ruby-grpc: the proxy granted 100 executor threads` has been
+line - a reader who runs this and sees `pc-ruby-grpc: the proxy granted 100 executor threads` has been
 told nothing about what they are looking at. Every language prints the same banner, differing only
 in its own name:
 
@@ -111,7 +111,7 @@ So the arm is labelled with both - the role and the library:
 
 ```
 AK core (franz-go)          rather than   AK core
-go-grpc (this client)       rather than   go-grpc
+pc-go-grpc (this client)       rather than   pc-go-grpc
 ```
 
 **Where a language has more than one serious Kafka client, RUN THEM ALL, each as its own arm.** Not

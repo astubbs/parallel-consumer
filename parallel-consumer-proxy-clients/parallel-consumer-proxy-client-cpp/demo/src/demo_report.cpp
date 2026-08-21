@@ -13,13 +13,13 @@ namespace {
 constexpr int kRuleWidth = 64;
 
 /// The arm column. Wide enough for the longest label this language has - a label now carries the
-/// library that produced the row, so "cpp-grpc (this client)" is the size to fit.
+/// library that produced the row, so "pc-cpp-grpc (this client)" is the size to fit.
 ///
 /// COLUMN WIDTH IS DELIBERATELY NOT CONTRACT, and bin/ci-demo-conformance.sh says so: a language
 /// with a longer arm name would otherwise be in permanent violation of an alignment rule. Column
 /// IDENTITY and ORDER are what every language must match.
-constexpr const char* kHeaderFormat = "  %-24s %10s %8s %10s %12s %12s\n";
-constexpr const char* kRowFormat = "  %-24s %10s %8s %9.1fs %12s %12s\n";
+constexpr const char* kHeaderFormat = "  %-27s %10s %8s %10s %12s %12s\n";
+constexpr const char* kRowFormat = "  %-27s %10s %8s %9.1fs %12s %12s\n";
 
 }  // namespace
 

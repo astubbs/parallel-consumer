@@ -13,7 +13,7 @@ no latency. What is specific to Python is in `demo/README.md` beside this file.
   process. Always spelled "AK core", never bare "core", which reads as `parallel-consumer-core`
   (`CONCEPTS.md`) - and always with the client that actually ran, because "AK core" is a category
   and Python has more than one client in it.
-* **python-grpc (this client)** - this repository's Python client library, which spawns the sidecar
+* **pc-python-grpc (this client)** - this repository's Python client library, which spawns the sidecar
   as a child process, receives records over a socket, runs the user's function in **worker
   processes**, and reports outcomes back. **The application does no Kafka I/O on this path**: the
   sidecar owns the consumer, the producer, the group membership and the offsets.
@@ -101,7 +101,7 @@ than one serious Kafka client, which is exactly why naming this one matters; ``d
 says which and why this demo runs ``confluent-kafka``.
 """
 
-PYTHON_GRPC = "python-grpc (this client)"
+PYTHON_GRPC = "pc-python-grpc (this client)"
 """The sidecar arm, labelled with what drives it: this repository's own Python client library."""
 
 SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
@@ -500,12 +500,12 @@ def report(title: str, results: list[ArmResult], baseline: ArmResult | None, *,
     """
     heading = "vs AK core*" if across_replays else "vs AK core"
     lines = ["", "", title,
-             f"  {'arm':<26} {'records':>9} {'keys':>7} {'elapsed':>10} {'msg/s':>14} "
+             f"  {'arm':<30} {'records':>9} {'keys':>7} {'elapsed':>10} {'msg/s':>14} "
              f"{heading:>14}"]
     for result in results:
         ratio = ("-" if baseline is None or baseline.rate_per_second == 0
                  else f"{result.rate_per_second / baseline.rate_per_second:.1f}x")
-        lines.append(f"  {result.arm:<26} {result.processed:>9,} {result.keys:>7,} "
+        lines.append(f"  {result.arm:<30} {result.processed:>9,} {result.keys:>7,} "
                      f"{result.elapsed_seconds:>9.1f}s {int(result.rate_per_second):>14,} "
                      f"{ratio:>14}")
     if across_replays:

@@ -64,9 +64,9 @@ else started - the tests use `TestModeMain` from the proxy module's test jar, by
 ## Testing it
 
 ```bash
-./mvnw test -pl :parallel-consumer-proxy-client-java-grpc -am
+./mvnw test -pl :parallel-consumer-proxy-client-pc-java-grpc -am
 ./mvnw test -pl :parallel-consumer-proxy-client-java-harness -am
-./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=java-grpc
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=pc-java-grpc
 ```
 
 The first is the tests that need no engine - `WireMappingTest`, and `SessionEndTest`, which pins

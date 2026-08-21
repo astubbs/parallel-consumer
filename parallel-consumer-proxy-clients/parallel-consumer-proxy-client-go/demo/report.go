@@ -22,11 +22,11 @@ func errorf(format string, args ...any) {
 }
 
 // armColumnWidth is the arm column, wide enough for the longest label an arm can carry now that
-// each names the client it ran - `go-grpc (this client)` is twenty-one characters against the
-// seven `go-grpc` used to need. Column WIDTH is deliberately not contract, unlike column identity
+// each names the client it ran - `pc-go-grpc (this client)` is twenty-one characters against the
+// seven `pc-go-grpc` used to need. Column WIDTH is deliberately not contract, unlike column identity
 // and order: a language with a longer client name would otherwise be in permanent violation of an
 // alignment rule it cannot keep.
-const armColumnWidth = 22
+const armColumnWidth = 26
 
 // report prints one replay's table.
 //

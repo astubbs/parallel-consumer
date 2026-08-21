@@ -31,7 +31,7 @@ DEMO_DIR="$(dirname "$RUN_SH")"
 LOG_DIR="$(mktemp -d)"
 SMALL=(--records 20 --delay-ms 1 --concurrency 4 --partitions 2 --replay-factor 1)
 
-# The arms every platform runs. java-grpc-uds is asserted separately, because whether it can run is
+# The arms every platform runs. pc-java-grpc-uds is asserted separately, because whether it can run is
 # a property of the platform rather than of the demo - see the container assertion below.
 REQUIRED_ARMS=("AK core" "pc-core" "java-direct" "java-grpc" "java-raw-grpc")
 
@@ -85,10 +85,10 @@ assert_demo_ran "container" "$LOG_DIR/docker.log"
 # The container is Linux whatever the host is, so the domain-socket arm MUST be there. This is the
 # assertion that keeps the UDS path covered on a macOS developer machine, where it cannot run
 # natively and would otherwise be exercised by nobody until CI.
-grep -qE "^[[:space:]]*java-grpc-uds([[:space:]]*\([^)]*\))?[[:space:]]+[0-9]" "$LOG_DIR/docker.log.plain" \
-    || fail "container: the java-grpc-uds arm is missing, and inside a Linux container it cannot be
+grep -qE "^[[:space:]]*pc-java-grpc-uds([[:space:]]*\([^)]*\))?[[:space:]]+[0-9]" "$LOG_DIR/docker.log.plain" \
+    || fail "container: the pc-java-grpc-uds arm is missing, and inside a Linux container it cannot be
         legitimately absent - see $LOG_DIR/docker.log.plain"
-echo "ci-demo-test: container ran the java-grpc-uds arm"
+echo "ci-demo-test: container ran the pc-java-grpc-uds arm"
 
 # TWO CONTAINER-ONLY PROMISES THAT NOTHING USED TO CHECK, both of which were broken when these
 # assertions were written. Found by a language agent transcribing the seed's compose file, which is

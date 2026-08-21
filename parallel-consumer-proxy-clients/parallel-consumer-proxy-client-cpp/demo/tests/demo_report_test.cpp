@@ -78,7 +78,7 @@ PCP_TEST(the_table_carries_the_contract_columns_in_order,
 PCP_TEST(every_arm_reports_what_it_did_and_not_only_how_fast,
          "records and keys are what demonstrate the run rather than assert it") {
     const std::vector<demo::ArmResult> results{arm("AK core (librdkafka)", 2.0, 2000, 1000),
-                                               arm("cpp-grpc (this client)", 0.5, 2000, 1000)};
+                                               arm("pc-cpp-grpc (this client)", 0.5, 2000, 1000)};
 
     const std::string table = demo::render("Small replay", results, &results.front(), false);
 
@@ -94,18 +94,18 @@ PCP_TEST(every_arm_reports_what_it_did_and_not_only_how_fast,
 PCP_TEST(an_arm_names_the_client_that_produced_its_row,
          "'AK core' is a category; a reader cannot judge a comparison without the library") {
     const std::vector<demo::ArmResult> results{arm("AK core (librdkafka)", 2.0, 20, 20),
-                                               arm("cpp-grpc (this client)", 1.0, 20, 20)};
+                                               arm("pc-cpp-grpc (this client)", 1.0, 20, 20)};
 
     const std::string table = demo::render("Small replay", results, &results.front(), false);
 
     PCP_CHECK_CONTAINS(table, "AK core (librdkafka)");
-    PCP_CHECK_CONTAINS(table, "cpp-grpc (this client)");
+    PCP_CHECK_CONTAINS(table, "pc-cpp-grpc (this client)");
 }
 
 PCP_TEST(a_cross_replay_ratio_says_so,
          "the big replay's baseline came from the small replay, which is not like-for-like") {
     const std::vector<demo::ArmResult> baseline{arm("AK core (librdkafka)", 2.0, 20, 20)};
-    const std::vector<demo::ArmResult> big{arm("cpp-grpc (this client)", 1.0, 40, 40)};
+    const std::vector<demo::ArmResult> big{arm("pc-cpp-grpc (this client)", 1.0, 40, 40)};
 
     const std::string same_replay = demo::render("Small replay", baseline, &baseline.front(), false);
     const std::string across = demo::render("Big replay", big, &baseline.front(), true);

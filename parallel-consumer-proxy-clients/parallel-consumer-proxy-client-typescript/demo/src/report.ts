@@ -34,16 +34,16 @@ export const AK_CORE = `${AK_CORE_ROLE} (kafkajs)`;
  * and the library is named, because that is the thing being demonstrated. The application itself
  * runs no Kafka client on this path at all.
  */
-export const SIDECAR_ARM = "typescript-grpc (this client)";
+export const SIDECAR_ARM = "pc-typescript-grpc (this client)";
 
 /** The arm name `bin/ci-demo-conformance.sh` normalises across languages, without its label. */
-export const SIDECAR_ARM_NAME = "typescript-grpc";
+export const SIDECAR_ARM_NAME = "pc-typescript-grpc";
 
 /**
  * The first thing the demo prints, and it names the PRODUCT.
  *
  * Not the module, not the arm, not a configuration line: a reader who starts this and is met with
- * `typescript-grpc: the proxy granted 100 executor threads` has been told nothing about what they
+ * `pc-typescript-grpc: the proxy granted 100 executor threads` has been told nothing about what they
  * are looking at. Every language prints this same block, differing only in its own name - so it is
  * contract, not decoration.
  */
@@ -72,10 +72,10 @@ export function ratePerSecond(result: ArmResult): number {
  *
  * **Width is deliberately not contract** - column IDENTITY and ORDER are (`demo/README.md` in the
  * proxy module, and the note at the top of `bin/ci-demo-conformance.sh`). This one is wider than
- * Java's because `typescript-grpc (this client)` is a longer label than `java-grpc (this client)`,
+ * Java's because `pc-typescript-grpc (this client)` is a longer label than `java-grpc (this client)`,
  * and that is allowed to be true.
  */
-const ARM_WIDTH = 31;
+const ARM_WIDTH = 34;
 const RECORDS_WIDTH = 9;
 const KEYS_WIDTH = 7;
 const ELAPSED_WIDTH = 10;

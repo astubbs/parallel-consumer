@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory
  *    one record at a time. The client is named in the label because "AK core" is a category and the
  *    answer differs in every language. Always spelled "AK core", never bare "core", which reads as
  *    `parallel-consumer-core` (`CONCEPTS.md`).
- *  - '''`scala-grpc (this client)`''' - this module's own `ParallelConsumerClient` over a sidecar the
+ *  - '''`pc-scala-grpc (this client)`''' - this module's own `ParallelConsumerClient` over a sidecar the
  *    client library spawns as a child process. The application does no Kafka I/O on that path: the
  *    sidecar owns the consumer, the producer, the group membership and the offsets.
  *
@@ -90,7 +90,7 @@ object ScalaDemo {
    * is the contract's wording rather than the type's name, so that the label means the same thing in
    * a language whose client library is not a class.
    */
-  private val ScalaGrpc = "scala-grpc (this client)"
+  private val ScalaGrpc = "pc-scala-grpc (this client)"
 
   /** The bucket a record with no key at all falls into, so "unique keys" stays a truthful count. */
   private val NoKey = "<no key>"
@@ -267,7 +267,7 @@ object ScalaDemo {
       ParallelConsumerClient.open(
         ClientOptions(
           topics = Seq(topic),
-          kafkaProperties = broker.consumerProperties(groupId("scala-grpc")),
+          kafkaProperties = broker.consumerProperties(groupId("pc-scala-grpc")),
           maxConcurrency = Some(options.maxConcurrency),
           ordering = Some(ProcessingOrder.UNORDERED)),
         sidecarCommand()),
@@ -418,5 +418,5 @@ object ScalaDemo {
       elapsed: String,
       rate: String,
       ratio: String): String =
-    String.format(Locale.ROOT, "  %-26s %9s %9s %10s %14s %14s%n", arm, records, keys, elapsed, rate, ratio)
+    String.format(Locale.ROOT, "  %-29s %9s %9s %10s %14s %14s%n", arm, records, keys, elapsed, rate, ratio)
 }

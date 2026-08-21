@@ -78,7 +78,12 @@ defect:
 - `CheckQuarantineOwnersScriptTest` - two different methods, on different runs
 - `ProxyProcessorLivenessTest.aSlowWorkerKeepsItsRecordWhileHeartbeatsContinueAndLosesItWhenTheyStop`
 - `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` - added 2026-08-17, seen with ~60
-  worktrees live on the box; passed in isolation and in the same session's full post-change run
+  worktrees live on the box; passed in isolation and in the same session's full post-change run.
+  **Seen again 2026-08-22** on `feats/polyglot-demos`, failing on `Expected size: 1 but was: 0`,
+  while a Go test suite ran in the same command on a box with many worktrees live. The branch that
+  met it had changed **zero** files under `parallel-consumer-core` (checked, not assumed), and the
+  same module's tests had passed in three earlier full runs that session. Same classification:
+  contention, not a regression
 - `ParallelEoSStreamProcessorTest.processInKeyOrder(CommitMode)[3]` - added 2026-08-21, seen once while
   building U10 in the proxy module (`-am` again). **A different assertion from the commit-frontier
   symptom this file records for the same test further down**: this one failed on

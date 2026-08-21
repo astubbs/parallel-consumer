@@ -21,7 +21,7 @@ Read that first. This file only records what is specific to Rust.
 | arm | what it is |
 |---|---|
 | `AK core (rdkafka)` | [`rdkafka`](https://crates.io/crates/rdkafka), one record at a time on one thread |
-| `rust-grpc (this client)` | this application as a **foreign client**: the Rust client library spawns the sidecar, receives records over a socket, runs the user's function and reports outcomes back |
+| `pc-rust-grpc (this client)` | this application as a **foreign client**: the Rust client library spawns the sidecar, receives records over a socket, runs the user's function and reports outcomes back |
 
 **Each row names the client it actually ran, because "AK core" is a category rather than a client**
 and the answer differs in every language. Rust's answer is `rdkafka`, the binding over librdkafka.
@@ -33,7 +33,7 @@ can hold an in-process engine, a client library over that engine, and a hand-wri
 client all at once, so each *pair* changes exactly one term. Rust has none of those comparators:
 there is one engine, reachable one way.
 
-**On the `rust-grpc` path this application does no Kafka I/O.** The sidecar owns the consumer, the
+**On the `pc-rust-grpc` path this application does no Kafka I/O.** The sidecar owns the consumer, the
 producer, the group membership and the offsets. That is a claim about the *path*, not about the
 process - the same binary creates the topic, seeds the backlog and runs the AK core arm with
 `rdkafka`, because a comparison needs both sides.

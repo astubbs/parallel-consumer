@@ -61,22 +61,22 @@ import java.util.concurrent.atomic.AtomicReference;
  *       {@code CONCEPTS.md}. This is the arm every language has.</li>
  *   <li><b>pc-core</b> - {@code ParallelEoSStreamProcessor} directly, no client library, no
  *       sidecar. The engine as a Java application already uses it today.</li>
- *   <li><b>java-direct</b> - {@code DirectParallelConsumerClient}: the client library's surface
+ *   <li><b>pc-java-direct</b> - {@code DirectParallelConsumerClient}: the client library's surface
  *       with the engine bound in process behind it. Against pc-core this prices <b>what reaching
  *       the engine through the client library costs</b>.</li>
- *   <li><b>java-grpc</b> - {@code GrpcParallelConsumerClient} over a real sidecar this process
- *       spawns. Against java-direct - same library surface, same broker, same workload - this
+ *   <li><b>pc-java-grpc</b> - {@code GrpcParallelConsumerClient} over a real sidecar this process
+ *       spawns. Against pc-java-direct - same library surface, same broker, same workload - this
  *       prices <b>what it costs to reach the engine over a socket instead of in process</b>, which
  *       is the number the whole language-proxy design turns on. Read it as the wire hop <i>plus the
  *       sidecar's own dispatch model</i>, not the wire alone: the two sides run the engine with
  *       different in-flight pipelining, so attributing the whole gap to the socket would overstate
  *       it.</li>
- *   <li><b>java-grpc-uds</b> - the same client library over the same sidecar, reached through a
- *       <b>Unix domain socket</b> instead of loopback TCP. Against java-grpc - one term changed, and
+ *   <li><b>pc-java-grpc-uds</b> - the same client library over the same sidecar, reached through a
+ *       <b>Unix domain socket</b> instead of loopback TCP. Against pc-java-grpc - one term changed, and
  *       every other term identical - this prices <b>the TCP/IP stack</b>. It is additive: where it
  *       cannot run, every other arm reports exactly what it reports now.</li>
- *   <li><b>java-raw-grpc</b> - the protocol spoken by hand, with no client library at all. A
- *       control arm: against java-grpc it prices <b>the client library itself</b>. It is here
+ *   <li><b>pc-java-raw-grpc</b> - the protocol spoken by hand, with no client library at all. A
+ *       control arm: against pc-java-grpc it prices <b>the client library itself</b>. It is here
  *       because an earlier version of this demo was <em>only</em> this arm, which is precisely why
  *       it measured the engine and said nothing about the client. Kept as a control, not as an
  *       example - no application should write this, and no other language's demo needs it.</li>
@@ -111,7 +111,7 @@ public final class ReferenceDemo {
     /**
      * <b>The first thing this demo prints, and the shape every language prints.</b>
      * <p>
-     * A reader who starts a demo and is greeted by {@code java-grpc: the proxy granted 100 executor
+     * A reader who starts a demo and is greeted by {@code pc-java-grpc: the proxy granted 100 executor
      * threads} has been told nothing about what they are looking at. The banner names the product
      * and what is about to happen, and only the language differs between the eleven copies of it.
      */
@@ -141,19 +141,19 @@ public final class ReferenceDemo {
 
     private static final String PC_CORE_CLIENT = "ParallelEoSStreamProcessor";
 
-    private static final String JAVA_DIRECT = "java-direct";
+    private static final String JAVA_DIRECT = "pc-java-direct";
 
     private static final String JAVA_DIRECT_CLIENT = "this client, in process";
 
-    private static final String JAVA_GRPC = "java-grpc";
+    private static final String JAVA_GRPC = "pc-java-grpc";
 
     private static final String JAVA_GRPC_CLIENT = "this client";
 
-    private static final String JAVA_GRPC_UDS = "java-grpc-uds";
+    private static final String JAVA_GRPC_UDS = "pc-java-grpc-uds";
 
     private static final String JAVA_GRPC_UDS_CLIENT = "this client, over UDS";
 
-    private static final String JAVA_RAW_GRPC = "java-raw-grpc";
+    private static final String JAVA_RAW_GRPC = "pc-java-raw-grpc";
 
     private static final String JAVA_RAW_GRPC_CLIENT = "no client library";
 
@@ -250,7 +250,7 @@ public final class ReferenceDemo {
         // The banner and the fingerprint are printed by main() before the broker is resolved, not
         // here: see announce(DemoOptions, String).
         if (!domainSocketsAvailable()) {
-            log.info("\nThe java-grpc-uds arm is NOT running: this JVM has no epoll domain-socket "
+            log.info("\nThe pc-java-grpc-uds arm is NOT running: this JVM has no epoll domain-socket "
                     + "transport, which is expected outside Linux. Every other arm is unaffected and "
                     + "reports exactly what it always reports - the comparison is one row shorter, not "
                     + "different. To include it, run the demo in its container: demo/run.sh --docker");
@@ -415,7 +415,7 @@ public final class ReferenceDemo {
      *
      * Against {@link #javaGrpc} exactly one term changes: the socket type. Same library, same protobuf,
      * same engine, same spawned child, same broker, same workload. So the difference is what the TCP/IP
-     * stack costs, which the java-direct to java-grpc step otherwise lumps together with serialization,
+     * stack costs, which the pc-java-direct to pc-java-grpc step otherwise lumps together with serialization,
      * the gRPC machinery and the process boundary.
      *
      * <h2>Where it runs</h2>
@@ -455,7 +455,7 @@ public final class ReferenceDemo {
     /**
      * The control arm: the same sidecar, the same work, the protocol spoken by hand.
      * <p>
-     * <b>This is not an example to copy.</b> It exists so that java-grpc minus this arm is a number
+     * <b>This is not an example to copy.</b> It exists so that pc-java-grpc minus this arm is a number
      * rather than an assumption - it prices the client library itself. An application writes
      * {@link #javaGrpc}; nobody writes this.
      */

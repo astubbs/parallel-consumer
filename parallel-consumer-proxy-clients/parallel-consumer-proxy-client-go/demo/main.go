@@ -15,7 +15,7 @@
 //     CATEGORY, not a client, so the library is named beside it - a reader cannot judge a
 //     comparison without knowing what produced it. Always spelled "AK core", never bare "core",
 //     which reads as parallel-consumer-core (CONCEPTS.md).
-//   - go-grpc (this client) - this application as a FOREIGN CLIENT, through the Go client library,
+//   - pc-go-grpc (this client) - this application as a FOREIGN CLIENT, through the Go client library,
 //     over a real sidecar the library spawns as a child process. The application does no Kafka I/O
 //     on that path: the sidecar owns the consumer, the producer, the group membership and the
 //     offsets.
@@ -63,7 +63,7 @@ func run(args []string) int {
 	}
 
 	// THE BANNER IS THE FIRST THING PRINTED, before the settings and before any arm says anything
-	// about itself. A reader who runs this and meets `go-grpc: the proxy granted 100 executor
+	// about itself. A reader who runs this and meets `pc-go-grpc: the proxy granted 100 executor
 	// threads` has been told nothing about what they are looking at; the words "Parallel Consumer"
 	// have to appear before anything else does. Identical in every language bar the language's own
 	// name - see the contract's "It opens by saying what it is".
