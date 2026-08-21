@@ -49,6 +49,24 @@ means contention; still failing means core, and the observation above is already
 already lost three flakes that way - and a longer window would turn a real accounting bug into a
 slower one.
 
+### `BlockedThreadAsserterTest.functionThatReturnsOnItsOwnScheduleIsRejected` - the helper's own self-test (2026-08-21, astubbs#242)
+
+Seen by a language agent during the demo fan-out, on a box at **load average 83 across 12 cores**
+(ten agents running concurrently). Filed here rather than in that agent's own note because this is
+`parallel-consumer-core`, not a client.
+
+**Diagnosed as contention, with a control rather than an assumption:** the class re-run alone passed
+**7/7**, and the agent's own module tests were green 20/20 in the same session.
+
+**It is a NEW signature on a helper that already has prior art, and the two should not be merged.**
+The existing entry for this area is about `assertUnblocksAfter` measuring 2 ms short - a timing
+margin, owned by astubbs#262. This is the helper failing to **reject** a function that returns on its
+own schedule, which is the guard's own self-test rather than its margin. Same class, different
+assertion; filing them together would hide one of them.
+
+One sighting under extreme synthetic load is not a rate, and load average 83 is not a condition CI
+reproduces. Worth knowing, not worth acting on alone.
+
 ### Four more seen under concurrent agent load, 2026-08-15 - unclassified
 
 Recorded because this ledger exists so a flake is not met twice as a surprise, not because any of
