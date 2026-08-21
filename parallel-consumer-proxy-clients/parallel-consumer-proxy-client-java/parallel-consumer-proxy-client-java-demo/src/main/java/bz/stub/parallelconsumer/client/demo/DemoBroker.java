@@ -51,10 +51,13 @@ public final class DemoBroker implements AutoCloseable {
 
     /**
      * The key space the seeded records spread over. Ordering is UNORDERED in every arm, so this
-     * changes nothing today; it exists so that a KEY-ordered lane added later has more than one
-     * key to shard across, rather than needing the seeding rewritten first.
+     * changes nothing about how they run; it exists so that a KEY-ordered lane added later has more
+     * than one key to shard across, rather than needing the seeding rewritten first.
+     * <p>
+     * It is also what makes the <b>keys</b> column of the results tables a <em>checkable</em>
+     * number rather than a decorative one - see {@link #expectedUniqueKeys(int)}.
      */
-    private static final int KEY_SPACE = 1_000;
+    static final int KEY_SPACE = 1_000;
 
     private static final String FALLBACK_IMAGE = "confluentinc/cp-kafka:7.9.0";
 
@@ -118,6 +121,22 @@ public final class DemoBroker implements AutoCloseable {
 
     public String bootstrap() {
         return bootstrap;
+    }
+
+    /**
+     * How many distinct keys an arm must see, having replayed {@code records} seeded records.
+     *
+     * <h2>Why this is worth a method</h2>
+     *
+     * {@link #seed} lays records over the key space cyclically, so the answer is exactly
+     * "the whole key space, or the backlog if it is smaller". Every arm reports its own observed
+     * count in the results tables, and this is the number that count has to equal - which is what
+     * turns the <b>keys</b> column from an assertion into a demonstration, and what
+     * {@code ReferenceDemoIT} checks. A demo whose evidence column cannot be predicted is not
+     * evidence.
+     */
+    public static int expectedUniqueKeys(int records) {
+        return Math.min(records, KEY_SPACE);
     }
 
     /** Creates the demo's topic, tolerating one that a previous run already left behind. */

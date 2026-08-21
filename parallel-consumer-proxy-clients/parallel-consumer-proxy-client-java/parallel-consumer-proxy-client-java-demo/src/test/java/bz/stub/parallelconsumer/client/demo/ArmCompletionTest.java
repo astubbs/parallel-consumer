@@ -5,15 +5,15 @@ package bz.stub.parallelconsumer.client.demo;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The guard that decides whether an arm produced a result or merely stopped.
+ * The guard that decides whether an arm produced a result or merely stopped, and the two evidence
+ * figures it reports alongside its rate.
  *
  * <h2>Why this is worth a test of its own</h2>
  *
@@ -23,21 +23,30 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * worst failure available to an artifact whose entire output is numbers other people copy - it does
  * not look like a failure at all.
  *
+ * <h2>And why the keys column is tested here rather than only run</h2>
+ *
+ * {@code records} and {@code keys} are the only figures in the tables that are deterministic across
+ * languages, which is what makes them the ones a cross-language check can compare. A keys count that
+ * silently counted deliveries rather than distinct keys would still produce a plausible table - the
+ * same failure mode as above, one column along.
+ *
  * @author Antony Stubbs
  */
 class ArmCompletionTest {
 
     private static final String ARM = "test-arm";
 
+    private static final String CLIENT = "test-client";
+
     /** The healthy path: the target was reached, so the arm reports it. */
     @Test
     void anArmThatReachedItsTargetReportsThatTarget() {
-        var processed = new AtomicInteger(100);
-        var done = new CountDownLatch(0);
+        var tally = new ArmTally(3);
+        processRecords(tally, "key-0", "key-1", "key-2");
 
-        var result = awaitQuietly(processed, done, 100);
+        var result = awaitQuietly(tally);
 
-        assertThat(result.processed()).isEqualTo(100);
+        assertThat(result.processed()).isEqualTo(3);
         assertThat(result.arm()).isEqualTo(ARM);
     }
 
@@ -47,34 +56,39 @@ class ArmCompletionTest {
      */
     @Test
     void anArmWhoseLatchOpenedEarlyIsAFailureNotAResult() {
-        var processed = new AtomicInteger(42);
-        var done = new CountDownLatch(0);
+        var tally = new ArmTally(100);
+        processRecords(tally, "key-0", "key-1");
+        // exactly what a raw-gRPC stream does when its session ends before the arm is finished
+        tally.sessionEnded();
 
-        assertThatThrownBy(() -> ReferenceDemo.awaited(ARM, System.nanoTime(), processed, done, 100))
+        assertThatThrownBy(() -> ReferenceDemo.awaited(ARM, CLIENT, System.nanoTime(), tally))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("ended early at 42 of 100");
+                .hasMessageContaining("ended early at 2 of 100");
     }
 
     /** An arm that never releases its latch is stalled, and says so rather than hanging forever. */
     @Test
     void anArmThatNeverCompletesIsReportedAsStalled() {
-        var processed = new AtomicInteger(7);
-        var neverOpens = new CountDownLatch(1);
+        var neverOpens = new ArmTally(100);
+        var openedEarly = new ArmTally(100);
+        openedEarly.sessionEnded();
 
         // ARM_BUDGET is ten minutes, so this asserts the message shape via the early-exit path
         // rather than by waiting: a latch that opens with too few records is the same verdict a
         // caller sees, and the stall path differs only in which branch produced it.
-        assertThatThrownBy(() -> ReferenceDemo.awaited(ARM, System.nanoTime(), processed,
-                new CountDownLatch(0), 100))
+        assertThatThrownBy(() -> ReferenceDemo.awaited(ARM, CLIENT, System.nanoTime(), openedEarly))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(ARM);
-        assertThat(neverOpens.getCount()).isOne();
+        assertThat(neverOpens.stillRunning())
+                .withFailMessage("a tally nobody has finished must still be running, or the stall "
+                        + "budget never applies to anything")
+                .isTrue();
     }
 
-    /** Throughput is the only figure the demo publishes, so its arithmetic is asserted. */
+    /** Throughput is the only measured figure the demo publishes, so its arithmetic is asserted. */
     @Test
     void throughputIsRecordsOverElapsedTime() {
-        var result = new ArmResult(ARM, Duration.ofSeconds(2), 1_000);
+        var result = new ArmResult(ARM, CLIENT, Duration.ofSeconds(2), 1_000, 500);
 
         assertThat(result.ratePerSecond()).isEqualTo(500.0);
     }
@@ -82,14 +96,74 @@ class ArmCompletionTest {
     /** A zero-length measurement must not divide by zero and must not invent a rate. */
     @Test
     void aZeroLengthMeasurementReportsNoRateRatherThanInfinity() {
-        var result = new ArmResult(ARM, Duration.ZERO, 1_000);
+        var result = new ArmResult(ARM, CLIENT, Duration.ZERO, 1_000, 500);
 
         assertThat(result.ratePerSecond()).isZero();
     }
 
-    private static ArmResult awaitQuietly(AtomicInteger processed, CountDownLatch done, int target) {
+    /** The row a reader sees names the role AND the library, because the role alone is a category. */
+    @Test
+    void anArmIsLabelledWithBothItsRoleAndTheClientThatRanIt() {
+        var result = new ArmResult("AK core", "KafkaConsumer", Duration.ofSeconds(1), 10, 10);
+
+        assertThat(result.label()).isEqualTo("AK core (KafkaConsumer)");
+        assertThat(result.arm())
+                .withFailMessage("the stable name must NOT pick up the client, or every lookup "
+                        + "and expectation keyed on it breaks")
+                .isEqualTo("AK core");
+    }
+
+    /** The point of the column: repeated keys are one key, however many records carried them. */
+    @Test
+    void repeatedKeysAreCountedOnceAndEveryDeliveryIsStillARecord() {
+        var tally = new ArmTally(4);
+        processRecords(tally, "key-0", "key-1", "key-0", "key-1");
+
+        var result = awaitQuietly(tally);
+
+        assertThat(result.processed()).isEqualTo(4);
+        assertThat(result.uniqueKeys())
+                .withFailMessage("counting deliveries rather than distinct keys would make the "
+                        + "column a copy of the records column, and evidence of nothing")
+                .isEqualTo(2);
+    }
+
+    /** Kafka distinguishes a null key from an empty one, and so does the count. */
+    @Test
+    void aKeylessRecordIsStillARecordButIsNotAKey() {
+        var tally = new ArmTally(2);
+        tally.recordProcessed(null);
+        processRecords(tally, "key-0");
+
+        var result = awaitQuietly(tally);
+
+        assertThat(result.processed()).isEqualTo(2);
+        assertThat(result.uniqueKeys()).isEqualTo(1);
+    }
+
+    /**
+     * The keys column is only evidence if its expected value can be predicted, and the seeding is
+     * what predicts it: records are laid over a fixed key space, cyclically.
+     */
+    @Test
+    void theExpectedKeyCountIsTheBacklogOrTheKeySpaceWhicheverIsSmaller() {
+        assertThat(DemoBroker.expectedUniqueKeys(20)).isEqualTo(20);
+        assertThat(DemoBroker.expectedUniqueKeys(DemoBroker.KEY_SPACE)).isEqualTo(DemoBroker.KEY_SPACE);
+        assertThat(DemoBroker.expectedUniqueKeys(DemoBroker.KEY_SPACE * 40))
+                .withFailMessage("a backlog larger than the key space cannot show more keys than "
+                        + "the key space has")
+                .isEqualTo(DemoBroker.KEY_SPACE);
+    }
+
+    private static void processRecords(ArmTally tally, String... keys) {
+        for (String key : keys) {
+            tally.recordProcessed(key.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private static ArmResult awaitQuietly(ArmTally tally) {
         try {
-            return ReferenceDemo.awaited(ARM, System.nanoTime(), processed, done, target);
+            return ReferenceDemo.awaited(ARM, CLIENT, System.nanoTime(), tally);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);

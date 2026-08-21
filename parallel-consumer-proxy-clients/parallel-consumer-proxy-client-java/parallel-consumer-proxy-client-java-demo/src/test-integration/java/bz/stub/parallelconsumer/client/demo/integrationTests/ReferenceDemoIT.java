@@ -35,9 +35,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * Every arm now refuses to produce a result it did not earn: an arm whose latch opens before its
  * target is reached throws rather than reporting a partial count, and the serial arm has a stall
- * budget. So a completed run is already a statement that all five arms processed every record. The
+ * budget. So a completed run is already a statement that every arm processed every record. The
  * assertions below make that explicit rather than leaving it implied, and they are what fails if a
- * future change makes an arm silently do less.
+ * future change makes an arm silently do less - including the two evidence columns the tables now
+ * carry, whose expected values are predictable from the seeded backlog rather than from the run.
  *
  * <h2>Cost</h2>
  *
@@ -102,6 +103,23 @@ class ReferenceDemoIT {
                         assertThat(result.ratePerSecond())
                                 .withFailMessage("%s reported no throughput at all", result.arm())
                                 .isGreaterThan(0d);
+                        // The evidence column, and the reason it is worth printing: it is
+                        // PREDICTABLE. The backlog is laid over a fixed key space, so every arm -
+                        // and every language - must see exactly this many distinct keys. An arm
+                        // that quietly read one partition, or counted deliveries rather than keys,
+                        // fails here and nowhere else.
+                        assertThat(result.uniqueKeys())
+                                .withFailMessage("%s saw %d distinct keys over %d records; the "
+                                                + "seeded backlog has exactly %d",
+                                        result.arm(), result.uniqueKeys(), result.processed(),
+                                        DemoBroker.expectedUniqueKeys(RECORDS))
+                                .isEqualTo(DemoBroker.expectedUniqueKeys(RECORDS));
+                        // "AK core" is a category; the row a reader sees must name the library too,
+                        // or the comparison cannot be judged.
+                        assertThat(result.label())
+                                .withFailMessage("%s did not name the client that ran it", result.arm())
+                                .isEqualTo(result.arm() + " (" + result.client() + ")")
+                                .isNotEqualTo(result.arm());
                     });
         }
     }
