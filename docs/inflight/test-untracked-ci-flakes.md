@@ -129,9 +129,17 @@ only that a count was wrong. This one names the class, the method and the invari
 test built specifically to overlap pulls with returns - so the interleaving is deliberate rather than
 incidental.
 
-**Reproduction: NOT reproduced in isolation - 4 clean runs of the whole class at the time of writing,
-with more still running.** Both sightings are therefore suite-only so far, which points at load or
-interleaving rather than a deterministic path.
+**Reproduction: 0 out of 8 in isolation**, running the whole class, at a one-minute load of 12.8 on
+twelve cores - so this is not the weaker claim that it only passes on an idle machine. Both sightings
+are therefore suite-only, which points at interleaving rather than a deterministic path.
+
+**The condition that produced both, and the next experiment.** The suite runs test methods
+concurrently at `junit.jupiter.execution.parallel.config.dynamic.factor=20` - up to twenty times the
+core count of methods in flight, each with its own PC instances and worker pools. Running this class
+alone reproduces none of that no matter what the machine load is, because load is not the variable;
+concurrent *interleaving inside the JVM* is. So the next experiment is to raise the pressure in that
+dimension specifically - many concurrent copies of this one test in one JVM - rather than to run it
+more times on a busier box, which is what 0/8 above has already ruled out.
 
 **What has NOT been ruled out, and must be before this is called a test bug.** The test's returner
 thread is single, and each `WorkContainer` reaches it once per `toReturn` insertion, so a double
