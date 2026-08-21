@@ -74,6 +74,35 @@ dead-ends" summary hid it, because a verdict without a reason is not prior art.
 **The fix is the reason, not the verdict.** This note exists so the next person reads *"three times
 slower, and poller throttling was the suspect"* rather than *"dead end"*.
 
+## The argument for direct pull that has nothing to do with speed
+
+**Owner's point, 2026-08-21, and it reframes the whole branch:** *even if it is not faster, is it not
+still better to talk directly to the WorkManager than to maintain another buffer?*
+
+**Yes - and it is worth more than the throughput it failed to deliver.** The intermediate buffer is not
+one thing, it is a system that exists only to keep that buffer at the right depth:
+
+- `DynamicLoadFactor`, its warm-up, its cool-down, its step-up, and its cap at 100 - **which has its own
+  open defect**, astubbs#155 *"Max loading factor steps reached: 100/100"*.
+- `checkPipelinePressure()`, `isPoolQueueLow()`, `getQueueTargetLoaded()`, `calculateQuantityToRequest()`.
+- `getNumberOfUserFunctionsQueued()`, which reaches into `ThreadPoolExecutor.getQueue().size()`.
+- The buffer's own memory cost, and the offsets it holds beyond the committable one - which
+  `DynamicLoadFactor`'s javadoc warns "could cause much larger replays than necessary".
+
+**If workers pull straight from the shards, every one of those disappears.** There is no buffer to size,
+so there is no load factor, no pressure check, and no queue depth to read.
+
+**And that last one is the unlock.** The blocker on virtual threads
+([`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md)) is that the
+pressure system reads `getQueue().size()` and `getActiveCount()` off the `ThreadPoolExecutor`, which a
+virtual-thread executor does not expose - the exact problem PR #51's author reported. **Direct pull
+removes the question rather than answering it.**
+
+**So the 2022 branch was not merely a failed optimisation.** It was a simplification that happened to be
+measured only on speed, and judged only on speed. Re-read with that lens, "1/3 as fast" is a reason to
+find out *why it was slow*, not a reason to discard the design - especially now that the thing making
+everything slow has been identified and is not in that code.
+
 ## What it does not settle
 
 - **Whether it would still be 3x slower.** It predates six years of change and its own commits say the
