@@ -98,6 +98,70 @@ workflow's `cpp` row now gates for real.
   `Exit value: 2` in the exec failure message, while Maven's own exit stays 1 - so read the message,
   not just the code, when a CI row goes red.
 
+## The demo (plan unit U35)
+
+`demo/` beside the library: `run.sh`, a `Dockerfile`, a `docker-compose.yml`, `src/` and a
+`tests/`. Two arms, per the contract - `AK core` on librdkafka, and `cpp-grpc` through **this
+module's client library**, which spawns the sidecar itself. No hand-written gRPC anywhere: the Java
+seed did that first and had to be rewritten, because it proved the engine worked and said nothing
+about the client library.
+
+### What the C++ demo does differently, and why
+
+- **Container-only, with no native mode**, which is the one real divergence. `run.sh --native`
+  answers with the reason rather than failing as an unknown flag. It follows from the same fact that
+  makes `bin/build-client.sh` build this language in an image: gRPC, protobuf and librdkafka arrive
+  as system dev packages, so there is no host toolchain to run natively against.
+- **The broker is always supplied from outside.** Java starts one with Testcontainers when
+  `--bootstrap` is absent; C++ has no Testcontainers, and the demo container is never granted the
+  host Docker socket, so a missing address is an error with an explanation rather than a silently
+  different run.
+- **The sidecar is a launcher script the image installs**, at `/app/sidecar/sidecar`, named by
+  `PC_DEMO_SIDECAR`. A foreign client library spawns a binary by absolute path and the sidecar is a
+  JVM program, so something has to bridge that; `exec` in the launcher is load-bearing, because a
+  forking wrapper would hold the lifecycle pipe the proxy watches for parent death.
+  **`PC_DEMO_SIDECAR` is deliberately not an eighth flag** - the contract fixes the list at seven,
+  and where the binary lives is a property of the image.
+- **The demo image is a RUNTIME image built from its own toolchain stage**, the opposite of
+  `../Dockerfile`, which exports statically linked artifacts and runs nothing. Nothing is extracted
+  here, so there is no portability claim to prove and no reason to pay for the static link's absl
+  archive group; the binary is dynamically linked and runs where it was built.
+- **`demo/CMakeLists.txt` is a project of its own**, not a target in the module's. The demo needs
+  librdkafka and the library does not, and adding it to the module's project would put a Kafka
+  client into the image whose whole job is a portability claim about gRPC.
+- **The Maven local repository IS a BuildKit cache mount here**, which the Java demo's Dockerfile
+  says it could not have: that image computes a classpath file pointing into `/root/.m2`, so a cache
+  mount would name jars the running container does not have. This one copies the jars out
+  (`dependency:copy-dependencies`) and uses a wildcard classpath, which has no such coupling.
+  `sharing=locked`, because a Maven local repository is not safe for concurrent writers and ten
+  sibling demos may build at once.
+
+### What was actually run, and what was not
+
+Both entry paths were exercised by hand on this branch: `demo/run.sh` at the volume
+`bin/ci-demo-test.sh` uses for the Java demo (`--records 20 --delay-ms 1 --concurrency 4
+--partitions 2`), once with `--replay-factor 1` and once with `--replay-factor 2` so that the big
+replay's second seed, second table and footnote ran too. Both arms processed every record and the
+run exited 0. The no-argument path was exercised three ways: `run.sh` under **bash 3.2**, which is
+what macOS ships and where the reference demo's empty-array expansion once aborted; the binary with
+no arguments and no broker, which explains itself and exits 2; and `--help`, which the binary
+answers itself because `docker compose run demo --help` reaches it directly.
+
+**No measurement was taken and none should be read into those runs.** At twenty records the figures
+are start-up and rebalance, which is exactly why the CI volume asserts arms rather than numbers. A
+default-scale run is deferred to an unloaded machine - this one was running ten demo waves at once.
+
+### What is NOT wired up
+
+- **Neither entry point is in `bin/ci-demo-test.sh`.** That script and `.github/` were outside this
+  wave's ownership, so the C++ demo is not run on every pull request the way the Java one is. The
+  contract is explicit that "a demo with one tested entry point has an untested entry point", so
+  this is a real gap rather than a deferral of polish. What it would need: a `cpp` row that runs
+  `demo/run.sh --records <small> --replay-factor 1`, and nothing else - there is no native path to
+  test separately, which makes C++ the cheapest language to add there.
+- The demo's own tests cover the option surface only. The arms need a broker, and the image build
+  has none.
+
 ## Not implemented, and therefore not declared
 
 Heartbeats and the liveness lease, the manifest reconnect and `Drop`, `WorkerDied`, terminal
