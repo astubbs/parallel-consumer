@@ -201,15 +201,23 @@ Kotlin/Scala compile execution, and one `build-classpath` execution.
   engine artifacts, exactly as in the harness lane - but worth knowing before wondering why the
   file changes size under `-Dpc.kotlinDemo`.
 
-### The one divergence from the shared contract, and why
+### The divergence that stopped being one
 
-**The simulated work is `delay`, not `Thread.sleep`.** The contract's rule is "the simulated work
-must use that language's non-occupying wait", and its list then says a blocking sleep is fine in
-Kotlin. The list is written for a thread-per-record client; this one runs each record as a coroutine
-on `Dispatchers.IO`, whose default parallelism is 64. A blocking sleep there caps in-flight records
-at 64 however high `--concurrency` is set, while the fingerprint keeps printing the number the
-reader asked for - a throughput figure reported against settings that did not apply, which is the
-exact failure the fingerprint exists to prevent.
+**The simulated work is `delay`, not `Thread.sleep`** - and as of the contract's reader-experience
+rewrite this is what the contract *asks for* rather than an exception to it. The rule used to name
+nine languages where a blocking sleep was fine, Kotlin among them, and this demo took the rule over
+the list. The contract has since replaced the list with a predicate - **is the client
+thread-per-record?** - and names Kotlin's bounded coroutine dispatcher as one of the six execution
+models that fail it. **The prediction recorded here held**: this note said the language list was
+probably a contract defect rather than a Kotlin exception, and that any coroutine-, fiber- or
+async-native client was in the same position; the rewrite found four of the nine safe-listed
+languages were not safe, and Swift and C# - both named as suspects here - are two of them.
+
+The reasoning, kept because it is the evidence rather than the ruling: this client runs each record
+as a coroutine on `Dispatchers.IO`, whose default parallelism is 64. A blocking sleep there caps
+in-flight records at 64 however high `--concurrency` is set, while the fingerprint keeps printing
+the number the reader asked for - a throughput figure reported against settings that did not apply,
+which is the exact failure the fingerprint exists to prevent.
 
 Measured, on a heavily loaded machine (load average 23 on 12 cores, ten agents): at
 `--records 4000 --delay-ms 50 --concurrency 200 --replay-factor 1` the sidecar arm finished in
@@ -219,13 +227,58 @@ controlled experiment, and the control arm was not run; contention can only push
 figure *down*, never above the thread ceiling, so the direction survives the load even though the
 absolute rate does not.
 
-**This may be a defect in the shared contract rather than a Kotlin exception.** The contract names
-only Python and TypeScript as languages where a blocking sleep is not the non-occupying wait; the
-real predicate is not the language but whether the client's execution model is thread-per-record.
-Any coroutine-, fiber- or async-native client - Kotlin here, and plausibly Swift's structured
-concurrency and C#'s `async` - is in the same position. Recorded here rather than edited into
-`parallel-consumer-proxy/demo/README.md`, which is the fan-out's shared contract file and not this
-wave's to change.
+This was recorded here rather than edited into `parallel-consumer-proxy/demo/README.md`, because
+that is the fan-out's shared contract file and was not this wave's to change. It was changed by the
+contract's own owner afterwards, which is the arrangement working as intended.
+
+### The reader-experience rules, applied - and the one thing they break that this module cannot fix
+
+The contract's "The output a reader actually sees" section was rewritten after someone watched a
+demo and found it unimpressive. Three of its clauses landed in `KotlinDemo.kt`:
+
+- **The banner is the first thing the demo prints**, ahead of the broker line, the effective
+  configuration and every log line. It is printed by the *program*, not by `run.sh`, and that is
+  the load-bearing choice: on the `--docker` path `run.sh` execs `docker compose` and prints nothing
+  further, so a banner in the script would be absent from exactly the entry point
+  `bin/ci-demo-conformance.sh` exercises. The cost is that in native mode `run.sh`'s
+  `Mode: native - ...` line still precedes it. Judged the lesser evil - the alternative is either a
+  banner printed twice natively, or no banner at all in a container - but it does mean the literal
+  first line of a native run is still not the product's name.
+- **Both arms name their client.** `AK core (KafkaConsumer)` and `kotlin-sidecar (this client)`.
+  Kotlin is the awkward case the contract's own examples do not cover: `franz-go` and `rdkafka` are
+  the language's own clients, and Kotlin has none - **there is no Kotlin-native implementation of
+  the Kafka protocol**, only wrappers over the same `kafka-clients` jar. So the label names Apache
+  Kafka's `KafkaConsumer` rather than inventing a Kotlin-sounding name for a client that is not
+  Kotlin's, and `demo/README.md` answers the contract's "is there a second serious client?" question
+  with why a third arm would compare two wrappers over one client.
+- **`records` and `keys` are now columns.** Both are deterministic here for a reason worth writing
+  down: the backlog seeded for a replay is *exactly* the arm's target, so no arm can overshoot, and
+  `records` therefore equals the target rather than approximately equalling it. `keys` is
+  `min(records, 1000)` - `DemoBroker.KEY_SPACE` is 1000 and the seeder writes `key-{i % KEY_SPACE}`
+  - so any language that seeds the same way reports the same figure. **A language whose key space
+  differs will report a different `keys` and look like drift**; that is a seeding question, not an
+  output question, and it is the one new column that can disagree for a legitimate reason.
+
+**Column order chosen: `arm | records | keys | elapsed | msg/s | vs AK core`.** The contract fixes
+the columns' identity but not where the two new ones go. Records and keys sit beside the arm because
+they are what it *did*, ahead of how fast it did it, and because the ratio column carries a footnote
+marker and reads worst mid-table. The three pre-existing columns keep their relative order. **If the
+other ten languages appended instead, this is the line that will differ** - and the fix is one
+`String.format` here, not a redesign.
+
+**`bin/ci-demo-conformance.sh` cannot parse this output any more, and that is `bin/**` to fix, not
+this module.** Two of its `awk` rules stop matching, independently:
+
+- the `HEADER` rule matches `arm[[:space:]]+elapsed`, and the header now reads
+  `arm   records   keys   elapsed`;
+- the `ROW` rule's arm-name class is `[A-Za-z][A-Za-z0-9 _-]*`, which excludes the parentheses every
+  language's arm label now carries, and its `normalise_arms` sed matches `^ROW [a-z0-9]+-sidecar$`,
+  which `kotlin-sidecar (this client)` no longer is.
+
+Both break for **every** language simultaneously, so the script fails closed - "produced no
+recognisable fingerprint or table" - rather than silently passing a demo it can no longer read. That
+is the right failure, but it means the script must be updated in the same change that lands these
+labels, or the conformance gate reports nothing at all.
 
 ### What was actually run, and under what load
 
@@ -248,6 +301,23 @@ re-measured on an idle machine before it is quoted anywhere.**
   reporting numbers for settings nobody asked for; and `PC_DEMO_RECORDS=7 PC_DEMO_DELAY_MS=9
   --records 11` printed `records = 11, delayMs = 9`, which is the contract's precedence - flags beat
   the environment beats the defaults - and no bootstrap address anywhere in the fingerprint.
+
+**After the reader-experience rewrite**, on a box under **load average 43-80 across 12 cores** with
+ten other language agents on it. Shape only - **no throughput figure from this run is worth
+quoting**, and none is recorded here for that reason.
+
+- Native, `--records 20 --concurrency 4 --partitions 2 --replay-factor 2`: exit 0. The banner is the
+  first thing the JVM prints; both arms reported `20 records / 20 keys`, the big replay `40 / 40`.
+- Container, the same flags via `--docker`: exit 0, `demo-1 exited with code 0`. The banner is the
+  **first line of the demo container's own stream** - which is the property that matters, because
+  compose interleaves the broker's log with it and the conformance script reads `demo-1` lines only.
+  Same figures: `20 / 20`, `20 / 20`, `40 / 40`.
+- An unknown flag still exits **2**, with the banner, the message and the usage text - re-checked
+  because the banner now prints before argument parsing.
+- **One aborted container attempt is worth knowing about**: the in-container Maven compile took
+  **500s** under this load and a 10-minute cap killed it mid image-import. It is a machine-load
+  observation, not a demo defect - the same command completed on the next attempt - but anything
+  timing this entry point in CI should budget for a cold image build, not a warm one.
 
 ### A sighting that is not the Kotlin client's, recorded here only because of file ownership
 

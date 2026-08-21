@@ -22,6 +22,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.Locale
 import java.util.Properties
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.minutes
@@ -30,16 +31,52 @@ import kotlin.time.Duration.Companion.seconds
 /** No arm may take longer than this before the demo calls it stalled rather than slow. */
 private val ARM_BUDGET = 10.minutes
 
-private const val AK_CORE = "AK core"
+/**
+ * The serial arm's label: the role, and the client that actually produced the number.
+ *
+ * "AK core" alone is a CATEGORY, and the shared contract forbids leaving it at that - a reader
+ * cannot judge a comparison without knowing what ran it, and the answer differs in every language
+ * (`franz-go` in Go, `rdkafka` in Ruby). Kotlin has no Kafka client of its own: this arm is Apache
+ * Kafka's own `KafkaConsumer`, driven from Kotlin, which is why the label names it rather than
+ * inventing a Kotlin-sounding one. `demo/README.md` carries the "is there a second serious client?"
+ * answer the contract also asks for.
+ */
+private const val AK_CORE = "AK core (KafkaConsumer)"
 
-private const val KOTLIN_SIDECAR = "kotlin-sidecar"
+/** The sidecar arm's label: the role, and what drives it - this module's own client library. */
+private const val KOTLIN_SIDECAR = "kotlin-sidecar (this client)"
 
 /** The real sidecar's entry point, launched as an ordinary child process by the client library. */
 private const val SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
 
-/** What one arm achieved: how long it took, and over how many records. */
-internal class ArmResult(val arm: String, val elapsed: Duration, val processed: Int) {
-    /** Throughput, which is the only figure this demo reports. */
+/** Stands in for a keyless record, so one still counts as a distinct key rather than vanishing. */
+private const val NO_KEY = "<no key>"
+
+/**
+ * The banner every language prints, differing only in its own name.
+ *
+ * Contract, not decoration: the demo's job is to be watched, and a first line reading
+ * `kotlin-sidecar: the proxy granted 100 executor threads` tells a reader nothing about what they
+ * are looking at. The product is named before anything else, including the effective configuration.
+ */
+private val BANNER = """
+    ================================================================
+      PARALLEL CONSUMER  -  Kotlin demo
+      The same records, twice: one at a time, then all at once.
+    ================================================================
+""".trimIndent()
+
+/**
+ * What one arm achieved.
+ *
+ * [processed] and [keys] are the contract's two DETERMINISTIC figures: every language running the
+ * same records reports the same pair, which is what lets `bin/ci-demo-conformance.sh` compare
+ * languages at all - elapsed and msg/s never can be. [processed] must equal the target, because a
+ * short arm is a failed arm rather than a fast one; [keys] shows the backlog was really spread
+ * across keys rather than one key repeated.
+ */
+internal class ArmResult(val arm: String, val elapsed: Duration, val processed: Int, val keys: Int) {
+    /** Throughput, which is the only rate figure this demo reports. */
     val ratePerSecond: Double
         get() = elapsed.toNanos().let { if (it > 0) processed * NANOS_PER_SECOND / it else 0.0 }
 
@@ -47,6 +84,9 @@ internal class ArmResult(val arm: String, val elapsed: Duration, val processed: 
         const val NANOS_PER_SECOND = 1_000_000_000.0
     }
 }
+
+/** The key as counted: the bytes Kafka held, or the keyless sentinel. This demo never deserializes. */
+private fun keyOf(key: ByteArray?): String = key?.toString(Charsets.UTF_8) ?: NO_KEY
 
 /**
  * The demo's own output, on stdout and unconditional.
@@ -62,6 +102,8 @@ internal object Console {
 }
 
 public fun main(args: Array<String>) {
+    // FIRST, before the mode, the broker, the configuration or a single log line: what is this?
+    Console.say(BANNER)
     if (DemoOptions.isHelpRequested(args)) {
         usage()
         return
@@ -109,9 +151,11 @@ private fun usage() {
  *
  * ## Two arms, and only two
  *
- * - **AK core** - a plain `KafkaConsumer` driven from Kotlin, one record at a time. Always spelled
- *   "AK core", never bare "core", which reads as `parallel-consumer-core` (`CONCEPTS.md`).
- * - **kotlin-sidecar** - this module's own `ParallelConsumerClient`: it spawns the sidecar as a
+ * - **AK core (KafkaConsumer)** - Apache Kafka's own `KafkaConsumer` driven from Kotlin, one record
+ *   at a time. Always spelled "AK core", never bare "core", which reads as `parallel-consumer-core`
+ *   (`CONCEPTS.md`) - and never "AK core" alone in the table, because that is a category rather than
+ *   a client and a reader cannot judge a comparison without knowing what ran it.
+ * - **kotlin-sidecar (this client)** - this module's own `ParallelConsumerClient`: it spawns the sidecar as a
  *   child process, receives records over a socket, runs a suspending function on them and reports
  *   outcomes back. **On this path the application does no Kafka I/O** - the sidecar owns the
  *   consumer, the producer, the group membership and the offsets. That is a claim about the *path*,
@@ -191,6 +235,9 @@ internal class KotlinDemo(
         }
 
         var processed = 0
+        // A plain HashSet: this arm is single-threaded by definition, and the sidecar arm - which
+        // is not - uses a concurrent one.
+        val keys = HashSet<String>()
         KafkaConsumer<ByteArray, ByteArray>(config).use { consumer ->
             consumer.subscribe(listOf(topic))
             // The clock starts AFTER the consumer is built and stops before it closes, because this
@@ -202,12 +249,13 @@ internal class KotlinDemo(
                 // The arm that waits on no latch still needs the budget, or a backlog shorter than
                 // the target spins here forever with no output.
                 check(System.nanoTime() <= deadline) { "$AK_CORE stalled at $processed of $target" }
-                for (ignored in consumer.poll(Duration.ofMillis(POLL_MILLIS))) {
+                for (record in consumer.poll(Duration.ofMillis(POLL_MILLIS))) {
                     Thread.sleep(options.delayMs.toLong())
+                    keys.add(keyOf(record.key()))
                     processed++
                 }
             }
-            return finished(AK_CORE, startedAt, processed)
+            return finished(AK_CORE, startedAt, processed, keys.size)
         }
     }
 
@@ -222,6 +270,9 @@ internal class KotlinDemo(
     private suspend fun kotlinSidecar(target: Int): ArmResult {
         Console.say("\n=== $KOTLIN_SIDECAR starting over $target records ===")
         val processed = AtomicInteger()
+        // Concurrent, because this arm runs maxConcurrency records at once; a HashSet here would
+        // silently lose keys and under-report the very figure that proves the backlog was spread.
+        val keys = ConcurrentHashMap.newKeySet<String>()
         val done = CompletableDeferred<Unit>()
 
         val client = ParallelConsumerClient.open(
@@ -238,12 +289,13 @@ internal class KotlinDemo(
             val startedAt = System.nanoTime()
             coroutineScope {
                 val poller = launch(Dispatchers.IO) {
-                    client.poll { _ ->
+                    client.poll { record ->
                         // The simulated work: a NON-OCCUPYING wait, because this arm runs
                         // maxConcurrency records at once and a blocking sleep would cap it at the
                         // dispatcher's thread count while the fingerprint still printed the number
                         // the reader asked for. demo/README.md carries the measurement.
                         delay(options.delayMs.toLong())
+                        keys.add(keyOf(record.key))
                         if (processed.incrementAndGet() >= target) {
                             done.complete(Unit)
                         }
@@ -252,7 +304,7 @@ internal class KotlinDemo(
                 }
                 withTimeoutOrNull(ARM_BUDGET) { done.await() }
                     ?: error("$KOTLIN_SIDECAR stalled at ${processed.get()} of $target")
-                val result = finished(KOTLIN_SIDECAR, startedAt, processed.get())
+                val result = finished(KOTLIN_SIDECAR, startedAt, processed.get(), keys.size)
                 // The clock has already stopped, so the teardown - drain, close, reap the child -
                 // is charged to no arm. `use` closes again afterwards; close is idempotent.
                 client.close()
@@ -275,10 +327,10 @@ internal class KotlinDemo(
         return SidecarCommand(java, listOf("-cp", System.getProperty("java.class.path"), SIDECAR_MAIN))
     }
 
-    private fun finished(arm: String, startedAt: Long, processed: Int): ArmResult {
+    private fun finished(arm: String, startedAt: Long, processed: Int, keys: Int): ArmResult {
         val elapsed = Duration.ofNanos(System.nanoTime() - startedAt)
-        Console.say("=== $arm finished: $processed records in ${elapsed.toMillis()}ms ===")
-        return ArmResult(arm, elapsed, processed)
+        Console.say("=== $arm finished: $processed records over $keys keys in ${elapsed.toMillis()}ms ===")
+        return ArmResult(arm, elapsed, processed, keys)
     }
 
     /** A fresh group per arm per replay, so every arm reads the same records from the beginning. */
@@ -293,11 +345,21 @@ internal class KotlinDemo(
 
 private fun baselineOf(results: List<ArmResult>): ArmResult? = results.firstOrNull { it.arm == AK_CORE }
 
+/**
+ * The results table.
+ *
+ * `records` and `keys` sit beside the arm - what it DID - before the figures that say how fast it
+ * did it. They are there because throughput alone cannot show the work happened: a short arm is a
+ * failed arm rather than a fast one, and a single key repeated is not a spread backlog. They are
+ * also the only two figures in this table that another language can be held to, which is what
+ * `bin/ci-demo-conformance.sh` compares.
+ */
 private fun report(title: String, results: List<ArmResult>, baseline: ArmResult?, acrossReplays: Boolean) {
     val table = StringBuilder("\n\n").append(title).append('\n')
     table.append(
         String.format(
-            Locale.ROOT, "  %-14s %10s %14s %14s%n", "arm", "elapsed", "msg/s",
+            Locale.ROOT, "  %-30s %9s %8s %10s %14s %14s%n",
+            "arm", "records", "keys", "elapsed", "msg/s",
             if (acrossReplays) "vs AK core*" else "vs AK core",
         )
     )
@@ -309,8 +371,11 @@ private fun report(title: String, results: List<ArmResult>, baseline: ArmResult?
         }
         table.append(
             String.format(
-                Locale.ROOT, "  %-14s %9.1fs %14s %14s%n",
-                result.arm, result.elapsed.toMillis() / 1000.0,
+                Locale.ROOT, "  %-30s %9s %8s %9.1fs %14s %14s%n",
+                result.arm,
+                String.format(Locale.ROOT, "%,d", result.processed),
+                String.format(Locale.ROOT, "%,d", result.keys),
+                result.elapsed.toMillis() / 1000.0,
                 String.format(Locale.ROOT, "%,d", result.ratePerSecond.toInt()), ratio,
             )
         )

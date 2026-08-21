@@ -9,8 +9,9 @@ docker compose up
 ```
 
 Needs Docker. A JDK is optional: with one, the demo runs natively and starts its broker in a
-container; without one, the demo runs in a container too and the broker is a compose sibling. It
-announces which it chose, and why, on its first line.
+container; without one, the demo runs in a container too and the broker is a compose sibling.
+`run.sh` announces which it chose, and why, before it starts anything; the demo itself then opens
+with the shared banner naming the product, ahead of its effective configuration and every log line.
 
 **The contract this keeps - and that every other language's demo keeps - is
 [`parallel-consumer-proxy/demo/README.md`](../../../parallel-consumer-proxy/demo/README.md).** Read
@@ -18,10 +19,26 @@ that first. This file records only what is specific to Kotlin.
 
 ## The two arms
 
-| arm | what it is |
+| arm, as the table labels it | what it is |
 |---|---|
-| **AK core** | a plain `KafkaConsumer` driven from Kotlin, one record at a time |
-| **kotlin-sidecar** | this module's `ParallelConsumerClient`: it spawns the sidecar as a child process, receives records over a socket, runs a **suspending** function on them and reports outcomes back |
+| **`AK core (KafkaConsumer)`** | Apache Kafka's own `KafkaConsumer`, driven from Kotlin, one record at a time |
+| **`kotlin-sidecar (this client)`** | this module's `ParallelConsumerClient`: it spawns the sidecar as a child process, receives records over a socket, runs a **suspending** function on them and reports outcomes back |
+
+The labels carry the client and not only the role, because "AK core" is a *category*: it is
+`franz-go` in Go and `rdkafka` in Ruby, and a reader cannot judge a comparison without knowing which
+one produced it.
+
+**Kotlin has no second serious Kafka client to run as a third arm.** There is no Kotlin-native
+implementation of the Kafka protocol: the Kotlin-facing libraries are wrappers over this same
+`kafka-clients` jar, so a second serial arm would be two wrappers over one client rather than two
+clients - which is why this arm names the underlying client instead of inventing a Kotlin-sounding
+label for it.
+
+Both arms report `records` and `keys` beside their timings, and both figures are **deterministic**:
+the backlog seeded for a replay is exactly the arm's target, so `records` equals it rather than
+approximately equalling it, and the seeder writes `key-{i % 1000}`, so `keys` is
+`min(records, 1000)`. They are what a reader - and `bin/ci-demo-conformance.sh` - can hold two
+languages to; elapsed and msg/s never can be.
 
 Two arms is the whole contract everywhere except Java. Java can hold the engine, the client library
 in process and the raw wire in one JVM, so each of its extra pairs changes exactly one term; Kotlin
@@ -36,12 +53,13 @@ application calls it.
 
 ## What is specific to Kotlin
 
-### The simulated work is `delay`, not `Thread.sleep` - and that is a divergence, stated
+### The simulated work is `delay`, not `Thread.sleep`
 
-The shared contract says the simulated work "must use that language's non-occupying wait", and then
-lists Kotlin among the languages where "a blocking sleep is fine". **This demo takes the rule and
-not the list**, because the list is written for a thread-per-record client and this client is not
-one.
+**No longer a divergence.** The shared contract used to name nine languages where a blocking sleep
+was fine, Kotlin among them, and this demo took the rule over the list. The contract has since
+replaced the list with the predicate - *is the client thread-per-record?* - and by that predicate
+this client is not, so `delay` is now what the contract asks for rather than an exception to it.
+The measurement below is what settled it, and is kept because it is the evidence.
 
 The user's function here is `suspend (InboundRecord) -> Outcome`, and each record runs as a
 coroutine on `Dispatchers.IO`. `Dispatchers.IO` has a default parallelism of 64. So a blocking sleep
