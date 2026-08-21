@@ -34,6 +34,37 @@ the direct-pull engine those changes exist for was **off** in this run.
 **So it is the load-tightness shape again, not a new defect - but astubbs#260's claim that the
 assertion was simply wrong now has a counter-example, and the next sighting is a third.**
 
+### A test that passes on JDK 17 and fails on JDK 21 under load, 2026-08-22
+
+**`OrderingModeDispatchParityTest.keyAndUnorderedCostTheSameToDispatch`** - recorded because the
+virtual-threads work adds a lane that runs the unit suite on a **JDK 21 test JVM**, and this is the
+one test whose verdict changes with that JVM. It asserts the UNORDERED and KEY shard shapes cost the
+same to walk, with a ratio bound.
+
+**Controlled, because the obvious attribution is the wrong one.** Virtual threads were the suspect and
+are ruled out:
+
+| Run | Load (1m) | Result |
+|---|---:|---|
+| JDK 17, full suite | ~12 | pass |
+| JDK 21, full suite, **mode off** | ~18 | **fail, ratio 4.95** |
+| JDK 21, full suite, mode on | ~22 | **fail, ratio 4.21** |
+| JDK 21, full suite, mode on | ~14 | pass |
+| JDK 21, full suite, mode on | ~67 | **fail, ratio 7.68** |
+| JDK 21, **isolated**, mode on | ~30 | pass, 3/3 |
+
+**The control arm fails too, with a worse ratio than the treatment** - so this is JDK 21 plus
+concurrent suite load, not the execution mode. It also passes in isolation on JDK 21 every time, so it
+is not a JDK 21 regression in the dispatch scan either. What changes is the surrounding parallelism:
+the ratio compares two timed walks, and the shorter one (KEY, 41-55ms) is short enough that scheduler
+noise moves the ratio more than the code does.
+
+**Not quarantined**, because quarantine is master-state and this is only reachable on a lane that does
+not exist on master yet. **It is why the virtual-thread CI entry is advisory.** If the lane is ever
+made a required check, this has to be settled first - and the settlement is probably to compare work
+done rather than wall-clock, since a timing ratio between a 44ms and a 338ms measurement is not a
+property of the dispatch scan on a shared machine.
+
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
