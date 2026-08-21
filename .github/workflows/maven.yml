@@ -133,6 +133,37 @@ jobs:
 
   # Default Kafka version: split suites for fast, parallel feedback.
   # Uses the same scripts as local development (ci-unit-test.sh, etc.)
+  #
+  # EXECUTION-MODE AXIS. The last entry is not a fourth suite - it is the FIRST suite again, run with a
+  # different execution mode selected. Parallel Consumer has opt-in execution paths that are meant to be
+  # BEHAVIOURALLY EQUIVALENT to the default engine, and what needs asserting is not that each one works
+  # but that each one AGREES with the default, on ordering, commits, retries, rebalance and shutdown.
+  # That is the suite we already have, run again with a different selector - so it is a matrix axis over
+  # one suite, not a suite per path. See docs/inflight/test-opt-in-engine-paths-are-unexercised.md.
+  #
+  # ADDING THE NEXT MODE IS A MATRIX ENTRY, not another job. Direct pull is the next one:
+  #     - suite: unit
+  #       name: "Unit Tests (direct pull)"
+  #       cmd: "bin/ci-unit-test.sh -Dpc.directPull=true"
+  #       mode: direct-pull
+  #       java: '17'
+  #       timeout: 20
+  # It needs a row in bin/check-execution-mode.sh's mode_marker()/mode_selector() too, and it is
+  # deliberately NOT added here - that is separate work.
+  #
+  # WHY THE VIRTUAL-THREAD ENTRY BUILDS ON 17 AND TESTS ON 21. Virtual threads are a RUNTIME capability
+  # and PC reaches them reflectively, so nothing has to compile against JDK 21 - and nothing can: Jabel
+  # 1.0.0, which is what lets this project emit Java 8 bytecode from Java 17 source, does not run on JDK
+  # 21 at all (it rewrites javac internals with a Byte Buddy that predates it, and strips
+  # Source$Feature.LAMBDA in the attempt). Surefire's fork is a separate JVM, and the pom already
+  # parameterises it as ${jvm.location}, so the lane tests the SHIPPED Java 8 bytecode on a JDK 21
+  # runtime - which is exactly what a user with this option enabled does.
+  #
+  # THE JOB IS ADVISORY AND ITS NAME IS NEW. Required status checks are matched BY NAME in the master
+  # ruleset, and a required context that no run has ever produced blocks every PR whose base predates it
+  # - so making this one required is a separate, deliberate act, after it has run on master. Note also
+  # that a JDK axis existed here once (JDK 8 and 13) and was removed for cost; re-adding one re-opens
+  # that decision (astubbs#128), and this entry is scoped to the unit suite only to keep it cheap.
   test:
     if: github.event_name == 'pull_request'
     needs: prepare-deps
@@ -156,15 +187,30 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # First non-default entry on the execution-mode axis - see the header comment above.
+          - suite: unit
+            name: "Unit Tests (virtual threads)"
+            cmd: "bin/ci-unit-test.sh -Dpc.virtualThreads=true -Djvm.location=$JAVA_HOME_21_X64"
+            mode: virtual-threads
+            advisory: true
+            timeout: 20
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
+    # Advisory entries never gate merge - see the execution-mode note in this job's header comment.
+    continue-on-error: ${{ matrix.advisory == true }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
+      # 17 is LAST so it wins JAVA_HOME and stays the BUILD JDK for every entry. setup-java also
+      # exports JAVA_HOME_21_X64, which is how the virtual-thread entry points surefire's fork at a
+      # JDK 21 runtime without moving the compiler - Jabel cannot run on 21. Listing 21 is a no-op
+      # for every other entry.
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: |
+            21
+            17
       - name: Restore Maven cache
         uses: actions/cache/restore@v4
         with:
@@ -174,12 +220,28 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: ${{ matrix.name }}
         run: ${{ matrix.cmd }}
+      # A suite that SKIPPED the mode it was asked for and reported green is the failure this axis
+      # exists to prevent, and it is the shape this repo has already shipped once. The guard reads the
+      # surefire XML - structural evidence, not a log string - and refuses a green verdict when the
+      # mode-proving tests did not execute. always(), so it still speaks when the suite went red.
+      - name: "Was the execution mode actually exercised?"
+        if: always() && matrix.mode != ''
+        # pipefail is NOT the default for a run: step (GitHub uses "bash -e {0}"), so a bare
+        # "guard | tee" would report tee's status and the step would be green however the guard
+        # exited - this step silently doing the exact thing it was written to catch. Explicit shell,
+        # explicit pipefail.
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash bin/check-execution-mode.sh "${{ matrix.mode }}" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
           files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
-          flags: ${{ matrix.suite }}
+          # Distinct per matrix entry, not per suite: two entries now share the "unit" suite, and one
+          # flag for both would average the default engine's coverage with the virtual-thread run's.
+          flags: ${{ matrix.mode && format('{0}-{1}', matrix.suite, matrix.mode) || matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
