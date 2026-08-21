@@ -74,7 +74,18 @@ property of the dispatch scan on a shared machine.
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 | `simpleBatchTest` in **both** `ReactorBatchTest` and `MutinyBatchTest` | 2 seen (2026-08-18, 2026-08-19) | Not from the original scan - both found while babysitting a **docs-only** branch (astubbs#308 head `d930ca98d`; astubbs#320 head `70a247184`). Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda - see below, the second sighting is what makes it worth diagnosing. UNDIAGNOSED - classify (contention vs product) before touching |
 
-### An EXTRA delivery under the direct-pull engine, 2026-08-22 - recorded as unexplained, not as a flake
+### An EXTRA delivery under the direct-pull engine, 2026-08-22 - DIAGNOSED, and neither sighting was a flake
+
+> **Both sightings below are now explained, reproduced, and owned by
+> [`bug-direct-pull-claim-is-check-then-act.md`](bug-direct-pull-claim-is-check-then-act.md).**
+> The claim in `ProcessingShard#getWorkIfAvailable` is check-then-act: `isAvailableToTakeAsWork()`
+> reads three terms and `onQueueingForExecution()`'s compare-and-set re-validates only the in-flight
+> one, which `onSuccessResult` resets - via `endFlight()` - *before* it removes the offset. A puller
+> whose availability check predates the record's completion therefore wins the CAS on an
+> already-completed record, and the claim clears the success verdict that would have refused it.
+> **It is a product bug, not a harness bug, and only the direct-pull engine can reach it.**
+> Reproduced at 4 occurrences in 14,400,000 record completions; the text below is kept as the
+> sighting record, and the one part of it that turned out to be wrong is marked at the end.
 
 **`ParallelEoSStreamProcessorPauseResumeTest.pausingAndResumingProcessingShouldWork(PERIODIC_CONSUMER_ASYNC)`**
 failed once in a full core unit run with `-Dpc.directPull=true`, on the branch that adds the
@@ -148,6 +159,15 @@ claim CAS is supposed to prevent and which `takenCount` would also have caught -
 completed once through the returner and once through some other path. **(b) is the unexamined one**,
 and it is the same gap the earlier entry names: the redelivery paths (retry, abandonment, the stale
 sweep) were never covered.
+
+> **This paragraph is the part that was wrong, and it is left standing because the mistake is worth
+> keeping.** The answer is (a), and (a) was dismissed here on the grounds that "the claim CAS is
+> supposed to prevent" it. The CAS prevents two *simultaneous* claims; it does not prevent a claim
+> whose availability decision was taken before the record completed, because it re-validates only the
+> one term completion resets. Ruling a branch out by what a guard is *supposed* to do, rather than by
+> which terms it actually re-reads, sent the investigation to (b) - where there was nothing.
+> `takenCount` would not have caught it either: the assert fires on the returner thread and aborts the
+> run before that assertion is ever reached.
 
 **The guard that now exists**, so a recurrence is a diagnosis rather than another sighting:
 `DirectPullEngineParityTest.pausingStopsDeliveryAndResumingDeliversTheRestExactlyOnce` runs the same
