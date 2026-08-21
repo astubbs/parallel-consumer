@@ -1,0 +1,22 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+# frozen_string_literal: true
+
+# The demo's bundle, which is the client library's bundle plus a Kafka client.
+#
+# THE CLIENT'S OWN PINS ARE INHERITED RATHER THAN REPEATED. The demo loads the library from
+# ../lib, so it must run it against the `grpc` and `google-protobuf` versions it was built and
+# tested against - and a second copy of those pins is a pin that drifts in one of the two places
+# without anything noticing. `eval_gemfile` reads the module's Gemfile, groups and all;
+# .bundle/config beside this file drops the development and test group, so a demo run installs
+# rubocop, rspec and the protoc toolchain not at all.
+eval_gemfile "../Gemfile"
+
+# RUBY'S OWN KAFKA CLIENT, for the AK core arm - librdkafka behind an FFI binding, which is what a
+# Ruby application actually consumes Kafka with today (it is what Karafka is built on). The
+# alternative, the pure-Ruby `ruby-kafka`, was rejected on a fact rather than a preference: it has
+# been archived by its authors since 2023, and a comparison whose serial arm is an unmaintained
+# gem would flatter the sidecar for a reason that has nothing to do with Parallel Consumer.
+#
+# It ships precompiled for Linux, so the demo container builds it without a C toolchain; on other
+# platforms `bundle install` builds librdkafka from source and needs one. demo/README.md says so.
+gem "rdkafka", "0.29.0"

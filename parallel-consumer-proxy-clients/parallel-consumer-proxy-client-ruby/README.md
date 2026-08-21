@@ -15,9 +15,20 @@ your block on executor threads, and reports each record's outcome.
 
 **Wave one.** Connect, configure, receive dispatch waves, run the block, report per-record
 outcomes, produce records back on success, shut down cleanly. Leases, heartbeats, the manifest
-reconnect, worker-death reporting, terminal outcomes, the demo and RubyGems packaging are all
-absent - **un-negotiated capabilities rather than half-built features**, since the client declares
+reconnect, worker-death reporting, terminal outcomes and RubyGems packaging are all absent -
+**un-negotiated capabilities rather than half-built features**, since the client declares
 `["dispatch"]` and nothing else. The module's testing-evidence record names them.
+
+## Seeing it work
+
+```bash
+demo/run.sh          # needs Docker; Ruby and a JDK are optional
+```
+
+The same records through Ruby's own Kafka client and through this library over a sidecar, with the
+throughput of each. [`demo/README.md`](demo/README.md) is its own documentation; the contract it
+keeps, which every language's demo keeps, is
+[`parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md).
 
 ## Using it
 
