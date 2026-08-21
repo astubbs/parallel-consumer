@@ -130,7 +130,20 @@ Throughput alone cannot show the work happened. Each arm also reports **records 
 
 These two are **deterministic** - every language processing the same records reports the same
 figures - which is what makes them comparable across languages when elapsed and msg/s never can be.
-`bin/ci-demo-conformance.sh` relies on exactly that.
+`bin/ci-demo-conformance.sh` compares their **values** across languages for that reason, rather than
+masking them the way it masks a rate.
+
+**The column order is fixed, and it is:**
+
+```
+arm | records | keys | elapsed | msg/s | vs AK core
+```
+
+Evidence before rate: what the arm *did* comes before how fast it did it. This is written down
+because it was once left unstated, and four languages independently chose this order anyway - which
+settled it, but only by luck. Column *widths* are still not contract: a longer arm name may widen a
+column, and a check that enforced alignment would put every language with a long client name in
+permanent violation.
 
 ## The contract a per-language demo must keep
 

@@ -127,3 +127,47 @@ U35's second half - the *reading* demo (three modes, TTY prompt, serde marker, s
 the reconciliation it needs: **KTD40 in the plan still describes every demo as having three modes**,
 while the seed has none and says why. Plan and seed disagree on paper until someone amends KTD40 or
 records that it governs the reading demo only. That reconciliation, not the code, is the open item.
+
+
+## What is next, in order (2026-08-21)
+
+1. **The conformance harness must land with the polish wave, not after it.** The arm labels now carry
+   the client name in parentheses and the table gained two columns; both break the old parser. Two
+   language agents ran `skeleton()` over their own output and **measured** the dangerous outcome: the
+   fingerprint still parsed, so the skeleton was non-empty, the skip never fired, the absolute
+   assertions passed, and the drift check silently narrowed to comparing two headings. **A green run
+   would have meant the tables were not checked at all.** Fixed on `feats/polyglot-demos` - the parser
+   now tolerates parenthesised labels, compares the deterministic `records`/`keys` **values** instead
+   of masking them, and a demo whose table cannot be parsed **fails** rather than skipping.
+2. **Merge the eleven `polish/*` branches**, normalise any column order that differs from the
+   contract's now-fixed one, then run the harness across as many languages as the machine allows.
+   This is the first point at which the drift check proves anything beyond two languages.
+3. **Push once**, then decide the PR shape. Current recommendation is to fold
+   `feats/polyglot-demos` into astubbs#328 rather than open a second PR, because that PR still ships the
+   **old, disproven** divergence rule and the correction's evidence is the fan-out itself - reviewing
+   one without the other reviews a conclusion with no argument. Reverse that if astubbs#293 merges
+   while the polish wave is still unfinished.
+4. **The idle-machine measurement pass**, which is blocked twice: it needs a quiet box, and it needs
+   the unexplained baseline shift in [`next-demo-seed-followups.md`](next-demo-seed-followups.md)
+   item 1 resolved, because every ratio divides by a figure that moved 15% between sessions for
+   reasons a control arm refuted.
+5. **The sidecar logging defect**, in the order its own record specifies - see
+   [`bug-sidecar-runtime-logging-and-address-leak.md`](bug-sidecar-runtime-logging-and-address-leak.md).
+   Each step alone regresses something, which is why it is one job.
+6. **Owner decisions, not work**: the `enable.auto.commit` divergence between the two transports; the
+   KTD40 reconciliation (the plan still says every demo has three modes, the seed has none and says
+   why); and whether the merged `demos/*` branches and their worktrees are cleaned up.
+
+### A fix that was applied and NOT verified - treat as unproven
+
+`KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` was added to all eleven compose files to quieten the broker, and
+**it does not work**. Two language agents measured it independently - 927 broker lines against 35 of
+the demo's own in one run, 584 in another - and root-caused it: the cp-kafka image writes its own
+per-logger map (`kafka=INFO`, `kafka.controller=TRACE`, `state.change.logger=TRACE`) which outranks
+the root level. `KAFKA_LOG4J_LOGGERS` is the variable that merges into that map and has now been
+added to all eleven, **but the verifying run was cut off by a timeout and has not been repeated.**
+Count the broker lines before believing it.
+
+Nothing counts broker lines today, and the native path never sees them because Testcontainers does
+not attach the broker's stdout - so this was invisible to every check that exists. A line-count
+assertion in the harness would close that.

@@ -47,6 +47,12 @@ services:
       # the two tables the demo exists to show. Kafka's own warnings and errors still come through.
       KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
       KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN
+      # ROOT ALONE IS NOT ENOUGH, and this was measured rather than assumed: the cp-kafka image
+      # writes kafka=INFO, kafka.controller=TRACE and state.change.logger=TRACE into its own
+      # log4j config, and a named logger beats the root. With only the root set, one demo run
+      # interleaved 927 broker lines with 35 of the demo's own. These are the named loggers that
+      # actually produce the noise.
+      KAFKA_LOG4J_LOGGERS: "kafka=WARN,kafka.controller=WARN,kafka.server=WARN,kafka.coordinator=WARN,kafka.log=WARN,kafka.network=WARN,kafka.request.logger=WARN,state.change.logger=WARN,org.apache.kafka=WARN"
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       # Bound to the service name, not 0.0.0.0: this image formats its KRaft storage with the same

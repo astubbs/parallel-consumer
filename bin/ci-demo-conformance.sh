@@ -55,29 +55,25 @@ note() { echo "ci-demo-conformance: $1"; }
 #   ROW <arm>                 - one arm's row, every figure discarded
 # Everything else is noise (log lines, broker chatter, compose prefixes) and is dropped.
 skeleton() {
-    sed -e 's/\x1b\[[0-9;]*m//g' -e 's/^[a-z0-9_-]*-[0-9]* *| *//' "$1" | awk '
-        # the dials the fingerprint echoes back
-        # the topic is named per run, so the dial must survive but its value cannot
-        /^[[:space:]]*topic = / { print "DIAL topic = <generated>"; next }
-        /^[[:space:]]*[A-Za-z]+ = / { gsub(/^[[:space:]]+/, ""); print "DIAL " $0; next }
-        # a replay heading; the record counts vary with input so only the kind survives
-        /^[[:space:]]*Small replay/ { print "TITLE Small"; next }
-        /^[[:space:]]*Big replay/   { print "TITLE Big";   next }
-        # the column row - identity and order kept, padding discarded
-        /^[[:space:]]*arm[[:space:]]+elapsed[[:space:]]+msg\/s[[:space:]]+vs AK core/ { print "HEADER"; next }
-        # an arm row: <name> <elapsed>s <rate> <ratio>x - keep only which arm reported
-        /^[[:space:]]*[A-Za-z][A-Za-z0-9 _-]*[[:space:]]+[0-9.]+s[[:space:]]+[0-9,-]+[[:space:]]+[0-9.x-]+[[:space:]]*$/ {
-            gsub(/^[[:space:]]+/, "");
-            sub(/[[:space:]]+[0-9.]+s[[:space:]].*$/, "");
-            print "ROW " $0; next
-        }
-    '
+    sed -E -e 's/\x1b\[[0-9;]*m//g' -e 's/^[a-z0-9_-]*-[0-9]* *\| *//' "$1" \
+    | sed -E -n \
+        -e 's|^[[:space:]]*topic = .*|DIAL topic = <generated>|p' \
+        -e 's|^[[:space:]]*([A-Za-z]+ = .*)$|DIAL \1|p' \
+        -e 's|^[[:space:]]*Small replay.*|TITLE Small|p' \
+        -e 's|^[[:space:]]*Big replay.*|TITLE Big|p' \
+        -e 's|^[[:space:]]*arm[[:space:]]+records[[:space:]]+keys[[:space:]]+elapsed[[:space:]]+msg/s[[:space:]]+vs AK core.*|HEADER arm records keys elapsed msg/s vs-AK-core|p' \
+        -e 's|^[[:space:]]*(.*[A-Za-z)])[[:space:]]+([0-9,]+)[[:space:]]+([0-9,]+)[[:space:]]+[0-9.]+s[[:space:]]+[0-9,-]+[[:space:]]+[0-9.]+x[[:space:]]*$|ROW \1 records=\2 keys=\3|p'
 }
 
-# The sidecar arm is named for its language by design (`go-grpc`, `python-grpc`), so it is
-# normalised before comparison - otherwise every language would differ on the one row they are all
-# required to have.
-normalise_arms() { sed -E 's/^ROW [a-z0-9]+-grpc$/ROW SIDECAR/; s/^ROW [a-z0-9]+-sidecar$/ROW SIDECAR/' "$1"; }
+normalise_arms() {
+    # The arm names differ by design - each names its own client - so they are reduced to their ROLE
+    # before comparison. The records and keys figures are NOT masked: they are deterministic, so
+    # they are exactly the part worth comparing across languages, and masking them was the mistake.
+    sed -E -e 's/^ROW AK core \(.*\) /ROW AK-CORE /' \
+           -e 's/^ROW [a-z0-9]+-(grpc|sidecar) \(.*\) /ROW SIDECAR /' \
+           -e 's/^ROW [a-z0-9]+-(grpc|sidecar) /ROW SIDECAR /' \
+           -e 's/^ROW AK core /ROW AK-CORE /' "$1"
+}
 
 # PC_DEMO_LANGUAGES restricts the set - a comma-separated list. Every language by default; a subset
 # lets CI shard this across jobs and lets a developer prove the mechanism without eleven image
@@ -120,10 +116,21 @@ for lang in "${languages[@]}"; do
         cp "$log" "$log.demo"
     fi
     skeleton "$log.demo" > "$WORK/$lang.skel"
+    # A NON-EMPTY SKELETON IS NOT ENOUGH, and this exact hole was found by two language agents
+    # running this function over their own output: when the table format changed, the fingerprint
+    # still parsed, so the skeleton was non-empty, the skip never fired, the absolute assertions
+    # passed - and the drift check silently narrowed to comparing two headings. A green run then
+    # meant the tables were no longer checked at all. A demo without a parsed table now FAILS.
     if [ ! -s "$WORK/$lang.skel" ]; then
-        skipped+=("$lang(no skeleton)")
-        note "$lang SKIPPED - produced no recognisable fingerprint or table; see $log"
-        continue
+        fail "$lang: produced no recognisable output at all; see $log"
+    fi
+    if ! grep -q "^HEADER " "$WORK/$lang.skel"; then
+        fail "$lang: no results-table HEADER was parsed. Either the demo stopped printing one, or
+        its columns changed and this script's pattern did not - and the second is the dangerous
+        one, because it makes every language look identical. See $WORK/$lang.skel"
+    fi
+    if ! grep -q "^ROW " "$WORK/$lang.skel"; then
+        fail "$lang: a table header was parsed but no arm rows were; see $WORK/$lang.skel"
     fi
     ran+=("$lang")
 done
