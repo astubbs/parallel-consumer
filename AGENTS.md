@@ -242,9 +242,19 @@ counts. This is a community-maintained fork of the no-longer-maintained
 
 ## Build Requirements
 
-- **JDK 17** (the project uses Jabel to compile Java 17 source to Java 8 bytecode)
+- **JDK 17** (the project uses Jabel to compile Java 17 source to Java 8 bytecode). On JDK 21 the
+  build dies as `Unable to delombok: InvocationTargetException` in `parallel-consumer-core` - a
+  module your change never touched, so it reads as a real breakage and is not one. Check
+  `java -version` first. Set it **per command** (`JAVA_HOME=... ./mvnw`), never by repointing a
+  shared default that every other session inherits.
 - **Docker** (integration tests - TestContainers spins up Kafka brokers)
 - **Maven via wrapper** (`./mvnw`) - do not use system Maven
+- **Go 1.24+ and Ruby 3.2+**, for the cross-language conformance module *only*. It builds a runner
+  per language and **fails the build when one cannot be built** - deliberately, because a language
+  nobody could build is not a language that passed. Both failure modes look like project breakage
+  and are not: Go reports `go.mod: unknown block type: tool` when `go env GOTOOLCHAIN` is `local`
+  (the default `auto` would fetch the right toolchain - `GOTOOLCHAIN=auto` per command fixes it),
+  and Ruby reports a missing `bundler` when the system 2.6 is on `PATH`.
 
 ## How to Build
 
