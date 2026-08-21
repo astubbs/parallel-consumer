@@ -115,6 +115,21 @@ Java, Kotlin, Scala, Go, Ruby, Rust, Swift, C# and C++. It is **not** fine in tw
 Everything else in the contract is identical by design. Where a language must diverge, say so in its
 own README rather than quietly changing the shape.
 
+## Both entry points are tested, and that is part of the contract
+
+A demo with one tested entry point has an untested entry point. `bin/ci-demo-test.sh` runs this one
+through **both** - native and container - on every pull request, at a volume chosen to prove the
+machinery rather than to measure anything.
+
+It is deliberately separate from the module's `ReferenceDemoIT`. That test calls the demo's own
+entry method and proves the *arms* work; it says nothing about how a reader actually starts the
+thing - the classpath step, the forked JVM the spawned sidecar depends on, the image build, the
+compose broker, or the exit code a scripted caller sees. **Every failure this demo has actually had
+lived in that gap**, and not one of them was a logic error that a unit test could have caught.
+
+A per-language demo inherits this: mirroring the flags and the tables is not enough if nobody ever
+runs the container you shipped.
+
 ## What this demo is not
 
 This is the **comparison** demo: two arms, one workload, throughput out. It is not the *reading*

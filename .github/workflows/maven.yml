@@ -156,6 +156,17 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # The reference demo, through BOTH of its entry points. Separate from the integration
+          # suite because ReferenceDemoIT proves the demo's ARMS work while this proves the way a
+          # reader actually starts it - the Maven classpath step, the forked JVM the spawned
+          # sidecar depends on, the image build, the compose broker, and the exit code a scripted
+          # caller sees. Every failure this demo has had lived in that gap, and none of them was a
+          # logic error a unit test could have caught. It also covers the java-grpc-uds arm on a
+          # developer machine that cannot run it: the container is Linux whatever the host is.
+          - suite: demo
+            name: "Demo (both entry points)"
+            cmd: "bin/ci-demo-test.sh"
+            timeout: 30
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
