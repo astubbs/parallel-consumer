@@ -765,15 +765,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void innerDoClose(Duration timeout) throws TimeoutException, ExecutionException, InterruptedException {
         log.debug("Starting close process (state: {})...", state);
 
-        // Drain and pause polling - keeps consumer alive for later commit, but paused
-        // drained messages will be sent to retry queue and not actually processed.
-        brokerPollSubsystem.drain();
-
-        log.debug("Shutting down execution pool...");
-        //Clear scheduled but not started work in execution pool
-        workerThreadPool.get().getQueue().clear();
-        //request graceful shutdown
-        workerThreadPool.get().shutdown();
+        try {
+            // Drain and pause polling - keeps consumer alive for later commit, but paused
+            // drained messages will be sent to retry queue and not actually processed.
+            brokerPollSubsystem.drain();
+        } finally {
+            // Unconditional: the worker threads are NOT daemon threads, so a drain that throws on its way past this
+            // point would strand every thread this instance started for the life of the JVM. Nothing fails at the
+            // time - the drain exception propagates and looks like the whole story - so the leak is invisible where
+            // it happens and surfaces later as CPU contention with no owner. Inside a test fork, which reuses one
+            // JVM across many classes, one badly closed instance quietly slows down or times out unrelated tests
+            // that run afterwards.
+            shutDownWorkerPool();
+        }
         if (workerThreadPool.get().getActiveCount() > 0) {
             log.info("Inflight work in execution pool: {}, letting to finish on shutdown with timeout: {}", workerThreadPool.get().getActiveCount(), timeout);
         }
@@ -832,6 +836,26 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
 
         producerManager.ifPresent(x -> x.close(timeout));
+    }
+
+    /**
+     * Releases the worker pool, in the order {@link #innerDoClose} has always used: discard the work that was queued
+     * but never started, then ask the pool to shut down gracefully.
+     * <p>
+     * The nested {@code finally} is deliberate, and is the whole point of this method: reaching the
+     * {@code shutdown()} must not be conditional on any earlier step succeeding. {@code getQueue().clear()} resolves
+     * the memoized pool supplier and touches a live queue, so it is not obviously incapable of throwing - and if it
+     * ever does, the pool it failed to tidy must still be shut down rather than left running.
+     */
+    private void shutDownWorkerPool() {
+        log.debug("Shutting down execution pool...");
+        try {
+            //Clear scheduled but not started work in execution pool
+            workerThreadPool.get().getQueue().clear();
+        } finally {
+            //request graceful shutdown
+            workerThreadPool.get().shutdown();
+        }
     }
 
     /**

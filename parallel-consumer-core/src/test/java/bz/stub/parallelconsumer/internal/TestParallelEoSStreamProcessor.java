@@ -26,6 +26,16 @@ public class TestParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStr
         super(newOptions);
     }
 
+    /**
+     * Builds on a caller-supplied module, which is how a test substitutes one of the subsystems the processor
+     * resolves through {@link PCModule} - the poller, the work manager, the consumer manager. Those are wired in the
+     * constructor and held in {@code private final} fields, so the module is the only seam: there is no setter to
+     * swap one afterwards.
+     */
+    public TestParallelEoSStreamProcessor(final ParallelConsumerOptions<K, V> newOptions, final PCModule<K, V> module) {
+        super(newOptions, module);
+    }
+
     public int getTargetLoad() { return getQueueTargetLoaded(); }
 
     public  <R> List<Tuple<ConsumerRecord<K, V>, R>> runUserFunc(
