@@ -28,6 +28,13 @@ same** record, and the guarantee is about the **shard**.
    Two threads that both see the head as free both attempt the CAS; the loser takes nothing and hits
    the same break.
 
+   > **Point 2 is true of the shard-ordering invariant and false as a general statement, and the
+   > difference is a live defect** - see
+   > [`bug-direct-pull-claim-is-check-then-act.md`](bug-direct-pull-claim-is-check-then-act.md). The
+   > claim decides only the *in-flight* term; the other two terms it never re-reads, and one of them
+   > - the success verdict - is the only thing standing between a stale availability check and a
+   > second delivery of an already-completed record. Reproduced, product bug, direct-pull only.
+
 **Neither is named anywhere as the ordering lock**, which is the problem: the guarantee lives in a
 `break` placement in one class and a return value in another, and an engine change that moved either
 would pass every correctness test in the suite. That is not hypothetical - the register records an
