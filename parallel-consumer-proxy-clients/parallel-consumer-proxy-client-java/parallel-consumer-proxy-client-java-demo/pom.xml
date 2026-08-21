@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-client-java</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java Demo</name>
+    <artifactId>parallel-consumer-proxy-client-java-demo</artifactId>
+
+    <!--
+        THE REFERENCE DEMO, and the module the other ten languages' demos are transcribed from
+        (astubbs#242, plan unit U35, governed by KTD40).
+
+        WHY IT IS A CLIENT MODULE AND NOT PART OF THE SIDECAR. An earlier version of this demo lived
+        in parallel-consumer-proxy and spoke raw gRPC to the sidecar. It ran, and it measured the
+        wrong thing: it demonstrated that the ENGINE works while saying nothing about the CLIENT
+        LIBRARY, which is the artifact a user actually touches. A demo of a client belongs beside
+        the client, drives ParallelConsumerClient like any application would, and cannot silently
+        stop exercising the wrapper.
+
+        WHY IT HAS MAIN SOURCES RATHER THAN BEING AN INTEGRATION TEST. The demo ships as a
+        container (R72: "Java is included, not exempted"), and a container that has to run Maven and
+        failsafe to show you a demo is not the one-command promise. It is also the template ten
+        languages copy, and none of them has JUnit - a demo shaped as a test is a shape they cannot
+        mirror. So it is an ordinary application with a main method, which is what every other
+        language will write.
+
+        WHY IT DEPENDS ON THE HARNESS MODULE. Not for the conformance harness: for the one
+        dependency set that puts the ENGINE and SidecarProcess on a classpath. The demo spawns a
+        real sidecar as a child process, and SidecarProcess.spawn() hands the child this JVM's own
+        classpath, so the engine has to be on it. The harness module's pom exists to hold exactly
+        that set in one place so consumers do not restate three dependencies and drift from them;
+        this is its third consumer, after the Kotlin and Scala e2e profiles. Taken at compile scope
+        rather than their test scope because this module's demo IS main code.
+
+        THE REACTOR HAZARD THAT DOES NOT APPLY HERE. The harness pom warns that a dependency on the
+        engine is a reactor edge, so a client wrapper carrying one gets the sidecar jar deleted from
+        under it by the `clean` that opens bin/build.sh. This module is a leaf that nothing depends
+        on - the same property that lets the harness and conformance modules hold the engine edge -
+        so the hazard has nothing to travel along. Before adding a dependency ON this module, stop:
+        it would recreate exactly that bug.
+
+        This module publishes nothing; the clients aggregator skips deploy, install and gpg for the
+        whole tree.
+    -->
+
+    <properties>
+        <!-- the engine and the gRPC transport both require it; see java-grpc's pom for the reasoning -->
+        <release.target>17</release.target>
+    </properties>
+
+    <dependencies>
+        <!--
+            The spawn classpath: the engine, the proxy test-jar that holds SidecarProcess and Main's
+            child-process contract, and parallel-consumer-core's test-jar underneath. Compile scope because the demo's
+            main sources spawn the sidecar; see the module comment above for why this is one
+            dependency rather than three.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-harness</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- The three arms that go through the client library, which is the point of the demo. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-direct</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!--
+            Declared rather than leaned on transitively, because the demo names them in its own
+            source: parallel-consumer-core for the pc-core arm, kafka-clients for the AK core arm and the
+            producer, protocol for the raw-wire control arm.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+
+        <!--
+            Testcontainers at COMPILE scope, which is unusual and deliberate: KTD40 makes a real
+            Testcontainers broker the demo's default mode, so starting one is production behaviour
+            here rather than test scaffolding. It is used only on the native path - inside the demo
+            container the broker is a compose sibling and this code never runs, because U35 forbids
+            granting a demo container the host Docker socket.
+        -->
+        <dependency>
+            <!-- DockerImageName lives here, not in the kafka module; both are needed and both are
+                 managed at test scope, so both have to say compile. -->
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <!--
+                The scope has to be stated. The root pom manages every testcontainers artifact at
+                TEST scope, which is right for the modules that only use containers in tests, and
+                wrong here - starting a broker is what this demo does when nobody supplied one.
+                Without this override the managed scope wins and the compile fails on the import.
+            -->
+            <scope>compile</scope>
+        </dependency>
+
+        <!--
+            A demo is a program someone runs, so it needs a logging BINDING and not just the facade
+            the parent supplies. The parent puts logback at test scope, which is right for a library
+            and wrong for an application: without this the demo would print nothing but SLF4J's
+            no-provider warning.
+        -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+
+        <!-- junit-jupiter-api and assertj-core arrive at test scope from the root pom's own
+             <dependencies>; re-declaring them here would only duplicate that. -->
+    </dependencies>
+
+</project>

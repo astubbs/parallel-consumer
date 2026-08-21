@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Java reference implementation work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - artifact: parallel-consumer-proxy-client-java-demo
+    deferred:
+      reason: >-
+        Its own tests cover the demo's flag and mode plumbing only. The client behaviour the demo exercises is evidenced where a reader looks for it - against parallel-consumer-proxy-client-java-direct and parallel-consumer-proxy-client-java-grpc, whose conformance suites assert it - and recording it a second time here would be the same claim counted twice. What the demo produces instead is a measurement, which is reported in its own output and in the branch record, not as test evidence.
+      lifted_by: >-
+        Nothing is expected to lift it; the demo has no published surface of its own to evidence.

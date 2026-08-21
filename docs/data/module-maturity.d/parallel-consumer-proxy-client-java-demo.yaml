@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the Java reference implementation work ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-client-java-demo
+    deferred:
+      reason: >-
+        A demo, not a library. It ships as a container and a script that a reader runs, never as an artifact anyone compiles against - the clients aggregator skips deploy and install for the whole tree - so there is no API surface to make a maturity or support claim about. Its dependency on the engine is the same leaf-only edge the harness module carries, and depending on this module is the one thing that would turn that edge into the reactor bug its pom describes.
+      lifted_by: >-
+        Nothing is expected to lift it. A demo that grew a published, dependable surface would no longer be a demo, and that change would record its first real row here.
