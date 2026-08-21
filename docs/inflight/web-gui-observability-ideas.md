@@ -63,7 +63,7 @@ each answers a question an operator actually asks. Recorded as feature targets:
   the data.
 - **A live chaos/scaling widget** counting messages, scaling events, reassignments, dropped,
   duplicates and out-of-order - on their *marketing* site. Worth noting for
-  [`next-landing-page.md`](next-landing-page.md): the same component serves operations and
+  the landing-page work (dropped 2026-08-22; see git history for `next-landing-page.md`): the same component serves operations and
   promotion.
 
 We already have Micrometer metrics; the gap is presentation and the offset-set view.
@@ -192,5 +192,5 @@ And item 2 is the one to lead on - it is the only view here that is *ours*.
 
 - [`market-analysis-llingr.md`](market-analysis-llingr.md) - the full teardown.
 - [`next-auto-scaling.md`](next-auto-scaling.md) - wants the same in-flight series as item 1.
-- [`next-landing-page.md`](next-landing-page.md) - item 2 rendered as an animation is the
+- The dropped landing-page note - item 2 rendered as an animation is the
   clearest way to explain the offset map to someone who will not read prose.

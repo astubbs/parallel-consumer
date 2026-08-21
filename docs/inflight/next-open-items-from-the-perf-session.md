@@ -93,8 +93,6 @@ load themselves - so running them concurrently has been buying less than it appe
 
 | Item | Note |
 |---|---|
-| **The landing page's visual identity** | Content, evidence discipline and both animations are sound; palette and type landed on the most recognisable generated look there is. Two token blocks - [`next-landing-page.md`](next-landing-page.md) |
-| **Three sections blocked on evidence** | A Kafka version support matrix that does not exist, the key-distribution sweep, and a public defect record. Same note |
 | **The key-distribution axis** | Every published number uses all-distinct keys, which is a best case for any key-sharded design - [`next-performance-regression-testing.md`](next-performance-regression-testing.md) |
 | **The engine comparison in the docs** | Needs the EoS axis, not just throughput, or it steers users off the only engine that supports it - [`next-docs-publish-the-engine-comparison.md`](next-docs-publish-the-engine-comparison.md) |
 | **`ThreadCeiling` on Linux** | Forty lines, no broker, no dependencies. Until it runs, every ceiling figure here is one operating system's - [`next-benchmark-a-model-of-work-not-work.md`](next-benchmark-a-model-of-work-not-work.md) |

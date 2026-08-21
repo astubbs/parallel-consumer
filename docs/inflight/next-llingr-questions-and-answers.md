@@ -347,7 +347,7 @@ notes should stay usable if anyone else reads them.
   record never holds up everything behind it, and a rebalance does not redo the work that finished."**
 
 The last one is the strongest and it is currently invisible in our documentation. See
-[`next-landing-page.md`](next-landing-page.md).
+the landing-page work (dropped 2026-08-22; see git history for `next-landing-page.md`).
 
 **No public comparison against llingr**, per the standing decision. These notes are internal.
 

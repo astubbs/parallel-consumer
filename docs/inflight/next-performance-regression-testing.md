@@ -317,7 +317,7 @@ data does, and what a benchmark has to include before its numbers mean anything 
 
 **`UNORDERED` mode should be run across all five**, because its result should be flat - concurrency in
 that mode does not depend on key distribution at all. Demonstrating that flatness *is* the
-differentiator described in [`next-landing-page.md`](next-landing-page.md), and it is a
+differentiator described in the landing-page work (dropped 2026-08-22; see git history for `next-landing-page.md`), and it is a
 measurement rather than a claim.
 
 Depends on the harness gaining a key-shape generator; the delay and concurrency sweeps already have the

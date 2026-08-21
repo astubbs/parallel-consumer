@@ -61,7 +61,7 @@ believes it will hold up at 3am. Three things follow:
 - **Documentation is part of reliability, not adjacent to it.** *"Having all the docs in the README is
   kinda shit."* A 1,500-line README is a trust signal in the wrong direction. The docs site
   ([`parked-docs-site.md`](parked-docs-site.md), astubbs#208) and the promotional site
-  ([`next-landing-page.md`](next-landing-page.md)) are not cosmetic - **an evaluator who
+  (dropped 2026-08-22 - see git history for `next-landing-page.md`) are not cosmetic - **an evaluator who
   cannot find out what the library does concludes nobody is looking after it.**
 
 ## Competitive advantages currently unstated - including one nobody has mentioned
@@ -117,7 +117,7 @@ never as what a competitor cannot do.
 ## Related
 
 - [`market-analysis-llingr.md`](market-analysis-llingr.md) - the analysis this came from.
-- [`next-landing-page.md`](next-landing-page.md) and
+- The dropped landing-page note (git history) and
   [`parked-docs-site.md`](parked-docs-site.md) - the accessibility half.
 - [`branch-language-proxy.md`](branch-language-proxy.md) - the every-ecosystem half.
 - [`next-auto-scaling.md`](next-auto-scaling.md) - the differentiator that most directly serves

@@ -85,7 +85,7 @@ is a narrower statement. See [`next-core-async-user-function.md`](next-core-asyn
 
 - **`README.adoc`** - the engine choice needs to be a decision with a stated criterion, not a list of
   supported frameworks. The criterion is: *does your work block a thread?*
-- **The landing page** - [`next-landing-page.md`](next-landing-page.md) already carries the rule that
+- **The landing page** - dropped 2026-08-22, but its note (in git history) carried the rule that
   no figure is published without the conditions that produced it. This is the first real test of that
   rule.
 - **The `ExternalEngine` regression** ([`perf-throughput-regression-since-0-3.md`](perf-throughput-regression-since-0-3.md))

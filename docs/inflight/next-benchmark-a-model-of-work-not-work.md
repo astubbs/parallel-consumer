@@ -84,5 +84,5 @@ Both are cheap. Neither was done because the session's questions were comparativ
 or the client, the scan or the threads* - and comparisons survive a shared model of work, since both
 arms pay the same simplification. **The moment a number is quoted as an absolute rather than a ratio,
 both of these bite.** The landing page's benchmark section is exactly that moment; see
-[`next-landing-page.md`](next-landing-page.md), where the rule is already written down as *never
+the landing-page work (dropped 2026-08-22; see git history for `next-landing-page.md`), where the rule is already written down as *never
 publish a figure without the conditions that produced it*.
