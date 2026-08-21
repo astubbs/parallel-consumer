@@ -151,6 +151,77 @@ answers itself because `docker compose run demo --help` reaches it directly.
 are start-up and rebalance, which is exactly why the CI volume asserts arms rather than numbers. A
 default-scale run is deferred to an unloaded machine - this one was running ten demo waves at once.
 
+### The reader-experience pass, and the one thing it could not honour
+
+The demo contract's "The output a reader actually sees" section was rewritten after someone watched
+a demo and found it unimpressive. Three of its four rules are applied here; the fourth was already
+true.
+
+- **The banner is the first thing printed**, before the usage text and before a refused flag, not
+  only before the fingerprint. C++'s copy names the language `C++` rather than the module
+  directory's `cpp`.
+- **Both arms name their library**: `AK core (librdkafka)` and `cpp-grpc (this client)`. The demo
+  README now also answers the contract's "where a language has more than one serious client, say so"
+  clause, and the answer for C++ is that it does not have one - `cppkafka` and `modern-cpp-kafka`
+  are wrappers over librdkafka, so a second arm would price a header-only binding.
+- **`records` and `keys` are new columns**, counted per arm from that arm's own delivery path
+  (`rd_kafka_message_t` for AK core, `InboundRecord` for the sidecar arm) rather than restated from
+  the seeding loop. The sidecar arm's key set is guarded by the same mutex as its counter, because
+  every executor thread writes it; an unsynchronised `std::set` there is a race that would present
+  as a slightly wrong key count rather than as a crash.
+- **Broker log levels were already `WARN`** in `demo/docker-compose.yml` and were not touched.
+- **The SIDECAR was not quiet, and that turned out to be two contract violations rather than
+  noise.** This image gives the sidecar an SLF4J binding it would otherwise lack (see
+  `demo/Dockerfile` for why). At slf4j-simple's default level it emitted the overwhelming majority
+  of the demo's own output on a twenty-record run - including a full `ConsumerConfig values` dump
+  per arm, which prints `bootstrap.servers`. The sidecar's stderr is inherited by the demo's
+  container, so that address lands in the demo's own lines: `bin/ci-demo-conformance.sh` greps for
+  exactly that and would have failed C++ on the credential rule. `demo/sidecar-launcher.sh` now
+  passes `-Dorg.slf4j.simpleLogger.defaultLogLevel=warn`, overridable with `PC_SIDECAR_LOG_LEVEL`.
+  **Every language whose demo image gains that binding inherits both problems**, so this is worth
+  carrying into the repo-wide defect note rather than leaving as a C++ detail.
+
+#### `bin/ci-demo-conformance.sh` no longer recognises this table, and that is silent
+
+**Owed back to whoever owns `bin/`** - out of this note's ownership, so it is recorded rather than
+fixed. That script reduces each demo's stdout to a skeleton and requires the skeletons to match. Two
+of its `awk` patterns are now stale against the contract they enforce:
+
+- the header pattern is `arm ... elapsed ... msg/s ... vs AK core`, which the two new columns break;
+- the row pattern accepts `[A-Za-z0-9 _-]*` for an arm name and then `<elapsed>s <rate> <ratio>`,
+  which both the parentheses in `AK core (librdkafka)` and the two extra figures break.
+
+**Neither failure is visible as a failure.** With both patterns missing, a skeleton degrades to its
+`DIAL` and `TITLE` lines, every language degrades identically, the diff is clean and the script
+reports agreement - having stopped checking the columns and the arm order it exists to check. The
+absolute assertions (the dials echoed, the address absent, no latency) still hold, so the run is not
+worthless; it is just weaker than it reads. Fixing it means widening both patterns and normalising
+the new `(library)` suffix the way `normalise_arms` already normalises the sidecar arm's name.
+
+#### What this pass was verified against
+
+`demo/run.sh --records 20 --concurrency 4 --partitions 2 --replay-factor 2` with
+`PC_DEMO_DELAY_MS=3` - the conformance harness's own input - in the container, which is C++'s only
+mode. It exited 0. Observed: the banner first, then the fingerprint; both arms labelled with their
+library; both tables carrying `records` and `keys`; `20/20` in the small replay and `40/40` in the
+big one, which is what the seeding makes deterministic at this volume (the key space is larger than
+the record count, so keys equals records here and would equal the key space at default scale). With
+the sidecar quietened the whole run is a few dozen lines, and `bootstrap.servers` appears nowhere in
+them.
+
+**No throughput figure from that run means anything and none is recorded here.** Ten language demos
+were building and running on the box at the time; the elapsed columns are contention and start-up.
+Output shape is what was being proven.
+
+#### Rendering moved out of `demo.cpp` so the contract could be tested
+
+`demo/src/demo_report.{h,cpp}` now owns `ArmResult`, the banner and the table; `demo.cpp` prints
+what it returns. The split exists for one reason: the banner's wording, the column set and their
+order are contract, and the arms that produce the figures need a broker that the image build does
+not have - but rendering does not. `demo/tests/demo_report_test.cpp` holds all of it, and runs at
+image-build time beside the option tests. The renderers return strings rather than writing to
+`std::cout`, because the thing worth asserting is the text.
+
 ### What is NOT wired up
 
 - **Neither entry point is in `bin/ci-demo-test.sh`.** That script and `.github/` were outside this
@@ -159,8 +230,10 @@ default-scale run is deferred to an unloaded machine - this one was running ten 
   this is a real gap rather than a deferral of polish. What it would need: a `cpp` row that runs
   `demo/run.sh --records <small> --replay-factor 1`, and nothing else - there is no native path to
   test separately, which makes C++ the cheapest language to add there.
-- The demo's own tests cover the option surface only. The arms need a broker, and the image build
-  has none.
+- The demo's own tests cover the option surface and the output shape. The ARMS still need a broker,
+  which the image build has none of - so nothing at build time proves that the `records` and `keys`
+  columns are counted correctly, only that the table reports them. Running the demo is what proves
+  the figures.
 
 ## Not implemented, and therefore not declared
 
