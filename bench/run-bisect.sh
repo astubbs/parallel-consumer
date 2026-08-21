@@ -156,7 +156,10 @@ run_one() {
     jfr=(-XX:FlightRecorderOptions=stackdepth=256
          -XX:StartFlightRecording=settings=profile,filename="$BENCH_JFR/$(echo "$*" | tr " /" "__").jfr,dumponexit=true")
   fi
-  java "${jfr[@]}" -cp "$cp" Bench "$@" 2>/dev/null | parse_result
+  # ${jfr[@]+"${jfr[@]}"} rather than "${jfr[@]}": macOS ships bash 3.2, where expanding an EMPTY
+  # array under `set -u` is an unbound-variable error. Written the obvious way, this made every
+  # unprofiled run fail - silently, as RUN_FAILED rows - while the profiled path worked fine.
+  java ${jfr[@]+"${jfr[@]}"} -cp "$cp" Bench "$@" 2>/dev/null | parse_result
 }
 
 # --- the llingr arm --------------------------------------------------------------------------

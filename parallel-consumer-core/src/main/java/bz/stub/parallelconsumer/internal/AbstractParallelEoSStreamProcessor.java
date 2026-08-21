@@ -363,7 +363,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             return thread;
         };
         ThreadPoolExecutor.AbortPolicy rejectionHandler = new ThreadPoolExecutor.AbortPolicy();
-        LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
+        // EXPERIMENT: LinkedTransferQueue instead of LinkedBlockingQueue.
+        //
+        // Profiling found ~31,000 parks in five seconds on a NonfairSync ReentrantLock, all of them on
+        // this pool's own worker threads - which is LinkedBlockingQueue's single takeLock, with every
+        // worker serialising through it to collect its next record. LinkedTransferQueue is the
+        // lock-free alternative with the same BlockingQueue contract and the same unbounded behaviour,
+        // so it is a one-line test of whether that lock costs throughput or merely shows up in a
+        // profile.
+        //
+        // The known cost: LinkedTransferQueue.size() is O(n) where LinkedBlockingQueue keeps a counter,
+        // and getNumberOfUserFunctionsQueued() reads it every control loop. If this trades lock
+        // contention for a linear scan it will show as a LOSS, which is itself a useful result.
+        BlockingQueue<Runnable> workQueue = new LinkedTransferQueue<>();
         return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
                 namingThreadFactory, rejectionHandler);
     }
