@@ -64,14 +64,59 @@ no framework, and no change to the project's compatibility baseline -
   `ExternalEngine` subclass. **That would collapse a whole layer**, which is worth more than the
   throughput.
 
+## The classic API becomes an adapter - and this is what makes the change small
+
+**Owner's refinement, and it is the load-bearing part of the design:** the existing API does not have
+to change at all. It becomes a thin wrapper over the future-returning one, so there is **one internal
+completion path instead of two**.
+
+**One correction to how it was put, because it matters:** the wrapper must not *block* on the future.
+The classic user function is already synchronous - it signals completion by returning - so the wrapper
+simply returns an **already-completed** future:
+
+```java
+void poll(Consumer<PollContext<K, V>> fn) {
+    pollAsync(ctx -> {
+        fn.accept(ctx);                              // runs on the worker thread, exactly as today
+        return CompletableFuture.completedFuture(null);
+    });
+}
+```
+
+**No blocking is added anywhere.** Adding a `join()` would be strictly worse than today - a thread
+parked waiting for something already finished. The thread is held for exactly as long as
+`fn.accept(ctx)` takes, which is precisely the current behaviour, and `whenComplete` on an
+already-complete future fires inline on the same thread - so it lands on `onUserFunctionSuccess()` and
+`addToMailbox()` at the same moment the current code does.
+
+**Byte-identical semantics for every existing user**, and the void API stops being a special case in
+the engine and becomes a two-line adapter. **That is a deletion, not an addition.**
+
+### And it shrinks the hard parts considerably
+
+**The pressure system only breaks for the genuinely-async caller.** In the adapter path the thread *is*
+held for the duration, so `getQueue().size()` still means what it always meant and
+`checkPipelinePressure()` still works. **Only a caller who returns an unfinished future needs the new
+accounting.**
+
+That is a much better position than the current one, where `ExternalEngine` no-ops the pressure system
+for *everybody* on that engine and pays the 35% regression for it. **The blast radius becomes the
+async path alone**, and the classic path keeps behaviour that is already measured and understood.
+
+**It also suggests `ExternalEngine` need not be a subclass.** If core can complete a record from a
+callback, the difference between core and Vert.x stops being a class hierarchy and becomes which entry
+point the user called. Whether that actually holds is the first thing to check.
+
 ## What makes it hard, and none of it is the future itself
 
 1. **It inherits `ExternalEngine`'s known defect.** With no thread held, `getQueue().size()` stops
    meaning anything, which is exactly why `ExternalEngine` no-ops `checkPipelinePressure()` - and **that
    no-op is the cause of the 35% throughput regression** documented in
    [`perf-throughput-regression-since-0-3.md`](perf-throughput-regression-since-0-3.md). Doing this
-   naively adopts a defect we already have open. **It should be built on whatever replaces the pressure
-   system, not before it** - see [`bug-available-work-counter-needs-a-clamp.md`](bug-available-work-counter-needs-a-clamp.md).
+   naively adopts a defect we already have open. **But see the adapter section above: this bites only the async path.** The classic path still holds a
+   thread, so its pressure accounting is unchanged. That makes the coupling to
+   [`bug-available-work-counter-needs-a-clamp.md`](bug-available-work-counter-needs-a-clamp.md) a
+   sequencing preference rather than a hard dependency.
 2. **Transactions are currently incompatible, and this is the sharpest constraint.** `ExternalEngine`
    rejects them outright:
 
