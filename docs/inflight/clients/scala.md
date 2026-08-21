@@ -181,11 +181,23 @@ Declared unconditionally that is a permanent reactor edge to the engine, and `bi
 with `clean` - which would delete the sidecar jar every other language's conformance test spawns. So
 the demo's sources are a **test source root added only by the `scala-demo` profile**
 (`-Dpc.scalaDemo`, passed by `run.sh` and by the Dockerfile), and its dependencies live there too.
-The module's standing check still passes:
 
-```bash
-./mvnw -pl :parallel-consumer-proxy-client-scala -am validate   # must not print parallel-consumer-proxy
-```
+**Verified with a control arm rather than asserted**, because "the edge is only in the profile" is
+exactly the kind of claim that is comfortable and wrong. One term changed, everything else identical,
+and the reactor listing is what flips:
+
+| command | reactor | `parallel-consumer-proxy` |
+|---|---|---|
+| `./mvnw -pl :parallel-consumer-proxy-client-scala -am validate` | 8 modules | **absent** |
+| the same, plus `-Dpc.scalaDemo` | 9 modules | present, as "Language Proxy" |
+
+Read the reactor listing, not the build result: **that command currently fails on this machine for an
+unrelated reason**, and a reader who greps for `BUILD SUCCESS` will think the check is broken.
+`validate` produces no artifacts, so in a reactor whose snapshots are not installed locally
+`parallel-consumer-proxy-client-java-grpc` cannot resolve `parallel-consumer-proxy-client-java-api`
+and Maven has a cached Central miss for it. Confirmed to have nothing to do with Scala: the identical
+failure reproduces on `./mvnw -pl :parallel-consumer-proxy-client-java-grpc -am validate`, which
+never mentions this module. `-U`, or any lane that reaches `package`, does not have it.
 
 This is the third thing in this module arranged that way, after `scala-e2e-harness` and the
 conformance runner's classpath. Any JVM client whose demo spawns a real sidecar will need the same
@@ -223,9 +235,10 @@ Run natively on macOS, under heavy concurrent load from the parallel client fan-
 throughput figure from these runs means anything and none is recorded here**. What they prove is that
 the machinery works:
 
-- `demo/run.sh --records 50 --replay-factor 2 --partitions 3 --concurrency 10` - both arms completed,
-  both tables rendered, exit 0. The `--replay-factor 2` was chosen over 1 deliberately: at 1 the big
-  replay is skipped, and the second table's rendering path would never have executed.
+- `demo/run.sh --records 20 --replay-factor 2 --partitions 2 --concurrency 8` - both arms completed,
+  both tables rendered, exit 0, 59 lines of output end to end. The `--replay-factor 2` was chosen over
+  1 deliberately: at 1 the big replay is skipped, and the second table's rendering path would never
+  have executed at all.
 - `demo/run.sh` with **no arguments at all**, configured entirely through `PC_DEMO_RECORDS`,
   `PC_DEMO_REPLAY_FACTOR`, `PC_DEMO_PARTITIONS` and `PC_DEMO_CONCURRENCY`. This is the case that has
   broken before - `bash 3.2` under `set -u` treats an empty array expansion as an unbound variable -
