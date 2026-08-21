@@ -118,6 +118,12 @@ go-grpc (this client)       rather than   go-grpc
 running both as separate arms - the choice materially changes the number, and a reader evaluating
 "is this fast in my language" is really asking about the client they already use.
 
+An extra arm is a **legitimate addition, not drift**. `bin/ci-demo-conformance.sh` compares the two
+arms every language must have and permits additional ones, reporting them rather than failing them.
+That had to be said out loud: the first version of that script required every language's output to
+match exactly, so a language adding the second client this section invites would have been failed for
+obeying it.
+
 ### Every arm reports what it did, not just how fast
 
 Throughput alone cannot show the work happened. Each arm also reports **records processed** and

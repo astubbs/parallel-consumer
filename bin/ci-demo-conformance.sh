@@ -168,10 +168,24 @@ done
 # --- the drift check: every language's skeleton must match every other's ------------------------
 # Java is compared separately: it is documented as carrying extra diagnostic arms no other language
 # has or needs, so requiring it to match would enforce the opposite of the contract.
+# EXTRA ARMS ARE LEGITIMATE, and requiring identical skeletons made them impossible - which put
+# this script in direct conflict with the contract it enforces. The contract invites a language with
+# more than one serious Kafka client to run both, and Go declined to add a sarama arm for exactly
+# this reason: a third row in one language would have read as permanent drift. So the comparison is
+# over the arms the contract REQUIRES - the serial one and the sidecar one - and any additional row
+# is allowed and REPORTED rather than silently tolerated, so nobody can hide a drifted arm by
+# calling it an extra.
+required_only() { grep -E "^(DIAL|TITLE|HEADER|ROW (AK-CORE|SIDECAR))" "$1"; }
+extra_arms() { grep -E "^ROW " "$1" | grep -vE "^ROW (AK-CORE|SIDECAR)" || true; }
+
 reference=""; drifted=0
 for lang in "${ran[@]}"; do
     [ "$lang" = "java" ] && continue
-    normalise_arms "$WORK/$lang.skel" > "$WORK/$lang.norm"
+    normalise_arms "$WORK/$lang.skel" > "$WORK/$lang.norm.all"
+    required_only "$WORK/$lang.norm.all" > "$WORK/$lang.norm"
+    if [ -s "$WORK/$lang.extra" ] || extra_arms "$WORK/$lang.norm.all" > "$WORK/$lang.extra"; then
+        [ -s "$WORK/$lang.extra" ] && note "$lang also runs extra arm(s): $(sed 's/ records=.*//; s/^ROW //' "$WORK/$lang.extra" | tr '\n' ' ')"
+    fi
     if [ -z "$reference" ]; then reference="$lang"; continue; fi
     if ! diff -u "$WORK/$reference.norm" "$WORK/$lang.norm" > "$WORK/$lang.diff"; then
         echo "ci-demo-conformance: DRIFT between $reference and $lang:" >&2
