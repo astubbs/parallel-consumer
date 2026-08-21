@@ -95,8 +95,71 @@ In-flight still plateaus around 2,750. **A tenfold dispatch win is completely in
 dispatch is not where the time goes** - the same conclusion the four-arm comparison reached, arrived at
 from the opposite direction and therefore worth twice as much.
 
+### The zero and 2ms cases too - and they explain the whole thing
+
+**The 100ms result alone was not enough**, because a 100ms handler is where an engine win is most
+easily hidden. At a near-free handler, dispatch is the largest fraction of per-record time it will ever
+be, so that is where a tenfold dispatch win should show. Three runs each:
+
+| Delay / concurrency | Baseline | Split state | |
+|---|---:|---:|---|
+| 0ms / 1,000 | 109,709 | 105,832 | **-3.5%** |
+| 2ms / 1,000 | 66,624 | 65,919 | -1.1% |
+| 0ms / 5,000 | 101,370 | 101,452 | +0.1% |
+| 2ms / 5,000 | 30,041 | 29,470 | -1.9% |
+
+**Flat to slightly worse, everywhere.** Not one operating point rewards it.
+
+**And the reconciliation matters more than the verdict.** The dispatch measurement said 97ms -> 10ms,
+which is roughly 4.9µs per record down to 0.5µs. At 0ms the engine does ~100,000 records/second, so
+~10µs per record - meaning the walk should have been half the budget and its removal should have been
+enormous. It was nothing. The reason:
+
+**The walk is O(in-flight), and in-flight is small at every delay that matters.** The unit measurement
+lets in-flight grow to 20,000 because nothing ever completes. The real runs never get near that - peak
+in-flight was **83 to 780** at 0ms, and even at the very top end, 100ms with 5,000 concurrent, it
+plateaus around **2,750** because the Java client cannot feed it faster. At those depths the walk is
+short and its cost is immaterial.
+
+**So the scan is quadratic in a quantity that is bounded well below where it would hurt**, and the
+bound is imposed by something entirely outside PC. That is why all three attempts return zero, and it
+is a stronger result than any of them: **the cost cannot become significant until the client stops
+being the limit.**
+
+**A caveat this exposes about our own guard test.** `OrderingModeDispatchParityTest` measures with
+20,000 records in flight - a condition no real run reaches. It is a **shape** guard, deliberately
+extreme so a superlinear regression shows up at all, and it must not be read as a workload. A ratio
+moving there says the algorithm changed; it does not say throughput changed.
+
 **Verdict: not proposed for merge.** Zero measured benefit does not buy a change to how ordering is
 enforced. The branch is committed so the work and the evidence survive.
+
+## The third design, not built: an index over the single collection
+
+**The owner's proposal after the split broke ordering, and it is the best of the three.** Keep one
+ordered collection as the base, so every record stays in offset order and the ordering block is
+**completely untouched** - `KEY` and `PARTITION` walk to the head and break exactly as they do today.
+Add an index of what is *not* in flight, and let only the `UNORDERED` dispatch path consult it.
+
+**It is strictly safer than the split.** The split *removed* records from the scanned map, which is
+what silently broke ordering; an index never touches the base, so the enforcement mechanism cannot be
+affected. The ten failures that design cost simply cannot occur.
+
+**Not built, because the answer is already known.** Three separate mechanisms have now been measured
+against the same question and the low-delay runs above explain why they must all return zero: the walk
+is O(in-flight), and in-flight is bounded well below where it hurts by the Kafka client. A third
+mechanism removes the same cost the other two removed.
+
+**Two things to know if it is ever built:**
+
+- **The index means "not in flight", not "takeable now".** A record whose retry delay has not elapsed
+  is still in it and still gets walked past. The win is large, not total.
+- **It would want to replace `availableWorkContainerCnt`, not join it.** That counter drifts - there is
+  a clamp in `dcrAvailableWorkContainerCntByDelta` resetting it to zero "in case of possible race
+  condition", which is the parallel-state symptom exactly. But the counter is read on the broker-poll
+  hot path and `ConcurrentSkipListSet.size()` is O(n), so a naive index sits *alongside* it and makes
+  three pieces of state where there are two. **Solving that is the actual design work**, and it is
+  worth more than the dispatch win: a counter that needs a clamp is a bug waiting to be found.
 
 ## What would have to be true to restart it
 
