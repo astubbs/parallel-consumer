@@ -12,10 +12,34 @@ neither is a caveat on a detail - both are caveats on headlines.
 Three call sites in `bench/Bench.java.template`, no exceptions. **We have measured a model of work,
 never work.**
 
-**What the model gets right:** blocking I/O parks a thread exactly as a sleep does, so the
-platform-thread mechanism carries over intact. The finding that reachable concurrency is
-`min(maxConcurrency, r x handler_latency)` does not depend on what the thread is waiting for -
+**What the model gets right, with one condition:** **blocking** I/O parks a thread exactly as a sleep
+does, so the platform-thread mechanism carries over intact and the reachable-concurrency law
+`min(maxConcurrency, r x handler_latency)` holds -
 [`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md).
+
+**The condition is that the handler blocks at all.** A user on a non-blocking client - an async HTTP
+library, R2DBC, a reactive driver - does not park a thread while waiting, and none of this applies to
+them.
+
+**Except that in the core engine they cannot avoid parking one, because the API will not let them.**
+
+```java
+void poll(Consumer<PollContext<K, V>> usersVoidConsumptionFunction);
+```
+
+**The callback returns `void` and is synchronous.** Completion is signalled by returning, so a user
+holding a `CompletableFuture` from a non-blocking client has exactly one option: `.get()` or `.join()`
+it - **which parks the thread they were trying not to park.** Their non-blocking library buys them
+nothing, and the sleep model describes them accurately after all.
+
+**So the thread is pinned by the API's shape, not by the user's I/O choice**, and that is the sharpest
+version of the argument for the async engines: they are not merely faster, they are **the only way to
+use a non-blocking client without wasting it.** `ExternalEngine` exists precisely so the user can hand
+back something unfinished.
+
+**The one case the sleep model genuinely does not describe is CPU-bound work**, which parks nothing,
+is limited by cores rather than by activations, and inverts the analysis - more concurrency makes it
+worse.
 
 **What it leaves out, and any of these could move a number:**
 
