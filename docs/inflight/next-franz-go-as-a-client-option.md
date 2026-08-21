@@ -118,8 +118,22 @@ require tracing 126 contributors, which is a fork-viability question, not ours.
 
 1. **Does a Go proxy use franz-go natively, or continue to proxy the JVM engine?** That is the
    language-proxy architecture question (astubbs#242) and this note only supplies inputs to it.
-2. **What is the project's position on share groups generally?** They overlap with what Parallel
-   Consumer does, they are now GA, and no note here states a position. That is a strategy gap
-   independent of Go.
+2. ~~What is the project's position on share groups generally?~~ **Answered - and the premise was
+   wrong.** An earlier draft of this note claimed no position existed. It does, in two places, and
+   both are more developed than anything that would have been written here: `README.adoc` has a
+   top-level section *"When to use this library (vs KIP-932 Share Groups)"* with a seven-row
+   comparison covering ordering, exactly-once, slow processing, poison messages, broker cost,
+   requirements and scaling axis; and `STRATEGY.md` carries the narrow per-record-overhead comparison
+   with its cost attached. The settled line is that **the choice is about ordering, not concurrency** -
+   share groups scale *out*, Parallel Consumer scales *up*, and what remains uniquely ours is
+   key-level ordering with concurrency beyond partition count, plus no processing clock.
+
+   **What follows for franz-go specifically:** share groups are a **separate consumer type and a
+   separate group type**, not a mode the existing protocol slips into. A client uses them only by
+   calling the share-consumer API deliberately, and the broker side has its own enablement, which
+   changed between the 4.0 early-access form and 4.2 GA. **So depending on franz-go does not expose
+   anyone to share groups, and does not change any existing behaviour.** They are an *additional
+   capability* that no other Go client can offer at all - relevant only if a Go proxy ever wants to
+   sit in front of them.
 3. **Would virtual threads close any of the Java-versus-Go floor gap?** Untested, and it is the
    pending experiment in the ceiling note. If it does, the urgency of a native Go client drops.

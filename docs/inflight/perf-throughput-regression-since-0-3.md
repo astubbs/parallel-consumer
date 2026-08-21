@@ -819,3 +819,124 @@ relying on any of them.** The count columns need no such caveat.
 - [`test-required-perf-lane-scope.md`](test-required-perf-lane-scope.md) - the existing perf lane is
   a required PR gate. It did not catch this, which is worth understanding on its own: whatever it
   measures, it is not this.
+
+---
+
+# The handover for the next performance session - read this section first
+
+**Written 2026-08-21**, at the owner's request, so the next session does not have to reconstruct any
+of this from a chat log. Everything below is measured, and every measured claim points at
+[`bench/results/high-concurrency-unordered.csv`](../../bench/results/high-concurrency-unordered.csv),
+which carries its own conditions in a header comment.
+
+## If you read nothing else
+
+**Parallel Consumer's engine is not the problem. The Kafka client is.**
+
+Four arms, one broker, one dataset, all keys distinct, handler is a sleep:
+
+| Arm | What it is |
+|---|---|
+| `core` | Parallel Consumer |
+| `pool` | plain `KafkaConsumer` + fixed thread pool + semaphore. **No engine.** The Java floor |
+| `llingr` | a Go engine, reaching Kafka through franz-go |
+| `franz` | plain franz-go + worker pool. **No engine.** The Go floor |
+
+**Three findings, in order of how much they should change what anyone does:**
+
+1. **The two floors are far apart and the two engines are not.** The Java floor reaches **31-67%** of
+   the Go floor depending on the operating point, with no engine on either side. Meanwhile the Go
+   engine matches its own floor to within a quarter of a percent at 100ms, and PC matches the Java
+   floor to within a few percent at most points - **and beats it at two.** Any comparison that reports
+   "engine A versus engine B" without both floors is reporting the client libraries.
+2. **Nobody's engine matters at a realistic handler delay.** At 100ms per record the engine cost
+   disappears into the sleep. Engines only become visible near a zero-cost handler. **Competing on
+   engine microseconds optimises the smallest term** - see `market-analysis-llingr.md` section 5a.
+3. **The concurrency setting dominates both.** The same build spans a 1.9x throughput range purely by
+   changing `maxConcurrency`. That is larger than the entire five-year engine regression this note
+   was opened to investigate.
+
+## What is actually PC's to fix, and what is not
+
+**Not ours - a ceiling at ~2,750 records in flight.** Setting `maxConcurrency(5000)` at a 100ms
+handler yields ~2,750 in flight. **The bare Java consumer yields 2,848 under identical conditions**,
+and both Go arms reach 5,000 exactly. Tracked in
+[`bug-in-flight-ceiling-above-2000-concurrency.md`](bug-in-flight-ceiling-above-2000-concurrency.md).
+Ruled out by single-variable runs: window length, partition count (1 vs 10), `max.poll.records`
+(500 vs 5,000), the loading-factor buffer (dynamic vs a static 25,000), and ordering mode.
+
+**Ours, and specific: `UNORDERED` is 21% slower than `KEY` at 100ms and 1,000 concurrent.**
+
+| Delay / concurrency | `UNORDERED` | `KEY` | Java floor |
+|---|---:|---:|---:|
+| 2ms / 1,000 | 67,259 | 65,223 | 68,250 |
+| 2ms / 5,000 | 34,016 | 27,896 | 43,482 |
+| **100ms / 1,000** | **7,318** | **8,875** | 9,095 |
+| 100ms / 5,000 | 19,577 | 19,151 | 20,102 |
+
+**`KEY` at 100ms/1,000 is within 2.4% of a bare consumer. `UNORDERED` at the same point is 20% off
+it.** That is a reproducible, PC-only deficit in the mode that should be the *cheapest*, and it is the
+single most promising target in this whole investigation.
+
+**A plausible mechanism, not yet proven.** `ProcessingShard.getWorkIfAvailable` opens a **fresh
+iterator at the head of the shard's `ConcurrentSkipListMap` on every dispatch pass**. Records already
+out for processing stay in that map until `onSuccess` removes them, and `isOrderRestricted()` is false
+for `UNORDERED`, so the scan does not stop early - every pass walks past every in-flight container in
+the shard before reaching selectable work.
+
+That predicts exactly the observed asymmetry: `UNORDERED` puts ~1,000 records in each of 10 shards, so
+the walk is long; `KEY` puts one record in each of many shards, so there is no walk. **The fix is to
+resume the scan rather than restart it.** Measure `UNORDERED` at 100ms/1,000 before and after; the
+prediction is that it moves toward 8,900.
+
+**Also ours, unattributed: 2ms at 5,000 concurrent**, where both modes sit 22-36% below the Java
+floor. No hypothesis yet.
+
+## Three hypotheses that were tested and REFUTED - do not re-run these
+
+Each cost real time. They are recorded so nobody spends it twice.
+
+1. **"Summing work across shards on every poll is O(shards) and expensive."**
+   `WorkManager.isSufficientlyLoaded()` calls
+   `ShardManager.getNumberOfWorkQueuedInShardsAwaitingSelection()`, which streams every shard and sums.
+   It looks like an obvious hot-path cost. **`KEY` mode puts ~500,000 keys through the same code path -
+   four to five orders of magnitude more shards than `UNORDERED`'s ten - and is FASTER at 100ms/1,000
+   and identical at 100ms/5,000.** If the sum were costly, that could not happen. **Do not patch it for
+   performance.**
+2. **"It is lock contention."** There is no `synchronized`, `ReentrantLock` or `.lock()` anywhere in
+   `WorkManager`, `ShardManager` or `ProcessingShard`. **Nothing locks between "a record is available"
+   and "the record is submitted."** The concurrent *collections* remain a separate question - see the
+   audit in [`next-performance-regression-testing.md`](next-performance-regression-testing.md) - but
+   the refutation above also bounds how much they can be costing.
+3. **"The engine is half the speed of the competition, so the engine needs rewriting."** The floors
+   say the gap is the client. **A rewrite aimed at the engine targets the smallest available saving.**
+
+## The two experiments worth running next, in order
+
+1. **Virtual threads, as a measurement.** The one thing both Java arms share and neither Go arm has is
+   thousands of live platform threads. **[PR #51](https://github.com/astubbs/parallel-consumer/pull/51)
+   already implements it** - a `useVirtualThreads` option, `setupWorkerPool` generalised to
+   `ExecutorService`, and `synchronized` replaced with `ReentrantLock` to avoid pinning. Crucially it
+   reaches the Java 21 APIs **reflectively**, so it compiles under this project's Java 8 target
+   (`release.target = 8`) and throws a clear `UnsupportedOperationException` on an older JVM. That
+   removes the constraint that looked hardest. What remains is rebasing it across the
+   `io.confluent` -> `bz.stub` rename and giving CI a JDK 21 lane, since JDK 17 silently skips its
+   tests. Run the same grid with it and see whether the ~2,750 ceiling moves.
+2. **A profiler over 2ms/5,000 and 100ms/1,000.** Two well-defined points, both PC's own. An
+   async-profiler run separates allocation, control-loop CPU and contention in one pass, and would
+   settle in minutes what these controlled runs can only bound.
+
+**What not to do:** rewrite the engine, swap concurrent collections on suspicion, or optimise for a
+zero-cost handler. The first targets the smallest term, the second is bounded by refutation 1 above,
+and the third is not a workload anyone has.
+
+## Axes the harness now carries, and why each exists
+
+`bench/run-bisect.sh` sweeps **modes, delays, concurrencies, partitions, ordering** and pins
+kafka-clients. Every one is a results column, because **a ruled-out suspect still has to be readable
+back** - a file swept across an axis whose value is not recorded cannot be interpreted later.
+
+Still missing, and the one that matters most for honesty: **key distribution**. Every number above
+uses all-distinct keys, which is a best case for any key-sharded design. The sweep worth adding is
+all-unique, uniform over N, Zipf, single hot key, clustered - specified in
+[`next-performance-regression-testing.md`](next-performance-regression-testing.md).
