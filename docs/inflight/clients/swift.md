@@ -124,3 +124,104 @@ being rediscovered. Full detail in [`cpp.md`](cpp.md).
 - **A missing Docker is exit 2, not a pass** (`bin/build-client.sh`). Through Maven that surfaces as
   `Exit value: 2` in the exec failure message, while Maven's own exit stays 1 - so read the message,
   not just the code, when a CI row goes red.
+
+## The demo (astubbs#242, plan unit U35, R72)
+
+**Status: written, in `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/demo/`.**
+Two arms - `AK core` over `swift-kafka-client`, and `swift-grpc` over the client library in this
+module - plus the contract's flags, environment variables, fingerprint and two tables. It is its own
+SwiftPM package with a `.package(path: "..")` dependency on the client, its own `Dockerfile` and its
+own `docker-compose.yml`; there is **no Maven module** and it is not in the reactor.
+
+### What was actually run, and what it does NOT establish
+
+Both arms were run end to end in the container, twice, on a machine shared with nine other agent
+sessions:
+
+- `--records 30 --replay-factor 1 --partitions 3` - fingerprint, both arms, small table, exit 0.
+- `--records 20 --replay-factor 3 --partitions 2` - both replays, both tables and the across-replays
+  footnote, exit 0.
+- The image's own entry point with **no arguments** (parses the defaults and fails on the absent
+  broker, exit 1), with `--help` (exit 0) and with a misspelled flag (exit 2).
+- `run.sh` with no arguments, with flags, with an inherited `PC_DEMO_PARTITIONS`, `--help`,
+  `--native`, an unknown flag and a flag missing its value - against a stubbed `docker`.
+- No line the demo printed contained the bootstrap address; the only occurrences in the whole
+  transcript are the broker's own logs.
+
+**These runs prove the machinery, not any number.** Volumes that small are dominated by start-up:
+the sidecar arm came out at 0.9x of AK core over 20 records and 2.7x over 60, which is the same
+demo saying two different things about the same code. Nothing here should be quoted as a
+measurement, and a default-scale run on an unloaded machine has not been done.
+
+**One observation that a real measurement will have to account for**, seen in both runs and not yet
+explained: the AK core arm's wall clock is far larger than its simulated work (30 records at 2 ms
+took 1.79 s). `swift-kafka-client` feeds its message `AsyncSequence` from a poll loop whose
+`pollInterval` defaults to 100 ms, so at these volumes the arm is timing that loop rather than the
+work. Whether it amortises at contract scale is unknown - it was not tested, and the demo does not
+change the default.
+
+### What is owed
+
+- **`bin/ci-demo-test.sh` runs the Java demo only.** The contract says a per-language demo inherits
+  "both entry points are tested", and this one is tested by neither. It is a shared script, so
+  wiring Swift in is a separate change to a file this wave did not own.
+- **The demo package has no committed `Package.resolved`.** Generating one needs a toolchain that
+  does not exist on this box outside the image. The image copies the resolved file it produced to
+  `/app/Package.resolved` so a reader can at least see what was built; committing one properly means
+  extracting it from a build, which is a `bin/build-client.sh`-shaped job rather than a demo one.
+- **The blocking-sleep divergence is reasoned, not measured.** See below.
+- **The big replay's title says "would take 0s+" at tiny volumes.** It is the Java seed's own
+  expression, `total * delayMs / 1000` in integer arithmetic, mirrored faithfully; at the contract's
+  defaults it reads correctly. Left as-is rather than diverging for a cosmetic case, but it is the
+  seed's wart rather than Swift's.
+
+### The three divergences
+
+- **`Task.sleep`, not a blocking sleep, and the contract's "a blocking sleep is fine in Swift" is
+  wrong for the sidecar arm.** `poll` starts `executorCount` Swift concurrency **tasks** on the
+  cooperative pool, whose width is the core count. A blocking sleep in the user function occupies a
+  pool thread for its whole duration, so an arm asking for 100 in-flight records could only ever
+  have core-count many running - the table would report the pool's ceiling while appearing to report
+  the engine's. This is the same mechanism this module already recorded for the conformance
+  runner's ceiling barrier ("a waiter that blocked its thread would take one of those threads out of
+  the pool"), so it is an established property of this client rather than a new guess.
+  **It has not been measured here** - no blocking-sleep control arm has been run, and no figure for
+  the gap should be quoted until one has.
+- **`--partitions` reaches the broker's `num.partitions`, not a `CreateTopics` call.**
+  `swift-kafka-client` has no admin client and no public metadata API, so the demo cannot create a
+  topic with a partition count, cannot describe an existing one, and cannot do what the Java seed
+  does when a topic already exists with the wrong count. The topic is auto-created by the first
+  produce and `docker-compose.yml` carries the count. Consequence: with `--bootstrap` pointing at
+  someone else's cluster the flag has no effect - pass `--topic` for a topic you made yourself.
+- **No native mode.** There is no Swift toolchain on a developer box here, so `run.sh --native`
+  refuses with the reason, and the demo can never start its own broker (a demo container gets no
+  host Docker socket). The compose sibling is the only broker it meets.
+
+### Things the next demo wave should not rediscover
+
+- **The demo has to be its OWN SwiftPM package.** Its AK core arm needs `swift-kafka-client`, which
+  vendors librdkafka and drags in zstd, OpenSSL and SwiftNIO. Putting that in the client library's
+  manifest would add all of it to every consumer's graph, and to the committed `Package.resolved`
+  the clients workflow keys its cache on, to serve a demo none of them build. A path dependency is
+  also what makes it *legal*: the library's targets use `unsafeFlags`, which bars a package from
+  being depended on by version - local paths are exempt.
+- **`swift-kafka-client` publishes only `1.0.0-alpha.N` tags, and `main` is unusable here.** `main`
+  declares `swift-tools-version:6.2.3`, which the pinned Swift 6.1 toolchain cannot parse, so the
+  failure arrives at manifest load and reads as a resolution error rather than a version conflict.
+  The demo pins `exact: "1.0.0-alpha.9"` - the newest tag whose tools version (5.9) the image can
+  read. A base-image bump is what unblocks a move, exactly as it is for swift-log 1.10.1.
+- **A Dockerfile cannot inherit a stage from another Dockerfile**, and `docker compose up` - the
+  path a reader with only Docker takes - cannot build one image before another. So the demo image
+  repeats the client module's `toolchain`, `plugins` and `codegen` stages **byte-identically**, which
+  makes BuildKit's cache key match and pays for the protoc-plugin compile once per machine instead
+  of once per Dockerfile. Only the codegen stage's schema COPY differs, because this build's context
+  is already the repository. **Edit those stages in one file and you must edit the other.**
+- **`maven:` as a base is usable after all, if you clear `MAVEN_CONFIG`.** The Java demo's Dockerfile
+  rejects that image because it sets `MAVEN_CONFIG=/root/.m2` and the wrapper appends it to its own
+  command line, so `./mvnw package` dies with `Unknown lifecycle phase "/root/.m2"`. `ENV MAVEN_CONFIG=`
+  removes the conflict and keeps the wrapper, which saves pulling a second JDK base - worth knowing
+  on a machine where ten agents share a disk.
+- **The sidecar's jars are COPIED OUT rather than the Maven repository baked in.** The Java demo
+  bakes `~/.m2` into its image because it computes a classpath pointing there; naming an output
+  directory instead (`dependency:build-classpath`, then copying each entry) lets the download cache
+  stay a BuildKit cache mount, which is not part of any image.
