@@ -209,9 +209,14 @@ internal class KotlinDemo(
         // milliseconds to finish a backlog the sidecar arm clears in seconds, and making a reader
         // wait that long to learn nothing new is not worth the wall clock.
         val big = listOf(kotlinSidecar(total))
+        // the unit is chosen so the figure is never zero - see the demo contract.
+        val serialMillis = total.toLong() * options.delayMs
+        val serialCost =
+            if (serialMillis >= MILLIS_PER_SECOND) "${serialMillis / MILLIS_PER_SECOND}s"
+            else "${serialMillis}ms"
         report(
             "Big replay - $total records, parallel arms only (AK core is serial and would take " +
-                "${total * options.delayMs / MILLIS_PER_SECOND}s+)",
+                "$serialCost+)",
             big, baselineOf(small), acrossReplays = true,
         )
 

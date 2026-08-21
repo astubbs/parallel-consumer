@@ -290,8 +290,15 @@ public final class ReferenceDemo {
             big.add(javaGrpcOverDomainSocket(total));
         }
         big.add(javaRawGrpc(total));
+        // The unit is chosen so this figure is never zero. At the demo's own defaults it is 80s and
+        // carries the whole argument for dropping the serial arm; at the volumes CI and the
+        // conformance harness run, integer seconds printed "0s+" - which told a reader the arm was
+        // dropped to save no time at all, and was the only false statement this demo made. Ten
+        // languages mirrored the wart from here, so the fix belongs here first.
+        long serialMillis = (long) total * options.delayMs();
+        String serialCost = serialMillis >= 1000 ? (serialMillis / 1000) + "s" : serialMillis + "ms";
         report("Big replay - " + total + " records, parallel arms only (AK core is serial and would"
-                + " take " + (total * options.delayMs() / 1000) + "s+)", big, baselineOf(small), true);
+                + " take " + serialCost + "+)", big, baselineOf(small), true);
 
         var everything = new ArrayList<ArmResult>(small);
         everything.addAll(big);

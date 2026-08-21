@@ -105,11 +105,14 @@ async function main(argv: readonly string[]): Promise<number> {
   // total * delayMs milliseconds to finish a backlog the sidecar arm clears in seconds, and a demo
   // that makes a reader wait that long to learn nothing new is not worth the wall clock.
   const big = [await typescriptGrpc(options, broker, topic, total)];
-  const serialSeconds = Math.trunc((total * options.delayMs) / 1_000);
+  // the unit is chosen so the figure is never zero - see the demo contract.
+  const serialMillis = total * options.delayMs;
+  const serialCost =
+    serialMillis >= 1_000 ? `${Math.trunc(serialMillis / 1_000)}s` : `${serialMillis}ms`;
   process.stdout.write(
     table(
       `Big replay - ${total} records, parallel arms only (AK core is serial and would take ` +
-        `${serialSeconds}s+)`,
+        `${serialCost}+)`,
       big,
       baseline,
       true,

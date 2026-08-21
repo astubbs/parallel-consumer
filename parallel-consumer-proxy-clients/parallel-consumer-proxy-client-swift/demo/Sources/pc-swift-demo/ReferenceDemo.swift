@@ -151,10 +151,13 @@ struct ReferenceDemo {
         // total * delayMs milliseconds to finish a backlog the sidecar arm clears in seconds, and
         // waiting that long to learn nothing new is not worth the wall clock.
         let big = [try await swiftGrpc(target: total)]
+        // the unit is chosen so the figure is never zero - see the demo contract.
+        let serialMillis = total * options.delayMs
+        let serialCost = serialMillis >= 1000 ? "\(serialMillis / 1000)s" : "\(serialMillis)ms"
         Note.say(
             ArmTable.render(
                 title: "Big replay - \(total) records, parallel arms only (AK core is serial and "
-                    + "would take \(total * options.delayMs / 1000)s+)",
+                    + "would take \(serialCost)+)",
                 results: big, baseline: baseline, acrossReplays: true))
     }
 

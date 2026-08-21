@@ -133,8 +133,9 @@ module ParallelConsumer
       # same expression is 80s and carries the whole argument. So the figure appears when it is an
       # argument and is silent when it is not - "AK core is serial" is true at every volume.
       def serial_cost
-        seconds = @options.big_replay_records * @options.delay_ms / 1000
-        seconds.positive? ? " and would take #{seconds}s+" : ""
+        millis = @options.big_replay_records * @options.delay_ms
+        figure = millis >= 1000 ? "#{millis / 1000}s" : "#{millis}ms"
+        " and would take #{figure}+"
       end
 
       # THE SERIAL ARM: one record at a time, the same sleep, in this process.

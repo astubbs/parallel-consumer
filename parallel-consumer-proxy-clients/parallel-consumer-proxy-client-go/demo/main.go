@@ -151,7 +151,13 @@ func (d demo) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	report(fmt.Sprintf("Big replay - %d records, parallel arms only (AK core is serial and would take %ds+)",
-		total, total*d.options.delayMs/1000), []armResult{big}, &akCore, true)
+	// the unit is chosen so the figure is never zero - see the demo contract.
+	serialMillis := total * d.options.delayMs
+	serialCost := fmt.Sprintf("%dms", serialMillis)
+	if serialMillis >= 1000 {
+		serialCost = fmt.Sprintf("%ds", serialMillis/1000)
+	}
+	report(fmt.Sprintf("Big replay - %d records, parallel arms only (AK core is serial and would take %s+)",
+		total, serialCost), []armResult{big}, &akCore, true)
 	return nil
 }

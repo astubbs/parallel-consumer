@@ -154,9 +154,13 @@ public:
         // a reader wait that long to learn nothing new is not worth the wall clock.
         std::vector<ArmResult> big;
         big.push_back(cpp_grpc(total));
+        // the unit is chosen so the figure is never zero - see the demo contract.
+        const long serial_millis = static_cast<long>(total) * options_.delay_ms;
+        const std::string serial_cost = serial_millis >= 1000
+                                            ? std::to_string(serial_millis / 1000) + "s"
+                                            : std::to_string(serial_millis) + "ms";
         report("Big replay - " + std::to_string(total) + " records, parallel arms only (AK core is serial"
-                       + " and would take " + std::to_string(static_cast<long>(total) * options_.delay_ms / 1000)
-                       + "s+)",
+                       + " and would take " + serial_cost + "+)",
                big, &small.front(), true);
     }
 

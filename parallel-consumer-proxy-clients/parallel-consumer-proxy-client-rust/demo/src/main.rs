@@ -111,10 +111,16 @@ async fn run(options: DemoOptions) -> Result<(), String> {
     // milliseconds to finish a backlog the sidecar arm clears in seconds, and a demo that makes a
     // reader wait that long to learn nothing new is not worth the wall clock.
     let big = vec![arms::rust_grpc(&broker, &options, &sidecar, &topic, total).await?];
+    // the unit is chosen so the figure is never zero - see the demo contract.
+    let serial_millis = total as u64 * options.delay_ms;
+    let serial_cost = if serial_millis >= 1000 {
+        format!("{}s", serial_millis / 1000)
+    } else {
+        format!("{serial_millis}ms")
+    };
     report(
         &format!(
-            "Big replay - {total} records, parallel arms only (AK core is serial and would take {}s+)",
-            total as u64 * options.delay_ms / 1000
+            "Big replay - {total} records, parallel arms only (AK core is serial and would take {serial_cost}+)"
         ),
         &big,
         baseline_of(&small),

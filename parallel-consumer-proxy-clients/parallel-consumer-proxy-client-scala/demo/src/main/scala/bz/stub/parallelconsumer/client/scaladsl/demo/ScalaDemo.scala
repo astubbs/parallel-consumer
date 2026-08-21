@@ -188,9 +188,12 @@ object ScalaDemo {
       // the figure it carries is what the engine sustains once start-up stops dominating, and the
       // small replay above is where the comparison lives.
       val big = Seq(sidecar(options, broker, topic, total))
+      // the unit is chosen so the figure is never zero - see the demo contract.
+      val serialMillis = total.toLong * options.delayMs
+      val serialCost = if (serialMillis >= 1000) s"${serialMillis / 1000}s" else s"${serialMillis}ms"
       report(
         s"Big replay - $total records, parallel arms only (AK core is serial and would take " +
-          s"${total * options.delayMs / 1000}s+)",
+          s"$serialCost+)",
         big,
         baseline,
         acrossReplays = true)

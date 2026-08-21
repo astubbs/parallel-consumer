@@ -211,10 +211,13 @@ internal static class Program
         {
             await SidecarArmAsync(options, broker, topic, total).ConfigureAwait(false),
         };
+        // the unit is chosen so the figure is never zero - see the demo contract.
+        var serialMillis = (long)total * options.DelayMs;
+        var serialCost = serialMillis >= 1000 ? $"{serialMillis / 1000}s" : $"{serialMillis}ms";
         Report(
             string.Create(
                 CultureInfo.InvariantCulture,
-                $"Big replay - {total} records, parallel arms only (AK core is serial and would take {total * options.DelayMs / 1000}s+)"),
+                $"Big replay - {total} records, parallel arms only (AK core is serial and would take {serialCost}+)"),
             big,
             baseline,
             acrossReplays: true);
