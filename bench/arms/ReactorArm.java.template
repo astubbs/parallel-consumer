@@ -1,0 +1,59 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import __PKG__.reactor.ReactorProcessor;
+import reactor.core.publisher.Mono;
+
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+
+import java.util.Collections;
+
+/**
+ * The Reactor engine - an {@code ExternalEngine}, like Vert.x and Mutiny.
+ * <p>
+ * It exists because the family was ASSUMED to behave alike and only Vert.x had ever been run. The
+ * whole argument that Parallel Consumer escapes the platform-thread ceiling when its callee is async
+ * (docs/inflight/perf-vertx-already-beats-the-thread-ceiling.md) rested on one engine plus the
+ * inference that a shared superclass makes the rest behave the same. That inference is load-bearing
+ * for the advice this project gives users, so it is worth a measurement rather than a paragraph.
+ * <p>
+ * <b>The user function returns a {@code Mono} that is already in flight.</b>
+ * {@code Bench#callCallee} issues a non-blocking request and hands back its future; wrapping it in
+ * {@code Mono.fromCompletionStage} adapts it without ever parking a thread. A {@code Mono.delay} would
+ * have been simpler and would have measured a different experiment - no callee at all - which is what
+ * BENCH_TIMER_CALLEE exists for, as a labelled control rather than as the default.
+ * <p>
+ * <b>Scheduler note, because it bounds what this arm can show.</b> {@code ReactorProcessor} defaults
+ * to {@code Schedulers.boundedElastic()}, capped at ten threads per core, and subscribes each record's
+ * Mono on it. That is fine here only because the subscription work is "issue a request and return" -
+ * microseconds. A user whose reactive chain blocks would meet that cap instead, and this arm says
+ * nothing about that case. It is the default a user gets, which is why it is what is measured.
+ * <p>
+ * <b>The returned publisher MUST emit exactly one item, and that is a property of the engine rather
+ * than a style choice here.</b> {@code ReactorProcessor.react} subscribes with
+ * {@code subscribe(item -> onComplete(context), error -> onError(context, error))} - an onNext
+ * consumer and no onComplete one. A record is therefore marked successful by its first EMITTED ITEM:
+ * a publisher that completes empty never completes its record at all, and one that emits n items
+ * completes it n times. See docs/inflight/bug-reactor-completes-on-item-not-on-completion.md.
+ */
+public class ReactorArm implements BenchArm {
+
+    @Override
+    public long run(String bootstrap, String topic, int expected, int delayMs, int concurrency, int bufferSize)
+            throws Exception {
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(Bench.consumerProps(bootstrap));
+        ReactorProcessor<String, String> pc =
+                new ReactorProcessor<>(Bench.options(consumer, concurrency, bufferSize));
+        pc.subscribe(Collections.singletonList(topic));
+        Bench.responses.set(0);
+        long start = System.currentTimeMillis();
+        pc.react(ignored -> Mono.fromCompletionStage(Bench.callCallee(delayMs))
+                .doOnNext(response -> Bench.responses.incrementAndGet()));
+        while (Bench.responses.get() < expected) Bench.sleep(25);
+        long took = System.currentTimeMillis() - start;
+        Bench.windowClosed();
+        try { pc.closeDrainFirst(); } catch (Exception ignored) { }
+        return took;
+    }
+}

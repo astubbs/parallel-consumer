@@ -1,0 +1,53 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import __PKG__.mutiny.MutinyProcessor;
+import io.smallrye.mutiny.Uni;
+
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+
+import java.util.Collections;
+
+/**
+ * The SmallRye Mutiny engine - an {@code ExternalEngine}, like Vert.x and Reactor, and the one that
+ * had never been benchmarked at all: there was no template, no mode and no row for it anywhere.
+ * <p>
+ * <b>Fork-only, and Java 17-only.</b> No published Parallel Consumer release has this module, so this
+ * arm exists at PC_VERSIONS=LOCAL and nowhere else. The module's own release target is 17 because
+ * Mutiny 2.x is compiled for 17 - see parallel-consumer-mutiny/pom.xml - so a sweep of this mode on an
+ * older JVM fails at class-load, loudly, which is the intended behaviour.
+ * <p>
+ * <b>Completion semantics differ from Reactor's, and in Mutiny's favour.</b>
+ * {@code MutinyProcessor.onRecord} subscribes with an explicit completion callback
+ * ({@code subscribe().with(item -> {}, failure -> onError(..), () -> onComplete(..))}), so a record is
+ * completed by the stream's COMPLETION rather than by its first item - a {@code Uni} that resolves to
+ * null completes the record correctly, where the Reactor engine would leave it in flight forever. The
+ * shared callee emits a non-null value anyway, so this arm is not relying on the difference; it is
+ * recorded because the two engines are otherwise presented as interchangeable.
+ * <p>
+ * The user function returns a {@code Uni} over an already-in-flight non-blocking request, exactly as
+ * the Reactor arm does, so the two differ by their engine and by nothing else.
+ * {@code runSubscriptionOn} moves the subscribe onto Mutiny's default worker pool, where the work is
+ * "issue a request and return" and no thread is held for the callee's latency.
+ */
+public class MutinyArm implements BenchArm {
+
+    @Override
+    public long run(String bootstrap, String topic, int expected, int delayMs, int concurrency, int bufferSize)
+            throws Exception {
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(Bench.consumerProps(bootstrap));
+        MutinyProcessor<String, String> pc =
+                new MutinyProcessor<>(Bench.options(consumer, concurrency, bufferSize));
+        pc.subscribe(Collections.singletonList(topic));
+        Bench.responses.set(0);
+        long start = System.currentTimeMillis();
+        pc.onRecord(ignored -> Uni.createFrom().completionStage(Bench.callCallee(delayMs))
+                .onItem().invoke(response -> Bench.responses.incrementAndGet()));
+        while (Bench.responses.get() < expected) Bench.sleep(25);
+        long took = System.currentTimeMillis() - start;
+        Bench.windowClosed();
+        try { pc.closeDrainFirst(); } catch (Exception ignored) { }
+        return took;
+    }
+}

@@ -48,6 +48,12 @@ REPEATS=${4:-2}
 # "pc" = the Vert.x engine (an ExternalEngine); "core" = ParallelEoSStreamProcessor; "vanilla" = a
 # plain KafkaConsumer. Different code paths through the control loop, so a result from one says
 # nothing about the other. "llingr" is not PC at all - see the llingr arm below.
+#
+# THE OTHER ExternalEngines ARE ARMS TOO, as of 2026-08-21: "reactor", "mutiny" and "proxy". Until
+# then the project shipped four engines and compared one, and every cross-engine claim rested on
+# Vert.x plus the ASSUMPTION that a shared ExternalEngine superclass makes the family behave alike.
+# The proxy arm is the one that had to exist: astubbs#242's language proxies reach PC through
+# ProxyProcessor and through nothing else, so its ceiling is the ceiling of every non-JVM client.
 MODE=${MODE:-pc}
 # Modes to sweep. Listing more than one is how a comparison table is produced in a single run, e.g.
 #   MODES="core llingr" DELAYS="0 2 20 100" PC_VERSIONS=LOCAL bench/run-bisect.sh
@@ -81,16 +87,67 @@ CLIENT_PINS=${CLIENT_PINS:-"NATIVE 3.9.2"}
 
 log() { echo "[bisect] $*" >&2; }
 
+# --- the engine arm table -------------------------------------------------------------------------
+#
+# ONE TABLE, read by two things: which arm source to compile, and which Maven artifact that arm needs
+# on top of the base. Bench itself names no engine class - it resolves "<mode>" to "<Mode>Arm" by
+# reflection - because Bench.java.template must still compile against 0.3.0.2, and Mutiny and the
+# proxy exist in NO published release. An import of them in the shared template would not add an arm,
+# it would delete the version bisect.
+#
+# A mode with no entry here needs no arm: vanilla, pool and core are implemented in Bench itself
+# because they use no engine module. A mode whose artifact does not exist at the version being swept
+# fails to resolve and is recorded as COMPILE_FAILED, which is the honest outcome - reactor exists in
+# published releases, mutiny and proxy do not.
+arm_class() {
+  case $1 in
+    pc|vertx) echo VertxArm ;;
+    reactor)  echo ReactorArm ;;
+    mutiny)   echo MutinyArm ;;
+    proxy)    echo ProxyArm ;;
+  esac
+}
+# The base pom already carries parallel-consumer-vertx (it supplies both the Vert.x engine and the
+# vertx-core the async stub is built on), so the Vert.x arm needs nothing extra.
+arm_artifact() {
+  case $1 in
+    reactor) echo parallel-consumer-reactor ;;
+    mutiny)  echo parallel-consumer-mutiny ;;
+    proxy)   echo parallel-consumer-proxy ;;
+  esac
+}
+
+# THE ARM SET IS PER MODE, NOT PER SWEEP, and that is a correctness property rather than tidiness.
+# Deriving it once from MODES put every swept mode's artifact into ONE generated pom, so adding
+# "mutiny" to a version bisect made that pom demand parallel-consumer-mutiny at 0.5.3.2 - which does
+# not exist - and resolution then failed for the WHOLE arm directory. Every mode in the sweep, core
+# included, reported COMPILE_FAILED at every published version: one unavailable engine deleting ten
+# other arms' rows. Keyed per mode, an absent artifact fails only the mode that asked for it.
+
 # The broker lives in bench/lib/broker.sh, shared with run-divergence.sh: two harnesses quietly
 # agreeing on a DIFFERENT partition count would produce numbers that look comparable and are not.
 . "$HERE/lib/broker.sh"
 
 # Resolves a classpath for one (pcVersion, clientPin) pair and compiles the harness against it.
 # Echoes "<classesDir>:<classpath>" on success, nothing on failure.
+#
+# ONLY THE MAVEN RESOLUTION IS CACHED. The sources are regenerated and recompiled every time, and
+# that is not belt-and-braces: caching the COMPILED CLASSES silently published wrong numbers on
+# 2026-08-21. A BENCH_WORK directory left over from an earlier session still had cp.txt in it, so
+# this function returned before generating anything, and an entire sweep ran a build of the harness
+# from hours earlier. The old build had no async stub and no arm dispatch, so BENCH_ASYNC_STUB was
+# ignored and three brand-new engine modes all fell through that template's `else` branch into the
+# VERT.X arm - four "different engines" that were one engine, at a third of the throughput the same
+# operating point had just produced, with nothing anywhere saying so. It was caught only because the
+# Vert.x control disagreed with a committed figure.
+#
+# javac on four small files is a second; `dependency:build-classpath` across eleven versions is
+# minutes. Cache the slow half, never the half that decides what actually runs.
 prepare() {
-  local pcv=$1 pin=$2 tag="$1-$2"
-  local dir=$WORK/$tag
-  [ -f "$dir/cp.txt" ] && { echo "$dir/classes:$(cat "$dir/cp.txt")"; return 0; }
+  local pcv=$1 pin=$2 armmode=${3:-core}
+  local arm; arm=$(arm_class "$armmode")
+  # The arm is part of the cache key because it is part of what gets compiled and resolved.
+  local dir=$WORK/$pcv-$pin-${arm:-noarm}
   mkdir -p "$dir/classes" "$dir/src"
 
   # Every arm is a Maven coordinate, including this checkout's own build - install it with
@@ -107,18 +164,32 @@ prepare() {
   aid=parallel-consumer-vertx
   local pinblock=""
   [ "$pin" != "NATIVE" ] && pinblock="<dependency><groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>$pin</version></dependency>"
+  # The engine modules the arms in this sweep need, at the same version as the base artifact - so a
+  # bisect that reaches a release without one of them fails to RESOLVE and is recorded, rather than
+  # silently measuring today's engine against yesterday's core.
+  local armblock="" extra
+  extra=$(arm_artifact "$armmode")
+  [ -n "$extra" ] && armblock="<dependency><groupId>$gid</groupId><artifactId>$extra</artifactId><version>$ver</version></dependency>"
   cat > "$dir/pom.xml" <<POM
 <project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>
 <groupId>bench</groupId><artifactId>arm-$pcv</artifactId><version>1</version>
 <dependencies>
   $pinblock
+  $armblock
   <dependency><groupId>$gid</groupId><artifactId>$aid</artifactId><version>$ver</version></dependency>
   <dependency><groupId>com.github.tomakehurst</groupId><artifactId>wiremock-jre8</artifactId><version>2.35.2</version></dependency>
   <dependency><groupId>ch.qos.logback</groupId><artifactId>logback-classic</artifactId><version>1.3.14</version></dependency>
 </dependencies></project>
 POM
-  (cd "$dir" && mvn -q -B dependency:build-classpath -Dmdep.outputFile="$dir/cp.raw" >/dev/null 2>&1) || return 1
-  cp=$(cat "$dir/cp.raw")
+  # The cached half: resolution is minutes across a full sweep and depends only on the generated pom,
+  # which is regenerated above - so a changed arm set invalidates it by changing the pom's checksum.
+  if [ -f "$dir/cp.raw" ] && [ -f "$dir/pom.sum" ] && [ "$(cksum < "$dir/pom.xml")" = "$(cat "$dir/pom.sum")" ]; then
+    cp=$(cat "$dir/cp.raw")
+  else
+    (cd "$dir" && mvn -q -B dependency:build-classpath -Dmdep.outputFile="$dir/cp.raw" >/dev/null 2>&1) || return 1
+    cksum < "$dir/pom.xml" > "$dir/pom.sum"
+    cp=$(cat "$dir/cp.raw")
+  fi
 
   # Jabel ships as a transitive of older PC releases and javac auto-loads it as a compiler plugin
   # via ServiceLoader, where its 2021 ASM cannot read modern class files. It is compile-time-only
@@ -128,9 +199,20 @@ POM
   # bench/conf goes FIRST on every runtime classpath, so logback.xml is found before anything an
   # arm might drag in. See bench/conf/logback.xml for what this is protecting against.
   cp="$HERE/conf:$cp"
+  # The shared harness, its arm interface, and ONLY the arms this sweep needs. Compiling every arm
+  # unconditionally would put the Mutiny and proxy types on the compile path of a bisect that is not
+  # measuring them, and neither exists in any published release - so the sweep would fail at the arm
+  # rather than at the version, which is a confusing way to say "not published".
+  #
+  # Wipe first. A .class left behind by a previous sweep's arm set is still resolvable by name, and
+  # Bench finds its arms BY NAME - so a stale ProxyArm.class would run happily against a template
+  # that no longer exists. That is the same failure the caching comment above describes, one level
+  # down, and it costs nothing to make impossible.
+  rm -f "$dir/classes"/*.class "$dir/src"/*.java
   sed "s/__PKG__/$pkg/" "$HERE/Bench.java.template" > "$dir/src/Bench.java"
-  javac -nowarn -cp "$cp" -d "$dir/classes" "$dir/src/Bench.java" >"$dir/javac.log" 2>&1 || return 1
-  echo "$cp" > "$dir/cp.txt"
+  sed "s/__PKG__/$pkg/" "$HERE/BenchArm.java.template" > "$dir/src/BenchArm.java"
+  [ -n "$arm" ] && sed "s/__PKG__/$pkg/" "$HERE/arms/$arm.java.template" > "$dir/src/$arm.java"
+  javac -nowarn -cp "$cp" -d "$dir/classes" "$dir/src"/*.java >"$dir/javac.log" 2>&1 || return 1
   echo "$dir/classes:$cp"
 }
 
@@ -159,7 +241,28 @@ run_one() {
   # ${jfr[@]+"${jfr[@]}"} rather than "${jfr[@]}": macOS ships bash 3.2, where expanding an EMPTY
   # array under `set -u` is an unbound-variable error. Written the obvious way, this made every
   # unprofiled run fail - silently, as RUN_FAILED rows - while the profiled path worked fine.
-  java ${jfr[@]+"${jfr[@]}"} -cp "$cp" Bench "$@" 2>/dev/null | parse_result
+  # STDERR GOES TO A FILE AND IS THEN CHECKED, rather than to /dev/null.
+  #
+  # bench/conf/logback.xml pins every arm at WARN and says why in its own header: "an arm that is
+  # failing and retrying should still say so, and silence would hide it." This line threw that away,
+  # so the one signal that separates a slow arm from a FAILING one never reached anybody. PC retries
+  # a failed user function after a second by default: an arm with a real failure rate is measuring
+  # retry scheduling, and prints a throughput figure while doing it.
+  #
+  # ONLY ERRORS BEFORE BENCH_WINDOW_CLOSED COUNT. Teardown closes the callee while the engine still
+  # has records out, so every run ends with roughly `concurrency` failures - see Bench#windowClosed,
+  # which also records the control that established they are teardown and not a storm. Checking the
+  # whole file would fire on every run, and a warning that always fires is not a warning.
+  local err=$WORK/last-run.err
+  java ${jfr[@]+"${jfr[@]}"} -cp "$cp" Bench "$@" 2>"$err" | parse_result
+  # `sed '/PAT/q'`, not `sed -n '1,/PAT/p'`: a `1,/PAT/` range does not test the end pattern on line
+  # 1, so when the marker IS line 1 - which happens whenever an arm logs nothing during its run, the
+  # healthy case - the range never closes and the whole teardown log is scanned. That fired the
+  # warning on a clean run the first time it was written.
+  if sed '/BENCH_WINDOW_CLOSED/q' "$err" 2>/dev/null | grep -qE '^ERROR|fail signal'; then
+    log "WARNING: $* logged errors INSIDE the measured window - that result includes retries. See $err"
+    cp "$err" "$err.$(echo "$*" | tr ' /' '__')"
+  fi
 }
 
 # --- the llingr arm --------------------------------------------------------------------------
@@ -257,7 +360,21 @@ fi
 # delay_ms and concurrency are columns because both are now swept axes; without them a multi-delay
 # or multi-concurrency results file cannot be read back. Everything else is unchanged, so llingr,
 # franz and PC rows all sit in one table.
-echo "pc_version,client_pin,mode,ordering,partitions,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+#
+# records IS A COLUMN even though one invocation cannot vary it, and callee likewise. Both are
+# settings a sweep fixes and a RESULTS FILE accumulates across invocations, which is exactly the
+# shape that has burned this repository: a 100,000-record row was compared against a 500,000-record
+# one and published as a 21% ordering-mode deficit that did not exist. The callee has now done the
+# same thing to Vert.x - the WireMock stub caps high-concurrency runs server-side, so a capped row
+# and an uncapped one sit side by side looking comparable. Emitting them is cheap; recovering them
+# later is impossible.
+# CALLEE_LABEL doubles as the record of which stub the run used, resolved once so no row can
+# disagree with another about a setting that is process-wide.
+if [ -n "${BENCH_TIMER_CALLEE:-}" ]; then CALLEE_LABEL=timer
+elif [ -n "${BENCH_ASYNC_STUB:-}" ]; then CALLEE_LABEL=async
+else CALLEE_LABEL=blocking; fi
+MAX_POLL=${BENCH_MAX_POLL_RECORDS:-500}
+echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
 for mode in $MODES; do
   # The two Go arms differ only in which binary they build and what they call themselves, so they
   # share one branch rather than two near-identical copies of the sweep loop.
@@ -273,7 +390,7 @@ for mode in $MODES; do
           read -r rate peak <<< "$(run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c")"
           [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-          echo "$ver,franz,$mode,$ORDERING,$PARTITIONS,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak" >> "$RESULTS"
         done
       done
     done
@@ -282,14 +399,14 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,$mode,$ORDERING,$PARTITIONS,,,,COMPILE_FAILED" >> "$RESULTS"; continue; }
+      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED," >> "$RESULTS"; continue; }
       for c in $CONCURRENCIES; do
         for d in $DELAYS; do
           for r in $(seq 1 "$REPEATS"); do
             read -r rate peak <<< "$(run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER")"
             [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
             log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-            echo "$pcv,$pin,$mode,$ORDERING,$PARTITIONS,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak" >> "$RESULTS"
           done
         done
       done
