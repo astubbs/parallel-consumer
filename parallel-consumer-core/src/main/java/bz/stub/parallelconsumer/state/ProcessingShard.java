@@ -42,8 +42,12 @@ public class ProcessingShard<K, V> {
      * <p>
      * Is a Map because need random access into collection, as records don't always complete in order (i.e. UNORDERED
      * mode).
+     * <p>
+     * <b>Deliberately not exposed.</b> Every insertion and removal has to be paired with a
+     * {@link RecordPopulation} admission or retirement, and that pairing is only enforceable while this class is
+     * the only thing that can touch the map. Read-only totals are available through
+     * {@link #getCountOfWorkTracked()}.
      */
-    @Getter
     private final NavigableMap<Long, WorkContainer<K, V>> entries = new ConcurrentSkipListMap<>();
 
 
@@ -54,8 +58,29 @@ public class ProcessingShard<K, V> {
 
     private final PartitionStateManager<K, V> pm;
 
+    /**
+     * The conservation-derived count of records held across <em>all</em> shards, which this shard contributes its
+     * admissions and retirements to. Shared instance, owned by {@link ShardManager}.
+     */
+    private final RecordPopulation population;
+
     private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
+    /**
+     * Approximately how many of this shard's {@link #entries} are selectable as work right now.
+     * <p>
+     * <b>This no longer gates record intake</b> - see {@link WorkManager#isSufficientlyLoaded()}, which reads the
+     * conservation figure instead. It survives as the input to the {@code WAITING_RECORDS} metric, the
+     * under-served-retrieval diagnostic, and the shutdown drain check, and it remains an <em>approximation</em>:
+     * it is incremented when a record is put back for retry, which is before its retry delay has passed, and
+     * {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()} nets that out against the retry queue
+     * rather than this shard doing so.
+     * <p>
+     * There is deliberately no clamp on it. A clamp is only defensible while something depends on the value being
+     * non-negative, and once the load gate stopped reading it, nothing does - the aggregate in
+     * {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()} floors its own result. Hiding a
+     * negative here only hid one direction of drift, and made the other direction impossible to see at all.
+     */
     private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
 
     public void addWorkContainer(WorkContainer<K, V> wc) {
@@ -64,13 +89,14 @@ public class ProcessingShard<K, V> {
             log.debug("Entry for {} already exists in shard queue, dropping record", wc);
         } else {
             entries.put(key, wc);
+            population.onAdmitted();
             availableWorkContainerCnt.incrementAndGet();
         }
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {
         // remove work from shard's queue
-        entries.remove(wc.offset());
+        retireAlreadyDeducted(entries.remove(wc.offset()));
     }
 
     /**
@@ -102,13 +128,13 @@ public class ProcessingShard<K, V> {
                 .count();
     }
 
+    /**
+     * Removes the record at this offset, if it is still held. Reached from the partition revocation sweep.
+     */
     public WorkContainer<K, V> remove(long offset) {
-        // from onPartitionsRemoved callback, need to deduce the available worker count for the revoked partition
-        WorkContainer<K, V> toRemovedWorker = entries.get(offset);
-        if (toRemovedWorker != null && toRemovedWorker.isAvailableToTakeAsWork()) {
-            dcrAvailableWorkContainerCntByDelta(1);
-        }
-        return entries.remove(offset);
+        WorkContainer<K, V> removed = entries.remove(offset);
+        retireAndDeductIfStillCounted(removed);
+        return removed;
     }
 
 
@@ -123,7 +149,7 @@ public class ProcessingShard<K, V> {
             Map.Entry<Long, WorkContainer<K, V>> entry = iterator.next();
             if (isWorkContainerStale(entry.getValue())) {
                 iterator.remove();  // Safe even on ConcurrentSkipListMap
-                dcrAvailableWorkContainerCntByDelta(1);
+                retireAndDeductIfStillCounted(entry.getValue());
                 staleContainers.add(entry.getValue());
             }
         }
@@ -167,10 +193,11 @@ public class ProcessingShard<K, V> {
                 //  matter.
 
                 if (isWorkContainerStale(workContainer)) {
-                    // remove stale container and deduct on availableWorkContainerCnt
+                    // last-resort sweep, for a container that went stale without either epoch-change sweep
+                    // having reached it - it still has to be retired like every other departure
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
-                    dcrAvailableWorkContainerCntByDelta(1);
                     iterator.remove();
+                    retireAndDeductIfStillCounted(workContainer);
                 } else {
                     log.trace("Partition for shard {} is blocked for work taking, stopping shard scan", this);
                     break;
@@ -237,11 +264,39 @@ public class ProcessingShard<K, V> {
         return pm.getPartitionState(workContainer).checkIfWorkIsStale(workContainer);
     }
 
-    private void dcrAvailableWorkContainerCntByDelta(int ByNum) {
-        availableWorkContainerCnt.getAndAdd(-1 * ByNum);
-        // in case of possible race condition
-        if (availableWorkContainerCnt.get() < 0L) {
-            availableWorkContainerCnt.set(0L);
+    private void dcrAvailableWorkContainerCntByDelta(int byNum) {
+        availableWorkContainerCnt.getAndAdd(-1L * byNum);
+    }
+
+    /**
+     * The record has left this shard, and the available-work counter had <em>already</em> deducted it when it was
+     * selected as work - so only the population is updated.
+     */
+    private void retireAlreadyDeducted(WorkContainer<?, ?> removed) {
+        if (removed != null) {
+            population.onRetired();
+        }
+    }
+
+    /**
+     * The record has left this shard without being processed to a conclusion - revoked, or swept as stale.
+     * <p>
+     * Whether the available-work counter still holds a unit for it depends on where the record was when it went:
+     * one out at a worker was deducted at selection, one sitting in the shard (including one waiting out a retry
+     * delay, which {@link #markAvailableAgain()} counted back in) was not. {@link WorkContainer#isNotInFlight()}
+     * is what separates the two.
+     * <p>
+     * The old test here was {@link WorkContainer#isAvailableToTakeAsWork()}, which additionally requires the retry
+     * delay to have passed. That made revoking a record parked in retry back-off leave its increment behind
+     * permanently, high, in the direction the clamp never caught.
+     */
+    private void retireAndDeductIfStillCounted(WorkContainer<?, ?> removed) {
+        if (removed == null) {
+            return;
+        }
+        population.onRetired();
+        if (removed.isNotInFlight()) {
+            dcrAvailableWorkContainerCntByDelta(1);
         }
     }
 }

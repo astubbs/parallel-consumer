@@ -79,11 +79,12 @@ stopped them is information this note does not have.
   designed for exactly this producer/consumer shape. A new dependency, which is a real cost for a
   library.
 - **A sharded counter, for the related problem.** `workMailBox.size()` is read on the drain path, and
-  `ProcessingShard.availableWorkContainerCnt` has a drift clamp
-  ([`bug-available-work-counter-needs-a-clamp.md`](bug-available-work-counter-needs-a-clamp.md)). The
-  JDK already ships the sharded-counter idea as **`LongAdder`** - striped cells, contention-free
+  `ProcessingShard.availableWorkContainerCnt` is still an approximation
+  ([`bug-available-work-counter-is-still-an-approximation.md`](bug-available-work-counter-is-still-an-approximation.md)).
+  The JDK already ships the sharded-counter idea as **`LongAdder`** - striped cells, contention-free
   increment, `sum()` on read. It is the right tool for a counter written by many threads and read by
-  one, and it needs no dependency.
+  one, and it needs no dependency. `RecordPopulation`, which replaced the drift clamp that used to be
+  cited here, is built on exactly that.
 
 ## State this as a hypothesis, because the register says to
 
