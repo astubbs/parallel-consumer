@@ -175,12 +175,17 @@ assertion in the harness would close that.
 
 ## Reconciliation items found during the polish wave
 
-- **Rust's column order differs from the other five.** It placed `records | keys` *after*
-  `vs AK core`; python, typescript, scala, kotlin and go all placed them immediately after `arm`.
-  Rust's reasoning was sound from where it stood - that position was the only one that kept the old
-  `HEADER` regex matching - but the contract now fixes the order and the parser has been repaired,
-  so this is one format string to normalise at merge. **Check all eleven**, since the drift check
-  could not distinguish them while its row pattern was broken.
+- **Two languages placed the new columns differently, and both were reasoning correctly.** Rust and
+  .NET put `records | keys` *after* `vs AK core`; python, typescript, scala, kotlin and go put them
+  immediately after `arm`. Both Rust and .NET said explicitly why: the harness's `HEADER` pattern was
+  **not end-anchored**, so appending was the only position that kept the check passing, while its
+  `ROW` pattern was end-anchored and broke either way.
+
+  **That is the lesson worth keeping.** The contract was silent on position and the regex was not, so
+  two independent implementers let a broken test define the spec - which is what an under-specified
+  contract plus a visible check will always produce. The contract now fixes the order and the parser
+  is repaired, so this is one format string each at merge. **Check all eleven**: the drift check was
+  structurally unable to tell them apart while its row pattern matched nothing.
 
 - **Ruby and Rust both publish host port 29092**, so their demos cannot run back to back without
   `Bind for 0.0.0.0:29092 failed`. Python already parameterises its port
