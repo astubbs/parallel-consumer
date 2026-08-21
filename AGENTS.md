@@ -250,7 +250,9 @@ counts. This is a community-maintained fork of the no-longer-maintained
 - **Docker** (integration tests - TestContainers spins up Kafka brokers)
 - **Maven via wrapper** (`./mvnw`) - do not use system Maven
 - **[mise](https://mise.jdx.dev)**, for the cross-language conformance module and the client
-  builds. It provides every foreign toolchain except the two that build in containers
+  builds. `mise install` reads **`mise.toml`**, which is the single declaration of every toolchain
+  version; the CI matrix mirrors it and `bin/check-toolchain-versions.sh` fails if the two ever
+  disagree. It provides every foreign toolchain except the two that build in containers
   (`bin/build-client.sh` names them: C++ and Swift). **Agents may install it and run `mise use -g`
   themselves** - that call is recorded in
   [`docs/inflight/parked-containerised-toolchains-and-runtime.md`](docs/inflight/parked-containerised-toolchains-and-runtime.md),

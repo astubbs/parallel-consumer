@@ -38,6 +38,8 @@
 
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+readonly REPO_ROOT
 readonly CLIENTS_DIR="parallel-consumer-proxy-clients"
 readonly MODULE_PREFIX="parallel-consumer-proxy-client-"
 readonly PROTO_CONTEXT="parallel-consumer-proxy-protocol/src/main/proto"
@@ -155,11 +157,96 @@ maven_module_list() { # <module dir> -> comma-separated :artifactId list
     printf '%s' "$list"
 }
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# TOOLCHAIN VERSION ASSERTION
+#
+# Maven shells out to whatever `go`, `ruby`, `node`, `python3`, `rustc` or `dotnet` is on PATH, and
+# a wrong one does not announce itself - it produces an error deep inside a module nobody touched.
+# Both real cases cost an hour each before anyone suspected their PATH: Go 1.23 against a 1.25
+# module reports `go.mod: unknown block type: tool`, and macOS's system Ruby 2.6 reports a missing
+# `bundler`. Neither says "your toolchain is the wrong version", which is the only useful sentence.
+#
+# MAJOR.MINOR, NOT EXACT. mise.toml and CI pin an exact patch and `bin/check-toolchain-versions.sh`
+# holds those two declarations identical - but asserting the patch HERE would fail every developer
+# whose mise resolved one release along (this was written on a box with go 1.25.14 against a pinned
+# 1.25.13) while catching nothing: every failure this guard exists for was a major or minor gap.
+#
+# A version it cannot read is a FAILURE, not a pass. "I could not check" and "it is fine" must never
+# look the same - the rule bin/AGENTS.md states for every script here.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+# The runtime each language builds with. `typescript` is the one place the language and the tool have
+# different names, matching the mapping in bin/check-toolchain-versions.sh.
+tool_for_language() { # <language> -> tool name, or empty when the language has no host toolchain
+    case "$1" in
+        typescript) printf 'node' ;;
+        go | ruby | rust | python | dotnet) printf '%s' "$1" ;;
+        *) printf '' ;;
+    esac
+}
+
+declared_version() { # <tool> -> the version mise.toml pins, or empty
+    local mise="$REPO_ROOT/mise.toml"
+    [ -f "$mise" ] || return 0
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$mise" | head -1
+}
+
+active_version() { # <tool> -> the version actually on PATH, or empty when it cannot be determined
+    case "$1" in
+        go)     go version 2>/dev/null | sed -n 's/.*go\([0-9][0-9.]*\).*/\1/p' ;;
+        ruby)   ruby --version 2>/dev/null | sed -n 's/^ruby \([0-9][0-9.]*\).*/\1/p' ;;
+        rust)   rustc --version 2>/dev/null | sed -n 's/^rustc \([0-9][0-9.]*\).*/\1/p' ;;
+        python) python3 --version 2>/dev/null | sed -n 's/^Python \([0-9][0-9.]*\).*/\1/p' ;;
+        node)   node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9.]*\).*/\1/p' ;;
+        dotnet) dotnet --version 2>/dev/null | sed -n 's/^\([0-9][0-9.]*\).*/\1/p' ;;
+        *)      printf '' ;;
+    esac
+}
+
+major_minor() { # <version> -> first two components
+    printf '%s' "$1" | cut -d. -f1,2
+}
+
+assert_toolchain_version() { # <language>
+    local language="$1" tool declared active
+    tool="$(tool_for_language "$language")"
+    [ -n "$tool" ] || return 0
+
+    declared="$(declared_version "$tool")"
+    if [ -z "$declared" ]; then
+        die 1 "$language: mise.toml pins no version for $tool, so the toolchain cannot be checked.
+        Add it, or remove $language from tool_for_language() and say why it has no host toolchain."
+    fi
+
+    active="$(active_version "$tool")"
+    if [ -z "$active" ]; then
+        die 1 "$language: could not determine the installed $tool version - is it on PATH?
+        mise.toml pins $tool $declared; install it with 'mise install' (or 'mise use -g $tool@$declared').
+        Refusing to build rather than guess: an unreadable toolchain is not a working one."
+    fi
+
+    if [ "$(major_minor "$active")" != "$(major_minor "$declared")" ]; then
+        die 1 "$language: wrong $tool version.
+          on PATH   : $active
+          mise.toml : $declared
+        Install the pinned one with 'mise install', or 'mise use -g $tool@$declared'.
+        Building anyway produces an error inside a module you did not touch - Go reports
+        'unknown block type: tool', Ruby reports a missing bundler - which reads as project breakage."
+    fi
+
+    if [ "$active" != "$declared" ]; then
+        printf '==> %s: %s %s on PATH, %s pinned - same minor, continuing\n' \
+            "$language" "$tool" "$active" "$declared"
+    fi
+}
+
 build_natively() { # <maven phase>
     local phase="$1"
     local module_dir="$CLIENTS_DIR/$MODULE_PREFIX$LANGUAGE"
     local projects
     projects="$(maven_module_list "$module_dir")"
+
+    assert_toolchain_version "$LANGUAGE"
 
     printf '==> %s: native toolchain via Maven (%s), projects %s\n' "$LANGUAGE" "$phase" "$projects"
     # No `clean`, deliberately: several agents and worktrees share this tree, and a clean here would

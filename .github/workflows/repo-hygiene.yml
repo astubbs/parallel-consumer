@@ -99,6 +99,25 @@ jobs:
       - name: One version per action
         run: bash bin/check-action-versions.sh
 
+  toolchain-versions:
+    name: "toolchains: one declaration"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # mise.toml and the clients.yml matrix pin the same toolchains and install them differently on
+      # purpose - mise locally, setup-* actions on the runner, because those carry the client
+      # matrix's caching and ruby/setup-ruby is SHA-pinned. Nothing compared the two numbers, and
+      # they had already drifted by whole major versions (dotnet 8 vs 9, node 22 vs 25). That is the
+      # "passes locally, fails in CI" shape, and its nastier reverse where CI runs the older runtime
+      # and the developer never sees the failure their change causes.
+      - name: Self-test the toolchain-version gate
+        run: bash bin/test-check-toolchain-versions.sh
+
+      - name: mise.toml and the client matrix declare the same versions
+        run: bash bin/check-toolchain-versions.sh
+
   deferred-modules:
     name: "clients: deferred modules"
     runs-on: ubuntu-latest

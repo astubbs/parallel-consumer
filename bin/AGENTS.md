@@ -87,6 +87,20 @@ caught it in review, and the same mistake had been seen before.
 The github-actions ecosystem was re-enabled in `.github/dependabot.yml` at the same time; it had
 been off since 2022, when the repo genuinely had no workflows.
 
+**One toolchain declaration.** `bin/check-toolchain-versions.sh` fails when `mise.toml` and the
+`.github/workflows/clients.yml` matrix disagree about a language's version, and runs in Repo Hygiene
+behind its own self-test. The two *install* differently on purpose - mise locally, `setup-*` actions
+on the runner, which carry the client matrix's caching and a SHA-pinned `ruby/setup-ruby` - but they
+must never *declare* differently. Same class as the rule above: **nothing else could catch it**, and
+they had already drifted by whole major versions (dotnet 8 against 9, node 22 against 25) before the
+gate existed. The four languages with no host toolchain (swift and cpp build in containers, kotlin
+and scala on the Maven reactor) are asserted absent from both, so "nobody declared it" cannot be
+mistaken for "it deliberately has none".
+
+`bin/build-client.sh` asserts the *installed* version separately, at build time, on major.minor
+only - the declarations are exact, but a developer one patch along from the pin is not a problem
+worth blocking, and every failure the assertion exists for was a major or minor gap.
+
 **Temporary CVE exclusions expire.** `bin/check-cve-exclusions.sh` parses the root pom's
 `excludeVulnerabilityIds` and fails once an entry marked `TEMPORARY-SINCE: YYYY-MM-DD` is more than
 90 days old - also on an undated, unparseable or future-dated marker, and on an id with no rationale

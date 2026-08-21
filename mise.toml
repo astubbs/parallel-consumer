@@ -1,0 +1,27 @@
+# The toolchain versions this repository builds against.
+#
+# THIS FILE IS THE SINGLE DECLARATION. `.github/workflows/clients.yml` installs the same versions
+# with per-language `setup-*` actions rather than with mise, because those actions also carry the
+# caching the client matrix depends on and `ruby/setup-ruby` is pinned by commit SHA - a supply-chain
+# posture worth keeping. So the two INSTALL differently on purpose, and `bin/check-toolchain-versions.sh`
+# asserts they never DECLARE differently. Change a version here and that gate will tell you to change
+# the matrix to match; nothing else compares them, and they had already drifted by whole major
+# versions (dotnet 8 against 9, node 22 against 25) before the gate existed.
+#
+# Four languages are deliberately absent, and their absence is checked too:
+#   swift, cpp     - built in a container by `bin/build-client.sh`, so no host toolchain is pinned
+#   kotlin, scala  - built by the Maven reactor, so the JDK is their toolchain
+#
+# The JDK itself is not here. It is installed per developer (sdkman, brew, a distribution package)
+# and by `actions/setup-java` in CI; AGENTS.md states the requirement and the failure mode when it is
+# wrong. Folding it in would be more DRY and is a bigger change than this file.
+#
+# Install everything with `mise install`, or one with `mise use -g go@1.25.13`.
+
+[tools]
+go = "1.25.13"
+python = "3.13.5"
+rust = "1.88.0"
+dotnet = "8.0.404"
+node = "22.17.0"
+ruby = "3.4.4"
