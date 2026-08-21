@@ -62,6 +62,27 @@ with itself the way a counter drifts. **That is the real prize in that note - no
 It needs a structure whose size is O(1), which rules out `ConcurrentSkipListSet` and points at a
 `ConcurrentHashMap` plus an ordered view, or a maintained size on a purpose-built holder.
 
+**And if a counter survives at all, keep it as a `LongAdder`, not an `AtomicLong`.** The owner's
+framing was exactly right - *a counter that needs no lock on write, only a reduce on read*. That is
+`LongAdder`: increments are spread across striped cells so writers rarely touch the same memory, and
+`sum()` reduces them on read. It ships in the JDK and needs no dependency.
+
+**It does not fix the drift on its own**, and the distinction matters. `LongAdder` removes *write
+contention*; the drift here is that the counter and the collection it describes are updated at
+different moments by different threads. **A contention-free wrong number is still wrong.** Use it if a
+counter survives the redesign; do not reach for it as the fix.
+
+**And if a counter is kept, keep it as a `LongAdder`, not an `AtomicLong`.** The owner's framing was
+exactly right - *a counter that does not need a lock on write, only a reduce on read*. That is
+`LongAdder`: it spreads increments across striped cells so writers rarely touch the same memory, and
+`sum()` reduces them on read. It ships in the JDK, needs no dependency, and is the correct tool for a
+counter written by many threads and read by one.
+
+**It does not fix the drift on its own**, and that distinction matters: `LongAdder` removes *write
+contention*, while the drift here is that the counter and the collection it describes are updated at
+different moments. A contention-free wrong number is still wrong. **Use it if a counter survives the
+redesign; do not reach for it as the fix.**
+
 ## What to do first
 
 1. **Reproduce the drift.** Nobody has: the clamp implies it was seen, but no test asserts it and no

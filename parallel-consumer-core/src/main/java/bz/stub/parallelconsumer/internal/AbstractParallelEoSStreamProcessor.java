@@ -129,7 +129,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Collection of work waiting to be
      */
     @Getter(PROTECTED)
-    private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non blocking
+    // EXPERIMENT: CountedTransferQueue instead of LinkedBlockingQueue.
+    //
+    // Profiling put 17,785 of ~39,000 parks in five seconds right here - workers calling offer() and
+    // taking LinkedBlockingQueue's putLock to report a completed record. It is the largest single park
+    // site and the only one that is PC's own code; the rest are workers idle in getTask, which is the
+    // pool working correctly.
+    //
+    // The shape suits a lock-free queue and, unlike the worker pool's queue, it suits THIS one:
+    // LinkedTransferQueue spins before parking, which was catastrophic where a thousand threads
+    // CONSUME, but here a thousand threads PRODUCE - and offer() on an unbounded transfer queue is a
+    // CAS append that never spins. One consumer, the control loop, does the waiting.
+    //
+    // Counted, so size() stays O(1): the previous experiment changed the structure and its size()
+    // behaviour together and could not be interpreted.
+    private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new CountedTransferQueue<>();
 
     private final AtomicBoolean isRebalanceInProgress = new AtomicBoolean(false);
 
