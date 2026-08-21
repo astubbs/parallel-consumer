@@ -23,6 +23,43 @@ public class ThreadCeiling {
         int target = Integer.parseInt(args[2]);
         boolean virtual = args.length > 3 && args[3].equals("virtual");
 
+        // SHARDS=n replaces one pool of `concurrency` threads with n pools of concurrency/n, the same
+        // total threads, round-robin submission. Every process-wide explanation (OS thread cap, timer
+        // slots, scheduler capacity) predicts NO CHANGE, because the process still holds the same
+        // number of sleeping platform threads. An explanation that blames one shared queue's serialized
+        // admission predicts the ceiling lifts, because each sub-pool's gate now carries a fraction of
+        // the admissions and the gates run in parallel.
+        int shards = System.getenv("SHARDS") == null ? 1 : Integer.parseInt(System.getenv("SHARDS"));
+        if (shards > 1 && !virtual) {
+            ExecutorService[] pools = new ExecutorService[shards];
+            for (int i = 0; i < shards; i++) {
+                pools[i] = new ThreadPoolExecutor(concurrency / shards, concurrency / shards, 0L,
+                        TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>());
+            }
+            Semaphore p = new Semaphore(concurrency);
+            long st = System.currentTimeMillis();
+            int sub = 0;
+            while (sub < target) {
+                p.acquire();
+                ExecutorService dest = pools[sub % shards];
+                sub++;
+                dest.submit(() -> {
+                    int now = inFlight.incrementAndGet();
+                    peak.accumulateAndGet(now, Math::max);
+                    try { Thread.sleep(delayMs); } catch (InterruptedException ignored) { }
+                    inFlight.decrementAndGet();
+                    done.incrementAndGet();
+                    p.release();
+                });
+            }
+            while (done.get() < target) Thread.sleep(5);
+            long el = System.currentTimeMillis() - st;
+            System.out.printf("SHARDED %d pools x %d threads, delay=%dms -> %.0f msg/s, peak in flight %d (of %d)%n",
+                    shards, concurrency / shards, delayMs, target * 1000.0 / el, peak.get(), concurrency);
+            for (ExecutorService e : pools) e.shutdownNow();
+            System.exit(0);
+        }
+
         ExecutorService pool;
         if (virtual) {
             // reflective, so this compiles and runs on any JDK; fails loudly on an old one

@@ -92,6 +92,59 @@ behaviour - which is why no single-mechanism story fitted both.
 not hide a heavy tail: at 100ms it is **mean 3.8ms, p99 30ms, max 47ms**. Too small to matter, which
 rules it out properly rather than by median alone.
 
+### The shared queue is refuted too - and the constant is remarkably stubborn
+
+A second review proposed that the gate is **serialized admission through the executor's single
+`LinkedBlockingQueue` takeLock**, at roughly 40us per admission, and named a discriminator that no
+competing theory could rationalise: **shard the executor.** Ten pools of 500 threads instead of one
+pool of 5,000 - same total threads, same semaphore, same sleeps, round-robin submission. A shared-queue
+gate predicts the ceiling lifts to ~5,000 because each sub-gate now carries a tenth of the admissions
+and the gates run in parallel. Every process-wide explanation predicts no change.
+
+| | Peak in flight |
+|---|---:|
+| One pool of 5,000 | 2,717 |
+| **Ten pools of 500** | **2,840** |
+
+**No change. Refuted.** Which also refutes the queue lock a third time, after replacing it with a
+lock-free queue made things 69% worse and counting its size changed nothing.
+
+**And the constant is now stable across an ~80x range of machine load:**
+
+| Load average (12 cores) | Ceiling |
+|---:|---:|
+| ~8 | 2,756 |
+| ~10 (prestarted) | 2,722 |
+| ~102 | 2,673 |
+| ~667 | 2,717 / 2,840 |
+
+**A quantity that does not move when the machine is 80x busier is not a queueing or contention
+effect.** Contention gets worse under load. This does not move at all.
+
+### Where that leaves the mechanism: rate-shaped, process-wide, and unidentified
+
+Everything that has been tested is out:
+
+| Candidate | Refuted by |
+|---|---|
+| An OS thread cap or count limit | 5,000 concurrent sleepers at 400ms |
+| Timer slots or wait-queue entries | same - and a limit that doubles when the sleep doubles is a rate |
+| Lazy thread creation | `prestartAllCoreThreads` - ceiling unchanged |
+| The shared executor queue's lock | sharding into ten pools - ceiling unchanged |
+| The queue lock's cost | lock-free replacement, 69% worse; counted, no change |
+| Sleep overshoot | measured: mean 3.8ms, p99 30ms - far too small |
+| The submitter | the async arm uses the same submit loop and reaches 50,000 |
+
+**What survives is a process-wide or system-wide rate of platform-thread activation**, around
+**20,000-27,000 per second**, invariant to load, invariant to how the threads are pooled, and invariant
+to whether they already exist. **That is a property of the JVM-on-macOS thread wake path, and this
+investigation has not localised it further.**
+
+**Which is the point at which to stop.** The formula is established and predictive, the fix is
+established and does not depend on the cause, and further attribution needs kernel-level tooling
+(`dtrace`, syscall counts, a `jstack` park census) rather than another Java experiment. **Recorded as
+open, not as solved.**
+
 ### Why this matters more than the raw comparison
 
 **It turns the ceiling into a formula a user can apply.** `min(maxConcurrency, r x handler_latency)`
