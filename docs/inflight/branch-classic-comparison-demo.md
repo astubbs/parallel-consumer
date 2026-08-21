@@ -372,3 +372,35 @@ each one has already decided something this could contradict.
 - **U35** in [`docs/plans/2026-08-14-001-feat-language-proxy-plan.md`](../plans/2026-08-14-001-feat-language-proxy-plan.md)
   - the demo unit whose fileset this adopts, and whose KTD40 identical-UX contract caps how much
   per-language divergence the control surface may have.
+
+## Where the per-language fan-out stands (2026-08-21)
+
+Everything the fan-out was blocked on has landed, and it is all in **PR astubbs#328** - one PR by the
+owner's instruction, stacked on astubbs#293.
+
+**Unblocked, and this was the whole blocker:** U10 shipped, so `parallel-consumer-proxy` now has a
+production entry point and its first-ever test against a real broker. A foreign client can reach a
+real broker. Before this, the only `main` booted the engine on `MockConsumer`.
+
+**The seed is built and measured.** `parallel-consumer-proxy/demo/run.sh`, one command, no setup:
+AK core 359 msg/s against the sidecar's 1,516 (4.2x) over identical records, and 9,678 msg/s (26.9x)
+on the big replay. `demo/README.md` is the contract each language copies.
+
+**What is left is the ten language demos**, and the shape is fixed rather than open:
+
+- Mirror `demo/README.md` exactly - same flags, same defaults, same two tables, same
+  effective-config fingerprint, no latency reported.
+- Each lands at `<client-module>/demo/run.sh` per decision 12.
+- **Every toolchain needed is present on the owner's machine** - python3, go, node, cargo, dotnet,
+  ruby, swift all resolve - so each demo can be RUN, not merely written. Do that: this branch family
+  has been bitten three times by code committed without being executed, most recently a runner that
+  worked with flags and aborted with none.
+- The one sanctioned divergence is KTD40's per-language wait. Python's client runs worker
+  **processes** (`WorkerPool`/`RecordProcessor`, fork and spawn contexts) and TypeScript is a single
+  event loop; both need a non-occupying wait where the other eight can block. Start with Python for
+  exactly that reason - if the contract survives the hardest case, the rest are transcription.
+
+**Still open and not the fan-out's to settle:** the executor-count formula is `identity`, so a Python
+application configured with max concurrency 500 spawns 500 worker processes. `OptionsMapper`'s own
+javadoc flags it as an unanswered plan question needing a deliberate yes, and ten client authors
+inherit whatever it becomes.
