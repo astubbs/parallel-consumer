@@ -14,6 +14,8 @@ public class ThreadCeiling {
     static final AtomicInteger inFlight = new AtomicInteger();
     static final AtomicInteger peak = new AtomicInteger();
     static final AtomicInteger done = new AtomicInteger();
+    // Measures what the sleep ACTUALLY took, which nothing in this investigation had recorded.
+    static final java.util.concurrent.ConcurrentLinkedQueue<Long> overshootNanos = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     public static void main(String[] args) throws Exception {
         int concurrency = Integer.parseInt(args[0]);
@@ -42,14 +44,31 @@ public class ThreadCeiling {
             pool.submit(() -> {
                 int now = inFlight.incrementAndGet();
                 peak.accumulateAndGet(now, Math::max);
+                long t0 = System.nanoTime();
                 try { Thread.sleep(delayMs); } catch (InterruptedException ignored) { }
+                overshootNanos.add((System.nanoTime() - t0) / 1_000_000 - delayMs);
                 inFlight.decrementAndGet();
                 done.incrementAndGet();
                 permits.release();
             });
         }
-        while (done.get() < target) Thread.sleep(5);
+        // The discriminating number: did the pool ever CREATE the threads? If poolSize reaches
+        // `concurrency` but in-flight does not, they exist and cannot all run. If poolSize itself
+        // stalls, the pool never made them and the ceiling is thread CREATION, not scheduling.
+        int peakPoolSize = 0;
+        while (done.get() < target) {
+            if (pool instanceof ThreadPoolExecutor) {
+                peakPoolSize = Math.max(peakPoolSize, ((ThreadPoolExecutor) pool).getPoolSize());
+            }
+            Thread.sleep(5);
+        }
+        System.out.printf("peak pool threads created: %d%n", peakPoolSize);
         long ms = System.currentTimeMillis() - start;
+        var os = new java.util.ArrayList<>(overshootNanos);
+        java.util.Collections.sort(os);
+        String pct = os.isEmpty() ? "n/a" : String.format("p50=%dms p90=%dms p99=%dms",
+                os.get(os.size()/2), os.get((int)(os.size()*0.9)), os.get((int)(os.size()*0.99)));
+        System.out.printf("sleep overshoot: %s%n", pct);
         System.out.printf("concurrency=%d delay=%dms threads=%s -> %.0f msg/s, peak in flight %d (of %d), mean %.0f%n",
                 concurrency, delayMs, virtual ? "virtual" : "platform",
                 target * 1000.0 / ms, peak.get(), concurrency, target * 1000.0 / ms * delayMs / 1000.0);

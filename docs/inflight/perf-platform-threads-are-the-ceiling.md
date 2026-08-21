@@ -54,6 +54,77 @@ have the platform-thread ceiling at all.** That is a strong, cheap prediction an
 (`startStub(delayMs, concurrency * 2)`), so it reproduces the ceiling server-side. **Testing it needs a
 stub that completes asynchronously**, which is a harness change worth making.
 
+## Independent review, and the corrections it forced
+
+An independent analysis was commissioned on the full evidence set and **found four real errors**. Its
+own headline hypothesis was then tested and is *not* confirmed, but the corrections stand and matter
+more than the hypothesis did.
+
+### Corrections that stand
+
+1. **The measurement window includes the consumer-group join, for every arm.** Derivable from the
+   committed data: both Go arms report ~37.6k at 100ms/5,000, and 500,000 at the theoretical 50,000/s
+   is exactly 10.0s of steady state - so both carry ~3.3s of join and ramp. **This was never deducted**,
+   and it is why "mean in-flight 1,958 against a peak of 2,751" looked like thousands of idle threads.
+   Corrected, the mean sits at the plateau: **the in-flight population is pinned, not fluctuating.**
+2. **The two Go arms at 100ms/5,000 are clipped by their own semaphore and measure nothing about
+   franz-go's speed.** They are pinned at exactly theoretical, which is why two unrelated Go programs
+   agree to 0.26%. **So "the Java floor reaches 53% of the Go floor at 100ms/5,000" is wrong** - that
+   row compares a saturated arm against a limited one. **The honest client-versus-client number is the
+   0ms row: 96k against 143k, about 67%.**
+3. **"Roughly 7,250 records are sitting in the shards awaiting selection" was inferred from the throttle
+   formula, never observed.** Those records could equally be in the executor's own queue, already
+   selected. PC already logs the discriminating pair - `pool active: {} queued: {}` - and nobody read
+   it. The dispatch-defect framing built on that inference is unsupported as written.
+4. **`maxConcurrency` is not "silently not honoured".** The cap never binds; the system equilibrates
+   below it because throughput times latency is smaller than the cap. **That inverts the user-facing
+   advice**: not "your setting is being ignored" but **"achieved concurrency is throughput-limited, and
+   raising `maxConcurrency` cannot help."**
+
+### The hypothesis that did not survive
+
+The analysis proposed a **constant ~21-22ms per-record latency tax** above ~2,000 sleeping threads,
+derived by solving Little's law on the corrected numbers, and predicted a sleep-overshoot p50 of
+20-25ms at 5,000 against ~3ms at 1,000.
+
+**Measured, by instrumenting the control's actual sleep duration: overshoot p50 is 0-10ms and does not
+step with concurrency** - 7ms at 1,000, 7ms at 2,000, 8ms at 5,000 in one run; 3ms at 5,000 in another.
+It tracks machine load, not sleeper count. **A 3ms overshoot on a 100ms sleep cannot produce a 9.7x
+throughput difference or a 47% in-flight shortfall.**
+
+Its second proposed experiment - replace the sleeping handler with a shared scheduler completing after
+100ms - **had already been run** as `AsyncCeiling`, and its prediction under the thread hypothesis
+(45-50k/s, pinned at 5,000) matched exactly: **47,022 msg/s, 5,000 of 5,000.** So the analysis and the
+control agree on the conclusion while disagreeing on the mechanism.
+
+### What is robust
+
+Re-run with all three arms back to back at load average ~102-110 on twelve cores:
+
+| concurrency 5,000, 100ms | msg/s | Peak in flight | Sleep overshoot p50 |
+|---|---:|---:|---:|
+| Platform threads | 4,648 | **2,673** of 5,000 | 3ms |
+| Virtual threads | **44,994** | **5,000** of 5,000 | **0ms** |
+| Async, 4 threads | **47,022** | **5,000** of 5,000 | - |
+
+**9.7x under heavy load, against 7.1x on a quiet machine** - so load makes the case stronger, not
+weaker. And the platform ceiling is stable across every run at every load level: **2,438 · 2,531 ·
+2,673 · 2,697 · 2,756.**
+
+**The threads are created.** `getPoolSize()` reaches 5,000. They exist and simply cannot all be in
+their sleep window at once.
+
+### The mechanism is still not pinned down, and this note should not claim it is
+
+Sleep overshoot is ruled out. Thread *creation* is ruled out - the pool reaches 5,000. The submitter is
+ruled out: the async arm uses the **same single-threaded submit loop** and reaches 47k/s. What remains
+is the cost of the handoff itself once thousands of platform threads are attached to the executor, and
+**that pathway is not identified.** Scheduler dispatch, wake-herd behaviour, timer coalescing and
+safepoint coordination are all candidates and none has been separated from the others.
+
+**What is established is the fix, not the cause** - and the fix is the same under every candidate
+mechanism, which is why it is safe to act on while the cause is open.
+
 ## What this explains, all at once
 
 - **Why both Java arms plateau near 2,750-2,850** - PC at 2,751, a bare `KafkaConsumer` with a thread
