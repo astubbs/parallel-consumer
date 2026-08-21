@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    THE DEMO'S LOG LEVELS, AND WHY THE DEMO NEEDS ITS OWN.
+
+    With no configuration at all, logback defaults to DEBUG on a console appender - which for this
+    demo means the engine, the gRPC stack and the Kafka clients bury the two tables the reader came
+    for. The demo therefore prints its own output with println (see Console) and turns the
+    libraries down to WARN here, so the product of the run is legible whatever the reader's
+    terminal is doing.
+
+    Testcontainers stays at INFO deliberately: pulling a broker image is the longest wait in a
+    first run, and a reader staring at a silent terminal cannot tell it from a hang.
+
+    THE ODD FILENAME IS THE WHOLE POINT, AND IT IS A BUG FIX RATHER THAN A PREFERENCE. This demo's
+    classpath carries parallel-consumer-core's test output, which contains a logback-test.xml -
+    and logback looks for logback-test.xml BEFORE logback.xml, whatever the classpath order. Named
+    logback.xml this file was silently ignored and the first run printed core's INFO configuration
+    instead. So it carries a name nothing else can claim, and run.sh and the Dockerfile both name
+    it in -Dlogback.configurationFile, which beats both defaults outright.
+
+    Consequently it does NOT reach the spawned sidecar: the client library hands the child this
+    JVM's classpath, but not its system properties. That is deliberate here - the sidecar's stdout
+    and stderr are drained by Sidecar.kt and logged at debug, so its own levels never reach this
+    terminal anyway.
+
+-->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{28} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="org.testcontainers" level="INFO"/>
+    <logger name="tc" level="INFO"/>
+
+    <root level="WARN">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

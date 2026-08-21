@@ -203,6 +203,158 @@
                 </plugins>
             </build>
         </profile>
+
+        <!--
+            THE DEMO, AND WHY IT IS A PROFILE RATHER THAN A MODULE (astubbs#242, plan unit U35).
+
+            The Java demo is its own Maven module. This one cannot be, and the reason is not
+            squeamishness about pom size: a new module needs a line in the clients AGGREGATOR pom,
+            which is a file shared by every language wave running at once. So the demo lives inside
+            this module, under demo/, and this profile is what compiles it.
+
+            WHY THE DEPENDENCIES ARE NOT UNCONDITIONAL. The sidecar arm spawns the real sidecar -
+            `bz.stub.parallelconsumer.proxy.Main` - as a child process and hands it this JVM's own
+            classpath, so the demo needs the engine ON that classpath. Declared outside a profile
+            that would give this module a PERMANENT reactor edge to parallel-consumer-proxy, and
+            `bin/build.sh` opens with `clean`: the routine build of this module would then delete
+            the sidecar jar every other language's conformance test spawns. That is the exact
+            hazard the module comment above describes, and the invariant it names still holds -
+            measure it, do not trust it:
+
+                ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+            must not print parallel-consumer-proxy. With -Dpc.kotlinDemo it will, and that is the
+            whole point of the switch.
+
+            WHY THE DEMO COMPILES TO test-classes. It is an application, not a test - it has a
+            main() and no JUnit anywhere near it - but this module publishes a library whose
+            surface is guarded by -Xexplicit-api=strict, and a demo is not part of that surface.
+            The test output tree is where this module already puts programs that use the client
+            (scripts/conformance-runner launches one), so the demo joins it rather than inventing a
+            third output directory. Its sources are under demo/src, not src/test, so nothing reads
+            it as a test.
+        -->
+        <profile>
+            <id>kotlin-demo</id>
+            <activation>
+                <property>
+                    <name>pc.kotlinDemo</name>
+                </property>
+            </activation>
+            <dependencies>
+                <!--
+                    The spawn classpath, as ONE dependency: the engine, the proxy jar that holds
+                    Main, and core's test-jar underneath. The same module the harness lane above
+                    uses, and for the same reason - restating three coordinates here would be a
+                    second copy of a set that has already drifted once.
+                -->
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy-client-java-harness</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <!-- The AK core arm's consumer, and the producer that seeds the backlog. -->
+                <dependency>
+                    <groupId>org.apache.kafka</groupId>
+                    <artifactId>kafka-clients</artifactId>
+                    <version>${kafka.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <!--
+                    Testcontainers, because starting a broker is what this demo DOES when nobody
+                    supplied one (KTD40). Test scope here rather than the Java demo's compile
+                    scope only because this demo lives in the test output tree; it is production
+                    behaviour either way. Unused inside the demo's own container, where the broker
+                    is a compose sibling - a demo container is never granted the host Docker
+                    socket.
+                -->
+                <dependency>
+                    <groupId>org.testcontainers</groupId>
+                    <artifactId>testcontainers</artifactId>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.testcontainers</groupId>
+                    <artifactId>kafka</artifactId>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <!--
+                    demo/src/main/resources joins the test resources so the demo's logback.xml
+                    reaches the classpath. The default entry is restated because a <testResources>
+                    block REPLACES the inherited list rather than adding to it - this module has no
+                    src/test/resources today, and losing it silently the day someone adds one is
+                    exactly the kind of failure that reads as "the fixture is missing".
+                -->
+                <testResources>
+                    <testResource>
+                        <directory>${project.basedir}/src/test/resources</directory>
+                    </testResource>
+                    <testResource>
+                        <directory>${project.basedir}/demo/src/main/resources</directory>
+                    </testResource>
+                </testResources>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-plugin</artifactId>
+                        <version>${kotlin.version}</version>
+                        <executions>
+                            <execution>
+                                <!--
+                                    Its own execution rather than another sourceDir on the module's
+                                    test-compile: the demo has to compile even when the module's
+                                    own tests are skipped, and keeping it separate means a demo
+                                    that fails to compile names itself in the build output.
+                                -->
+                                <id>demo-compile</id>
+                                <phase>test-compile</phase>
+                                <goals>
+                                    <goal>test-compile</goal>
+                                </goals>
+                                <configuration>
+                                    <sourceDirs>
+                                        <sourceDir>${project.basedir}/demo/src/main/kotlin</sourceDir>
+                                    </sourceDirs>
+                                    <args combine.self="override">
+                                        <!-- the demo is an application, not a published surface:
+                                             explicit API mode would only add ceremony -->
+                                    </args>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <!--
+                                    The classpath demo/run.sh launches the demo with, and the same
+                                    one the demo hands its spawned sidecar. Written at
+                                    generate-test-resources so it is current before the demo
+                                    classes are emitted beside it, and never regenerated at run
+                                    time: a nested `mvn` in the startup path would defeat the
+                                    one-command promise.
+                                -->
+                                <id>demo-classpath</id>
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/demo-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 
     <build>
