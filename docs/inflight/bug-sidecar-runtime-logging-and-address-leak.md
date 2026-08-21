@@ -19,6 +19,20 @@ three tickets.
 - **A provider with no configuration** - logback falls back to root `DEBUG`. Measured by the Scala
   agent: 4000+ lines of Netty frames and docker-java headers, burying the demo's own output.
 
+## The fourth face, found later and arguably the worst
+
+**The sidecar's diagnostics are structurally unavailable to the audience the sidecar exists for.**
+Its logging goes to **stdout**, and stdout is the lifecycle channel the client library drains to read
+the `port: <n>` line - so a foreign client consumes those lines and discards them. Observed by the
+Rust agent: dozens of start-up lines when the sidecar is run by hand, none in any demo run, and a
+failing sidecar reporting "session failed" with no reason attached.
+
+**The Java seed hides this rather than escaping it.** Its `SidecarProcess` pumps that stream into its
+own logger, so a Java developer sees everything and would never notice. Every other language sees
+nothing. Fixing the provider and the configuration above does not fix this one: correctly configured
+logging still goes down a channel that is drained and thrown away. Either the sidecar logs to
+**stderr**, or the client libraries surface what they drain.
+
 ## The face that matters most, and why it is not cosmetic
 
 **The Kafka clients log their full effective configuration at INFO, `bootstrap.servers` included,
@@ -37,6 +51,8 @@ there, and R48/KTD11 treat that as credential-grade.
 
 ## What the fix has to do, all at once
 
+0. Move the sidecar's own logging off **stdout**, which is the lifecycle channel, or have the client
+   libraries surface what they drain. Without this the other three fix a stream nobody reads.
 1. Give the proxy a runtime logging **provider**, so a shipped sidecar can log at all.
 2. Give it a **configuration** that pins `org.apache.kafka.common.config.AbstractConfig` above INFO,
    so the address is suppressed by intent rather than by a test artifact's leftovers.
@@ -50,4 +66,8 @@ Doing any one of these alone makes something worse. That is the finding.
 
 `docs/inflight/clients/python.md` (stdout ahead of the port line),
 `docs/inflight/clients/typescript.md` (no provider on a runtime classpath),
-`docs/inflight/clients/scala.md` (root DEBUG, and the client's own config dump).
+`docs/inflight/clients/scala.md` (root DEBUG, and the client's own config dump),
+`docs/inflight/clients/rust.md` (stdout is the lifecycle channel, so the logs are discarded).
+
+**Four agents, four faces, and each one's proposed fix leaves at least one of the others standing.**
+That is the whole argument for treating it as one defect.
