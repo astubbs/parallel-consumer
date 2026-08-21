@@ -157,7 +157,7 @@ public class Demo extends BrokerIntegrationTest<String, String> {
      * a stub HTTP service with a simulated per-request delay. It measures; it does not assert.
      * <p>
      * Off by default. This lane collects by PACKAGE PATH - failsafe includes
-     * {@code **&#47;integrationTest*&#47;**&#47;*.java} - so living in this package is what decides
+     * {@code **&#47;integrationTest*&#47;**&#47;*.java} - so living in this package is what decides <!-- issue-refs: exempt -->
      * collection, and a multi-minute measurement with no assertions would otherwise run on every
      * build. {@code VertxConcurrencyIT} is the sibling that does assert, and it stays in the lane.
      * <p>

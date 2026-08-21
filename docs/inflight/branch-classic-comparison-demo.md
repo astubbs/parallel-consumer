@@ -382,23 +382,139 @@ owner's instruction, stacked on astubbs#293.
 production entry point and its first-ever test against a real broker. A foreign client can reach a
 real broker. Before this, the only `main` booted the engine on `MockConsumer`.
 
-**The seed is built and measured.** `parallel-consumer-proxy/demo/run.sh`, one command, no setup:
-AK core 359 msg/s against the sidecar's 1,516 (4.2x) over identical records, and 9,678 msg/s (26.9x)
-on the big replay. `demo/README.md` is the contract each language copies.
+**The seed is built, and it now measures the client library rather than the engine.** It lives with
+the Java client, at
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/demo/run.sh`, and it is driven
+through `ParallelConsumerClient` like any application. `parallel-consumer-proxy/demo/README.md`
+stays where it is and stays the contract each language copies - the contract binds eleven languages,
+so it does not belong to any one of them.
+
+### The correction that moved it, and why it mattered
+
+The first version of the seed lived in `parallel-consumer-proxy` and spoke raw gRPC. It ran and it
+measured, but it demonstrated that the **engine** works and said nothing about the **client
+library**, which is the artifact users touch. The root cause was a prior-art search that asked "how
+does the harness boot the engine" - which finds `TestModeMainTest`'s raw-protobuf pattern - instead
+of "what does an application use to talk to the sidecar", which lands on the client library at once.
+
+### Five arms, of which two are the contract
+
+Only **AK core** and the sidecar arm are what other languages mirror. Java carries three more
+because one JVM can hold them all against one broker, and each pair prices one thing:
+
+| pair | what it isolates |
+|---|---|
+| `pc-core` vs `java-direct` | what reaching the engine through the client library costs |
+| `java-direct` vs `java-grpc` | reaching the engine over a socket instead of in process |
+| `java-grpc` vs `java-raw-grpc` | the client library's own overhead on the wire |
+
+`java-raw-grpc` is the old raw-protobuf demo, kept as a control arm rather than deleted. It is
+explicitly not an example: no application should write it.
+
+### First measurements of the corrected seed (2026-08-21)
+
+Defaults - 2,000 records, 2 ms of simulated work, max concurrency 100, ten partitions, big replay
+40,000 records. UNORDERED throughout. Idle host, **three native runs** of the reviewed code,
+reported as ranges because one run cannot tell a difference from a fluctuation.
+
+| arm | small replay, msg/s | big replay, msg/s |
+|---|---|---|
+| AK core | 299 - 300 | excluded, serial |
+| pc-core | 2,996 - 3,131 | 23,142 - 23,322 |
+| java-direct | 3,171 - 3,226 | 23,677 - 23,922 |
+| java-grpc | 1,543 - 1,578 | 11,351 - 11,406 |
+| java-raw-grpc | 1,810 - 1,826 | 11,481 - 11,581 |
+
+A further run in the container, through `docker compose up`, put every arm lower by roughly a tenth
+and left the ordering unchanged - so containerisation costs something small and uniform, and is not
+where any of these differences come from.
+
+**What they support.**
+
+- **The client wrapper is free.** `pc-core` and `java-direct` are indistinguishable at both volumes
+  in every run. Reaching the engine through `ParallelConsumerClient` costs nothing measurable.
+- **Going out of process is the real cost, and it is about half.** `java-direct` sustains roughly
+  23,800 msg/s in process against `java-grpc`'s 11,400 over the socket. This is the number the
+  language-proxy design turns on. Read it as the socket *plus the sidecar's own dispatch model* -
+  the two sides pipeline in-flight work differently, so the whole gap is not the wire's.
+- **The client library's cost over the wire is a START-UP cost, not a per-record one.** Against the
+  hand-written control, `java-grpc` is consistently about fifteen per cent slower on the small
+  replay and within one per cent on the big one, in every run. A fixed cost amortising away over
+  twenty times the records is the shape that fits; a per-record overhead would have persisted. An
+  earlier single run appeared to show a flat seven per cent, which was noise being read as a trend.
+
+### The AK core baseline moved, and the obvious explanation was wrong
+
+Earlier runs of this demo put AK core at 344 - 346 msg/s; every run of the reviewed code puts it at
+299 - 303. That matters because AK core is the denominator of every ratio in both tables.
+
+The obvious suspect was a review fix that moved this arm's clock to start after its consumer is
+built and stop before it closes. **A control arm refutes it:** with the clock put back to its old
+boundary and nothing else changed, the same host measured 303 msg/s - inside the spread of the
+corrected code's 299 - 300. The boundary is worth about one per cent, which is what it should be
+worth, and it is not what moved the baseline.
+
+Host state is the remaining candidate - the machine has since built and run several large container
+images - but that was **not** isolated and is a hypothesis, not a result. Treat the ratios as
+reproducible within a session and not across sessions until someone pins it.
+
+### Two defects the run exposed, both invisible until something ran
+
+- **The raw arm was measuring key-ordered work.** `Configure.ordering` is optional and unspecified
+  means parallel-consumer-core's default, which is KEY - so the hand-built message ran a different workload from every
+  other arm while appearing to run the same one. The earlier published numbers were measured that
+  way. A hand-written protocol message gets no help from the client library, which is itself part of
+  what the control arm demonstrates.
+- **The two transports disagree about `enable.auto.commit`**, so identical `ClientOptions` start
+  over gRPC and throw over direct. Recorded in
+  [`bug-direct-client-does-not-disable-auto-commit.md`](bug-direct-client-does-not-disable-auto-commit.md);
+  it needs an owner decision, and ten client authors inherit whatever it becomes.
+
+### The demo ships as a container, which is U35's rule and not a nicety
+
+R72 says "Java is included, not exempted": a visitor evaluating "does this work in my language"
+reads an exempted Java as an admission that the other ten are the hard case. So there is a
+`Dockerfile` and a `docker-compose.yml` beside `run.sh`, and `docker compose up` on its own is a
+supported entry point - no arguments, no environment, no wrapper script.
+
+Two rules bind every language's container, both from U35:
+
+- **Never grant the demo container the host Docker socket.** Broker mode inside a container reaches
+  a compose sibling; the demo takes a `--bootstrap` address rather than starting Testcontainers.
+- **The sidecar is not a compose service.** The client library spawns it (KTD41), so a service would
+  teach a deployment the product does not ask for.
+
+`run.sh` picks native or container by whether a JDK toolchain is present, and says which it chose on
+its first line.
+
+**One stale citation is left deliberately.** U36's fileset in the plan still lists
+`parallel-consumer-proxy/demo/run.sh`, which no longer exists - the runner moved with the code and
+only the contract README stayed behind. It is not corrected here because a plan is a decision
+artifact and this branch does not own U36; whoever picks that unit up should repoint the fileset as
+part of it. The ownership split U36 describes still holds, only the path changed.
+
+### What this seed is NOT, and where the rest of U35 lives
+
+This is the comparison demo. U35's other half - the reading demo - owns the three modes
+(own-cluster, broker, mock), the TTY prompt and non-TTY fallback, the
+`PLACE SERDE SETUP IN YOUR LANGUAGE HERE` marker and the rate-limited content sample. Those are
+deliberately absent here: a rate-limited sample of message *content* is the opposite of a demo whose
+output is two throughput tables, and a non-TTY default of *mock* would mean an automated run
+measuring throughput against a `MockConsumer`. The boundary is written into the contract README so
+the ten authors inherit it rather than re-deciding it.
 
 **What is left is the ten language demos**, and the shape is fixed rather than open:
 
-- Mirror `demo/README.md` exactly - same flags, same defaults, same two tables, same
-  effective-config fingerprint, no latency reported.
-- Each lands at `<client-module>/demo/run.sh` per decision 12.
+- Mirror `demo/README.md` exactly - same flags, same environment variables, same defaults, same two
+  tables, same effective-config fingerprint, no latency reported, and a container.
+- Each lands at `<client-module>/demo/` per decision 12.
 - **Every toolchain needed is present on the owner's machine** - python3, go, node, cargo, dotnet,
   ruby, swift all resolve - so each demo can be RUN, not merely written. Do that: this branch family
-  has been bitten three times by code committed without being executed, most recently a runner that
-  worked with flags and aborted with none.
-- The one sanctioned divergence is KTD40's per-language wait. Python's client runs worker
-  **processes** (`WorkerPool`/`RecordProcessor`, fork and spawn contexts) and TypeScript is a single
-  event loop; both need a non-occupying wait where the other eight can block. Start with Python for
-  exactly that reason - if the contract survives the hardest case, the rest are transcription.
+  has now been bitten four times by code committed without being executed.
+- The one sanctioned divergence is the per-language non-occupying wait. Python's client runs worker
+  **processes** and TypeScript is a single event loop; both need a non-occupying wait where the
+  other eight can block. Start with Python for exactly that reason - if the contract survives the
+  hardest case, the rest are transcription.
 
 **Still open and not the fan-out's to settle:** the executor-count formula is `identity`, so a Python
 application configured with max concurrency 500 spawns 500 worker processes. `OptionsMapper`'s own

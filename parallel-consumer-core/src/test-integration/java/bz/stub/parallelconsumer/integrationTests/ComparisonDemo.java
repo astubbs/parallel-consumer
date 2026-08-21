@@ -77,7 +77,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *     -Dfailsafe.failIfNoSpecifiedTests=false -DskipUTs=true -Dpc.demo=true</pre>
  * <p>
  * Off by default, and the gate is not decoration: this lane collects by PACKAGE PATH - failsafe
- * includes {@code **&#47;integrationTest*&#47;**&#47;*.java} - so living in this package is what
+ * includes {@code **&#47;integrationTest*&#47;**&#47;*.java} - so living in this package is what <!-- issue-refs: exempt -->
  * decides collection and the class name is irrelevant. A multi-minute measurement with no
  * assertions would otherwise run on every build.
  * <p>
