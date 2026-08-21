@@ -2,13 +2,15 @@
 //
 // THE C++ DEMO (astubbs#242, plan unit U35). The same records through two arms:
 //
-//   - AK core   - librdkafka, one record at a time. "AK core" is always spelled out, because bare
-//                 "core" reads as parallel-consumer-core (CONCEPTS.md).
-//   - cpp-grpc  - this application as a FOREIGN CLIENT. The client library in the module above
-//                 spawns the sidecar, receives records over a socket, runs the same sleep on them
-//                 and reports outcomes back. On this path the application does no Kafka I/O at all:
-//                 the sidecar owns the consumer, the producer, the group membership and the
-//                 offsets.
+//   - AK core (librdkafka)     - C++'s own Kafka client, one record at a time. "AK core" is always
+//                 spelled out, because bare "core" reads as parallel-consumer-core (CONCEPTS.md) -
+//                 and never left bare EITHER, because "AK core" is a category rather than a client
+//                 and a reader cannot judge a comparison without knowing what produced it.
+//   - cpp-grpc (this client)   - this application as a FOREIGN CLIENT. The client library in the
+//                 module above spawns the sidecar, receives records over a socket, runs the same
+//                 sleep on them and reports outcomes back. On this path the application does no
+//                 Kafka I/O at all: the sidecar owns the consumer, the producer, the group
+//                 membership and the offsets.
 //
 // THE ARM GOES THROUGH THE CLIENT LIBRARY, NEVER THROUGH HAND-WRITTEN gRPC. The Java seed was
 // written the other way first and had to be rewritten: speaking the protocol by hand proves the
@@ -27,14 +29,14 @@
 
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
-#include <cstdio>
+#include <cstddef>
 #include <exception>
 #include <future>
 #include <iostream>
 #include <optional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -42,6 +44,7 @@
 
 #include "demo_broker.h"
 #include "demo_options.h"
+#include "demo_report.h"
 #include "parallel_consumer_proxy_client.h"
 
 namespace pcp = parallelconsumer::proxy;
@@ -57,8 +60,18 @@ constexpr std::chrono::minutes kArmBudget{10};
 /// How often the sidecar arm looks up from waiting to ask whether the session is still alive.
 constexpr std::chrono::milliseconds kProgressCheck{200};
 
-constexpr const char* kAkCore = "AK core";
-constexpr const char* kSidecarArm = "cpp-grpc";
+/// THE ARM LABELS, AND WHY EACH CARRIES A LIBRARY NAME.
+///
+/// "AK core" is a CATEGORY, not a client: it means "that language's own Kafka client", and the
+/// answer differs in every language. A reader cannot judge a comparison without knowing what
+/// produced it, so the role and the library are both said. In C++ the library is librdkafka - see
+/// demo/README.md for why there is no second candidate worth running as its own arm.
+///
+/// The sidecar arm is labelled with what DRIVES it, which is this module's client library rather
+/// than hand-written gRPC. That distinction is the whole point of the arm, and until it was in the
+/// label the output did not carry it.
+constexpr const char* kAkCore = "AK core (librdkafka)";
+constexpr const char* kSidecarArm = "cpp-grpc (this client)";
 
 /// Where the sidecar binary is when nothing said otherwise - the path the demo image installs it
 /// at. `PC_DEMO_SIDECAR` overrides it, which is what a reader running the binary outside that image
@@ -68,31 +81,6 @@ constexpr const char* kSidecarArm = "cpp-grpc";
 /// property of the image rather than of the run. See demo/README.md.
 constexpr const char* kDefaultSidecarPath = "/app/sidecar/sidecar";
 
-/// What one arm achieved: how long it took, and over how many records.
-struct ArmResult {
-    std::string arm;
-    std::chrono::nanoseconds elapsed{0};
-    int processed = 0;
-
-    /// Throughput, which is the only figure this demo reports.
-    [[nodiscard]] double rate_per_second() const {
-        const double seconds = std::chrono::duration<double>(elapsed).count();
-        return seconds > 0 ? processed / seconds : 0;
-    }
-};
-
-/// A whole number with thousands separators, hand-rolled rather than taken from a locale: the demo
-/// image is a slim one and its locale is C, so `std::locale("en_US.UTF-8")` would throw there and
-/// nowhere else.
-std::string with_thousands(long value) {
-    std::string digits = std::to_string(value);
-    for (std::size_t at = digits.size(); at > 3;) {
-        at -= 3;
-        digits.insert(at, ",");
-    }
-    return digits;
-}
-
 /// A fresh group per arm per replay, so every arm reads the same records from the beginning.
 std::string group_id(const std::string& arm) {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -100,12 +88,12 @@ std::string group_id(const std::string& arm) {
            + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }
 
-ArmResult finished(const std::string& arm, Clock::time_point started, int processed) {
+ArmResult finished(const std::string& arm, Clock::time_point started, int processed, std::size_t unique_keys) {
     const auto elapsed = Clock::now() - started;
-    std::cout << "=== " << arm << " finished: " << processed << " records in "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << "ms ==="
-              << std::endl;
-    return ArmResult{arm, elapsed, processed};
+    std::cout << "=== " << arm << " finished: " << processed << " records over " << unique_keys
+              << " keys in " << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << "ms ===" << std::endl;
+    return ArmResult{arm, elapsed, processed, static_cast<int>(unique_keys)};
 }
 
 /// The simulated work, identical in both arms so they differ by transport and nothing else.
@@ -120,31 +108,11 @@ void simulated_work(int delay_ms) {
     }
 }
 
-/// The two tables, same columns and same order in every language.
+/// The two tables, same columns and same order in every language. Rendered next door in
+/// demo_report.cpp so the shape can be tested without a broker; printed here.
 void report(const std::string& title, const std::vector<ArmResult>& results, const ArmResult* baseline,
             bool across_replays) {
-    char line[512];
-    std::cout << "\n\n" << title << '\n';
-    std::snprintf(line, sizeof(line), "  %-14s %10s %14s %14s\n", "arm", "elapsed", "msg/s",
-                  across_replays ? "vs AK core*" : "vs AK core");
-    std::cout << line;
-    for (const ArmResult& result : results) {
-        std::string ratio = "-";
-        if (baseline != nullptr && baseline->rate_per_second() > 0) {
-            char rendered[32];
-            std::snprintf(rendered, sizeof(rendered), "%.1fx", result.rate_per_second() / baseline->rate_per_second());
-            ratio = rendered;
-        }
-        std::snprintf(line, sizeof(line), "  %-14s %9.1fs %14s %14s\n", result.arm.c_str(),
-                      std::chrono::duration<double>(result.elapsed).count(),
-                      with_thousands(static_cast<long>(result.rate_per_second())).c_str(), ratio.c_str());
-        std::cout << line;
-    }
-    if (across_replays) {
-        std::cout << "\n  * against the SMALL replay's AK core arm. Across replays, so not "
-                     "like-for-like.\n";
-    }
-    std::cout << std::flush;
+    std::cout << render(title, results, baseline, across_replays) << std::flush;
 }
 
 /// The demo itself.
@@ -157,7 +125,7 @@ public:
           sidecar_(std::move(sidecar)) {}
 
     void run() {
-        // The fingerprint, FIRST and before anything runs: a number without its settings is not
+        // Then the fingerprint, before anything runs: a number without its settings is not
         // reproducible. The bootstrap address is deliberately not in it.
         std::cout << "\nEffective configuration:\n  " << options_.describe() << "\n  topic = " << topic_
                   << std::endl;
@@ -199,6 +167,11 @@ private:
         KafkaHandle consumer = broker_.subscribed_consumer(topic_, group_id("ak-core"));
 
         int processed = 0;
+        // THE KEYS THIS ARM ACTUALLY SAW, which is half of what turns the table from an assertion
+        // that work happened into a demonstration of it. A set rather than a counter because
+        // "unique" is the claim; a counter would report the same number as `processed` and prove
+        // nothing about the backlog being spread.
+        std::set<std::string> keys;
         // The clock starts AFTER the consumer is built and stops before it closes, because this arm
         // is the denominator of every ratio in both tables and no other arm charges itself for
         // client construction or teardown.
@@ -225,9 +198,16 @@ private:
             }
             simulated_work(options_.delay_ms);
             ++processed;
+            // The key as bytes and by length, because a Kafka key is neither a C string nor
+            // guaranteed to be text. A null key is legal and is not a key, so it is not counted -
+            // this demo seeds `key-<index modulo the key space>` on every record, which makes the
+            // count `min(records, key space)` and the same in every language.
+            if (message->key != nullptr) {
+                keys.emplace(static_cast<const char*>(message->key), message->key_len);
+            }
             rd_kafka_message_destroy(message);
         }
-        ArmResult result = finished(kAkCore, started, processed);
+        ArmResult result = finished(kAkCore, started, processed, keys.size());
         rd_kafka_consumer_close(consumer.get());
         return result;
     }
@@ -259,16 +239,23 @@ private:
         std::mutex mutex;
         std::condition_variable changed;
         int processed = 0;
+        // GUARDED BY THE SAME MUTEX AS `processed`, because unlike the AK core arm's set this one is
+        // written by every executor thread at once. An unsynchronised std::set here is a data race
+        // that would usually look like a slightly wrong key count rather than like a crash.
+        std::set<std::string> keys;
 
         std::unique_ptr<pcp::Client> client = pcp::Client::connect(client_options);
         // The clock starts once the session is open, for the same reason the AK core arm's starts
         // once its consumer is built: neither arm charges itself for start-up.
         const auto started = Clock::now();
-        client->poll([&](const pcp::InboundRecord&) {
+        client->poll([&](const pcp::InboundRecord& record) {
             simulated_work(options_.delay_ms);
             {
                 const std::lock_guard<std::mutex> lock(mutex);
                 ++processed;
+                if (record.key.has_value()) {
+                    keys.insert(*record.key);
+                }
             }
             changed.notify_all();
             return pcp::Outcome::success();
@@ -300,11 +287,13 @@ private:
         }
 
         int completed = 0;
+        std::size_t distinct_keys = 0;
         {
             const std::lock_guard<std::mutex> lock(mutex);
             completed = processed;
+            distinct_keys = keys.size();
         }
-        ArmResult result = finished(kSidecarArm, started, completed);
+        ArmResult result = finished(kSidecarArm, started, completed, distinct_keys);
         // After the clock stops: the drain and the sidecar's reaping are teardown, and no other arm
         // charges itself for that either.
         client->shutdown();
@@ -340,6 +329,12 @@ int main(int argc, char** argv) {
     namespace demo = parallelconsumer::proxy::demo;
 
     const std::vector<std::string> args(argv + 1, argv + argc);
+
+    // THE VERY FIRST THING PRINTED, WHATEVER HAPPENS NEXT - before the usage text, before a refused
+    // flag, before the fingerprint. A reader who runs this must be told what they are looking at:
+    // the demo used to open on a configuration dial, which names neither the product nor the point.
+    std::cout << demo::banner();
+
     if (demo::DemoOptions::help_requested(args)) {
         std::cout << demo::usage();
         return 0;

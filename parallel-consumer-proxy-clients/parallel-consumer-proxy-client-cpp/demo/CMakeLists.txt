@@ -13,7 +13,8 @@
 #
 # TWO TARGETS:
 #   pc-cpp-demo        the demo itself - both arms, the two tables
-#   pc-cpp-demo-tests  the option surface, run by ctest inside the image build (see tests/)
+#   pc-cpp-demo-tests  the entry path and the OUTPUT SHAPE, run by ctest inside the image build
+#                      (see tests/) - the two parts of the demo that need no broker
 
 cmake_minimum_required(VERSION 3.20)
 
@@ -98,6 +99,7 @@ add_executable(pc-cpp-demo
         "${CMAKE_CURRENT_SOURCE_DIR}/src/demo.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/demo_broker.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/demo_options.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/demo_report.cpp"
         ${PC_CLIENT_SOURCES}
         ${PC_GEN_SOURCES})
 target_include_directories(pc-cpp-demo PRIVATE ${PC_INCLUDE_DIRS})
@@ -113,16 +115,20 @@ target_link_libraries(pc-cpp-demo PRIVATE
 
 # ── The demo's own tests ─────────────────────────────────────────────────────────────────────────
 # The module's harness, not a second one: tests/test_main.cpp next door is the runner, and
-# test_support.h is the sixty lines of macros. Only demo_options.cpp is linked in, so these tests
-# need neither gRPC nor a broker and run in a second inside the image build.
+# test_support.h is the sixty lines of macros. Only demo_options.cpp and demo_report.cpp are linked
+# in - the two units with no broker in them - so these tests need neither gRPC nor Kafka and run in
+# a second inside the image build. demo.cpp and demo_broker.cpp are deliberately absent: an arm
+# cannot be tested without a broker, whereas the contract's rules about the OUTPUT can be.
 add_executable(pc-cpp-demo-tests
         "${PC_MODULE_ROOT}/tests/test_main.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/demo_options_test.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/demo_options.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/demo_report_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/demo_options.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/demo_report.cpp")
 target_include_directories(pc-cpp-demo-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${PC_MODULE_ROOT}/tests")
 target_compile_options(pc-cpp-demo-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pc-cpp-demo-tests PRIVATE Threads::Threads)
 
-add_test(NAME demo-options COMMAND pc-cpp-demo-tests)
+add_test(NAME demo-entry-and-output COMMAND pc-cpp-demo-tests)
