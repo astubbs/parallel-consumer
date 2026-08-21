@@ -15,13 +15,19 @@
 // the client library, which is the artifact users actually touch. That is why this file imports
 // ParallelConsumerProxyClient and nothing from the protocol module.
 //
-// THE SIMULATED WORK IS `Task.sleep`, NOT A BLOCKING SLEEP, and that is this language's one
-// documented divergence from the contract - see demo/README.md for why the contract's "a blocking
-// sleep is fine in Swift" does not survive contact with the client library's executors.
+// THE SIMULATED WORK IS `Task.sleep`, NOT A BLOCKING SLEEP, and the contract now agrees: its
+// predicate is whether the CLIENT is thread-per-record, and this one is not - `poll` runs its
+// executors as Swift concurrency tasks on the cooperative pool. A blocking sleep there would cap
+// in-flight work at the machine's core count while the table appeared to report the engine.
+// demo/README.md carries the mechanism in full.
+//
+// NIOCore is imported for one reason: `KafkaConsumerMessage.key` is a `ByteBuffer`, and the AK core
+// arm has to read it to count the keys it saw.
 
 import Foundation
 import Kafka
 import Logging
+import NIOCore
 import ParallelConsumerProxyClient
 import ServiceLifecycle
 
@@ -30,6 +36,17 @@ struct ReferenceDemo {
 
     /// No arm may take longer than this before the demo calls it stalled rather than slow.
     static let armBudget = Duration.seconds(600)
+
+    /// THE FIRST THING THE DEMO PRINTS, and it is contract rather than decoration: a reader who
+    /// starts this and is met with a configuration line has been told nothing about what they are
+    /// looking at. Every language prints this same banner, differing only in its own name.
+    static let banner = """
+
+        ================================================================
+          PARALLEL CONSUMER  -  Swift demo
+          The same records, twice: one at a time, then all at once.
+        ================================================================
+        """
 
     /// Where the sidecar binary lives inside the demo's image. The client library refuses a
     /// relative or PATH-resolved sidecar - which binary receives the Kafka credentials is not a
@@ -55,6 +72,11 @@ struct ReferenceDemo {
             Note.say(DemoOptions.usage)
             return
         }
+
+        // BEFORE THE PARSE, not after it, so the banner is the first thing printed on every path
+        // that is a run - including one that dies in `init` for want of a sidecar. `--help` is
+        // exempt above: usage text asked for by name is not a run.
+        Note.say(banner)
 
         let options: DemoOptions
         do {
@@ -160,9 +182,16 @@ struct ReferenceDemo {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await serviceGroup.run() }
             group.addTask {
-                for try await _ in consumer.messages {
+                for try await message in consumer.messages {
                     try await Task.sleep(for: delay, tolerance: .zero)
-                    if counter.increment() >= target { break }
+                    // The key is read from the record this arm actually received, exactly as the
+                    // sidecar arm reads it from its own. Counting is what the demo OBSERVES, not
+                    // what the broker knows - swift-kafka-client has no admin or metadata API to
+                    // ask with, and a broker-side answer would describe the topic rather than the
+                    // run, so it could not show that this arm saw the backlog spread.
+                    if counter.count(key: message.key.map { String(buffer: $0) }) >= target {
+                        break
+                    }
                 }
                 await serviceGroup.triggerGracefulShutdown()
             }
@@ -177,8 +206,7 @@ struct ReferenceDemo {
         }
 
         return try finished(
-            ArmTable.akCore, startedAt: startedAt, finishedAt: counter.finishedAt,
-            processed: counter.value, target: target)
+            ArmTable.akCore, startedAt: startedAt, counter: counter, target: target)
     }
 
     /// **swift-grpc** - the application as a foreign client, through the client library in this
@@ -209,12 +237,15 @@ struct ReferenceDemo {
         let counter = RecordCounter(target: target)
         let delay = Duration.milliseconds(options.delayMs)
         let startedAt = ContinuousClock.now
-        try client.poll { _ in
+        try client.poll { record in
             // THE SAME WAIT THE AK CORE ARM RUNS, so the two arms differ by transport and nothing
-            // else. See this file's header for why it is `Task.sleep` in both rather than the
-            // blocking sleep the contract permits.
+            // else. See this file's header for why it is `Task.sleep` in both rather than a
+            // blocking one.
             try await Task.sleep(for: delay, tolerance: .zero)
-            counter.increment()
+            // Decoded the same lossy way the AK core arm decodes its `ByteBuffer`, so a key that
+            // is not valid UTF-8 counts as the same key on both arms rather than vanishing from
+            // one of them. `keyText` is the library's stricter reading and would not.
+            counter.count(key: record.key.map { String(decoding: $0, as: UTF8.self) })
             return .success
         }
         let reached = await counter.awaitTarget(within: Self.armBudget)
@@ -240,26 +271,26 @@ struct ReferenceDemo {
         }
 
         return try finished(
-            ArmTable.swiftGrpc, startedAt: startedAt, finishedAt: counter.finishedAt,
-            processed: counter.value, target: target)
+            ArmTable.swiftGrpc, startedAt: startedAt, counter: counter, target: target)
     }
 
     // MARK: - plumbing
 
     private func finished(
-        _ arm: String, startedAt: ContinuousClock.Instant,
-        finishedAt: ContinuousClock.Instant?, processed: Int, target: Int
+        _ arm: String, startedAt: ContinuousClock.Instant, counter: RecordCounter, target: Int
     ) throws -> ArmResult {
+        let processed = counter.value
         // Reaching the target is not the only way an arm's wait ends: a failed or completed session
         // ends it too. Without this check a broken run prints a plausible row at a plausible rate
         // and exits 0, which is the worst thing a demo whose shape ten languages copy can do.
-        guard processed >= target, let finishedAt else {
+        guard processed >= target, let finishedAt = counter.finishedAt else {
             throw DemoError("\(arm) ended early at \(processed) of \(target)")
         }
         let elapsed = startedAt.duration(to: finishedAt)
-        let result = ArmResult(arm: arm, elapsed: elapsed, processed: processed)
+        let result = ArmResult(
+            arm: arm, elapsed: elapsed, processed: processed, uniqueKeys: counter.uniqueKeys)
         Note.say(
-            "=== \(arm) finished: \(processed) records in "
+            "=== \(arm) finished: \(processed) records over \(result.uniqueKeys) keys in "
                 + "\(Int((result.seconds * 1000).rounded()))ms ===")
         return result
     }
@@ -270,7 +301,12 @@ struct ReferenceDemo {
     }
 }
 
-/// Counts processed records and remembers WHEN the last one landed.
+/// Counts processed records, the distinct keys among them, and remembers WHEN the last one landed.
+///
+/// THE KEY SET IS WHAT THE ARM SAW, and there is no other way for this demo to get it: Swift's
+/// Kafka client exposes no admin client and no metadata API, so nothing here can ask the broker
+/// what keys the topic holds. Counting what arrives is the better answer anyway - it demonstrates
+/// that the arm really spread over the backlog rather than replaying one key.
 ///
 /// A locked class rather than an actor, for the reason this module's client library gives for its
 /// own dispatch queue: everything here is called from the user function, which runs on the client's
@@ -279,7 +315,8 @@ struct ReferenceDemo {
 final class RecordCounter: @unchecked Sendable {
     private let lock = NSLock()
     private let target: Int
-    private var count = 0
+    private var processed = 0
+    private var keys: Set<String> = []
     private var finished: ContinuousClock.Instant?
 
     /// The target is fixed at construction rather than supplied by whoever waits, because the
@@ -290,19 +327,26 @@ final class RecordCounter: @unchecked Sendable {
         self.target = target
     }
 
-    /// Counts one record and returns its 1-based ordinal.
+    /// Counts one record and its key, and returns the record's 1-based ordinal.
+    ///
+    /// - Parameter key: the key as this arm received it, or `nil` for a null key. A null key is not
+    ///   a key and is counted as none: Kafka distinguishes an absent key from an empty one, and
+    ///   folding the two together would report a distinct-key figure that no other language's demo
+    ///   could be expected to match.
     @discardableResult
-    func increment() -> Int {
+    func count(key: String?) -> Int {
         lock.withLock {
-            count += 1
+            processed += 1
+            if let key { keys.insert(key) }
             // Stamped HERE, by the task that processed the last record, rather than by whoever
             // notices afterwards: a poller's granularity would otherwise be charged to the arm.
-            if count >= target && finished == nil { finished = .now }
-            return count
+            if processed >= target && finished == nil { finished = .now }
+            return processed
         }
     }
 
-    var value: Int { lock.withLock { count } }
+    var value: Int { lock.withLock { processed } }
+    var uniqueKeys: Int { lock.withLock { keys.count } }
     var finishedAt: ContinuousClock.Instant? { lock.withLock { finished } }
 
     /// Resolves when `target` records have been counted, or when the budget runs out.

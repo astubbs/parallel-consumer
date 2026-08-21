@@ -128,10 +128,40 @@ being rediscovered. Full detail in [`cpp.md`](cpp.md).
 ## The demo (astubbs#242, plan unit U35, R72)
 
 **Status: written, in `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift/demo/`.**
-Two arms - `AK core` over `swift-kafka-client`, and `swift-grpc` over the client library in this
-module - plus the contract's flags, environment variables, fingerprint and two tables. It is its own
-SwiftPM package with a `.package(path: "..")` dependency on the client, its own `Dockerfile` and its
-own `docker-compose.yml`; there is **no Maven module** and it is not in the reactor.
+Two arms - `AK core (swift-kafka-client)`, and `swift-grpc (this client)` over the client library in
+this module - plus the contract's flags, environment variables, fingerprint and two tables. It is
+its own SwiftPM package with a `.package(path: "..")` dependency on the client, its own `Dockerfile`
+and its own `docker-compose.yml`; there is **no Maven module** and it is not in the reactor.
+
+### The reader-experience pass (the contract's "output a reader actually sees")
+
+Applied here after the contract gained that section: the demo opens with the standard banner
+(printed **before** the option parse, so a run that dies for want of a sidecar has still said what
+it is), both arms name the client that produced their row, and both tables carry `records` and
+`keys` beside `elapsed`, `msg/s` and the ratio. Broker log levels were already `WARN` in this
+module's `docker-compose.yml` and were not touched.
+
+- **Unique keys are counted from what the arm processed, never asked of the broker**, and in Swift
+  there was no choice: `swift-kafka-client` has no admin client and no public metadata API. It is
+  also the better figure - a broker-side answer describes the topic, not the run. Each arm counts
+  the keys of the records that reached its own user function, decoded from bytes the same lossy way
+  on both arms, so a non-UTF-8 key counts as one key on both rather than vanishing from one.
+- **The AK core arm now needs `NIOCore` declared.** `KafkaConsumerMessage.key` is a NIO
+  `ByteBuffer`, so `demo/Package.swift` gained `swift-nio` at swift-kafka-client's own lower bound -
+  a name added to the graph, not a version added to the solve.
+- **Column ORDER was a guess, and eleven agents guessed independently.** This demo prints
+  `arm | records | keys | elapsed | msg/s | vs AK core`, reading the contract's own sentence -
+  "every arm reports what it did, not just how fast" - as putting the work before the speed. The
+  contract does not fix the order, and the drift check will find out; if the other ten went the
+  other way, this is the file to change.
+- **`bin/ci-demo-conformance.sh` cannot see these rows any more, and it will not go red saying so.**
+  Its `skeleton()` awk matches an arm row as `<name> <elapsed>s <rate> <ratio>` with the name in
+  `[A-Za-z0-9 _-]*`, so it matches neither the new column order nor the parenthesised client name -
+  and its `normalise_arms` reduces `ROW <lang>-grpc` to `ROW SIDECAR`, which `swift-grpc (this
+  client)` no longer matches either. The effect is that **no `ROW` lines reach the skeleton at all**,
+  so arm identity and order stop being compared while the run still passes. The `HEADER` line goes
+  the same way in this demo's order (`arm` is no longer followed by `elapsed`). Both regexes need
+  widening once the eleven agree on an order; `bin/` was not this task's to edit.
 
 ### What was actually run, and what it does NOT establish
 
@@ -177,8 +207,12 @@ change the default.
 
 ### The three divergences
 
-- **`Task.sleep`, not a blocking sleep, and the contract's "a blocking sleep is fine in Swift" is
-  wrong for the sidecar arm.** `poll` starts `executorCount` Swift concurrency **tasks** on the
+- **`Task.sleep`, not a blocking sleep - and this is no longer a divergence, because the contract
+  adopted the finding.** Its rule used to name languages and listed Swift as safe for a blocking
+  sleep; it now asks whether the CLIENT is thread-per-record, and names Swift's cooperative pool
+  among those that are not. Rust measured the same class of error at 10,341 msg/s through its
+  blocking adapter against 3,518 with a raw thread sleep. The mechanism here is unchanged: `poll`
+  starts `executorCount` Swift concurrency **tasks** on the
   cooperative pool, whose width is the core count. A blocking sleep in the user function occupies a
   pool thread for its whole duration, so an arm asking for 100 in-flight records could only ever
   have core-count many running - the table would report the pool's ceiling while appearing to report

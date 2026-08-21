@@ -43,6 +43,11 @@ let package = Package(
         // only use products of dependencies it declares itself.
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.1.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.10.0"),
+        // Declared for the same reason as the line above: `KafkaConsumerMessage.key` is a NIO
+        // `ByteBuffer`, and the AK core arm reads it to count the distinct keys it saw. The lower
+        // bound is swift-kafka-client's own, so this adds a name to the graph and not a version to
+        // the solve - whatever it resolves today is what the Kafka client already resolved.
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.55.0"),
     ],
     targets: [
         .executableTarget(
@@ -56,6 +61,7 @@ let package = Package(
                 .product(name: "Kafka", package: "swift-kafka-client"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
             ]
             // NO `-warnings-as-errors` HERE, unlike the library targets next door, and the
             // difference is deliberate. That flag is right for code this project owns; on a demo it
