@@ -20,10 +20,28 @@ to Swift.
 
 ## The two arms
 
-| arm | what it is |
+| arm, as the table names it | what it is |
 |---|---|
-| `AK core` | [`swift-kafka-client`](https://github.com/swift-server/swift-kafka-client), one record at a time. No engine, no client library, no sidecar |
-| `swift-grpc` | this module's client library: it spawns the sidecar, receives records over a socket, runs the same function on them, and reports outcomes back |
+| `AK core (swift-kafka-client)` | [`swift-kafka-client`](https://github.com/swift-server/swift-kafka-client), one record at a time. No engine, no client library, no sidecar |
+| `swift-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the same function on them, and reports outcomes back |
+
+**The client is named in the row because "AK core" is a category, not a client.** The answer differs
+in every language, and a reader cannot judge the comparison without knowing which binding produced
+the number. Swift's answer is `swift-kafka-client` - the Swift Server workgroup's package, which
+wraps librdkafka. It is the only one this demo could sensibly run: the older `SwiftKafka` is
+archived, and the remaining bindings are unmaintained wrappers of the same C library, so there is no
+second serious client here to run as a third arm.
+
+**Both arms also report `records` and `keys`** - how many records they processed, and how many
+distinct keys they saw while doing it. Those two are the only figures in the table that are
+comparable between languages: elapsed and msg/s belong to the machine, while the records and the
+keys belong to the *work*, so every language replaying the same backlog must print the same two
+numbers. `bin/ci-demo-conformance.sh` is built on exactly that. A short arm is a failed arm rather
+than a fast one, and the demo already refuses to print a row for one.
+
+The key count is **observed, not queried**: each arm counts the keys of the records that reached its
+own user function. Swift could not do it the other way even if that were preferable - see divergence
+2 below, `swift-kafka-client` has no admin client and no public metadata API at all.
 
 On the `swift-grpc` path the application does **no Kafka I/O at all** - the sidecar owns the
 consumer, the producer, the group membership and the offsets. That the same process also seeds the
@@ -61,12 +79,18 @@ Two consequences follow from that, and both are visible in the demo's behaviour:
   size ever matters, the first lever is a slim runtime base plus a statically linked binary - the
   client module's `Dockerfile` already does the static half for its extracted artifacts.
 
-## The three divergences, and why each one exists
+## The three things Swift does its own way, and why each one exists
+
+Only two of them are divergences from the contract now; the first was one until the contract adopted
+it.
 
 ### 1. The simulated work is `Task.sleep`, not a blocking sleep
 
-The contract says a blocking sleep is fine in Swift. **It is not fine on the sidecar arm here**, and
-the reason is this client library's own design rather than anything about the demo.
+**This is no longer a divergence from the contract - the contract changed to match it**, and the
+paragraph below is why. The rule used to name languages and listed Swift among those where a
+blocking sleep was fine; it now asks a question about the *client* instead - is it
+thread-per-record? - and this one is not. What follows is the mechanism that settled it, kept here
+because the contract states the predicate and this file owes it the evidence.
 
 `ParallelConsumerClient.poll` starts `executorCount` **Swift concurrency tasks**, which share the
 cooperative thread pool - a pool whose width is the machine's core count. A blocking sleep inside
@@ -102,6 +126,12 @@ the fingerprint is the number the topic got.
   created yourself.
 - The fingerprint's `partitions` line is what was *asked for*. On the compose path it is also what
   was got, because the same value configured the broker.
+
+The same absence decides how the `keys` column is produced, and there it costs nothing: each arm
+counts the distinct keys of the records that reached its own user function, so the figure describes
+the run. Asking the broker instead would have described the *topic* - which is a different claim,
+and a weaker one, because a topic holding a thousand keys says nothing about whether this arm saw
+more than one of them.
 
 ### 3. No `Package.resolved` is committed for the demo
 
