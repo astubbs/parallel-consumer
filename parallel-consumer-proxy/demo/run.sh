@@ -27,6 +27,9 @@ Needs Docker (the broker runs in a container) and a JDK 17 toolchain.
 USAGE
 }
 
+# ${props[@]+...} rather than "${props[@]}": under `set -u`, bash 3.2 - which is what macOS ships,
+# and what a first-time user runs this with - treats an EMPTY array expansion as an unbound variable
+# and aborts. That fails exactly the no-argument case, which is the double-click case.
 props=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -54,4 +57,4 @@ exec ./mvnw verify \
     -Dpc.demo=true \
     -Dfailsafe.failIfNoSpecifiedTests=false \
     -DskipUTs=true \
-    "${props[@]}"
+    ${props[@]+"${props[@]}"}
