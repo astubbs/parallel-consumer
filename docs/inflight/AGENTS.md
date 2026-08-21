@@ -30,6 +30,46 @@ is the grouping. One deliberate exception exists: `clients/<lang>.md` holds the 
 fan-out's per-language notes (astubbs#242) - a family of parallel same-shape items where a prefix
 would just re-spell the directory; do not add a second subdirectory without the same argument.
 
+## Labels, and the trailer that outlives the note
+
+Two tags already exist on most notes and are read by tooling and by agents scanning the directory:
+
+```
+<!-- inflight-type: bug | test | ci | deps | pr | branch | release | parked | next | feature | task -->
+<!-- inflight-impact: performance | correctness | coordination | process | architecture -->
+```
+
+**A third is now available**, for cross-cutting marks that are not the note's type or its impact:
+
+```
+<!-- inflight-labels: release-note, security, breaking-change, needs-measurement -->
+```
+
+Comma-separated, lowercase, hyphenated. Add a label when something needs to be **found later by a
+scan that does not know which note to look in** - the release-note sweep being the obvious one.
+`grep -rl 'inflight-labels:.*release-note' docs/inflight/` is the whole mechanism.
+
+**But a label on a note cannot survive the note.** This directory's first rule is that a closed item
+gets `git rm`'d, so anything that must still be findable after the work lands does **not** belong only
+here. Put it in the **commit message**, as a trailer:
+
+```
+Release-Note: Adaptive concurrency now backs off when the downstream system saturates.
+```
+
+Git history is the durable index. `git log --grep='^Release-Note:'` finds every one of them, across
+every note that has since been deleted, and it works at release time when the inflight file that
+prompted it is long gone. The repo already uses `Upstream-Issue:` the same way.
+
+**Use both when both apply**: the label so the open item is findable while it is open, the trailer so
+the *outcome* is findable once it is not. A label alone is a note to ourselves; a trailer is the
+record.
+
+**What earns a `Release-Note:` trailer**: a user- or operator-visible change. Not refactors, not test
+work, not internal measurement. The bar is the same as `CHANGELOG.adoc`'s - see the root AGENTS.md on
+changelog discipline - and the trailer exists to make assembling that changelog a scan rather than an
+archaeology exercise.
+
 ## Rules
 
 - **Track only what is currently OPEN**, plus cross-branch context a future branch should inherit.

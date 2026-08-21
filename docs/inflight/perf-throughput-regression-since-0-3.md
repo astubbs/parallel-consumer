@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: release-gate -->
+<!-- inflight-labels: needs-measurement -->
 
 **Release gate (owner, 2026-08-20):** the question to answer before v6 is whether this throughput can
 be recovered legitimately - without going back to ignoring the concurrency the user asked for.
@@ -923,6 +924,28 @@ bug.
   so this is checkable - and the check was not done.
 - **A single run is not a measurement at a noisy operating point.** 2ms/5,000 spreads 21%; three of the
   four conclusions drawn from single runs at that point were wrong.
+
+**A new measurement, taken while building the guard test: the modes are NOT equal at the dispatch
+layer.** Timed in isolation, with no broker and no handler - 20,000 records, all keys distinct, taken
+in batches of 500 and never completed so the in-flight set grows the whole way:
+
+| Dispatch cost alone | Fastest of three |
+|---|---:|
+| `KEY` | ~41ms |
+| `UNORDERED` | ~97ms |
+
+**`UNORDERED` costs about 2.3x `KEY` to dispatch**, which is exactly what the shard shape predicts:
+`UNORDERED` walks one shard holding every in-flight record, `KEY` walks many shards holding one each.
+
+**And it does not matter.** End to end, at a 100ms handler, the two modes are 0.9% apart - the
+dispatch difference disappears entirely into the per-record work. **Both facts are true and the second
+is the one that governs**, which is the same lesson as the whole `ExternalEngine` versus client story:
+a real cost in the engine can be completely irrelevant at any delay a user actually has.
+
+**Guarded by `OrderingModeDispatchParityTest`**, which pins the ratio below 4. Clean it sits at ~2.3;
+injecting a redundant full-map walk into the `UNORDERED` path moves it to 6.2-7.9, so the bound has
+margin on both sides. It uses the fastest of three runs rather than a mean, because a mean drags with
+every unrelated hiccup and the ratio was landing either side of the bound between runs.
 
 **Also ours, unattributed: 2ms at 5,000 concurrent**, where both modes sit 22-36% below the Java
 floor. No hypothesis yet.

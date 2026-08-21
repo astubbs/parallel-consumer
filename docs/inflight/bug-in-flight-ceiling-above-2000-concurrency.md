@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: performance -->
+<!-- inflight-labels: needs-measurement -->
 
 Found 2026-08-21 while building an unordered comparison at high concurrency. **No prior art**:
 searched `docs/inflight/` for concurrency/in-flight/load-factor entries, `docs/solutions/`,
