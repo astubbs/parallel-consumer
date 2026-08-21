@@ -22,6 +22,8 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
@@ -343,6 +345,32 @@ public class ParallelConsumerOptions<K, V> {
     @Builder.Default
     private final boolean directPullEngine = Boolean.getBoolean("pc.directPull");
 
+    /**
+     * Runs the user's function on virtual threads (JEP 444) instead of a fixed pool of platform threads. Requires a
+     * JDK 21 runtime; the published artifact is still Java 8 bytecode, and the JDK 21 API is reached reflectively.
+     * <p>
+     * <b>What it is for.</b> A handler that blocks holds an OS thread for as long as it blocks, and this machine can
+     * only bring platform threads out of a park at a fixed rate - so reachable concurrency is
+     * {@code min(maxConcurrency, activationRate * handlerLatency)} rather than {@code maxConcurrency}. Measured on a
+     * 12-core laptop at {@code maxConcurrency} 5,000 with a 100ms handler: platform threads held 2,673 records in
+     * flight, virtual threads held all 5,000. Raising {@link #maxConcurrency} past that ceiling does nothing; making
+     * the work not hold a thread removes the term. See {@code docs/inflight/perf-platform-threads-are-the-ceiling.md}.
+     * <p>
+     * <b>What it changes.</b> The pool is unbounded, so {@link #maxConcurrency} becomes a target the control loop
+     * aims at rather than a cap the pool enforces: a burst of already-submitted work can briefly exceed it. It also
+     * takes precedence over {@link #managedExecutorService} and {@link #managedThreadFactory}, which describe a pool
+     * that no longer exists in this mode. External engines (Vert.x, Reactor, Mutiny) ignore it - their worker "pool"
+     * is a single dispatch thread by design and their concurrency lives in the external runtime.
+     * <p>
+     * Defaults from the {@code pc.virtualThreads} system property, for the same reason
+     * {@link #isDirectPullEngine()} does: the benchmark harness compiles one source file against every released
+     * version, and CI's execution-mode matrix selects the mode without editing a test.
+     *
+     * @see #validate()
+     */
+    @Builder.Default
+    private final boolean useVirtualThreads = Boolean.getBoolean("pc.virtualThreads");
+
     public static final Duration DEFAULT_STATIC_RETRY_DELAY = Duration.ofSeconds(1);
 
     // Default backoff for SaslAuthenticationException retry durion ConsumerManager.commitSync and ConsumerManager.poll.
@@ -491,6 +519,29 @@ public class ParallelConsumerOptions<K, V> {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
         transactionsValidation();
+        virtualThreadsValidation();
+    }
+
+    /**
+     * Fails construction rather than the first poll, and probes exactly what
+     * {@code AbstractParallelEoSStreamProcessor#setupWorkerPool} will call - not just
+     * {@code Thread.ofVirtual}. Probing a subset would let a JVM with one method and not the other pass validation
+     * and then fail later, somewhere less obviously about this option.
+     */
+    private void virtualThreadsValidation() {
+        if (!useVirtualThreads) {
+            return;
+        }
+        try {
+            Class.forName("java.lang.Thread").getMethod("ofVirtual");
+            Executors.class.getMethod("newThreadPerTaskExecutor", ThreadFactory.class);
+        } catch (NoSuchMethodException | ClassNotFoundException e) {
+            throw new UnsupportedOperationException(msg(
+                    "useVirtualThreads is enabled, but this JVM ({} {}) does not provide virtual threads. " +
+                            "They need a JDK 21 runtime - note that the Parallel Consumer artifact itself is still " +
+                            "Java 8 bytecode, so only the runtime has to move, not your build.",
+                    System.getProperty("java.vm.name"), System.getProperty("java.version")), e);
+        }
     }
 
     private void transactionsValidation() {

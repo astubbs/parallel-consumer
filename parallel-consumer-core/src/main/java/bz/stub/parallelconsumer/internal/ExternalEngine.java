@@ -11,7 +11,7 @@ import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ExecutorService;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -63,8 +63,18 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      * vert.x.
      */
     @Override
-    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+    protected ExecutorService setupWorkerPool(int poolSize) {
         return super.setupWorkerPool(1);
+    }
+
+    /**
+     * @return false - see {@link AbstractParallelEoSStreamProcessor#supportsVirtualThreads()}. The single thread
+     *         this engine's pool holds only starts asynchronous work; making it virtual buys nothing and making it
+     *         unbounded breaks the dispatch model.
+     */
+    @Override
+    protected boolean supportsVirtualThreads() {
+        return false;
     }
 
     /**

@@ -204,11 +204,21 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         // unlock the user function
         testUserFunction.unlockProcessing();
 
-        // in flight messages + buffered messages should get processed now (exact number is based on dynamic load factor)
+        // In-flight messages, plus whatever was buffered ahead of the workers, should get processed now.
+        //
+        // The bound is >= rather than > because the surplus is engine-specific, and asserting on it was asserting
+        // an implementation detail rather than the property this test is named for. Under the pre-loaded-queue
+        // engine the load factor keeps a multiple of maxConcurrency sitting in the executor's queue, so more than
+        // `degreeOfParallelism` records drain here. Under virtual threads there is no such queue - every submitted
+        // record is already running - so exactly `degreeOfParallelism` drain, and `isGreaterThan` failed for a
+        // system behaving correctly. See AbstractParallelEoSStreamProcessor#getQueueTargetLoaded.
+        //
+        // What the test is actually for - that pausing finishes in-flight work successfully and commits its
+        // offsets - is asserted below and is unchanged in both modes.
         Awaitility
                 .waitAtMost(defaultTimeout)
                 .alias("at least " + degreeOfParallelism + " records should be processed")
-                .untilAsserted(() -> assertThat(testUserFunction.numProcessedRecords.get()).isGreaterThan(degreeOfParallelism));
+                .untilAsserted(() -> assertThat(testUserFunction.numProcessedRecords.get()).isAtLeast(degreeOfParallelism));
 
         // overall committed offset should reach the same value
         awaitForCommit(testUserFunction.numProcessedRecords.get());

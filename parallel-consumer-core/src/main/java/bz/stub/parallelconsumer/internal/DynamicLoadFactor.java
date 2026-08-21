@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Controls a loading factor. Is used to ensure enough messages in multiples of our target concurrency are queued ready
@@ -96,19 +97,31 @@ public class DynamicLoadFactor {
         return false;
     }
 
-    private synchronized boolean doStep() {
-        if (isMaxReached()) {
-            return false;
-        } else {
-            // compare and set
-            currentFactor = currentFactor + stepUpFactorBy;
-            long delta = currentFactor - lastSteppedFactor;
-            log.debug("Stepped up load factor by {} from {} to {}", delta, lastSteppedFactor, currentFactor);
+    private final ReentrantLock stepLock = new ReentrantLock();
 
-            //
-            lastSteppedFactor = currentFactor;
-            lastStepTime = Instant.now();
-            return true;
+    /**
+     * A {@link ReentrantLock} rather than {@code synchronized} for uniformity with the other monitors on the
+     * virtual-thread path, not because this one pins: nothing inside blocks. Kept as a lock so the whole engine
+     * reads one way.
+     */
+    private boolean doStep() {
+        stepLock.lock();
+        try {
+            if (isMaxReached()) {
+                return false;
+            } else {
+                // compare and set
+                currentFactor = currentFactor + stepUpFactorBy;
+                long delta = currentFactor - lastSteppedFactor;
+                log.debug("Stepped up load factor by {} from {} to {}", delta, lastSteppedFactor, currentFactor);
+
+                //
+                lastSteppedFactor = currentFactor;
+                lastStepTime = Instant.now();
+                return true;
+            }
+        } finally {
+            stepLock.unlock();
         }
     }
 

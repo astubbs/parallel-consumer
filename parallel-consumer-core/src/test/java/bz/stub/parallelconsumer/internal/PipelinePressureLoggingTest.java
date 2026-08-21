@@ -84,7 +84,13 @@ class PipelinePressureLoggingTest {
 
     private static ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> options() {
         return ParallelConsumerOptions.<String, String>builder()
-                .consumer(new MockConsumer<>(OffsetResetStrategy.LATEST));
+                .consumer(new MockConsumer<>(OffsetResetStrategy.LATEST))
+                // Pinned, not inherited from CI's execution-mode axis. Everything asserted here is about the
+                // pre-loaded-queue engine: the notice exists to explain why the EXECUTOR QUEUE will not be filled
+                // any deeper. A virtual-thread pool has no queue to fill, so it suppresses the notice entirely
+                // (AbstractParallelEoSStreamProcessor#maybeReportLoadFactorCeiling) - and "the notice did not
+                // fire" would then be true for a reason that has nothing to do with rate limiting.
+                .useVirtualThreads(false);
     }
 
     /**
