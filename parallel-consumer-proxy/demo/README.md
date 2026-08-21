@@ -38,21 +38,21 @@ what crossing a process boundary costs, and nothing else.
 ### Java carries four extra arms. Do not mirror them.
 
 Because one JVM can hold all of them at once, the Java demo also runs `pc-core` (the engine
-directly), `java-direct` (the client library with the engine in process), `java-grpc-uds` (the
-client library over a **Unix domain socket**) and `java-raw-grpc` (the protocol by hand). Each
+directly), `pc-java-direct` (the client library with the engine in process), `pc-java-grpc-uds` (the
+client library over a **Unix domain socket**) and `pc-java-raw-grpc` (the protocol by hand). Each
 *pair* changes exactly one term, which is the only way a difference means anything:
 
 | pair | what it isolates |
 |---|---|
-| `pc-core` vs `java-direct` | what reaching the engine through the client library costs |
-| `java-direct` vs `java-grpc` | going out of process at all |
-| `java-grpc` vs `java-grpc-uds` | the TCP/IP stack, with everything else held identical |
-| `java-grpc` vs `java-raw-grpc` | what the client library itself costs on the wire |
+| `pc-core` vs `pc-java-direct` | what reaching the engine through the client library costs |
+| `pc-java-direct` vs `pc-java-grpc` | going out of process at all |
+| `pc-java-grpc` vs `pc-java-grpc-uds` | the TCP/IP stack, with everything else held identical |
+| `pc-java-grpc` vs `pc-java-raw-grpc` | what the client library itself costs on the wire |
 
 A language whose only Kafka client is its own has nothing to compare a wrapper or a raw wire
 against, so **two arms is the whole contract everywhere else.**
 
-**`java-grpc-uds` is absent where it cannot run, and never silently.** It needs an epoll
+**`pc-java-grpc-uds` is absent where it cannot run, and never silently.** It needs an epoll
 domain-socket transport, which means Linux - including inside this demo's own container on any
 host, so `demo/run.sh --docker` gets it on macOS too. The demo asks the runtime whether it can open
 a domain socket rather than guessing from the operating system's name, and when it cannot it says
@@ -74,6 +74,119 @@ that does not go parallel**, which in every language except Java means the AK co
 would need minutes to hours for a backlog the sidecar clears in seconds, and waiting that long to
 learn nothing new is not worth the wall clock.
 
+## The output a reader actually sees
+
+These are contract because the demo's whole job is to be watched. A demo that is correct and
+unreadable has failed at the only thing it does.
+
+### It opens by saying what it is
+
+The **first thing printed** names the product. Not the module, not the arm, not a configuration
+line - a reader who runs this and sees `pc-ruby-grpc: the proxy granted 100 executor threads` has been
+told nothing about what they are looking at. Every language prints the same banner, differing only
+in its own name:
+
+```
+================================================================
+  PARALLEL CONSUMER  -  <language> demo
+  The same records, twice: one at a time, then all at once.
+================================================================
+```
+
+Then the effective configuration, then the run.
+
+### The broker is quiet
+
+A KRaft broker at INFO emits hundreds of lines of controller elections and log-segment chatter and
+buries the tables. Every `docker-compose.yml` sets `KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` and
+`KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN`. Kafka's own warnings and errors still come through - this
+quietens the routine, not the diagnostics.
+
+### Every arm names the client it actually ran
+
+**"AK core" is a category, not a client.** A reader cannot judge a comparison without knowing what
+produced it, and the answer differs everywhere: `rdkafka` in Ruby, `franz-go` in Go, `kafkajs` in
+TypeScript, `confluent-kafka` in Python, `Confluent.Kafka` in .NET, `swift-kafka-client` in Swift.
+So the arm is labelled with both - the role and the library:
+
+```
+AK core (franz-go)          rather than   AK core
+pc-go-grpc (this client)       rather than   pc-go-grpc
+```
+
+**Where a language has more than one serious Kafka client, RUN THEM ALL, each as its own arm.** Not
+"consider" - run them. A reader asking "is this fast in my language" is really asking about the
+client they already use, and answering for one of three leaves two thirds of them guessing. Go has
+franz-go, confluent-kafka-go and sarama; Python has confluent-kafka, kafka-python and aiokafka;
+TypeScript has kafkajs and confluentinc-kafka-javascript. Each is somebody's production choice.
+
+Name the clients you found in the demo's own README, including any you deliberately did **not** run,
+with the reason. A client excluded for a real constraint - it needs cgo and the image is
+`CGO_ENABLED=0`, it is archived and unmaintained - is a finding worth writing down. A client excluded
+because one arm felt tidier is not.
+
+Extra arms are a **legitimate addition, not drift**. `bin/ci-demo-conformance.sh` compares the arms
+every language must have and permits additional ones, reporting them rather than failing them. That
+had to be said out loud: its first version required every language's output to match exactly, so a
+language adding a second client would have been failed for doing what this section asks.
+
+## Idiomatic inside, identical outside
+
+**The Java demo is a seed, not a template.** What must match across eleven languages is everything
+this document specifies: the flags and their precedence, the banner, the tables, the arms, the
+container rules, the exit codes. **Nothing about the internals must match, and trying to make them
+match makes every demo worse.**
+
+Write each demo the way someone fluent in that language would write it. Use its idioms, its
+concurrency primitives, its error handling, its project layout, its test framework. If the Java
+version uses a class where your language wants a function, use a function. If it threads a value
+through three objects and your language has a better way, take the better way. A Java program
+transliterated into Ruby is not a Ruby demo - it is a Java demo that happens to run under Ruby, and
+it teaches a Ruby reader nothing about using this client in Ruby.
+
+This is not licence to diverge on behaviour. The contract above is exactly the part that is not
+yours to reinterpret; everything below the output is.
+
+### Every arm reports what it did, not just how fast
+
+Throughput alone cannot show the work happened. Each arm also reports **records processed** and
+**unique keys seen**, so the table demonstrates the run rather than asserting it:
+
+| | |
+|---|---|
+| **records** | must equal the target; a short arm is a failed arm, not a fast one |
+| **keys** | the distinct keys observed, which shows the backlog was really spread rather than one key repeated |
+
+These two are **deterministic** - every language processing the same records reports the same
+figures - which is what makes them comparable across languages when elapsed and msg/s never can be.
+`bin/ci-demo-conformance.sh` compares their **values** across languages for that reason, rather than
+masking them the way it masks a rate.
+
+**The column order is fixed, and it is:**
+
+```
+arm | records | keys | elapsed | msg/s | vs AK core
+```
+
+Evidence before rate: what the arm *did* comes before how fast it did it.
+
+This is written down because it was once left unstated, and eleven implementations then returned
+**three different orders** from the one document: six beside `arm`, four appended after
+`vs AK core`, one in the middle. Every one of the eleven was defensible, and the two that wrote down
+a reason gave a *good* one - appending kept the original four-column header a prefix of the new one,
+which mattered while the conformance skeleton matched headers loosely. The lesson is not that anyone
+chose badly. It is that a contract which leaves something unstated does not get consistency, it gets
+a vote, and nothing anywhere goes red to report the result.
+
+**Assert your column order in your own test suite.** Three of the eleven already did - the ones that
+did were not the problem, and their tests are what made the divergence cheap to find and safe to fix.
+A language whose table shape nothing asserts will drift again the next time someone adds a column,
+and the cross-language check cannot be the only thing watching: it compares languages to each other,
+so eleven demos that drift *together* still pass it.
+
+Column *widths* are still not contract: a longer arm name may widen a column, and a check that
+enforced alignment would put every language with a long client name in permanent violation.
+
 ## The contract a per-language demo must keep
 
 Mirror this, so a reader who has run one has run them all:
@@ -90,6 +203,17 @@ Mirror this, so a reader who has run one has run them all:
 | **container** | `<client-module>/demo/Dockerfile` and `docker-compose.yml`, so a reader with only Docker can run it. Java is included, not exempted (R72) |
 | **latency** | do not report any. The backlog is pre-produced, so the workload is closed-loop and per-record timings are flattered by however far an arm fell behind. Reporting throughput only is the honest option available here |
 
+### Pick a free port, do not reserve one
+
+A demo that publishes a fixed host port cannot run beside another demo that chose the same number,
+and two of eleven collided on 29092 the first time all eleven ran. **Do not solve this by allocating
+eleven distinct numbers** - that is a registry to maintain, and it is wrong the moment somebody runs
+two copies of the same demo.
+
+**Try a port; if the bind fails, try the next one.** Report the port actually used. The demo already
+reports the topic it created for the same reason: a value chosen at run time is fine as long as it is
+announced.
+
 ### The container rule that is not negotiable
 
 **A demo container is never granted the host Docker socket.** Broker mode inside a container reaches
@@ -104,13 +228,25 @@ deployment the product does not ask for.
 
 ### The one thing that genuinely differs per language
 
-**The simulated work must use that language's non-occupying wait.** A blocking sleep is fine in
-Java, Kotlin, Scala, Go, Ruby, Rust, Swift, C# and C++. It is **not** fine in two places:
+**The simulated work must not occupy a slot the engine is counting as available.** The rule used to
+name languages, and that was wrong - it listed nine as safe for a blocking sleep, and four of them
+turned out not to be. The predicate is a property of the CLIENT, not of the language:
 
-- **Python** - the client runs worker *processes*; a hundred sleeping processes is not the free
-  thing a hundred sleeping threads is.
-- **TypeScript** - a single event loop; a blocking sleep there stops everything, so it must be an
-  awaited timer.
+> **Is the client thread-per-record?** If each record gets a thread that can block harmlessly, a
+> blocking sleep is honest. If records share an event loop, a coroutine dispatcher, an async
+> runtime, a fixed cooperative pool, or worker processes, a blocking sleep caps in-flight work at
+> something *other than* the concurrency the fingerprint printed - and the table then reports the
+> runtime's ceiling while appearing to report the engine's.
+
+Measured, not reasoned: in Rust the same workload gave **10,341 msg/s** through the client's
+blocking adapter and **3,518 msg/s** with a raw thread sleep - roughly core-count-over-delay, which
+is the ceiling the runtime imposed rather than anything about Parallel Consumer.
+
+By that predicate: **Python** (worker processes), **TypeScript** (one event loop), **Rust** (async
+runtime), **Kotlin** (coroutines on a bounded dispatcher), **Swift** (cooperative pool) and **C#**
+(thread-pool tasks) all need their language's non-occupying wait. **Ruby** does not - its executors
+are threads and MRI releases the GVL around `sleep`, which was checked rather than assumed. Apply
+the predicate to your client; do not trust a list.
 
 Everything else in the contract is identical by design. Where a language must diverge, say so in its
 own README rather than quietly changing the shape.

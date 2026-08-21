@@ -36,10 +36,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -64,22 +61,22 @@ import java.util.concurrent.atomic.AtomicReference;
  *       {@code CONCEPTS.md}. This is the arm every language has.</li>
  *   <li><b>pc-core</b> - {@code ParallelEoSStreamProcessor} directly, no client library, no
  *       sidecar. The engine as a Java application already uses it today.</li>
- *   <li><b>java-direct</b> - {@code DirectParallelConsumerClient}: the client library's surface
+ *   <li><b>pc-java-direct</b> - {@code DirectParallelConsumerClient}: the client library's surface
  *       with the engine bound in process behind it. Against pc-core this prices <b>what reaching
  *       the engine through the client library costs</b>.</li>
- *   <li><b>java-grpc</b> - {@code GrpcParallelConsumerClient} over a real sidecar this process
- *       spawns. Against java-direct - same library surface, same broker, same workload - this
+ *   <li><b>pc-java-grpc</b> - {@code GrpcParallelConsumerClient} over a real sidecar this process
+ *       spawns. Against pc-java-direct - same library surface, same broker, same workload - this
  *       prices <b>what it costs to reach the engine over a socket instead of in process</b>, which
  *       is the number the whole language-proxy design turns on. Read it as the wire hop <i>plus the
  *       sidecar's own dispatch model</i>, not the wire alone: the two sides run the engine with
  *       different in-flight pipelining, so attributing the whole gap to the socket would overstate
  *       it.</li>
- *   <li><b>java-grpc-uds</b> - the same client library over the same sidecar, reached through a
- *       <b>Unix domain socket</b> instead of loopback TCP. Against java-grpc - one term changed, and
+ *   <li><b>pc-java-grpc-uds</b> - the same client library over the same sidecar, reached through a
+ *       <b>Unix domain socket</b> instead of loopback TCP. Against pc-java-grpc - one term changed, and
  *       every other term identical - this prices <b>the TCP/IP stack</b>. It is additive: where it
  *       cannot run, every other arm reports exactly what it reports now.</li>
- *   <li><b>java-raw-grpc</b> - the protocol spoken by hand, with no client library at all. A
- *       control arm: against java-grpc it prices <b>the client library itself</b>. It is here
+ *   <li><b>pc-java-raw-grpc</b> - the protocol spoken by hand, with no client library at all. A
+ *       control arm: against pc-java-grpc it prices <b>the client library itself</b>. It is here
  *       because an earlier version of this demo was <em>only</em> this arm, which is precisely why
  *       it measured the engine and said nothing about the client. Kept as a control, not as an
  *       example - no application should write this, and no other language's demo needs it.</li>
@@ -111,7 +108,54 @@ public final class ReferenceDemo {
     /** No arm may take longer than this before the demo calls it stalled rather than slow. */
     private static final Duration ARM_BUDGET = Duration.ofMinutes(10);
 
+    /**
+     * <b>The first thing this demo prints, and the shape every language prints.</b>
+     * <p>
+     * A reader who starts a demo and is greeted by {@code pc-java-grpc: the proxy granted 100 executor
+     * threads} has been told nothing about what they are looking at. The banner names the product
+     * and what is about to happen, and only the language differs between the eleven copies of it.
+     */
+    private static final String BANNER =
+            "\n================================================================\n"
+                    + "  PARALLEL CONSUMER  -  Java demo\n"
+                    + "  The same records, twice: one at a time, then all at once.\n"
+                    + "================================================================";
+
     private static final String AK_CORE = "AK core";
+
+    /**
+     * <b>What each arm actually drives.</b> "AK core" is a category, not a client - it is
+     * {@code KafkaConsumer} here, {@code franz-go} in Go, {@code rdkafka} in Ruby - and a reader
+     * cannot judge a row without knowing which of those produced it. So every row is printed as
+     * {@code arm (client)}, and these are the second half of that.
+     * <p>
+     * {@link #JAVA_GRPC} is the arm every language has, and its client is spelled exactly as the
+     * contract spells it - {@code this client} - because in every language that row means "the
+     * client library this repository ships". Java's four extra arms name what they swap for it: a
+     * different engine surface, a different socket, or no library at all. So what each pair isolates
+     * is readable straight off the table, rather than only from the prose above.
+     */
+    private static final String AK_CORE_CLIENT = "KafkaConsumer";
+
+    private static final String PC_CORE = "pc-core";
+
+    private static final String PC_CORE_CLIENT = "ParallelEoSStreamProcessor";
+
+    private static final String JAVA_DIRECT = "pc-java-direct";
+
+    private static final String JAVA_DIRECT_CLIENT = "this client, in process";
+
+    private static final String JAVA_GRPC = "pc-java-grpc";
+
+    private static final String JAVA_GRPC_CLIENT = "this client";
+
+    private static final String JAVA_GRPC_UDS = "pc-java-grpc-uds";
+
+    private static final String JAVA_GRPC_UDS_CLIENT = "this client, over UDS";
+
+    private static final String JAVA_RAW_GRPC = "pc-java-raw-grpc";
+
+    private static final String JAVA_RAW_GRPC_CLIENT = "no client library";
 
     /**
      * The capability the client library declares (WireMapping's own {@code DISPATCH_CAPABILITY}).
@@ -149,11 +193,27 @@ public final class ReferenceDemo {
             return;
         }
 
+        String topic = options.topic().orElseGet(() -> "pc-demo-" + System.nanoTime());
+        // Banner and fingerprint BEFORE the broker is resolved, because resolving it can start a
+        // container and print a paragraph about doing so - and the contract's order is the product,
+        // then the settings, then the run. A reader who has to scroll back past broker chatter to
+        // find out what they are running has been told what it is too late.
+        announce(options, topic);
+
         try (DemoBroker broker = DemoBroker.resolve(options.bootstrap().orElse(null))) {
-            String topic = options.topic()
-                    .orElseGet(() -> "pc-demo-" + System.nanoTime());
             runFor(options, broker, topic);
         }
+    }
+
+    /**
+     * Names the product, then echoes every dial the run is using.
+     * <p>
+     * The fingerprint is not decoration: a number without its settings is not reproducible. It never
+     * includes the bootstrap address, because own-cluster mode puts a user's real broker there.
+     */
+    static void announce(DemoOptions options, String topic) {
+        log.info("{}", BANNER);
+        log.info("\nEffective configuration:\n  {}\n  topic = {}", options, topic);
     }
 
     private static void usage() {
@@ -187,9 +247,10 @@ public final class ReferenceDemo {
     }
 
     private List<ArmResult> run() throws Exception {
-        log.info("\nEffective configuration:\n  {}\n  topic = {}", options, topic);
+        // The banner and the fingerprint are printed by main() before the broker is resolved, not
+        // here: see announce(DemoOptions, String).
         if (!domainSocketsAvailable()) {
-            log.info("\nThe java-grpc-uds arm is NOT running: this JVM has no epoll domain-socket "
+            log.info("\nThe pc-java-grpc-uds arm is NOT running: this JVM has no epoll domain-socket "
                     + "transport, which is expected outside Linux. Every other arm is unaffected and "
                     + "reports exactly what it always reports - the comparison is one row shorter, not "
                     + "different. To include it, run the demo in its container: demo/run.sh --docker");
@@ -229,8 +290,15 @@ public final class ReferenceDemo {
             big.add(javaGrpcOverDomainSocket(total));
         }
         big.add(javaRawGrpc(total));
+        // The unit is chosen so this figure is never zero. At the demo's own defaults it is 80s and
+        // carries the whole argument for dropping the serial arm; at the volumes CI and the
+        // conformance harness run, integer seconds printed "0s+" - which told a reader the arm was
+        // dropped to save no time at all, and was the only false statement this demo made. Ten
+        // languages mirrored the wart from here, so the fix belongs here first.
+        long serialMillis = (long) total * options.delayMs();
+        String serialCost = serialMillis >= 1000 ? (serialMillis / 1000) + "s" : serialMillis + "ms";
         report("Big replay - " + total + " records, parallel arms only (AK core is serial and would"
-                + " take " + (total * options.delayMs() / 1000) + "s+)", big, baselineOf(small), true);
+                + " take " + serialCost + "+)", big, baselineOf(small), true);
 
         var everything = new ArrayList<ArmResult>(small);
         everything.addAll(big);
@@ -249,7 +317,7 @@ public final class ReferenceDemo {
         config.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
 
-        int processed = 0;
+        var tally = new ArmTally(target);
         try (KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(config)) {
             consumer.subscribe(Collections.singletonList(topic));
             // The clock starts AFTER the consumer is built and stops before it closes, because this
@@ -257,33 +325,32 @@ public final class ReferenceDemo {
             // for client construction or teardown.
             long startedAt = System.nanoTime();
             long deadline = startedAt + ARM_BUDGET.toNanos();
-            while (processed < target) {
+            while (tally.processed() < target) {
                 // The one arm that does not wait on a latch still needs the budget ARM_BUDGET
                 // promises, or a backlog shorter than the target spins here forever with no output.
                 if (System.nanoTime() > deadline) {
-                    throw new IllegalStateException(AK_CORE + " stalled at " + processed
+                    throw new IllegalStateException(AK_CORE + " stalled at " + tally.processed()
                             + " of " + target);
                 }
                 ConsumerRecords<byte[], byte[]> polled = consumer.poll(Duration.ofMillis(500));
-                for (var ignored : polled) {
+                for (var record : polled) {
                     ThreadUtils.sleepQuietly(options.delayMs());
-                    processed++;
+                    tally.recordProcessed(record.key());
                 }
             }
-            return finished(AK_CORE, startedAt, processed);
+            return finished(AK_CORE, AK_CORE_CLIENT, startedAt, tally);
         }
     }
 
     /** The engine on its own, as a Java application uses it today - no client library, no sidecar. */
     private ArmResult pcCore(int target) throws InterruptedException {
-        log.info("\n=== pc-core starting over {} records ===", target);
+        log.info("\n=== {} starting over {} records ===", PC_CORE, target);
         var config = new Properties();
-        config.putAll(broker.consumerProperties(groupId("pc-core")));
+        config.putAll(broker.consumerProperties(groupId(PC_CORE)));
         config.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
 
-        var processed = new AtomicInteger();
-        var done = new CountDownLatch(1);
+        var tally = new ArmTally(target);
         var engine = new ParallelEoSStreamProcessor<byte[], byte[]>(
                 ParallelConsumerOptions.<byte[], byte[]>builder()
                         .consumer(new KafkaConsumer<byte[], byte[]>(config))
@@ -295,9 +362,9 @@ public final class ReferenceDemo {
             long startedAt = System.nanoTime();
             engine.poll(context -> {
                 ThreadUtils.sleepQuietly(options.delayMs());
-                countTowards(processed, target, done);
+                tally.recordProcessed(context.key());
             });
-            return awaited("pc-core", startedAt, processed, done, target);
+            return awaited(PC_CORE, PC_CORE_CLIENT, startedAt, tally);
         } finally {
             engine.close();
         }
@@ -305,15 +372,14 @@ public final class ReferenceDemo {
 
     /** The client library with the engine bound in process behind it. */
     private ArmResult javaDirect(int target) throws InterruptedException {
-        log.info("\n=== java-direct starting over {} records ===", target);
-        var processed = new AtomicInteger();
-        var done = new CountDownLatch(1);
+        log.info("\n=== {} starting over {} records ===", JAVA_DIRECT, target);
+        var tally = new ArmTally(target);
         try (ParallelConsumerClient client = DirectParallelConsumerClient.builder()
-                .options(clientOptions(groupId("java-direct")))
+                .options(clientOptions(groupId(JAVA_DIRECT)))
                 .build()) {
             long startedAt = System.nanoTime();
-            client.poll(sleepingProcessor(processed, target, done));
-            return awaited("java-direct", startedAt, processed, done, target);
+            client.poll(sleepingProcessor(tally));
+            return awaited(JAVA_DIRECT, JAVA_DIRECT_CLIENT, startedAt, tally);
         }
     }
 
@@ -328,17 +394,16 @@ public final class ReferenceDemo {
      * client library at all, which is the property this arm stands in for.
      */
     private ArmResult javaGrpc(int target) throws Exception {
-        log.info("\n=== java-grpc starting over {} records ===", target);
-        var processed = new AtomicInteger();
-        var done = new CountDownLatch(1);
+        log.info("\n=== {} starting over {} records ===", JAVA_GRPC, target);
+        var tally = new ArmTally(target);
         try (SidecarProcess sidecar = SidecarProcess.spawn()) {
             try (ParallelConsumerClient client = GrpcParallelConsumerClient.builder()
                     .port(sidecar.port())
-                    .options(clientOptions(groupId("java-grpc")))
+                    .options(clientOptions(groupId(JAVA_GRPC)))
                     .build()) {
                 long startedAt = System.nanoTime();
-                client.poll(sleepingProcessor(processed, target, done));
-                return awaited("java-grpc", startedAt, processed, done, target);
+                client.poll(sleepingProcessor(tally));
+                return awaited(JAVA_GRPC, JAVA_GRPC_CLIENT, startedAt, tally);
             }
         }
     }
@@ -350,7 +415,7 @@ public final class ReferenceDemo {
      *
      * Against {@link #javaGrpc} exactly one term changes: the socket type. Same library, same protobuf,
      * same engine, same spawned child, same broker, same workload. So the difference is what the TCP/IP
-     * stack costs, which the java-direct to java-grpc step otherwise lumps together with serialization,
+     * stack costs, which the pc-java-direct to pc-java-grpc step otherwise lumps together with serialization,
      * the gRPC machinery and the process boundary.
      *
      * <h2>Where it runs</h2>
@@ -362,17 +427,16 @@ public final class ReferenceDemo {
      * as a UDS penalty that is really the container.
      */
     private ArmResult javaGrpcOverDomainSocket(int target) throws Exception {
-        log.info("\n=== java-grpc-uds starting over {} records ===", target);
-        var processed = new AtomicInteger();
-        var done = new CountDownLatch(1);
+        log.info("\n=== {} starting over {} records ===", JAVA_GRPC_UDS, target);
+        var tally = new ArmTally(target);
         try (SidecarProcess sidecar = SidecarProcess.spawnOnDomainSocket()) {
             try (ParallelConsumerClient client = GrpcParallelConsumerClient.builder()
                     .socketPath(sidecar.socketPath())
-                    .options(clientOptions(groupId("java-grpc-uds")))
+                    .options(clientOptions(groupId(JAVA_GRPC_UDS)))
                     .build()) {
                 long startedAt = System.nanoTime();
-                client.poll(sleepingProcessor(processed, target, done));
-                return awaited("java-grpc-uds", startedAt, processed, done, target);
+                client.poll(sleepingProcessor(tally));
+                return awaited(JAVA_GRPC_UDS, JAVA_GRPC_UDS_CLIENT, startedAt, tally);
             }
         }
     }
@@ -391,14 +455,13 @@ public final class ReferenceDemo {
     /**
      * The control arm: the same sidecar, the same work, the protocol spoken by hand.
      * <p>
-     * <b>This is not an example to copy.</b> It exists so that java-grpc minus this arm is a number
+     * <b>This is not an example to copy.</b> It exists so that pc-java-grpc minus this arm is a number
      * rather than an assumption - it prices the client library itself. An application writes
      * {@link #javaGrpc}; nobody writes this.
      */
     private ArmResult javaRawGrpc(int target) throws Exception {
-        log.info("\n=== java-raw-grpc starting over {} records ===", target);
-        var processed = new AtomicInteger();
-        var done = new CountDownLatch(1);
+        log.info("\n=== {} starting over {} records ===", JAVA_RAW_GRPC, target);
+        var tally = new ArmTally(target);
 
         try (SidecarProcess sidecar = SidecarProcess.spawn()) {
             ManagedChannel channel = ManagedChannelBuilder
@@ -430,7 +493,16 @@ public final class ReferenceDemo {
                                                     .setSuccess(Report.Success.newBuilder()))
                                             .build());
                                 }
-                                countTowards(processed, target, done);
+                                // The key comes off the wire here rather than out of a client
+                                // library, which is the whole point of this arm - it reports the
+                                // same two evidence columns as the rest with no help at all. The
+                                // presence check is the library's null-key handling, done by hand:
+                                // the field is optional, and an ABSENT key decodes to an EMPTY
+                                // ByteString, which would count as a key rather than as no key.
+                                var wireRecord = record.getRecord();
+                                tally.recordProcessed(wireRecord.hasKey()
+                                        ? wireRecord.getKey().toByteArray()
+                                        : null);
                             });
                         }
                     }
@@ -441,15 +513,15 @@ public final class ReferenceDemo {
                         // stream then reports back as UNAVAILABLE. Reporting our own teardown as a
                         // failure would teach a reader to expect an error at the end of a healthy
                         // run, so it is only an error if we were not already finished.
-                        if (done.getCount() > 0) {
+                        if (tally.stillRunning()) {
                             log.error("Session failed", t);
-                            done.countDown();
+                            tally.sessionEnded();
                         }
                     }
 
                     @Override
                     public void onCompleted() {
-                        done.countDown();
+                        tally.sessionEnded();
                     }
                 });
                 requests.set(stream);
@@ -462,10 +534,10 @@ public final class ReferenceDemo {
                 // help from the client library, which is itself part of what this control arm
                 // demonstrates.
                 var configure = rawConfigure(options, topic,
-                        broker.consumerProperties(groupId("java-raw-grpc")));
+                        broker.consumerProperties(groupId(JAVA_RAW_GRPC)));
                 stream.onNext(ClientMessage.newBuilder().setConfigure(configure).build());
 
-                return awaited("java-raw-grpc", startedAt, processed, done, target);
+                return awaited(JAVA_RAW_GRPC, JAVA_RAW_GRPC_CLIENT, startedAt, tally);
             } finally {
                 workers.shutdownNow();
                 channel.shutdownNow();
@@ -474,13 +546,13 @@ public final class ReferenceDemo {
     }
 
     /**
-     * The user function for the two client-library arms, identical to the sleep every other arm
+     * The user function for the client-library arms, identical to the sleep every other arm
      * runs so that the arms differ by transport and nothing else.
      */
-    private RecordProcessor sleepingProcessor(AtomicInteger processed, int target, CountDownLatch done) {
+    private RecordProcessor sleepingProcessor(ArmTally tally) {
         return record -> {
             ThreadUtils.sleepQuietly(options.delayMs());
-            countTowards(processed, target, done);
+            tally.recordProcessed(record.key());
             return Outcome.success();
         };
     }
@@ -525,32 +597,28 @@ public final class ReferenceDemo {
                 .build();
     }
 
-    private static void countTowards(AtomicInteger processed, int target, CountDownLatch done) {
-        if (processed.incrementAndGet() >= target) {
-            done.countDown();
-        }
-    }
-
-    static ArmResult awaited(String arm, long startedAt, AtomicInteger processed,
-                                     CountDownLatch done, int target) throws InterruptedException {
-        if (!done.await(ARM_BUDGET.toMillis(), TimeUnit.MILLISECONDS)) {
-            throw new IllegalStateException(arm + " stalled at " + processed.get() + " of " + target);
+    static ArmResult awaited(String arm, String client, long startedAt, ArmTally tally)
+            throws InterruptedException {
+        if (!tally.awaitCompletion(ARM_BUDGET)) {
+            throw new IllegalStateException(arm + " stalled at " + tally.processed()
+                    + " of " + tally.target());
         }
         // Reaching the target is not the only thing that releases the latch: a failed or completed
         // session releases it too. Without this check a broken run prints a plausible row at a
         // plausible rate and exits 0, which is the worst thing a demo whose numbers ten other
         // languages copy can do.
-        int count = processed.get();
-        if (count < target) {
-            throw new IllegalStateException(arm + " ended early at " + count + " of " + target);
+        if (tally.processed() < tally.target()) {
+            throw new IllegalStateException(arm + " ended early at " + tally.processed()
+                    + " of " + tally.target());
         }
-        return finished(arm, startedAt, count);
+        return finished(arm, client, startedAt, tally);
     }
 
-    private static ArmResult finished(String arm, long startedAt, int processed) {
+    private static ArmResult finished(String arm, String client, long startedAt, ArmTally tally) {
         var elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
-        log.info("=== {} finished: {} records in {}ms ===", arm, processed, elapsed.toMillis());
-        return new ArmResult(arm, elapsed, processed);
+        log.info("=== {} finished: {} records over {} keys in {}ms ===",
+                arm, tally.processed(), tally.uniqueKeys(), elapsed.toMillis());
+        return new ArmResult(arm, client, elapsed, tally.processed(), tally.uniqueKeys());
     }
 
     /** A fresh group per arm per replay, so every arm reads the same records from the beginning. */
@@ -558,23 +626,68 @@ public final class ReferenceDemo {
         return "pc-demo-" + arm + "-" + System.nanoTime();
     }
 
+    /**
+     * Prints one replay's table.
+     *
+     * <h2>Six columns, and two of them are the evidence</h2>
+     *
+     * {@code elapsed}, {@code msg/s} and the ratio are measurements: they depend on the machine, the
+     * load on it and the language. {@code records} and {@code keys} are not - every arm, in every
+     * language, replaying the same backlog must report the same pair. They are what turns a table
+     * that <em>asserts</em> the work happened into one that <em>shows</em> it: a short arm is a
+     * failed arm rather than a fast one, and a keys figure that collapses to 1 says the backlog was
+     * never spread however good the rate looks.
+     *
+     * <h2>The arm column is sized to its contents</h2>
+     *
+     * Because the label now carries the client too, a fixed width either truncates
+     * {@code pc-core (ParallelEoSStreamProcessor)} or wastes a third of the line on every other row.
+     * Column width is explicitly not part of the cross-language contract for exactly this reason -
+     * arm names differ in length between languages - so the widest label in the table sets it.
+     */
     private static void report(String title, List<ArmResult> results, ArmResult baseline,
                                boolean acrossReplays) {
+        log.info("{}", renderTable(title, results, baseline, acrossReplays));
+    }
+
+    /**
+     * The table as text, split from {@link #report} for one reason: <b>column identity and order
+     * are contract</b> across all eleven languages, and nothing else in this demo can assert them.
+     * The C++ and Rust demos split theirs for the same reason; Java, as the seed, had no such test
+     * at all until the eleven implementations returned three different column orders from one
+     * document - and the seed's own order was one of the wrong ones.
+     * <p>
+     * Package-private rather than public: the test lives beside it, and the demo's surface is
+     * {@code main}.
+     */
+    static String renderTable(String title, List<ArmResult> results, ArmResult baseline,
+                              boolean acrossReplays) {
+        int armWidth = results.stream().mapToInt(r -> r.label().length()).max().orElse(20);
+        String rowFormat = "  %-" + armWidth + "s %9s %7s %9s %10s %11s%n";
+
         var table = new StringBuilder("\n\n").append(title).append('\n');
-        table.append(String.format(Locale.ROOT, "  %-14s %10s %14s %14s%n", "arm", "elapsed", "msg/s",
-                acrossReplays ? "vs AK core*" : "vs AK core"));
+        table.append(String.format(Locale.ROOT, rowFormat, "arm", "records", "keys", "elapsed",
+                "msg/s", acrossReplays ? "vs AK core*" : "vs AK core"));
         for (ArmResult result : results) {
             String ratio = baseline == null || baseline.ratePerSecond() == 0
                     ? "-"
                     : String.format(Locale.ROOT, "%.1fx", result.ratePerSecond() / baseline.ratePerSecond());
-            table.append(String.format(Locale.ROOT, "  %-14s %9.1fs %14s %14s%n",
-                    result.arm(), result.elapsed().toMillis() / 1000d,
-                    String.format(Locale.ROOT, "%,d", (int) result.ratePerSecond()), ratio));
+            table.append(String.format(Locale.ROOT, rowFormat,
+                    result.label(),
+                    String.format(Locale.ROOT, "%,d", result.processed()),
+                    String.format(Locale.ROOT, "%,d", result.uniqueKeys()),
+                    String.format(Locale.ROOT, "%.1fs", result.elapsed().toMillis() / 1000d),
+                    String.format(Locale.ROOT, "%,d", (int) result.ratePerSecond()),
+                    ratio));
         }
+        // Phrased as a sentence rather than as `name = value` on purpose: the cross-language
+        // conformance check reads any such line as a configuration dial the demo echoed.
+        table.append("\n  The records and keys columns are deterministic - every arm must process "
+                + "every record, over the same keys.\n");
         if (acrossReplays) {
-            table.append("\n  * against the SMALL replay's AK core arm. Across replays, so not "
+            table.append("  * against the SMALL replay's AK core arm. Across replays, so not "
                     + "like-for-like.\n");
         }
-        log.info("{}", table);
+        return table.toString();
     }
 }

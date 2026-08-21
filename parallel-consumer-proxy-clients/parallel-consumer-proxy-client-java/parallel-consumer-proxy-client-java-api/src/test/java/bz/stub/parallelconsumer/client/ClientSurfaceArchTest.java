@@ -13,7 +13,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 /**
  * The rule the direct transport's pom asks for by name: <em>"The Java reference work adds an ArchUnit rule
  * covering the API SURFACE; this ban covers the CLASSPATH"</em> (the {@code ban-transport-dependencies}
- * enforcer execution in {@code parallel-consumer-proxy-client-java-direct/pom.xml}).
+ * enforcer execution in {@code parallel-consumer-proxy-client-pc-java-direct/pom.xml}).
  * <p>
  * The two checks are complements, not duplicates, and neither subsumes the other. The enforcer ban reads the
  * dependency <em>tree</em> - it fires when a jar arrives. This reads the <em>bytecode</em> - it fires when a
