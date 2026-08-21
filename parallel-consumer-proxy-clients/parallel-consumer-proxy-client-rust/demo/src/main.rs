@@ -29,6 +29,17 @@ use options::{DemoOptions, USAGE};
 const EXIT_USAGE: u8 = 2;
 const EXIT_FAILED: u8 = 1;
 
+/// **The first thing the demo prints, and it names the product.** Not the module, not an arm, not
+/// a configuration line: a reader who runs this and is met with
+/// `rust-grpc: the proxy granted 100 executor threads` has been told nothing about what they are
+/// looking at. Every language prints this same banner, differing only in its own name - contract,
+/// in `parallel-consumer-proxy/demo/README.md`.
+const BANNER: &str = "\
+================================================================
+  PARALLEL CONSUMER  -  Rust demo
+  The same records, twice: one at a time, then all at once.
+================================================================";
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -61,8 +72,12 @@ async fn run(options: DemoOptions) -> Result<(), String> {
         .clone()
         .unwrap_or_else(|| format!("pc-demo-{}", arms::unique()));
 
-    // THE FINGERPRINT COMES FIRST, and the bootstrap address is not in it: own-cluster mode puts a
-    // user's real broker there, and a number without its settings is not reproducible anyway.
+    // The banner, then the fingerprint, then the run - in that order, because a reader needs to
+    // know what they are watching before they can care how it was configured.
+    println!("\n{BANNER}");
+
+    // The bootstrap address is not in the fingerprint: own-cluster mode puts a user's real broker
+    // there, and a number without its settings is not reproducible anyway.
     println!("\nEffective configuration:\n  {options}\n  topic = {topic}");
 
     let sidecar = sidecar::resolve()?;
@@ -132,17 +147,34 @@ fn baseline_of(results: &[ArmResult]) -> Option<&ArmResult> {
 
 /// One table, in the reference's columns and the reference's order.
 ///
+/// **`records` and `keys` are what turn the table from an assertion into a demonstration.**
+/// Throughput alone cannot show the work happened - a short arm would look like a fast one - and
+/// the distinct keys show the backlog was really spread rather than being one key replayed. They
+/// are also the only two figures here that are deterministic, so they are the ones that can be
+/// compared between languages at all.
+///
+/// The arm column carries the client that produced the row, because "AK core" is a category rather
+/// than a client and the answer differs in every language.
+///
 /// `across_replays` marks the big replay's ratio column, whose denominator is the *small* replay's
 /// AK core arm - the only baseline there is, because the serial arm never runs the big one. It is
 /// not like-for-like, and the footnote says so rather than letting the column imply otherwise.
 fn report(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, across_replays: bool) {
+    println!("{}", render(title, results, baseline, across_replays));
+}
+
+/// The table as text. Split from [`report`] only so a test can read the columns a reader sees -
+/// column identity and order are contract, and nothing else in this demo can assert them.
+fn render(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, across_replays: bool) -> String {
     let mut table = format!("\n\n{title}\n");
     table.push_str(&format!(
-        "  {:<14} {:>10} {:>14} {:>14}\n",
+        "  {:<24} {:>10} {:>14} {:>14} {:>10} {:>8}\n",
         "arm",
         "elapsed",
         "msg/s",
-        if across_replays { "vs AK core*" } else { "vs AK core" }
+        if across_replays { "vs AK core*" } else { "vs AK core" },
+        "records",
+        "keys"
     ));
     for result in results {
         let ratio = match baseline {
@@ -152,11 +184,13 @@ fn report(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, acro
             _ => "-".to_owned(),
         };
         table.push_str(&format!(
-            "  {:<14} {:>9.1}s {:>14} {:>14}\n",
-            result.arm,
+            "  {:<24} {:>9.1}s {:>14} {:>14} {:>10} {:>8}\n",
+            result.label(),
             result.elapsed.as_millis() as f64 / 1000.0,
             thousands(result.rate_per_second() as u64),
-            ratio
+            ratio,
+            thousands(result.processed as u64),
+            thousands(result.unique_keys as u64)
         ));
     }
     if across_replays {
@@ -164,7 +198,7 @@ fn report(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, acro
             "\n  * against the SMALL replay's AK core arm. Across replays, so not like-for-like.\n",
         );
     }
-    println!("{table}");
+    table
 }
 
 /// Grouped with commas, the way the reference's `%,d` renders in the root locale - so two
@@ -189,8 +223,10 @@ mod tests {
     fn result(arm: &str, millis: u64, processed: usize) -> ArmResult {
         ArmResult {
             arm: arm.to_owned(),
+            client: "a client".to_owned(),
             elapsed: Duration::from_millis(millis),
             processed,
+            unique_keys: processed,
         }
     }
 
@@ -206,6 +242,65 @@ mod tests {
     fn throughput_is_records_over_wall_clock() {
         assert_eq!(result("x", 2_000, 1_000).rate_per_second(), 500.0);
         assert_eq!(result("x", 0, 1_000).rate_per_second(), 0.0, "no division by zero");
+    }
+
+    #[test]
+    fn the_banner_names_the_product_and_the_language() {
+        // The contract's shape, not this demo's taste: the first thing printed says what the
+        // reader is looking at. A banner that named the module or the arm would be the defect it
+        // was written to remove.
+        let lines: Vec<&str> = BANNER.lines().collect();
+
+        assert_eq!(lines.len(), 4, "rule, two lines, rule");
+        assert!(lines[0].starts_with("========"), "opens with a rule");
+        assert_eq!(lines[1], "  PARALLEL CONSUMER  -  Rust demo");
+        assert_eq!(lines[2], "  The same records, twice: one at a time, then all at once.");
+        assert_eq!(lines[3], lines[0], "closes with the same rule");
+    }
+
+    #[test]
+    fn every_arm_names_the_client_that_produced_its_row() {
+        // "AK core" is a category rather than a client, so the row carries both.
+        let ak = ArmResult {
+            arm: AK_CORE.to_owned(),
+            client: arms::AK_CORE_CLIENT.to_owned(),
+            elapsed: Duration::from_millis(1),
+            processed: 1,
+            unique_keys: 1,
+        };
+
+        assert_eq!(ak.label(), "AK core (rdkafka)");
+        assert_eq!(
+            ArmResult {
+                arm: arms::RUST_GRPC.to_owned(),
+                client: arms::RUST_GRPC_CLIENT.to_owned(),
+                ..ak
+            }
+            .label(),
+            "rust-grpc (this client)"
+        );
+    }
+
+    #[test]
+    fn the_table_reports_records_and_keys_beside_the_rate() {
+        let mut ak = result(AK_CORE, 1_000, 2_000);
+        ak.client = arms::AK_CORE_CLIENT.to_owned();
+        ak.unique_keys = 1_000;
+        let results = vec![ak];
+
+        let table = render("Small replay", &results, baseline_of(&results), false);
+        let header = table.lines().find(|line| line.contains("msg/s")).expect("a header row");
+        let row = table.lines().find(|line| line.contains("rdkafka")).expect("an arm row");
+
+        // Column IDENTITY and ORDER are the contract; the padding is not.
+        let columns: Vec<&str> = header.split_whitespace().collect();
+        let expected = vec!["arm", "elapsed", "msg/s", "vs", "AK", "core", "records", "keys"];
+        assert_eq!(columns, expected);
+        assert!(row.contains("AK core (rdkafka)"), "the row names its client: {row}");
+        // Deterministic, unlike elapsed and msg/s, which is what makes them comparable across
+        // languages - and grouped the same way the rate is, so a table reads as one table.
+        assert!(row.contains(" 2,000 "), "records processed: {row}");
+        assert!(row.trim_end().ends_with(" 1,000"), "unique keys last: {row}");
     }
 
     #[test]

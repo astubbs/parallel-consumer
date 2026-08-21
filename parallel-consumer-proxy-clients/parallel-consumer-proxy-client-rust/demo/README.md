@@ -20,8 +20,13 @@ Read that first. This file only records what is specific to Rust.
 
 | arm | what it is |
 |---|---|
-| `AK core` | `rdkafka`, Rust's own Kafka client, one record at a time on one thread |
-| `rust-grpc` | this application as a **foreign client**: the Rust client library spawns the sidecar, receives records over a socket, runs the user's function and reports outcomes back |
+| `AK core (rdkafka)` | [`rdkafka`](https://crates.io/crates/rdkafka), one record at a time on one thread |
+| `rust-grpc (this client)` | this application as a **foreign client**: the Rust client library spawns the sidecar, receives records over a socket, runs the user's function and reports outcomes back |
+
+**Each row names the client it actually ran, because "AK core" is a category rather than a client**
+and the answer differs in every language. Rust's answer is `rdkafka`, the binding over librdkafka.
+Pure-Rust alternatives exist, but this demo runs no second serial arm and makes no claim about how
+they compare - adding one is the contract's "consider running both", not something it did.
 
 Two arms is the whole contract outside Java. The reference demo carries four more because one JVM
 can hold an in-process engine, a client library over that engine, and a hand-written protocol
@@ -37,9 +42,10 @@ process - the same binary creates the topic, seeds the backlog and runs the AK c
 
 ### The simulated work is a blocking sleep, and *where* it blocks is the whole story
 
-The contract says a blocking sleep is fine in Rust, unlike Python (worker processes) and TypeScript
-(one event loop). It is - and Rust still has an answer of its own, because the client library's
-executors are tasks on an async runtime.
+The contract's rule is no longer a list of languages: it asks whether the **client** is
+thread-per-record. This one is not - its executors are tasks on an async runtime - so Rust is among
+the languages that need their own non-occupying wait. This demo's numbers are the measurement that
+rule now keys on.
 
 The demo's user function is `std::thread::sleep`, handed to the library through
 [`blocking(...)`](../src/outcome.rs), which is its documented entry point for a blocking user
@@ -93,6 +99,22 @@ after reading the port line. `sidecar_stderr` governs the other stream, so it do
 back: the demo's runs show none of the sidecar's several dozen start-up lines. Genuinely fatal JVM
 output still reaches stderr and is inherited. That is a property of the client library and the
 proxy together, not of this demo; it is recorded in `docs/inflight/clients/rust.md`.
+
+## What the run prints, and in what order
+
+The **banner first**, then the effective configuration, then the arms. That order is the contract's,
+and the reason for it is that a reader needs to know what they are watching before they can care how
+it was configured.
+
+Each table carries `records` and `keys` beside `msg/s`, because throughput alone cannot show the
+work happened - a short arm would read as a fast one rather than a failed one. `records` must equal
+the target, and `keys` is the distinct record keys the arm saw, which shows the backlog was really
+spread across the key space rather than one key replayed. Both are **deterministic**: the same
+backlog gives every language the same pair, which is what lets `bin/ci-demo-conformance.sh` compare
+languages at all, where elapsed and msg/s never can.
+
+A **null key is not a key** in either arm. Nothing this demo seeds has one; the rule is written down
+so the two arms cannot disagree the first time something does.
 
 ## Cosmetics that differ, and deliberately do not matter
 

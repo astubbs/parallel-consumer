@@ -9,8 +9,9 @@
 //! isolate; adding a hand-rolled-protocol arm would price the client library against itself in a
 //! language where nobody would write the control.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use parallel_consumer_proxy_client::{
@@ -35,19 +36,39 @@ pub const AK_CORE: &str = "AK core";
 /// The sidecar arm's name, in the reference's `<language>-<transport>` shape.
 pub const RUST_GRPC: &str = "rust-grpc";
 
-/// What one arm achieved: how long it took, and over how many records.
+/// **The client the AK core arm actually ran.** "AK core" is a *category*, not a client, and the
+/// answer differs in every language - `franz-go` in Go, `kafkajs` in TypeScript, `rdkafka` here. A
+/// reader cannot judge the comparison without being told which one produced the number, so the
+/// table prints both the role and the library.
+pub const AK_CORE_CLIENT: &str = "rdkafka";
+
+/// What the sidecar arm drives: this repository's Rust client library, not a hand-rolled protocol
+/// client. Named for the same reason - the row says what the reader is being shown.
+pub const RUST_GRPC_CLIENT: &str = "this client";
+
+/// What one arm achieved: how long it took, over how many records, and across how many keys.
 ///
 /// **There is no latency field, and that is the contract rather than an omission.** The backlog is
 /// pre-produced, so the workload is closed-loop and a per-record timing would be flattered by
 /// however far an arm had fallen behind. Throughput is the only honest number this shape produces.
+///
+/// `processed` and `unique_keys` are the two **deterministic** figures: every language replaying
+/// the same backlog reports the same pair, which is what makes them comparable across languages
+/// when elapsed and msg/s never can be. `bin/ci-demo-conformance.sh` relies on exactly that.
 #[derive(Debug, Clone)]
 pub struct ArmResult {
-    /// The arm's name, as it appears in the tables.
+    /// The arm's role, and the identity every ratio and message keys off - `AK core`, `rust-grpc`.
     pub arm: String,
+    /// The Kafka client, or client library, the arm actually ran on.
+    pub client: String,
     /// Wall clock from the first record being asked for to the last one being processed.
     pub elapsed: Duration,
-    /// How many records it actually processed.
+    /// How many records it actually processed. Must equal the target: a short arm is a **failed**
+    /// arm, not a fast one.
     pub processed: usize,
+    /// How many distinct record keys it saw. Shows the backlog was really spread over the key
+    /// space rather than being one key repeated.
+    pub unique_keys: usize,
 }
 
 impl ArmResult {
@@ -59,6 +80,11 @@ impl ArmResult {
         } else {
             0.0
         }
+    }
+
+    /// The arm as the tables name it: the role, and the client that produced the number.
+    pub fn label(&self) -> String {
+        format!("{} ({})", self.arm, self.client)
     }
 }
 
@@ -94,6 +120,7 @@ pub fn ak_core(
     let work = Duration::from_millis(options.delay_ms);
     let started_at = Instant::now();
     let mut processed = 0usize;
+    let mut keys: HashSet<Vec<u8>> = HashSet::new();
     while processed < target {
         if started_at.elapsed() > ARM_BUDGET {
             return Err(format!("{AK_CORE} stalled at {processed} of {target}"));
@@ -104,6 +131,12 @@ pub fn ak_core(
                 // is what the contract asks for in Rust; this arm has one thread and nothing else
                 // to do with it.
                 let _ = message.payload();
+                // A null key is not a key, so only a present one counts. Nothing this demo seeds
+                // has one, and counting `None` as a distinct key would make the two arms disagree
+                // the first time something did.
+                if let Some(key) = message.key() {
+                    keys.insert(key.to_vec());
+                }
                 std::thread::sleep(work);
                 processed += 1;
             }
@@ -111,7 +144,7 @@ pub fn ak_core(
             None => {}
         }
     }
-    Ok(finished(AK_CORE, started_at, processed))
+    Ok(finished(AK_CORE, AK_CORE_CLIENT, started_at, processed, keys.len()))
 }
 
 /// **The sidecar arm**: this application as a *foreign client*.
@@ -153,9 +186,15 @@ pub async fn rust_grpc(
     .map_err(|e| format!("{RUST_GRPC}: opening the session: {e}"))?;
 
     let processed = Arc::new(AtomicUsize::new(0));
+    // The distinct keys this arm saw, which is half of what the table uses to show the work
+    // happened rather than assert it. A mutex in a path whose every invocation already sleeps for
+    // `--delay-ms` costs nothing measurable; correctness across the executor pool is what matters
+    // here, and an atomic cannot count distinct values.
+    let seen_keys: Arc<Mutex<HashSet<Vec<u8>>>> = Arc::new(Mutex::new(HashSet::new()));
     let (counted, mut counts) = watch::channel(0usize);
     let work = Duration::from_millis(options.delay_ms);
     let counter = Arc::clone(&processed);
+    let key_sink = Arc::clone(&seen_keys);
 
     // THE SLEEP GOES THROUGH `blocking(...)`, AND THAT IS RUST'S ONE DIVERGENCE WORTH READING.
     // The contract says a blocking sleep is fine in Rust, and this is one - `std::thread::sleep`,
@@ -166,8 +205,14 @@ pub async fn rust_grpc(
     // runtime's blocking pool, so concurrency is bounded by the engine's ceiling rather than by
     // the core count. Measured, not assumed: see docs/inflight/clients/rust.md.
     client
-        .poll(blocking(move |_record| {
+        .poll(blocking(move |record| {
             std::thread::sleep(work);
+            if let Some(key) = record.key.as_ref() {
+                key_sink
+                    .lock()
+                    .expect("the key-set lock is never poisoned")
+                    .insert(key.clone());
+            }
             let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = counted.send(done);
             Ok(Outcome::success())
@@ -192,6 +237,7 @@ pub async fn rust_grpc(
     }
     let elapsed = started_at.elapsed();
     let count = processed.load(Ordering::Relaxed);
+    let unique_keys = seen_keys.lock().expect("the key-set lock is never poisoned").len();
 
     let shutdown = client.shutdown().await;
     if count < target {
@@ -205,21 +251,31 @@ pub async fn rust_grpc(
     }
     shutdown.map_err(|e| format!("{RUST_GRPC}: closing the session: {e}"))?;
 
-    println!("=== {RUST_GRPC} finished: {count} records in {}ms ===", elapsed.as_millis());
+    println!(
+        "=== {RUST_GRPC} finished: {count} records over {unique_keys} keys in {}ms ===",
+        elapsed.as_millis()
+    );
     Ok(ArmResult {
         arm: RUST_GRPC.to_owned(),
+        client: RUST_GRPC_CLIENT.to_owned(),
         elapsed,
         processed: count,
+        unique_keys,
     })
 }
 
-fn finished(arm: &str, started_at: Instant, processed: usize) -> ArmResult {
+fn finished(arm: &str, client: &str, started_at: Instant, processed: usize, unique_keys: usize) -> ArmResult {
     let elapsed = started_at.elapsed();
-    println!("=== {arm} finished: {processed} records in {}ms ===", elapsed.as_millis());
+    println!(
+        "=== {arm} finished: {processed} records over {unique_keys} keys in {}ms ===",
+        elapsed.as_millis()
+    );
     ArmResult {
         arm: arm.to_owned(),
+        client: client.to_owned(),
         elapsed,
         processed,
+        unique_keys,
     }
 }
 
