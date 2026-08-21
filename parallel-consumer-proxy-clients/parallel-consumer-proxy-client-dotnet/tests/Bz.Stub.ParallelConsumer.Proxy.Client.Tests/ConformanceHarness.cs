@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 
 using System.Diagnostics;
+using Bz.Stub.ParallelConsumer.Proxy.Client.Jvm;
 
 namespace Bz.Stub.ParallelConsumer.Proxy.Client.Tests;
 
@@ -71,41 +72,14 @@ internal sealed record ConformanceHarness(string Path, IReadOnlyList<string> Arg
     }
 
     /// <summary>
-    /// Resolves the JVM launcher. A PATH lookup is acceptable HERE and nowhere else: this is test
-    /// scaffolding choosing a JVM, not a client library choosing which sidecar receives the user's
-    /// Kafka credentials.
+    /// Resolves the JVM launcher, naming this suite's own override variable.
     /// </summary>
-    private static string JavaLauncher()
-    {
-        var explicitJava = Environment.GetEnvironmentVariable("PC_PROXY_TEST_JAVA");
-        if (!string.IsNullOrEmpty(explicitJava))
-        {
-            return explicitJava;
-        }
-
-        var javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
-        if (!string.IsNullOrEmpty(javaHome))
-        {
-            var candidate = System.IO.Path.Combine(javaHome, "bin", "java");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        foreach (var entry in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-                     .Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var candidate = System.IO.Path.Combine(entry, "java");
-            if (File.Exists(candidate))
-            {
-                return System.IO.Path.GetFullPath(candidate);
-            }
-        }
-
-        throw new InvalidOperationException(
-            "no JVM found - set JAVA_HOME or PC_PROXY_TEST_JAVA");
-    }
+    /// <remarks>
+    /// The lookup itself is shared with the demo, which spawns the same sidecar the same way -
+    /// see <c>shared/JvmToolchain.cs</c>, compiled into both projects by link.
+    /// </remarks>
+    private static string JavaLauncher() =>
+        JvmToolchain.JavaLauncher(Environment.GetEnvironmentVariable("PC_PROXY_TEST_JAVA"));
 
     /// <summary>
     /// Assembles the proxy module's test classpath: its test jar (which carries the harness), its
