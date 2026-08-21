@@ -25,14 +25,19 @@ export default tseslint.config(
     // Build output, dependencies, and protoc's own output. The generated stubs are the generator's
     // code, not this project's: linting them would either fail on style this project does not own
     // or be undone by the next `npm run proto`. They ARE type-checked - see tsconfig.json.
-    ignores: ["dist/**", "node_modules/**", "src/generated/**"],
+    ignores: ["dist/**", "demo/dist/**", "node_modules/**", "src/generated/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
     languageOptions: {
       parserOptions: {
-        project: ["./tsconfig.json"],
+        // The demo's project is here too, and that is deliberate rather than incidental: the demo
+        // is a SEPARATE npm package (demo/package.json) but it is the same kind of async code, and
+        // the floating-promise rules below are exactly what an arm that races a countdown against
+        // a session's end needs. Without this line `eslint .` reports every demo file as "not
+        // found in any of the provided project(s)" and the CI matrix row goes red.
+        project: ["./tsconfig.json", "./demo/tsconfig.json"],
         tsconfigRootDir: import.meta.dirname,
       },
     },
