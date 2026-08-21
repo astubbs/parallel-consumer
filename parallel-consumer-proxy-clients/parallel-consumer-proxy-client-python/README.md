@@ -86,7 +86,7 @@ by argv, environment variable or file.
 ## Not yet - and what that means
 
 Later waves add: the liveness lease and heartbeats, reconnect with a manifest, worker-death
-reporting, terminal outcomes to a dead-letter topic, the demo container, PyPI packaging, and the
+reporting, terminal outcomes to a dead-letter topic, PyPI packaging, and the
 conformance scenarios beyond the four the harness serves today. **These are un-negotiated
 capabilities, not half-built features.** The client declares exactly the one capability it
 implements (`dispatch`) in its handshake, so the proxy holds it to that rather than to promises;
@@ -96,6 +96,7 @@ each wave adds its token alongside its duty.
 
 ```bash
 make build        # install into .venv, then parse every source file - what Maven's compile runs
+make demo-build   # build, plus the demo's extra (confluent-kafka) - what demo/run.sh runs
 make test         # the suite, including the end-to-end test against the real sidecar
 make lint         # ruff - the same check CI runs
 make proto        # regenerate the stubs from the frozen proxy.proto
@@ -187,6 +188,19 @@ edits:
 * **`Released` is sent only when the `shutdown` capability is negotiated.** On a session without
   it, the queue is discarded at shutdown and the proxy reclaims those records when the stream ends
   - sending a message outside the negotiated set would be this client's own violation.
+
+## The demo
+
+```bash
+demo/run.sh          # picks native or container for you; needs Docker either way
+```
+
+The same records through `confluent_kafka.Consumer` one at a time, and through this library over a
+real sidecar - two arms, two throughput tables, no setup. It keeps the cross-language contract in
+[`../../parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md);
+[`demo/README.md`](demo/README.md) records what is specific to Python, of which the load-bearing
+item is that `--concurrency` defaults to 16 rather than the seed's 100 - here an in-flight record is
+a worker **process**.
 
 ## Also here
 
