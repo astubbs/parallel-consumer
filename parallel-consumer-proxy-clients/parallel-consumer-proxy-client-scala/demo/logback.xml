@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<!--
+    THE DEMO'S OWN LOGGING, AND IT IS NOT A COSMETIC CHOICE.
+
+    A demo whose entire output is two throughput tables has to be able to show them. With no logback
+    configuration on the classpath at all, logback falls back to BasicConfigurator - root at DEBUG -
+    and a fifty-record run emits over four thousand lines of Netty frame dumps, docker-java HTTP
+    headers and Kafka client configuration before the first table appears. That is not a demo a
+    reader can read.
+
+    IT IS NOT A RESOURCE, IT IS A FILE run.sh AND THE CONTAINER'S ENTRYPOINT POINT AT with
+    -Dlogback.configurationFile. Putting it in src/test/resources would land it in target/test-classes,
+    which is also what scripts/conformance-runner runs from - so the demo's logging preferences would
+    silently become the conformance runner's, and the diagnostics the shared suite attaches to a
+    failure would be the ones this file turned off.
+
+    org.apache.kafka IS AT WARN FOR A REASON BEYOND NOISE. Every Kafka client logs its full effective
+    configuration at INFO when it is constructed, and `bootstrap.servers` is in it. The demo's own
+    fingerprint deliberately omits that address because own-cluster mode puts a user's real broker
+    there; leaving the client's dump on would print it anyway, four times a run, and undo the rule.
+
+    THE SIDECAR IS A SEPARATE PROCESS AND IS NOT GOVERNED BY THIS FILE. It gets its own defaults, and
+    the client library does not republish its stdout into this application's logs - deliberately, and
+    for the same reason it does not here. Its stderr does reach this process's stderr, so a
+    misconfigured broker still explains itself rather than becoming an unexplained hang.
+-->
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{24} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- the Kafka clients' construction-time configuration dump, which carries bootstrap.servers -->
+    <logger name="org.apache.kafka" level="WARN"/>
+    <!-- Netty frame dumps and channel bootstrap detail from the client library's transport -->
+    <logger name="io.grpc" level="WARN"/>
+    <!-- the Docker API conversation Testcontainers has to start the broker -->
+    <logger name="com.github.dockerjava" level="WARN"/>
+    <logger name="org.testcontainers" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

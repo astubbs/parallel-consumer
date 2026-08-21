@@ -10,9 +10,10 @@ shared note.
 user's function, the report with the token echoed verbatim, and a clean client-initiated shutdown -
 proven by two end-to-end tests against the real test-mode sidecar. The module is at
 `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala/`; its maturity and
-testing-evidence deferrals are lifted and it has a CI row. Later waves: leases and heartbeats, the
-manifest reconnect, worker death, terminal outcomes, the `Shutdown` drain, the demo and its
-container, and publishing - **most of which this client inherits rather than implements.**
+testing-evidence deferrals are lifted and it has a CI row. **The demo and its container landed on
+`demos/scala`** - see "The demo" below. Later waves: leases and heartbeats, the manifest reconnect,
+worker death, terminal outcomes, the `Shutdown` drain, and publishing - **most of which this client
+inherits rather than implements.**
 
 ## The decisions this wave was left to make
 
@@ -154,3 +155,104 @@ row to un-defer. Two facts the row's owner may want:
   `src/docs/README_TEMPLATE.adoc` against the *process's* working directory, so a build started from
   a module directory fails on a file that never moved. The row runs `scanner-cmd` with the module as
   its working directory, so any JVM client whose recipe shells out to Maven hits this.
+
+## The demo
+
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala/demo/` - `run.sh`, `Dockerfile`,
+`docker-compose.yml`, a `README.md` recording what is Scala's own, a `logback.xml`, and the sources
+under `demo/src/main/scala`. It keeps the contract in `parallel-consumer-proxy/demo/README.md`
+exactly: the seven flags with the same defaults, the same `PC_DEMO_*` variables with flags beating
+environment beating defaults, the effective-configuration fingerprint printed first and never
+carrying the bootstrap address, the two tables in the same order with the same columns, and no
+latency anywhere.
+
+**Two arms - `AK core` and `scala-grpc` - and the four extra ones the Java seed carries are absent on
+purpose.** Scala is a JVM language, so it *could* run `pc-core`, `java-direct` and the rest against
+the same broker in the same process, which is exactly why the temptation had to be named and
+declined: the contract's value is that a reader who has run one language's demo has run them all, and
+a six-row Scala table beside a two-row Ruby table would not be that. `scala-grpc` goes through
+`ParallelConsumerClient`, not the wire - nothing in the demo's sources names a protobuf message, a
+channel or a token.
+
+### The demo is behind a Maven profile, for the reason the harness lane is
+
+The sidecar arm has to hand its child process a classpath carrying `parallel-consumer-proxy`.
+Declared unconditionally that is a permanent reactor edge to the engine, and `bin/build.sh` opens
+with `clean` - which would delete the sidecar jar every other language's conformance test spawns. So
+the demo's sources are a **test source root added only by the `scala-demo` profile**
+(`-Dpc.scalaDemo`, passed by `run.sh` and by the Dockerfile), and its dependencies live there too.
+
+**Verified with a control arm rather than asserted**, because "the edge is only in the profile" is
+exactly the kind of claim that is comfortable and wrong. One term changed, everything else identical,
+and the reactor listing is what flips:
+
+| command | reactor | `parallel-consumer-proxy` |
+|---|---|---|
+| `./mvnw -pl :parallel-consumer-proxy-client-scala -am validate` | 8 modules | **absent** |
+| the same, plus `-Dpc.scalaDemo` | 9 modules | present, as "Language Proxy" |
+
+Read the reactor listing, not the build result: **that command currently fails on this machine for an
+unrelated reason**, and a reader who greps for `BUILD SUCCESS` will think the check is broken.
+`validate` produces no artifacts, so in a reactor whose snapshots are not installed locally
+`parallel-consumer-proxy-client-java-grpc` cannot resolve `parallel-consumer-proxy-client-java-api`
+and Maven has a cached Central miss for it. Confirmed to have nothing to do with Scala: the identical
+failure reproduces on `./mvnw -pl :parallel-consumer-proxy-client-java-grpc -am validate`, which
+never mentions this module. `-U`, or any lane that reaches `package`, does not have it.
+
+This is the third thing in this module arranged that way, after `scala-e2e-harness` and the
+conformance runner's classpath. Any JVM client whose demo spawns a real sidecar will need the same
+shape, and it is worth stating once rather than each wave rediscovering it.
+
+### Three findings that are not Scala's, recorded rather than fixed
+
+The first two apply to **every JVM demo, the Java seed included**, and neither is this branch's to
+edit.
+
+- **With no logback configuration on the classpath, logback's fallback is root at `DEBUG`.** A
+  fifty-record run of this demo emitted over four thousand lines of Netty frame dumps, docker-java
+  HTTP headers and Kafka client configuration, with the two tables buried in the middle. Measured on
+  the first run of this demo, before `demo/logback.xml` existed. The Java seed's demo module carries
+  no logging configuration either, so it will do the same; this branch fixed only its own, by pointing
+  `-Dlogback.configurationFile` at a file in `demo/` rather than shipping a resource, because
+  `target/test-classes` is also what `scripts/conformance-runner` runs from and the demo's logging
+  preferences must not silently become the shared suite's.
+- **Every Kafka client logs its full effective configuration at `INFO` when constructed, and
+  `bootstrap.servers` is in it.** The contract's rule that a demo never prints the bootstrap address
+  exists because own-cluster mode puts a user's real broker there - and the demo's own fingerprint
+  honours it, while the client's dump prints it anyway, several times a run. `org.apache.kafka` is at
+  `WARN` in this demo's logging configuration for that reason and not for noise. **Whoever owns the
+  Java seed should check the same thing**, and the contract may be worth a sentence saying the rule
+  binds the whole run rather than only the fingerprint block.
+- **`SidecarCommand` requires an absolute path to an executable, and a JVM sidecar is a jar**, so
+  every JVM caller writes "this JVM's `java` plus a `-cp` argument" again. That is now in three places
+  in this module's orbit: `OneRecordThroughTheSidecarTest`, the Java seed's `SidecarProcess`, and this
+  demo. It reinforces the note above that spawning belongs to the Java lifecycle unit rather than to
+  each client.
+
+### What was run, and what was not
+
+Run natively on macOS, under heavy concurrent load from the parallel client fan-out, so **no
+throughput figure from these runs means anything and none is recorded here**. What they prove is that
+the machinery works:
+
+- `demo/run.sh --records 20 --replay-factor 2 --partitions 2 --concurrency 8` - both arms completed,
+  both tables rendered, exit 0, 59 lines of output end to end. The `--replay-factor 2` was chosen over
+  1 deliberately: at 1 the big replay is skipped, and the second table's rendering path would never
+  have executed at all.
+- `demo/run.sh` with **no arguments at all**, configured entirely through `PC_DEMO_RECORDS`,
+  `PC_DEMO_REPLAY_FACTOR`, `PC_DEMO_PARTITIONS` and `PC_DEMO_CONCURRENCY`. This is the case that has
+  broken before - `bash 3.2` under `set -u` treats an empty array expansion as an unbound variable -
+  and it proves the environment layer at the same time.
+- `--help` and a misspelled flag both reach the usage text; the misspelled flag exits 2.
+
+**The container path was not run**, and that is the one gap. `Dockerfile` and `docker-compose.yml` are
+written and mirror the Java seed's, including the two rules that are not negotiable - the broker is a
+compose sibling and the host Docker socket is never mounted, and the sidecar is a child process
+rather than a compose service - but building the image means building the whole reactor inside it,
+and the machine was running ten agents. The contract is explicit that "a demo with one tested entry
+point has an untested entry point", so **this is unproven, not proven-elsewhere.**
+
+**It is also not wired into `bin/ci-demo-test.sh`**, which runs the Java demo through both entry
+points on every pull request. That file is shared across the fan-out and this branch does not own it;
+whoever integrates the eleven demos should add the Scala row, and the container path should be
+considered untested until that row has run once.
