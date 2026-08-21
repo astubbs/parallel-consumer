@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -20,9 +21,12 @@ namespace Bz.Stub.ParallelConsumer.Proxy.Client.Demo;
 /// TWO ARMS, WHICH IS THE WHOLE CONTRACT OUTSIDE JAVA:
 /// </para>
 /// <list type="bullet">
-///   <item><b>AK core</b> - a plain <c>Confluent.Kafka</c> consumer, one record at a time. Always
-///     spelled "AK core", never bare "core", which reads as <c>parallel-consumer-core</c>.</item>
-///   <item><b>dotnet-grpc</b> - this module's client library over a sidecar it spawns itself. ON
+///   <item><b>AK core (Confluent.Kafka)</b> - a plain <c>Confluent.Kafka</c> consumer, one record at
+///     a time. Always spelled "AK core", never bare "core", which reads as
+///     <c>parallel-consumer-core</c> - and always carrying the client's own name, because "AK core"
+///     is a CATEGORY and a reader cannot judge a comparison without knowing what produced it.</item>
+///   <item><b>dotnet-grpc (this client)</b> - this module's client library over a sidecar it spawns
+///     itself, which is what the second half of the label names. ON
 ///     THIS PATH THE APPLICATION DOES NO KAFKA I/O: the sidecar owns the consumer, the producer,
 ///     the group membership and the offsets. In a genuinely foreign application that is the whole
 ///     story - it needs no Kafka client library at all. In this demo it is a statement about the
@@ -42,12 +46,62 @@ internal static class Program
     /// <summary>No arm may take longer than this before the demo calls it stalled rather than slow.</summary>
     private static readonly TimeSpan ArmBudget = TimeSpan.FromMinutes(10);
 
-    private const string AkCore = "AK core";
+    /// <summary>
+    /// THE FIRST THING THIS DEMO PRINTS, AND IT NAMES THE PRODUCT.
+    /// </summary>
+    /// <remarks>
+    /// Contract, not decoration. A reader who runs this and is met with
+    /// <c>dotnet-grpc: the proxy granted 100 executor threads</c> has been told nothing about what
+    /// they are looking at - not the product's name, not what is about to happen. Every language
+    /// prints this same banner, differing only in its own name, so a visitor moving between two
+    /// demos recognises the second one instantly.
+    /// </remarks>
+    private const string Banner = """
+        ================================================================
+          PARALLEL CONSUMER  -  .NET demo
+          The same records, twice: one at a time, then all at once.
+        ================================================================
+        """;
 
-    private const string SidecarArm = "dotnet-grpc";
+    /// <summary>
+    /// The serial arm's label: the ROLE and the CLIENT, because "AK core" alone is a category.
+    /// </summary>
+    /// <remarks>
+    /// The answer differs in every language - <c>rdkafka</c> in Ruby, <c>franz-go</c> in Go,
+    /// <c>kafkajs</c> in TypeScript - and a reader evaluating "is this fast in my language" is
+    /// really asking about the client they already use. In .NET the answer is
+    /// <c>Confluent.Kafka</c>, and there is no second serious answer to choose between; the demo's
+    /// own README says so rather than leaving the reader to wonder.
+    /// </remarks>
+    private const string AkCore = "AK core (Confluent.Kafka)";
+
+    /// <summary>The sidecar arm's label, naming what drives it: this module's own client library.</summary>
+    private const string SidecarArm = "dotnet-grpc (this client)";
+
+    /// <summary>
+    /// The sidecar arm's identifier, for places a label cannot go.
+    /// </summary>
+    /// <remarks>
+    /// Consumer group names travel to the broker and end up in metric names, so the label's spaces
+    /// and brackets have no business there. The label is for the reader; this is for Kafka.
+    /// </remarks>
+    private const string SidecarArmId = "dotnet-grpc";
+
+    /// <summary>
+    /// Stands in for a null key when counting distinct keys.
+    /// </summary>
+    /// <remarks>
+    /// Every other key is counted by its base64 text, which cannot contain <c>&lt;</c>, so this can
+    /// never collide with a real one. A null key is one distinct key, not an absent record.
+    /// </remarks>
+    private const string NullKeyToken = "<null>";
 
     private static async Task<int> Main(string[] arguments)
     {
+        // BEFORE EVERYTHING, including the argument parsing: a reader who mistypes a flag should
+        // still be told what they were trying to run.
+        Console.WriteLine(Banner);
+
         if (DemoOptions.IsHelpRequested(arguments))
         {
             Usage();
@@ -182,6 +236,7 @@ internal static class Program
         // neither client construction nor teardown.
         var startedAt = Stopwatch.GetTimestamp();
         var processed = 0;
+        var keys = NewKeySet();
         while (processed < target)
         {
             // The one arm that does not wait on a completion still needs the budget, or a backlog
@@ -198,11 +253,12 @@ internal static class Program
                 continue;
             }
 
+            keys.TryAdd(KeyToken(delivered.Message.Key), 0);
             await SimulatedWorkAsync(options.DelayMs, CancellationToken.None).ConfigureAwait(false);
             processed++;
         }
 
-        return Finished(AkCore, Stopwatch.GetElapsedTime(startedAt), processed);
+        return Finished(AkCore, Stopwatch.GetElapsedTime(startedAt), processed, keys.Count);
     }
 
     /// <summary>
@@ -222,6 +278,7 @@ internal static class Program
 
         var sidecar = SidecarCommand.Resolve();
         var processed = 0;
+        var keys = NewKeySet();
         var reachedTarget = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var client = await ParallelConsumerClient.ConnectAsync(new ClientOptions
@@ -232,13 +289,16 @@ internal static class Program
             Topics = [topic],
             MaxConcurrency = options.MaxConcurrency,
             Ordering = ProcessingOrder.Unordered,
-            KafkaProperties = broker.ConsumerProperties(GroupId(SidecarArm)),
+            KafkaProperties = broker.ConsumerProperties(GroupId(SidecarArmId)),
             InstanceTag = "pc-dotnet-demo",
         }).ConfigureAwait(false);
 
         var startedAt = Stopwatch.GetTimestamp();
         var session = client.PollAsync(async (record, cancellationToken) =>
         {
+            // On arrival, matching the serial arm: the column is "unique keys SEEN", which is a
+            // property of what the engine handed this function, not of the work afterwards.
+            keys.TryAdd(KeyToken(record.Key), 0);
             await SimulatedWorkAsync(options.DelayMs, cancellationToken).ConfigureAwait(false);
             if (Interlocked.Increment(ref processed) >= target)
             {
@@ -248,7 +308,8 @@ internal static class Program
             return Outcome.Succeed();
         });
 
-        return await AwaitedAsync(SidecarArm, startedAt, reachedTarget.Task, session, () => processed, target)
+        return await AwaitedAsync(
+                SidecarArm, startedAt, reachedTarget.Task, session, () => processed, () => keys.Count, target)
             .ConfigureAwait(false);
     }
 
@@ -301,6 +362,7 @@ internal static class Program
         Task reachedTarget,
         Task session,
         Func<int> processed,
+        Func<int> uniqueKeys,
         int target)
     {
         var ended = await Task.WhenAny(reachedTarget, session).WaitAsync(ArmBudget).ConfigureAwait(false);
@@ -314,37 +376,70 @@ internal static class Program
         return count < target
             ? throw new InvalidOperationException(string.Create(
                 CultureInfo.InvariantCulture, $"{arm} ended early at {count} of {target}"))
-            : Finished(arm, Stopwatch.GetElapsedTime(startedAt), count);
+            : Finished(arm, Stopwatch.GetElapsedTime(startedAt), count, uniqueKeys());
     }
 
-    private static ArmResult Finished(string arm, TimeSpan elapsed, int processed)
+    private static ArmResult Finished(string arm, TimeSpan elapsed, int processed, int uniqueKeys)
     {
         Console.WriteLine(string.Create(
             CultureInfo.InvariantCulture,
-            $"=== {arm} finished: {processed} records in {(long)elapsed.TotalMilliseconds}ms ==="));
-        return new ArmResult(arm, elapsed, processed);
+            $"=== {arm} finished: {processed} records over {uniqueKeys} keys in {(long)elapsed.TotalMilliseconds}ms ==="));
+        return new ArmResult(arm, elapsed, processed, uniqueKeys);
     }
+
+    /// <summary>
+    /// The set an arm counts its distinct keys in.
+    /// </summary>
+    /// <remarks>
+    /// Concurrent in both arms even though only one of them needs it to be: the serial arm is the
+    /// denominator of every ratio in both tables, and it must not differ from its numerator in how
+    /// it arrives at a figure the two are then compared on.
+    /// </remarks>
+    private static ConcurrentDictionary<string, byte> NewKeySet() => new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// One record key, as the text the distinct-key count is taken over.
+    /// </summary>
+    /// <remarks>
+    /// Base64 rather than the key's own characters, because keys are BYTES on this wire and an
+    /// arbitrary byte string is not text. A null key is one distinct key of its own - it is not the
+    /// same as an empty one, and it is not an absent record.
+    /// </remarks>
+    private static string KeyToken(byte[]? key) =>
+        key is null ? NullKeyToken : Convert.ToBase64String(key);
 
     /// <summary>A fresh group per arm per replay, so every arm reads the same records from the beginning.</summary>
     private static string GroupId(string arm) =>
         string.Create(CultureInfo.InvariantCulture, $"pc-demo-{arm}-{Stopwatch.GetTimestamp()}");
 
     /// <summary>
-    /// One of the demo's two tables. Same columns, same order, in every language - and throughput
-    /// only, because the backlog is pre-produced and a per-record latency would be flattered by
-    /// however far an arm had fallen behind.
+    /// One of the demo's two tables. Same columns, same order, in every language.
     /// </summary>
+    /// <remarks>
+    /// FOUR OF THE FIVE FIGURES SAY SOMETHING DIFFERENT. Elapsed, msg/s and the ratio are this
+    /// machine on this run and mean nothing anywhere else; RECORDS and KEYS are deterministic, so
+    /// every language over the same backlog must print the same two numbers and any language that
+    /// does not has a real defect. That is what makes the table demonstrate the run rather than
+    /// assert it - a short arm is a FAILED arm, not a fast one - and it is what
+    /// <c>bin/ci-demo-conformance.sh</c> compares languages on.
+    /// <para>
+    /// No latency, in either table. The backlog is pre-produced, so the workload is closed-loop and
+    /// a per-record timing would be flattered by however far an arm had fallen behind.
+    /// </para>
+    /// </remarks>
     private static void Report(
         string title, IReadOnlyList<ArmResult> results, ArmResult? baseline, bool acrossReplays)
     {
         var table = new StringBuilder("\n\n").Append(title).Append('\n');
         table.AppendLine(string.Format(
             CultureInfo.InvariantCulture,
-            "  {0,-14} {1,10} {2,14} {3,14}",
+            "  {0,-26} {1,10} {2,14} {3,14} {4,10} {5,8}",
             "arm",
             "elapsed",
             "msg/s",
-            acrossReplays ? "vs AK core*" : "vs AK core"));
+            acrossReplays ? "vs AK core*" : "vs AK core",
+            "records",
+            "keys"));
         foreach (var result in results)
         {
             var ratio = baseline is null || baseline.RatePerSecond == 0
@@ -353,11 +448,13 @@ internal static class Program
                     CultureInfo.InvariantCulture, $"{result.RatePerSecond / baseline.RatePerSecond:F1}x");
             table.AppendLine(string.Format(
                 CultureInfo.InvariantCulture,
-                "  {0,-14} {1,9:F1}s {2,14} {3,14}",
+                "  {0,-26} {1,9:F1}s {2,14} {3,14} {4,10} {5,8}",
                 result.Arm,
                 (long)result.Elapsed.TotalMilliseconds / 1000d,
                 ((long)result.RatePerSecond).ToString("N0", CultureInfo.InvariantCulture),
-                ratio));
+                ratio,
+                result.Processed.ToString("N0", CultureInfo.InvariantCulture),
+                result.UniqueKeys.ToString("N0", CultureInfo.InvariantCulture)));
         }
 
         if (acrossReplays)

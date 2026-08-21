@@ -157,30 +157,86 @@ green too, and is the stricter command a local check should use.
 ## The demo
 
 `demo/run.sh` in this module, mirroring the contract in `parallel-consumer-proxy/demo/README.md`:
-the same flags and defaults, the same `PC_DEMO_*` variables with the same precedence, the
-fingerprint first and without the bootstrap address, the same two tables, no latency anywhere. Two
-arms - `AK core` (`Confluent.Kafka`, serial) and `dotnet-grpc` (this module's client library over a
-sidecar it spawns). The demo project joined the module's one solution, so the ordinary
-`dotnet build` and the clients CI row keep it compiling under the same analyzers-as-errors lint as
-the library.
+the same flags and defaults, the same `PC_DEMO_*` variables with the same precedence, the banner
+first, then the fingerprint without the bootstrap address, then the same two tables, no latency
+anywhere. Two arms - `AK core (Confluent.Kafka)`, serial, and `dotnet-grpc (this client)`, this
+module's client library over a sidecar it spawns. The demo project joined the module's one
+solution, so the ordinary `dotnet build` and the clients CI row keep it compiling under the same
+analyzers-as-errors lint as the library.
 
-### The divergence: an awaited timer, not a blocking sleep
+### The divergence that stopped being one: an awaited timer, not a blocking sleep
 
-The contract lists C# among the languages where a blocking sleep is fine, and names Python and
-TypeScript as the exceptions. **For this client that list is wrong, and the demo diverges.** The
-library's executors are `Task`s on the thread pool, so `Thread.Sleep` in the user's function
+The contract used to list C# among the languages where a blocking sleep is fine, naming Python and
+TypeScript as the only exceptions. **For this client that list was wrong, and the demo diverged.**
+The library's executors are `Task`s on the thread pool, so `Thread.Sleep` in the user's function
 occupies a pool thread; at the contract's default `--concurrency 100` the pool would be injecting
 replacement threads at roughly one a second and the sidecar arm would report the injection rate
 rather than the engine's throughput. Both arms use `await Task.Delay(...)`, because the serial arm
 is the denominator of every ratio and must not differ from its numerator by the wait primitive as
 well as by the transport.
 
-**Recorded rather than edited into the contract**, as instructed. The contract's own reasoning
-already covers this case - it exempts Python for worker *processes* and TypeScript for a single
-event loop - so the rule it should state is about the client's concurrency *shape*, not the
-language's name: any client whose executors are pooled tasks needs the non-occupying wait. Kotlin
-(coroutines) and Swift (structured concurrency) are the likely neighbours of this, and both are
-currently on the blocking-sleep list.
+**Recorded here rather than edited into the contract, and the contract has since absorbed it.** The
+argument this note made - that the predicate is the client's concurrency *shape* and not the
+language's name - is now the rule as written: *is the client thread-per-record?* Six languages fail
+it, C# among them for exactly this reason, and the note's two guesses at the neighbours (Kotlin's
+coroutines, Swift's cooperative pool) are both on that list. So this module no longer diverges from
+anything; the demo's code and README say so, and the reasoning is kept here because it is the
+evidence behind a rule eleven languages now follow. Rust supplied the measurement that made it
+undeniable, not this module - 10,341 msg/s through its blocking adapter against 3,518 with a raw
+thread sleep.
+
+### The reader-experience pass (the contract's "output a reader actually sees")
+
+Applied here after the contract gained the section. Three changes, all in the demo, none of them
+touching what is measured:
+
+- **The banner is the first thing the demo prints**, before the broker is resolved and before the
+  fingerprint, in the contract's exact shape with `.NET` as the language. It is printed before the
+  argument parsing too, so a reader who mistypes a flag is still told what they were trying to run.
+  **What still precedes it on the native path is `run.sh`'s own scaffolding** - the mode line, the
+  Maven sidecar build, the `dotnet build`. That is the script, not the demo, and the demo is what
+  the contract binds and what the conformance harness captures from the container; a script that
+  has to build a JVM sidecar and a .NET project cannot make the banner byte one. The `dotnet build`
+  summary block was silenced (`-consoleLoggerParameters:NoSummary`) so the banner is at least the
+  line after the build, and build errors are unaffected by that flag.
+- **Both arms are labelled with the role and the client**: `AK core (Confluent.Kafka)` and
+  `dotnet-grpc (this client)`. The bare `dotnet-grpc` survives as a separate constant for the
+  consumer group id - a label with spaces and brackets has no business in a Kafka group name or the
+  metric names derived from it.
+- **Two deterministic columns, `records` and `keys`**, appended after `vs AK core`. Appended rather
+  than inserted for a concrete reason, below. Keys are counted over the key BYTES as base64 (a
+  Kafka key is not text) with a `<null>` sentinel, in a `ConcurrentDictionary` in both arms - the
+  serial arm does not need concurrency but must not reach a compared figure by a different route
+  than the arm it is the denominator of. Measured at `--records 20 --partitions 2`: both arms
+  report 20 records and 20 keys in the small replay, and the sidecar arm 40 and 40 in the big one,
+  which is what the seeding (`key-{ordinal % 1000}`) predicts.
+
+### The new output silently blinds `bin/ci-demo-conformance.sh`, and `bin/**` was not mine to fix
+
+**Reproduced, not inferred**: the script's own `skeleton()` awk, run verbatim over this demo's real
+capture, emits `DIAL`s, both `TITLE`s and both `HEADER`s - and **not one `ROW` line**. Before this
+change the same capture produced three.
+
+Two independent breakages, and only one of them is about the labels:
+
+- **The `ROW` matcher is end-anchored on the ratio**: `... [0-9,-]+ [0-9.x-]+[[:space:]]*$`. Two more
+  columns after `vs AK core` leave nothing for `$` to match, so the row is dropped **whatever the
+  arm is called**. Every language adding the contract's `records` and `keys` hits this, including
+  one that keeps `AK core` bare.
+- **The arm-name class is `[A-Za-z][A-Za-z0-9 _-]*`**, which admits the space in `AK core` but not
+  the brackets or the dot in `AK core (Confluent.Kafka)`. And `normalise_arms` maps
+  `^ROW [a-z0-9]+-grpc$`, anchored, so `dotnet-grpc (this client)` would not normalise either.
+
+**The failure mode is the dangerous one: silent.** Unmatched lines are dropped rather than flagged,
+so every language emits a skeleton with no `ROW` lines, the skeletons still agree with each other,
+and the drift check passes green while having stopped comparing the arms entirely - which is most of
+what it was there to compare.
+
+The `HEADER` matcher is *not* anchored at its end, which is why the two new columns went **after**
+`vs AK core` rather than before: that ordering is the one that keeps the header recognised, and
+every language should use it. Whoever owns `bin/**` needs to extend the `ROW` pattern by two columns,
+widen its arm-name class, and widen `normalise_arms`, in the change that lands these labels. The
+absolute assertions - dials echoed, no bootstrap address, no latency - are unaffected and still pass.
 
 ### Two findings against the product, both from running it
 
@@ -239,6 +295,9 @@ control.**
   is Java-only; extending it - or adding a sibling - was out of this session's ownership
   (`bin/**` was off limits). Until then the .NET demo has exactly the untested entry points that
   script exists to prevent, and the contract says both entry points being tested is part of it.
+- **`bin/ci-demo-conformance.sh` needs its `ROW` and `normalise_arms` patterns widened** for the new
+  arm labels, or its drift check silently stops comparing arms - see the section above for the two
+  exact regexes. Same ownership boundary: `bin/**` is not this branch's.
 - **No default-scale run has ever happened.** Every run was at `--records 20`, chosen to prove the
   machinery on a machine running ten agents at once. At that volume both arms are dominated by
   consumer-group join time and the ratios in the tables are meaningless; nothing in this branch
@@ -248,7 +307,16 @@ control.**
   JDK, a populated `/root/.m2` and the built reactor, because the sidecar classpath baked in at
   build time has to point at files the running container actually has - the same trade the Java
   demo's image documents. Nothing here has been optimised; a reader on a cold cache waits several
-  minutes.
+  minutes. Measured while verifying the reader-experience pass: the `COPY . .` layer is invalidated
+  by **any** change in the repository, including one that touches no .NET file at all - so making a
+  commit mid-build costs the whole Maven layer again, which was 480-520s on its own here, plus
+  around 400s to export and load a 2.3GB image. **Do not edit the tree while `--docker` is
+  building**, and budget well past a ten-minute timeout for a cold container run.
+- **A killed `docker compose up` strands the network and the NEXT run fails, not the killed one.**
+  Observed here: `network pc-dotnet-demo_default was found but has incorrect label
+  com.docker.compose.network set to "default" (expected: "")`. It reads like a compose-file defect
+  and is not one; `docker compose -f <demo>/docker-compose.yml down --remove-orphans` clears it.
+  Worth knowing before anyone "fixes" the compose file in response.
 - **`shared/JvmToolchain.cs` is compiled into two projects by `Compile Include` link** - the test
   harness and the demo both have to find a JVM, and neither is a library anyone references. If a
   third consumer appears, that is the moment to reconsider an assembly.

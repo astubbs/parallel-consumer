@@ -116,8 +116,11 @@ echo "Building the sidecar (parallel-consumer-proxy) and its classpath..."
     dependency:build-classpath -Dmdep.includeScope=runtime \
     '-Dmdep.outputFile=${project.build.directory}/sidecar-classpath.txt'
 
+# NoSummary as well as quiet: the "Build succeeded / 0 Warning(s) / Time Elapsed" block is four
+# lines of scaffolding immediately before the demo's own banner, and the banner is the first thing a
+# reader is meant to see. Build ERRORS are not part of that summary and still print.
 echo "Building the demo..."
-dotnet build --nologo --verbosity quiet "$PROJECT"
+dotnet build --nologo --verbosity quiet -consoleLoggerParameters:NoSummary "$PROJECT"
 
 # The built executable, not `dotnet run`, and not because it is faster: `dotnet run` interposes a
 # process between this script and the demo, and the demo is the process whose lifecycle pipe keeps
