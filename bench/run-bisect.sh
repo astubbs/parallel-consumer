@@ -24,6 +24,20 @@
 # converges on records*delay/concurrency. One delay therefore says nothing about an engine's shape -
 # only a sweep does. Hence DELAYS, and hence delay_ms is a column in the results.
 #
+# CONCURRENCY IS AN AXIS TOO, for the same reason and a sharper one. The first engine comparison
+# found llingr beating PC at delay 0 while holding a peak of two or three records in flight against
+# PC's hundred - so PC was paying to fan out work that had no work in it. Whether a LOW concurrency
+# setting beats a high one at delay 0 is therefore a question about PC, not about the other engine,
+# and it cannot be asked while concurrency is a fixed positional argument. Hence CONCURRENCIES, and
+# hence concurrency is a column in the results: a file swept across it cannot be read back without.
+#
+# THE franz ARM IS A CONTROL, and it exists because the llingr comparison had an uncontrolled
+# variable in it. llingr reaches Kafka through franz-go; PC reaches it through the Java client. A
+# gap between them is some mixture of engine and client and nothing in the first sweep could
+# separate the two. bench/franz drives franz-go with NO engine at all - the Go-side counterpart of
+# the vanilla arm - so whatever it scores is the franz-go floor, and only what llingr scores ABOVE
+# that floor can be attributed to llingr.
+#
 # Usage:  bench/run-bisect.sh [records] [delayMs] [concurrency] [repeats]
 set -uo pipefail
 
@@ -41,6 +55,11 @@ MODES=${MODES:-$MODE}
 # Delays to sweep, in milliseconds. Defaults to the single value given positionally, so the old
 # invocation still means exactly what it used to.
 DELAYS=${DELAYS:-$DELAY_MS}
+# Concurrencies to sweep. Same contract as DELAYS: defaults to the positional value, so a caller who
+# never heard of this variable gets the behaviour it always had. Meaningless for the vanilla arm,
+# which is single-threaded by construction - it will simply repeat the same measurement once per
+# value, and each row still records what was asked for.
+CONCURRENCIES=${CONCURRENCIES:-$CONCURRENCY}
 BUFFER=${BUFFER:-0}
 
 BROKER_NAME=pc-bench-broker
@@ -164,11 +183,47 @@ prepare_llingr() {
 
 # The engine version goes in the pc_version column, so a results file records WHICH llingr was
 # measured. Read from go.mod rather than hardcoded, so a dependency bump cannot silently mislabel.
-llingr_version() { awk '/llingr-demux v/ {print "llingr-demux-" $2; exit}' "$LLINGR_DIR/go.mod"; }
+llingr_version() { version_field "llingr-demux v" "llingr-demux-" "$LLINGR_DIR/go.mod"; }
 
-run_llingr() {
+
+# --- the franz control arm -------------------------------------------------------------------
+#
+# NOT private research and NOT AGPL: franz-go is BSD-3-Clause, this directory links no llingr code,
+# and nothing it measures is subject to the llingr publication decision. It is still its own Go
+# module, kept out of parallel-consumer-proxy-client-go, because bench code is not product and a
+# shipped artifact should not acquire a benchmark's dependencies.
+#
+# It is the Go-side vanilla arm. The llingr comparison confounds engine with client - PC on the Java
+# client versus llingr on franz-go - and CLIENT_PINS, which exists to separate exactly that on the
+# Java side, has no counterpart across languages. This arm supplies one: franz-go, a fixed worker
+# pool, a sleep, a counter, no engine.
+FRANZ_DIR=$HERE/franz
+
+prepare_franz() {
+  command -v go >/dev/null 2>&1 || return 1
+  local bin=$WORK/franz-bench
+  [ -x "$bin" ] && { echo "$bin"; return 0; }
+  # GOTOOLCHAIN=auto for the same reason the llingr arm needs it - the module's Go directive can
+  # outrun the installed toolchain, and Go will fetch its own rather than failing the sweep.
+  (cd "$FRANZ_DIR" && GOTOOLCHAIN=auto go build -o "$bin" .) >"$WORK/franz-build.log" 2>&1 || return 1
+  echo "$bin"
+}
+
+# Read from go.mod, never hardcoded, so a client bump cannot silently mislabel a results file - the
+# same rule llingr_version follows, and for the same reason. It picks the field that LOOKS like a
+# version rather than a fixed column, because go.mod writes "require <path> <ver>" on one line and
+# "<path> <ver>" inside a require block, and the first version of this printed the module path into
+# every row of a results file - wrong, and wrong in a way nothing would have caught later.
+version_field() { awk -v pat="$1" -v prefix="$2" '$0 ~ pat { for (i = 1; i <= NF; i++) if ($i ~ /^v[0-9]/) { print prefix $i; exit } }' "$3"; }
+franz_version() { version_field "twmb/franz-go v" "franz-go-" "$FRANZ_DIR/go.mod"; }
+
+# Both Go arms take the same flags and print the same RESULT line, so there is one runner and one
+# dispatch pair rather than two near-identical copies of each.
+run_go_arm() {
   "$1" -bootstrap "$2" -topic "$3" -count "$4" -delay "${5}ms" -concurrency "$6" 2>/dev/null | parse_result
 }
+prepare_go_arm() { case $1 in llingr) prepare_llingr ;; franz) prepare_franz ;; esac; }
+go_arm_version() { case $1 in llingr) llingr_version ;; franz) franz_version ;; esac; }
 
 start_broker
 
@@ -184,22 +239,27 @@ else
   run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null
 fi
 
-# delay_ms is a column because it is now a swept axis; without it a multi-delay results file cannot
-# be read back. Everything else is unchanged, so llingr rows and PC rows sit in one table.
-echo "pc_version,client_pin,mode,delay_ms,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+# delay_ms and concurrency are columns because both are now swept axes; without them a multi-delay
+# or multi-concurrency results file cannot be read back. Everything else is unchanged, so llingr,
+# franz and PC rows all sit in one table.
+echo "pc_version,client_pin,mode,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
 for mode in $MODES; do
-  if [ "$mode" = llingr ]; then
-    BIN=$(prepare_llingr) || {
-      log "SKIP llingr: $(command -v go >/dev/null 2>&1 && echo "build failed, see $WORK/llingr-build.log" || echo "no 'go' on PATH - install Go to measure this arm")"
+  # The two Go arms differ only in which binary they build and what they call themselves, so they
+  # share one branch rather than two near-identical copies of the sweep loop.
+  if [ "$mode" = llingr ] || [ "$mode" = franz ]; then
+    BIN=$(prepare_go_arm "$mode") || {
+      log "SKIP $mode: $(command -v go >/dev/null 2>&1 && echo "build failed, see $WORK/$mode-build.log" || echo "no 'go' on PATH - install Go to measure this arm")"
       continue
     }
-    ver=$(llingr_version)
-    for d in $DELAYS; do
-      for r in $(seq 1 "$REPEATS"); do
-        read -r rate peak <<< "$(run_llingr "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$CONCURRENCY")"
-        [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
-        log "$ver llingr delay=${d}ms run$r = $rate msg/s, peak in flight $peak"
-        echo "$ver,franz,llingr,$d,$r,$rate,$peak" >> "$RESULTS"
+    ver=$(go_arm_version "$mode")
+    for c in $CONCURRENCIES; do
+      for d in $DELAYS; do
+        for r in $(seq 1 "$REPEATS"); do
+          read -r rate peak <<< "$(run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c")"
+          [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
+          log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
+          echo "$ver,franz,$mode,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+        done
       done
     done
     continue
@@ -207,13 +267,15 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,$mode,,,COMPILE_FAILED" >> "$RESULTS"; continue; }
-      for d in $DELAYS; do
-        for r in $(seq 1 "$REPEATS"); do
-          read -r rate peak <<< "$(run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$CONCURRENCY" "$BUFFER")"
-          [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
-          log "$pcv/$pin $mode delay=${d}ms run$r = $rate msg/s, peak in flight $peak"
-          echo "$pcv,$pin,$mode,$d,$r,$rate,$peak" >> "$RESULTS"
+      CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,$mode,,,,COMPILE_FAILED" >> "$RESULTS"; continue; }
+      for c in $CONCURRENCIES; do
+        for d in $DELAYS; do
+          for r in $(seq 1 "$REPEATS"); do
+            read -r rate peak <<< "$(run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER")"
+            [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
+            log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
+            echo "$pcv,$pin,$mode,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+          done
         done
       done
     done

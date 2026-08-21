@@ -439,6 +439,166 @@ Where that work already lives:
   fixed pool rather than the pool itself, and `ExternalEngine.checkPressure()` no-ops it entirely for
   Vert.x and Reactor. So on the external engines there is currently no adaptive element at all.
 
+## Concurrency as an axis, and the client control the llingr comparison was missing
+
+Added 2026-08-21. Two harness changes and the sweep they made possible.
+[`bench/run-bisect.sh`](../../bench/run-bisect.sh) grew a `CONCURRENCIES` list on the same contract
+as `DELAYS`, and a `concurrency` results column, so one invocation sweeps concurrency x delay x
+mode. And [`bench/franz`](../../bench/franz) is a new arm: **franz-go with no engine at all**, the
+Go-side counterpart of `vanilla`, a fixed worker pool of `-concurrency` goroutines behind an
+unbuffered channel, sleeping per record and counting. Data in
+[`results/concurrency-sweep-0ms.csv`](../../bench/results/concurrency-sweep-0ms.csv) and
+[`results/concurrency-sweep-2ms.csv`](../../bench/results/concurrency-sweep-2ms.csv). Same broker,
+same 350,000-record topic, same bytes, fresh consumer group per run, logging pinned, two repeats
+(four for the two core points measured in both sweeps). Ranges are inside 3% except llingr at
+concurrency 1 and 5, which spread 6%.
+
+### The hypothesis that prompted this is REFUTED
+
+The delay sweep found llingr at 0ms beating PC while holding a peak of **two or three** records in
+flight against PC's hundred, which read as PC paying to fan out work that had none in it. If that
+were so, PC at a low ceiling would match or beat PC at 100.
+
+It does the opposite, monotonically, with no knee anywhere in the range:
+
+| `maxConcurrency` | core, delay 0 | peak in flight |
+|---|---|---|
+| 1 | 8,473 | 1 |
+| 2 | 11,600 | 2 |
+| 5 | 19,014 | 5 |
+| 10 | 25,417 | 10 |
+| 25 | 36,472 | 25 |
+| 100 | 51,881 | 100 |
+| 1,000 | **63,915** | 1,000 |
+
+Dropping from 100 to 1 costs a factor of six. **PC is not paying for fan-out it does not need - the
+fan-out is what pays for PC.** Concurrency 1 is the reading that matters: with no overlap available,
+a record costs PC **118µs** of wall clock end to end, against franz-go's 8.9µs and llingr's 13.2µs
+on the same records. Concurrency is how that 118µs gets hidden, and the more of it PC is given the
+more of it hides. Nothing here locates PC's optimum: 1,000 is the largest ceiling measured at 0ms
+and the curve is still climbing at it.
+
+The mirror of that reading explains llingr's flat curve without any appeal to cleverness. Its peak
+in flight is 2-3 whatever the dial says - 2 at a setting of 2, and still 3 at a setting of 1,000 -
+because at 0ms the handler returns before the next record arrives, so no queue ever forms to fan out
+from. Its throughput barely moves across the whole range (75,916 at 1, 88,641 at 100, 85,817 at
+1,000). llingr is not out-scheduling PC at 0ms; it has so little per-record cost that one worker
+nearly saturates the fetch path and extra concurrency has nothing left to buy.
+
+**llingr's dispatch does respond to work, and PC's stops responding first.** At 2ms and a ceiling of
+1,000, llingr reaches a peak of exactly 1,000 while **core reaches 438-456** - PC cannot supply
+itself the concurrency it was configured for once the handler takes time, which is the in-flight
+target and buffer ceiling this note already documents, seen from a third direction. It costs
+directly: 83,269 against 51,865 at that setting. (Read the core peak of 1,000 at *0ms* carefully -
+with a zero-length sleep, a thousand pool threads entering the handler together is most plausibly a
+dispatch burst rather than sustained concurrency. That is a reading, not a measurement.)
+
+### The franz control: none of llingr's advantage survives it
+
+`franz`'s mean is above `llingr`'s at **every one of the ten concurrency-delay points measured**,
+and the two arms' ranges are disjoint at nine of them. The exception is 2ms / ceiling 25, where
+llingr ran 9,969-10,102 and franz 10,045-10,116 - overlapping, so read that row as a tie rather than
+a win. There is no point in this data at which the llingr engine is faster than the bare client it
+runs on, and one at which it is level.
+
+| delay | ceiling | core | llingr | franz | llingr as % of franz | core as % of franz |
+|---|---|---|---|---|---|---|
+| 0ms | 1 | 8,473 | 75,916 | 112,181 | 68% | 8% |
+| 0ms | 10 | 25,417 | 88,079 | 109,308 | 81% | 23% |
+| 0ms | 100 | 51,881 | 88,641 | 106,562 | 83% | 49% |
+| 0ms | 1,000 | 63,915 | 85,817 | 106,189 | 81% | 60% |
+| 2ms | 25 | 8,667 | 10,035 | 10,081 | 100% | 86% |
+| 2ms | 100 | 25,413 | 30,734 | 31,683 | 97% | 80% |
+| 2ms | 1,000 | 51,865 | 83,269 | 92,385 | 90% | 56% |
+
+At the point the original finding was taken - 0ms, ceiling 100 - llingr is **1.71x** core. The bare
+client is **2.05x** core at the same point. **The whole of llingr's advantage there is franz-go, and
+llingr then gives 17% of it back.** The engine-versus-engine question the delay sweep appeared to
+answer was never asked by it; what it measured was mostly the client underneath.
+
+The delay column is the more useful half. At 2ms - still a fast handler, but one that does something
+- franz-go with no engine is **1.16x** core at a ceiling of 25 and **1.25x** at 100. A cross-runtime,
+cross-client gap of a quarter is not the shape the 0ms numbers implied, and the 0ms row is the
+synthetic one: no real handler returns in zero time.
+
+### What this does NOT show, and one of these matters a lot
+
+- **PC's own deficit cannot be split into client and engine.** This is the biggest gap and it is the
+  direct next measurement. `franz` isolates franz-go from llingr; **there is no Java-side
+  equivalent** - the `vanilla` arm drives real HTTP through WireMock rather than sleeping, so it is
+  not a floor for the sleep-handler arms and returns a few hundred msg/s. So "core reaches 49% of
+  franz-go at 0ms/100" bounds PC and the Java client *together*, and says nothing about how that 51%
+  divides between them. A `Bench` mode that is a plain `KafkaConsumer` plus a fixed thread pool plus
+  a sleep would settle it, and would make the 118µs-per-record figure attributable. Until it exists,
+  every core-versus-franz ratio above is a joint result.
+- **`franz` is a floor, not a competitor, and it is deliberately weaker than both engines.** It does
+  not order by key - records go to whichever worker is free, so two records sharing a key run
+  concurrently and in either order, which is the entire problem both engines exist to solve. And it
+  commits what franz-go's default autocommit commits, which is what has been *polled*: a crash loses
+  fetched-but-unrun records. Nothing here is evidence that anyone should use it.
+- **It does not show llingr is slow.** It shows llingr's overhead is small enough to be visible only
+  against its own client, which is a compliment paid by a sharper instrument. Its 3% cost at 2ms /
+  ceiling 100 is close to unmeasurable at n=2.
+- **The machine was not quiet, and this was discovered after the fact.** A second agent session was
+  working in this same worktree throughout, and by the end of the window was running
+  `bench/run-divergence.sh` against the same broker; 15-minute load average on a 12-core laptop read
+  8.57 when the sweeps finished. Four things bound how much that can have moved the conclusion, and
+  none of them makes the data clean:
+  - **The two core points measured twice, ten minutes apart, agree.** Concurrency 25 gave
+    36,904 / 36,592 in the first window and 35,773 / 36,619 in the second; concurrency 100 gave
+    52,286 / 51,080 and 52,153 / 52,006. Spread across both windows is under 3%.
+  - **Contention depresses; two of these numbers went up.** core at 2ms / ceiling 100 measured
+    25,413 today against 23,752 in [`core-curve.csv`](../../bench/results/core-curve.csv) earlier,
+    and llingr at 2ms / ceiling 100 measured 30,734 against 29,291 in
+    [`delay-sweep-llingr.csv`](../../bench/results/delay-sweep-llingr.csv). Both are ~6% faster than
+    the same points on a quieter machine, not slower.
+  - **The load ran against the franz arm's favour, not for it.** Within every invocation `llingr`
+    ran before `franz`, so rising background load penalises franz - and franz won every point
+    anyway. The franz conclusion is therefore conservative.
+  - **The core-versus-Go comparison is the exposed one.** core and the Go arms were measured in
+    *separate invocations* minutes apart rather than interleaved, so any drift in machine state sits
+    directly on the ratio that matters most. The size of the core-versus-franz gap should be treated
+    as approximate; its direction is not in doubt at 2x, but a claim like "80% at 2ms / 100" should
+    be re-taken on a quiet machine before it is relied on.
+
+  **Interleave the arms and check the machine next time.** The harness runs mode as the outer loop,
+  which is right for compiling each classpath once and wrong for isolating a slow drift, and it says
+  nothing about what else is running.
+- **One partition, one laptop, every record a distinct key, n=2.** Ranges are reported above; no
+  statistic stronger than a range is claimed. All-distinct keys is llingr's best case on routing and
+  is unchanged from the earlier sweep.
+- **PC's optimum was not found.** The 0ms curve is still rising at 1,000, and the earlier
+  matched-concurrency data has Vert.x turning over between 1,000 and 10,000. Where core turns over
+  at 0ms is unmeasured.
+- **llingr's demand-driven dispatch is inferred, not observed.** The peak column is consistent with
+  it and nothing here reads llingr's scheduler.
+
+### Where this lands
+
+- **For the release gate:** unchanged in direction, sharpened in size. The gate is about recovering
+  PC's own throughput without ignoring the concurrency the user asked for, and the concurrency curve
+  says the recovery lever is real and large - **51,881 -> 63,915 at 0ms from the ceiling alone** -
+  while the 2ms rows say the cross-engine gap being chased is closer to 25% than to 71%.
+- **For [`next-auto-scaling.md`](next-auto-scaling.md):** three measured inputs. Throughput is
+  monotonic in the ceiling at 0ms across three orders of magnitude with no knee, so a controller has
+  a clean gradient to climb in the regime where overhead dominates. PC cannot reach a configured
+  ceiling of 1,000 once the handler takes 2ms, topping out near 450, so the controller's actual
+  actuator is the in-flight target, not `maxConcurrency`. And a competitor's dispatch demonstrably
+  tracks demand rather than configuration - peak 3 at 0ms, peak 1,000 at 2ms, same dial.
+- **For the llingr market-analysis note:** the throughput comparison is
+  even less worth competing on than that note already argues, and now for a measured reason rather
+  than a structural one. The gap at the headline point is the Kafka client, not the engine.
+  **Private research; none of the llingr figures above may be published.**
+
+*Provenance, two items. The `llingr` binary these runs used was built from a working tree carrying
+another session's uncommitted edit to `bench/llingr/main.go`. It was checked rather than assumed:
+the edit lifts `concurrentKeysMax` to package scope and adds an early return taken only when
+`-scenario` is passed, which these runs did not pass, so the throughput path executed is the
+committed one. And the `franz` rows in `concurrency-sweep-0ms.csv` were relabelled by hand from
+`franz-go-github.com/twmb/franz-go` to `franz-go-v1.21.5`. `franz_version()` read the wrong go.mod
+field on a single-line `require`; the runs are unaffected, the same binary from the same `go.mod`,
+and the extractor was fixed rather than the label being left to mislead.*
+
 ## Related
 
 - [`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) - where this surfaced.
