@@ -30,7 +30,7 @@ import {
   USAGE,
   UsageError,
 } from "./options";
-import { AK_CORE, type ArmResult, table } from "./report";
+import { AK_CORE, type ArmResult, BANNER, table } from "./report";
 
 /** A misspelled flag must not be reported as a result for settings nobody asked for. */
 const EXIT_USAGE = 2;
@@ -53,6 +53,13 @@ async function main(argv: readonly string[]): Promise<number> {
     }
     throw error;
   }
+
+  // THE FIRST THING PRINTED NAMES THE PRODUCT, and it is contract rather than decoration: a
+  // reader who starts a demo and is met with a configuration line has been told nothing about what
+  // they are looking at. Every language prints this same block. It goes here rather than in
+  // `run.sh` so that both entry points - `run.sh` and a bare `docker compose up` - open with it,
+  // and so it is printed exactly once on either.
+  process.stdout.write(`\n${BANNER}\n`);
 
   if (options.bootstrap === undefined) {
     // run.sh starts the broker and supplies its address; see broker.ts for why that is the
