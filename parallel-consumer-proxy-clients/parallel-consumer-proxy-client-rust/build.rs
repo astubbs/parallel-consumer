@@ -162,9 +162,32 @@ fn protoc_from_maven_repository() -> Option<PathBuf> {
         .filter_map(|version_dir| {
             let name = format!("protoc-{}-{classifier}.exe", version_dir.file_name()?.to_string_lossy());
             let candidate = version_dir.join(name);
-            candidate.is_file().then_some(candidate)
+            (candidate.is_file() && is_executable(&candidate)).then_some(candidate)
         })
         .collect();
     candidates.sort();
     candidates.pop()
+}
+
+/// Whether a candidate can actually be RUN, and not merely whether the file is there.
+///
+/// **Maven does not make this artifact executable.** It is a `.exe` classifier artifact like any
+/// other, so it lands in the local repository at `0644`; `protobuf-maven-plugin` chmods the copy it
+/// extracts for its own use, never the one in `~/.m2`. Selecting it on `is_file()` alone therefore
+/// picks a binary that fails with `Permission denied` **in preference to** a perfectly good
+/// `protoc` on `PATH`, because this fallback is consulted before `PATH` is. Found by building the
+/// Rust demo on a machine that had both (astubbs#242); the failure is a build error naming a path
+/// under `~/.m2`, which reads as a corrupt download rather than as a permission bit.
+///
+/// Non-unix targets have no mode bits to consult, and this fallback is unreachable there anyway -
+/// the classifier match above returns `None` for every non-Linux, non-macOS platform.
+#[cfg(unix)]
+fn is_executable(candidate: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(candidate).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(_candidate: &std::path::Path) -> bool {
+    true
 }
