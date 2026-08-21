@@ -865,29 +865,64 @@ and both Go arms reach 5,000 exactly. Tracked in
 Ruled out by single-variable runs: window length, partition count (1 vs 10), `max.poll.records`
 (500 vs 5,000), the loading-factor buffer (dynamic vs a static 25,000), and ordering mode.
 
-**Ours, and specific: `UNORDERED` is 21% slower than `KEY` at 100ms and 1,000 concurrent.**
+**RETRACTED: there is no `UNORDERED` deficit.** An earlier version of this section claimed
+`UNORDERED` ran 21% slower than `KEY` at 100ms and 1,000 concurrent, called it *"the single most
+promising target in this whole investigation"*, and a fix was written, tested and merged on the
+strength of it. **All of that was built on a confound, and the confound was ours.**
 
-| Delay / concurrency | `UNORDERED` | `KEY` | Java floor |
-|---|---:|---:|---:|
-| 2ms / 1,000 | 67,259 | 65,223 | 68,250 |
-| 2ms / 5,000 | 34,016 | 27,896 | 43,482 |
-| **100ms / 1,000** | **7,318** | **8,875** | 9,095 |
-| 100ms / 5,000 | 19,577 | 19,151 | 20,102 |
+The two numbers being compared were taken at different record counts:
 
-**`KEY` at 100ms/1,000 is within 2.4% of a bare consumer. `UNORDERED` at the same point is 20% off
-it.** That is a reproducible, PC-only deficit in the mode that should be the *cheapest*, and it is the
-single most promising target in this whole investigation.
+```
+core,UNORDERED,100000,...,100,1000,1,7318.0    <- 100,000 records
+core,KEY,     500000,...,100,1000,1,8875.2     <- 500,000 records
+```
 
-**A plausible mechanism, not yet proven.** `ProcessingShard.getWorkIfAvailable` opens a **fresh
-iterator at the head of the shard's `ConcurrentSkipListMap` on every dispatch pass**. Records already
-out for processing stay in that map until `onSuccess` removes them, and `isOrderRestricted()` is false
-for `UNORDERED`, so the scan does not stop early - every pass walks past every in-flight container in
-the shard before reaching selectable work.
+**Window length was already known to matter here** - the same note records throughput moving 12,429 ->
+19,385 at 5,000 concurrent on record count alone, and states that the short window understates the
+rate. It was then used as an uncontrolled variable in the very next comparison.
 
-That predicts exactly the observed asymmetry: `UNORDERED` puts ~1,000 records in each of 10 shards, so
-the walk is long; `KEY` puts one record in each of many shards, so there is no walk. **The fix is to
-resume the scan rather than restart it.** Measure `UNORDERED` at 100ms/1,000 before and after; the
-prediction is that it moves toward 8,900.
+**Measured properly, at 500,000 records for both**, three runs each:
+
+| 100ms / 1,000 concurrent | Runs | Mean |
+|---|---|---:|
+| `UNORDERED` | 8,841 / 8,791 / 8,770 | **8,800** |
+| `KEY` | 8,875 (single) | **8,875** |
+
+**0.9% apart. The ordering modes perform the same**, and that is the actual finding: the shard *shape*
+- ten shards holding a thousand records each versus half a million shards holding one - makes no
+measurable difference to throughput at this operating point. It is a more interesting result than the
+one it replaces, and it further bounds how much the shard data structures can be costing.
+
+**The fix was reverted.** `perf/resume-shard-scan` made the dispatch scan resume rather than restart at
+the head of each shard's skip list. Like-for-like, three runs each at 500,000 records:
+
+| 100ms / 1,000 concurrent | Runs | Mean |
+|---|---|---:|
+| Before the fix | 8,841 / 8,791 / 8,770 | **8,800** |
+| After the fix | 8,807 / 8,784 / 8,868 | **8,819** |
+
+**+0.2%. Nothing.** Unchanged at 100ms/5,000 (19,566 -> 19,372) and at 2ms/1,000; and the apparent 18%
+loss at 2ms/5,000 was also a single-sample artefact - that point has a **21% run-to-run spread**, the
+noisiest in the grid.
+
+**The rescan is real in the source and is not costing anything measurable.** `getWorkIfAvailable` does
+open a fresh iterator at the head of the shard every pass, and records do stay there until they
+succeed, so it genuinely is O(in-flight) per pass. The theory was right about the code and wrong about
+the consequence. **Do not re-derive it from the source and re-attempt it without a measurement first.**
+
+**The test survives the revert and should stay.** `UnorderedShardScanResumeTest` passes against the
+unmodified code and pins a starvation property nothing else covered: a record that becomes selectable
+again behind the dispatch scan must still be offered while the shard is continuously fed. It cost two
+wrong attempts to write - the first version passed with the fix deleted, because an idle tail hides the
+bug.
+
+**Two process lessons, both earned twice today:**
+
+- **A benchmark comparison must fix every axis the harness sweeps, not just the one under test.** The
+  harness records records, partitions, ordering, delay, concurrency and client pin as columns precisely
+  so this is checkable - and the check was not done.
+- **A single run is not a measurement at a noisy operating point.** 2ms/5,000 spreads 21%; three of the
+  four conclusions drawn from single runs at that point were wrong.
 
 **Also ours, unattributed: 2ms at 5,000 concurrent**, where both modes sit 22-36% below the Java
 floor. No hypothesis yet.

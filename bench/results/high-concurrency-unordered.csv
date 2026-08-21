@@ -29,6 +29,16 @@
 # opposite data shape - and the KEY rows are what refuted the shard-count hypothesis and exposed the
 # UNORDERED-only deficit at 100ms/1,000. See docs/inflight/perf-throughput-regression-since-0-3.md.
 #
+# READ THE records COLUMN BEFORE COMPARING ANY TWO ROWS. Rows exist at both 100,000 and 500,000
+# records, and window length moves throughput a long way - 12,429 to 19,385 at 5,000 concurrent on that
+# change alone. A comparison across two different record counts is not a comparison. This is not
+# hypothetical: an UNORDERED row at 100k was compared against a KEY row at 500k, the difference was
+# published as a 21% ordering-mode deficit, and a fix was written and merged before the like-for-like
+# runs showed the two modes are 0.9% apart. See docs/inflight/perf-throughput-regression-since-0-3.md.
+#
+# AND 2ms/5,000 IS THE NOISY POINT - 21% run-to-run spread against 1% elsewhere. Single runs there mean
+# nothing; three of four conclusions drawn from single samples at that point were wrong.
+#
 # CONDITIONS, since a number without them is not evidence: 12-core laptop under normal desktop load,
 # single-broker container on localhost, one consumer group per run, ALL KEYS DISTINCT, handler is a
 # sleep that never reads the payload. Not a quiet machine - the ratios are sound, the absolute
@@ -85,3 +95,29 @@ LOCAL,NATIVE,core,KEY,500000,10,500,2,1000,1,65223.1,488
 LOCAL,NATIVE,core,KEY,500000,10,500,2,5000,1,27895.6,366
 LOCAL,NATIVE,core,KEY,500000,10,500,100,1000,1,8875.2,1000
 LOCAL,NATIVE,core,KEY,500000,10,500,100,5000,1,19151.2,2747
+# --- like-for-like repeats at 500,000 records, added after the confound above was found ---
+# resume-scan-fix=no is the unmodified code; =yes is perf/resume-shard-scan, since reverted.
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,1000,1,8840.6,1000
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,1000,2,8790.9,1000
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,1000,3,8769.6,1000
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,1000,1,8806.5,1000
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,1000,2,8784.1,1000
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,1000,3,8867.8,1000
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,5000,1,19648.7,2828
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,5000,2,19378.3,2714
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,5000,3,19670.3,2900
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,5000,1,19233.7,2816
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,5000,2,19663.4,2864
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,5000,3,19219.7,2670
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,5000,1,27845.8,258
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,5000,2,28320.6,194
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,5000,3,33772.4,362
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,5000,1,27881.6,308
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,5000,2,29841.8,263
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,5000,3,29232.9,212
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,1000,1,67321.9,453
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,1000,2,65858.8,515
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,1000,3,64985.7,494
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,1000,1,66542.5,512
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,1000,2,65385.1,494
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,1000,3,67132.1,494
