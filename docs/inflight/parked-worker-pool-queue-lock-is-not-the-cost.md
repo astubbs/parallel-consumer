@@ -1,11 +1,15 @@
-# Bug: worker threads contend on the thread pool's single work-queue lock
+# Not a bug: worker threads park on the pool's queue lock, and it costs nothing
 
-<!-- inflight-type: bug -->
+<!-- inflight-type: parked -->
 <!-- inflight-impact: performance -->
 <!-- inflight-labels: needs-measurement -->
 
-Found 2026-08-21 by profiling, after three separate attempts to make the shard dispatch scan cheaper
-all returned zero end-to-end. **This is where the time actually goes.**
+Opened 2026-08-21 by profiling, **and immediately falsified by testing it.** Kept as a parked note
+rather than deleted, because the negative result is worth more than the note ever was and because the
+reasoning error in it is one this session made four times.
+
+**THE HEADLINE WAS WRONG.** This began as *"this is where the time actually goes"*. It is not. Replacing
+the lock with a lock-free queue made throughput **69% worse**, not better - see the test below.
 
 ## The measurement
 
@@ -58,9 +62,58 @@ only a shared number.
 is materially more expensive than a non-fair one and is read on the broker-poll path - a good suspect on
 inspection. **It accounts for 5 parks out of 39,000.** Not the problem.
 
+## The test that falsified it
+
+`LinkedTransferQueue` is lock-free, has the same `BlockingQueue` contract and the same unbounded
+behaviour, so swapping it for `LinkedBlockingQueue` in `setupWorkerPool` is a **one-line test** of
+whether that `takeLock` costs throughput.
+
+| 1,000 concurrent | Baseline | Lock-free queue | |
+|---|---:|---:|---|
+| 0ms handler | 109,709 | **33,743** | **-69%** |
+| 100ms handler | 8,800 | 8,841 | +0.5% |
+
+**And the parks did not go away - they multiplied**, from 31,112 on the lock to **332,631** on the
+transfer queue.
+
+**Likely cause of the loss**, and it is the cost the change was expected to carry:
+`LinkedTransferQueue.size()` is **O(n)** where `LinkedBlockingQueue` keeps a counter, and
+`getNumberOfUserFunctionsQueued()` reads it **every control loop**. At a zero-cost handler the queue
+holds on the order of a thousand entries, so every loop pays a linear scan. That it is invisible at
+100ms fits: the loop runs far less often relative to the work.
+
+## The reasoning error, which is the reusable part
+
+**Thirty-one thousand parks in five seconds is not evidence of a problem.** A park is where a thread
+**waits**, and a worker waiting for its next record is the pool working exactly as designed. A profile
+showing heavy parking on a lock says *threads queue here*; it does not say *time is lost here*.
+
+**Contention visible in a profile is not contention costing throughput.** Distinguishing the two needs
+a control arm - remove the lock and see whether the number moves - and here it moved the wrong way.
+
+This is the **fourth** time in one session that a signal read from inspection or a profile was
+overturned by a controlled run: the load-factor buffer, the shard-count scan, the in-shard rescan, and
+now this. The pattern is consistent enough to be a rule: **an explanation that has not been removed and
+re-measured is a hypothesis, however well it reads.**
+
+## What survives
+
+**The negative result on `RetryQueue`, which is genuinely useful.** It uses a **fair**
+`ReentrantReadWriteLock` - materially more expensive than a non-fair one - and it is read on the
+broker-poll path via `getQueueSizeAndNumberReadyToBeRetried()`. On inspection that is a strong suspect.
+**It accounts for 5 parks out of 39,000.** Ruled out, cheaply, and nobody needs to look again.
+
+**And `BENCH_JFR=<dir>` on `bench/run-bisect.sh`**, which records a flight recording per measured run.
+Profiled and unprofiled runs are not comparable and must never share a table.
+
 ## What to do
 
-1. **Virtual threads, and this changes their status.** `Executors.newVirtualThreadPerTaskExecutor()`
+**Nothing here, on this mechanism.** The items below were written when the finding looked real; they
+are kept because virtual threads remain worth doing, but **not for the reason given here** - the
+executor handoff is not the bottleneck. Treat them as they were before this note: a measurement worth
+taking, ranked behind the key-distribution sweep.
+
+1. **Virtual threads.** `Executors.newVirtualThreadPerTaskExecutor()`
    has no shared work queue and no pool of threads competing for one lock - each task gets its own
    carrier-scheduled continuation. That removes precisely the mechanism measured here.
    **[PR #51](https://github.com/astubbs/parallel-consumer/pull/51) already implements the option**, and
