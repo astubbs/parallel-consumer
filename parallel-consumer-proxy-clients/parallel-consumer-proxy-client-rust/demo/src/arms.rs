@@ -127,9 +127,11 @@ pub fn ak_core(
         }
         match consumer.poll(Duration::from_millis(500)) {
             Some(Ok(message)) => {
-                // The user's function, and the same sleep every other arm runs. A blocking sleep
-                // is what the contract asks for in Rust; this arm has one thread and nothing else
-                // to do with it.
+                // The user's function, and the same sleep every other arm runs. The contract's
+                // predicate is whether the CLIENT is thread-per-record, not what the language is
+                // called - and this arm is: one thread, one record, nothing else to do with it. So
+                // a blocking sleep occupies no slot the engine is counting, which is exactly what
+                // it does NOT do on the sidecar arm below.
                 let _ = message.payload();
                 // A null key is not a key, so only a present one counts. Nothing this demo seeds
                 // has one, and counting `None` as a distinct key would make the two arms disagree
@@ -197,13 +199,15 @@ pub async fn rust_grpc(
     let key_sink = Arc::clone(&seen_keys);
 
     // THE SLEEP GOES THROUGH `blocking(...)`, AND THAT IS RUST'S ONE DIVERGENCE WORTH READING.
-    // The contract says a blocking sleep is fine in Rust, and this is one - `std::thread::sleep`,
-    // not a timer. What Rust adds is *where* it may block: the client library's executors are
-    // tasks on an async runtime, and a blocking call made directly inside one occupies a runtime
-    // worker thread, of which there are as many as the machine has cores. `blocking(...)` is the
-    // library's own entry point for a blocking user function - it runs each invocation on the
-    // runtime's blocking pool, so concurrency is bounded by the engine's ceiling rather than by
-    // the core count. Measured, not assumed: see docs/inflight/clients/rust.md.
+    // The contract's rule is not about the language: it asks whether the CLIENT is
+    // thread-per-record, and this one is not - its executors are tasks on an async runtime. A
+    // blocking call made directly inside one occupies a runtime worker thread, of which there are
+    // as many as the machine has cores, so the table would report the RUNTIME's ceiling while
+    // appearing to report the engine's. `blocking(...)` is the library's own entry point for a
+    // blocking user function: it runs each invocation on the runtime's blocking pool, so
+    // concurrency is bounded by the ceiling the fingerprint printed. This is still a real
+    // `std::thread::sleep` either way - only where it blocks changes. Measured rather than
+    // reasoned about, and the contract now cites the figures: docs/inflight/clients/rust.md.
     client
         .poll(blocking(move |record| {
             std::thread::sleep(work);
