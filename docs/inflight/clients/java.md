@@ -71,3 +71,81 @@ reasoning**; what a later Java wave needs to know is the shape and what it const
   payload, FIFO hand-out through one executor, the asynchronous processor answering off-thread, the
   session-end stage, and the records-out-for-processing leak check. Redundancy between two suites is
   cheaper than a scenario deleted by whoever knew least about what it was protecting.
+
+## The reader-experience pass on the demo output (astubbs#242)
+
+The demo contract (`parallel-consumer-proxy/demo/README.md`) grew three output rules after someone
+watched a run and found it unimpressive. Java, as the reference the other ten transcribe, took them
+first. What changed here, and what the pass could not close.
+
+### What the Java demo now prints
+
+- **A banner, before anything the demo controls.** `ReferenceDemo.BANNER`, printed from `announce`
+  in `main` **before** `DemoBroker.resolve` - so it precedes the "starting a broker in a container"
+  paragraph rather than following it. The effective-configuration block moved with it, for the same
+  reason. `runFor` no longer prints the fingerprint, which means `ReferenceDemoIT` no longer sees it;
+  that is deliberate - the contract binds the demo's output, and the test asserts on returned
+  results.
+- **Every arm names its client**, as `arm (client)`. `ArmResult` now carries the two separately and
+  renders `label()`; everything that has to *match* - `baselineOf`, `ReferenceDemoIT`'s expected
+  arms, `bin/ci-demo-test.sh`'s `REQUIRED_ARMS` - still keys off `arm()` alone, which is what kept
+  the change from rippling.
+- **Two evidence columns, `records` and `keys`.** `ArmTally` accumulates both in one call, so an arm
+  cannot count a record without noting its key. The arm column is sized to the widest label in the
+  table rather than to a constant, because `pc-core (ParallelEoSStreamProcessor)` does not fit one.
+
+### THE TWO `bin/` SCRIPTS THAT NOW NEED UPDATING - one fails loudly, one fails silently
+
+Both read the tables by regex, and both were written against the old row shape. **Neither was
+touched by this pass** (the fan-out that produced it owns `bin/`), and every language changing its
+labels breaks them identically, so this is a shared item rather than a Java one.
+
+- **`bin/ci-demo-test.sh` FAILS.** Its per-arm assertion is
+  `grep -qE "^[[:space:]]*${arm}[[:space:]]+[0-9]"` - the arm name followed by its elapsed figure.
+  A row now reads `AK core (KafkaConsumer)    1.9s ...`, so what follows the name is `(`, not a
+  digit, and every required arm reports "no row". The `java-grpc-uds` assertion further down has the
+  same shape and the same fate.
+- **`bin/ci-demo-conformance.sh` PASSES, having stopped checking the arms.** Its `HEADER` pattern
+  survives (it is anchored only at the start, and the two new columns were appended *after*
+  `vs AK core` partly for that reason). Its `ROW` pattern does not: it forbids `(` and `,` in the
+  name and requires the line to *end* at the ratio. So no `ROW` lines reach the skeleton, the
+  skeletons still diff clean on `DIAL`/`TITLE`/`HEADER` alone, and the drift check silently covers
+  less than it did. `normalise_arms` is moot for the same reason. **A green run of this script after
+  the label change is not evidence the arms agree.**
+
+### Column order, and why `records`/`keys` went last
+
+The contract names the two columns but not their position. They are appended after `vs AK core`
+rather than inserted after `arm`, which keeps `ci-demo-conformance.sh`'s `HEADER` pattern matching
+and reads as "the old table, plus its evidence". **The other ten demos have to match this**, and
+nothing enforces the order - the conformance script compares column identity through a pattern that
+would accept either arrangement.
+
+### The contract clause this could not honour: the banner is not the first line
+
+Roughly thirty lines of logback's own configuration status print before the banner, and **both**
+entry points have it - checked, not assumed. `parallel-consumer-core`'s test jar is on the demo
+classpath (the sidecar spawn needs it) and carries a `logback-test.xml` with `scan="true"`; logback
+cannot watch a file inside a jar, warns, and a warning makes it dump its whole status. **A
+`logback.xml` in the demo module would not fix it** - a `logback-test.xml` anywhere on the classpath
+outranks it - so the fix belongs wherever that test jar's logging config does, not here. Recorded
+rather than worked around; the demo's own README says so too.
+
+Everything the demo itself controls is in contract order: banner, then the effective configuration,
+then the run - the broker paragraph now comes after both rather than between them.
+
+### What was actually run
+
+`demo/run.sh --records 20 --concurrency 4 --partitions 2 --replay-factor 2`, natively and with
+`--docker`; both exited 0 and printed both tables. Natively, five arms (`java-grpc-uds` correctly
+absent on macOS, with the message naming the container); in the container, all six. `records` and
+`keys` read 20/20 in the small replay and 40/40 in the big one on both paths - the big replay's arms
+re-read from the beginning, so they see the whole seeded backlog, which is why 40 is right there.
+`DemoOptionsTest`, `ConfigureParityTest` and `ArmCompletionTest` pass (29 tests), and
+`ReferenceDemoIT` passes in the integration lane - so the new `uniqueKeys` equality assertion has
+been executed against a real broker and all five arms that platform runs, not merely compiled.
+
+**No throughput figure from these runs is worth anything and none is recorded here.** Eleven agents
+were doing this simultaneously on one machine - load average was over 80 on twelve cores, the first
+container attempt had its broker killed with exit 137, and the image build took a quarter of an
+hour. The runs prove the output SHAPE.
