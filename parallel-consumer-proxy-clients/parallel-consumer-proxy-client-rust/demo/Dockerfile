@@ -78,9 +78,18 @@ RUN ./mvnw --batch-mode -q -DskipTests -Dcopyright.skip=true \
 
 # THE APPLICATION. Release, not debug: the demo's entire output is throughput, and a debug-profile
 # number would be a measurement of the optimiser being switched off.
+#
+# THE BUILD OUTPUT IS DELETED IN THE SAME LAYER THAT PRODUCES IT, and that is not tidiness. Cargo's
+# target directory for this crate is several gigabytes of intermediate artifacts, the registry
+# another few hundred megabytes, and none of it is reachable once the binary is copied to /app.
+# Removing them in a LATER layer would save nothing - the bytes stay in the layer below - so it has
+# to be this `&&` chain. It matters because a demo image is something a reader downloads or exports,
+# and every gigabyte here is time they spend before seeing a table. The Maven downloads are the
+# deliberate exception: the sidecar's classpath points into /root/.m2, so those must stay.
 RUN cd parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/demo \
  && cargo build --release \
- && cp ../target/demo/release/demo /app/demo
+ && cp ../target/demo/release/demo /app/demo \
+ && rm -rf ../target/demo "${CARGO_HOME:-/usr/local/cargo}/registry"
 
 # PC_DEMO_ARGS is unquoted on purpose: it carries the caller's flags through compose as a single
 # string and must word-split into separate arguments. The classpath is read from the file rather

@@ -91,7 +91,7 @@ fn classpath() -> Result<String, String> {
             return Ok(supplied);
         }
     }
-    let root = repository_root()?;
+    let root = repository_root(&format!("the sidecar's classpath ({CLASSPATH_FILE})"))?;
     let file = root.join(CLASSPATH_FILE);
     let dependencies = std::fs::read_to_string(&file).map_err(|e| {
         format!(
@@ -111,7 +111,12 @@ fn classpath() -> Result<String, String> {
 /// Walks up from the working directory to the enclosing git working tree. `.git` is a **file** in
 /// a worktree and a directory in a primary clone, so this tests for existence rather than for a
 /// directory - several of these demos are developed in worktrees at once.
-pub fn repository_root() -> Result<PathBuf, String> {
+///
+/// **It cannot succeed inside the demo's own container**, because the repository-root
+/// `.dockerignore` excludes `.git` from the build context. Every caller must therefore be a path
+/// the container never takes, and each one says which environment variable stands in for it there.
+/// The caller states what it was looking for, because this function does not know.
+pub fn repository_root(wanted: &str) -> Result<PathBuf, String> {
     let mut directory =
         std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
     loop {
@@ -119,12 +124,10 @@ pub fn repository_root() -> Result<PathBuf, String> {
             return Ok(directory);
         }
         if !directory.pop() {
-            return Err(
-                "no git working tree above this process's working directory, and no \
-                 PC_DEMO_PROXY_CLASSPATH to use instead - run the demo from inside the repository, \
-                 or through demo/run.sh"
-                    .to_owned(),
-            );
+            return Err(format!(
+                "no git working tree above this process's working directory, so {wanted} could not \
+                 be located - run the demo from inside the repository, or through demo/run.sh"
+            ));
         }
     }
 }
@@ -134,7 +137,7 @@ pub fn compose_file() -> Result<PathBuf, String> {
     if let Some(supplied) = std::env::var_os("PC_DEMO_COMPOSE_FILE") {
         return Ok(PathBuf::from(supplied));
     }
-    Ok(repository_root()?.join(demo_directory()))
+    Ok(repository_root("the demo's own compose file")?.join(demo_directory()))
 }
 
 fn demo_directory() -> &'static Path {
