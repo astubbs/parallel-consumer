@@ -369,6 +369,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             return;
         }
 
+        // Third of the three staleness checkpoints - see PartitionState#epochIsStale for the scheme.
+        // Work that went stale mid-flight never reaches onSuccessResult/onFailureResult, which is what
+        // stops a returning stale result removing a FRESH container that replaced it at the same offset.
         if (checkIfWorkIsStale(wc)) {
             // no op, partition has been revoked
             log.debug("Work result received, but from an old generation. Dropping work from revoked partition {}", wc);
