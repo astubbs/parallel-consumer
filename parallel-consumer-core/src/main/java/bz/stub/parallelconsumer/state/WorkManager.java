@@ -233,20 +233,42 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        long awaitingSelection = getNumberOfWorkQueuedInShardsAwaitingSelection();
-        long outForProcessing = getNumberRecordsOutForProcessing();
+        long workable = getNumberOfWorkableRecordsInSystem();
         long threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
-        boolean loaded = (awaitingSelection + outForProcessing) > threshold;
-        // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while no
-        // records are actually flowing, the poller never resumes and the PC stalls. A high outForProcessing with
-        // no awaitingSelection and no real progress is the numberRecordsOutForProcessing counter-drift signature.
+        boolean loaded = workable > threshold;
+        // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while
+        // no records are actually flowing, the poller never resumes and the PC stalls. Because the figure below is
+        // derived by conservation, "stays true with nothing flowing" now means records really are being held and not
+        // finished with - a leak in the shards - rather than possibly just a counter that has drifted.
         // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled()) {
-            log.debug("isSufficientlyLoaded={} (awaitingSelection={} + outForProcessing={} = {} vs target({})*loadingFactor({})={})",
-                    loaded, awaitingSelection, outForProcessing, awaitingSelection + outForProcessing,
+            log.debug("isSufficientlyLoaded={} (inShards={} - parkedForRetry={} = {} vs target({})*loadingFactor({})={})",
+                    loaded, sm.getNumberOfRecordsInShards(), sm.getNumberOfRecordsParkedForRetry(), workable,
                     options.getTargetAmountOfRecordsInFlight(), getLoadingFactor(), threshold);
         }
         return loaded;
+    }
+
+    /**
+     * How many records the system is holding that it can actually make progress on - the figure that gates record
+     * intake from the broker.
+     * <p>
+     * <b>Derived by conservation, not counted.</b> The gate only ever wanted the <em>sum</em> of "queued in shards"
+     * and "out for processing", never the split, and that sum is simply "records inside the system": everything
+     * admitted from the broker that has not yet been finished with. {@link ShardManager} keeps that as
+     * {@code admitted - retired} over the one collection that holds the records, which is why it cannot drift the
+     * way the two separately-maintained counters it replaces could - a defect the previous implementation
+     * acknowledged with a clamp on one of them.
+     * <p>
+     * Records waiting out a retry delay are excluded: they occupy the buffer but no amount of worker capacity can
+     * advance them, so a consumer whose whole buffer is in back-off should keep fetching rather than idle.
+     * <p>
+     * The one thing this does <em>not</em> count, which the old expression did, is a record whose partition was
+     * revoked while it was still out at a worker. That record has been dropped from the shards and its result will
+     * be discarded on return, so counting it as loaded only ever delayed a fetch.
+     */
+    public long getNumberOfWorkableRecordsInSystem() {
+        return sm.getNumberOfRecordsInShards() - sm.getNumberOfRecordsParkedForRetry();
     }
 
     private int getLoadingFactor() {
@@ -267,6 +289,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public long getNumberOfWorkQueuedInShardsAwaitingSelection() {
         return sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
+    }
+
+    /**
+     * @see ShardManager#getNumberOfRecordsInShards()
+     */
+    public long getNumberOfRecordsInShards() {
+        return sm.getNumberOfRecordsInShards();
     }
 
     public boolean hasIncompleteOffsets() {

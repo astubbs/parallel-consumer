@@ -72,6 +72,16 @@ public class ShardManager<K, V> {
 
 
     /**
+     * How many records the shards are currently holding, derived by conservation rather than counted.
+     * <p>
+     * Shared with every {@link ProcessingShard} this manager creates, so that the admissions and retirements of
+     * all shards reduce to one figure that can be read in O(1) from the control thread.
+     *
+     * @see #getNumberOfRecordsInShards()
+     */
+    private final RecordPopulation recordPopulation = new RecordPopulation();
+
+    /**
      * View of {@link WorkContainer}s that need retrying sorted by retryDue.
      */
     @Getter(AccessLevel.PACKAGE) // visible for testing
@@ -133,6 +143,66 @@ public class ShardManager<K, V> {
         return retryQueueSizeAndNumberReadyToBeRetried.getRight() + (diffBetweenShardsAndRetrySize < 0 ? 0 : diffBetweenShardsAndRetrySize);
     }
 
+    /**
+     * How many records the shards currently hold - selectable, out at a worker, or waiting out a retry delay.
+     * <p>
+     * Derived by conservation ({@code admitted - retired}) rather than counted, so it cannot disagree with the
+     * shards' contents the way a separately maintained running total can, and it is O(1) to read.
+     *
+     * @see RecordPopulation
+     */
+    public long getNumberOfRecordsInShards() {
+        return recordPopulation.getInSystem();
+    }
+
+    /**
+     * How many records the shards hold that are parked waiting out a retry delay, and so cannot be worked on yet
+     * however much capacity there is.
+     * <p>
+     * Subtracted from {@link #getNumberOfRecordsInShards()} to get the figure that gates record intake: a
+     * consumer whose entire buffer is in retry back-off should keep fetching, or it would idle its workers
+     * waiting on delays.
+     */
+    public long getNumberOfRecordsParkedForRetry() {
+        var sizeAndReady = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
+        return sizeAndReady.getLeft() - sizeAndReady.getRight();
+    }
+
+    /**
+     * The conservation counters themselves, for tests that need to assert on both sides of the balance.
+     */
+    // visible for testing
+    RecordPopulation getRecordPopulation() {
+        return recordPopulation;
+    }
+
+    /**
+     * Ground truth for {@link #getNumberOfRecordsInShards()}: counts the shards' contents by scanning them.
+     * <p>
+     * O(n) and deliberately independent of the conservation counters, so a test can hold the two against each
+     * other. Not for production use - that is the whole reason the conservation figure exists.
+     */
+    // visible for testing
+    long countRecordsInShardsByScan() {
+        return processingShards.values().stream()
+                .mapToLong(ProcessingShard::getCountOfWorkTracked)
+                .sum();
+    }
+
+    /**
+     * The raw sum of the per-shard available-work counters, with no flooring applied.
+     * <p>
+     * {@link #getNumberOfWorkQueuedInShardsAwaitingSelection()} floors its result, which hides both directions of
+     * counter drift from any test that reads it. This exposes the unfloored figure so drift can be asserted on
+     * directly.
+     */
+    // visible for testing
+    long sumOfShardAvailableCounters() {
+        return processingShards.values().stream()
+                .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
+                .sum();
+    }
+
     public boolean workIsWaitingToBeProcessed() {
         return getNumberOfWorkQueuedInShardsAwaitingSelection() > 0L;
     }
@@ -183,7 +253,7 @@ public class ShardManager<K, V> {
 
         // don't need to synchronise on /adding/ elements, as the iterator would just stop early
         var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm()));
+                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation));
         shard.addWorkContainer(wc);
     }
 
@@ -322,8 +392,7 @@ public class ShardManager<K, V> {
 
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
-                this, shardManager -> shardManager.processingShards.values().stream()
-                        .mapToInt(processingShard -> processingShard.getEntries().size()).sum());
+                this, ShardManager::getNumberOfRecordsInShards);
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
                 this, shardManager -> shardManager.processingShards.keySet().size());
     }

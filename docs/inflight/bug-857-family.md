@@ -6,6 +6,19 @@
 
 Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom.
 
+**Candidate fourth mechanism, 2026-08-24 - the broker-poller load gate drifts high across
+rebalances.** `ProcessingShard.availableWorkContainerCnt` had two conditional decrements whose
+conditions did not match the increment's; the reproducible one is exactly rebalance-shaped: revoking
+a record parked in retry back-off left its increment behind permanently, in the direction nothing
+corrected (the clamp only caught the low side). The sum feeds `WorkManager.isSufficientlyLoaded()`,
+which decides whether the broker poller pauses - so enough phantom "awaiting selection" records keep
+intake paused indefinitely, and a restart clears it because the counter is in-memory. That matches
+this family's symptom signature (halts after rebalance, resumes on restart), and possibly
+astubbs#183 (confluentinc#875) as well. **Hypothesis, not a diagnosis**: no reporter's instance has
+been tied to the counter, and the mirror's primary mechanism (the lost-partition skip) is different.
+The fix - deriving the gate by conservation - lands independently of this attribution; if reports
+persist after it ships, this mechanism is ruled out for them, which is also information.
+
 **Landed:** astubbs#100 (a mid-rebalance commit threw `RebalanceInProgressException`, which nothing caught,
 permanently killing the broker-poll thread) and astubbs#80 (a draining consumer never called
 `consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
