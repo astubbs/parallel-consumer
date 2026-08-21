@@ -371,7 +371,9 @@ the model: an entry claimed a dependency version the pom had moved past). The te
 are *changing an existing claim to be true* (allowed) or *adding information about a change* (the
 generator's job).
 
-Write commit messages that can feed that generator - see [Commits](#commits).
+Write commit messages that can feed that generator - see [Commits](#commits), and give a
+user-visible change a `Release-Note:` trailer so the generator's input is a scan rather than a
+reading of every subject line.
 [`docs/releasing.md`](docs/releasing.md) **owns the rest** - how generation works, the state of each
 section - and wins where the two disagree.
 
@@ -410,6 +412,27 @@ Nothing lints commit messages, so all of this is on you.
   `(producer)`, `(changelog)`. A directory name is not a scope.
 - **Bodies feed the release notes**: what changed, what it changed for a user, plus the diagnosis,
   the experiment and the rejected alternatives.
+- **A user-visible change also gets a `Release-Note:` trailer.** One line, in the commit body,
+  stating the change in the words a user would read:
+
+  ```
+  Release-Note: A Reactor user function returning an empty publisher now completes its record
+  ```
+
+  **Why a trailer and not just a well-written body.** `CHANGELOG.adoc` is generated at release time
+  from the commit log, and finding what belongs in it currently means reading every subject and
+  judging. `git log --grep='^Release-Note:'` turns that judgement into a scan, and it works months
+  later when the branch, the PR thread and any working notes are long gone. Git history is the only
+  index here that outlives everything else - which is why the repo already carries `Upstream-Issue:`
+  and the DEP-3 trailers the same way.
+
+  **What earns one**: a change a user or operator would notice - behaviour, defaults, API, a fixed
+  defect they could have hit. Not refactors, not test work, not internal measurement, not docs. The
+  bar is the changelog's own, and the trailer exists so that assembling the changelog is a scan
+  rather than an archaeology exercise.
+
+  **Nothing enforces this**, in keeping with the rest of this section - a missed trailer costs a
+  release note, not a build.
 - **Branch names encode the upstream number**: `bugs/857-...`, `fix/909-...`,
   `cherry-pick/893-...`, `upstream-pr-905`. It keeps the mapping greppable.
 - Upstream-related commits carry DEP-3 provenance trailers -
