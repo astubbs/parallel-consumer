@@ -1,8 +1,9 @@
 # The ten per-language demos: ten branches, no PR, and what the fan-out found
 
-Session handoff, 2026-08-21. Ten agents built the per-language demos in parallel, one worktree and
-one branch each. **Nothing is merged and only `feats/java-sidecar-demo` is pushed.** This file exists
-because the work is real, on disk, and invisible to `gh`.
+Ten agents built the per-language demos in parallel, one worktree and one branch each; an eleventh
+wave polished all of them. **All of it is now merged into `feats/polyglot-demos`**, which has commits
+that are not pushed. This file exists because the work is real, on disk, and largely invisible to
+`gh`.
 
 ## Where the code is
 
@@ -70,8 +71,10 @@ recorded objections in their own notes, by instruction. These are unresolved:
    `bootstrap.servers` at INFO several times a run. It should bind the whole run.
 6. **`bin/ci-demo-test.sh` is Java-only** - confirmed independently by every agent. Ten demos can
    ship while the contract claims both entry points are tested per language.
-7. The big-replay title's `total * delayMs / 1000` is integer arithmetic and prints "would take 0s+"
-   at small volumes. A seed wart, faithfully mirrored everywhere.
+7. ~~The big-replay title prints "would take 0s+" at small volumes.~~ **Fixed in all eleven**: the
+   unit is now chosen so the figure is never zero (`80s` at the demo's own defaults, `80ms` at CI's).
+   Two languages had already fixed it independently and differently - Ruby omitted the clause, Python
+   changed the unit - and Python's answer won because it keeps the information at every volume.
 8. **Every non-JVM demo container is a two-toolchain image** and the contract does not say so - the
    sidecar is a child of the *running* demo, so it cannot be a discarded build stage.
 
@@ -129,69 +132,55 @@ while the seed has none and says why. Plan and seed disagree on paper until some
 records that it governs the reading demo only. That reconciliation, not the code, is the open item.
 
 
-## What is next, in order (2026-08-21)
+## What is next, in order (2026-08-22)
 
-1. **The conformance harness must land with the polish wave, not after it.** The arm labels now carry
-   the client name in parentheses and the table gained two columns; both break the old parser. Two
-   language agents ran `skeleton()` over their own output and **measured** the dangerous outcome: the
-   fingerprint still parsed, so the skeleton was non-empty, the skip never fired, the absolute
-   assertions passed, and the drift check silently narrowed to comparing two headings. **A green run
-   would have meant the tables were not checked at all.** Fixed on `feats/polyglot-demos` - the parser
-   now tolerates parenthesised labels, compares the deterministic `records`/`keys` **values** instead
-   of masking them, and a demo whose table cannot be parsed **fails** rather than skipping.
-2. **Merge the eleven `polish/*` branches**, normalise any column order that differs from the
-   contract's now-fixed one, then run the harness across as many languages as the machine allows.
-   This is the first point at which the drift check proves anything beyond two languages.
-3. **Push once**, then decide the PR shape. Current recommendation is to fold
-   `feats/polyglot-demos` into astubbs#328 rather than open a second PR, because that PR still ships the
-   **old, disproven** divergence rule and the correction's evidence is the fan-out itself - reviewing
-   one without the other reviews a conclusion with no argument. Reverse that if astubbs#293 merges
-   while the polish wave is still unfinished.
-4. **The idle-machine measurement pass**, which is blocked twice: it needs a quiet box, and it needs
-   the unexplained baseline shift in [`next-demo-seed-followups.md`](next-demo-seed-followups.md)
-   item 1 resolved, because every ratio divides by a figure that moved 15% between sessions for
-   reasons a control arm refuted.
+1. **The Java demo does not exit on the container path** -
+   [`bug-java-demo-hangs-on-exit.md`](bug-java-demo-hangs-on-exit.md). This blocks CI rather than
+   failing it: nothing in either harness wraps a run in a timeout, so a hang burns the job. The
+   native path exits cleanly on macOS, which does **not** clear CI, because CI is Linux and Linux's
+   native path carries the UDS arm too. Highest priority of anything here.
+2. **Run the conformance harness across more than two languages.** Its patterns were repaired and
+   verified against real output from two languages, but the drift check still has not proved
+   anything at the width it exists for. This is the first thing the merged branch makes possible.
+3. **Push, then decide the PR shape.** Current recommendation is to fold `feats/polyglot-demos` into
+   astubbs#328 rather than open a second PR, because that PR still ships the **old, disproven**
+   divergence rule and the correction's evidence is the fan-out itself - reviewing one without the
+   other reviews a conclusion with no argument. Reverse that if astubbs#293 merges first.
+4. **The idle-machine measurement pass**, blocked twice: it needs a quiet box, and it needs the
+   unexplained baseline shift in [`next-demo-seed-followups.md`](next-demo-seed-followups.md) item 1
+   resolved, because every ratio divides by a figure that moved 15% between sessions for reasons a
+   control arm refuted.
 5. **The sidecar logging defect**, in the order its own record specifies - see
    [`bug-sidecar-runtime-logging-and-address-leak.md`](bug-sidecar-runtime-logging-and-address-leak.md).
    Each step alone regresses something, which is why it is one job.
 6. **Owner decisions, not work**: the `enable.auto.commit` divergence between the two transports; the
    KTD40 reconciliation (the plan still says every demo has three modes, the seed has none and says
-   why); and whether the merged `demos/*` branches and their worktrees are cleaned up.
+   why); and whether the merged `demos/*` and `polish/*` branches and their worktrees are cleaned up.
 
-### A fix that was applied and NOT verified - treat as unproven
+### The broker is quiet now - measured, and the assertion is still missing
 
-`KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` was added to all eleven compose files to quieten the broker, and
-**it does not work**. Two language agents measured it independently - 927 broker lines against 35 of
-the demo's own in one run, 584 in another - and root-caused it: the cp-kafka image writes its own
-per-logger map (`kafka=INFO`, `kafka.controller=TRACE`, `state.change.logger=TRACE`) which outranks
-the root level. `KAFKA_LOG4J_LOGGERS` is the variable that merges into that map and has now been
-added to all eleven, **but the verifying run was cut off by a timeout and has not been repeated.**
-Count the broker lines before believing it.
+`KAFKA_LOG4J_ROOT_LOGLEVEL` does not work; the cp-kafka image writes its own per-logger map
+(`kafka=INFO`, `kafka.controller=TRACE`, `state.change.logger=TRACE`) which outranks the root level.
+Four agents measured it independently - 1465, 927, 883 and 584 broker lines against 35-42 of the
+demo's own. `KAFKA_LOG4J_LOGGERS` is the variable that merges into that map, and a container run of
+the Java demo now gives:
 
-Nothing counts broker lines today, and the native path never sees them because Testcontainers does
-not attach the broker's stdout - so this was invisible to every check that exists. A line-count
-assertion in the harness would close that.
+```
+broker lines: 12   (1 INFO, 1 WARN; the rest are the image's own "===>" banner, not log4j)
+demo lines:  216
+```
 
+**Still open: nothing asserts it.** The native path never sees broker output at all - Testcontainers
+does not attach the broker's stdout - so this was invisible to every check that exists, and would
+regress silently. A broker-line-count assertion in `bin/ci-demo-test.sh` is what closes it.
 
 ## Reconciliation items found during the polish wave
 
-- **Two languages placed the new columns differently, and both were reasoning correctly.** Rust and
-  .NET put `records | keys` *after* `vs AK core`; python, typescript, scala, kotlin and go put them
-  immediately after `arm`. Both Rust and .NET said explicitly why: the harness's `HEADER` pattern was
-  **not end-anchored**, so appending was the only position that kept the check passing, while its
-  `ROW` pattern was end-anchored and broke either way.
-
-  **That is the lesson worth keeping.** The contract was silent on position and the regex was not, so
-  two independent implementers let a broken test define the spec - which is what an under-specified
-  contract plus a visible check will always produce. The contract now fixes the order and the parser
-  is repaired, so this is one format string each at merge. **Check all eleven**: the drift check was
-  structurally unable to tell them apart while its row pattern matched nothing.
-
-  Final tally across the nine that landed: **five beside `arm`** (python, typescript, scala, kotlin,
-  go), **three appended after `vs AK core`** (rust, dotnet, java) and **one in the middle** (cpp, at
-  `arm | elapsed | msg/s | records | keys | vs AK core`). Three different answers from nine
-  implementers reading the same document - which is what an unstated rule costs, and why the contract
-  now states it.
+- **The column order is settled** - all eleven print
+  `arm | records | keys | elapsed | msg/s | vs AK core`, the contract states it, and Java now carries
+  a test for it. **The lesson is what is worth keeping**: the contract was silent on position and the
+  harness regex was not, so two independent implementers let a broken test define the spec. That is
+  what an under-specified contract plus a visible check will always produce.
 
 - **Ruby and Rust both publish host port 29092**, so their demos cannot run back to back without
   `Bind for 0.0.0.0:29092 failed`. Python already parameterises its port
