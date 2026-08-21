@@ -104,3 +104,19 @@ It fixed its own image with `-Dorg.slf4j.simpleLogger.defaultLogLevel=warn`, ove
 problems, and adding the binding is precisely what the first step of the fix asks for. It is the
 clearest evidence yet that these four steps are one job: shipping step 1 alone would hand every
 language a noisier demo and a credential leak at the same time.
+
+
+## A sixth face, on the demo side: the banner cannot be first
+
+The contract requires the product's name to be the first thing printed. **In Java it is not**, and
+the Java agent established why rather than working around it: `parallel-consumer-core`'s test jar is
+on the demo's classpath - the sidecar spawn needs it - and carries a `logback-test.xml` with
+`scan="true"`. Logback cannot watch a file inside a jar, warns, and the warning triggers a full
+status dump of roughly thirty lines **before** anything the demo prints.
+
+**A `logback.xml` in the demo module cannot fix it**, because a `logback-test.xml` anywhere on the
+classpath outranks it. Both paths were checked rather than assumed.
+
+So this belongs with the rest: the fix is wherever that test jar's logging configuration lives, which
+is the same place steps 1 and 2 above have to land. It is one more reason the demos cannot be made
+right one at a time from the demo side.

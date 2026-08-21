@@ -62,7 +62,11 @@ assert_demo_ran() {
         # Leading whitespace is optional, and that is not laziness: stripping compose's "demo-1 | "
         # prefix takes the row's indentation with it, so requiring indentation passed natively and
         # failed in the container. Found by running this script, which is the point of it.
-        grep -qE "^[[:space:]]*${arm}[[:space:]]+[0-9]" "$plain" \
+        # The optional (client) group is required, not cosmetic: the contract now has every arm name
+        # the library it actually ran - `AK core (KafkaConsumer)` - so what follows the arm name is a
+        # bracket, not a figure. Without this the check fails every language at once, which is at
+        # least loud; its sibling ci-demo-conformance.sh failed the same change SILENTLY.
+        grep -qE "^[[:space:]]*${arm}([[:space:]]*\([^)]*\))?[[:space:]]+[0-9]" "$plain" \
             || fail "$mode: the '$arm' arm reported no row - see $plain"
     done
     echo "ci-demo-test: $mode ran every required arm"
@@ -81,7 +85,7 @@ assert_demo_ran "container" "$LOG_DIR/docker.log"
 # The container is Linux whatever the host is, so the domain-socket arm MUST be there. This is the
 # assertion that keeps the UDS path covered on a macOS developer machine, where it cannot run
 # natively and would otherwise be exercised by nobody until CI.
-grep -qE "^[[:space:]]*java-grpc-uds[[:space:]]+[0-9]" "$LOG_DIR/docker.log.plain" \
+grep -qE "^[[:space:]]*java-grpc-uds([[:space:]]*\([^)]*\))?[[:space:]]+[0-9]" "$LOG_DIR/docker.log.plain" \
     || fail "container: the java-grpc-uds arm is missing, and inside a Linux container it cannot be
         legitimately absent - see $LOG_DIR/docker.log.plain"
 echo "ci-demo-test: container ran the java-grpc-uds arm"

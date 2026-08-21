@@ -187,6 +187,12 @@ assertion in the harness would close that.
   is repaired, so this is one format string each at merge. **Check all eleven**: the drift check was
   structurally unable to tell them apart while its row pattern matched nothing.
 
+  Final tally across the nine that landed: **five beside `arm`** (python, typescript, scala, kotlin,
+  go), **three appended after `vs AK core`** (rust, dotnet, java) and **one in the middle** (cpp, at
+  `arm | elapsed | msg/s | records | keys | vs AK core`). Three different answers from nine
+  implementers reading the same document - which is what an unstated rule costs, and why the contract
+  now states it.
+
 - **Ruby and Rust both publish host port 29092**, so their demos cannot run back to back without
   `Bind for 0.0.0.0:29092 failed`. Python already parameterises its port
   (`${PC_DEMO_BROKER_PORT:-19095}`), which is the shape that fixes it. Patching one language alone
