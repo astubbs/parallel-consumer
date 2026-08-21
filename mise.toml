@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # The toolchain versions this repository builds against.
 #
 # THIS FILE IS THE SINGLE DECLARATION. `.github/workflows/clients.yml` installs the same versions

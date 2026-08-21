@@ -87,6 +87,43 @@ Nothing here argues against the container route for *building* - it built both l
 host with neither toolchain, which is what it is for. It argues that "built" and "runnable here" are
 different claims, and only the first one is currently true off Linux.
 
+### SOLVED for the conformance suite, 2026-08-22: run the whole thing inside
+
+`bin/run-conformance-in-container.sh <cpp|swift>` now drives either language on macOS:
+
+```
+cpp    5 scenarios driven   10 tests   0 failures   BUILD SUCCESS
+swift  5 scenarios driven   10 tests   0 failures   BUILD SUCCESS
+```
+
+**It needed no product change at all** - no client API, no protocol change, nothing touching R29's
+authority allowlist. The insight was the owner's: containerising only the *runner* is what created
+every boundary problem. The client spawns its sidecar as a child and dials `127.0.0.1` (KTD41), and
+`SidecarShim` announces a bare port with no host deliberately, so the client exercises its real
+spawn-and-reap path. Move the whole run inside - suite, in-JVM engine, shim, runner - and that
+loopback is simply the container's own.
+
+A `conformance` stage in each module's existing Dockerfile is `FROM toolchain` plus a JDK, with the
+runner **copied from the same `build` stage CI extracts from**, so this path and CI drive one binary
+rather than two builds that could differ. `LanguageRunners` takes it via
+`PC_CONFORMANCE_PREBUILT_RUNNERS` and carries an empty build command - the shape Kotlin and Scala
+already use for "the reactor built it" - which also avoids running the container route *inside* a
+container that has no Docker.
+
+**Two things are still open.**
+
+1. **CI will never exercise this**, because its runners are Linux and the extracted artifact is
+   native there. It is a macOS-developer path only, so it rots silently - the exact risk the owner
+   named before it was built. A scheduled run is what would keep it honest, and nothing schedules
+   one yet.
+2. **It is not `--network none`**, which would have proved nothing crosses the boundary. A macOS
+   `~/.m2` holds no `com.google.protobuf:protoc:exe:linux-aarch_64`, so a cold offline run dies in
+   the protocol module before the suite is reached. `PC_CONFORMANCE_OFFLINE=1` restores the proof
+   once the cache is warm; the classifiers coexist, so warming costs the host nothing.
+
+**The DEMO runtime is untouched and needs nothing** - each demo already runs in its own container,
+where binary and OS match by construction. This section was only ever about the conformance suite.
+
 **Cheaper middle path to weigh first:** this repo already manages Java, Go and Node through mise,
 and mise also covers Rust, Ruby and .NET. Extending what exists costs far less than an image fleet;
 containers earn their place for the genuinely awkward two (Swift on Linux, C++ with gRPC dev libs).
