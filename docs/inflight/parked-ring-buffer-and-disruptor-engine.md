@@ -5,7 +5,7 @@
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21, after profiling put the largest parking site in the engine on the mailbox
-([`next-mailbox-contention.md`](next-mailbox-contention.md)) and the owner recalled having tried ring
+([`parked-mailbox-is-not-the-bottleneck.md`](parked-mailbox-is-not-the-bottleneck.md)) and the owner recalled having tried ring
 buffers years ago. **They exist, they are already registered, and the register calls them dead ends.**
 
 ## The prior art, and where it is recorded
@@ -52,6 +52,36 @@ verdict.
 **So a ring buffer would be replacing a structure measured to cost about 3%**, in an engine whose
 throughput is set by something outside it. That is the opposite of the situation in 2020, when none of
 this was known.
+
+## The design the 2020 branch actually was - and why its failure is the whole story
+
+**Owner's description, 2026-08-21:** *instead of loading up the outbound queue for threads to take, a
+queue implementation that was not really a queue - backed by the WorkManager, speaking directly to the
+shared collections, so the intermediate buffer disappears.*
+
+That is what *"avoid intermediate buffer which must be managed"* means in `9d3d18af0`'s commit
+message, and it is a **materially better idea than anything tried in this session.** Every experiment
+here made the control loop's dispatch *cheaper*. This removes the control loop from the dispatch path
+altogether: a worker calling `take()` reaches into the shards itself, so **dispatch parallelises across
+the worker threads instead of being serialised through one.**
+
+**It was tried, and the register records both the outcome and the cause:**
+
+> `origin/refactor/gpt3-central-queue-direct-pull` @7e775a11 - central queue, direct pull
+> **(noted: poller-throttling issue, didn't help)**
+
+**"Poller throttling" is the broker poller not supplying records fast enough.** So the 2020 experiment
+removed the dispatch serialisation, and throughput did not move, because the records were not there to
+dispatch.
+
+**That is the same conclusion this session reached from measurements, six years later and by a
+completely different route:** the Kafka client is the limit, in-flight plateaus near 2,750 for PC and
+2,848 for a bare consumer, and nothing inside the engine changes it. **A prior experiment failing for
+the reason our current evidence names is the strongest corroboration either has.**
+
+**What it means for a restart:** direct pull is not worth rebuilding to chase throughput - the thing it
+removes has already been shown not to bind. It becomes interesting only *after* the supply side moves,
+which is what makes the client question the gate on all of this.
 
 ## The variant that has not been tried
 

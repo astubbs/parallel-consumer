@@ -1,11 +1,34 @@
-# Next: the mailbox is the largest park site, and it is our own code
+# Parked: the mailbox is the largest park site, and it is the wrong target
 
-<!-- inflight-type: next -->
+<!-- inflight-type: parked -->
 <!-- inflight-impact: performance -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21, from a flight recording read **properly** - `jfr print` truncates stacks to five
 frames by default, and raising it changes what the profile says.
+
+## The argument that settles it, and it is simpler than the measurement
+
+**Owner's reasoning, 2026-08-21, and it is right.** Group the parks by what the thread was trying to
+do rather than by which lock it hit:
+
+| Parks | What the worker was doing |
+|---:|---|
+| **19,722** | **Waiting for work** - `getTask` on an empty queue |
+| 17,785 | **Blocked returning work** - `addToMailbox` |
+
+**Workers are starved as often as they are blocked.** If a worker is frequently sitting with nothing to
+do, the limit is *upstream* of it, and **making the return path faster cannot fix a supply problem** -
+the worker gets back to an empty queue sooner.
+
+**That predicts the measurement, and the measurement agrees**: replacing the mailbox with a lock-free
+queue gave **+3.3% at 100ms and -2.7% at 0ms**. Real, tiny, and a trade. Exactly what "not the
+bottleneck" looks like.
+
+**So this note is parked rather than actioned.** The reasoning above would have got there without four
+experiments, and it is the lesson worth carrying: **classify parks by intent - waiting for work versus
+blocked doing work - before deciding which lock matters.** A lock that appears in a profile while the
+threads hitting it are starved anyway is not on the critical path.
 
 ## What the stacks show
 

@@ -27,6 +27,20 @@ hypothesis, however well it reads.* Inspection generates candidates. Only a cont
 | 8 | The worker pool's queue lock costs throughput | Replaced it with a lock-free `LinkedTransferQueue` | **69% WORSE.** Refuted, and inverted |
 | 9 | That loss was `LinkedTransferQueue.size()` being O(n) | Wrapped it with an O(1) counter | 31,832 vs 33,743 - no difference. **Refuted** |
 
+| 10 | The mailbox lock costs throughput | Replaced it with a lock-free counted queue | **+3.3% at 100ms, -2.7% at 0ms.** Real, tiny, a trade - and the wrong target, see below |
+
+## The shortcut that would have saved all of it
+
+**Classify parks by intent before choosing a lock to attack.** Of ~39,000 parks: **19,722 were workers
+waiting for work** on an empty queue, and 17,785 were workers blocked returning it.
+
+**Workers starved as often as blocked means the limit is upstream of them**, and no improvement to the
+return path can fix a supply problem - the worker just reaches an empty queue sooner. That one
+observation predicts hypotheses 6 through 10 all returning nothing, and it needs no experiment.
+
+**A lock that appears in a profile while the threads hitting it are starved anyway is not on the
+critical path.**
+
 ## Confirmed, and load-bearing
 
 - **The gap is the client, not the engine.** With no engine on either side, the Java floor reaches
@@ -52,7 +66,7 @@ core** - spinning burns exactly the cores the working threads need. Removing the
 
 - **Too many platform threads for the machine.** Raised by the owner early, argued down by me on
   evidence that was weaker than I presented it, and now the strongest surviving candidate. See below.
-- **The mailbox** - [`next-mailbox-contention.md`](next-mailbox-contention.md), the largest single park
+- **The mailbox** - [`parked-mailbox-is-not-the-bottleneck.md`](parked-mailbox-is-not-the-bottleneck.md), the largest single park
   site and PC's own code. Currently a hypothesis, not a finding.
 - The two ~20% cells against the Java floor, and whether they are even real given run-to-run spread.
 
