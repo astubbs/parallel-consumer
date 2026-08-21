@@ -12,7 +12,17 @@ docker compose up
 
 Needs Docker. A .NET SDK and a JDK are optional: with both, the demo runs natively and starts its
 broker in a container; without either, the demo runs in a container too and the broker is a compose
-sibling. It announces which it chose, and why, on its first line.
+sibling. `run.sh` announces which it chose, and why, before it builds anything.
+
+The demo itself opens with the banner every language's demo opens with - the product's name and
+what is about to happen - then the effective configuration, then the run:
+
+```
+================================================================
+  PARALLEL CONSUMER  -  .NET demo
+  The same records, twice: one at a time, then all at once.
+================================================================
+```
 
 **The contract this keeps - and that every other language's demo keeps - is
 [`parallel-consumer-proxy/demo/README.md`](../../../parallel-consumer-proxy/demo/README.md).** Read
@@ -20,10 +30,19 @@ that first. This file only records what is specific to .NET.
 
 ## The two arms
 
-| arm | what it is |
+| arm, as the tables label it | what it is |
 |---|---|
-| `AK core` | `Confluent.Kafka`, one record at a time, in this process |
-| `dotnet-grpc` | this module's client library, over a sidecar it spawns itself |
+| `AK core (Confluent.Kafka)` | `Confluent.Kafka`, one record at a time, in this process |
+| `dotnet-grpc (this client)` | this module's client library, over a sidecar it spawns itself |
+
+**Each label carries the role and the client**, because "AK core" is a category rather than a
+client and a reader cannot judge a comparison without knowing what produced it. In .NET the answer
+is `Confluent.Kafka`, the `librdkafka` binding Confluent publishes, and the contract asks a
+language with a second serious client to say so here and consider running both. **.NET does not
+appear to have one.** The packages a reader is likely to meet - KafkaFlow, Streamiz - are
+frameworks built **on top of** `Confluent.Kafka` rather than protocol implementations of their own,
+so a second arm would price a wrapper over the same client and not a different client. If that is
+wrong, the fix is a third arm here rather than a footnote.
 
 On the `dotnet-grpc` path **the application does no Kafka I/O**: the sidecar owns the consumer, the
 producer, the group membership and the offsets. That is a statement about the *path*, not about the
@@ -36,16 +55,42 @@ Two arms is the whole contract outside Java. Java carries four more (`pc-core`, 
 changes exactly one term; here the two arms are two different client libraries as well as two
 different engines, so a difference between them is not a wire cost and must not be read as one.
 
+## What the tables print
+
+Five columns, the same five in both tables and in the same order:
+
+```
+  arm                           elapsed          msg/s     vs AK core    records     keys
+  AK core (Confluent.Kafka)        4.9s              4           1.0x         20       20
+  dotnet-grpc (this client)        1.7s             11           2.9x         20       20
+```
+
+`records` and `keys` are the **deterministic** pair. Elapsed, msg/s and the ratio describe one
+machine on one run and travel nowhere; every language over the same backlog must print the same
+record count and the same distinct-key count, so those two are what `bin/ci-demo-conformance.sh`
+can compare across languages. They also make the table demonstrate the run rather than assert it -
+a throughput figure cannot show the work happened, and an arm that is **short** is a failed arm
+rather than a fast one.
+
+Keys are counted over the record key's **bytes** - base64, because a Kafka key is not text - and a
+null key counts as one distinct key of its own. There is no latency column, in either table, and
+that is contract: the backlog is pre-produced, so the workload is closed-loop and a per-record
+timing would be flattered by however far an arm had fallen behind.
+
 ## What is specific to .NET
 
-### The simulated work is an awaited timer, not a blocking sleep - and that is a divergence
+### The simulated work is an awaited timer, not a blocking sleep - and it is no longer a divergence
 
-The contract says a blocking sleep is fine in C#, and names Python and TypeScript as the two
-exceptions. **It is not fine here**, and the reason is this client's shape rather than the
-language's: the library's executors are `Task`s on the thread pool, so a hundred of them sitting in
-`Thread.Sleep` is a hundred pool threads occupied, and the pool injects replacements at roughly one
-per second once its core count is used up. The sidecar arm would report the thread pool's injection
-rate rather than the engine's throughput - a number that looks like a measurement and is not one.
+This module's demo diverged from the contract here, and **the contract has since moved to meet it**.
+The rule used to name languages and listed C# as safe for a blocking sleep; it now asks a question
+about the *client* instead - is it thread-per-record? - and C# is one of the six languages the
+question rules out.
+
+It rules this one out because the library's executors are `Task`s on the thread pool: a hundred of
+them sitting in `Thread.Sleep` is a hundred pool threads occupied, and the pool injects
+replacements at roughly one per second once its core count is used up. The sidecar arm would then
+report the thread pool's injection rate rather than the engine's throughput - a number that looks
+like a measurement and is not one.
 
 So the wait is `await Task.Delay(...)`, which is what "non-occupying" means in a language whose
 concurrency is tasks rather than threads. **Both arms use it.** The `AK core` arm holds one record
@@ -95,13 +140,16 @@ as the library.
 
 ## What has been run, and what has not
 
-Both entry points, by hand, at `--records 20` - the native one twice, once with **no arguments at
-all** (the case that has broken before, scaled down by `PC_DEMO_*` variables) and once with explicit
-flags and a big replay; the container one through `run.sh --docker`. Both arms completed in every
-run and both exited 0.
+Both entry points, by hand, at `--records 20` - the native one with no arguments at all (the case
+that has broken before, scaled down by `PC_DEMO_*` variables) and with explicit flags and a big
+replay; the container one through `run.sh --docker`. Both arms completed in every run and both
+exited 0, and the deterministic columns agree with what the seeding predicts: 20 records over 20
+keys in the small replay, 40 over 40 in the big one.
 
 **No run at the contract's defaults has ever happened**, and nothing here should be read as a
-measurement: at twenty records both arms are dominated by consumer-group join time.
+measurement: at twenty records both arms are dominated by consumer-group join time, and the runs
+above were taken on a machine running ten agents at once. The `msg/s` and `vs AK core` columns in
+this file's example are shape, not a figure anybody should quote.
 
 `bin/ci-demo-test.sh` runs the **Java** demo through both of its entry points on every pull request.
 Nothing runs this one in CI yet - which is exactly the gap that script exists to close. Open work,
