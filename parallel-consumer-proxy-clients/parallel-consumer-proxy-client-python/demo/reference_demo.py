@@ -9,12 +9,14 @@ no latency. What is specific to Python is in `demo/README.md` beside this file.
 
 ## The two arms, and why there are exactly two
 
-* **AK core** - `confluent_kafka.Consumer`, one record at a time, in this process. Always spelled
-  "AK core", never bare "core", which reads as `parallel-consumer-core` (`CONCEPTS.md`).
-* **python-grpc** - this repository's Python client library, which spawns the sidecar as a child
-  process, receives records over a socket, runs the user's function in **worker processes**, and
-  reports outcomes back. **The application does no Kafka I/O on this path**: the sidecar owns the
-  consumer, the producer, the group membership and the offsets.
+* **AK core (confluent-kafka)** - `confluent_kafka.Consumer`, one record at a time, in this
+  process. Always spelled "AK core", never bare "core", which reads as `parallel-consumer-core`
+  (`CONCEPTS.md`) - and always with the client that actually ran, because "AK core" is a category
+  and Python has more than one client in it.
+* **python-grpc (this client)** - this repository's Python client library, which spawns the sidecar
+  as a child process, receives records over a socket, runs the user's function in **worker
+  processes**, and reports outcomes back. **The application does no Kafka I/O on this path**: the
+  sidecar owns the consumer, the producer, the group membership and the offsets.
 
 The seed carries four more arms because one JVM can hold every engine at once. Python cannot, and
 a language whose only Kafka client is its own has nothing to compare a wrapper or a raw wire
@@ -48,6 +50,7 @@ import logging
 import multiprocessing
 import os
 import pathlib
+import re
 import shutil
 import sys
 import time
@@ -71,8 +74,35 @@ from parallel_consumer import (
 
 log = logging.getLogger("demo")
 
-AK_CORE = "AK core"
-PYTHON_GRPC = "python-grpc"
+BANNER = """\
+================================================================
+  PARALLEL CONSUMER  -  Python demo
+  The same records, twice: one at a time, then all at once.
+================================================================"""
+"""The first thing this demo prints, and the same in every language bar its own name.
+
+Contract, not decoration. The first line used to be an arm announcing its executor count, which
+tells a reader nothing about what they are watching - so the shape is fixed in
+``parallel-consumer-proxy/demo/README.md`` and every language prints it identically.
+
+``PC_DEMO_BANNER_PRINTED`` suppresses it, and is a **statement of fact rather than a preference**:
+``demo/run.sh`` prints the banner before its own setup lines, so that the product's name is the
+first thing on screen even when a Maven build and a broker start-up come between that and the run.
+It then sets this, because the same banner twice in one screen is worse than either alone. Nothing
+else sets it, so ``docker compose up`` and ``python demo/reference_demo.py`` both still print it.
+"""
+
+AK_CORE = "AK core (confluent-kafka)"
+"""**"AK core" is a category; ``confluent-kafka`` is the client that actually ran.**
+
+A reader cannot judge a comparison without knowing what produced it, and the answer differs in
+every language - `rdkafka` in Ruby, `franz-go` in Go, `kafkajs` in TypeScript. Python has more
+than one serious Kafka client, which is exactly why naming this one matters; ``demo/README.md``
+says which and why this demo runs ``confluent-kafka``.
+"""
+
+PYTHON_GRPC = "python-grpc (this client)"
+"""The sidecar arm, labelled with what drives it: this repository's own Python client library."""
 
 SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
 """The sidecar's entry point. It is a JVM today; :func:`resolve_sidecar` is where that stops
@@ -84,19 +114,71 @@ ARM_BUDGET_SECONDS = 600.0
 
 @dataclasses.dataclass(frozen=True)
 class ArmResult:
-    """One arm's finished run: what it was, how long it took, how many records it settled."""
+    """One arm's finished run: what it was, what it did, and how fast it did it.
+
+    ``processed`` and ``keys`` are the contract's **deterministic** pair - every language running
+    the same records reports the same two figures, which is what makes them comparable when
+    elapsed and msg/s never can be. They also demonstrate the run rather than asserting it: a
+    short arm is a failed arm, not a fast one, and a single key repeated would mean the backlog
+    was never spread at all.
+    """
 
     arm: str
     elapsed_seconds: float
     processed: int
+    keys: int
 
     @property
     def rate_per_second(self) -> float:
         return 0.0 if self.elapsed_seconds <= 0 else self.processed / self.elapsed_seconds
 
 
+class KeyTally:
+    """The distinct keys an arm saw, countable from **worker processes**.
+
+    This is Python's problem alone, and it is the fork that causes it: the sidecar arm's user
+    function runs in a worker process, so an ordinary ``set`` closed over by the processor would be
+    duplicated by the fork and every worker would report only its own keys. A
+    :class:`multiprocessing.Manager` dictionary would count exactly and generally, and was
+    rejected: it puts an IPC round trip on the critical path of the very arm the demo exists to
+    time, and almost every record in the small replay carries a key no worker has seen.
+
+    So the tally is a shared **byte per key slot** - one unsynchronised write, because the only
+    value ever written is 1 and two workers writing it to the same slot cannot disagree. Both arms
+    use it, so the two rows are counted the same way rather than one exactly and one approximately.
+
+    ``foreign`` counts records this demo did not seed. It should always be zero; if it is not, the
+    keys column is an undercount and the demo says so rather than printing a number it cannot
+    stand behind.
+    """
+
+    def __init__(self, context: ForkContext | SpawnContext) -> None:
+        self._seen = context.Array("b", demo_kafka.KEY_SPACE, lock=False)
+        self._foreign = context.Value("i", 0)
+
+    def observe(self, key: bytes | None) -> None:
+        slot = demo_kafka.key_slot(key)
+        if slot is None:
+            with self._foreign.get_lock():
+                self._foreign.value += 1
+            return
+        self._seen[slot] = 1
+
+    @property
+    def distinct(self) -> int:
+        return sum(self._seen)
+
+    @property
+    def foreign(self) -> int:
+        return int(self._foreign.value)
+
+
 def main(argv: list[str]) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
+    # BEFORE ANYTHING ELSE, including the usage text and any complaint about a bad flag: a reader
+    # must be told what they are looking at before they are told anything else about it.
+    if not os.environ.get("PC_DEMO_BANNER_PRINTED"):
+        print(BANNER)
 
     if demo_options.is_help_requested(argv):
         print(demo_options.USAGE)
@@ -158,10 +240,10 @@ def run(options: demo_options.DemoOptions, sidecar: SidecarCommand, topic: str) 
     # AK core is excluded here because it does not go parallel: it would need
     # total * delay_ms milliseconds to finish a backlog the sidecar arm clears in seconds, and a
     # demo that makes a reader wait that long to learn nothing new is not worth the wall clock.
-    serial_seconds = total * options.delay_ms // 1000
+    serial_estimate = duration(total * options.delay_ms)
     big = [sidecar_arm(options, sidecar, topic, total)]
     report(f"Big replay - {total} records, parallel arms only (AK core is serial and would take "
-           f"{serial_seconds}s+)", big, baseline_of(small), across_replays=True)
+           f"{serial_estimate}+)", big, baseline_of(small), across_replays=True)
 
     return small + big
 
@@ -178,6 +260,9 @@ def ak_core_arm(options: demo_options.DemoOptions, topic: str, target: int) -> A
     config: dict[str, Any] = dict(
         demo_kafka.consumer_properties(options.bootstrap or "", group_id(AK_CORE)))
     consumer = Consumer(config)
+    # The same tally the sidecar arm uses, in a process that could have used a plain set. Two
+    # counting methods would make the two rows of the "keys" column mean subtly different things.
+    keys = KeyTally(worker_context())
     processed = 0
     started_at: float | None = None
     try:
@@ -201,12 +286,13 @@ def ak_core_arm(options: demo_options.DemoOptions, topic: str, target: int) -> A
                 # first rebalance are start-up, and the sidecar arm does not charge itself for
                 # theirs either. See this module's docstring.
                 started_at = time.monotonic()
+            keys.observe(message.key())
             simulate_work(options.delay_seconds)
             processed += 1
         elapsed = time.monotonic() - (started_at or time.monotonic())
     finally:
         consumer.close()
-    return finished(AK_CORE, elapsed, processed)
+    return finished(AK_CORE, elapsed, processed, keys)
 
 
 def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topic: str,
@@ -237,6 +323,7 @@ def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topi
     started_at = context.Value("d", 0.0)
     ended_at = context.Value("d", 0.0)
     finished_event = context.Event()
+    keys = KeyTally(context)
     delay = options.delay_seconds
 
     def process(record: Any) -> None:
@@ -244,6 +331,7 @@ def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topi
             with started_at.get_lock():
                 if started_at.value == 0.0:
                     started_at.value = time.monotonic()
+        keys.observe(record.key)
         simulate_work(delay)
         with counted.get_lock():
             counted.value += 1
@@ -274,25 +362,30 @@ def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topi
     # is the worst thing a demo whose shape ten languages copy can do.
     if processed < target:
         raise RuntimeError(f"{PYTHON_GRPC} ended early at {processed} of {target}")
-    return finished(PYTHON_GRPC, elapsed, processed)
+    return finished(PYTHON_GRPC, elapsed, processed, keys)
 
 
 def simulate_work(seconds: float) -> None:
     """The user's function, in both arms: a wait that occupies nothing while it waits.
 
-    **This is Python's one sanctioned divergence, and it is smaller than it looks.**
-    :func:`time.sleep` releases the GIL and parks the calling thread on the kernel's timer, so the
-    wait itself costs no CPU and no lock - it is exactly the non-occupying wait the contract asks
-    for, and the busy loop it rules out (``while time.monotonic() < deadline: pass``) would pin a
-    core per in-flight record.
+    **The contract's predicate is whether the client is thread-per-record. This one is not** - it
+    hands the user's function to a worker process - so Python is one of the six languages that owes
+    its own non-occupying wait, and :func:`time.sleep` is it: it releases the GIL and parks the
+    calling thread on the kernel's timer, so the wait costs no CPU and no lock. The busy loop it
+    rules out (``while time.monotonic() < deadline: pass``) would pin a core per in-flight record.
 
-    What a Python wait *does* occupy is a whole **worker process**, because this client runs the
-    user's function in one - and no wait primitive changes that. ``asyncio.sleep`` was considered
-    and rejected: the client hands a worker one record and takes one outcome back, so an event loop
-    inside the worker cannot overlap a second record, and ``asyncio.run`` per record would hold the
-    process for exactly as long while adding a loop set-up to every one. TypeScript's divergence is
-    real - one event loop, and a blocking sleep there stops everything - Python's is not the same
-    shape.
+    What a Python wait *does* occupy is a whole **worker process**, and no wait primitive changes
+    that. ``asyncio.sleep`` was considered and rejected: the client hands a worker one record and
+    takes one outcome back, so an event loop inside the worker cannot overlap a second record, and
+    ``asyncio.run`` per record would hold the process for exactly as long while adding a loop
+    set-up to every one.
+
+    That occupancy is **not** the misreport the rule is aimed at, which is a table showing the
+    runtime's ceiling while appearing to show the engine's. Here the ceiling *is* the number the
+    fingerprint printed, because the proxy's executor count is the worker count - one sleeping
+    worker per in-flight record, exactly as many as asked for. TypeScript's case is the other one:
+    one event loop, where a blocking sleep caps in-flight work at one whatever the fingerprint
+    says.
 
     So the divergence lands where the cost actually is: ``--concurrency`` defaults to
     :data:`demo_options.DEFAULT_CONCURRENCY` rather than the seed's 100, because in this language
@@ -360,14 +453,35 @@ def java_binary() -> str:
     return found
 
 
+def duration(milliseconds: int) -> str:
+    """A wall clock a reader can read, in whichever unit says something.
+
+    Integer seconds are right for the default backlog - 40,000 records at 2ms is ``80s`` - and
+    wrong for the small volumes CI and the conformance harness run, where the same arithmetic
+    printed ``0s`` and told a reader that a serial arm would take no time at all.
+    """
+    return f"{milliseconds // 1000}s" if milliseconds >= 1000 else f"{milliseconds}ms"
+
+
 def group_id(arm: str) -> str:
-    """A fresh group per arm per replay, so every arm reads the same records from the beginning."""
-    return f"pc-demo-{arm.replace(' ', '-')}-{time.time_ns()}"
+    """A fresh group per arm per replay, so every arm reads the same records from the beginning.
+
+    The arm's own label now carries the client's name in brackets, and a group id is not the place
+    for punctuation - so everything that is not a letter or a digit becomes a dash.
+    """
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", arm).strip("-")
+    return f"pc-demo-{slug}-{time.time_ns()}"
 
 
-def finished(arm: str, elapsed: float, processed: int) -> ArmResult:
-    print(f"=== {arm} finished: {processed} records in {int(elapsed * 1000)}ms ===")
-    return ArmResult(arm, elapsed, processed)
+def finished(arm: str, elapsed: float, processed: int, keys: KeyTally) -> ArmResult:
+    print(f"=== {arm} finished: {processed} records, {keys.distinct} keys "
+          f"in {int(elapsed * 1000)}ms ===")
+    if keys.foreign:
+        # Never silently. The keys column is contract precisely because it is deterministic, and a
+        # topic that already held somebody else's records makes it an undercount.
+        print(f"    NOTE: {keys.foreign} record(s) carried a key this demo did not seed, so the "
+              "keys figure below is an undercount. Pass --topic with a fresh name.")
+    return ArmResult(arm, elapsed, processed, keys.distinct)
 
 
 def baseline_of(results: list[ArmResult]) -> ArmResult | None:
@@ -376,15 +490,24 @@ def baseline_of(results: list[ArmResult]) -> ArmResult | None:
 
 def report(title: str, results: list[ArmResult], baseline: ArmResult | None, *,
            across_replays: bool) -> None:
-    """The two tables, in the seed's exact columns and widths, so two languages diff cleanly."""
+    """The two tables, in the contract's columns and order, so two languages diff cleanly.
+
+    Six columns: what ran, **what it did**, then how fast. ``records`` and ``keys`` come before the
+    timings deliberately - throughput alone cannot show the work happened, and a reader scanning
+    left to right should meet the evidence before the number it justifies. Column *identity and
+    order* are contract; the widths are not, and this demo's are wider than the seed's because an
+    arm label now carries its client's name.
+    """
     heading = "vs AK core*" if across_replays else "vs AK core"
     lines = ["", "", title,
-             f"  {'arm':<14} {'elapsed':>10} {'msg/s':>14} {heading:>14}"]
+             f"  {'arm':<26} {'records':>9} {'keys':>7} {'elapsed':>10} {'msg/s':>14} "
+             f"{heading:>14}"]
     for result in results:
         ratio = ("-" if baseline is None or baseline.rate_per_second == 0
                  else f"{result.rate_per_second / baseline.rate_per_second:.1f}x")
-        lines.append(f"  {result.arm:<14} {result.elapsed_seconds:>9.1f}s "
-                     f"{int(result.rate_per_second):>14,} {ratio:>14}")
+        lines.append(f"  {result.arm:<26} {result.processed:>9,} {result.keys:>7,} "
+                     f"{result.elapsed_seconds:>9.1f}s {int(result.rate_per_second):>14,} "
+                     f"{ratio:>14}")
     if across_replays:
         lines.append("")
         lines.append("  * against the SMALL replay's AK core arm. Across replays, so not "

@@ -118,3 +118,7 @@ services:
       PC_DEMO_PARTITIONS: ${PC_DEMO_PARTITIONS:-}
       PC_DEMO_REPLAY_FACTOR: ${PC_DEMO_REPLAY_FACTOR:-}
       PC_DEMO_TOPIC: ${PC_DEMO_TOPIC:-}
+      # NOT A DIAL - a statement that run.sh already printed the banner, so the demo does not print
+      # a second one. Empty when you run `docker compose up` yourself, which is when the demo's own
+      # banner is the only one there is.
+      PC_DEMO_BANNER_PRINTED: ${PC_DEMO_BANNER_PRINTED:-}
