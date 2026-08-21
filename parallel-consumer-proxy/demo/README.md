@@ -190,6 +190,17 @@ Mirror this, so a reader who has run one has run them all:
 | **container** | `<client-module>/demo/Dockerfile` and `docker-compose.yml`, so a reader with only Docker can run it. Java is included, not exempted (R72) |
 | **latency** | do not report any. The backlog is pre-produced, so the workload is closed-loop and per-record timings are flattered by however far an arm fell behind. Reporting throughput only is the honest option available here |
 
+### Pick a free port, do not reserve one
+
+A demo that publishes a fixed host port cannot run beside another demo that chose the same number,
+and two of eleven collided on 29092 the first time all eleven ran. **Do not solve this by allocating
+eleven distinct numbers** - that is a registry to maintain, and it is wrong the moment somebody runs
+two copies of the same demo.
+
+**Try a port; if the bind fails, try the next one.** Report the port actually used. The demo already
+reports the topic it created for the same reason: a value chosen at run time is fine as long as it is
+announced.
+
 ### The container rule that is not negotiable
 
 **A demo container is never granted the host Docker socket.** Broker mode inside a container reaches
