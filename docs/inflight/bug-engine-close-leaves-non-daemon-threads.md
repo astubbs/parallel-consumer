@@ -18,6 +18,8 @@ Control loop ending clean (state:CLOSED)...   x4
 and yet the JVM will not exit, because four **non-daemon** threads are still alive with
 `DestroyJavaVM` blocked behind them:
 
+<!-- issue-refs: exempt-begin - the #NN below are JVM thread ids in a quoted jstack, not issues -->
+
 ```
 "pc-broker-poll" #98  prio=5 ... elapsed=173.04s  waiting on condition
 "pc-control"     #99  prio=5 ... elapsed=173.04s  waiting on condition
@@ -25,6 +27,8 @@ and yet the JVM will not exit, because four **non-daemon** threads are still ali
 "pc-control"     #119 prio=5 ... elapsed=171.99s  waiting on condition
 "DestroyJavaVM"  #188 prio=5 ... elapsed=166.96s  waiting on condition
 ```
+
+<!-- issue-refs: exempt-end -->
 
 **So `close()` returning is not evidence that the engine's threads are gone**, and neither is
 `Control loop ending clean`. Two of the four engines shut down completely; two logged the same
