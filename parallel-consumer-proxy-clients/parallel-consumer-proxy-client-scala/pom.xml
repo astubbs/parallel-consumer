@@ -201,6 +201,119 @@
             </build>
         </profile>
 
+        <!--
+            THE DEMO, AND WHY IT IS A PROFILE FOR THE SAME REASON THE HARNESS LANE IS.
+
+            demo/ holds the Scala rendering of the contract in
+            parallel-consumer-proxy/demo/README.md: two arms - Scala's own Kafka client, and Scala
+            over the sidecar through THIS module's client library - one workload, two throughput
+            tables. Run it with demo/run.sh; nothing about it is part of the published client.
+
+            IT NEEDS THE ENGINE, AND THE ENGINE MUST NOT BECOME A PERMANENT EDGE. The sidecar arm
+            spawns the real proxy binary, so `parallel-consumer-proxy` has to be on the classpath the
+            demo hands its child. Declared outside a profile that edge would put the engine in this
+            module's ordinary `-am` reactor, and `bin/build.sh` opens with `clean` - which would
+            delete the sidecar jar every other language's conformance test spawns. So the demo lives
+            in exactly the arrangement the scala-e2e-harness profile above already uses, and the
+            module's standing check still holds:
+
+                ./mvnw -pl :parallel-consumer-proxy-client-scala -am validate
+
+            must not print parallel-consumer-proxy.
+
+            THE SOURCES ARE A TEST SOURCE ROOT, not a main one, and the demo directory is where they
+            live rather than src/. A demo is not part of the artefact this module publishes, and a
+            test root is the source set Maven already refuses to package. build-helper points at
+            demo/src/main/scala so everything a reader has to open to understand the demo - the
+            script, the container, the sources - is under one directory.
+
+            kafka-clients IS DECLARED even though parallel-consumer-proxy drags it in. The AK core
+            arm builds a KafkaConsumer by hand and the demo seeds its own backlog, so this module's
+            demo names the API directly; inheriting it silently through the engine would make the
+            comparison arm's dependency an accident of what the engine happens to use.
+        -->
+        <profile>
+            <id>scala-demo</id>
+            <activation>
+                <property>
+                    <name>pc.scalaDemo</name>
+                </property>
+            </activation>
+            <dependencies>
+                <!-- the sidecar the client library spawns as a child process; the demo never calls
+                     into it, it only puts it on the classpath the child is given -->
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.apache.kafka</groupId>
+                    <artifactId>kafka-clients</artifactId>
+                    <version>${kafka.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <!-- broker mode, for a caller who supplied no bootstrap address. Inside the demo's
+                     own container this is never reached: a demo container is never granted the host
+                     Docker socket, so compose hands it a sibling broker's address instead. -->
+                <dependency>
+                    <groupId>org.testcontainers</groupId>
+                    <artifactId>kafka</artifactId>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>add-demo-source</id>
+                                <phase>generate-test-sources</phase>
+                                <goals>
+                                    <goal>add-test-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${project.basedir}/demo/src/main/scala</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <!--
+                                    The demo's classpath, written at BUILD time into a file that
+                                    run.sh and the container's entrypoint both read. Computing it at
+                                    run time would put Maven in the startup path of a demo whose
+                                    whole promise is one command - and it is the same file the demo
+                                    hands its spawned sidecar, because run.sh forks a real JVM whose
+                                    java.class.path is therefore this.
+                                -->
+                                <id>demo-classpath</id>
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/demo-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
     </profiles>
 
     <build>
