@@ -17,6 +17,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
@@ -527,6 +530,93 @@ class ConfigureHandlerTest {
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
                 assertWithMessage("records out for processing must return to baseline")
                         .that(engine.getNumberRecordsOutForProcessing()).isEqualTo(0));
+    }
+
+    /**
+     * KTD38's regression test, and it is written as a CONTROL rather than as an absence.
+     * <p>
+     * The plan reached this seam carrying the credit ledger under another name: an
+     * {@code ExecutorCountPolicy} deriving the count from OBSERVED report concurrency and re-sending
+     * {@code SetExecutorCount} whenever the observation moved. Rename "advertised capacity" to "observed
+     * report concurrency" and the structure is identical - a closed feedback loop between proxy and client -
+     * and so are the four unanswered questions: over what window, damped how, what happens to records already
+     * dispatched when the number falls, and how is the value proven not to drift. Four review rounds died on
+     * it.
+     * <p>
+     * <b>The structural half is the load-bearing one.</b> Asserting no {@code SetExecutorCount} arrives
+     * during one test's workload only proves it about that workload; the plan asks for the property under a
+     * workload "whose report concurrency varies widely", and no single scenario can stand for all of them.
+     * Asserting that <b>no production source constructs the message at all</b> covers every workload,
+     * including the ones no test runs - which is what a regression guard has to do.
+     */
+    @Test
+    void noProductionCodePathConstructsSetExecutorCount() throws IOException {
+        var mainSources = Paths.get("src/main/java");
+        assertWithMessage("the module's main sources must be where this test thinks they are")
+                .that(Files.isDirectory(mainSources)).isTrue();
+
+        var builders = new ArrayList<String>();
+        try (var paths = Files.walk(mainSources)) {
+            for (var file : paths.filter(path -> path.toString().endsWith(".java")).toArray(java.nio.file.Path[]::new)) {
+                var text = Files.readString(file);
+                if (text.contains("SetExecutorCount.newBuilder") || text.contains("setSetExecutorCount")) {
+                    builders.add(file.toString());
+                }
+            }
+        }
+
+        assertWithMessage("SetExecutorCount is declared in the schema and deliberately never sent (KTD38). "
+                + "Sending it reintroduces the credit ledger as a capacity feedback loop, which needs its own "
+                + "KTD answering the window, damping, in-flight and drift questions first.")
+                .that(builders).isEmpty();
+    }
+
+    /**
+     * The other half of KTD38, and the reason the field is not simply deleted: it stays <b>declared</b> so a
+     * dynamic count remains an additive change under R38 rather than a breaking one. A test that only proved
+     * nobody sends it would pass just as well against a schema that had dropped the field.
+     */
+    @Test
+    void setExecutorCountRemainsInTheSchemaSoADynamicCountStaysAdditive() {
+        assertThat(ProxyMessage.MessageCase.SET_EXECUTOR_COUNT).isNotNull();
+        assertWithMessage("a message the proxy never sends must still be one the schema declares")
+                .that(ProxyMessage.newBuilder().build().getMessageCase())
+                .isNotEqualTo(ProxyMessage.MessageCase.SET_EXECUTOR_COUNT);
+    }
+
+    /**
+     * The runtime half: across a connection's whole life - configure, a dispatch, a report, the connection
+     * dropping, and a reconnect that resumes with a manifest - the count travels exactly once, in
+     * {@code Configured}, and nothing revises it afterwards.
+     */
+    @Test
+    void theExecutorCountTravelsOnceAndIsNeverRevisedAcrossAReconnect() {
+        var handler = newHandlerWithSeededRecord();
+        var observed = new ArrayList<ProxyMessage>();
+
+        var first = new RecordingSession(handler);
+        first.send(configureMessage(Configure.newBuilder().addTopics(TOPIC).setMaxConcurrency(7)));
+        var configured = first.awaitConfigured();
+        assertWithMessage("the count travels in Configured, which is the only place it may")
+                .that(configured.getExecutorCount()).isEqualTo(7);
+        var dispatch = first.awaitMessage();
+        observed.add(dispatch);
+        first.drop();
+
+        var second = new RecordingSession(handler);
+        second.send(ClientMessage.newBuilder()
+                .setManifest(Manifest.newBuilder()
+                        .addTokens(dispatch.getDispatch().getRecords(0).getToken()))
+                .build());
+
+        observed.addAll(first.messages);
+        observed.addAll(second.messages);
+        assertWithMessage("nothing in a session's life may revise the executor count")
+                .that(observed.stream()
+                        .map(ProxyMessage::getMessageCase)
+                        .filter(ProxyMessage.MessageCase.SET_EXECUTOR_COUNT::equals)
+                        .count())
+                .isEqualTo(0);
     }
 
     private static ClientMessage configureMessage(Configure.Builder configure) {
