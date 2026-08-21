@@ -9,13 +9,16 @@
 // printed first and the bootstrap address never printed at all. What is specific to Go - and the
 // short list of places it diverges - is in demo/README.md beside this file.
 //
-// TWO ARMS, WHICH IS THE WHOLE CONTRACT OUTSIDE JAVA:
+// TWO ARMS, WHICH IS THE WHOLE CONTRACT OUTSIDE JAVA, AND EACH NAMES THE CLIENT IT ACTUALLY RAN:
 //
-//   - AK core   - franz-go, one record at a time. Always spelled "AK core", never bare "core",
+//   - AK core (franz-go)    - Go's own Kafka client, one record at a time. "AK core" is a
+//     CATEGORY, not a client, so the library is named beside it - a reader cannot judge a
+//     comparison without knowing what produced it. Always spelled "AK core", never bare "core",
 //     which reads as parallel-consumer-core (CONCEPTS.md).
-//   - go-grpc   - this application as a FOREIGN CLIENT, through the Go client library, over a real
-//     sidecar the library spawns as a child process. The application does no Kafka I/O on that
-//     path: the sidecar owns the consumer, the producer, the group membership and the offsets.
+//   - go-grpc (this client) - this application as a FOREIGN CLIENT, through the Go client library,
+//     over a real sidecar the library spawns as a child process. The application does no Kafka I/O
+//     on that path: the sidecar owns the consumer, the producer, the group membership and the
+//     offsets.
 //
 // Java carries four more arms because one JVM can hold every engine at once and price the hop
 // exactly. Go cannot - its two arms are different client libraries as well as different engines -
@@ -30,6 +33,16 @@ import (
 	"syscall"
 	"time"
 )
+
+// banner is the demo's opening lines, fixed by the shared contract and identical in all eleven
+// languages except for the language's own name. Copied verbatim rather than composed, including
+// the sixty-four rule characters and the two spaces either side of the dash, because eleven demos
+// drifting apart on their own banner would be a poor advertisement for a contract about output.
+const banner = `
+================================================================
+  PARALLEL CONSUMER  -  Go demo
+  The same records, twice: one at a time, then all at once.
+================================================================`
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -48,6 +61,13 @@ func run(args []string) int {
 		logf("%s", usageText)
 		return 0
 	}
+
+	// THE BANNER IS THE FIRST THING PRINTED, before the settings and before any arm says anything
+	// about itself. A reader who runs this and meets `go-grpc: the proxy granted 100 executor
+	// threads` has been told nothing about what they are looking at; the words "Parallel Consumer"
+	// have to appear before anything else does. Identical in every language bar the language's own
+	// name - see the contract's "It opens by saying what it is".
+	logf("%s", banner)
 
 	opts, err := parseOptions(args, environment)
 	if err != nil {
