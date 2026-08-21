@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Proves the virtual-thread path <b>ran</b>, rather than proving it exists.
@@ -35,6 +34,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * runtime that cannot provide virtual threads is a <b>failure</b>, because the lane was asked for a thing it did
  * not deliver. An assumption remains only for the developer running the default suite on a JDK 17 with no mode
  * selected, where nothing was asked for and nothing is owed.
+ *
+ * <p>
+ * <b>Every test in this class requires the mode.</b> That is a contract, not a coincidence:
+ * {@code bin/check-execution-mode.sh} counts how many tests in this class actually executed and calls a lane broken
+ * when the answer is zero, so a test that can pass without virtual threads would inflate that count and let a JDK 17
+ * run claim it had exercised the mode. The option-level tests that run on any JDK live in
+ * {@link VirtualThreadOptionTest}.
  *
  * @see ParallelConsumerOptions#isUseVirtualThreads()
  */
@@ -182,30 +188,4 @@ class VirtualThreadExecutionModeTest {
         assertThat(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - start)).isLessThan(60L);
     }
 
-    /**
-     * The negative half, and it runs on every JDK - including the JDK 17 default lane, where it is the only one of
-     * these that executes. Without it, "the virtual-thread tests all passed on 17" would be true and meaningless.
-     */
-    @Test
-    void enablingTheModeOnAJvmWithoutVirtualThreadsFailsAtConstructionWithACause() {
-        if (virtualThreadsAvailable()) {
-            // Cannot be provoked on this JVM - it has them. The complementary case is covered above.
-            return;
-        }
-
-        assertThatThrownBy(() -> options().useVirtualThreads(true).build().validate())
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("useVirtualThreads")
-                .hasMessageContaining("JDK 21")
-                .hasCauseInstanceOf(ReflectiveOperationException.class);
-    }
-
-    @Test
-    void theOptionIsOffByDefault() {
-        // The default must stay platform threads whatever else changes here.
-        Assumptions.assumeFalse(Boolean.getBoolean(MODE_PROPERTY),
-                "the execution-mode axis has selected virtual threads for this run");
-
-        assertThat(options().build().isUseVirtualThreads()).isFalse();
-    }
 }
