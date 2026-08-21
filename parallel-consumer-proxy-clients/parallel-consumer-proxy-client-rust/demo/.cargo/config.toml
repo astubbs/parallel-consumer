@@ -1,0 +1,15 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# WHY THIS FILE EXISTS AT ALL: so that `mvn clean` deletes this crate's build output.
+#
+# The client module's pom.xml records, at length, that cargo and Maven share `target/` beside
+# Cargo.toml - which is exactly `${project.build.directory}` - and that this collision is
+# deliberate, because "a clean that leaves a foreign toolchain's output behind is a clean that
+# lies". This crate sits one directory deeper, so its own default output would be
+# `demo/target/`, which the module's clean does not reach. Redirecting it back under the module's
+# `target/` keeps the property the pom argues for.
+#
+# It applies only to cargo invocations whose working directory is this one, so the client crate's
+# own build is untouched.
+[build]
+target-dir = "../target/demo"

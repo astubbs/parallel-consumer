@@ -1,0 +1,48 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The Rust demo (astubbs#242, plan unit U35). It keeps the contract in
+# parallel-consumer-proxy/demo/README.md; read that first.
+#
+# A CRATE OF ITS OWN, BESIDE THE CLIENT RATHER THAN INSIDE IT, AND THAT IS THE WHOLE POINT OF THE
+# LAYOUT. The demo needs a Kafka client - `rdkafka` - for its AK core arm, for creating the topic
+# and for seeding the backlog. The client library must never need one: an application reaching the
+# engine through the sidecar does no Kafka I/O at all, and a `rdkafka` entry in the library's own
+# Cargo.toml would quietly contradict the claim the demo exists to make. Putting the demo in
+# `src/bin/` would have done exactly that, because a bin target shares the crate's dependencies.
+#
+# `[workspace]` WITH NOTHING IN IT IS LOAD-BEARING: it makes this package its own workspace root
+# and stops cargo walking up into the client crate's directory looking for one. Without it, cargo
+# refuses to build a package nested inside another package's directory.
+[package]
+name = "parallel-consumer-proxy-client-rust-demo"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "The Rust demo: the same records through Rust's own Kafka client and through Rust over the Parallel Consumer sidecar"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"
+
+[dependencies]
+# THE CLIENT LIBRARY THIS DEMO EXISTS TO EXERCISE, by path. The sidecar arm goes through this and
+# nothing else - no hand-rolled gRPC, no protobuf in this crate at all. The Java seed hand-rolled
+# the protocol and had to be rewritten, because it proved the engine worked and said nothing about
+# the artifact users actually touch.
+parallel-consumer-proxy-client = { path = ".." }
+
+# Rust's own Kafka client, for the AK core arm and for the topic and backlog every arm replays.
+# It vendors and statically links librdkafka, so the only build requirement it adds is a C
+# compiler and make - no cmake, and nothing to install on the host.
+rdkafka = "0.38"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[profile.release]
+# The demo reports throughput, so it is built and run in release. A debug-profile number here
+# would be a measurement of the optimiser being switched off.
+debug = false

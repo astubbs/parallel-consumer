@@ -1,0 +1,101 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# THE ONE-COMMAND PATH for the Rust demo (astubbs#242, plan unit U35, R20).
+#
+# THE BROKER IS A SIBLING, AND THAT IS A RULE RATHER THAN A LAYOUT CHOICE. Reaching a broker the
+# demo container started itself would need the host Docker socket, and U35 forbids it: a documented
+# socket mount is root-equivalent host access taught as the normal way to run the product. So broker
+# mode inside a container reaches a compose sibling on the demo's own network, and the demo
+# container is given an address instead of a socket.
+#
+# THE SIDECAR IS NOT A SERVICE HERE, deliberately. It would be easy to add one, and it would teach
+# the wrong thing: KTD41's product model is that the client library spawns and supervises the
+# sidecar itself, so the user never installs, deploys or operates a process. A compose service would
+# show a deployment the product does not ask for. The Rust client spawns it as a child process
+# inside this container, exactly as it does natively.
+#
+# THIS FILE ALSO SERVES THE NATIVE PATH, WHICH THE REFERENCE'S DOES NOT. The Java demo starts its
+# native broker with Testcontainers, from inside the JVM. Rust's equivalent would put a Docker API
+# client in the demo binary's dependency tree for the one path that already has Docker, so the demo
+# starts the `broker` service here instead - `docker compose up --detach --wait broker` - and talks
+# to it over the HOST listener below. One broker definition serves both paths, which is the part
+# that matters: the two paths cannot drift into measuring different brokers.
+#
+# TWO WAYS IN, AND BOTH ARE SUPPORTED:
+#
+#   cd <this directory> && docker compose up      # the plain one, defaults, nothing else needed
+#   demo/run.sh --docker [--records N ...]        # the same thing with the demo's flags
+#
+# `docker compose up` on its own is the path to keep working: it is what a reader who has never seen
+# this repository will type. It needs no arguments, no environment and no wrapper script - the demo
+# service runs with the demo's own defaults, and PC_DEMO_ARGS below is empty unless run.sh sets it.
+# Add --build after changing any source, and `docker compose down` to remove the broker afterwards.
+
+name: pc-rust-demo
+
+services:
+  broker:
+    # Pinned as a literal because a compose file cannot derive anything. It must track
+    # <kafka.version> in the root pom - the mapping is CP major = AK major + 4, so AK 3.9.x means
+    # CP 7.9. The Java demo's compose file pins the same image for the same reason.
+    image: confluentinc/cp-kafka:7.9.0
+    ports:
+      # ONLY the host listener is published. The demo container reaches `broker:9092` over the
+      # compose network and needs nothing published at all; this port exists for the NATIVE path,
+      # where the demo process is on the host. 29092 rather than 9092 because 9092 is where a
+      # developer's own broker already is, and binding over it would be a confusing failure.
+      - "29092:29092"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # THREE LISTENERS, AND THE THIRD IS WHAT MAKES ONE BROKER SERVE BOTH PATHS. A Kafka client is
+      # told where to reconnect by the ADVERTISED address of the listener it arrived on, so a single
+      # advertised name cannot be right for a container on this network and a process on the host at
+      # once. PLAINTEXT advertises `broker:9092` to the compose network; HOST advertises
+      # `localhost:29092` to the host. Bound to the service name rather than 0.0.0.0 on the first
+      # two: this image formats its KRaft storage with the same config it boots with, and the format
+      # step refuses a non-routable advertised address.
+      KAFKA_LISTENERS: PLAINTEXT://broker:9092,CONTROLLER://broker:9093,HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092,HOST://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # The demo forms one consumer group per arm per replay, one after another, and the default
+      # three-second settling delay would be charged to every one of them.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 500
+    healthcheck:
+      # The demo must not start before the broker can serve an API request. Listing topics is the
+      # cheapest call that proves that, and it proves more than a port being open does. The native
+      # path waits on this healthcheck too, via `docker compose up --wait`.
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "broker:9092", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  demo:
+    build:
+      # The repository, because the image builds BOTH halves of this demo: the Rust binary, whose
+      # client library generates from the protocol module's frozen .proto, and the Java sidecar it
+      # spawns, which is a Maven reactor module and cannot be built without its parents and
+      # siblings. The root .dockerignore is what keeps this from uploading every target/ directory
+      # in the tree; the Dockerfile explains why that pair had to exist.
+      context: ../../..
+      dockerfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/demo/Dockerfile
+    # A demo that has printed its tables is done. Without this, compose's default would restart a
+    # container that exited cleanly and the reader would watch the whole run happen again.
+    restart: "no"
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      # Supplying this is what stops the demo trying to start a broker of its own - which, in a
+      # container, it refuses to do at all rather than reaching for a Docker socket.
+      PC_DEMO_BOOTSTRAP: broker:9092
+      # The flags demo/run.sh was called with, forwarded as one string.
+      PC_DEMO_ARGS: ${PC_DEMO_ARGS:-}
