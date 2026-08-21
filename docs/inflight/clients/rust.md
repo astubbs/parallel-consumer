@@ -215,6 +215,53 @@ those two).
   which does not reach `demo/`. Both commands pass in `demo/` today, run by hand. The pom is not
   this branch's to edit either.
 
+## The reader-experience polish, and the one thing it breaks
+
+The demo now keeps the contract's rewritten output rules: the banner is the first thing printed,
+each arm names the client that produced its row (`AK core (rdkafka)`, `rust-grpc (this client)`),
+and both tables carry `records` and `keys` beside `msg/s`. Broker log levels were already set and
+were not touched.
+
+**`bin/ci-demo-conformance.sh` can no longer see a single arm row, and this is not Rust-specific.**
+Observed, not predicted - its own `skeleton()` awk was run by hand over this demo's captured
+output, and the result was `DIAL`s, two `TITLE`s, two `HEADER`s and **zero `ROW` lines**. Two
+independent causes, either of which is sufficient:
+
+- its arm-name character class is `[A-Za-z0-9 _-]*`, which excludes the parentheses the contract
+  now requires in every arm label;
+- its row pattern is anchored with `$` immediately after the ratio column, so any additional
+  column - which is exactly what `records` and `keys` are - fails the match.
+
+`normalise_arms` has the same problem one step later: `s/^ROW [a-z0-9]+-grpc$/ROW SIDECAR/` cannot
+match `rust-grpc (this client)`. The failure is quiet rather than red: the skeleton is still
+non-empty, so no language is *skipped*; the drift check simply stops comparing arm identity and
+order, which is one of the two things it exists to compare. `bin/` is outside this branch's
+ownership, so it is open here rather than fixed.
+
+**The column order was chosen to keep the one regex that still works.** `records` and `keys` go
+*after* `vs AK core`, because the `HEADER` pattern is not end-anchored and therefore still matches;
+putting them anywhere else would have broken the header check as well as the row check. Eleven
+languages picked their own order simultaneously, so **whoever reconciles this must confirm all
+eleven agree** - the drift check cannot tell them apart until its row pattern is repaired, and a
+demo whose columns are in a different order from its neighbours' would pass today.
+
+## Two shared-machine hazards seen while verifying, neither of them the demo's fault
+
+Both were hit on a box running eleven language agents at once, and both are worth knowing before
+someone reads a failed demo run as a defect.
+
+- **Ruby's and Rust's compose files publish the same host port, 29092.** Two native demos cannot run
+  at once, and the second reports
+  `Bind for 0.0.0.0:29092 failed: port is already allocated` from `docker compose up`. Python's file
+  already parameterises its port (`${PC_DEMO_BROKER_PORT:-19095}`), which is the shape that fixes
+  this; changing Rust's alone would only move the collision, so it is recorded rather than patched.
+- **The Docker VM ran out of disk**, and the symptom names Kafka rather than the disk: the broker
+  container exits 1 having logged
+  `Formatting metadata directory /var/lib/kafka/data ... No space left on device`, and the demo
+  reports only "starting the broker failed". The C++ demo's broker was in the same state at the same
+  time. The host volume was at 99% with eleven image builds in flight. Nothing was pruned - that is
+  shared state - beyond this demo's own compose project.
+
 ## Local gates, and the proof each one fires
 
 Run from the module directory. **`cargo clippy --all-targets -- -D warnings` is the lint gate** -
