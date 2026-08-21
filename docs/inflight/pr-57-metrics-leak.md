@@ -14,20 +14,20 @@ Owns `PCMetrics.java`, `PCMetricsDef.java`, `PartitionState.java`, `PartitionSta
 
 ## Handoff - 2026-08-20
 
-**State:** base `master`, 399 tests / 8 skipped, all gates green, hook self-tests green (16 cases).
+**State:** base `master`, all gates green, hook self-tests green.
 Three review rounds landed clean on the library code; the last two rounds' findings were all in the
 merge resolution and in `.claude/hooks/check-upstream-map-merged.sh`, and are fixed. astubbs#325 has
 merged, so the dependency is discharged.
 
 ### Two decisions are the operator's, and nothing proceeds without them
 
-- **Merge strategy: recut, not squash - and it has not been done.** The branch holds 19 real commits
-  plus 6 merge commits. Rebase-merge as-is is unsafe: three of those merges carry hand-made conflict
-  resolutions that a replay would drop. Squash would collapse three separable upstream fixes
-  (astubbs#120, astubbs#121, confluentinc#905) that the changelog generator wants as distinct
-  entries. Proposed six atomic units - the three fixes, the un-quarantine, the `workManager` setter
-  removal, and the docs. Reset to the **merge-base**, never to `origin/master`, and verify
-  `git diff <old-tip> HEAD` is empty.
+- **Merge strategy: recut, not squash - and it has not been done.** Rebase-merge as-is is unsafe:
+  three of the branch's merge commits carry hand-made conflict resolutions that a replay would
+  drop. Squash would collapse three separable upstream fixes (astubbs#120, astubbs#121,
+  confluentinc#905) that the changelog generator wants as distinct entries. Proposed six atomic
+  units - the three fixes, the un-quarantine, the `workManager` setter removal, and the docs.
+  Reset to the **merge-base**, never to `origin/master`, and verify `git diff <old-tip> HEAD` is
+  empty.
 - **No human LGTM.** The `review: human LGTM` gate reports green, but every review on the PR is
   `COMMENTED`, never `APPROVED`. Do not read the gate as approval.
 
@@ -53,5 +53,4 @@ merged, so the dependency is discharged.
 
 - `core-pcmetrics-lock-held-across-registry-calls.md` and `core-pcmodule-injection-seam.md` - both
   deferred tasks this PR raised and deliberately did not fix.
-- `pr57-pre-recut` tag is local-only and has never been pushed.
 - Chaos Pain Suite reds are confluentinc#857, advisory, not in the required checks - not this PR's.
