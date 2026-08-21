@@ -17,6 +17,43 @@ product behaviour and the assertion was wrong, so no product change was needed.
 | `PCMetricsTest.metricsRegisterBinding` | 4 seen | Released by astubbs#265, failed twice consecutively on one head, **re-quarantined unowned** in astubbs#116. Mechanism only half-known: the fix closed the metric-ahead direction, the failures are metric-behind-and-never-converging - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 
+### The shutdown-commit family surfaced again, 2026-08-21 - and this time a sibling test
+
+**`ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown`** - failed once
+in a full core unit run at load average ~58 on twelve cores, asserting
+`[1 record completed during shutdown]`. **Passed 3/3 in isolation** immediately afterwards.
+
+**This name is new to the ledger.** The one already here is its sibling,
+`queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`, which astubbs#260 closed by
+establishing that the extra commit was correct product behaviour and the *assertion* was wrong.
+**astubbs#260 fixed one assertion in that family; this is a second test making a similar assertion, and
+nobody checked whether it had the same problem.**
+
+**Two sightings, independently, on the same day**, which is what makes it worth an entry rather than a
+shrug:
+
+1. This one, in a run verifying the conservation-counter change - which touches `drain()`, so it had to
+   be ruled in or out rather than dismissed.
+2. `queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` **itself**, failing once in a
+   **default-engine** full run during the direct-pull measurement, and passing 3/3 in isolation. **A
+   recurrence of the one this ledger records as fixed.**
+
+**What that pair suggests, stated as a hypothesis rather than a finding:** astubbs#260 corrected one
+assertion but not the class of assertion. Prior art points the same way -
+[`unit-tests-parallelise-by-forking-not-threading-2026-07-29.md`](../solutions/test-flakiness/unit-tests-parallelise-by-forking-not-threading-2026-07-29.md)
+records this family failing "intermittently only under thread parallelism", and both sightings here
+were under heavy load.
+
+**Why it is recorded rather than chased:** neither sighting is reproducible on demand, both were on
+uncommitted branches, and **a seed recorded now outlives the logs**. The useful next step is not a
+repro attempt but a read: **take astubbs#260's reasoning about why its assertion was wrong, and check
+whether `inFlightMessagesCommittedIfProcessedDuringShutdown` makes the same mistake.** That is a
+five-minute question and it may close both.
+
+**Do not let this block the conservation merge without checking it first.** The concern that prompted
+the entry was that the conservation change touches `drain()` - but the second sighting was on the
+*default engine* with none of that work present, which is evidence the family is flaky independently.
+
 ### Four more seen under concurrent agent load, 2026-08-15 - unclassified
 
 Recorded because this ledger exists so a flake is not met twice as a surprise, not because any of
