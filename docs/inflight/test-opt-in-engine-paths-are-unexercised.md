@@ -14,9 +14,24 @@ run exercises none of them:**
 
 | Path | Selected by | Exercised by the default suite? | Exercised by CI? |
 |---|---|---|---|
-| **Direct pull** | `-Dpc.directPull=true` | **no** | **no** |
-| **Virtual threads** (astubbs#51, in progress) | `useVirtualThreads` + a JDK 21 runtime | no - and its tests **silently skip** on the JDK 17 CI runs | **no** |
+| **Direct pull** | `-Dpc.directPull=true` | **no** | **no - and this is what is left of this note** |
+| **Virtual threads** | `-Dpc.virtualThreads=true` + a JDK 21 test JVM | no, by design - it is a mode, not a default | **yes**, `Unit Tests (virtual threads)` in `maven.yml` |
 | **Async user function** ([`next-core-async-user-function.md`](next-core-async-user-function.md)) | a different entry point | not yet built | not yet |
+
+**The axis now exists**, so what remains here is populating it. Adding direct pull is a matrix entry
+in `maven.yml` plus a row in `bin/check-execution-mode.sh`'s `mode_marker()`/`mode_selector()` - the
+shape is written into the workflow's own comment, with the direct-pull entry spelled out and
+deliberately left commented. **The mechanism to reuse is that one**; do not build a second.
+
+Two things the virtual-thread entry settled that direct pull inherits:
+
+- **A `-D` on the Maven command line does not reach surefire's forked JVM.** The pom forwards
+  `pc.virtualThreads` and `pc.directPull` through `systemPropertyVariables`; without that,
+  `mvn test -Dpc.directPull=true` runs the whole suite on the default engine and reports green.
+- **`bin/check-execution-mode.sh` is the loud-skip guard this note asked for.** It reads the surefire
+  XML rather than a log line, and refuses a green verdict when the mode's own tests did not execute.
+  Its self-test caught two defects in it, one of which was the guard committing this note's own
+  failure mode - counting two JDK-agnostic tests as evidence the mode had run.
 
 **Direct pull today is roughly 500 lines of engine code that no test runs by default and no CI job runs
 at all.** It was measured, not covered - and the measurement was a one-off on a laptop. It will rot,

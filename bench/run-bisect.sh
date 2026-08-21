@@ -164,6 +164,19 @@ run_one() {
     shift
     set -- core "$@"
   fi
+  # core-vt: same mode-suffix trick as core-dp, and it exists for the same reason - the template is
+  # compiled against every released version in the sweep and none of them has the option, so the
+  # selection has to be a system property old versions ignore.
+  #
+  # RUN BOTH ARMS ON THE SAME JVM. A JDK 21+ java must be on PATH for this mode to do anything, and
+  # running the platform arm on 17 while the virtual arm ran on 21 would confound JDK version with
+  # thread type - which is the one variable this comparison is about. Set JAVA_HOME/PATH once, for
+  # the whole sweep, and let the platform arm run there too.
+  if [ "${1:-}" = "core-vt" ]; then
+    engine=(-Dpc.virtualThreads=true)
+    shift
+    set -- core "$@"
+  fi
   local jfr=()
   if [ -n "${BENCH_JFR:-}" ]; then
     mkdir -p "$BENCH_JFR"

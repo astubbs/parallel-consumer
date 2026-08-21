@@ -150,7 +150,7 @@ entries:
   - id: virtual-threads
     title: Support virtual threads
     serves: [performance, flexibility]
-    horizon: next-0x
+    horizon: "0.6.0.0"
     blocks_1_0: false
     why_now: Blocking work is the case virtual threads help most, and supporting them removes a reason to reach for an adapter module.
     done_when: A user can run the processing function on virtual threads.
