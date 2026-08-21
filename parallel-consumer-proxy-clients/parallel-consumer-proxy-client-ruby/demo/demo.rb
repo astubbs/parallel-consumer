@@ -26,6 +26,23 @@ module ParallelConsumer
     EXIT_OK = 0
     EXIT_USAGE = 2
 
+    # THE FIRST THING PRINTED, AND IT NAMES THE PRODUCT. It used to be
+    # "ruby-grpc: the proxy granted 100 executor threads, ceiling 100" - a configuration line that
+    # does not contain the words Parallel Consumer and tells a reader nothing about what they are
+    # watching. The shape is contract (`parallel-consumer-proxy/demo/README.md`, "It opens by saying
+    # what it is") and every language prints it identically bar its own name, so the banner is not a
+    # place to be creative.
+    #
+    # IT LIVES HERE RATHER THAN IN `demo/run.sh` because `docker compose up` reaches this file
+    # directly - that path is documented and has no script in front of it, so a banner in the shell
+    # wrapper would be absent from the way a reader with only Docker actually starts the demo.
+    BANNER = <<~BANNER
+      ================================================================
+        PARALLEL CONSUMER  -  Ruby demo
+        The same records, twice: one at a time, then all at once.
+      ================================================================
+    BANNER
+
     # WHY THE DEMO DOES NOT START A BROKER ITSELF. The Java seed starts one with Testcontainers when
     # no address is supplied. Ruby's entry point starts the same compose broker on the host and
     # hands the address in - so the promise the contract makes ("omit --bootstrap to start one") is
@@ -61,6 +78,7 @@ module ParallelConsumer
     end
 
     def self.run(options)
+      puts BANNER
       raise NO_BROKER if options.bootstrap.nil? || options.bootstrap.strip.empty?
 
       topic = options.topic || "pc-demo-#{Process.clock_gettime(Process::CLOCK_REALTIME, :nanosecond)}"

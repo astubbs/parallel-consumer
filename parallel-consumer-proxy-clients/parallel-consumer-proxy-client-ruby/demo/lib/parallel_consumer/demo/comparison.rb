@@ -15,10 +15,14 @@ module ParallelConsumer
     #
     # == Two arms, and why Ruby has exactly two
     #
-    # - <b>AK core</b> - librdkafka through the `rdkafka` gem, one record at a time. Always spelled
-    #   "AK core", never bare "core", which reads as `parallel-consumer-core` (`CONCEPTS.md`).
-    # - <b>ruby-grpc</b> - this module's client library, which spawns the sidecar, receives records
-    #   over a socket, runs this demo's block on its executor threads and reports outcomes back.
+    # - <b>AK core (rdkafka)</b> - librdkafka through the `rdkafka` gem, one record at a time.
+    #   Always spelled "AK core", never bare "core", which reads as `parallel-consumer-core`
+    #   (`CONCEPTS.md`) - and always with the gem beside it, because "AK core" is a CATEGORY and
+    #   every language fills it with a different library. A reader cannot judge the comparison
+    #   without knowing which one produced the number.
+    # - <b>ruby-grpc (this client)</b> - this module's client library, which spawns the sidecar,
+    #   receives records over a socket, runs this demo's block on its executor threads and reports
+    #   outcomes back.
     #   <b>The application does no Kafka I/O on this path</b>: the sidecar owns the consumer, the
     #   producer, the group membership and the offsets.
     #
@@ -37,9 +41,21 @@ module ParallelConsumer
       # No arm may take longer than this before the demo calls it stalled rather than slow.
       ARM_BUDGET = 600
 
-      AK_CORE = "AK core"
+      # THE ARM LABELS CARRY THEIR CLIENT, and the reason is that "AK core" names a ROLE rather
+      # than a library: it is `rdkafka` here, `franz-go` in Go, `kafkajs` in TypeScript. A reader
+      # asking "is this fast in my language" is really asking about the client they already use, so
+      # the table has to answer with the client's name in it.
+      AK_CORE = "AK core (rdkafka)"
 
-      SIDECAR_ARM = "ruby-grpc"
+      SIDECAR_ARM = "ruby-grpc (this client)"
+
+      # The same two arms as identifiers rather than labels. Consumer group names and the sidecar's
+      # own arm name must stay free of spaces and brackets, so the label is not reused for them -
+      # a group id built from "AK core (rdkafka)" is a thing to explain to a reader of the broker's
+      # topic list rather than a thing to read.
+      AK_CORE_GROUP = "ak-core"
+
+      SIDECAR_GROUP = "ruby-grpc"
 
       # How long the AK core arm waits for one record before checking its budget again. It is not a
       # timeout for the arm - that is ARM_BUDGET - only how often a consumer with nothing to hand
@@ -53,12 +69,23 @@ module ParallelConsumer
       FOOTNOTE = "\n  * against the SMALL replay's AK core arm. Across replays, so not " \
                  "like-for-like.\n"
 
-      # The column layout is the Java seed's, character for character, so that two languages' tables
-      # can be read side by side. Annotated format tokens are RuboCop's requirement, not the seed's;
-      # the widths are what carry over.
-      HEADER = "  %<arm>-14s %<elapsed>10s %<rate>14s %<ratio>14s"
+      # RECORDS AND KEYS ARE THE TWO COLUMNS THAT DEMONSTRATE THE RUN RATHER THAN ASSERT IT.
+      # Throughput alone cannot show the work happened: a short arm is a FAILED arm, not a fast one,
+      # and a fast rate over one key repeated is not the backlog the fingerprint described. They are
+      # also the only two figures in the table that are DETERMINISTIC - every language over the same
+      # records reports the same pair - which is what lets `bin/ci-demo-conformance.sh` compare
+      # languages where elapsed and msg/s never could.
+      #
+      # THEY ARE APPENDED RATHER THAN INSERTED, deliberately: `vs AK core` stays the last of the
+      # original four columns, so the header a reader (and the conformance skeleton) already knows
+      # is still a prefix of this one.
+      #
+      # Column IDENTITY and ORDER are contract; the widths are not, and this arm column is wider
+      # than the Java seed's because "ruby-grpc (this client)" no longer fits in fourteen. Annotated
+      # format tokens are RuboCop's requirement rather than the seed's.
+      HEADER = "  %<arm>-24s %<elapsed>10s %<rate>14s %<ratio>14s %<records>9s %<keys>7s"
 
-      ROW = "  %<arm>-14s %<elapsed>9.1fs %<rate>14s %<ratio>14s"
+      ROW = "  %<arm>-24s %<elapsed>9.1fs %<rate>14s %<ratio>14s %<records>9s %<keys>7s"
 
       def initialize(options, broker, topic)
         @options = options
@@ -93,10 +120,19 @@ module ParallelConsumer
         total = @options.big_replay_records
         @broker.seed(@topic, @options.records, total)
         big = [sidecar(total)]
-        serial_estimate = total * @options.delay_ms / 1000
-        report("Big replay - #{total} records, parallel arms only (AK core is serial and would " \
-               "take #{serial_estimate}s+)", big, baseline, across_replays: true)
+        report("Big replay - #{total} records, parallel arms only (AK core is serial#{serial_cost})",
+               big, baseline, across_replays: true)
         big
+      end
+
+      # Why the serial arm is not here, in wall clock - WHEN THERE IS A WALL CLOCK WORTH QUOTING.
+      # `20 records x 2ms` is 0.04s, and integer division printed that as "would take 0s+", which
+      # tells a reader the arm was dropped to save no time at all. At the demo's own defaults the
+      # same expression is 80s and carries the whole argument. So the figure appears when it is an
+      # argument and is silent when it is not - "AK core is serial" is true at every volume.
+      def serial_cost
+        seconds = @options.big_replay_records * @options.delay_ms / 1000
+        seconds.positive? ? " and would take #{seconds}s+" : ""
       end
 
       # THE SERIAL ARM: one record at a time, the same sleep, in this process.
@@ -105,30 +141,39 @@ module ParallelConsumer
       # there is no batch to iterate, because the point of the arm is that nothing overlaps.
       def ak_core(target)
         puts "\n=== #{AK_CORE} starting over #{target} records ==="
-        consumer = @broker.subscribed_consumer(group_id("ak-core"), @topic)
+        consumer = @broker.subscribed_consumer(group_id(AK_CORE_GROUP), @topic)
         # The clock starts AFTER the consumer is built and stops before it closes, because this arm
         # is the denominator of every ratio in both tables and the other arm does not charge itself
         # for client construction or teardown either.
         started = Demo.clock
-        processed = drain(consumer, target, started + ARM_BUDGET)
-        finished(AK_CORE, Demo.clock - started, processed)
+        processed, unique_keys = drain(consumer, target, started + ARM_BUDGET)
+        finished(AK_CORE, Demo.clock - started, processed, unique_keys)
       ensure
         consumer&.close
       end
 
+      # @return [Array(Integer, Integer)] records consumed, and how many distinct keys they carried.
+      #   The count is the one this loop actually reached rather than the target it was given -
+      #   the records column exists to demonstrate the arm finished, so it must not be the target
+      #   echoed back.
       def drain(consumer, target, deadline)
         processed = 0
+        keys = Set.new
         while processed < target
           # The one arm that does not wait on a condition variable still needs a budget, or a
           # backlog shorter than the target spins here forever with no output.
           raise "#{AK_CORE} stalled at #{processed} of #{target}" if Demo.clock > deadline
 
-          next unless consumer.poll(POLL_TIMEOUT_MS)
+          message = consumer.poll(POLL_TIMEOUT_MS)
+          next unless message
 
           sleep(@options.delay_seconds)
+          # The key rather than the offset: the keys column exists to show the backlog was really
+          # spread rather than one key hammered, which is a claim offsets cannot make.
+          keys << message.key
           processed += 1
         end
-        processed
+        [processed, keys.size]
       end
 
       # THE ARM THE WHOLE DESIGN EXISTS FOR: the client library over a real sidecar it spawns.
@@ -142,7 +187,7 @@ module ParallelConsumer
       def sidecar(target)
         puts "\n=== #{SIDECAR_ARM} starting over #{target} records ==="
         completion = Completion.new(target)
-        client = ParallelConsumer::Client.open(client_options(group_id(SIDECAR_ARM)),
+        client = ParallelConsumer::Client.open(client_options(group_id(SIDECAR_GROUP)),
                                                sidecar: @sidecar.path, sidecar_args: @sidecar.args)
         puts "#{SIDECAR_ARM}: the proxy granted #{client.session.executor_count} executor threads, " \
              "ceiling #{client.session.max_concurrency}"
@@ -156,14 +201,16 @@ module ParallelConsumer
       end
 
       def run_sidecar_arm(client, completion)
-        client.poll do |_record|
+        client.poll do |record|
           # THE SIMULATED WORK, and a blocking sleep is the right one for Ruby rather than merely
-          # the allowed one: MRI releases the global VM lock around `sleep`, so N executor threads
-          # sleeping is N records in flight, not one. The contract names Python and TypeScript as
-          # the languages where this would be a lie; Ruby's executors are threads, not processes,
-          # and the sleep occupies none of them.
+          # the allowed one. The contract's predicate is a property of the CLIENT, not of the
+          # language: is it thread-per-record? This one is - the executors are threads and MRI
+          # releases the global VM lock around `sleep` - so N executors sleeping is N records in
+          # flight, and the table reports the engine's concurrency rather than the runtime's
+          # ceiling. A client with worker processes, an event loop or a bounded dispatcher would
+          # need its language's non-occupying wait here instead.
           sleep(@options.delay_seconds)
-          completion.record
+          completion.record(record.key)
           ParallelConsumer::Outcome.success
         end
         # The session ending short of the target must wake the waiter rather than leave it sitting
@@ -186,7 +233,7 @@ module ParallelConsumer
         count = completion.count
         raise "#{SIDECAR_ARM} ended early at #{count} of #{completion.target}" if count < completion.target
 
-        finished(SIDECAR_ARM, elapsed, count)
+        finished(SIDECAR_ARM, elapsed, count, completion.unique_keys)
       end
 
       def client_options(group)
@@ -198,9 +245,10 @@ module ParallelConsumer
         )
       end
 
-      def finished(arm, elapsed, processed)
-        puts "=== #{arm} finished: #{processed} records in #{(elapsed * 1000).round}ms ==="
-        ArmResult.new(arm: arm, elapsed: elapsed, processed: processed)
+      def finished(arm, elapsed, processed, unique_keys)
+        puts "=== #{arm} finished: #{processed} records over #{unique_keys} keys in " \
+             "#{(elapsed * 1000).round}ms ==="
+        ArmResult.new(arm: arm, elapsed: elapsed, processed: processed, unique_keys: unique_keys)
       end
 
       def baseline_of(results)
@@ -215,7 +263,8 @@ module ParallelConsumer
       def report(title, results, baseline, across_replays:)
         puts "\n\n#{title}"
         puts format(HEADER, arm: "arm", elapsed: "elapsed", rate: "msg/s",
-                            ratio: across_replays ? "vs AK core*" : "vs AK core")
+                            ratio: across_replays ? "vs AK core*" : "vs AK core",
+                            records: "records", keys: "keys")
         results.each { |result| puts row(result, baseline) }
         puts FOOTNOTE if across_replays
       end
@@ -227,7 +276,8 @@ module ParallelConsumer
                   format("%<ratio>.1fx", ratio: result.rate_per_second / baseline.rate_per_second)
                 end
         format(ROW, arm: result.arm, elapsed: result.elapsed,
-                    rate: thousands(result.rate_per_second.to_i), ratio: ratio)
+                    rate: thousands(result.rate_per_second.to_i), ratio: ratio,
+                    records: thousands(result.processed), keys: thousands(result.unique_keys))
       end
 
       # 12345 => "12,345". The Java seed prints its rates with the platform's grouping separator, so

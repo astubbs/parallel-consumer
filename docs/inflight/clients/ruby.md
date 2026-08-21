@@ -151,12 +151,14 @@ are purely Ruby-facing live in `demo/README.md`, beside the code they explain.
   sidecar for a reason that has nothing to do with Parallel Consumer. It ships **precompiled for
   linux-gnu**, so the demo image installs it without a C toolchain - the reason the container path
   is not slow to build for a native extension.
-- **The blocking sleep was checked rather than inherited.** The contract lists Ruby among the
-  languages where a blocking sleep is fine, and names Python and TypeScript as the exceptions. It is
-  fine here for a reason that had to be confirmed against *this* client's own design: the executors
-  are **threads**, and MRI releases the GVL around `sleep`. Had this wave taken Python's answer -
-  worker processes - the contract's own list would have been wrong for Ruby, so the list is right by
-  agreement rather than by luck.
+- **The blocking sleep was checked rather than inherited, and the contract's rule has since changed
+  to match.** It is fine here for a reason confirmed against *this* client's own design: the
+  executors are **threads**, and MRI releases the GVL around `sleep`. At the time the contract named
+  nine languages as safe; four of them turned out not to be, and it now states a predicate instead -
+  *is the client thread-per-record?* - citing Ruby as the one language that was checked rather than
+  assumed. The lesson is not about Ruby: **a wave that inherits a per-language verdict inherits
+  whatever the author of the list guessed**, and only re-deriving it against the client in front of
+  you can tell the two apart.
 - **The demo does not start a broker; `demo/run.sh` does.** The Java seed uses Testcontainers. Ruby
   has no equivalent this demo would rather depend on, so the entry point starts the *compose* broker
   - the same service the container path uses, one definition rather than two - and hands the address
@@ -183,6 +185,15 @@ one as "not supplied". **Either the seed should do the same or the contract shou
 environment is a native-path feature**; an owner decision, and the same gap will be in whichever of
 the ten demos transcribed the seed's compose file literally.
 
+**SETTLED, the first way, in 9d3ee9390.** The seed's compose file now forwards every `PC_DEMO_`
+variable explicitly, as do the other nine. The prediction held exactly: the gap was in **seven** of
+the ten demos, all of them transcribed from the seed's compose file before it was fixed, and it was
+`bin/ci-demo-conformance.sh` that found them on its first run rather than any of the seven agents.
+Kept here rather than deleted because the shape is the durable lesson - a promise made by the
+contract and kept only by the *native* entry point is invisible from the path a reader without the
+toolchain always takes, and no per-language review would have caught it, because every one of the
+seven was individually consistent with the seed it copied.
+
 ### `blocker-executor-count-formula.md` does not block Ruby
 
 The identity executor-count function means `--concurrency 100` becomes 100 executors. In Python that
@@ -190,6 +201,136 @@ is 100 worker *processes*, which is why it blocks that demo; here they are threa
 observed the proxy granting exactly the number asked for (`--concurrency 4` -> 4 executor threads,
 ceiling 4). Ruby therefore needs no cap invented in a demo. It does mean **the demo prints the
 granted executor count**, which is the one place a reader can see the formula's effect.
+
+## The reader-experience pass, and the one thing it breaks outside this module (astubbs#242)
+
+The project owner ran **this** demo and was unimpressed by three things, all of which are now
+clauses in `parallel-consumer-proxy/demo/README.md` under "The output a reader actually sees". This
+module was the one they watched, so what follows is the fix rather than a transcription of someone
+else's.
+
+- **The first line named a dial, not the product.** It was `ruby-grpc: the proxy granted 100
+  executor threads, ceiling 100`, which does not contain the words Parallel Consumer. The banner is
+  now `Demo::BANNER` in `demo/demo.rb`, printed by `Demo.run` before anything else. **It is in the
+  Ruby program and not in `demo/run.sh`**, because `docker compose up` in `demo/` is a documented
+  entry point with no script in front of it - a banner in the wrapper would be missing from the way
+  a reader with only Docker starts the demo. The consequence, stated because it is a real gap: on
+  the **native** path `run.sh` still speaks first, with its mode line and "Building the sidecar...".
+  The banner is the first thing the *demo* prints, not the first thing on the terminal.
+- **The arms named a category, not a client.** `AK core` -> `AK core (rdkafka)` and `ruby-grpc` ->
+  `ruby-grpc (this client)`. The labels are no longer reused as identifiers: `AK_CORE_GROUP` and
+  `SIDECAR_GROUP` carry the consumer-group names, because a group id built from a label with a space
+  and brackets in it is a thing to explain rather than to read.
+- **Two new columns, `records` and `keys`**, appended after `vs AK core` rather than inserted before
+  it - see the harness note below for why that position was not free. The AK core arm collects keys
+  from `Rdkafka::Consumer::Message#key`; the sidecar arm collects them inside `Completion`, under
+  the mutex that already guards the counter, since N executor threads reach it at once.
+
+Observed at `--records 20 --concurrency 4 --partitions 2 --replay-factor 2`: `20 / 20` on both
+small-replay arms and `40 / 40` on the big-replay sidecar arm, which is what the seeding predicts -
+`key-#{index % 1000}` over 40 records is 40 distinct keys, and the two arms agreeing on both figures
+is the point of having them.
+
+### The contract's new labels are invisible to `bin/ci-demo-conformance.sh`, and it will not go red
+
+**Reported, not fixed - `bin/**` is outside every language agent's file scope.** That script reduces
+each demo's stdout to a skeleton and requires the skeletons to match. Two of its patterns cannot see
+an arm row any more, and neither failure announces itself:
+
+- its row matcher accepts an arm name of `[A-Za-z][A-Za-z0-9 _-]*` and every language's arm name now
+  contains **parentheses**, so no `ROW` line is emitted at all;
+- `normalise_arms` rewrites `ROW <lang>-grpc` to `ROW SIDECAR`, and the sidecar arm is now
+  `ruby-grpc (this client)`.
+
+The dangerous half is that the drift check still **passes**: all ten languages lose their `ROW`
+lines identically, so the skeletons still match while no longer comparing the one thing the rows
+were there for. The header assertion survives only because that pattern is unanchored -
+`arm elapsed msg/s vs AK core` is still a prefix of the new header, which is the reason the two new
+columns were appended rather than inserted, and the reason `vs AK core` kept its wording after the
+arm it names was relabelled.
+
+Whoever owns `bin/` needs to widen the row pattern to allow `(`, `)` and `.`, re-point
+`normalise_arms` at the new sidecar label, and ideally assert the deterministic `records`/`keys`
+pair the contract added them for - that is the assertion those columns exist to make possible, and
+nothing uses it yet.
+
+### `KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` DOES NOT QUIETEN THIS BROKER - measured
+
+**Reported, not fixed: broker log levels were explicitly placed out of scope for this pass.** It is
+the first thing to fix before anyone runs a demo to be watched again, and the fix is one line in
+each of the eleven compose files, so it wants doing once across the fan-out rather than eleven
+times.
+
+The measurement, from the verification run below (`--records 20 --concurrency 4 --partitions 2
+--replay-factor 2`, `docker compose up`, the setting present in the compose file and the broker
+container recreated from it): **1520 lines of combined output, of which 1465 were the broker, 1042
+of those at INFO, and 41 were the demo's own.** The thing a reader came to watch is about one line
+in thirty-seven.
+
+The cause is in the image rather than in the compose file. The log4j template under
+`/etc/confluent/docker/` in `confluentinc/cp-kafka:7.9.0` renders `KAFKA_LOG4J_ROOT_LOGLEVEL` into
+`log4j.rootLogger` **and then unconditionally writes a block of explicit per-logger levels over the
+top of it**:
+
+```
+log4j.rootLogger={{ env["KAFKA_LOG4J_ROOT_LOGLEVEL"] | default('INFO') }}, stdout
+...
+{% set loggers = { 'kafka': 'INFO', 'kafka.controller': 'TRACE',
+                   'state.change.logger': 'TRACE', ... } -%}
+```
+
+A named logger beats the root logger in log4j, so `kafka.*` stays at INFO and the controller and
+state-change loggers stay at **TRACE** whatever the root is set to. The root level only ever
+governed the loggers *not* in that map, which is why the setting looks applied, changes the
+rendered `log4j.properties`, and quietens almost nothing.
+
+The variable that reaches those loggers is `KAFKA_LOG4J_LOGGERS`, which the same template merges
+over the defaults (`parse_log4j_loggers`) - something of the shape
+`KAFKA_LOG4J_LOGGERS: "kafka=WARN,kafka.controller=WARN,state.change.logger=WARN,org.apache.kafka=WARN"`
+beside the existing root setting. Whoever applies it should **count the broker's INFO lines before
+and after** rather than reading the rendered properties file: the current setting demonstrates that
+a config change can be visible in the file and absent from the output.
+
+### What was checked for noise in the demo's own output, and what was found
+
+Separately from the broker, everything the demo process itself emits was read. **It is clean**: the
+sidecar's stderr is inherited by the demo process and the JVM printed nothing, `rdkafka` printed
+nothing, `grpc` printed nothing. The `puts` calls in `demo/lib/` are the fingerprint, the topic and
+seeding lines, the two per-arm markers and the tables - nothing removable. One thing was wrong and
+is fixed:
+
+- **`(AK core is serial and would take 0s+)`.** The big-replay heading priced the arm it drops with
+  integer-divided seconds, so at any volume under 500 record-milliseconds it told the reader the arm
+  had been dropped to save no time at all - and the contract's own conformance volume is exactly
+  such a volume. `Comparison#serial_cost` now prints the figure only when there is one worth
+  quoting; "AK core is serial" is true at every volume. Verified both ways: at `--delay-ms 2` the
+  clause is absent, and the control at `--delay-ms 100` - one term changed - prints "and would take
+  4s+".
+
+Two things a watcher might still notice, neither of them the demo's doing and so neither changed:
+
+- **`docker compose up --build` shows the whole image build first**, including a four-minute Maven
+  step and a screenful of `cp: warning: behavior of -n is non-portable`. That belongs to the
+  Dockerfile's classpath copy, and it is only ever seen on a cold build.
+- **The AK core arm prints its "starting" line and then nothing for as long as it runs** - about ten
+  seconds at the demo's own defaults. That is silence rather than noise, and no clause of the
+  contract asks for progress inside an arm; if one ever does, that arm is where it goes.
+
+### Eleven demos, one host port: 29092 is not per-language
+
+Every language's `docker-compose.yml` publishes the broker's host listener on **29092**, so two
+demos running at once on one machine cannot both start. This pass hit it as
+`Bind for 0.0.0.0:29092 failed: port is already allocated`, with the **Rust** demo's broker holding
+it. The verification runs were completed by remapping this module's published port temporarily; the
+compose file is unchanged.
+
+It costs a reader nothing - they run one demo - so it is not obviously a defect to fix. It costs a
+**fan-out** a great deal, and `bin/ci-demo-conformance.sh` runs the languages sequentially for what
+may be this reason. Worth deciding once, for all eleven, rather than discovering per language.
+
+The same run also exhausted Docker's disk (`no space left on device` while exporting a 1.38GB
+image), with 33GB reclaimable in dangling images from the parallel builds. `docker image prune -f`
+recovered 15GB without touching a tagged image, a running container or a build cache.
 
 ## Local verification, and what it is pinned to
 
@@ -237,6 +378,14 @@ and its footnote ran too); the **no-argument** invocation with the same values s
 through both `run.sh` and the image's own entrypoint (exit 0 and exit 2). Both arms completed every
 time and the process exited 0. **No throughput figure from those runs means anything** - twenty
 records at 1ms is group-join cost, and the machine was carrying nine other agents.
+
+The reader-experience pass added to that, and still not to the native path: the container path at
+`--records 20 --concurrency 4 --partitions 2 --replay-factor 2` (the conformance harness's own
+volume), through `docker compose up` on the image `run.sh --docker` built, exit 0 with both tables
+and both new columns; then a second run at `--delay-ms 100` as the control for the big-replay
+heading. RuboCop 1.89.0 was run in a `ruby:3.4-bookworm` container over the whole module and is
+clean at 25 files. **No throughput figure from any of it means anything** - twenty records is
+group-join cost, and ten other language agents were building on the same machine throughout.
 
 The native path is unrun because **this machine ships Ruby 2.6.10 and has no other**, and the
 library's floor is 3.2. Three things in it are therefore unexercised: the Maven build that computes

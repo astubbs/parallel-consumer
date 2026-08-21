@@ -3,12 +3,21 @@
 
 module ParallelConsumer
   module Demo
-    # What one arm achieved: how long it took, and over how many records.
+    # What one arm achieved: how long it took, over how many records, and across how many keys.
     #
-    # THROUGHPUT IS THE ONLY FIGURE, and the absence of a latency field is the contract rather than
-    # an omission. The backlog is pre-produced, so the workload is closed-loop and per-record
-    # timings are flattered by however far an arm fell behind.
-    ArmResult = Data.define(:arm, :elapsed, :processed) do
+    # THROUGHPUT IS NOT THE ONLY FIGURE, AND IT CANNOT BE. A rate on its own cannot show the work
+    # happened - an arm that processed half the backlog looks FASTER than one that processed all of
+    # it. `processed` and `unique_keys` are what make the table demonstrate the run rather than
+    # assert it: the first must equal the target, and the second shows the backlog was spread over
+    # many keys rather than one repeated.
+    #
+    # They are also the only two figures here that are DETERMINISTIC, which is why the conformance
+    # harness can compare them across languages and can compare nothing else.
+    #
+    # NO LATENCY FIELD, and its absence is contract rather than omission. The backlog is
+    # pre-produced, so the workload is closed-loop and per-record timings are flattered by however
+    # far an arm fell behind.
+    ArmResult = Data.define(:arm, :elapsed, :processed, :unique_keys) do
       def rate_per_second
         elapsed.positive? ? processed / elapsed : 0.0
       end
@@ -26,6 +35,10 @@ module ParallelConsumer
       def initialize(target)
         @target = target
         @count = 0
+        # NO `require "set"` ANYWHERE IN THIS DEMO, and its absence is deliberate rather than an
+        # oversight: Set is an autoloaded constant from Ruby 3.2, which is this module's floor, and
+        # RuboCop's Lint/RedundantRequireStatement rejects the require outright.
+        @keys = Set.new
         @abandoned = false
         @mutex = Mutex.new
         @progress = ConditionVariable.new
@@ -35,9 +48,21 @@ module ParallelConsumer
         @mutex.synchronize { @count }
       end
 
-      def record
+      # How many distinct keys the executors saw between them.
+      #
+      # THE SET IS UNDER THE SAME MUTEX AS THE COUNTER, not beside it. N executor threads reach
+      # this object at once - a bare Set here would be the one piece of shared mutable state in the
+      # demo without a lock on it, and would under-count silently rather than raise.
+      def unique_keys
+        @mutex.synchronize { @keys.size }
+      end
+
+      # @param key [String, nil] the record's key as Kafka held it; nil is a legitimate key and
+      #   counts as one distinct value, which is what a Set gives for free
+      def record(key)
         @mutex.synchronize do
           @count += 1
+          @keys << key
           @progress.broadcast if @count >= @target
         end
         nil

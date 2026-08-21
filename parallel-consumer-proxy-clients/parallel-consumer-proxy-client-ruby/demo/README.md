@@ -24,8 +24,13 @@ Read that first. This file records only what is specific to Ruby.
 
 | arm | what it is |
 |---|---|
-| `AK core` | librdkafka through the [`rdkafka`](https://github.com/karafka/rdkafka-ruby) gem, one record at a time |
-| `ruby-grpc` | this module's client library: it spawns the sidecar, receives records over a socket, runs the demo's block on its executor threads and reports outcomes back |
+| `AK core (rdkafka)` | librdkafka through the [`rdkafka`](https://github.com/karafka/rdkafka-ruby) gem, one record at a time |
+| `ruby-grpc (this client)` | this module's client library: it spawns the sidecar, receives records over a socket, runs the demo's block on its executor threads and reports outcomes back |
+
+Each arm carries the **library it actually ran**, not only its role. "AK core" is a category and
+every language fills it with a different client - `rdkafka` here, `franz-go` in Go, `kafkajs` in
+TypeScript - and a reader asking "is this fast in my language" is really asking about the client
+they already use.
 
 On the second arm **the application does no Kafka I/O**: the sidecar owns the consumer, the
 producer, the group membership and the offsets. That is a statement about the path rather than
@@ -42,24 +47,41 @@ measure, and it does.
 
 ### A blocking `sleep` is the right simulated work here, not merely the allowed one
 
-The contract names Python and TypeScript as the two languages where a blocking sleep would be a
-lie, and lists Ruby among the languages where it is fine. It is worth saying *why*, because the
-reason is the same one that decided this client's concurrency model: **MRI releases the global VM
-lock around `sleep`**, and this client's executors are **threads**, not processes
-([`docs/inflight/clients/ruby.md`](../../../docs/inflight/clients/ruby.md)). N executors sleeping
-are N records in flight. Had the client forked worker processes, as Python's does, a hundred
-sleeping processes would have been as misleading here as it is there.
+The contract's rule is a predicate about the **client**, not a list of languages: *is it
+thread-per-record?* If each record gets a thread that can block harmlessly, a blocking sleep is
+honest; if records share an event loop, a coroutine dispatcher, an async runtime, a cooperative pool
+or worker processes, a blocking sleep caps in-flight work at something other than the concurrency
+the fingerprint printed, and the table then reports the runtime's ceiling while appearing to report
+the engine's.
 
-### `rdkafka`, and why not `ruby-kafka`
+Applied here: this client's executors are **threads**, not processes, and **MRI releases the global
+VM lock around `sleep`** ([`docs/inflight/clients/ruby.md`](../../../docs/inflight/clients/ruby.md)),
+so N executors sleeping are N records in flight. That was **checked against this client's design
+rather than assumed** - and it is worth knowing that the earlier version of the rule, which did name
+languages, named nine as safe and was wrong about four of them. Had this client forked worker
+processes, as Python's does, a hundred sleeping processes would have been as misleading here as it
+is there.
 
-`rdkafka` binds librdkafka, and is what a Ruby application consumes Kafka with today - Karafka is
-built on it. The pure-Ruby alternative, `ruby-kafka`, was rejected on a fact rather than a taste:
-its authors archived it in 2023, and a comparison whose serial arm is an unmaintained gem would
-flatter the sidecar for a reason that has nothing to do with Parallel Consumer.
+### Ruby has more than one serious Kafka client, and this demo runs one of them
 
-It ships precompiled for Linux, so the demo container installs it without compiling anything. On
-other platforms - a native run on macOS, for one - `bundle install` builds librdkafka from source
-and needs a C toolchain.
+The contract asks a language with more than one to say so here, and to consider running both as
+separate arms. Ruby has two, and **the second one is not a live option**:
+
+| gem | what it is | why the demo does or does not run it |
+|---|---|---|
+| [`rdkafka`](https://github.com/karafka/rdkafka-ruby) | librdkafka behind FFI | **the serial arm.** What a Ruby application consumes Kafka with today - Karafka is built on it |
+| [`ruby-kafka`](https://github.com/zendesk/ruby-kafka) | a pure-Ruby protocol implementation | **not run.** Its authors archived it in 2023 |
+
+The second row is the whole argument for having only one serial arm. Adding a second arm is only
+worth the reader's wall clock if the number it produces is one a reader might act on, and a
+comparison whose serial arm is an **unmaintained** gem flatters the sidecar for a reason that has
+nothing to do with Parallel Consumer - it would price a library nobody should adopt, and invite the
+conclusion that Parallel Consumer is fast because `ruby-kafka` is slow. If `ruby-kafka` is ever
+un-archived, this is the decision to revisit; nothing else about it would need to change.
+
+`rdkafka` ships precompiled for Linux, so the demo container installs it without compiling
+anything. On other platforms - a native run on macOS, for one - `bundle install` builds librdkafka
+from source and needs a C toolchain.
 
 ### The demo does not start its own broker; its entry point does
 
