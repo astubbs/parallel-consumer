@@ -47,6 +47,15 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
     }
 
     /**
+     * There is no pool of worker threads here to hand the shards to - {@link #setupWorkerPool(int)} makes exactly one
+     * thread, and the concurrency lives in the external runtime. Direct pull is a core-engine experiment.
+     */
+    @Override
+    protected boolean supportsDirectPull() {
+        return false;
+    }
+
+    /**
      * The vert.x module doesn't use any thread pool for dispatching work, as the work is all done by the vert.x engine.
      * This thread is only used to dispatch the work to vert.x.
      * <p>

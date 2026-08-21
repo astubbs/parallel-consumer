@@ -326,6 +326,23 @@ public class ParallelConsumerOptions<K, V> {
 
     public static final int DEFAULT_MAX_CONCURRENCY = 16;
 
+    /**
+     * MEASUREMENT ONLY - selects the direct-pull engine instead of the pre-loaded executor queue.
+     * <p>
+     * Under the default engine the control loop is the only thread that selects work: it reads a target depth off the
+     * {@link java.util.concurrent.ThreadPoolExecutor}'s queue, pulls that many records out of the shards, and pushes
+     * them into that queue for the workers to consume. Under direct pull there is no intermediate queue - every worker
+     * blocks on the shards themselves and takes its own next record, which makes shard access N-way concurrent instead
+     * of single-consumer.
+     * <p>
+     * Defaults from the {@code pc.directPull} system property so that a benchmark harness which cannot change its
+     * source (it compiles one template against every released version) can still select the engine per run. Not a
+     * supported option: it exists to answer "what does N-way concurrent shard access cost?", and the write-up is
+     * {@code docs/inflight/perf-direct-pull-measured.md}.
+     */
+    @Builder.Default
+    private final boolean directPullEngine = Boolean.getBoolean("pc.directPull");
+
     public static final Duration DEFAULT_STATIC_RETRY_DELAY = Duration.ofSeconds(1);
 
     // Default backoff for SaslAuthenticationException retry durion ConsumerManager.commitSync and ConsumerManager.poll.

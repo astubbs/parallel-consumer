@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static bz.stub.parallelconsumer.internal.utils.KafkaUtils.toTopicPartition;
 import static java.util.Optional.of;
@@ -76,7 +77,15 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Getter
     private Optional<Throwable> lastFailureReason;
 
-    private boolean inFlight = false;
+    /**
+     * Atomic because the direct-pull engine lets every worker select work straight from the shards, so the
+     * "is it free? then take it" pair has to be one indivisible step. Under the default engine only the control loop
+     * selects work and a plain field would do; making it atomic for both keeps one code path, and the cost is one
+     * uncontended CAS per record.
+     *
+     * @see #onQueueingForExecution()
+     */
+    private final AtomicBoolean inFlight = new AtomicBoolean(false);
 
     @Getter
     private Optional<Boolean> maybeUserFunctionSucceeded = Optional.empty();
@@ -131,7 +140,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     public void endFlight() {
         log.trace("Ending flight {}", this);
-        inFlight = false;
+        inFlight.set(false);
     }
 
     public boolean isDelayPassed() {
@@ -208,12 +217,22 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     public boolean isInFlight() {
-        return inFlight;
+        return inFlight.get();
     }
 
-    public void onQueueingForExecution() {
+    /**
+     * Claims this record for execution, atomically.
+     *
+     * @return {@code true} if this caller won the claim; {@code false} if the record was already in flight, in which
+     *         case the caller must not process it. Only ever {@code false} under the direct-pull engine, where two
+     *         workers can scan the same shard at the same time.
+     */
+    public boolean onQueueingForExecution() {
+        if (!inFlight.compareAndSet(false, true)) {
+            log.trace("Lost the race to claim {}", this);
+            return false;
+        }
         log.trace("Queueing for execution: {}", this);
-        inFlight = true;
         deliveryCount++;
         // A redelivery carries no verdict yet. Clearing this matters: a record that failed, was redelivered and
         // then abandoned would otherwise still carry `maybeUserFunctionSucceeded == false` and be routed down
@@ -221,6 +240,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         // deliberately NOT cleared here - it is keyed by delivery, so a stale one identifies itself.
         maybeUserFunctionSucceeded = Optional.empty();
         timeTakenAsWorkMs = of(System.currentTimeMillis());
+        return true;
     }
 
     /**

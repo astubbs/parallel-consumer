@@ -168,10 +168,13 @@ public class ProcessingShard<K, V> {
             var workContainer = iterator.next().getValue();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
-                if (workContainer.isAvailableToTakeAsWork()) {
+                // The claim itself decides, not the availability check: under the direct-pull engine another worker
+                // may take this record between the check and the claim, and a lost claim must be skipped rather
+                // than double-delivered. Under the default engine the control loop is the only selector, so
+                // onQueueingForExecution() never loses.
+                if (workContainer.isAvailableToTakeAsWork() && workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 
-                    workContainer.onQueueingForExecution();
                     workTaken.add(workContainer);
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);

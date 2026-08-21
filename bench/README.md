@@ -84,10 +84,42 @@ was taken at 100.
 | `delay-sweep-llingr.csv` | core against llingr across four delays, at concurrency 100 |
 | `concurrency-sweep-0ms.csv` | core, llingr and franz across seven concurrencies at delay 0 |
 | `concurrency-sweep-2ms.csv` | the same three arms at delay 2ms, concurrency 25 / 100 / 1000 |
+| `direct-pull-delay-sweep.csv` | the shipped engine against the direct-pull engine, 3 delays x 2 concurrencies |
+| `direct-pull-concurrency-sweep-0ms.csv` | the same two engines at delay 0 across six concurrencies - where the result is |
 
-What the last two mean is in
+What the two `concurrency-sweep-*` files mean is in
 [`docs/inflight/perf-throughput-regression-since-0-3.md`](../docs/inflight/perf-throughput-regression-since-0-3.md),
-under "Concurrency as an axis, and the client control the llingr comparison was missing".
+under "Concurrency as an axis, and the client control the llingr comparison was missing"; the two
+`direct-pull-*` files are [their own arm](#the-direct-pull-arm---a-second-engine-inside-this-one).
+
+## The direct-pull arm - a second engine inside this one
+
+`bench/run-direct-pull.sh` compares Parallel Consumer's shipped engine against an experimental
+**direct-pull** engine, in which workers take their own work straight from the shards and no
+intermediate executor queue exists. It is selected by the mode name `core-dp`, which `run-bisect.sh`
+translates into `-Dpc.directPull=true`: a system property rather than a new `Bench` argument, because
+this template compiles against every released version in the sweep and none of them has the option.
+
+```sh
+BENCH_SKIP_PRODUCE=1 BENCH_TOPIC=bench-500000-p10 BENCH_PARTITIONS=10 \
+  bench/run-direct-pull.sh 500000 3
+DELAYS=0 CONCURRENCIES="10 100 250 500" \
+BENCH_SKIP_PRODUCE=1 BENCH_TOPIC=bench-500000-p10 BENCH_PARTITIONS=10 \
+  bench/run-direct-pull.sh 500000 3
+```
+
+**Why it has its own driver rather than being `MODES="core core-dp"`.** `run-bisect.sh` loops mode on
+the OUTSIDE, so two arms compared in one invocation are also compared across whatever happened to the
+machine between the two blocks - the fourth trap below, which nothing in the harness catches. This
+driver runs **one invocation per point with both arms in it**, so the two land within a minute of
+each other, and it **alternates which arm goes first** between repeats, because whichever runs first
+pays for a colder cache and always giving that to the same arm is a bias rather than noise. It also
+records `uptime` before and after every point, into `$BENCH_WORK/direct-pull-load.txt`.
+
+The finding is in
+[`docs/inflight/perf-direct-pull-measured.md`](../docs/inflight/perf-direct-pull-measured.md), and it
+is not a single number: the direct-pull engine is **three times faster at concurrency 10 and twenty
+times slower at 5,000**, so any measurement of it at one concurrency is meaningless.
 
 ## What it controls for, and why each one is there
 

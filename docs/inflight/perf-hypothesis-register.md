@@ -23,11 +23,12 @@ hypothesis, however well it reads.* Inspection generates candidates. Only a cont
 | 4 | The ceiling is `max.poll.records` | 500 vs 5,000 | Within 0.3%. **Refuted** |
 | 5 | The ceiling is the loading-factor buffer | Dynamic vs static 25,000 | Within 1%. **Refuted** |
 | 6 | Summing work across shards each poll is O(shards) and costly | `KEY` mode: ~500,000 shards vs 10 | **Faster.** Refuted outright |
-| 7 | The in-shard rescan past in-flight records costs throughput | Resume the scan; then split the state entirely | Dispatch 10x cheaper, **end-to-end 0%** at 0ms, 2ms and 100ms. Refuted twice |
+| 7 | The in-shard rescan past in-flight records costs throughput | Resume the scan; then split the state entirely | Dispatch 10x cheaper, **end-to-end 0%** at 0ms, 2ms and 100ms. Refuted twice - **for the shipped engine only**, see row 11 |
 | 8 | The worker pool's queue lock costs throughput | Replaced it with a lock-free `LinkedTransferQueue` | **69% WORSE.** Refuted, and inverted |
 | 9 | That loss was `LinkedTransferQueue.size()` being O(n) | Wrapped it with an O(1) counter | 31,832 vs 33,743 - no difference. **Refuted** |
 
 | 10 | The mailbox lock costs throughput | Replaced it with a lock-free counted queue | **+3.3% at 100ms, -2.7% at 0ms.** Real, tiny, a trade - and the wrong target, see below |
+| 11 | Direct pull's N-way concurrent shard access costs throughput, and the cost grows with concurrency | Built it with a correct blocking wait; swept concurrency 10 to 5,000 at 0ms with both arms alternating at every point | **CONFIRMED, and it changes sign.** Direct pull is **+221% at concurrency 10** and **-95% at 5,000**; its throughput falls monotonically as workers are added. The mechanism is row 7's walk - off the critical path when amortised per batch, dominant when paid per record on every thread. [`perf-direct-pull-measured.md`](perf-direct-pull-measured.md) |
 
 ## The shortcut that would have saved all of it
 
@@ -66,7 +67,7 @@ core** - spinning burns exactly the cores the working threads need. Removing the
 
 | Claim | Why it fell |
 |---|---|
-| "The 2022 direct-pull rework was 1/3 as fast, so the design is slow" | Its worker idle path is a **busy-spin** - the blocking wait is commented out with an unresolved race. The branch was unfinished; the design was never measured |
+| "The 2022 direct-pull rework was 1/3 as fast, so the design is slow" | Two errors, not one. The busy-spin was in an **earlier** phase of the branch; the commit that recorded "1/3 as fast" had a correct blocking wait on a **central queue**, which is not direct pull. Neither phase measured the architecture. Now measured - [`perf-direct-pull-measured.md`](perf-direct-pull-measured.md) |
 | "Every Vert.x measurement in the repo was harness-capped" | Too broad. The bisect ran at concurrency 100, nowhere near the stub's ceiling. **The 0.4.0.0 cliff, the buffer finding and the 35% recovery all stand** - only the high-concurrency Vert.x cells were capped |
 | "The async stub shows the Vert.x engine is 65% faster than core" | Conflates ceiling removal with **machine relief** - the WireMock stub's 2,600 sleeping Jetty threads were competing for the same 12 cores on localhost. It is a threading-model comparison, not an engine comparison |
 
