@@ -237,5 +237,38 @@ re-measured on an idle machine before it is quoted anywhere.**
 - Native, **no arguments at all** - the double-click case, and the one that has broken before: both
   replays ran and exit was 0. AK core 2000 records in 6.7s; kotlin-sidecar 2000 in 1.3s, then 40000
   in 3.5s.
-- The container path is recorded in the branch's own commit message; if the entry below says it did
-  not complete, it did not complete.
+- Container, `demo/run.sh --docker --records 20 ...`: image built from the repository context
+  (9.17MB uploaded, so `.dockerignore` is doing its job), broker came up as a compose sibling, the
+  sidecar was spawned inside the demo container with no host Docker socket anywhere, both arms
+  completed, exit 0.
+- Container, **`docker compose up` with no arguments and no environment** - the second documented
+  entry point, and the one a reader who has never seen this repository types: both replays ran,
+  demo container exited 0. AK core 2000 in 7.6s; kotlin-sidecar 2000 in 1.1s, then 40000 in 5.0s.
+- Argument handling, without a broker: an unknown flag exits **2** with the usage text rather than
+  reporting numbers for settings nobody asked for; and `PC_DEMO_RECORDS=7 PC_DEMO_DELAY_MS=9
+  --records 11` printed `records = 11, delayMs = 9`, which is the contract's precedence - flags beat
+  the environment beats the defaults - and no bootstrap address anywhere in the fingerprint.
+
+### A sighting that is not the Kotlin client's, recorded here only because of file ownership
+
+Running this module's default lane (`./mvnw -pl :parallel-consumer-proxy-client-kotlin -am test`)
+during the demo wave, on a machine at **load average 83 of 12 cores**, failed one test in
+`parallel-consumer-core`:
+
+```
+BlockedThreadAsserterTest.functionThatReturnsOnItsOwnScheduleIsRejected
+  BlockedThreadAsserter accepted a function that returns on a timer rather than on the unblocker,
+  but it must have rejected it
+```
+
+**Contention, established by control rather than asserted**: the same class re-run on its own
+passed 7/7 immediately afterwards, and the Kotlin module's own tests are green (20/20). This is the
+helper's *self-test* - it feeds the asserter a function that returns on its own timer and expects
+rejection - so under enough load the timer-returning function is late enough to look like a genuine
+unblock.
+
+`docs/inflight/test-untracked-ci-flakes.md` already carries `BlockedThreadAsserter` prior art, but
+for a **different** test and a different signature (`assertUnblocksAfter` measuring a window two
+milliseconds short, owned by astubbs#262). This one is a new signature on the same helper.
+**It belongs in that file, not this one** - it is recorded here because the Kotlin demo wave owns
+only `clients/kotlin.md`, and the fan-out's integrator should move it.
