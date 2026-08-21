@@ -1,0 +1,77 @@
+# PC, a bare Java consumer, llingr and a bare franz-go consumer - unordered, real broker, one dataset.
+#
+# WHY THIS FILE EXISTS. A competitor's published benchmark gives every record a unique key, which
+# makes per-key ordering vacuous - so its headline figures describe an effectively UNORDERED run. Our
+# harness already produces unique keys ("key-<i>") and the core arm's handler is a plain sleep, so the
+# two are directly comparable. These rows are that comparison, plus the control arms and the
+# controlled runs needed to attribute the result to a component.
+#
+# THE FOUR ARMS, and why each exists:
+#   core    - Parallel Consumer, ParallelEoSStreamProcessor, UNORDERED.
+#   pool    - plain KafkaConsumer + fixed thread pool + semaphore + sleep. NO ENGINE. The Java floor.
+#   llingr  - the llingr-demux engine, which reaches Kafka through franz-go.
+#   franz   - plain franz-go + worker pool + sleep. NO ENGINE. The Go floor.
+# Without the two floors, an engine comparison across languages confounds engine with client and
+# silently charges the whole difference to the engines. With them, each column is attributable.
+#
+# THE HEADLINE FINDING, which is not the one we expected. At 100ms and a concurrency setting of
+# 5,000, PC plateaus at 2,751 records in flight - and the bare Java consumer plateaus at 2,848. The
+# ceiling is essentially the same with the engine and without it, so it is NOT PC's dispatch. Both Go
+# arms reach 5,000 exactly. See docs/inflight/bug-in-flight-ceiling-above-2000-concurrency.md.
+#
+# SUSPECTS RULED OUT for PC, each by a single-variable run: window length (100k vs 500k - throughput
+# moved 56%, plateau 1.6%), partition count (1 vs 10 - within 8%), max.poll.records (500 vs 5,000 -
+# within 0.3%), and the loading-factor buffer (dynamic vs a static 25,000 - within 1%).
+#
+# CONDITIONS, since a number without them is not evidence: 12-core laptop under normal desktop load,
+# single-broker container on localhost, one consumer group per run, ALL KEYS DISTINCT, handler is a
+# sleep that never reads the payload. Not a quiet machine - the ratios are sound, the absolute
+# figures are approximate, and single repeats are marked as such by the repeat column.
+pc_version,client_pin,mode,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight
+LOCAL,NATIVE,core,100000,1,500,100,250,1,2241.5,250
+LOCAL,NATIVE,core,100000,1,500,100,250,2,2241.9,250
+LOCAL,NATIVE,core,100000,1,500,100,1000,1,7301.9,1000
+LOCAL,NATIVE,core,100000,1,500,100,1000,2,7313.1,1000
+LOCAL,NATIVE,core,100000,1,500,100,5000,1,12428.5,2708
+LOCAL,NATIVE,core,100000,1,500,100,5000,2,12391.6,2595
+LOCAL,NATIVE,core,500000,1,500,100,5000,1,19385.1,2752
+LOCAL,NATIVE,core,100000,10,500,100,250,1,2240.3,250
+LOCAL,NATIVE,core,100000,10,500,100,1000,1,7318.0,1000
+LOCAL,NATIVE,core,100000,10,500,100,5000,1,12166.9,2538
+LOCAL,NATIVE,core,500000,10,500,100,5000,1,19634.8,2710
+LOCAL,NATIVE,core,500000,10,5000,100,5000,1,19577.1,2751
+LOCAL,NATIVE,core,500000,10,500,200,5000,1,15594.3,3889
+LOCAL-buffer25000,NATIVE,core,500000,10,500,100,5000,1,19776.1,2654
+LOCAL,NATIVE,core,500000,10,500,0,250,1,96618.4,250
+LOCAL,NATIVE,core,500000,10,500,0,1000,1,105864.9,644
+LOCAL,NATIVE,core,500000,10,500,0,5000,1,93161.9,534
+LOCAL,NATIVE,core,500000,10,500,2,250,1,57425.1,250
+LOCAL,NATIVE,core,500000,10,500,2,1000,1,67258.5,403
+LOCAL,NATIVE,core,500000,10,500,2,5000,1,34015.9,237
+LOCAL,NATIVE,pool,500000,10,500,0,250,1,97200.6,250
+LOCAL,NATIVE,pool,500000,10,500,0,1000,1,100725.2,1000
+LOCAL,NATIVE,pool,500000,10,500,0,5000,1,96246.4,1419
+LOCAL,NATIVE,pool,500000,10,500,2,250,1,53208.5,250
+LOCAL,NATIVE,pool,500000,10,500,2,1000,1,68250.1,462
+LOCAL,NATIVE,pool,500000,10,500,2,5000,1,43482.0,327
+LOCAL,NATIVE,pool,500000,10,500,100,250,1,2384.4,250
+LOCAL,NATIVE,pool,500000,10,500,100,1000,1,9095.5,1000
+LOCAL,NATIVE,pool,500000,10,500,100,5000,1,20102.1,2848
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,0,250,1,116658.9,3
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,0,1000,1,115740.7,3
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,0,5000,1,103691.4,3
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,2,250,1,66190.1,250
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,2,1000,1,111557.3,1000
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,2,5000,1,109385.3,1249
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,100,250,1,2434.0,250
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,100,1000,1,9306.0,1000
+llingr-demux-v0.12.2,franz,llingr,500000,10,default,100,5000,1,37698.9,5000
+franz-go-v1.21.5,franz,franz,500000,10,default,0,250,1,144009.2,3
+franz-go-v1.21.5,franz,franz,500000,10,default,0,1000,1,141242.9,3
+franz-go-v1.21.5,franz,franz,500000,10,default,0,5000,1,143184.4,4
+franz-go-v1.21.5,franz,franz,500000,10,default,2,250,1,64909.8,250
+franz-go-v1.21.5,franz,franz,500000,10,default,2,1000,1,118708.5,1000
+franz-go-v1.21.5,franz,franz,500000,10,default,2,5000,1,138427.5,5000
+franz-go-v1.21.5,franz,franz,500000,10,default,100,250,1,2437.7,250
+franz-go-v1.21.5,franz,franz,500000,10,default,100,1000,1,9326.3,1000
+franz-go-v1.21.5,franz,franz,500000,10,default,100,5000,1,37599.6,5000

@@ -21,7 +21,10 @@ import java.net.URI;
 import java.net.URL;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -83,6 +86,8 @@ public class Bench {
         if ("vanilla".equals(mode)) {
             startStub(delayMs, 8);
             ms = runVanilla(bootstrap, topic, count);
+        } else if ("pool".equals(mode)) {
+            ms = runPool(bootstrap, topic, count, delayMs, concurrency);
         } else if ("core".equals(mode)) {
             ms = runCore(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         } else {
@@ -135,7 +140,13 @@ public class Bench {
     static ParallelConsumerOptions<String, String> options(KafkaConsumer<String, String> consumer,
                                                            int concurrency, int bufferSize) throws Exception {
         Object builder = ParallelConsumerOptions.<String, String>builder()
-                .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                // An axis, because it changes what a SHARD IS and therefore what dispatch costs.
+                // UNORDERED and PARTITION shard by topic-partition, so a handful of shards each hold
+                // every in-flight record for their partition; KEY shards by record key, so a
+                // distinct-key workload gets one shard per record holding one entry. Same records,
+                // opposite data shape, and the dispatch scan walks one of them per pass.
+                .ordering(ParallelConsumerOptions.ProcessingOrder.valueOf(
+                        System.getenv("BENCH_ORDERING") == null ? "UNORDERED" : System.getenv("BENCH_ORDERING")))
                 .consumer(consumer)
                 .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
                 .maxConcurrency(concurrency);
@@ -150,6 +161,61 @@ public class Bench {
         ParallelConsumerOptions<String, String> built =
                 (ParallelConsumerOptions<String, String>) builder.getClass().getMethod("build").invoke(builder);
         return built;
+    }
+
+    /**
+     * The Java-side counterpart of the franz arm: a plain {@link KafkaConsumer}, a fixed thread pool,
+     * a semaphore capping in-flight work, a sleep, and a counter. NO ENGINE.
+     * <p>
+     * It exists because every PC-versus-anything comparison so far has confounded two things. PC
+     * reaches Kafka through the Java client; the Go arms reach it through franz-go. A gap between them
+     * is some mixture of client and engine, and until this arm existed nothing could separate the two
+     * on the Java side - so a PC number bounded PC and the Java client jointly, and any deficit was
+     * silently attributed to PC.
+     * <p>
+     * Whatever this scores is the JAVA CLIENT FLOOR at a given concurrency. Only what PC scores ABOVE
+     * that floor is attributable to PC's engine, and only what it scores BELOW it is PC's to answer
+     * for. Deliberately the same shape as bench/franz so the two are comparable: same in-flight cap,
+     * same sleep, same counting, no ordering guarantees and no offset tracking beyond what the plain
+     * consumer does on its own.
+     * <p>
+     * NOT a fair fight on features, and it is not meant to be - it makes no ordering promise, does no
+     * per-record completion tracking, and commits nothing. That is the point: it is a floor, not a
+     * competitor.
+     */
+    static long runPool(String bootstrap, String topic, int expected, int delayMs, int concurrency)
+            throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(concurrency);
+        // Caps work actually in progress at `concurrency`, so peak in-flight is comparable with the
+        // engine arms rather than being whatever the poll loop happened to hand over.
+        Semaphore permits = new Semaphore(concurrency);
+        AtomicInteger done = new AtomicInteger();
+        int submitted = 0;
+        long start;
+        try (KafkaConsumer<String, String> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
+            c.subscribe(Collections.singletonList(topic));
+            start = System.currentTimeMillis();
+            while (submitted < expected) {
+                ConsumerRecords<String, String> polled = c.poll(Duration.ofSeconds(1));
+                for (Object ignored : polled) {
+                    if (submitted >= expected) break;
+                    submitted++;
+                    permits.acquire();
+                    pool.submit(() -> {
+                        int now = inFlight.incrementAndGet();
+                        peakInFlight.accumulateAndGet(now, Math::max);
+                        sleep(delayMs);
+                        inFlight.decrementAndGet();
+                        done.incrementAndGet();
+                        permits.release();
+                    });
+                }
+            }
+            while (done.get() < expected) sleep(5);
+        }
+        long took = System.currentTimeMillis() - start;
+        pool.shutdownNow();
+        return took;
     }
 
     /** The core engine, which does NOT go through ExternalEngine and its overrides. */
@@ -193,11 +259,29 @@ public class Bench {
         return took;
     }
 
+    /**
+     * Partition count for the dataset topic, from BENCH_PARTITIONS, defaulting to 1.
+     * <p>
+     * It is an axis because it was a SUSPECT, and ruling it out is what made the real finding legible.
+     * At a 100ms delay and maxConcurrency 5,000, in-flight plateaued around 2,750; the first
+     * hypothesis was that one partition could not supply records fast enough. Ten partitions produced
+     * the same plateau to within 8%, so the limit is not the broker. Keeping it as a recorded axis
+     * matters anyway: a number taken at one partition and a number taken at ten are two different
+     * experiments, and printing them in the same table without the column is how a confound ships.
+     * <p>
+     * An environment variable rather than an argument because this template also compiles against
+     * releases whose argument list this harness does not control.
+     */
+    static int partitions() {
+        String v = System.getenv("BENCH_PARTITIONS");
+        return v == null || v.isEmpty() ? 1 : Integer.parseInt(v);
+    }
+
     static void createTopic(String bootstrap, String topic) {
         Properties p = new Properties();
         p.put("bootstrap.servers", bootstrap);
         try (Admin admin = Admin.create(p)) {
-            admin.createTopics(Collections.singletonList(new NewTopic(topic, 1, (short) 1))).all().get();
+            admin.createTopics(Collections.singletonList(new NewTopic(topic, partitions(), (short) 1))).all().get();
         } catch (Exception e) {
             // already there is fine - the dataset is produced once and reused
         }
@@ -223,7 +307,12 @@ public class Bench {
         p.put("group.id", "bench-" + System.nanoTime());
         p.put("auto.offset.reset", "earliest");
         p.put("enable.auto.commit", "false");
-        p.put("max.poll.records", "500");
+        // An axis, not a constant. At maxConcurrency 5,000 the engine's in-flight count plateaued
+        // near 2,700 regardless of partition count, which points at record INTAKE rather than at
+        // dispatch - and intake is bounded by how many records one poll can return. Overridable so
+        // that can be tested rather than assumed.
+        p.put("max.poll.records", System.getenv("BENCH_MAX_POLL_RECORDS") == null
+                ? "500" : System.getenv("BENCH_MAX_POLL_RECORDS"));
         p.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
         p.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
         return p;

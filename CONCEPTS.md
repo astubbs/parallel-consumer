@@ -59,6 +59,47 @@ be committing its starting offset. That property is also what makes the frontier
 asserting about a commit: which intermediate offsets a partition commits on the way there depends on
 when the periodic commit happens to fire, but where it ends up does not.
 
+## Offsets
+
+Four different things get called "the offset" in this project, and conflating them has already
+produced a wrong conclusion in a written analysis. These names are the fix.
+
+**Base offset**
+The offset Parallel Consumer stores in Kafka's own committed-offset field — the **lowest incomplete
+offset**. Kafka's protocol allows nothing else: a single number, and redelivery starts there. It is
+pinned by the oldest record still outstanding, so one stuck record holds it still no matter how much
+work completes behind it. Kafka calls this simply "the committed offset", which is the source of the
+confusion.
+
+**Frontier offset**
+The **highest offset whose acknowledgement has been persisted** in the commit payload. Unlike the
+base offset, it keeps advancing while work completes, even when a record behind it is stuck. It is
+the number that answers "how far has this consumer actually got?", and it exists only because
+Parallel Consumer writes an offset payload — a plain consumer has no equivalent.
+
+**Complete set / incomplete set**
+Between the base offset and the frontier offset, every offset is recorded as either acknowledged or
+still outstanding. The **complete set** is the acknowledged ones; the **incomplete set** is the rest.
+The incomplete set is what redelivery is drawn from after a restart — not everything above the base
+offset.
+
+**Offset payload**
+The encoded representation of the complete and incomplete sets, written into Kafka's commit metadata
+alongside the base offset. Run-length and bitset encodings mean a long contiguous run costs a handful
+of bytes, so the payload's size tracks **how fragmented** the incomplete set is, not how far the
+frontier has travelled from the base.
+
+Why the distinction matters in one sentence: **the base offset is pinned by the lowest incomplete
+record; the frontier offset keeps moving; and the gap between them is work that does not have to be
+redone after a crash.** Measuring only the base offset makes Parallel Consumer look identical to a
+design that has no payload at all.
+
+**Contiguous-commit design**
+A consumer that commits only the highest *contiguous* acknowledgement, with no payload — so its
+committed offset and its frontier are necessarily the same number, and any completed work above a
+gap is held in memory and lost on restart. Named here because it is the contrast that gives the
+frontier offset its meaning, not because Parallel Consumer is one.
+
 ## Transactional commit
 
 **Produce lock**

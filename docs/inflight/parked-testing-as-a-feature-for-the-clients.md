@@ -1,7 +1,7 @@
 # Pre-v6: the shared test suite is a product feature, and the clients must be able to prove it
 
 Owner's requirement, 2026-08-15. When ten client libraries ship at once, the first honest question a
-reader will ask is whether they are generated slop. **The answer has to be visible, not asserted**:
+reader will ask is whether llingr is generated slop. **The answer has to be visible, not asserted**:
 every client passes the same conformance suite, exercising the same scenarios, with the same
 assertions - and that fact belongs in the documentation as a feature of the product, not as a
 footnote in a contributing guide.
@@ -74,3 +74,36 @@ mechanism this note depends on.
 **Now binding on live work (2026-08-20):** the fairness charter here governs
 [`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md), which races each language's
 PC client against that language's own native client in front of users.
+
+
+## A worked example of this thesis, from a competitor (2026-08-21)
+
+llingr ([`market-analysis-llingr.md`](market-analysis-llingr.md)) does exactly what this note argues
+for - **it sells testing as a feature** - and its execution is worth studying because it is more
+disciplined than the usual "we have tests" line.
+
+What makes it land:
+
+- **A dedicated Correctness page**, at the same level in the navigation as the product pages. Not a
+  paragraph in a README.
+- **Numbers with units, not adjectives.** "1.1B distinct states, 4.5B+ transitions, 25 verified
+  properties"; "~20bn messages, ~100k scaling events with no duplicates". Whether or not a reader can
+  check them, the specificity signals that someone counted.
+- **A named bug the method found**, published: a race between commit and revocation that would have
+  caused silent duplicates. **Admitting a caught defect is more persuasive than claiming none**, and
+  it is the single most credible thing on llingr's site.
+- **The guarantee stated as a boundary, not a boast**: graceful operations produce zero duplicates;
+  catastrophic failure produces duplicates bounded by in-flight count; both match at-least-once
+  exactly. It tells a sceptical reader what will go wrong and when.
+- **A live chaos widget on the page** ("Yo-yo Scaling Chaos Test") showing messages, scaling events,
+  reassignments, dropped, duplicates, out-of-order. Testing rendered as a demo.
+- **The epistemology argued explicitly** - why coverage is not evidence and mutation testing is - which
+  flatters the reader's judgement rather than asking for trust.
+
+**What we can say that they cannot**, and it belongs in the same voice: PC has **years of production
+history**, it is **Apache-2.0**, and it publishes the cases where it is *not* the right answer (the
+charter above). Our reconciliation testing has run at scale since the beginning; the gap is that none
+of it is *presented* anywhere a reader would find it.
+
+The lesson for this note's thesis: the work already exists here. What llingr has and we do not is a
+**page**.

@@ -190,6 +190,26 @@ Do not start one casually.
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
   While in `ConsumerManager`, fix the `erroneousWakups` typo.
 
+### Rename offset vocabulary in code to match CONCEPTS.md
+
+Four different things are called "the offset" across `state/` and `offsets/`, and conflating them
+already produced a wrong conclusion in a written analysis on 2026-08-21. `CONCEPTS.md` now defines
+the vocabulary; **the code has not been updated to match**, which is the gap:
+
+| Concept | Meaning | Current code |
+|---|---|---|
+| **base offset** | lowest incomplete; what goes in Kafka's committed-offset field | variously "committed offset", "offset to commit", `getOffsetHighestSequentialSucceeded()` |
+| **frontier offset** | highest *persisted* acknowledgement in the payload | `offsetHighestSucceeded` - the closest existing name, and the one to rename |
+| **complete / incomplete set** | acknowledged vs outstanding between base and frontier | `incompleteOffsets` (already good) |
+| **offset payload** | the encoded sets in commit metadata | "offset map", "offset metadata", "encoded offsets" - three names for one thing |
+
+The rename worth making first is **`offsetHighestSucceeded` -> frontier offset**, because it is the
+concept with no good current name and the one a reader most often misreads as the committed offset.
+`getOffsetHighestSequentialSucceeded()` is the base offset and should say so.
+
+Mechanical, wide, and touches public-ish names in `PartitionState` - so it belongs with a major, and
+should be one commit that changes names and nothing else.
+
 ### Performance
 - **confluentinc#884** - "Parallel Consumer is 30x slower than normal consumer" - the
   headline perf issue to characterise before/after any hot-path change.

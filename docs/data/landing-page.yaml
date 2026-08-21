@@ -1,0 +1,335 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The content plan for the Parallel Consumer landing page.
+#
+# WHAT THIS FILE IS. Stage P0 of the landing page is a CONTENT decision, not a design one: what do we
+# want to say, in what order, and what evidence backs each claim. That is what this file holds. It is
+# deliberately a structured data file rather than prose, so that the person or agent who later builds
+# the page has an unambiguous brief and does not have to re-derive the argument from inflight notes.
+#
+# WHAT THIS FILE IS NOT. Not the page. Not markup, not copy that is final, and not a design system.
+# `sections` is the running order; `status` on each says whether the copy is ready, needs a number
+# that does not exist yet, or is a placeholder.
+#
+# THE RULE THAT GOVERNS EVERY LINE. State what Parallel Consumer does. Never state what anything else
+# lacks. See docs/inflight/next-landing-page.md for the reasoning and worked rewrites - it is not
+# politeness, it is that a negative claim teaches a reader nothing and ages badly.
+#
+# EVIDENCE IS MANDATORY. Every claim carries `evidence`, pointing at a feature record, a test, a
+# committed benchmark result or a source file. A claim that cannot cite one is not ready to publish,
+# and `status: needs-evidence` says so out loud rather than shipping it and hoping.
+
+schema_version: 1
+kind: landing-page-content
+stage: P0-content
+title: Parallel Consumer landing page - content plan
+
+audience:
+  primary: >-
+    An engineer who has hit the partition-count ceiling on a Kafka consumer and is deciding whether to
+    add partitions, add instances, or add a library. They arrive sceptical and they leave in under two
+    minutes unless something is specific.
+  secondary: >-
+    A staff engineer or architect evaluating whether this is safe to depend on: maintenance, licence,
+    correctness evidence, and what happens when it fails.
+  not_the_audience: >-
+    Someone who already uses Parallel Consumer and needs reference material. That is the documentation
+    site (astubbs#208), a separate artifact with a separate voice.
+
+what_the_page_must_achieve:
+  - Name the reader's problem in their own words before naming the product.
+  - Make one specific, checkable claim early enough that a sceptic keeps reading.
+  - Answer "is this safe to depend on" without being asked.
+  - Leave the reader able to try it in one paste.
+
+voice:
+  - Specific over superlative. A number with its conditions beats an adjective.
+  - Volunteer the limits. Naming the boundary is what makes the rest believable.
+  - No comparisons, named or implied. See the rule above.
+  - Raw counts, not percentages, wherever a consequence is being described.
+
+# ---------------------------------------------------------------------------
+# The running order.
+# ---------------------------------------------------------------------------
+
+sections:
+
+  - id: hero
+    kind: hero
+    status: draft-copy-ready
+    purpose: Name the ceiling, then name the escape, in the fewest words that stay true.
+    headline_candidates:
+      - Process a Kafka partition in parallel, in order, without adding partitions.
+      - Your consumer is one thread per partition. It does not have to be.
+      - Concurrency that is not capped by your partition count.
+    preferred: Process a Kafka partition in parallel, in order, without adding partitions.
+    subhead: >-
+      Parallel Consumer decouples concurrency from partition count. Keep your ordering guarantee -
+      per key, per partition, or none at all - and choose the concurrency your workload actually
+      needs.
+    proof_line: >-
+      Apache-2.0. No licence key, no patent claim, no sidecar. A library you add to a consumer you
+      already have.
+    ctas:
+      - { label: Get started, target: quickstart-anchor }
+      - { label: How it works, target: offset-map }
+    notes: >-
+      Do not put a throughput number in the hero. Any number here is read as marketing; the same
+      number in the benchmark section, with its conditions printed beside it, is read as evidence.
+
+  - id: the-problem
+    kind: problem-statement
+    status: draft-copy-ready
+    purpose: >-
+      Establish the economic problem before the technical one. Partitions are the unit of both
+      concurrency and cost, and they ratchet - easy to add, effectively impossible to remove.
+    body: >-
+      A Kafka consumer processes one partition on one thread. If each record takes 20ms, that
+      partition moves 50 records a second, and the only conventional lever is more partitions - which
+      means more cost, more rebalance surface, and a number you can raise but never lower.
+    supporting_points:
+      - Partition count is a decision that outlives the reason it was made.
+      - Adding partitions changes key-to-partition assignment, which is a data-layout change, not a tuning knob.
+      - The cost lands on brokers, on rebalance time, and on whoever coordinates the change across teams.
+    evidence:
+      - { type: external, note: "Third-party analyses of partition-count cost. Cite sources rather than asserting - see next-landing-page.md." }
+    status_note: Needs a citation chosen before publish. Do not assert the cost without one.
+
+  - id: offset-map
+    kind: differentiator
+    weight: highest
+    status: draft-copy-ready
+    purpose: >-
+      The single strongest differentiator, and currently the least explained thing in the project.
+    headline: One slow record does not undo the work behind it.
+    body: >-
+      Parallel Consumer records which offsets completed, not just how far it got. That completion set
+      travels with the commit, so a restart resumes from what is actually outstanding - not from the
+      last record before the first gap.
+    the_number:
+      framing_rule: >-
+        RAW COUNT LEADS, PERCENTAGE FOLLOWS. "199,998 records reprocessed" converts into an
+        operator's own minutes; "100% redelivered" does not. This rule applies everywhere this story
+        is told, not only here.
+      claim: >-
+        Measured: one crash, one stuck record, one 200,000-record partition. Parallel Consumer
+        reprocessed 6,412 records on recovery.
+      payload_detail: >-
+        The recovery state for that partition was 9 bytes of commit metadata - a run-length encoding
+        of one incomplete record followed by one run of 199,998 completed ones.
+    evidence:
+      - { type: benchmark, path: bench/run-divergence.sh, note: "Committed, reproducible, real broker." }
+      - { type: source, path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java, note: "The design property in its own javadoc." }
+      - { type: inflight, path: docs/inflight/perf-throughput-regression-since-0-3.md }
+    visual:
+      kind: animation
+      description: >-
+        A partition as a row of cells filling in out of order, one cell stuck red, the commit marker
+        advancing past it, and a crash line after which only the red cell and its neighbours refill.
+      priority: P1
+    notes: >-
+      This is the item most worth spending design effort on. It is a mechanism nobody can picture
+      from a paragraph and everybody understands instantly from a diagram.
+
+  - id: admission-by-shard
+    kind: scenario
+    status: draft-copy-ready
+    purpose: >-
+      Show, not claim, that concurrency is not held hostage by one slow key. A scenario the reader
+      checks against their own key distribution.
+    headline: Work is admitted by shard, not by slot.
+    scenario: >-
+      A partition holds 1 record with key A, then 249 records with key B, then 1,000 records each
+      with a distinct key. Key B is slow.
+    what_pc_does: >-
+      All 1,251 records go into their shards on arrival. The control loop dispatches across every
+      shard, so the 1,000 distinct keys are processed immediately and concurrently while B's records
+      proceed in order on their own shard.
+    the_honest_limit: >-
+      Records sharing a key are still serial. That is the ordering guarantee, not a shortcoming - B's
+      249 records take as long as they take. What is guaranteed is that the other 1,001 do not wait
+      for them.
+    evidence:
+      - { type: source, path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java }
+      - { type: needs-test, note: "Worth a named integration test that asserts exactly this shape, so the scenario is executable rather than described." }
+    visual:
+      kind: animation
+      description: 1,251 tiles, one column per key, filling in parallel while the B column drains slowly.
+      priority: P1
+
+  - id: ordering-modes
+    kind: feature
+    status: draft-copy-ready
+    headline: Three ordering modes. Pick the guarantee your workload needs.
+    body: >-
+      Per partition, per key, or unordered. Unordered uses the full concurrency budget regardless of
+      how your keys are distributed; per key gives serial processing within a key and parallelism
+      across them; per partition preserves the guarantee you have today while still overlapping work
+      across partitions.
+    evidence:
+      - { type: feature-record, path: docs/features/, note: "Name the exact record at build time." }
+
+  - id: correctness
+    kind: trust
+    status: draft-copy-ready
+    purpose: Answer "is this safe to depend on" before it is asked. Top-level navigation, not a README paragraph.
+    headline: What is tested, and what is not.
+    body: >-
+      A correctness page that states the failure boundary out loud: what is guaranteed on a graceful
+      rebalance, what duplication is possible on a hard failure, and what that duplication is bounded
+      by.
+    includes:
+      - The delivery guarantee, stated precisely, with the conditions attached.
+      - Compacted topics, transaction markers and aborted transactions - handled as a design property, not a patch.
+      - The test surface: what runs against a real broker, what runs under chaos, what is model-checked.
+      - The honest-comparison charter: publish the case we expect to lose.
+    evidence:
+      - { type: inflight, path: docs/inflight/parked-testing-as-a-feature-for-the-clients.md }
+      - { type: feature-record, path: docs/features/compacted-topic-offset-recovery.yaml }
+    notes: Publishing the losing case is disarming and almost nobody does it. It is a differentiator in itself.
+
+  - id: reach
+    kind: trust
+    status: needs-evidence
+    purpose: >-
+      Backwards compatibility is a real and completely unstated advantage. An engineer on an older
+      platform is used to being told to upgrade first.
+    headline: Runs where you already are.
+    body: >-
+      Java 8 and up. A wide range of Kafka client and broker versions. No platform upgrade required
+      before you can try it.
+    evidence:
+      - { type: feature-record, path: docs/features/java-compatibility.yaml }
+      - { type: missing, note: "There is no feature record for Kafka client/broker version reach. Author it, then publish a support matrix - the matrix IS the claim." }
+    notes: >-
+      This section cannot publish until the matrix exists. A vague compatibility claim is worse than
+      none, because the reader's next question is the specific version they are on.
+
+  - id: benchmarks
+    kind: evidence
+    status: needs-data
+    purpose: Numbers with their conditions printed beside them, and more than one condition.
+    headline: Measured, with the conditions stated.
+    the_rule: >-
+      Never publish a throughput or efficiency figure without the key distribution, the per-record
+      delay, the concurrency setting, and whether a real broker was in the path. A number whose
+      conditions are stated persuades more than a larger number whose conditions are not.
+    must_show:
+      - Key distribution as an axis, not a constant - all-unique, uniform, Zipf, single hot key.
+      - Unordered mode across all distributions, where the result should be flat. Flatness is the finding.
+      - A real broker in the path, and the protocol cost that comes with it, shown rather than excluded.
+    evidence:
+      - { type: harness, path: bench/run-bisect.sh }
+      - { type: inflight, path: docs/inflight/next-performance-regression-testing.md }
+    notes: >-
+      Excluding broker protocol cost makes a number bigger and makes it mean less. Fetch sizing,
+      batching and commit round trips are a real and large part of what a Kafka consumer does. Show
+      the honest number.
+
+  - id: try-it
+    kind: demo
+    status: draft-copy-ready
+    headline: Run the comparison on your own broker.
+    body: >-
+      A containerised demo that runs a plain consumer and Parallel Consumer side by side against a
+      real broker, with dials for key-set size as a percentage of records, per-record delay, failure
+      rate, concurrency, partitions and instances.
+    why_it_matters: >-
+      It answers "will this help MY workload", which a chart cannot. The dials are the point: the
+      reader finds their own shape and watches what happens.
+    evidence:
+      - { type: inflight, path: docs/inflight/branch-classic-comparison-demo.md }
+
+  - id: licence
+    kind: trust
+    status: draft-copy-ready
+    headline: Apache-2.0. No licence key, no patent claim, no commercial tier on the core.
+    body: >-
+      Use it in a closed-source product, ship it in an appliance, run it as a service. There is
+      nothing to negotiate and nothing to renew.
+    notes: >-
+      For a large number of readers this is the entire decision, and it is decided before any feature
+      is read. It earns a top-level position, not a footer link.
+    evidence:
+      - { type: file, path: LICENSE }
+      - { type: inflight, path: docs/inflight/next-licensing-strategy.md }
+
+  - id: provenance
+    kind: trust
+    status: draft-copy-ready
+    headline: Years of production history, actively maintained.
+    body: >-
+      Originated at Confluent and used in production for years. Now maintained in this fork, with the
+      defect backlog worked down in public and every fix guarded by a test that would catch its
+      return.
+    the_hard_part: >-
+      Credibility is the real constraint here, and it is not won by claiming it. It is won by a
+      visible, dated record of defects closed and guards added. Link to that record; do not summarise
+      it.
+    evidence:
+      - { type: data, path: docs/data/roadmap.yaml }
+      - { type: needs-page, note: "A public 'what we fixed and how it is guarded' view. Does not exist yet." }
+
+  - id: ecosystem
+    kind: feature
+    status: draft-copy-ready
+    headline: A library on the JVM, not a sidecar.
+    body: >-
+      Core, Vert.x, Reactor and Mutiny engines, with Kafka Streams and Connect integrations on the
+      roadmap. No extra process to deploy, monitor or version.
+    evidence:
+      - { type: data, path: docs/data/module-maturity.yaml }
+
+  - id: roadmap
+    kind: forward-looking
+    status: draft-copy-ready
+    purpose: State what is coming without letting it read as what exists.
+    rule: >-
+      Everything in this section is visibly labelled as roadmap. Nothing from here appears anywhere
+      else on the page. Blurring the two is the fastest way to lose the credibility the rest of the
+      page is spending effort to build.
+    items:
+      - { id: adaptive-concurrency, headline: "Concurrency that finds its own ceiling", note: "Feedback-driven, internal and external scaling as one loop. The strongest forward differentiator." }
+      - { id: language-proxies, headline: "The same engine from other languages" }
+      - { id: running-instance-visibility, headline: "See what a running instance is actually doing" }
+      - { id: dead-letter-queue, headline: "A dead letter queue for records that cannot succeed" }
+    evidence:
+      - { type: data, path: docs/data/roadmap.yaml }
+
+  - id: quickstart-anchor
+    kind: cta
+    status: draft-copy-ready
+    headline: Add it to a consumer you already have.
+    body: One dependency, one builder, one lambda. Copyable, and correct as written.
+    requirement: >-
+      The snippet on this page must be executable verbatim and must be tested. A quickstart that does
+      not compile is worse than no quickstart.
+
+# ---------------------------------------------------------------------------
+# Build notes for whoever makes this. Stage P1, not P0.
+# ---------------------------------------------------------------------------
+
+craft_reference:
+  observation: >-
+    The most effective site in this space is static HTML with a single stylesheet, produced without a
+    site framework. No build step, no client-side rendering, and no analytics or third-party trackers
+    at all. Note that "no framework" is what the markup shows; it is NOT evidence a person typed it,
+    and agent-generated is at least as likely. Self-hosted subset woff2 fonts, one for text and one for code. A design-token palette - two
+    colour scales of roughly a dozen steps each - defined once at the top of the stylesheet and used
+    everywhere. A small amount of hand-written vanilla JavaScript for the interactive pieces. Static
+    hosting behind a CDN. Structured data in JSON-LD.
+  the_lesson: >-
+    The quality is craft, not tooling - which is the encouraging finding, because craft is available
+    to us and does not require choosing a framework. A hand-written page with a real palette and real
+    typography outperforms a generated one, and there is nothing to keep up to date.
+  implications_for_us:
+    - Do not reach for a site framework. The page is a handful of documents.
+    - Define a token palette and a type scale first; everything else follows from those two decisions.
+    - Self-host fonts. Subset them. No third-party requests at all - it is faster and it is a privacy position worth having.
+    - The interactive pieces (the offset-map animation, the shard-dispatch animation) are the design budget. Spend it there.
+    - No analytics. It costs nothing to omit and it is consistent with the licence position.
+
+open_questions:
+  - Where does this live? Shares the unresolved hosting and domain decision with the docs site (astubbs#208) and the demo gallery.
+  - Does the live demo need a runtime host, or can it be a recorded animation driven by real captured data?
+  - Who authors the Kafka version support matrix, which section `reach` is blocked on?

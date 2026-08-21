@@ -215,3 +215,16 @@ each one has already decided something this could contradict.
 - **U35** in [`docs/plans/2026-08-14-001-feat-language-proxy-plan.md`](../plans/2026-08-14-001-feat-language-proxy-plan.md)
   - the demo unit whose fileset this adopts, and whose KTD40 identical-UX contract caps how much
   per-language divergence the control surface may have.
+
+## Should a competitor be an arm in this demo? (2026-08-21)
+
+Asked, and the answer is currently no - but the reasoning is worth carrying, because it will be asked
+again. Adding a competitor arm to a user-facing demo is a **public comparison**, which collides with
+the standing no-public-comparison decision recorded in
+[`market-analysis-llingr.md`](market-analysis-llingr.md). Options and recommendation are in
+[`next-benchmark-llingr-as-a-baseline.md`](next-benchmark-llingr-as-a-baseline.md); private
+benchmarking already answers the engine-cost question without changing what this demo is.
+
+**What to take regardless:** sweep the delay dial as an axis and show the curve, rather than
+publishing throughput at one latency. The shape is the insight - at a realistic per-record delay the
+engine's own cost disappears, which is the honest version of the comparison this demo makes.

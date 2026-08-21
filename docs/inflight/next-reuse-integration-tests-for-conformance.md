@@ -32,7 +32,7 @@ is still a win: the expensive knowledge is which cases matter and what correct l
 For each existing integration test, decide which bucket it falls in, and say why:
 
 - **Shareable as-is** once the invocation seam exists - it asserts protocol-observable behaviour
-  (commit frontier, ordering, redelivery, attempt counts, rebalance safety).
+  (commit point, ordering, redelivery, attempt counts, rebalance safety).
 - **Shareable in substance, needs adaptation** - the assertion is right but the mechanism is
   JVM-specific (reaches into internals, or drives the user function in a way a foreign runner
   cannot).

@@ -359,7 +359,7 @@ issue tracker** - recorded here first, deliberately.
 
 **Identified: llingr / llingr-demux** (<https://llingr.io/>), supplied by the owner 2026-08-20 after
 a search of the repo's own landscape notes failed to name it. It has its own entry -
-the llingr market-analysis note - because it is closer to this project than
+[`market-analysis-llingr.md`](market-analysis-llingr.md) - because it is closer to this project than
 anything else recorded: same key-ordered-concurrency claim, a gRPC sidecar relay for other languages
 (the astubbs#242 architecture, already shipped), formally verified, and commercial with a patent
 pending.
@@ -585,7 +585,7 @@ synthetic one: no real handler returns in zero time.
   ceiling of 1,000 once the handler takes 2ms, topping out near 450, so the controller's actual
   actuator is the in-flight target, not `maxConcurrency`. And a competitor's dispatch demonstrably
   tracks demand rather than configuration - peak 3 at 0ms, peak 1,000 at 2ms, same dial.
-- **For the llingr market-analysis note:** the throughput comparison is
+- **For [`market-analysis-llingr.md`](market-analysis-llingr.md):** the throughput comparison is
   even less worth competing on than that note already argues, and now for a measured reason rather
   than a structural one. The gap at the headline point is the Kafka client, not the engine.
   **Private research; none of the llingr figures above may be published.**
@@ -615,7 +615,7 @@ Harness: [`bench/run-divergence.sh`](../../bench/run-divergence.sh),
 [`divergence-5s-commit-too-short.csv`](../../bench/results/divergence-5s-commit-too-short.csv),
 [`divergence-commit-metadata.csv`](../../bench/results/divergence-commit-metadata.csv) and the two
 `divergence-series-stuck-*.csv` time series. **The llingr arm is internal only** - see
-the llingr market-analysis note and `bench/llingr/NOTICE.md`.
+[`market-analysis-llingr.md`](market-analysis-llingr.md) and `bench/llingr/NOTICE.md`.
 
 **This scenario is chosen because it favours PC.** That is stated first because it is the same
 selection the pure-throughput benchmark makes in the other direction, and a benchmark that only
@@ -640,7 +640,7 @@ with `kafka-consumer-groups.sh`, so neither engine answers it about itself. n=3,
 | records completed above the committed offset | 199,998 | 199,998 |
 | **commit metadata** | **12 bytes** | 40 bytes |
 
-PC commits the **lowest incomplete offset**, exactly as a contiguous-frontier design does. The
+PC commits the **lowest incomplete offset**, exactly as a contiguous-commit design does. The
 committed offset alone therefore cannot distinguish the two architectures, and any comparison that
 quotes it - in either direction - is measuring the wrong thing. It also means the offset lag a user
 sees in `kafka-consumer-groups.sh` overstates PC's exposure, which is worth knowing independently of
@@ -708,7 +708,7 @@ So the honest statement of the differentiator is a **ratio, not a constant**:
 
 ```
 wasted work on crash  ~  commitInterval x throughput + inFlight        (PC)
-                      ~  timeSinceTheStallBegan x throughput           (contiguous frontier)
+                      ~  timeSinceTheStallBegan x throughput           (contiguous-commit design)
 ```
 
 PC's advantage is the ratio between "how long the record has been stuck" and "how long since the last
@@ -747,12 +747,12 @@ PC's 10% higher completion rate costs 11% more deliveries and 12% more wall cloc
 
 ### What this changes in the positioning
 
-the llingr market-analysis note proposed the line *"PC commits past the gaps,
+[`market-analysis-llingr.md`](market-analysis-llingr.md) proposed the line *"PC commits past the gaps,
 so one slow key never holds up a partition"*. **The first half of that is now measured and the second
 half is false as written**: the committed offset is held up, identically, on both engines. The
 defensible version is about restart cost, and it has a number:
 
-> One stuck record, one crash: PC reprocessed 6% of the work it had already done; a contiguous-frontier
+> One stuck record, one crash: PC reprocessed 6% of the work it had already done; a contiguous-commit
 > design reprocessed 100% of it. Nine bytes of commit metadata is the difference.
 
 Two items that note lists are now settled by measurement rather than by reading a marketing page:
@@ -762,7 +762,7 @@ Two items that note lists are now settled by measurement rather than by reading 
   *pre-allocating* space for gap tracking, and a 199,998-record gap did not stall it: it completed the
   dataset at full speed and simply committed nothing. **The failure mode is silent redelivery on
   restart, not backpressure.** That is a weaker claim than the note makes, and a more accurate one.
-- **"Restart reprocesses everything after the frontier"** - confirmed exactly, at 100.0% across three
+- **"Restart reprocesses everything after its commit point"** - confirmed exactly, at 100.0% across three
   repeats.
 
 ### Where it is unfair, and what it does not establish
@@ -799,7 +799,7 @@ That spread is inside the mechanism being described, not noise on top of it, and
 magnitude smaller than the gap it is being compared against.
 
 **The one place contention leans, it leans in PC's favour, so the ratio is an optimistic bound.**
-PC's wasted work is roughly `commitInterval x throughput`, while the contiguous-frontier design's is
+PC's wasted work is roughly `commitInterval x throughput`, while the contiguous-commit design's is
 fixed by the scenario at everything completed before the crash. A slower machine therefore *shrinks*
 PC's numerator and leaves llingr's alone, inflating the advantage ratio. The model is written out
 above precisely so a reader can recompute it for their own throughput rather than take 15.6x or 6.4x as

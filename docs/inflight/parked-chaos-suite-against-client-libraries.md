@@ -12,10 +12,10 @@ instead of ten suites drifting apart.
   channel*: it exits 0 whether or not a scenario's assertions held. Every foreign client has
   therefore had to invent its own assertions. A results topic is that missing channel, and it is
   worth building for the ordinary conformance suite even before chaos.
-- **The orchestrator can assert far more than the frontier, by decoding the commit metadata.** The
+- **The orchestrator can assert far more than the base offset, by decoding the commit metadata.** The
   committed offset is only the summary; the metadata beside it encodes which individual offsets above
   it are already complete. Decoding that gives the suite the *shape* of completion - how much work
-  sits above the frontier, and exactly which offsets are still holding it down - without any client
+  sits above the base offset, and exactly which offsets are still holding it down - without any client
   cooperation. That single assertion covers both sides at once: it proves the client resolved the
   records it claims to have resolved, and it proves the engine's own encoding round-trips, which is
   otherwise only tested from inside the JVM.

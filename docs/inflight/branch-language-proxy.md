@@ -1,5 +1,8 @@
 # Branch: language proxy (astubbs#242)
 
+<!-- inflight-type: feature -->
+<!-- inflight-impact: coordination -->
+
 Requirements for a sidecar that runs Parallel Consumer and hands records to a non-Java
 application's worker processes over loopback. Plan lives at
 `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` (the 2026-08-12 plan is retired). The
@@ -221,3 +224,26 @@ scoping call first.
 [`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) (`feats/classic-vertx-demo`)
 rescues the 2021 asciinema demo and builds the per-language comparison demo on top of the clients.
 It jumps U35's queue and is blocked, proxy-side, on U10's sidecar entry point.
+
+## The dial direction is a decision, and it should be documented as one (2026-08-21)
+
+astubbs#242's design has the **sidecar as the gRPC server** and the application dialling in. A
+competitor doing the same job (llingr's relay) chose the **opposite** - the engine dials out and the
+application runs the gRPC server, which is also how Envoy's `ext_proc` filter works. Apache Beam's
+portability framework chose PC's direction, and states why: *runners often sit where they cannot
+accept inbound connections.*
+
+**Neither is wrong, and the networking argument is not the real one here** - the plan already has a
+loopback/UDS path with a single-connection guard, so both sides are on the same host by construction.
+
+**The real reason is lifecycle**, and it should be written down: PC's direction falls out of *"the app
+spawns the sidecar, so the app connects to it"*, which is what deletes the bind-race election and the
+detached process group from this design. An engine that dials out must know its handler's address
+before the handler exists, which is an ordering problem this design does not have. The competitor's
+direction falls out of the relay being an independently deployed container that must go and find its
+handler. Each is internally consistent, and each follows from who owns process startup.
+
+**Actions:** state this in the plan's KTD set as a considered choice with Beam cited; carry it into
+user-facing documentation, because "why does my app connect to the sidecar rather than the other way
+round?" is a question every client author will ask; and give it a feature record so the reasoning is
+not only in a plan.

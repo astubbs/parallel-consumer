@@ -58,7 +58,7 @@ The question arose while writing
 [`next-work-server-pitch-and-buyer.md`](next-work-server-pitch-and-buyer.md), whose partition-cost
 argument would be undercut if a vendor already made it. The provisional finding is that **the
 "faster Kafka" vendors compete on storage and operational economics and leave the consumption model
-untouched** — which is why none of them scores what this does, and why they are complements rather
+untouched** — which is why none of them scores what this does, and why llingr is complements rather
 than rivals.
 
 - **Kafka-protocol reimplementations and re-engines** — Redpanda, WarpStream, AutoMQ, Bufstream,
@@ -109,3 +109,28 @@ No file written yet. This note exists so the research is not lost — it was gat
 astubbs#242 ideation and is currently only in that session's artifact
 (`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html`), which is scoped to the
 interaction model and will not carry the comparison as it grows.
+
+
+## Add llingr - the closest analogue found so far (2026-08-21)
+
+[`market-analysis-llingr.md`](market-analysis-llingr.md) is a full teardown; this is the pointer, and
+the reason it belongs in *this* document rather than only in a competitor file.
+
+It answers this note's own per-system questions unusually directly, and it converged on the same
+answers as the language-proxy work **independently and at the same time** - which is evidence about
+the architecture rather than about either project:
+
+- **Who owns scheduling:** the engine, entirely. Same as PC.
+- **What crosses the language boundary:** five gRPC methods - `ProcessMessage`, `WriteDeadLetter`,
+  `SendMetrics`, `NotifyShutdown`, `Heartbeat`. Compare astubbs#242's protocol, which has `dispatch`
+  negotiated today and leases/heartbeat designed but unimplemented by any client.
+- **The unit of work:** one message, not a bundle - the opposite of Beam's bundle-retry model recorded
+  above, and the same choice PC made.
+- **The FFI-versus-sidecar split:** Rust and C/C++ via FFI, everything else via a gRPC sidecar
+  container. **That is the exact conclusion `branch-language-proxy.md` reached** in its
+  native-bindings section.
+- **Engine duplication:** Go original, a **separate native JVM implementation**, and Rust as an FFI
+  binding over the Go engine. That is the Temporal pattern this document already records - shared core
+  plus bindings, with specific languages reimplemented natively - arrived at from the other direction.
+- **The broker is pluggable:** Kafka via two client adapters, and NATS JetStream. PC is Kafka-only by
+  construction, which is a scope decision worth making consciously rather than by default.

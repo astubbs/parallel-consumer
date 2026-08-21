@@ -230,7 +230,15 @@ backlog:
         are the JStream processors that hand back a JDK Stream of produce results.
       tracking: astubbs#116
     - subject: Dynamic concurrency control using flow-control theory
-      status: Undecided. Architectural rather than incremental.
+      status: >-
+        Prototyped, not proven. Two proof-of-concept branches exist and neither reached a working
+        state: features/dynamic-concurrency-control adds a parallel-consumer-core-auto-scale module
+        whose AutoScalingProcessor drives the worker pool from Netflix concurrency-limits
+        (Gradient2Limit, BlockingAdaptiveExecutor) and requests work by limit-minus-inflight; and
+        feature/auto-tuning-pressure adds a BackoffAnalyser implementing additive-increase
+        multiplicative-decrease against the last observed failure point. Both are from 2020 and
+        unmerged, so this is evidence that the approach has been attempted rather than evidence that
+        it works. Still architectural rather than incremental.
       tracking: astubbs#227
     - subject: Backpressure per partition rather than across the whole assignment
       status: Undecided. Architectural rather than incremental.

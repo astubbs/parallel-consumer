@@ -209,7 +209,17 @@ go_arm_version() { case $1 in llingr) llingr_version ;; franz) franz_version ;; 
 
 start_broker
 
-TOPIC=${BENCH_TOPIC:-bench-$RECORDS}
+# Partition count for the dataset. An axis, not a constant: at maxConcurrency 5,000 a single
+# partition bounded the measurement before concurrency did - see Bench.java.template#partitions().
+# It is in the default topic name so a 1-partition and a 10-partition dataset can never be mistaken
+# for each other, which is exactly the confound this file exists to avoid.
+# Ordering mode. An axis for the same reason partition count is: it changes the shape of the shard
+# map, which is what the dispatch scan walks. Recorded as a column so a swept file is readable back.
+ORDERING=${BENCH_ORDERING:-UNORDERED}
+export BENCH_ORDERING=$ORDERING
+PARTITIONS=${BENCH_PARTITIONS:-1}
+export BENCH_PARTITIONS=$PARTITIONS
+TOPIC=${BENCH_TOPIC:-bench-$RECORDS-p$PARTITIONS}
 
 # The dataset: produced once, by the local build, and reused by every arm - including the Go one,
 # which is the only way an engine comparison means anything.
@@ -224,7 +234,7 @@ fi
 # delay_ms and concurrency are columns because both are now swept axes; without them a multi-delay
 # or multi-concurrency results file cannot be read back. Everything else is unchanged, so llingr,
 # franz and PC rows all sit in one table.
-echo "pc_version,client_pin,mode,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+echo "pc_version,client_pin,mode,ordering,partitions,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
 for mode in $MODES; do
   # The two Go arms differ only in which binary they build and what they call themselves, so they
   # share one branch rather than two near-identical copies of the sweep loop.
@@ -240,7 +250,7 @@ for mode in $MODES; do
           read -r rate peak <<< "$(run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c")"
           [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-          echo "$ver,franz,$mode,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+          echo "$ver,franz,$mode,$ORDERING,$PARTITIONS,$d,$c,$r,$rate,$peak" >> "$RESULTS"
         done
       done
     done
@@ -249,14 +259,14 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,$mode,,,,COMPILE_FAILED" >> "$RESULTS"; continue; }
+      CP=$(prepare "$pcv" "$pin") || { log "SKIP $pcv/$pin (resolve or compile failed)"; echo "$pcv,$pin,$mode,$ORDERING,$PARTITIONS,,,,COMPILE_FAILED" >> "$RESULTS"; continue; }
       for c in $CONCURRENCIES; do
         for d in $DELAYS; do
           for r in $(seq 1 "$REPEATS"); do
             read -r rate peak <<< "$(run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER")"
             [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
             log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-            echo "$pcv,$pin,$mode,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$ORDERING,$PARTITIONS,$d,$c,$r,$rate,$peak" >> "$RESULTS"
           done
         done
       done
