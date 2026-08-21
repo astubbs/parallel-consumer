@@ -226,7 +226,7 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().markAvailableAgain();
+            shardOptional.get().markAvailableAgain(wc);
             this.retryQueue.add(wc);
         }
 
@@ -241,7 +241,7 @@ public class ShardManager<K, V> {
         log.debug("Work ABANDONED without verdict");
 
         var key = computeShardKey(wc);
-        getShard(key).ifPresent(ProcessingShard::markAvailableAgain);
+        getShard(key).ifPresent(shard -> shard.markAvailableAgain(wc));
     }
 
     /**

@@ -58,9 +58,25 @@ public class ProcessingShard<K, V> {
 
     private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
 
+    /**
+     * Records currently out for processing, keyed by offset. A record is in EXACTLY ONE of this map and
+     * {@link #entries} - never both, never neither.
+     * <p>
+     * WHY SPLIT THEM. When one map held both, a record stayed in it until it SUCCEEDED, so every
+     * dispatch scan walked past every in-flight container to reach selectable work. The fix that walks
+     * around them needs a resume point, and a resume point needs a wrap, and the wrap needs a starvation
+     * guard for records that become selectable again behind it. Moving the record out instead deletes
+     * that entire problem: dispatch takes from the head and there is nothing in the way.
+     * <p>
+     * It is a MOVE, not a second copy, so it is not the parallel-state shape that accumulates sync
+     * cascades - there is no state that can disagree with itself, because there is only one home for
+     * each record and putting it in the new one takes it out of the old one.
+     */
+    private final NavigableMap<Long, WorkContainer<K, V>> inFlight = new ConcurrentSkipListMap<>();
+
     public void addWorkContainer(WorkContainer<K, V> wc) {
         long key = wc.offset();
-        if (entries.containsKey(key)) {
+        if (entries.containsKey(key) || inFlight.containsKey(key)) {
             log.debug("Entry for {} already exists in shard queue, dropping record", wc);
         } else {
             entries.put(key, wc);
@@ -69,8 +85,11 @@ public class ProcessingShard<K, V> {
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {
-        // remove work from shard's queue
-        entries.remove(wc.offset());
+        // The record is normally in flight when it succeeds; entries is cleared too so that a caller
+        // which succeeds a record that was never dispatched cannot leave it behind.
+        long offset = wc.offset();
+        inFlight.remove(offset);
+        entries.remove(offset);
     }
 
     /**
@@ -79,13 +98,26 @@ public class ProcessingShard<K, V> {
      * <p>
      * Whether a retry is <em>also</em> scheduled is {@link ShardManager}'s decision, not this shard's.
      */
-    public void markAvailableAgain() {
+    public void markAvailableAgain(WorkContainer<?, ?> wc) {
+        // Move it back so the next dispatch finds it in offset order, with no scan position to reset and
+        // no range to wrap. Whether it is DUE yet is still isAvailableToTakeAsWork's decision - being
+        // back in the selectable map only means the scan can see it.
+        //
+        // Moved by OFFSET rather than by storing the caller's reference: this shard's tracked container
+        // is the one that must go back, and taking it out of inFlight is what proves it was ours. The
+        // method is idempotent, per ShardManager#onFailure's contract - a second call finds nothing in
+        // inFlight and puts nothing back.
+        long offset = wc.offset();
+        WorkContainer<K, V> tracked = inFlight.remove(offset);
+        if (tracked != null) {
+            entries.put(offset, tracked);
+        }
         availableWorkContainerCnt.incrementAndGet();
     }
 
 
     public boolean isEmpty() {
-        return entries.isEmpty();
+        return entries.isEmpty() && inFlight.isEmpty();
     }
 
     public long getCountOfWorkAwaitingSelection() {
@@ -93,13 +125,15 @@ public class ProcessingShard<K, V> {
     }
 
     public long getCountOfWorkTracked() {
-        return entries.size();
+        return entries.size() + inFlight.size();
     }
 
+    /**
+     * Now a size rather than a filtered stream over everything - the split makes the answer the map's
+     * own size instead of a scan.
+     */
     public long getCountWorkInFlight() {
-        return entries.values().stream()
-                .filter(WorkContainer::isInFlight)
-                .count();
+        return inFlight.size();
     }
 
     public WorkContainer<K, V> remove(long offset) {
@@ -108,7 +142,9 @@ public class ProcessingShard<K, V> {
         if (toRemovedWorker != null && toRemovedWorker.isAvailableToTakeAsWork()) {
             dcrAvailableWorkContainerCntByDelta(1);
         }
-        return entries.remove(offset);
+        WorkContainer<K, V> removed = entries.remove(offset);
+        WorkContainer<K, V> removedInFlight = inFlight.remove(offset);
+        return removed != null ? removed : removedInFlight;
     }
 
 
@@ -118,13 +154,16 @@ public class ProcessingShard<K, V> {
     // 2. will cause the consumer to paused consuming new messages indefinitely
     public List<WorkContainer<K, V>> removeStaleWorkContainersFromShard() {
         List<WorkContainer<K, V>> staleContainers = new ArrayList<>();
-        var iterator = entries.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<Long, WorkContainer<K, V>> entry = iterator.next();
-            if (isWorkContainerStale(entry.getValue())) {
-                iterator.remove();  // Safe even on ConcurrentSkipListMap
-                dcrAvailableWorkContainerCntByDelta(1);
-                staleContainers.add(entry.getValue());
+        // Both maps: a stale record blocks reassignment whether or not it was dispatched.
+        for (NavigableMap<Long, WorkContainer<K, V>> map : Arrays.asList(entries, inFlight)) {
+            var iterator = map.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<Long, WorkContainer<K, V>> entry = iterator.next();
+                if (isWorkContainerStale(entry.getValue())) {
+                    iterator.remove();  // Safe even on ConcurrentSkipListMap
+                    dcrAvailableWorkContainerCntByDelta(1);
+                    staleContainers.add(entry.getValue());
+                }
             }
         }
         return staleContainers;
@@ -135,6 +174,14 @@ public class ProcessingShard<K, V> {
 
         var slowWork = new HashSet<WorkContainer<?, ?>>();
         var workTaken = new ArrayList<WorkContainer<K, V>>();
+
+        // Ordered modes block the whole shard while anything from it is in flight. That used to happen
+        // implicitly - the scan reached the in-flight record at the head and broke - which only worked
+        // because in-flight records stayed in the map being scanned. Once they move out, the block has
+        // to be stated.
+        if (isOrderRestricted() && !inFlight.isEmpty()) {
+            return workTaken;
+        }
 
         var iterator = entries.entrySet().iterator();
         boolean hasStaleWorkContainer = false;
@@ -147,6 +194,9 @@ public class ProcessingShard<K, V> {
 
                     workContainer.onQueueingForExecution();
                     workTaken.add(workContainer);
+                    // MOVE it out of the selectable map, so the next scan does not walk past it.
+                    iterator.remove();
+                    inFlight.put(workContainer.offset(), workContainer);
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);
                     addToSlowWorkMaybe(slowWork, workContainer);
