@@ -594,8 +594,13 @@ Cross-cutting above; the rest:
 - `origin/refactor/double-ended-queue` @58a2b997 - block on work submission to the pool
   instead of on results (backpressure).
 - `origin/refactor/worker-queues` @a616de9e - worker-queue rework.
-- `origin/refactor/gpt3-central-queue-direct-pull` @7e775a11 - central queue, direct pull
-  (noted: poller-throttling issue, didn't help).
+- `origin/refactor/gpt3-central-queue-direct-pull` @7e775a11 - central queue, direct pull.
+  **Built and working, and still ~1/3 the speed of the ThreadPoolExecutor version** (its own commit
+  `0df84c9e5` says so). Poller throttling was identified as the suspect and "doesn't seem to help".
+  Also carries `5dcd39bb3` "ThreadLocal attempt for not sharing a queue" - the per-thread-queue idea -
+  and `58826c349` "Central queue facade over Shards", the queue-that-is-not-a-queue.
+  Full read-out in `docs/inflight/parked-2022-central-queue-rework.md`. **Reasons, not verdicts:**
+  this entry said "didn't help" for years, which hid that the alternative had been built and lost.
 - `origin/refactor/gpt3-queue-management-with-msg-push` @9ee80ffb - central distribution via
   actor message, batch-100.
 - `origin/external-engine-higher-pressure` @944808e9 - backpressure/pressure system for the
