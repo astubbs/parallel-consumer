@@ -10,7 +10,16 @@ docker compose up
 
 Needs Docker. A JDK is optional: with one, the demo runs natively and starts its broker in a
 container; without one, the demo runs in a container too and the broker is a compose sibling. It
-announces which it chose, and why, on its first line.
+announces which it chose, and why, on standard error before the run starts - **standard output opens
+with the demo's banner**, on both paths, because the first thing a reader sees has to say what they
+are looking at:
+
+```
+================================================================
+  PARALLEL CONSUMER  -  Scala demo
+  The same records, twice: one at a time, then all at once.
+================================================================
+```
 
 **The contract this keeps - and that every other language's demo keeps - is
 [`parallel-consumer-proxy/demo/README.md`](../../../parallel-consumer-proxy/demo/README.md).**
@@ -20,8 +29,23 @@ Read that first. This file only records what is specific to Scala.
 
 | arm | what it is |
 |---|---|
-| `AK core` | a plain `KafkaConsumer`, driven from Scala, one record at a time |
-| `scala-grpc` | this module's `ParallelConsumerClient` over a sidecar the client library spawns |
+| `AK core (KafkaConsumer)` | `org.apache.kafka.clients.consumer.KafkaConsumer`, driven from Scala, one record at a time |
+| `scala-grpc (this client)` | this module's `ParallelConsumerClient` over a sidecar the client library spawns |
+
+**The label names the client because "AK core" is a category, not a client.** It is `rdkafka` in
+Ruby, `franz-go` in Go, `kafkajs` in TypeScript - and in Scala it is the Apache Kafka Java consumer
+itself, because that is what a Scala application ends up calling however it gets there. A reader
+cannot judge a comparison without knowing what produced it.
+
+### Scala has several Kafka clients, and they are all this one underneath
+
+Alpakka Kafka (Akka/Pekko Streams), FS2 Kafka, ZIO Kafka and `kafka-streams-scala` are the libraries
+a Scala team is likely to already be using, and **every one of them wraps
+`org.apache.kafka.clients.consumer.KafkaConsumer`** rather than speaking the Kafka protocol itself.
+So unlike a language with two independent native clients, Scala has nothing here worth running as a
+second arm: a second row would measure a streaming façade's own scheduling on top of the same
+consumer, which is a different question from the one this demo asks. The AK core row is the floor
+those libraries are built on, and it is the honest one to compare against.
 
 `scala-grpc` goes through **the client library**, not the protocol. Nothing in
 `demo/src/main/scala` names a protobuf message, a channel or a token - the demo opens a
@@ -39,10 +63,16 @@ would not be the same demo.
 
 ## Divergences from the contract
 
-**None in the interface.** Same flags, same `PC_DEMO_*` environment variables, same precedence
-(flags beat environment beats defaults), same defaults, same two tables in the same order, the
-effective configuration printed first and never carrying the bootstrap address, and no latency
-reported anywhere.
+**None in the interface.** Same banner, same flags, same `PC_DEMO_*` environment variables, same
+precedence (flags beat environment beats defaults), same defaults, same two tables in the same order
+with the same columns, the effective configuration printed straight after the banner and never
+carrying the bootstrap address, and no latency reported anywhere.
+
+The two tables carry `records` and `keys` beside the timing, and those two are the **deterministic**
+pair: the same records over the same key space give the same figures in every language, which is
+what makes eleven demos comparable when elapsed and msg/s never can be. `records` must equal the
+target - a short arm is a failed arm, not a fast one - and `keys` is the distinct keys that arm
+actually saw, which is what shows the backlog was spread rather than one key repeated.
 
 Three things are Scala's own, and none of them changes the shape:
 

@@ -2,9 +2,10 @@
 
 package bz.stub.parallelconsumer.client.scaladsl.demo
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.{CountDownLatch, Executors, ThreadFactory, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, CountDownLatch, Executors, ThreadFactory, TimeUnit}
 import java.util.{Collections, Locale}
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -24,11 +25,13 @@ import org.slf4j.LoggerFactory
  *
  * ==Two arms, and the four the Java seed carries are deliberately absent==
  *
- *  - '''AK core''' - a plain `KafkaConsumer`, one record at a time. Always spelled "AK core", never
- *    bare "core", which reads as `parallel-consumer-core` (`CONCEPTS.md`).
- *  - '''scala-grpc''' - this module's own `ParallelConsumerClient` over a sidecar the client library
- *    spawns as a child process. The application does no Kafka I/O on that path: the sidecar owns the
- *    consumer, the producer, the group membership and the offsets.
+ *  - '''`AK core (KafkaConsumer)`''' - the Apache Kafka `KafkaConsumer` itself, driven from Scala,
+ *    one record at a time. The client is named in the label because "AK core" is a category and the
+ *    answer differs in every language. Always spelled "AK core", never bare "core", which reads as
+ *    `parallel-consumer-core` (`CONCEPTS.md`).
+ *  - '''`scala-grpc (this client)`''' - this module's own `ParallelConsumerClient` over a sidecar the
+ *    client library spawns as a child process. The application does no Kafka I/O on that path: the
+ *    sidecar owns the consumer, the producer, the group membership and the offsets.
  *
  * Java also runs `pc-core`, `java-direct`, `java-grpc-uds` and `java-raw-grpc`, and this demo runs
  * none of them '''on purpose'''. Those arms exist because one JVM can hold all of them against one
@@ -55,9 +58,42 @@ object ScalaDemo {
   /** No arm may take longer than this before the demo calls it stalled rather than slow. */
   private val ArmBudget: FiniteDuration = 10.minutes
 
-  private val AkCore = "AK core"
+  /**
+   * '''The first thing printed, and it is contract rather than decoration.'''
+   * `parallel-consumer-proxy/demo/README.md` fixes this text, identical in all eleven languages bar
+   * the language's own name. It exists because someone watched a demo open with
+   * `ruby-grpc: the proxy granted 100 executor threads` and had been told nothing about what they
+   * were looking at - not the product's name, not what the run was about to show them.
+   *
+   * Printed rather than logged, deliberately: it is the demo's headline, not an event, and a
+   * timestamp and logger name in front of the rule line would put a configuration line first again.
+   */
+  private val Banner: String =
+    """================================================================
+      |  PARALLEL CONSUMER  -  Scala demo
+      |  The same records, twice: one at a time, then all at once.
+      |================================================================""".stripMargin
 
-  private val ScalaGrpc = "scala-grpc"
+  /**
+   * '''"AK core" is a category, not a client''', so the arm carries both - the role and the library
+   * that produced the number. A reader cannot judge a comparison without knowing what ran: the
+   * answer is `rdkafka` in Ruby, `franz-go` in Go, `kafkajs` in TypeScript, and here it is the
+   * Apache Kafka `KafkaConsumer` itself, driven from Scala.
+   *
+   * '''Still spelled "AK core" and never bare "core"''', which reads as `parallel-consumer-core`
+   * (`CONCEPTS.md`).
+   */
+  private val AkCore = "AK core (KafkaConsumer)"
+
+  /**
+   * The sidecar arm, labelled with what drives it: this module's own client library. "this client"
+   * is the contract's wording rather than the type's name, so that the label means the same thing in
+   * a language whose client library is not a class.
+   */
+  private val ScalaGrpc = "scala-grpc (this client)"
+
+  /** The bucket a record with no key at all falls into, so "unique keys" stays a truthful count. */
+  private val NoKey = "<no key>"
 
   /**
    * The context the client library's own plumbing runs on - the spawn's blocking wait, the handshake
@@ -69,20 +105,41 @@ object ScalaDemo {
    */
   private implicit val plumbing: ExecutionContext = ExecutionContext.global
 
-  def main(args: Array[String]): Unit =
+  def main(args: Array[String]): Unit = {
+    // Before the argument parsing, so even a misspelled flag is answered by something that says what
+    // this program is.
+    println(Banner)
     if (DemoOptions.isHelpRequested(args.toSeq)) {
       log.info("\n" + DemoOptions.Usage)
     } else {
       parsed(args) match {
         case None => System.exit(2)
         case Some(options) =>
+          val topic = options.topic.getOrElse(s"pc-demo-scala-${System.nanoTime()}")
+          // Banner, then the effective configuration, then the run - the contract's order. Printed
+          // BEFORE the broker is resolved rather than inside runFor, because resolving it may mean
+          // pulling and starting a Kafka image, and a reader should not wait half a minute to find
+          // out what settings the numbers they are about to see were produced with.
+          announce(options, topic)
           val broker = DemoBroker.resolve(options.bootstrap)
           try {
-            val topic = options.topic.getOrElse(s"pc-demo-scala-${System.nanoTime()}")
             val _ = runFor(options, broker, topic)
           } finally broker.close()
       }
     }
+  }
+
+  /**
+   * The effective-configuration fingerprint: a number without its settings is not reproducible.
+   *
+   * '''The bootstrap address is not in it, and that rule binds the whole run rather than this block'''
+   * - own-cluster mode puts a user's real broker there. `DemoOptions.toString` is hand-written for
+   * that reason, and `demo/logback.xml` holds `org.apache.kafka` at `WARN` for the same one: every
+   * Kafka client dumps its full effective configuration at `INFO` when constructed, `bootstrap.servers`
+   * included, which would leak from the client the demo's own printing is careful not to leak.
+   */
+  private def announce(options: DemoOptions, topic: String): Unit =
+    log.info(s"\nEffective configuration:\n  $options\n  topic = $topic")
 
   /** `None` when the command line was not usable - a misspelled flag must never be reported as a run. */
   private def parsed(args: Array[String]): Option[DemoOptions] =
@@ -100,10 +157,10 @@ object ScalaDemo {
    * Returns the results rather than only printing them, so a test can assert what the arms actually
    * did against the same code path the reader runs - a parallel path could pass while the real one is
    * broken.
+   *
+   * The fingerprint is `announce`'s, printed by `main` before the broker is resolved.
    */
   def runFor(options: DemoOptions, broker: DemoBroker, topic: String): Seq[ArmResult] = {
-    log.info(s"\nEffective configuration:\n  $options\n  topic = $topic")
-
     broker.ensureTopic(topic, options.partitions)
     broker.seed(topic, 0, options.records)
 
@@ -149,6 +206,7 @@ object ScalaDemo {
     config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, classOf[ByteArrayDeserializer].getName)
 
     val consumer = new KafkaConsumer[Array[Byte], Array[Byte]](config)
+    val keys = ConcurrentHashMap.newKeySet[String]()
     try {
       consumer.subscribe(Collections.singletonList(topic))
       // The clock starts AFTER the consumer is built and stops before it closes, because this arm is
@@ -163,12 +221,13 @@ object ScalaDemo {
         if (System.nanoTime() > deadline) {
           throw new IllegalStateException(s"$AkCore stalled at $processed of $target")
         }
-        consumer.poll(java.time.Duration.ofMillis(500)).asScala.foreach { _ =>
+        consumer.poll(java.time.Duration.ofMillis(500)).asScala.foreach { record =>
           simulateWork(options.delayMs)
+          val _ = keys.add(keyOf(record.key()))
           processed += 1
         }
       }
-      finished(AkCore, startedAt, processed)
+      finished(AkCore, startedAt, processed, keys.size)
     } finally consumer.close()
   }
 
@@ -187,6 +246,10 @@ object ScalaDemo {
     log.info(s"\n=== $ScalaGrpc starting over $target records ===")
     val processed = new AtomicInteger()
     val done = new CountDownLatch(1)
+    // Concurrent, unlike the AK core arm's: this arm's user function runs on as many threads as the
+    // engine hands out records, so a plain mutable set would lose keys and under-report the spread
+    // the column exists to demonstrate.
+    val keys = ConcurrentHashMap.newKeySet[String]()
 
     // A pool of exactly the in-flight ceiling, and this is where a blocking sleep as the user
     // function gets paid for. The contract permits one in Scala - it is Python's worker processes and
@@ -211,9 +274,10 @@ object ScalaDemo {
       // Started only now: the spawn and the handshake are the client library's start-up, and the AK
       // core arm charges itself for neither its own construction nor its subscription.
       val startedAt = System.nanoTime()
-      val session = client.poll { _ =>
+      val session = client.poll { record =>
         Future {
           simulateWork(options.delayMs)
+          val _ = keys.add(keyOf(record.key.orNull))
           if (processed.incrementAndGet() >= target) {
             done.countDown()
           }
@@ -224,7 +288,7 @@ object ScalaDemo {
       if (!done.await(ArmBudget.toMillis, TimeUnit.MILLISECONDS)) {
         throw new IllegalStateException(s"$ScalaGrpc stalled at ${processed.get()} of $target")
       }
-      val result = finished(ScalaGrpc, startedAt, processed.get())
+      val result = finished(ScalaGrpc, startedAt, processed.get(), keys.size)
 
       client.close()
       // The session's own end, which this client makes the same future poll returns. Waiting on it is
@@ -269,10 +333,21 @@ object ScalaDemo {
       }
     }
 
-  private def finished(arm: String, startedAt: Long, processed: Int): ArmResult = {
+  /**
+   * The identity a key counts as, for the "unique keys" column.
+   *
+   * '''The bytes are never logged, only counted''' - a key is untrusted payload, and the column is a
+   * cardinality rather than a sample. Kafka's own `null` key is a distinct case rather than an
+   * absent one, so it gets its own bucket instead of being dropped: an arm that saw only keyless
+   * records should report one key, not zero.
+   */
+  private def keyOf(key: Array[Byte]): String =
+    if (key == null) NoKey else new String(key, StandardCharsets.UTF_8)
+
+  private def finished(arm: String, startedAt: Long, processed: Int, keys: Int): ArmResult = {
     val elapsed = FiniteDuration(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS)
-    log.info(s"=== $arm finished: $processed records in ${elapsed.toMillis}ms ===")
-    ArmResult(arm, elapsed, processed)
+    log.info(s"=== $arm finished: $processed records over $keys keys in ${elapsed.toMillis}ms ===")
+    ArmResult(arm, elapsed, processed, keys)
   }
 
   /** A fresh group per arm per replay, so every arm reads the same records from the beginning. */
@@ -291,6 +366,14 @@ object ScalaDemo {
    * One of the contract's two tables. Same columns, same order, in every language - and '''no latency
    * column''', because the backlog is pre-produced and a per-record timing would be flattered by
    * however far an arm had fallen behind.
+   *
+   * ==`records` and `keys` come first, before anything about speed==
+   *
+   * Throughput alone cannot show the work happened. `records` must equal the target - a short arm is
+   * a failed arm, not a fast one - and `keys` is the distinct keys that arm actually saw, which is
+   * what shows the backlog was spread rather than one key repeated. They are the only two figures
+   * here that are '''deterministic''': every language over the same records reports the same pair,
+   * which is what makes eleven demos comparable when elapsed and msg/s never can be.
    */
   private def report(
       title: String,
@@ -299,7 +382,7 @@ object ScalaDemo {
       acrossReplays: Boolean): Unit = {
     val table = new StringBuilder("\n\n").append(title).append('\n')
     table.append(
-      row("arm", "elapsed", "msg/s", if (acrossReplays) "vs AK core*" else "vs AK core"))
+      row("arm", "records", "keys", "elapsed", "msg/s", if (acrossReplays) "vs AK core*" else "vs AK core"))
     results.foreach { result =>
       val ratio = baseline.filter(_.ratePerSecond != 0d) match {
         case Some(against) =>
@@ -307,11 +390,11 @@ object ScalaDemo {
         case None => "-"
       }
       table.append(
-        String.format(
-          Locale.ROOT,
-          "  %-14s %9.1fs %14s %14s%n",
+        row(
           result.arm,
-          java.lang.Double.valueOf(result.elapsed.toMillis / 1000d),
+          String.format(Locale.ROOT, "%,d", java.lang.Integer.valueOf(result.processed)),
+          String.format(Locale.ROOT, "%,d", java.lang.Integer.valueOf(result.keys)),
+          String.format(Locale.ROOT, "%.1fs", java.lang.Double.valueOf(result.elapsed.toMillis / 1000d)),
           String.format(Locale.ROOT, "%,d", java.lang.Integer.valueOf(result.ratePerSecond.toInt)),
           ratio))
     }
@@ -321,6 +404,16 @@ object ScalaDemo {
     log.info(table.toString)
   }
 
-  private def row(arm: String, elapsed: String, rate: String, ratio: String): String =
-    String.format(Locale.ROOT, "  %-14s %10s %14s %14s%n", arm, elapsed, rate, ratio)
+  /**
+   * One line of a table, header or body - the same formatter for both, so a column can never be
+   * added to one and forgotten in the other.
+   */
+  private def row(
+      arm: String,
+      records: String,
+      keys: String,
+      elapsed: String,
+      rate: String,
+      ratio: String): String =
+    String.format(Locale.ROOT, "  %-26s %9s %9s %10s %14s %14s%n", arm, records, keys, elapsed, rate, ratio)
 }
