@@ -137,7 +137,27 @@ POM
 # RESULT <mode> <count> <ms> <msgPerSec> peak=<n>  ->  "<msgPerSec> <n>"
 # One parser for every arm, which is the point of making the Go arm print the identical line.
 parse_result() { grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; }
-run_one() { java -cp "$1" Bench "${@:2}" 2>/dev/null | parse_result; }
+# BENCH_JFR=<dir> records a Java Flight Recorder profile of each measured run into that directory,
+# one .jfr per arm. Off by default because recording is not free and every result in bench/results/
+# was taken without it - a profiled run and an unprofiled one are not comparable and must not be put
+# in the same table.
+#
+# JFR rather than the profiler the README credits (YourKit): it ships with the JDK, needs no install
+# and no agent path, and answers "which methods and which locks" well enough to point at a suspect.
+# Reach for YourKit when the suspect needs confirming - allocation attribution and lock-contention
+# detail are where it is materially better.
+run_one() {
+  local cp=$1; shift
+  local jfr=()
+  if [ -n "${BENCH_JFR:-}" ]; then
+    mkdir -p "$BENCH_JFR"
+    # stackdepth well above the default 64: the default truncates the lock-acquisition stacks with
+    # "..." exactly where the interesting frame is, which makes contention unattributable.
+    jfr=(-XX:FlightRecorderOptions=stackdepth=256
+         -XX:StartFlightRecording=settings=profile,filename="$BENCH_JFR/$(echo "$*" | tr " /" "__").jfr,dumponexit=true")
+  fi
+  java "${jfr[@]}" -cp "$cp" Bench "$@" 2>/dev/null | parse_result
+}
 
 # --- the llingr arm --------------------------------------------------------------------------
 #
