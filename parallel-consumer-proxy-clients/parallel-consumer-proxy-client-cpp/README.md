@@ -86,6 +86,21 @@ lifecycle never reaching `validate` where the enforcer is bound.
 - **The extracted artifacts carry the timestamps of the layer that made them**, not of your build,
   so `ls -l` is no evidence a compile ran. Read `link-report.txt` for what was built, and with what.
 
+## The demo
+
+```bash
+parallel-consumer-proxy-clients/parallel-consumer-proxy-client-cpp/demo/run.sh
+```
+
+Needs Docker and nothing else - no C++ toolchain, no gRPC dev packages, no JDK. It replays the same
+records through two arms, **librdkafka one record at a time** and **C++ over the sidecar through
+this client library**, and prints two throughput tables. The broker is a compose sibling; the
+sidecar is a child process the library spawns, not a service you deploy.
+
+[`demo/README.md`](demo/README.md) records what is specific to C++ - chiefly that there is no native
+mode, because the container *is* the toolchain here. The contract every language's demo keeps is
+[`parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md).
+
 ## Using it
 
 ```cpp
