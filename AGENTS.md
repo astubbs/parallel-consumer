@@ -249,12 +249,19 @@ counts. This is a community-maintained fork of the no-longer-maintained
   shared default that every other session inherits.
 - **Docker** (integration tests - TestContainers spins up Kafka brokers)
 - **Maven via wrapper** (`./mvnw`) - do not use system Maven
-- **Go 1.24+ and Ruby 3.2+**, for the cross-language conformance module *only*. It builds a runner
-  per language and **fails the build when one cannot be built** - deliberately, because a language
-  nobody could build is not a language that passed. Both failure modes look like project breakage
-  and are not: Go reports `go.mod: unknown block type: tool` when `go env GOTOOLCHAIN` is `local`
-  (the default `auto` would fetch the right toolchain - `GOTOOLCHAIN=auto` per command fixes it),
-  and Ruby reports a missing `bundler` when the system 2.6 is on `PATH`.
+- **[mise](https://mise.jdx.dev)**, for the cross-language conformance module and the client
+  builds. It provides every foreign toolchain except the two that build in containers
+  (`bin/build-client.sh` names them: C++ and Swift). **Agents may install it and run `mise use -g`
+  themselves** - that call is recorded in
+  [`docs/inflight/parked-containerised-toolchains-and-runtime.md`](docs/inflight/parked-containerised-toolchains-and-runtime.md),
+  along with the rule that follows from it: *do not build an image fleet for problems mise has
+  already solved*.
+
+  Without mise the build falls through to whatever the host has, and the conformance module then
+  **fails** - correctly, because it refuses to let a runner nobody could build look like a runner
+  that passed. The two failure modes read as project breakage and are not: Go reports
+  `go.mod: unknown block type: tool` when `go env GOTOOLCHAIN` is `local` rather than its default
+  `auto`, and Ruby reports a missing `bundler` when macOS's system 2.6 is on `PATH`.
 
 ## How to Build
 
