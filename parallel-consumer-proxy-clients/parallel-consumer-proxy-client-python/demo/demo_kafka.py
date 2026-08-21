@@ -25,7 +25,7 @@ from typing import Any
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
-__all__ = ["KEY_SPACE", "consumer_properties", "ensure_topic", "seed"]
+__all__ = ["KEY_SPACE", "consumer_properties", "ensure_topic", "key_of", "key_slot", "seed"]
 
 log = logging.getLogger(__name__)
 
@@ -36,8 +36,46 @@ It is load-bearing for a key-ordered engine and merely descriptive for an unorde
 demo runs unordered, so it is here for parity rather than for effect.
 """
 
+_KEY_PREFIX = "key-"
+"""The backlog's key format, written once because two places now depend on it.
+
+:func:`seed` produces it and :func:`key_slot` reads it back, and the reason the second exists is
+the contract's **unique keys** column: the sidecar arm's user function runs in worker *processes*,
+so "the set of keys this arm saw" cannot be a Python ``set`` in any one of them. A key that maps
+back to an ordinal maps to a slot in a shared array instead - one byte, no lock, no IPC.
+"""
+
+
 _TOPIC_CREATION_TIMEOUT = 30.0
 """Long enough for a broker that has just booted to elect leaders for every partition."""
+
+
+def key_of(ordinal: int) -> bytes:
+    """The key the backlog's ``ordinal``-th record carries."""
+    return f"{_KEY_PREFIX}{ordinal % KEY_SPACE}".encode()
+
+
+def key_slot(key: bytes | None) -> int | None:
+    """Which of :data:`KEY_SPACE` slots ``key`` occupies, or ``None`` if it is not ours.
+
+    ``None`` means a record this demo did not seed - a pre-existing topic named with ``--topic``
+    holding somebody else's records. The demo counts those separately and says so rather than
+    guessing at a slot, because a hashed slot would collide and quietly *under*-report the one
+    figure the contract calls deterministic.
+    """
+    if key is None:
+        return None
+    try:
+        text = key.decode()
+    except UnicodeDecodeError:
+        return None
+    if not text.startswith(_KEY_PREFIX):
+        return None
+    try:
+        ordinal = int(text[len(_KEY_PREFIX):])
+    except ValueError:
+        return None
+    return ordinal if 0 <= ordinal < KEY_SPACE else None
 
 
 def ensure_topic(bootstrap: str, topic: str, partitions: int) -> None:
@@ -101,7 +139,7 @@ def seed(bootstrap: str, topic: str, first: int, last: int) -> None:
     for ordinal in range(first, last):
         producer.produce(
             topic,
-            key=f"key-{ordinal % KEY_SPACE}".encode(),
+            key=key_of(ordinal),
             value=f"record-{ordinal}".encode(),
             on_delivery=delivered,
         )

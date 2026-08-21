@@ -21,6 +21,21 @@ COMPOSE_FILE="$DEMO_DIR/docker-compose.yml"
 # because eleven per-language demos will eventually exist and a reader may have two brokers up.
 BROKER_PORT="${PC_DEMO_BROKER_PORT:-19095}"
 
+# THE FIRST THING ON SCREEN NAMES THE PRODUCT. That is contract
+# (parallel-consumer-proxy/demo/README.md), and it has to be printed HERE rather than only by the
+# demo: a native run builds a classpath and starts a broker first, so a reader would otherwise watch
+# a minute of Maven output without being told what any of it is for. reference_demo.py prints the
+# same banner when nothing else has - `docker compose up` and running it by hand - and
+# PC_DEMO_BANNER_PRINTED below is how this script tells it not to print a second one.
+banner() {
+    cat <<'BANNER'
+================================================================
+  PARALLEL CONSUMER  -  Python demo
+  The same records, twice: one at a time, then all at once.
+================================================================
+BANNER
+}
+
 usage() {
     cat <<'USAGE'
 usage: demo/run.sh [options]
@@ -47,6 +62,10 @@ does not inherit: in Python, in-flight records are worker PROCESSES. See demo/RE
 Every flag also has an environment variable: --delay-ms is PC_DEMO_DELAY_MS.
 USAGE
 }
+
+banner
+# Every path below has now printed it exactly once, so the demo itself must not print a second.
+export PC_DEMO_BANNER_PRINTED=1
 
 # ${args[@]+...} rather than "${args[@]}": under `set -u`, bash 3.2 - which is what macOS ships,
 # and what a first-time user runs this with - treats an EMPTY array expansion as an unbound

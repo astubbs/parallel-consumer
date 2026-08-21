@@ -12,7 +12,7 @@ docker compose up
 
 Needs Docker. Python 3.10+ and a JDK are optional: with both, the demo runs natively and starts its
 broker in a container; without either, the demo runs in a container too and the broker is a compose
-sibling. It announces which it chose, and why, on its first line.
+sibling. It prints the product's banner first, then announces which it chose and why.
 
 **The contract this keeps - and that every other language's demo keeps - is
 [`parallel-consumer-proxy/demo/README.md`](../../../parallel-consumer-proxy/demo/README.md).**
@@ -22,16 +22,42 @@ Read that first. This file only records what is specific to Python.
 
 | arm | what it is |
 |---|---|
-| **AK core** | `confluent_kafka.Consumer` - Python's own Apache Kafka client - one record at a time, in this process. |
-| **python-grpc** | This module's client library. It spawns the sidecar as a child process, receives records over a socket, runs the user's function in **worker processes**, and reports outcomes back. The application does no Kafka I/O on this path. |
+| **AK core (confluent-kafka)** | `confluent_kafka.Consumer`, one record at a time, in this process. |
+| **python-grpc (this client)** | This module's client library. It spawns the sidecar as a child process, receives records over a socket, runs the user's function in **worker processes**, and reports outcomes back. The application does no Kafka I/O on this path. |
+
+Both labels name the library that actually ran, which is contract: **"AK core" is a category, not a
+client**, and a reader cannot judge a comparison without knowing what produced it.
 
 Two arms is the whole contract outside Java. The seed carries four more because one JVM can hold
-every engine at once; Python has one Kafka client and one way to reach the engine, so a wrapper arm
-and a raw-wire arm would have nothing to be compared against. In particular **nothing here speaks
+every engine at once; Python has one way to reach the engine, so a wrapper arm and a raw-wire arm
+would have nothing to be compared against. In particular **nothing here speaks
 the protocol by hand** - the seed's first version did, and it proved the engine worked while saying
 nothing about the client library, which is the artifact users actually touch.
 
 ## What is specific to Python
+
+### Python has more than one serious Kafka client, and this demo runs `confluent-kafka`
+
+The contract asks a language with several to say so here, because "the choice materially changes
+the number, and a reader evaluating *is this fast in my language* is really asking about the client
+they already use". Python's three:
+
+| client | what it is |
+|---|---|
+| [`confluent-kafka`](https://github.com/confluentinc/confluent-kafka-python) | A binding to **librdkafka**, the C client. What this demo's AK core arm runs, and what seeds the backlog. |
+| [`kafka-python`](https://github.com/dpkp/kafka-python) | A pure-Python implementation of the protocol - no C library underneath it. |
+| [`aiokafka`](https://github.com/aio-libs/aiokafka) | `asyncio`-native, built on `kafka-python`'s protocol code. |
+
+Only `confluent-kafka` runs here. **Nothing in this repository has measured the other two**, so
+this is a choice on grounds rather than on numbers: a binding to a C client is the denominator
+least likely to flatter the sidecar arm, which makes it the conservative one to divide by. It is
+also the client the sidecar itself effectively competes with, since the sidecar's consumer is the
+Java client rather than a Python one.
+
+**Running a second AK core arm is a live option** the contract explicitly allows, and this demo has
+not taken it. `aiokafka` would be the interesting one - it is the shape an asynchronous Python
+application already has - and it would need the demo's serial arm to grow an event loop, which is
+why it is recorded as an option rather than done.
 
 ### `--concurrency` defaults to 16, not the seed's 100
 
@@ -46,24 +72,51 @@ that two readers' fingerprints are comparable. `--concurrency 100` still does ex
 The formula itself is an open owner decision, not this demo's to make -
 [`docs/inflight/blocker-executor-count-formula.md`](../../../docs/inflight/blocker-executor-count-formula.md).
 
-### The simulated work is `time.sleep`, and the divergence is smaller than the contract expects
+### The simulated work is `time.sleep`, and that satisfies the contract's predicate
 
-The contract asks Python for a "non-occupying wait", on the grounds that "a hundred sleeping
-processes is not the free thing a hundred sleeping threads is". That last part is true; the
-conclusion does not follow to the *wait primitive*, and this demo diverges on the default above
-instead.
+The contract's rule is now a property of the **client**, not of the language: *is it
+thread-per-record?* This one is not - it hands the user's function to a worker **process** - so
+Python is one of the six that needs its own non-occupying wait.
 
-`time.sleep` releases the GIL and parks the thread on the kernel's timer: the wait costs no CPU and
-no lock, which is exactly what the rule is protecting against - a busy loop would pin a core per
-in-flight record. What a Python wait occupies is a whole worker **process**, and no wait primitive
-changes that: this client hands a worker one record and takes one outcome back, so an event loop
-inside the worker cannot overlap a second record. `asyncio.run(asyncio.sleep(d))` per record would
-hold the process for exactly as long, plus a loop set-up. TypeScript's divergence is real - one
-event loop, and a blocking sleep there stops everything - Python's is not the same shape.
+`time.sleep` **is** that wait. It releases the GIL and parks the thread on the kernel's timer, so
+it costs no CPU and no lock; the thing the rule exists to rule out is a busy loop
+(`while time.monotonic() < deadline: pass`), which would pin a core per in-flight record. No other
+primitive is available that would occupy less: this client hands a worker one record and takes one
+outcome back, so an event loop inside the worker cannot overlap a second record, and
+`asyncio.run(asyncio.sleep(d))` per record would hold the process for exactly as long plus a loop
+set-up.
+
+**What a Python wait occupies is a whole worker process** - and here that is not a
+misreport, which is the distinction the contract's predicate is drawing. The rule's hazard is a
+table "reporting the runtime's ceiling while appearing to report the engine's". Python's ceiling
+*is* the concurrency the fingerprint printed, because the proxy's executor count is the worker
+count, so a sleeping worker per in-flight record is exactly the number on the page. The cost lands
+on how expensive that number is to buy - which is why this demo's divergence is the default
+`--concurrency` above, and not the wait primitive.
 
 `simulate_work` in [`reference_demo.py`](reference_demo.py) carries the same reasoning at the point
-of use, and [`docs/inflight/clients/python.md`](../../../docs/inflight/clients/python.md) records
-it as a contract wording this demo believes is wrong.
+of use. An earlier version of the contract named languages rather than stating this predicate, and
+listed Python for a reason that did not survive; that argument is settled and no longer tracked in
+[`docs/inflight/clients/python.md`](../../../docs/inflight/clients/python.md).
+
+### The `keys` column is counted in shared memory, because a `set` cannot cross a fork
+
+Every language's table reports **records processed** and **unique keys seen**, and both are
+contract because they are deterministic - the same records give the same two figures in any
+language, which is what makes them comparable when elapsed and msg/s never are.
+
+In Python the second one is awkward for the same reason everything else here is: the user's
+function runs in a worker process, so a `set` closed over by the processor would be duplicated by
+the fork and each worker would report only what it saw. `KeyTally` in
+[`reference_demo.py`](reference_demo.py) uses a shared **byte per key slot** instead - one
+unsynchronised write, since the only value ever written is 1 - and both arms use it, so the two
+rows are counted the same way. A `multiprocessing.Manager` dictionary would have counted exactly
+and for any key at all; it was rejected because it puts an IPC round trip on the critical path of
+the arm the demo exists to time.
+
+The price is that a key this demo did not seed has no slot. That only arises if `--topic` names a
+topic already holding somebody else's records, and it is never silent: those records are counted
+separately and the arm prints that its keys figure is an undercount.
 
 ### The clock starts at the first record, in both arms
 

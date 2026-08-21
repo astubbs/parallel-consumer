@@ -26,25 +26,82 @@ difference showed.
 **This does not unblock the blocker.** It is a demo picking a survivable number; the formula is
 still an open owner decision that every one of the ten client authors inherits.
 
-### The contract's Python rule is aimed at the wrong thing, and this is the one to resolve
+### The contract's two new columns stop `bin/ci-demo-conformance.sh` seeing any table at all
 
-The contract says the simulated work "must use that language's non-occupying wait", and singles
-Python out because "the client runs worker *processes*; a hundred sleeping processes is not the free
-thing a hundred sleeping threads is". The second half is true. The rule that follows from it is not.
+**Measured, not predicted**: the six-column table this demo now prints, fed through that script's
+own `skeleton()` awk, produces **no `HEADER` line and no `ROW` lines** - only the `DIAL` and `TITLE`
+ones. Two independent causes, and either alone is enough:
 
-`time.sleep` **is** Python's non-occupying wait: it releases the GIL and parks the thread on the
-kernel's timer, costing no CPU and no lock. The alternative the rule rules out - a busy loop - is
-what would pin a core per in-flight record. What a Python wait occupies is a whole worker *process*,
-and **no wait primitive changes that**: this client hands a worker one record and takes one outcome
-back, so an event loop inside the worker cannot overlap a second record, and
-`asyncio.run(asyncio.sleep(d))` per record would hold the process for exactly as long plus a loop
-set-up.
+- the header pattern requires `arm` to be followed immediately by `elapsed`, and `records` and
+  `keys` now sit between them;
+- the row pattern allows `[A-Za-z0-9 _-]` in an arm name, and every arm label now carries its
+  client's name in **brackets** - `AK core (confluent-kafka)`.
 
-TypeScript's entry in the same list is sound - one event loop, and a blocking sleep there stops
-everything, so an awaited timer genuinely changes the behaviour. Python's is not the same shape: the
-cost is the process count, so the divergence belongs on `--concurrency`, which is where this demo
-put it. **Suggested rewording for whoever owns the next contract pass:** Python's divergence is the
-default concurrency, not the wait primitive.
+The script still exits 0. Its absolute assertions read `DIAL` and `TITLE` lines, which survive, so
+the run stays green while the drift check silently narrows to *the fingerprint and the two
+headings* - it can no longer see a table's columns, its arms, or their order, which was most of
+what it was for. That is the check-that-passes-without-having-run class again
+(`docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`).
+
+`bin/**` is outside the language waves' file scope, so **the integrator owns the repair**, and it
+is worth more than a regex fix: `records` and `keys` are *deterministic*, which the contract says
+is exactly what the harness relies on - so the skeleton should carry their **values** rather than
+masking them like elapsed and msg/s. Today it masks every figure, so eleven languages could each
+report a different record count and the drift check would still be clean.
+
+### `KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` does not quieten the broker, in any of the eleven files
+
+The contract's "the broker is quiet" clause is not being met, and the compose setting that was
+supposed to meet it is not enough. Observed on this demo's container path against
+`confluentinc/cp-kafka:7.9.0`: the env var is set on the container, the generated config does say
+`log4j.rootLogger=WARN, stdout` - and the broker still printed **927 lines** of controller
+elections and log-segment chatter, interleaved by compose with the **35** the demo itself produced,
+which is exactly the burial the clause was written to prevent. The cause is
+that the image also writes **per-logger levels that override the root**:
+
+```
+log4j.logger.kafka=INFO
+log4j.logger.kafka.controller=TRACE
+log4j.logger.state.change.logger=TRACE
+log4j.logger.kafka.log.LogCleaner=INFO
+```
+
+Those come from the image's default `KAFKA_LOG4J_LOGGERS`, so the fix is to set that variable too
+rather than to change the root level - roughly
+`KAFKA_LOG4J_LOGGERS: "kafka=WARN,kafka.controller=WARN,state.change.logger=WARN,kafka.log.LogCleaner=WARN"`.
+
+**Not applied here on purpose.** It is one line in eleven identical compose files and the demo wave
+was told to leave broker log levels alone; fixing it in one language would leave ten quiet in the
+compose file and loud on screen. It belongs in the same pass that set the root level.
+
+### Where the two new columns go is a coordination question the contract does not answer
+
+The contract names `records` and `keys` and says the tables keep "same columns, same order"; it
+does not say where in the row they sit. This demo prints
+`arm | records | keys | elapsed | msg/s | vs AK core` - what ran, what it did, then how fast, so a
+reader meets the evidence before the number it justifies.
+
+Eleven language agents chose independently and simultaneously. Until the harness above can see a
+header again, **nothing will detect a disagreement**, so this is a merge-time reconciliation rather
+than something CI will catch.
+
+### The banner has to be printed by `run.sh` too, or it is not the first thing a reader sees
+
+`reference_demo.py` prints it, which covers `docker compose up` and running the module by hand. It
+is not sufficient on its own: a native run builds the sidecar's classpath with Maven and starts a
+broker first, so the product's name would arrive a minute or so into a screen of build output.
+`run.sh` therefore prints the same banner before its own first line and sets
+`PC_DEMO_BANNER_PRINTED=1` - a statement of fact, not a dial - which the demo honours and the
+compose file forwards, so no path prints it twice.
+
+Any language whose `run.sh` builds or installs anything before starting the demo has the same
+problem, and a language that put the banner only in its demo program will not have noticed it.
+
+**One consequence to know before writing a check for it**: on the container path launched through
+`run.sh`, the banner is on the host's stdout and *not* among the `demo-1 |` lines a compose capture
+scopes to. A conformance assertion that looks for the banner in the demo's own output would fail
+this language and pass the ones that print it twice, which is the wrong way round. Assert it on the
+whole capture, or settle the wrapper-versus-demo question first.
 
 ### Both arms are timed from the first record, not from before consumption
 
@@ -122,4 +179,7 @@ processes (Ruby, C++).
 
 The demo inherits it as a constraint on its own bookkeeping: the counters both replays wait on are
 `multiprocessing` primitives created before the client exists, because a closure over an ordinary
-`int` would be duplicated by the fork and every worker would count only its own records.
+`int` would be duplicated by the fork and every worker would count only its own records. The
+contract's **unique keys** column lands on the same constraint - a `set` cannot cross a fork either
+- and `KeyTally` in `demo/reference_demo.py` answers it with a shared byte per key slot rather than
+with a `Manager` dictionary, which would put an IPC round trip on the timed path.

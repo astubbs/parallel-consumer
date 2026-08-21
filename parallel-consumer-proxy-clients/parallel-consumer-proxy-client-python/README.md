@@ -196,7 +196,8 @@ demo/run.sh          # picks native or container for you; needs Docker either wa
 ```
 
 The same records through `confluent_kafka.Consumer` one at a time, and through this library over a
-real sidecar - two arms, two throughput tables, no setup. It keeps the cross-language contract in
+real sidecar - two arms, and two tables giving each arm's records, unique keys and throughput, with
+no setup. It keeps the cross-language contract in
 [`../../parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md);
 [`demo/README.md`](demo/README.md) records what is specific to Python, of which the load-bearing
 item is that `--concurrency` defaults to 16 rather than the seed's 100 - here an in-flight record is
