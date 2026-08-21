@@ -26,10 +26,22 @@ A thread dump of the container's JVM (pid 1) at ~262s uptime shows `DestroyJavaV
 ```
 
 None carries the `daemon` marker, which is why the JVM will not exit. They are
-`parallel-consumer-core` threads, so **two engine instances outlived their arms**. The two `elapsed`
-figures are ~1s apart, which places both in the *small* replay - consecutive arms, i.e. the two that
-run an engine in this process. (Read that as *which* instances survived, not as *why*: the same two
-arms close cleanly on the native path - see below.)
+`parallel-consumer-core` threads, so **two engine instances outlived their arms**, and the two
+`elapsed` figures are 1.05s apart.
+
+**That 1.05s does NOT identify which replay they came from**, though an earlier version of this note
+claimed it did. The arm timeline from the same run shows both replays have a `pc-core` ->
+`java-direct` gap of almost exactly that size:
+
+| replay | `pc-core` finished | `java-direct` finished | gap |
+|---|---|---|---|
+| small | `51:00.254` | `51:01.322` | 1.07s |
+| big | `51:07.737` | `51:08.782` | 1.05s |
+
+So the pair is `pc-core` + `java-direct` from *one* of the two replays, and the thread dump alone
+cannot say which. Reconstructing it from `DestroyJavaVM`'s own elapsed time lands between the two
+candidates and is not precise enough to separate them. Whichever it is, note the asymmetry the cause
+has to explain: **four** in-process engines run and only **two** leak.
 
 ## Why the obvious explanation is wrong
 
@@ -38,9 +50,8 @@ try-with-resources. **So this is not a missing `close()`**, and anyone starting 
 will waste the time this note exists to save. Whatever is happening, `close()` is being called and
 the threads are surviving it - or one of the four engine instances is not the one being closed.
 
-Note the asymmetry that has to be explained: four engine instances run (`pc-core` and `java-direct`,
-in each replay) and only **two** pairs of threads remain. A cause that applied uniformly would leave
-four pairs or none.
+A cause that applied uniformly to every engine would leave four pairs or none, so whatever
+distinguishes the surviving two is the shape of the bug.
 
 ## Blast radius
 
@@ -88,10 +99,9 @@ This narrows it but does not convict anything, because the container moves **two
 3. **Is it new?** The polish wave's language agents reported exit 0 for their own demos, but only
    Java has in-process engine arms, so their runs say nothing about this. Check whether a container
    run from before the polish merge exits.
-4. **Which two of the four engine instances leak?** Four run (`pc-core` and `java-direct`, in each
-   replay) and only two pairs remain, both created ~10-11s after JVM start, which places them in the
-   *small* replay. A cause that applied uniformly would leave four pairs or none, so whatever
-   distinguishes the small replay's instances from the big replay's is the shape of the bug.
+4. **Which two of the four engine instances leak?** The dump cannot say - see the table above.
+   Naming an engine's arm in its thread name would settle it in one run and is cheaper than any
+   further inference from timestamps.
 
 ## What must not be done
 
