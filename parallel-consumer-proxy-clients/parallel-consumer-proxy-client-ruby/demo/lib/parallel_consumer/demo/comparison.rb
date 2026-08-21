@@ -76,16 +76,18 @@ module ParallelConsumer
       # records reports the same pair - which is what lets `bin/ci-demo-conformance.sh` compare
       # languages where elapsed and msg/s never could.
       #
-      # THEY ARE APPENDED RATHER THAN INSERTED, deliberately: `vs AK core` stays the last of the
-      # original four columns, so the header a reader (and the conformance skeleton) already knows
-      # is still a prefix of this one.
+      # THEY SIT BESIDE `arm`, WHICH IS THE CONTRACT'S ORDER. They were appended here originally,
+      # on the reasoning that keeping `vs AK core` last left the old four-column header a prefix of
+      # the new one - sound while the conformance skeleton matched headers loosely, and moot once
+      # that skeleton was fixed to match them exactly. Eleven implementations chose three different
+      # orders from the same document; the contract now states one, and this is it.
       #
       # Column IDENTITY and ORDER are contract; the widths are not, and this arm column is wider
       # than the Java seed's because "ruby-grpc (this client)" no longer fits in fourteen. Annotated
       # format tokens are RuboCop's requirement rather than the seed's.
-      HEADER = "  %<arm>-24s %<elapsed>10s %<rate>14s %<ratio>14s %<records>9s %<keys>7s"
+      HEADER = "  %<arm>-24s %<records>9s %<keys>7s %<elapsed>10s %<rate>14s %<ratio>14s"
 
-      ROW = "  %<arm>-24s %<elapsed>9.1fs %<rate>14s %<ratio>14s %<records>9s %<keys>7s"
+      ROW = "  %<arm>-24s %<records>9s %<keys>7s %<elapsed>9.1fs %<rate>14s %<ratio>14s"
 
       def initialize(options, broker, topic)
         @options = options

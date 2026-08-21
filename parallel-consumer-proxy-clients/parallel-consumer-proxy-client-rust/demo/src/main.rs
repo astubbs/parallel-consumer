@@ -168,13 +168,13 @@ fn report(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, acro
 fn render(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, across_replays: bool) -> String {
     let mut table = format!("\n\n{title}\n");
     table.push_str(&format!(
-        "  {:<24} {:>10} {:>14} {:>14} {:>10} {:>8}\n",
+        "  {:<24} {:>10} {:>8} {:>10} {:>14} {:>14}\n",
         "arm",
+        "records",
+        "keys",
         "elapsed",
         "msg/s",
-        if across_replays { "vs AK core*" } else { "vs AK core" },
-        "records",
-        "keys"
+        if across_replays { "vs AK core*" } else { "vs AK core" }
     ));
     for result in results {
         let ratio = match baseline {
@@ -184,13 +184,13 @@ fn render(title: &str, results: &[ArmResult], baseline: Option<&ArmResult>, acro
             _ => "-".to_owned(),
         };
         table.push_str(&format!(
-            "  {:<24} {:>9.1}s {:>14} {:>14} {:>10} {:>8}\n",
+            "  {:<24} {:>10} {:>8} {:>9.1}s {:>14} {:>14}\n",
             result.label(),
+            thousands(result.processed as u64),
+            thousands(result.unique_keys as u64),
             result.elapsed.as_millis() as f64 / 1000.0,
             thousands(result.rate_per_second() as u64),
-            ratio,
-            thousands(result.processed as u64),
-            thousands(result.unique_keys as u64)
+            ratio
         ));
     }
     if across_replays {
@@ -294,7 +294,7 @@ mod tests {
 
         // Column IDENTITY and ORDER are the contract; the padding is not.
         let columns: Vec<&str> = header.split_whitespace().collect();
-        let expected = vec!["arm", "elapsed", "msg/s", "vs", "AK", "core", "records", "keys"];
+        let expected = vec!["arm", "records", "keys", "elapsed", "msg/s", "vs", "AK", "core"];
         assert_eq!(columns, expected);
         assert!(row.contains("AK core (rdkafka)"), "the row names its client: {row}");
         // Deterministic, unlike elapsed and msg/s, which is what makes them comparable across

@@ -433,13 +433,13 @@ internal static class Program
         var table = new StringBuilder("\n\n").Append(title).Append('\n');
         table.AppendLine(string.Format(
             CultureInfo.InvariantCulture,
-            "  {0,-26} {1,10} {2,14} {3,14} {4,10} {5,8}",
+            "  {0,-26} {1,10} {2,8} {3,10} {4,14} {5,14}",
             "arm",
+            "records",
+            "keys",
             "elapsed",
             "msg/s",
-            acrossReplays ? "vs AK core*" : "vs AK core",
-            "records",
-            "keys"));
+            acrossReplays ? "vs AK core*" : "vs AK core"));
         foreach (var result in results)
         {
             var ratio = baseline is null || baseline.RatePerSecond == 0
@@ -448,13 +448,13 @@ internal static class Program
                     CultureInfo.InvariantCulture, $"{result.RatePerSecond / baseline.RatePerSecond:F1}x");
             table.AppendLine(string.Format(
                 CultureInfo.InvariantCulture,
-                "  {0,-26} {1,9:F1}s {2,14} {3,14} {4,10} {5,8}",
+                "  {0,-26} {1,10} {2,8} {3,9:F1}s {4,14} {5,14}",
                 result.Arm,
+                result.Processed.ToString("N0", CultureInfo.InvariantCulture),
+                result.UniqueKeys.ToString("N0", CultureInfo.InvariantCulture),
                 (long)result.Elapsed.TotalMilliseconds / 1000d,
                 ((long)result.RatePerSecond).ToString("N0", CultureInfo.InvariantCulture),
-                ratio,
-                result.Processed.ToString("N0", CultureInfo.InvariantCulture),
-                result.UniqueKeys.ToString("N0", CultureInfo.InvariantCulture)));
+                ratio));
         }
 
         if (acrossReplays)

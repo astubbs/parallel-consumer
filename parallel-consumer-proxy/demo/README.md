@@ -168,11 +168,24 @@ masking them the way it masks a rate.
 arm | records | keys | elapsed | msg/s | vs AK core
 ```
 
-Evidence before rate: what the arm *did* comes before how fast it did it. This is written down
-because it was once left unstated, and four languages independently chose this order anyway - which
-settled it, but only by luck. Column *widths* are still not contract: a longer arm name may widen a
-column, and a check that enforced alignment would put every language with a long client name in
-permanent violation.
+Evidence before rate: what the arm *did* comes before how fast it did it.
+
+This is written down because it was once left unstated, and eleven implementations then returned
+**three different orders** from the one document: six beside `arm`, four appended after
+`vs AK core`, one in the middle. Every one of the eleven was defensible, and the two that wrote down
+a reason gave a *good* one - appending kept the original four-column header a prefix of the new one,
+which mattered while the conformance skeleton matched headers loosely. The lesson is not that anyone
+chose badly. It is that a contract which leaves something unstated does not get consistency, it gets
+a vote, and nothing anywhere goes red to report the result.
+
+**Assert your column order in your own test suite.** Three of the eleven already did - the ones that
+did were not the problem, and their tests are what made the divergence cheap to find and safe to fix.
+A language whose table shape nothing asserts will drift again the next time someone adds a column,
+and the cross-language check cannot be the only thing watching: it compares languages to each other,
+so eleven demos that drift *together* still pass it.
+
+Column *widths* are still not contract: a longer arm name may widen a column, and a check that
+enforced alignment would put every language with a long client name in permanent violation.
 
 ## The contract a per-language demo must keep
 

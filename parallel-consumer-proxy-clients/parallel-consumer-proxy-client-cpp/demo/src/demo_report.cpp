@@ -18,8 +18,8 @@ constexpr int kRuleWidth = 64;
 /// COLUMN WIDTH IS DELIBERATELY NOT CONTRACT, and bin/ci-demo-conformance.sh says so: a language
 /// with a longer arm name would otherwise be in permanent violation of an alignment rule. Column
 /// IDENTITY and ORDER are what every language must match.
-constexpr const char* kHeaderFormat = "  %-24s %10s %12s %10s %8s %12s\n";
-constexpr const char* kRowFormat = "  %-24s %9.1fs %12s %10s %8s %12s\n";
+constexpr const char* kHeaderFormat = "  %-24s %10s %8s %10s %12s %12s\n";
+constexpr const char* kRowFormat = "  %-24s %10s %8s %9.1fs %12s %12s\n";
 
 }  // namespace
 
@@ -51,7 +51,7 @@ std::string render(const std::string& title, const std::vector<ArmResult>& resul
                    bool across_replays) {
     char line[512];
     std::string table = "\n\n" + title + "\n";
-    std::snprintf(line, sizeof(line), kHeaderFormat, "arm", "elapsed", "msg/s", "records", "keys",
+    std::snprintf(line, sizeof(line), kHeaderFormat, "arm", "records", "keys", "elapsed", "msg/s",
                   across_replays ? "vs AK core*" : "vs AK core");
     table += line;
     for (const ArmResult& result : results) {
@@ -63,9 +63,10 @@ std::string render(const std::string& title, const std::vector<ArmResult>& resul
             ratio = rendered;
         }
         std::snprintf(line, sizeof(line), kRowFormat, result.arm.c_str(),
+                      with_thousands(result.processed).c_str(),
+                      with_thousands(result.unique_keys).c_str(),
                       std::chrono::duration<double>(result.elapsed).count(),
                       with_thousands(static_cast<long>(result.rate_per_second())).c_str(),
-                      with_thousands(result.processed).c_str(), with_thousands(result.unique_keys).c_str(),
                       ratio.c_str());
         table += line;
     }

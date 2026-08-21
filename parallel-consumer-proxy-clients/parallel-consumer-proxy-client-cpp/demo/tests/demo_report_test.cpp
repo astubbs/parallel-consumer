@@ -56,7 +56,7 @@ PCP_TEST(the_banner_says_the_language_rather_than_the_module_directory,
 }
 
 PCP_TEST(the_table_carries_the_contract_columns_in_order,
-         "arm, elapsed, msg/s, records, keys, vs AK core - identity and order are contract") {
+         "arm, records, keys, elapsed, msg/s, vs AK core - identity and order are contract") {
     const std::vector<demo::ArmResult> results{arm("AK core (librdkafka)", 2.0, 20, 20)};
 
     const std::string header = demo::render("Small replay", results, nullptr, false);
@@ -68,11 +68,11 @@ PCP_TEST(the_table_carries_the_contract_columns_in_order,
     const std::size_t at_ratio = header.find("vs AK core");
 
     PCP_CHECK(at_arm != std::string::npos);
-    PCP_CHECK(at_arm < at_elapsed);
-    PCP_CHECK(at_elapsed < at_rate);
-    PCP_CHECK(at_rate < at_records);
+    PCP_CHECK(at_arm < at_records);
     PCP_CHECK(at_records < at_keys);
-    PCP_CHECK(at_keys < at_ratio);
+    PCP_CHECK(at_keys < at_elapsed);
+    PCP_CHECK(at_elapsed < at_rate);
+    PCP_CHECK(at_rate < at_ratio);
 }
 
 PCP_TEST(every_arm_reports_what_it_did_and_not_only_how_fast,

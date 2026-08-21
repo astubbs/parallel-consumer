@@ -640,32 +640,47 @@ public final class ReferenceDemo {
      */
     private static void report(String title, List<ArmResult> results, ArmResult baseline,
                                boolean acrossReplays) {
+        log.info("{}", renderTable(title, results, baseline, acrossReplays));
+    }
+
+    /**
+     * The table as text, split from {@link #report} for one reason: <b>column identity and order
+     * are contract</b> across all eleven languages, and nothing else in this demo can assert them.
+     * The C++ and Rust demos split theirs for the same reason; Java, as the seed, had no such test
+     * at all until the eleven implementations returned three different column orders from one
+     * document - and the seed's own order was one of the wrong ones.
+     * <p>
+     * Package-private rather than public: the test lives beside it, and the demo's surface is
+     * {@code main}.
+     */
+    static String renderTable(String title, List<ArmResult> results, ArmResult baseline,
+                              boolean acrossReplays) {
         int armWidth = results.stream().mapToInt(r -> r.label().length()).max().orElse(20);
-        String rowFormat = "  %-" + armWidth + "s %9s %10s %11s %9s %7s%n";
+        String rowFormat = "  %-" + armWidth + "s %9s %7s %9s %10s %11s%n";
 
         var table = new StringBuilder("\n\n").append(title).append('\n');
-        table.append(String.format(Locale.ROOT, rowFormat, "arm", "elapsed", "msg/s",
-                acrossReplays ? "vs AK core*" : "vs AK core", "records", "keys"));
+        table.append(String.format(Locale.ROOT, rowFormat, "arm", "records", "keys", "elapsed",
+                "msg/s", acrossReplays ? "vs AK core*" : "vs AK core"));
         for (ArmResult result : results) {
             String ratio = baseline == null || baseline.ratePerSecond() == 0
                     ? "-"
                     : String.format(Locale.ROOT, "%.1fx", result.ratePerSecond() / baseline.ratePerSecond());
             table.append(String.format(Locale.ROOT, rowFormat,
                     result.label(),
+                    String.format(Locale.ROOT, "%,d", result.processed()),
+                    String.format(Locale.ROOT, "%,d", result.uniqueKeys()),
                     String.format(Locale.ROOT, "%.1fs", result.elapsed().toMillis() / 1000d),
                     String.format(Locale.ROOT, "%,d", (int) result.ratePerSecond()),
-                    ratio,
-                    String.format(Locale.ROOT, "%,d", result.processed()),
-                    String.format(Locale.ROOT, "%,d", result.uniqueKeys())));
+                    ratio));
         }
         // Phrased as a sentence rather than as `name = value` on purpose: the cross-language
         // conformance check reads any such line as a configuration dial the demo echoed.
-        table.append("\n  The last two columns are deterministic - every arm must process every "
-                + "record, over the same keys.\n");
+        table.append("\n  The records and keys columns are deterministic - every arm must process "
+                + "every record, over the same keys.\n");
         if (acrossReplays) {
             table.append("  * against the SMALL replay's AK core arm. Across replays, so not "
                     + "like-for-like.\n");
         }
-        log.info("{}", table);
+        return table.toString();
     }
 }
