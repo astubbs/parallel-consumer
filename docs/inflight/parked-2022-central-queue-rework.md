@@ -93,8 +93,14 @@ thread selecting work; under direct pull every worker contends on shared shard s
 branch's own commits record fighting an O(n) count in exactly that path (`e12ba8a8b`). **That cost
 grows with concurrency, which is the direction that matters.**
 
-**It has never been measured, because the spin masked it.** A finished implementation with a real
-blocking wait would measure it for the first time.
+**It has now been measured**, on `perf/direct-pull-measured`, by building a finished direct-pull path
+on current code with a real blocking wait:
+[`perf-direct-pull-measured.md`](perf-direct-pull-measured.md). **The objection holds, and by a wide
+margin.** That note also corrects two things below: which commit the busy-spin was live on (an
+earlier one than this note assumes - by `0df84c9e5` it was dead code and the worker was taking from a
+`LinkedBlockingQueue`), and the claim further down that direct pull makes `DynamicLoadFactor`
+disappear (it does not; it removes the `ThreadPoolExecutor.getQueue().size()` reading, which is the
+part the virtual-threads argument actually needs).
 
 ## The three results, and what each one settles
 

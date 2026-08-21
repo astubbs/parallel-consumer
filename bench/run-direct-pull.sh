@@ -60,9 +60,17 @@ for r in $(seq 1 "$REPEATS"); do
     for d in $DELAYS; do
       note_load "before r$r c$c d$d:"
       log "repeat $r, delay ${d}ms, concurrency $c, order [$modes]"
-      MODES="$modes" bash "$HERE/run-bisect.sh" "$RECORDS" "$d" "$c" 1 >/dev/null 2>>"$WORK/direct-pull.log"
+      # DELAYS and CONCURRENCIES must not reach run-bisect.sh. It reads the same two names, and if a
+      # caller EXPORTED them (`DELAYS=0 CONCURRENCIES="10 100" bench/run-direct-pull.sh`) the child
+      # inherits them and sweeps the whole list itself, ignoring the positional argument. The result
+      # is not wrong - every row still records its own delay and concurrency - but each point is run
+      # once per outer iteration, so the repeat column stops meaning what it says.
+      MODES="$modes" DELAYS= CONCURRENCIES= bash "$HERE/run-bisect.sh" "$RECORDS" "$d" "$c" 1 >/dev/null 2>>"$WORK/direct-pull.log"
       # Stamp the real repeat number over run-bisect's own, which is always 1 here.
-      awk -F, -v r="$r" 'NR>1 {$8=r; OFS=","; print}' "$WORK/results.csv" >> "$OUT"
+      # OFS in BEGIN, not beside the assignment: awk rebuilds $0 at the moment a field is assigned,
+      # using whatever OFS is THEN. Set afterwards, the first row of every invocation came out
+      # space-separated and every later one comma-separated - a results file that reads as valid.
+      awk -F, -v r="$r" 'BEGIN { OFS="," } NR>1 { $8=r; print }' "$WORK/results.csv" >> "$OUT"
       note_load "after  r$r c$c d$d:"
       tail -2 "$OUT" >&2
     done

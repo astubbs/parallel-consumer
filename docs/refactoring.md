@@ -595,12 +595,18 @@ Cross-cutting above; the rest:
   instead of on results (backpressure).
 - `origin/refactor/worker-queues` @a616de9e - worker-queue rework.
 - `origin/refactor/gpt3-central-queue-direct-pull` @7e775a11 - central queue, direct pull.
-  **Built and working, and still ~1/3 the speed of the ThreadPoolExecutor version** (its own commit
-  `0df84c9e5` says so). Poller throttling was identified as the suspect and "doesn't seem to help".
+  Its own commit `0df84c9e5` records **~1/3 the speed of the ThreadPoolExecutor version**, and poller
+  throttling as the suspect that "doesn't seem to help". **Both statements are about a design that is
+  not direct pull**: by that commit the worker's live path was `CentralQueue.take()`, an ordinary
+  `LinkedBlockingQueue` the control loop pushed into. Direct pull lived earlier on the branch
+  (`c167b94b0`..`5dcd39bb3`) and its idle path was a busy-spin, so it never produced a number at all.
   Also carries `5dcd39bb3` "ThreadLocal attempt for not sharing a queue" - the per-thread-queue idea -
   and `58826c349` "Central queue facade over Shards", the queue-that-is-not-a-queue.
-  Full read-out in `docs/inflight/parked-2022-central-queue-rework.md`. **Reasons, not verdicts:**
-  this entry said "didn't help" for years, which hid that the alternative had been built and lost.
+  **The architecture has since been rebuilt and measured** on `perf/direct-pull-measured`, with a real
+  blocking wait: `docs/inflight/perf-direct-pull-measured.md` carries the numbers and the cause.
+  Read-out of the branch itself in `docs/inflight/parked-2022-central-queue-rework.md`. **Reasons, not
+  verdicts:** this entry said "didn't help" for years, which hid that the alternative had been built
+  and lost.
 - `origin/refactor/gpt3-queue-management-with-msg-push` @9ee80ffb - central distribution via
   actor message, batch-100.
 - `origin/external-engine-higher-pressure` @944808e9 - backpressure/pressure system for the

@@ -8,8 +8,31 @@ The retry that hid them is gone - that half is done and written up in
 which also has the scan method. What is open is the tests themselves - two of the scan's three, plus
 one met later. The scan's third,
 `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-(3/45), is fixed and gone from this ledger: astubbs#260 established the extra commit was correct
-product behaviour and the assertion was wrong, so no product change was needed.
+(3/45), was fixed and removed from this ledger: astubbs#260 established the extra commit was correct
+product behaviour and the assertion was wrong, so no product change was needed. **It has been seen
+again since** - see below.
+
+### Seen again after being called fixed: the shutdown one, 2026-08-22
+
+`ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
+failed once in a full core unit run on `perf/direct-pull-measured`, asserting
+*"primed record and first key=0 record completed only, followup key 0 records skipped"*. **Recorded
+because it is a recurrence of something declared fixed, which is the one case where a single sighting
+is worth writing down.**
+
+What is known: it **passed 3/3 in isolation immediately afterwards**, on the same build, with the box
+at a one-minute load of 6-8. The failing run was on a box whose five- and fifteen-minute load averages
+were 97 and 317 - several other agent sessions, plus a benchmark that had just finished driving five
+thousand threads.
+
+What it is **not**: the branch it was seen on changes `WorkContainer.inFlight` to a CAS,
+`WorkManager.numberRecordsOutForProcessing` to an atomic, and `ShardManager.iterationResumePoint` to
+volatile. Under the shipped engine the control loop is the only thread that selects work, so the CAS
+cannot lose and the counters carry identical values - the default path is semantically unchanged, and
+the direct-pull engine those changes exist for was **off** in this run.
+
+**So it is the load-tightness shape again, not a new defect - but astubbs#260's claim that the
+assertion was simply wrong now has a counter-example, and the next sighting is a third.**
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
