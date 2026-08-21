@@ -61,6 +61,26 @@ and it is currently buried under "Vert.x integration".
 - **Every figure is macOS and every handler is a sleep** -
   [`next-benchmark-a-model-of-work-not-work.md`](next-benchmark-a-model-of-work-not-work.md).
 
+## The comparison needs an exactly-once column, not just a throughput one
+
+**`ExternalEngine` rejects transactional commit mode outright.** So every engine this note would steer
+users towards **cannot do exactly-once**, and the core engine - the slower one - is the only one that
+can.
+
+**A comparison that shows only throughput would be actively misleading**, because it would move
+someone off the only engine that supports the guarantee they may be relying on, without ever
+mentioning it. The honest framing is a two-axis choice:
+
+| | Concurrency beyond `r x latency` | Exactly-once |
+|---|---|---|
+| **Core** | no - work holds a thread | **yes** |
+| **Async engines** | **yes** | no |
+
+**That is a real trade a reader can make**, and it is more useful than a ratio. It also names the gap
+worth closing: an engine that offered both would dominate, and nothing about async completion makes
+transactions *impossible* - it makes holding one open across an uncontrolled callback impossible, which
+is a narrower statement. See [`next-core-async-user-function.md`](next-core-async-user-function.md).
+
 ## Where it goes
 
 - **`README.adoc`** - the engine choice needs to be a decision with a stated criterion, not a list of

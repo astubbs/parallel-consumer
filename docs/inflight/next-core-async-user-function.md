@@ -117,8 +117,8 @@ point the user called. Whether that actually holds is the first thing to check.
    thread, so its pressure accounting is unchanged. That makes the coupling to
    [`bug-available-work-counter-needs-a-clamp.md`](bug-available-work-counter-needs-a-clamp.md) a
    sequencing preference rather than a hard dependency.
-2. **Transactions are currently incompatible, and this is the sharpest constraint.** `ExternalEngine`
-   rejects them outright:
+2. **Transactions: settled - block EoS on the new entry point only.** *Owner's decision,
+   2026-08-21.* `ExternalEngine` already rejects transactional commit mode outright:
 
    ```java
    if (options.isUsingTransactionCommitMode()) {
@@ -126,10 +126,23 @@ point the user called. Whether that actually holds is the first thing to check.
    }
    ```
 
-   **So today, async completion and exactly-once are mutually exclusive.** A core `pollAsync` either
-   carries that restriction - which makes it much less attractive - or solves it, which is a
-   substantially larger piece of work. **This also bears on the documentation push**: steering users
-   towards async engines currently steers them away from EoS, and the comparison must say so.
+   **`pollAsync` carries the same restriction. The classic `poll` must not**, and that distinction is
+   the whole point of the adapter: its future completes **inline, on the worker thread, before the
+   commit path runs**, so the transaction machinery sees exactly what it sees today. **Every existing
+   transactional user is unaffected.** A restriction that leaked onto `poll` would be a breaking change
+   dressed up as a refactor.
+
+   **And the restriction gets better wording out of this.** Today it reads as a module fact -
+   *"external engines do not support transactions"*. Stated in terms of the actual cause it is a rule a
+   user can reason about: **you cannot hold a producer transaction open across a completion you do not
+   control, for an unbounded time.** Same constraint, but it explains itself, and it stops being
+   surprising that Vert.x specifically is excluded.
+
+   **Consequence for the documentation push**, which must be said out loud rather than discovered:
+   steering users towards async completion steers them away from exactly-once. See
+   [`next-docs-publish-the-engine-comparison.md`](next-docs-publish-the-engine-comparison.md) - the
+   comparison needs an EoS column, not just a throughput one.
+
 3. **A future that never completes pins a record forever.** There is no timeout on the Vert.x path
    either, so this is an existing gap rather than a new one - but a core API would be used far more
    widely, and the proxy already had to solve it with `LivenessLease`. **A policy is needed before this
