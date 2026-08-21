@@ -287,7 +287,109 @@ the sidecar is spawned as a child process inside the demo container and is not a
 2. **The big replay's heading interpolates `total * delayMs / 1000` seconds**, which prints
    `would take 0s+` at any small volume. Faithfully mirrored, and it reads as a bug in every
    language that mirrors it. A floor, or a different phrasing under a second, would fix it once.
-3. **The contract does not say what an arm is called.** Java's arms are `java-grpc` and friends and
-   its table column is 14 characters wide; `typescript-grpc` is 15, so this demo widened the column.
-   Harmless, but "same columns, same order" is stated as contract and column *width* is not - worth
-   one sentence so the next language does not think it has broken something.
+3. **CLOSED by the polish wave below.** ~~The contract does not say what an arm is called.~~ Java's
+   arms are `java-grpc` and friends and its table column was 14 characters wide; `typescript-grpc`
+   is 15, so this demo widened the column and wondered whether it had broken something. The
+   rewritten contract says **identity and order only**, and `bin/ci-demo-conformance.sh`'s header
+   says the same outright - so width is explicitly free, and the arm labels the polish wave added
+   widened it again. What replaced this concern is a narrower one: the contract still does not fix
+   the column *order* for the two columns it just added. See "The contract gap this wave opened".
+
+## The reader-experience polish wave
+
+A later pass over `parallel-consumer-proxy/demo/README.md` added three reader-facing clauses after
+someone watched a demo and found it unimpressive. All three are now kept here, and one contract gap
+opened by them is recorded below rather than edited into the contract.
+
+### What changed
+
+- **The demo opens by naming the product.** `BANNER` in `demo/src/report.ts`, printed by
+  `main.ts` as the first thing the demo writes, before the effective configuration. It lives in the
+  *program* and not in `run.sh` deliberately: both entry points - `run.sh` and a bare
+  `docker compose up` - then open with it, and it is printed exactly once on either. `run.sh` still
+  prints its mode line and its build output first, because that is the *launcher* getting ready, not
+  the demo; a reader on the native path sees the banner after the Maven build.
+- **Both arms name their client.** `AK core (kafkajs)` and `typescript-grpc (this client)`. The arm
+  *name* was split from its *label*: `SIDECAR_ARM_NAME` (`typescript-grpc`) still supplies the
+  consumer group id and the instance tag, because those are identifiers and
+  `typescript-grpc (this client)` is a caption.
+- **Two new columns, `records` and `keys`.** `Countdown` became `Tally`, which counts and also
+  collects the distinct keys the arm observed. Both arms now read the record's key - the AK core
+  arm through `eachMessage: async ({ message }) => ...`, the sidecar arm through the
+  `InboundRecord` its processor is already handed - and neither deserializes a value, so neither is
+  charged for work the other avoids. Column order chosen here is
+  `arm | records | keys | elapsed | msg/s | vs AK core`.
+- **Broker log levels were NOT touched**; `WARN` was already set in `docker-compose.yml` and in
+  `run.sh`'s standalone `docker run`.
+
+### The judgement the contract asked for: TypeScript's second Kafka client
+
+The contract asks a language with more than one serious client to say so in its own README, and to
+*consider* running both as separate arms. TypeScript has kafkajs and
+`@confluentinc/kafka-javascript` (a librdkafka binding, the successor to `node-rdkafka`). **One arm,
+and it stays kafkajs** - the reasoning is in `demo/README.md` under "TypeScript has two serious
+Kafka clients": no native toolchain on the demo's critical path, and a third arm would be a second
+*serial* row that compares two Kafka clients with each other rather than pricing the sidecar hop,
+while putting this demo's table out of step with the other ten. The cost is stated in that README as
+reasoning and explicitly not as a measurement: kafkajs is the slower of the two, so this baseline is
+conservative and the `vs AK core` ratio correspondingly generous. **Nothing here measured that.**
+
+### The contract gap this wave opened, recorded and not edited
+
+**The contract fixes the new columns' identity but not their POSITION.** "output | the two tables
+above, same columns, same order" is a cross-language requirement, and the section that adds
+`records` and `keys` says only that each arm "also reports" them - so eleven demos polished in
+parallel can each pick a different position and every one of them will have kept the contract as
+written. This module put them directly after `arm`, on the argument that the deterministic
+"what it did" figures belong before the volatile "how fast" ones. **If the fan-out disagrees, this
+is the file to change, and one sentence in the contract would settle it for good.**
+
+Related, and now answered: the earlier note here asked for a sentence saying column *width* is not
+contract. The rewritten contract says identity and order only, and
+`bin/ci-demo-conformance.sh`'s header says it outright, so **that item is closed** - this table is
+wider again and that is allowed.
+
+### `bin/ci-demo-conformance.sh` needs a matching change, and it was not this agent's file
+
+`bin/**` was explicitly out of scope for this wave. Its `skeleton()` awk reduces a results row with
+
+```
+/^[[:space:]]*[A-Za-z][A-Za-z0-9 _-]*[[:space:]]+[0-9.]+s[[:space:]]+[0-9,-]+[[:space:]]+[0-9.x-]+[[:space:]]*$/
+```
+
+which cannot match the new rows for **two independent reasons**: the arm label now contains
+parentheses, which the name character class excludes, and `records`/`keys` now sit between the arm
+and its elapsed figure. `normalise_arms()` has the same problem - it maps `ROW <lang>-grpc` to
+`ROW SIDECAR`, and the row is now `typescript-grpc (this client)`. The `HEADER` pattern also stops
+matching, because `elapsed` no longer follows `arm`. **Every language is changing the same way at
+the same time**, so this is one edit to one file by whoever owns `bin/**`, not eleven - but until it
+lands the conformance script will report "no skeleton" and *skip* rather than fail, which is the
+quiet outcome, so it is written here where it can be found.
+
+### What was run, and what it is not
+
+Ten other agents were on this machine, so this wave proved the thing runs and **measured nothing**.
+The msg/s figures below are not throughput and must not be quoted as any; the `records` and `keys`
+columns are the point, and those are deterministic.
+
+| run | outcome |
+|---|---|
+| native, `--records 20 --concurrency 4 --partitions 2 --replay-factor 2` | exit 0. Banner, fingerprint, both tables. Small replay: both arms 20 records / 20 keys. Big replay: 40 records / 40 keys |
+| container, `--docker` with the same flags | exit 0. Identical `records` and `keys` on every row - the same 20/20 and 40/40 - which is the cross-entry-point half of the determinism the contract claims |
+
+The container run's AK core arm took 31s for 20 records because kafkajs hit
+`KafkaJSNumberOfRetriesExceeded: This is not the correct coordinator for this group` against a
+just-started broker, restarted its consumer, and then finished. It exited 0 and processed all 20
+records; the *elapsed* and *msg/s* on that row are the retry, not the client. Now noted in
+`demo/README.md` under the noise section, where the milder form of the same error already was.
+
+One operational trap worth recording: a `--docker` run killed part-way leaves
+`pc-typescript-demo-broker-1` behind, and the next run fails with a container-name conflict rather
+than reusing or replacing it. `docker compose -f <demo>/docker-compose.yml down` clears it. Not
+fixed here - it is compose's normal behaviour and the compose file already tells a reader to run
+`down` - but it will bite anyone who interrupts a run.
+
+### Still not done, and unchanged by this wave
+
+Everything in "Open, and NOT done by this wave" above still stands: nothing runs this demo in CI,
+there is no `ReferenceDemoIT` equivalent, and the CHANGELOG is not this agent's file.
