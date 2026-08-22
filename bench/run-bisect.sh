@@ -258,15 +258,16 @@ parse_result() {
   grep '^RESULT' | awk '{
     p = $6; sub("peak=", "", p);
     res = "-/-/-/-"; drain = "-/-/-/-"; e2e = "-/-/-/-";
-    arr = "-/-"; feed = "-/-/-"; backlog = "-/-/-"; fails = "-";
+    arr = "-/-"; feed = "-/-/-"; backlog = "-/-/-"; inflight = "-/-/-"; fails = "-";
     for (i = 7; i <= NF; i++) {
-      if ($i ~ /^res=/)     { res = substr($i, 5) }
-      if ($i ~ /^drain=/)   { drain = substr($i, 7) }
-      if ($i ~ /^e2e=/)     { e2e = substr($i, 5) }
-      if ($i ~ /^arr=/)     { arr = substr($i, 5) }
-      if ($i ~ /^feed=/)    { feed = substr($i, 6) }
-      if ($i ~ /^backlog=/) { backlog = substr($i, 9) }
-      if ($i ~ /^fails=/)   { fails = substr($i, 7) }
+      if ($i ~ /^res=/)      { res = substr($i, 5) }
+      if ($i ~ /^drain=/)    { drain = substr($i, 7) }
+      if ($i ~ /^e2e=/)      { e2e = substr($i, 5) }
+      if ($i ~ /^arr=/)      { arr = substr($i, 5) }
+      if ($i ~ /^feed=/)     { feed = substr($i, 6) }
+      if ($i ~ /^backlog=/)  { backlog = substr($i, 9) }
+      if ($i ~ /^inflight=/) { inflight = substr($i, 10) }
+      if ($i ~ /^fails=/)    { fails = substr($i, 7) }
     }
     # EVERY FIELD MUST BE NON-EMPTY, and this is not cosmetic. The row is read back with a bare
     # `read -r a b c ...`, whose default IFS collapses runs of whitespace - so an empty field does not
@@ -280,10 +281,11 @@ parse_result() {
     if (arr == "-")     { arr = "-/-" }
     if (feed == "-")    { feed = "-/-/-" }
     if (backlog == "-") { backlog = "-/-/-" }
+    if (inflight == "-") { inflight = "-/-/-" }
     if (fails == "")    { fails = "-" }
     split(res, r, "/"); split(drain, d, "/"); split(e2e, e, "/");
-    split(arr, a, "/"); split(feed, f, "/"); split(backlog, b, "/");
-    print $5, p, r[1], r[2], r[3], r[4], d[1], d[2], d[3], d[4],
+    split(arr, a, "/"); split(feed, f, "/"); split(backlog, b, "/"); split(inflight, n, "/");
+    print $5, p, n[1], r[1], r[2], r[3], r[4], d[1], d[2], d[3], d[4],
           e[1], e[2], e[3], e[4], a[1], a[2], f[2], b[2], b[3], fails;
   }'
 }
@@ -294,7 +296,7 @@ parse_result() {
 # two disagreed - the log quoted percentiles the results file did not contain, which is precisely the
 # shape of thing this harness has published wrongly before.
 clear_latency_fields() {
-  rp50=; rp99=; rp999=; rmax=; dp50=; dp99=; dp999=; dmax=
+  ifp50=; rp50=; rp99=; rp999=; rmax=; dp50=; dp99=; dp999=; dmax=
   ep50=; ep99=; ep999=; emax=; arrreq=; arrach=; feedp99=; backp99=; backmax=; fails=
 }
 
@@ -799,7 +801,7 @@ load_1m() { uptime | sed 's/.*load averages*: //' | awk '{print $1}'; }
 # PRODUCER WAS NOT THE BOTTLENECK. If the feed cannot hold its schedule the whole experiment measures
 # the producer; the run is voided rather than recorded, and these columns are what a reader checks
 # when they want to know how close it came.
-echo "pc_version,pc_build,client_pin,mode,callee,ordering,key_dist,records,partitions,max_poll_records,buffer,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms,e2e_p50_ms,e2e_p99_ms,e2e_p999_ms,e2e_max_ms,arrival_requested,arrival_achieved,feed_lag_p99_ms,backlog_p99,backlog_max,injected_failures" > "$RESULTS"
+echo "pc_version,pc_build,client_pin,mode,callee,ordering,key_dist,records,partitions,max_poll_records,buffer,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,inflight_p50,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms,e2e_p50_ms,e2e_p99_ms,e2e_p999_ms,e2e_max_ms,arrival_requested,arrival_achieved,feed_lag_p99_ms,backlog_p99,backlog_max,injected_failures" > "$RESULTS"
 
 # The eighteen latency-and-arrival fields on a row that HAS a measurement but could not report them.
 NO_LATENCY=",,,,,,,,,,,,,,,,,"
@@ -808,7 +810,7 @@ NO_LATENCY=",,,,,,,,,,,,,,,,,"
 # of the four such sites: counting them by hand is what put the skip rows one column short the first
 # time this file grew a column, and a short row is silent - nothing reads a results file strictly
 # enough to notice. verify_row_widths below is the backstop.
-NO_MEASUREMENT=",,,,,,,,,,,,,,,,,,,,"
+NO_MEASUREMENT=",,,,,,,,,,,,,,,,,,,,,"
 # THE NON-BLOCKING ENGINES MUST NOT BE MEASURED WITH A BLOCKING CALLEE.
 #
 # vertx, reactor, mutiny and proxy exist to run a user function that does NOT hold a thread - that is
@@ -920,13 +922,13 @@ for mode in $MODES; do
         for r in $(seq 1 "$REPEATS"); do
           load=$(load_1m)
           out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
-          read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax ep50 ep99 ep999 emax arrreq arrach feedp99 backp99 backmax fails <<< "$out"
+          read -r rate peak ifp50 rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax ep50 ep99 ep999 emax arrreq arrach feedp99 backp99 backmax fails <<< "$out"
           if [ "$rc" = 124 ] || [ -z "$rate" ]; then
             [ "$rc" = 124 ] && rate=RUN_TIMEOUT_${RUN_TIMEOUT}s || rate=RUN_FAILED
             peak=; latency=$NO_LATENCY; clear_latency_fields
           else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax,$ep50,$ep99,$ep999,$emax,$arrreq,$arrach,$feedp99,$backp99,$backmax,$fails"; fi
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, load $load, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
-          echo "$ver,,franz,$mode,n/a,$ORDERING,$KEY_DIST,$RECORDS,$PARTITIONS,default,$BUFFER,$d,$c,$r,$rate,$peak,$load,$latency" >> "$RESULTS"
+          echo "$ver,,franz,$mode,n/a,$ORDERING,$KEY_DIST,$RECORDS,$PARTITIONS,default,$BUFFER,$d,$c,$r,$rate,$peak,$ifp50,$load,$latency" >> "$RESULTS"
         done
       done
     done
@@ -964,7 +966,7 @@ for mode in $MODES; do
                 load=$(load_1m)
                 out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$topic" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
                 build_after=$(pc_build_id "$CP")
-                read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax ep50 ep99 ep999 emax arrreq arrach feedp99 backp99 backmax fails <<< "$out"
+                read -r rate peak ifp50 rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax ep50 ep99 ep999 emax arrreq arrach feedp99 backp99 backmax fails <<< "$out"
                 if [ "$rc" = 124 ] || [ -z "$rate" ]; then
                   if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s
                   # Exit 3 is Bench's arrival verdict: the feed could not hold the schedule it was
@@ -984,8 +986,8 @@ for mode in $MODES; do
                 fi
                 arrival_note=""
                 [ "$arrival" != 0 ] && arrival_note=" arrival=${arrival}/s (achieved ${arrach:--}, feed lag p99 ${feedp99:--}ms, backlog p99 ${backp99:--}), e2e p50/p99/p99.9/max ${ep50:--}/${ep99:--}/${ep999:--}/${emax:--}ms,"
-                log "$pcv/$pin $mode $ord delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, load $load,$arrival_note residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
-                echo "$pcv,$build_before,$pin,$mode,$CALLEE_LABEL,$ord,$KEY_DIST,$RECORDS,$PARTITIONS,$MAX_POLL,$BUFFER,$d,$c,$r,$rate,$peak,$load,$latency" >> "$RESULTS"
+                log "$pcv/$pin $mode $ord delay=${d}ms conc=$c run$r = $rate msg/s, in flight peak $peak / sustained ${ifp50:--}, load $load,$arrival_note residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
+                echo "$pcv,$build_before,$pin,$mode,$CALLEE_LABEL,$ord,$KEY_DIST,$RECORDS,$PARTITIONS,$MAX_POLL,$BUFFER,$d,$c,$r,$rate,$peak,$ifp50,$load,$latency" >> "$RESULTS"
                 [ "$arrival" != 0 ] && delete_topic "$topic"
               done
             done

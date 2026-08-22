@@ -109,11 +109,13 @@ public class Bench {
                     + "no retry mechanism, so a failed record would never complete and the run would "
                     + "time out rather than measure anything");
         }
+        // The sampler runs for EVERY run, not only the arrival ones: sustained in-flight is the
+        // measure that says whether an arm used its concurrency, and that question is asked of the
+        // saturated path just as much.
+        startSampler();
         if (arrivalMode()) {
-            // The feeder and the sampler start BEFORE the arm, because the warmup barrier is what
-            // decides when the schedule's clock starts and the arm has to already be joining for that
-            // to happen.
-            startBacklogSampler();
+            // The feeder starts BEFORE the arm, because the warmup barrier is what decides when the
+            // schedule's clock starts and the arm has to already be joining for that to happen.
             startFeeder(bootstrap, topic, count);
         }
         // Fallback stamp for the engine arms, whose clocks live in their own files. runVanilla,
@@ -162,10 +164,11 @@ public class Bench {
         String arrivals = arrivalMode()
                 ? String.format("%.1f/%.1f", ARRIVAL_RATE, achievedArrivalRate) : "-/-";
         System.out.printf("RESULT %s %d %d %.1f peak=%d res=%s drain=%s e2e=%s arr=%s "
-                        + "feed=%s backlog=%s fails=%d%n",
+                        + "feed=%s backlog=%s inflight=%s fails=%d%n",
                 mode, count, ms, count * 1000.0 / ms, peakInFlight.get(),
                 residenceMillis(), drain.render(), e2e.render(), arrivals,
-                feedLag.renderShort(), backlog.renderShort(), injectedFailures.get());
+                feedLag.renderShort(), backlog.renderShort(), sustainedInFlight.renderShort(),
+                injectedFailures.get());
         if (stub != null) stub.stop();
         if (asyncStubVertx != null) asyncStubVertx.close();
         if (calleeVertx != null) calleeVertx.close();
@@ -1102,14 +1105,32 @@ public class Bench {
         }
     }
 
-    /** Samples fed-minus-completed every 20ms. A bounded backlog is what "unsaturated" means. */
-    static void startBacklogSampler() {
+    /** Records actually in the user function, sampled. See {@link #startSampler}. */
+    static Latencies sustainedInFlight = new Latencies(0);
+
+    /**
+     * Samples two gauges every 20ms, for the whole run.
+     * <p>
+     * <b>{@code backlog}</b> is fed-minus-completed. A bounded backlog is what "unsaturated" means,
+     * and it is the direct evidence that an arrival run measured the engine rather than a queue.
+     * <p>
+     * <b>{@code sustainedInFlight} is here because {@code peak_in_flight} is a MAXIMUM, and a maximum
+     * cannot answer the question it keeps being asked.</b> An arm that reaches its configured
+     * concurrency once, in its first second, and then runs two records at a time for two minutes
+     * reports the same {@code peak_in_flight} as one that holds full concurrency throughout - and the
+     * two are completely different engines to the person choosing one. Measured 2026-08-22: `KEY`
+     * ordering on a skewed key distribution reported peak 24 of a configured 24 while taking 4.1x
+     * longer than `UNORDERED` over the identical records, because the run ends with one hot key
+     * draining one record at a time. The peak was true and told you nothing.
+     */
+    static void startSampler() {
         Thread sampler = new Thread(() -> {
             while (true) {
                 backlog.record(Math.max(0, fedRecords.get() - completedRecords.get()));
+                sustainedInFlight.record(inFlight.get());
                 sleep(20);
             }
-        }, "bench-backlog-sampler");
+        }, "bench-sampler");
         sampler.setDaemon(true);
         sampler.start();
     }
@@ -1195,6 +1216,7 @@ public class Bench {
         // recorder that silently stops sampling would bias the backlog gauge towards the early part
         // of the run, which is the direction that flatters.
         backlog = new Latencies(180_000);
+        sustainedInFlight = new Latencies(180_000);
     }
 
     /**

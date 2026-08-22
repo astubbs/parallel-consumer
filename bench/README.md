@@ -198,6 +198,22 @@ whenever the producer managed to. It therefore also charges the feeder's own lat
 **Read `p999` and `max`, not the mean.** Head-of-line blocking shows up in the upper percentiles long
 before it shows up anywhere else, which is the entire reason these columns exist.
 
+### `inflight_p50` - because `peak_in_flight` is a maximum, and a maximum answers the wrong question
+
+`peak_in_flight` is the highest the engine ever reached. `inflight_p50` is the median of a 20ms
+sample taken across the whole run - what it **sustained**.
+
+They come apart exactly where it matters. An arm that touches its configured concurrency once, in
+its first second, and then runs two records at a time for two minutes reports the same
+`peak_in_flight` as one that holds full concurrency throughout, and those are not the same engine to
+anybody choosing between them. Measured 2026-08-22: `KEY` ordering on a skewed key distribution
+reported **peak 24 of a configured 24** while taking **4.1x** longer than `UNORDERED` over the
+identical records - because the run's whole tail is one hot key draining one record at a time. The
+peak was true and told you nothing.
+
+Read the two together: `peak == concurrency` with `inflight_p50` far below it is an arm that is
+*starved*, not one that is *slow*.
+
 ### `pc_build` - `LOCAL` names a coordinate, not a build
 
 `PC_VERSIONS=LOCAL` resolves to `bz.stub.parallelconsumer:*:0.6.0.0-SNAPSHOT` out of a `~/.m2` that
