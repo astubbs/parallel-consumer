@@ -1151,12 +1151,36 @@ public class Bench {
      * ordering on a skewed key distribution reported peak 24 of a configured 24 while taking 4.1x
      * longer than `UNORDERED` over the identical records, because the run ends with one hot key
      * draining one record at a time. The peak was true and told you nothing.
+     * <p>
+     * <b>IT DOES NOT SAMPLE BEFORE THE FIRST RECORD REACHES THE USER FUNCTION, and that gate is the
+     * fix for a defect that made the column read zero on short runs.</b> The sampler is started from
+     * {@code main} - it has to be, because the arms take their own clocks and there is no earlier
+     * common hook - so until this gate existed it recorded a zero every 20ms through consumer
+     * construction, subscribe and the consumer-group join. That is four to six seconds of zeros
+     * PREPENDED to every run's sample set, which does not perturb a percentile on a thirty-second run
+     * and completely determines it on a four-second one.
+     * <p>
+     * Measured 2026-08-22 on the calibration for this campaign: {@code core}, {@code UNORDERED},
+     * maxConcurrency 200, 12,000 records - <b>2,978 msg/s at a reported sustained in flight of
+     * ZERO</b>, which Little's law puts at about 30. The same arm at maxConcurrency 24, whose run
+     * lasts 9.8s rather than 4.0s, reported 22 and looked entirely healthy. So the column did not
+     * fail loudly on the short run; it produced a number that was wrong by the whole quantity being
+     * measured, next to rows where it was roughly right, and the only tell was an arithmetic check
+     * nobody is required to perform.
+     * <p>
+     * Armed by work rather than by a clock, because the arms own their clocks: once any record is in
+     * the user function the run has begun for every arm here, and once armed it stays armed, so a
+     * genuine idle stretch mid-run - which is exactly what a hot key produces, and exactly what this
+     * column exists to show - is still recorded as the zero it is.
      */
+    static volatile boolean samplerArmed = false;
+
     static void startSampler() {
         Thread sampler = new Thread(() -> {
             while (true) {
                 backlog.record(Math.max(0, fedRecords.get() - completedRecords.get()));
-                sustainedInFlight.record(inFlight.get());
+                if (!samplerArmed && inFlight.get() > 0) samplerArmed = true;
+                if (samplerArmed) sustainedInFlight.record(inFlight.get());
                 sleep(20);
             }
         }, "bench-sampler");

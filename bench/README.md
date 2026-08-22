@@ -214,6 +214,21 @@ peak was true and told you nothing.
 Read the two together: `peak == concurrency` with `inflight_p50` far below it is an arm that is
 *starved*, not one that is *slow*.
 
+**It samples from the first record into the user function, not from JVM start, and it did not until
+2026-08-22.** The sampler is started from `main` - it has to be, because each arm takes its own clock
+and there is no earlier common hook - so before the gate it recorded a zero every 20ms through
+consumer construction, subscribe and the consumer-group join. That is four to six seconds of zeros
+prepended to every run's samples: **invisible on a thirty-second run and decisive on a four-second
+one.** Measured while calibrating the realistic-workload campaign: `core`, `UNORDERED`,
+maxConcurrency 200, 12,000 records - **2,978 msg/s at a reported sustained in flight of ZERO**, where
+Little's law puts it near 30 and the fixed instrument reads 196. The same arm at maxConcurrency 24,
+whose run lasts 9.8s rather than 4.0s, reported 22 and looked perfectly healthy.
+
+**So a short run's `inflight_p50` taken before that fix is not merely noisy, it is wrong by the whole
+quantity being measured** - and it was wrong quietly, in a column beside rows where it was roughly
+right. Once armed it stays armed, so a genuine idle stretch mid-run - which is exactly what a hot key
+produces, and exactly what this column exists to show - is still recorded as the zero it is.
+
 ### `pc_build` - `LOCAL` names a coordinate, not a build
 
 `PC_VERSIONS=LOCAL` resolves to `bz.stub.parallelconsumer:*:0.6.0.0-SNAPSHOT` out of a `~/.m2` that
@@ -225,6 +240,28 @@ code their author had never seen; `pc_version` read `LOCAL` for every row and id
 `pc_build` carries the core jar's checksum, taken **before and after every run**, so a swap that
 happens mid-cell voids that cell as `BUILD_CHANGED_<before>_TO_<after>` rather than being averaged
 into it. Two rows that disagree are visibly two experiments instead of two repeats.
+
+**`pc_build` detects the swap; `LOCAL_VERSION` prevents it, and a sweep longer than a few minutes
+should use it.** `LOCAL_VERSION=<version>` changes the coordinate `LOCAL` resolves to, so a sweep can
+measure a version nobody else on the machine has heard of:
+
+```bash
+./mvnw -B versions:set -DnewVersion=0.6.0.0-myrun-SNAPSHOT -DgenerateBackupPoms=false
+JAVA_HOME=~/.sdkman/candidates/java/17.0.18-tem ./mvnw -B install -DskipTests -Dcopyright.skip=true
+git checkout -- '*/pom.xml' pom.xml          # put the poms back BEFORE committing anything
+LOCAL_VERSION=0.6.0.0-myrun-SNAPSHOT MODES=core bench/run-bisect.sh
+```
+
+It is additive - the ordinary `0.6.0.0-SNAPSHOT` coordinate is left exactly as another session left
+it, so there is nothing to restore afterwards and no window in which somebody else's sweep is
+measuring your build. **This is not hypothetical**: `0.6.0.0-SNAPSHOT` was overwritten by another
+session partway through the realistic-workload campaign's calibration, between one run and the next,
+and the only outward sign was the residence column going blank.
+
+**Two cautions.** `cksum` on a jar is not a code identity - two installs of the *same* source produce
+different checksums, because the archive carries timestamps - so `pc_build` answers "did this change
+under me", never "is this the code I think it is". And `versions:set` rewrites every pom in the tree:
+put them back before committing, or the version bump ships with your measurement.
 
 ### Results in this directory
 
