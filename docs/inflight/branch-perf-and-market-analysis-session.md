@@ -12,7 +12,7 @@ and are deliberately not recorded here; they go stale within a day.
 |---|---|---|
 | `feats/classic-vertx-demo` | **yes** | The 2021 asciinema demo, rescued from the stranded `presentation` branch and made to run again. First commit is the original verbatim, author and date preserved. **The only branch here with finished, shippable work on it.** |
 | `perf/throughput-regression-since-0-3` | **yes** | The version bisect, the `bench/` harness, and the five-year `ExternalEngine` regression it found. **History was rewritten and force-pushed** - see below. |
-| `research/market-analysis-recut` | no | The market analysis, the four-arm benchmark comparison, the thread-ceiling investigation, licensing, franz-go, the landing page. **The trunk for everything below.** |
+| `integration/v6` | **yes** | **Renamed from `research/market-analysis-recut` on 2026-08-22**, while it was still free - no PR had ever been opened on it, and a rename closes one. The old name described a market analysis; the branch carries virtual threads, direct pull, the atomic claim fix, the bench harness, the share-groups arm, and the inherited proxy and polyglot work. **The integration branch for everything heading into v6.** |
 | `research/market-analysis` | no | **Superseded. Delete.** Pre-re-cut, its history carries redacted material. |
 
 **Experiments - each a hypothesis, an implementation, a measurement, and a reason it did not ship.**
@@ -90,7 +90,7 @@ is machine contention, not a merge break.
 ## What the engine-arms branch found on its way
 
 **A correctness defect in a shipped module**, written up in
-`bug-reactor-stalls-on-a-publisher-that-emits-nothing.md` **on that branch**: `ReactorProcessor.react`
+`docs/solutions/logic-errors/reactive-completion-wired-to-onnext-2026-08-22.md` **on that branch**: `ReactorProcessor.react`
 subscribes without an `onComplete` consumer, so a user function returning `Mono.empty()` or
 `Mono<Void>` never completes its record and the consumer stalls silently. Mutiny does it correctly,
 which makes it a Reactor defect rather than an `ExternalEngine` one.
@@ -114,7 +114,7 @@ the load-robust column and `msg_per_sec` is not. See `branch-parallel-measuremen
 All on origin now. Divergence and merge state are `git` questions and are deliberately not recorded
 here; **what each branch means is not.**
 
-**Merged into `research/market-analysis-recut`** - kept as named refs so a bisect can reach them:
+**Merged into `integration/v6`** - kept as named refs so a bisect can reach them:
 
 | Branch | What it is |
 |---|---|

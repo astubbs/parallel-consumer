@@ -5,7 +5,7 @@
 <!-- inflight-labels: needs-measurement -->
 
 Parked 2026-08-21, **because it was measured and does nothing** - not because it was abandoned
-half-finished. Branch `perf/resume-shard-scan`, reverted from `research/market-analysis-recut`.
+half-finished. Branch `perf/resume-shard-scan`, reverted from `integration/v6`.
 
 ## What it does
 

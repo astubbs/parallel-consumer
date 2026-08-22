@@ -127,6 +127,22 @@ archaeology exercise.
   When something closes, **`git rm` its file**. Do not rewrite it into a "FIXED/DONE" narrative:
   making a stale entry *accurate* is the wrong move. If it leaves open follow-ups, shrink the file to
   those and rename it.
+- **Before you `git rm` a note, ask what it knew that its outcome does not record - and relocate that
+  first.** Deleting is right; deleting *unread* is how this directory loses the only durable thing it
+  produces. A closed note's result usually survives in the code, a test, or a commit message. **What
+  does not survive is the method**: the comparison that would have been dishonest, the control arm
+  that made a difference attributable, the confound that reproduced perfectly across five rounds and
+  was still wrong, the instrument that read healthy while lying.
+
+  Those go to [`docs/solutions/`](../solutions/), which exists for exactly this and is the only place
+  a future reader looks that is not tied to a branch. **A note that taught nothing beyond its own
+  result can just go.** One that taught a method leaves the method behind.
+
+  The tell that you are about to lose something: if writing the deletion commit needs a paragraph
+  explaining what was learned, that paragraph belongs in `docs/solutions/` and the commit should cite
+  it. Worked example, from the Share Groups measurement whose proposal note was deleted the moment
+  its arm existed:
+  [`docs/solutions/best-practices/benchmark-a-rival-on-the-semantics-it-actually-offers.md`](../solutions/best-practices/benchmark-a-rival-on-the-semantics-it-actually-offers.md).
 - **Work your current PR resolves is tracked by that PR - delete its file in that PR.** Never leave a
   "delete this when #NN merges" marker on `master`. The merge is exactly when nobody is looking here,
   so the marker outlives the work and the next reader inherits a stale note that reads as live.
