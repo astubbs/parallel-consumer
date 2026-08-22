@@ -72,6 +72,45 @@ PC through the Java client, and the `franz` control arm was skipped as serial at
 Without that floor there is no way to attribute the 14% between engine and client. **Run `franz` at a
 small record count before this figure is used for anything.**
 
+## Direct pull, re-measured after the scan fix - it works
+
+`ShardOccupancy` (branch `perf/direct-pull-scan-collapse`) only. **None of the structural designs
+proposed on 2026-08-22 are built** - not the `UNORDERED` available-queue, not the selectable-shard
+queue, not retry selection, not the manager thread. This measures the scan fix alone, deliberately, so
+the result is attributable.
+
+100,000 records, one partition, `UNORDERED`, two repeats, load 3-5 throughout:
+
+| delay | conc | `core` | `core-dp` | |
+|---:|---:|---:|---:|---|
+| 0ms | 10 | 12,398 / 12,435 | **27,655 / 27,770** | **2.23x** |
+| 0ms | 100 | 23,010 / 23,052 | **27,747 / 27,556** | **1.20x** |
+| 0ms | 1,000 | 25,113 / 24,931 | 23,702 / 26,853 | parity |
+| 0ms | 5,000 | 24,272 / 24,771 | 25,641 / 23,535 | parity |
+| 2ms | 100 | 15,533 / 15,470 | 16,367 / 16,324 | 1.05x |
+| 2ms | 1,000 | 22,129 / 22,031 | 22,548 / 23,272 | 1.03x |
+| 2ms | 5,000 | 16,725 / 16,556 | 16,281 / 22,051 | noisy |
+
+**Both acceptance criteria met.** At concurrency 5,000 the arm went from 1,357 msg/s with runs that
+never finished, to parity with the shipped engine; and it kept its low-concurrency win rather than
+trading it away.
+
+**The in-flight column is the more interesting result.** At 5,000 / 0ms `core` peaks at **173-239
+records in flight** against a configured 5,000, while `core-dp` reaches **2,268-5,000**; at
+concurrency 1,000 direct pull holds a flat 1,000 where `core` manages 299-713. **Direct pull is now
+the arm that achieves the configured concurrency, and the shipped engine's buffer machinery is what
+fails to keep up** - which is `DynamicLoadFactor` showing up as a measurement rather than an argument.
+See [`next-starvation-is-the-signal-not-queue-depth.md`](next-starvation-is-the-signal-not-queue-depth.md).
+
+**A harness limitation, not a product one**: the `2ms / concurrency 10` cell timed out at 60s for
+**both** arms. 100,000 records at 2ms with 10-way concurrency is ~20s theoretical and nearer 60s with
+per-record overhead, so the flat `RUN_TIMEOUT` is too tight there. It should scale with projected
+runtime the way the serial-arm guard already does. That cell is missing, not failed.
+
+**Still outstanding on that branch**: `CoreBatchTest.simpleBatchTest` fails 3-of-3 under direct pull
+against a 0-of-5 baseline - all records delivered once, no batch over the limit, but four selectors
+where the test assumes one.
+
 ## Caveats that bound all of it
 
 - **One partition, all-distinct keys, one broker, one machine.** A best case for any key-sharded
