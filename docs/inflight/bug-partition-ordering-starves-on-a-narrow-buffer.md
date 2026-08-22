@@ -52,7 +52,7 @@ cannot be expected to derive the number.** The buffer needed scales as `max.poll
 partitions, roughly 12,000 here; a hundred-partition assignment would need five times that, and
 neither figure is written down anywhere or checked by anything. Set it too low and the symptom is
 silent idleness, which is exactly where this started. It is also not free: that buffer is records held
-in memory and, per [`perf-latency-needs-an-arrival-rate-axis.md`](perf-latency-needs-an-arrival-rate-axis.md),
+in memory and, per [`next-the-tail-experiment.md`](next-the-tail-experiment.md),
 seconds of added residence time.
 
 **The fix is that the prefetch target should be expressed in terms the ordering mode actually
