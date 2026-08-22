@@ -50,4 +50,13 @@ public enum AdmissionDecisionReason {
      * The gradient update wanted to go lower but the one-slot floor clamp bound.
      */
     AT_FLOOR,
+
+    /**
+     * A real change to this instance's partition assignment discarded the sample window and the law's history, and
+     * froze the target at its pre-rebalance value (carried over as the best available prior) for a cooldown - the
+     * old assignment's measurements say nothing about the new workload, and adapting on settle-time noise would
+     * move the target on evidence about a system that no longer exists. Set by
+     * {@link AdmissionController}, not the law - the law never sees a rebalance.
+     */
+    COOLDOWN,
 }

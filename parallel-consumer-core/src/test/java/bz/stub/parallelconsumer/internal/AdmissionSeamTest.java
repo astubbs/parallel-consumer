@@ -144,14 +144,18 @@ class AdmissionSeamTest {
 
     /**
      * The live target reaches dispatch denominated in records: 8 slots x batch 5 = 40 loaded target (NOT x factor
-     * 80); in-flight 7 leaves a shortfall of 33, rounded up to 35.
+     * 80); in-flight 7 leaves a shortfall of 33, rounded up to 35. State {@code RUNNING}, because the live read is
+     * state-derived (U7's KTD9 drain release) - the non-RUNNING arm has its own tests in
+     * {@link AdmissionLifecycleTest}.
      */
     @Test
     void enforceDispatchTargetIsTheLiveTargetTimesBatchSize() {
         try (var processor = arithmeticProcessor(enforceOptions(BATCH_SIZE, CONTRACTED_TARGET_SLOTS), 7)) {
+            processor.setState(State.RUNNING);
             assertLoadFactorFixture(processor);
             assertThat(processor.getTargetLoad()).isEqualTo(CONTRACTED_TARGET_SLOTS * BATCH_SIZE);
             assertThat(processor.calculateQuantityToRequest()).isEqualTo(35);
+            processor.setState(State.CLOSED);
         }
     }
 
@@ -163,14 +167,18 @@ class AdmissionSeamTest {
     @Test
     void enforceRequestTopsUpToThePublishedTargetNeverTargetTimesFactor() {
         try (var processor = arithmeticProcessor(enforceOptions(1, CONTRACTED_TARGET_SLOTS), CONTRACTED_TARGET_SLOTS)) {
+            processor.setState(State.RUNNING);
             assertLoadFactorFixture(processor);
             assertWithMessage("in-flight already at the published target - anything positive here is the factor "
                     + "leaking into dispatch")
                     .that(processor.calculateQuantityToRequest()).isAtMost(0);
+            processor.setState(State.CLOSED);
         }
         try (var processor = arithmeticProcessor(enforceOptions(1, CONTRACTED_TARGET_SLOTS), 5)) {
+            processor.setState(State.RUNNING);
             assertWithMessage("the top-up must stop at the published target of %s", CONTRACTED_TARGET_SLOTS)
                     .that(processor.calculateQuantityToRequest()).isEqualTo(CONTRACTED_TARGET_SLOTS - 5);
+            processor.setState(State.CLOSED);
         }
     }
 
@@ -181,8 +189,10 @@ class AdmissionSeamTest {
     @Test
     void enforceTargetAtTheCeilingMatchesTheCeilingArithmetic() {
         try (var processor = arithmeticProcessor(enforceOptions(1, CEILING_SLOTS), 0)) {
+            processor.setState(State.RUNNING);
             assertThat(processor.getTargetLoad()).isEqualTo(CEILING_SLOTS);
             assertThat(processor.calculateQuantityToRequest()).isEqualTo(CEILING_SLOTS);
+            processor.setState(State.CLOSED);
         }
     }
 
@@ -197,8 +207,10 @@ class AdmissionSeamTest {
                     .that(processor.getTargetLoad()).isEqualTo(20);
         }
         try (var processor = fakeVirtualPoolProcessor(enforceOptions(BATCH_SIZE, CONTRACTED_TARGET_SLOTS), 0)) {
+            processor.setState(State.RUNNING);
             assertWithMessage("active ENFORCE on a queueless pool: the live target, still un-multiplied")
                     .that(processor.getTargetLoad()).isEqualTo(CONTRACTED_TARGET_SLOTS * BATCH_SIZE);
+            processor.setState(State.CLOSED);
         }
     }
 
@@ -415,6 +427,8 @@ class AdmissionSeamTest {
 
     private void buildEnforceHarness() {
         buildHarness(enforceOptions(1, CONTRACTED_TARGET_SLOTS));
+        // the live read is state-derived (U7's KTD9): only a RUNNING processor consumes the contracted target
+        pc.setState(State.RUNNING);
         assertWithMessage("fixture: these scenarios are hand-computed for a live target of %s under a ceiling of %s",
                 CONTRACTED_TARGET_SLOTS, CEILING_SLOTS)
                 .that(pc.getTargetLoad()).isEqualTo(CONTRACTED_TARGET_SLOTS);

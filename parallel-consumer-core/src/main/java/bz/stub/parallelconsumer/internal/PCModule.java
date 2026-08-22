@@ -169,7 +169,16 @@ public class PCModule<K, V> {
      * <p>
      * When adaptive enforcement is active
      * ({@code AbstractParallelEoSStreamProcessor#adaptiveEnforcementActive()} - the processor stays the single owner
-     * of the mode-versus-capability decision) this is the controller's live target in slots times the batch size.
+     * of the mode-versus-capability decision) <em>and the processor is {@link State#RUNNING}</em>, this is the
+     * controller's live target in slots times the batch size. In every OTHER processor state the adaptive path
+     * reads the EFFECTIVE-MAXIMUM derivation instead - the drain release (the plan's KTD9), STATE-DERIVED
+     * deliberately rather than an edge action: {@code transitionToDraining()} runs on the caller's closing thread
+     * while the admission tick is gated to {@code RUNNING}, so an edge action there would be both cross-thread and
+     * unreachable. A state-derived read needs no tick at all - {@code close(DRAIN)} with a contracted target
+     * dispatches at full width on the very next pass (and holds even when {@code close()} arrives before the
+     * control loop ever ran, state {@code UNUSED}), so a contracted target can never stretch a drain past
+     * {@code drainTimeout}.
+     * <p>
      * Everywhere else - {@code DISABLED}, {@code OBSERVE}, an engine that refused the mode, or no processor attached
      * yet (bare-{@code WorkManager} test envs) - it is exactly today's static derivation,
      * {@link ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()}.
@@ -180,19 +189,46 @@ public class PCModule<K, V> {
     public int admissionTargetRecords() {
         AbstractParallelEoSStreamProcessor<K, V> processor = parallelEoSStreamProcessor;
         if (processor != null && processor.adaptiveEnforcementActive()) {
-            return admissionController().currentTarget() * options().getBatchSize();
+            int slots = processor.getState() == State.RUNNING
+                    ? admissionController().currentTarget()
+                    : admissionController().effectiveMaximum();
+            return slots * options().getBatchSize();
         }
         return options().getTargetAmountOfRecordsInFlight();
     }
 
+    /**
+     * KTD10 pinning gate: {@code ENFORCE} is read from the OPTIONS alone, never the processor's active flag - this
+     * factory can run with no processor attached (bare-{@code WorkManager} test envs) and, during processor
+     * construction, before that flag is even resolved (the processor wires the factor before it resolves
+     * capability). Blast radius of that choice: an engine that REFUSES enforce (external engines, direct pull)
+     * still gets the pinned-static factor - it stays at the initial value forever, which is exactly today's t=0
+     * behaviour, and the refusal already logged its WARN; the price is that such a configuration loses the
+     * factor's climb, never its floor. {@code OBSERVE} is deliberately NOT pinned: a non-acting mode must be
+     * byte-for-byte today's construction.
+     */
     private DynamicLoadFactor initDynamicLoadFactor() {
+        boolean enforceRequested =
+                options().getAdaptiveConcurrencyMode() == ParallelConsumerOptions.AdaptiveConcurrencyMode.ENFORCE;
         if (options().getMessageBufferSize() > 0) {
-            int staticLoadFactor = (options().getMessageBufferSize() / options().getTargetAmountOfRecordsInFlight()) + (options().getMessageBufferSize() % options().getTargetAmountOfRecordsInFlight() == 0 ? 0 : 1);
+            // Under ENFORCE the buffer divides by the CEILING-derived in-flight figure (effective maximum x batch
+            // size, KTD4's resolution included), never the seed or the live target: the buffer must be sized for
+            // the widest dispatch the controller may ever publish (KTD10).
+            int targetInFlight = enforceRequested
+                    ? admissionController().effectiveMaximum() * options().getBatchSize()
+                    : options().getTargetAmountOfRecordsInFlight();
+            int staticLoadFactor = (options().getMessageBufferSize() / targetInFlight) + (options().getMessageBufferSize() % targetInFlight == 0 ? 0 : 1);
             // Initial == maximum on purpose: the user asked for a fixed buffer, so the factor must not drift off it.
             // The consequence is that DynamicLoadFactor#isMaxReached() is true from construction onwards - see
             // DynamicLoadFactor#isStatic(), which is how callers tell "saturated after climbing" apart from "never
             // able to move", and why AbstractParallelEoSStreamProcessor does not warn about this case.
             return new DynamicLoadFactor(staticLoadFactor, staticLoadFactor);
+        } else if (enforceRequested) {
+            // Pinned static at the initial factor (the plan's KTD10): the factor's meaning - "keep the workers N
+            // deep in BUFFERED work" - held only while pool size equaled the target; with the pool at the ceiling
+            // and a live target below it, a climbing factor would multiply headroom the controller just took away.
+            // The initial factor is today's t=0 value, so t=0 behaviour is unchanged.
+            return new DynamicLoadFactor(options().initialLoadFactor, options().initialLoadFactor);
         } else {
             return new DynamicLoadFactor(options().initialLoadFactor, options().maximumLoadFactor);
         }

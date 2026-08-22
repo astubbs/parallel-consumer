@@ -295,6 +295,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private State state = State.UNUSED;
 
     /**
+     * R13 pause poison: set on the RUNNING-&gt;PAUSED transition ({@link #pauseIfRunning()}, any thread), consumed
+     * by the control thread at the first post-resume {@link #tickAdmissionController()} pass, which discards the
+     * admission controller's in-progress sample window - in-flight work keeps completing while PAUSED, so without
+     * this the first post-resume window would mix pre-pause and mid-pause samples into one reading. The law's
+     * EWMAs survive; a pause says nothing about the downstream.
+     */
+    private final AtomicBoolean admissionWindowPoisonedByPause = new AtomicBoolean(false);
+
+    /**
      * Wrapped {@link ConsumerRebalanceListener} passed in by a user that we can also call on events
      */
     private Optional<ConsumerRebalanceListener> usersConsumerRebalanceListener = Optional.empty();
@@ -736,6 +745,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
         log.debug("Partitions revoked {}, state: {}", partitions, state);
+        if (isAdaptiveConcurrencyActive()) {
+            // FIRST, before anything below can throw: pure set bookkeeping for the KTD9 assignment-delta gate.
+            // The reset decision itself is taken on the control thread, at the admission tick.
+            module.admissionController().onPartitionsRevoked(partitions);
+        }
         isRebalanceInProgress.set(true);
         while (isTransactionCommittingInProgress())
             Thread.sleep(100); //wait for the transaction to finish committing
@@ -771,6 +785,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
         wm.onPartitionsAssigned(partitions);
+        if (isAdaptiveConcurrencyActive()) {
+            // cycle end for the KTD9 assignment-delta gate - the controller compares against its baseline here
+            module.admissionController().onPartitionsAssigned(partitions);
+        }
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
     }
@@ -785,6 +803,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
         wm.onPartitionsLost(partitions);
+        if (isAdaptiveConcurrencyActive()) {
+            // a loss ends a cycle with no assignment half, so the delta gate compares here too
+            module.admissionController().onPartitionsLost(partitions);
+        }
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsLost(partitions));
     }
 
@@ -1248,9 +1270,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             retrieveAndDistributeNewWork(userFunction, callback);
         }
 
-        // one in-flight snapshot per pass - the admission controller's third input (its tick stays unwired here;
-        // that is the next unit's job)
+        // one in-flight snapshot per pass - the admission controller's third input - then the controller's tick,
+        // AFTER the snapshot so a window closing this pass includes it
         sampleAdmissionInFlight();
+        tickAdmissionController();
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -1314,6 +1337,52 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     void sampleAdmissionInFlight() {
         if (isAdaptiveConcurrencyActive()) {
             module.admissionController().recordInFlight(wm.getNumberRecordsOutForProcessing());
+        }
+    }
+
+    /**
+     * The admission controller's TICK, called once per {@link #controlLoop} pass (the plan's KTD7): a direct call
+     * adjacent to {@link #sampleAdmissionInFlight()} rather than a {@link #controlLoopHooks} registration,
+     * deliberately - the hooks are a public plugin surface ({@link #addLoopEndCallBack(Runnable)}) that runs
+     * unconditionally, while this needs the state gate below, an explicit ordering AFTER the pass's in-flight
+     * snapshot (so a window closing this pass includes it), and the same direct per-pass testability the sampler
+     * has. The WINDOW BOUNDARY is the controller's own injected-clock deadline inside
+     * {@code AdmissionController#tick()}, never this loop's block time - {@link #timeToBlockFor()} is itself
+     * target-derived, so a contracted target would otherwise slow the controller's own recovery cadence.
+     * <p>
+     * Gating: only while {@link State#RUNNING} and adaptive concurrency is active (which already folds in
+     * mode-not-DISABLED and engine capability). Not ticking outside RUNNING is load-bearing for the R13 lifecycle:
+     * DRAINING/CLOSING releases enforcement through the STATE-DERIVED seam read in
+     * {@link PCModule#admissionTargetRecords()}, with no edge action needed here, and a PAUSED interval simply
+     * stops the clock's windows from being acted on until the poison below cleans up.
+     * <p>
+     * Pause poison (R13): the first tick after a RUNNING-&gt;PAUSED-&gt;RUNNING cycle consumes
+     * {@link #admissionWindowPoisonedByPause} and discards the in-progress window, so no pre-pause samples appear
+     * in the first post-resume window. Cost: any samples recorded between resume and this pass (at most one loop
+     * pass) are discarded with them.
+     * <p>
+     * A target that GREW re-runs {@link #maybeWakeupPoller()} so a poller paused for throttling notices the new
+     * headroom this pass rather than next pass - the cheapest correct call, since it re-derives its conditions
+     * (buffer load, poller actually paused) instead of waking blindly; the wake itself is
+     * {@code ConsumerManager#wakeup()}, NOT a thread interrupt, so this adds no sender on the interrupt-based wake
+     * channel.
+     * <p>
+     * Package-private (non-{@code get}-prefixed, see {@link #userFunctionTaskAccounting()}) so the per-pass
+     * contract is testable without driving a real control loop - the {@link #sampleAdmissionInFlight()} pattern.
+     */
+    void tickAdmissionController() {
+        if (!isAdaptiveConcurrencyActive() || state != RUNNING) {
+            return;
+        }
+        var controller = module.admissionController();
+        if (admissionWindowPoisonedByPause.getAndSet(false)) {
+            controller.discardWindow();
+            return;
+        }
+        int targetBefore = controller.currentTarget();
+        controller.tick();
+        if (controller.currentTarget() > targetBefore) {
+            maybeWakeupPoller();
         }
     }
 
@@ -2280,6 +2349,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (this.state == State.RUNNING) {
             log.info("Transitioning parallel consumer to state paused.");
             this.state = State.PAUSED;
+            if (isAdaptiveConcurrencyActive()) {
+                // see the field: consumed at the first post-resume admission tick, which discards the window
+                admissionWindowPoisonedByPause.set(true);
+            }
         } else {
             log.debug("Skipping transition of parallel consumer to state paused. Current state is {}.", this.state);
         }

@@ -6,11 +6,16 @@ package bz.stub.parallelconsumer.internal.admission;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.AdaptiveConcurrencyMode;
+import org.apache.kafka.common.TopicPartition;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Owns the LIVE admission target (in slots), its effective-maximum resolution, its mode, and its reported state -
@@ -49,7 +54,10 @@ import java.util.Optional;
  * but service-time samples arrive from the WORKER threads (one per user-function invocation, recorded where the
  * invocation ran), so all {@link #window} access and the recorded-signal counters are guarded by one internal
  * lock. The lock is uncontended in DISABLED (records return before reaching it) and cheap everywhere else: each
- * record is a counter bump or list append.
+ * record is a counter bump or list append. The rebalance callbacks
+ * ({@link #onPartitionsRevoked(Collection)} et al) arrive on the BROKER-POLL thread: they touch only the
+ * assignment-tracking state (its own lock) and hand the decision to the control thread through one
+ * {@link AtomicBoolean}, consumed at {@link #tick()} - the reset itself always runs control-loop-side.
  * <p>
  * Accessors deliberately have no {@code get} prefix, and this class stays OUT of the Truth-generator allowlist in
  * {@code parallel-consumer-core/pom.xml} - see {@code AbstractParallelEoSStreamProcessor#userFunctionTaskAccounting()}
@@ -82,6 +90,14 @@ public class AdmissionController {
     static final Duration SAMPLE_WINDOW_DURATION = Duration.ofSeconds(1);
 
     /**
+     * How long the target stays frozen after a real assignment delta (the plan's R13/KTD9): the old assignment's
+     * history was discarded, and the new workload gets this much injected-clock settle time before the law adapts
+     * on it. Windows that close inside the cooldown are discarded, reason {@link AdmissionDecisionReason#COOLDOWN}.
+     * Package-visible so tests derive their clock steps from it.
+     */
+    static final Duration REBALANCE_TARGET_FREEZE_COOLDOWN = Duration.ofSeconds(30);
+
+    /**
      * How a completed invocation's outcome classifies for admission purposes - the pass-through vocabulary for
      * {@link #recordOutcome(Outcome)}, mapping one-to-one onto {@link AdmissionSampleWindow}'s outcome counters.
      */
@@ -111,8 +127,21 @@ public class AdmissionController {
 
     /** Null in DISABLED - the inert mode accumulates nothing. */
     private final AdmissionSampleWindow window;
-    /** Null in DISABLED. */
-    private final AdmissionControlLaw law;
+
+    /**
+     * Null in DISABLED. Not final: a real assignment delta RECONSTRUCTS the law from {@link #lawBuilder} rather
+     * than resetting it field-by-field - reconstruction is provably complete (a hand-maintained {@code reset()}
+     * would have to track every future law field, and missing one is silent), keeps the law itself pure, and
+     * R13's "carry the target over as the best available prior" is exactly the builder's {@code initialLimit}.
+     * Only the control thread reads or swaps it.
+     */
+    private AdmissionControlLaw law;
+
+    /**
+     * Retained for the reconstruction above - carries the caller's calibration (the test seam's tuning included),
+     * so a rebuilt law is calibrated identically to the discarded one. Null in DISABLED.
+     */
+    private final AdmissionControlLaw.Builder lawBuilder;
 
     /**
      * Guards {@link #window} and the recorded-signal counters below - see the class javadoc's threading note.
@@ -137,6 +166,33 @@ public class AdmissionController {
     private Instant windowOpenedAt;
     private AdmissionDecisionReason lastDecisionReason = null;
     private Instant lastMovementAt = null;
+
+    /**
+     * End of the post-rebalance target freeze on the injected clock; null when no cooldown is running.
+     * Control-thread-owned, like every other decision-surface field.
+     */
+    private Instant cooldownUntil = null;
+
+    // ------------------------------------------------------------------
+    // Assignment tracking (the plan's KTD9 delta gate). Callbacks arrive on the broker-poll thread; the reset they
+    // may request runs control-loop-side at tick(). Guarded by assignmentLock - never windowLock, so a rebalance
+    // never contends with worker-thread sample recording.
+    // ------------------------------------------------------------------
+
+    private final Object assignmentLock = new Object();
+
+    /** This instance's current assignment as the callbacks have reported it. Guarded by {@link #assignmentLock}. */
+    private final Set<TopicPartition> trackedAssignment = new HashSet<>();
+
+    /**
+     * The assignment as of the last completed rebalance cycle - what a cycle's outcome is compared against. Null
+     * until the FIRST assignment, which establishes the baseline without flagging a delta: at startup there is no
+     * history to protect, and a cooldown would only delay warmup. Guarded by {@link #assignmentLock}.
+     */
+    private Set<TopicPartition> assignmentBaseline = null;
+
+    /** The broker-poll-thread-to-control-thread handoff: set on a real delta, consumed at {@link #tick()}. */
+    private final AtomicBoolean assignmentDeltaPending = new AtomicBoolean(false);
 
     public AdmissionController(ParallelConsumerOptions<?, ?> options, Clock clock) {
         this(options, clock, AdmissionControlLaw.newBuilder());
@@ -167,8 +223,10 @@ public class AdmissionController {
             this.adaptiveTarget = staticTarget;
             this.window = null;
             this.law = null;
+            this.lawBuilder = null;
         } else {
             this.window = new AdmissionSampleWindow();
+            this.lawBuilder = lawBuilder;
             // The law always adapts against the ceiling ENFORCE would use (KTD4): in ENFORCE that IS the
             // effective maximum; in OBSERVE it is what the would-be target is computed against, recorded as such.
             this.law = lawBuilder
@@ -254,6 +312,68 @@ public class AdmissionController {
     }
 
     // ------------------------------------------------------------------
+    // Rebalance callbacks - broker-poll thread (see the class javadoc's threading note).
+    // ------------------------------------------------------------------
+
+    /**
+     * Reports partitions revoked from this instance. Pure set bookkeeping - a revocation is mid-cycle (the
+     * consumer contract always follows it with {@link #onPartitionsAssigned(Collection)}, possibly empty), so the
+     * delta check waits for the cycle to complete rather than reading a transient half-rebalanced set as a delta.
+     */
+    public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+        if (mode == AdaptiveConcurrencyMode.DISABLED) {
+            return;
+        }
+        synchronized (assignmentLock) {
+            trackedAssignment.removeAll(partitions);
+        }
+    }
+
+    /**
+     * Reports partitions assigned to this instance - the completion of a rebalance cycle, so this is where the
+     * KTD9 delta gate compares the resulting assignment against the pre-rebalance baseline. Only a REAL delta
+     * requests the reset: cooperative (and identical-eager) rebalances fire the callbacks even when nothing moved
+     * for this instance, and discarding valid history on those would let group churn starve the controller.
+     */
+    public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+        if (mode == AdaptiveConcurrencyMode.DISABLED) {
+            return;
+        }
+        synchronized (assignmentLock) {
+            trackedAssignment.addAll(partitions);
+            checkAssignmentDelta();
+        }
+    }
+
+    /**
+     * Reports partitions LOST (fenced, not revoked) - a cycle end with no assignment half, so the delta check runs
+     * here too.
+     */
+    public void onPartitionsLost(Collection<TopicPartition> partitions) {
+        if (mode == AdaptiveConcurrencyMode.DISABLED) {
+            return;
+        }
+        synchronized (assignmentLock) {
+            trackedAssignment.removeAll(partitions);
+            checkAssignmentDelta();
+        }
+    }
+
+    /** Caller holds {@link #assignmentLock}. */
+    private void checkAssignmentDelta() {
+        if (assignmentBaseline == null) {
+            // First-ever assignment: baseline only - there is no history to protect yet, and a startup cooldown
+            // would just delay warmup (see the field javadoc).
+            assignmentBaseline = new HashSet<>(trackedAssignment);
+            return;
+        }
+        if (!trackedAssignment.equals(assignmentBaseline)) {
+            assignmentBaseline = new HashSet<>(trackedAssignment);
+            assignmentDeltaPending.set(true);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // The tick
     // ------------------------------------------------------------------
 
@@ -263,12 +383,26 @@ public class AdmissionController {
      * in ENFORCE, the would-be one in OBSERVE - recording the decision reason, and the timestamp when the target
      * actually moved. Below the time bound (and always in DISABLED) it does nothing, so it is safe to call every
      * control-loop pass.
+     * <p>
+     * Two lifecycle arms run ahead of the window arithmetic (R13):
+     * <ul>
+     * <li>a pending assignment delta (checked first, mid-window included) discards the in-progress window AND the
+     * law's history, and freezes the target for {@link #REBALANCE_TARGET_FREEZE_COOLDOWN} - see
+     * {@link #resetForAssignmentDelta};</li>
+     * <li>while the cooldown runs, windows still close on cadence but are DISCARDED, reason
+     * {@link AdmissionDecisionReason#COOLDOWN}: settle-time samples describe a workload still rearranging itself,
+     * and feeding them to a freshly-reset law would warm its baseline on noise.</li>
+     * </ul>
      */
     public void tick() {
         if (mode == AdaptiveConcurrencyMode.DISABLED) {
             return;
         }
         Instant now = clock.instant();
+        if (assignmentDeltaPending.getAndSet(false)) {
+            resetForAssignmentDelta(now);
+            return;
+        }
         if (Duration.between(windowOpenedAt, now).compareTo(SAMPLE_WINDOW_DURATION) < 0) {
             return;
         }
@@ -276,8 +410,16 @@ public class AdmissionController {
         synchronized (windowLock) {
             closed = window.close();
         }
-        AdmissionDecision decision = law.onWindowClosed(closed);
         windowOpenedAt = now;
+        if (cooldownUntil != null) {
+            if (now.isBefore(cooldownUntil)) {
+                // Frozen: the closed window is discarded, the target holds at its carried-over value.
+                lastDecisionReason = AdmissionDecisionReason.COOLDOWN;
+                return;
+            }
+            cooldownUntil = null;
+        }
+        AdmissionDecision decision = law.onWindowClosed(closed);
         lastDecisionReason = decision.getReason();
 
         // Defensive publish clamp - the law already clamps to [floor, ceiling], and its ceiling IS the enforce
@@ -288,6 +430,50 @@ public class AdmissionController {
             adaptiveTarget = newTarget;
             lastMovementAt = now;
         }
+    }
+
+    /**
+     * The R13 rebalance reset, control-thread-side: the in-progress window is discarded (the old assignment's
+     * samples describe partitions this instance may no longer own), the law is RECONSTRUCTED from
+     * {@link #lawBuilder} - identical calibration, fresh EWMAs/baseline/probe bookkeeping (see the {@link #law}
+     * field javadoc for why reconstruction beats a hand-written reset) - seeded with the current target as the
+     * best available prior, and the target freezes for {@link #REBALANCE_TARGET_FREEZE_COOLDOWN}.
+     */
+    private void resetForAssignmentDelta(Instant now) {
+        synchronized (windowLock) {
+            window.close(); // close-and-drop IS the discard: close() resets the instance for the next window
+        }
+        law = lawBuilder
+                .initialLimit(clamp(adaptiveTarget, AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling))
+                .ceiling(enforceCeiling)
+                .build();
+        windowOpenedAt = now;
+        cooldownUntil = now.plus(REBALANCE_TARGET_FREEZE_COOLDOWN);
+        lastDecisionReason = AdmissionDecisionReason.COOLDOWN;
+    }
+
+    /**
+     * Drops the in-progress window's samples and restarts the window from now - the law and its EWMAs survive
+     * untouched. The engine's pause-poison lever (R13): a {@code PAUSED} interval leaves the window holding
+     * samples from before (and completions from during) the pause, and the first post-resume window must not
+     * carry them; a pause says nothing about the downstream, so the law's history stays. No-op in DISABLED.
+     */
+    public void discardWindow() {
+        if (mode == AdaptiveConcurrencyMode.DISABLED) {
+            return;
+        }
+        synchronized (windowLock) {
+            window.close(); // close-and-drop IS the discard
+        }
+        windowOpenedAt = clock.instant();
+    }
+
+    /**
+     * Test seam (package-private): the live law instance, so same-package tests can prove reconstruction (new
+     * instance, baseline zeroed) and survival (same instance) across rebalances. Null in DISABLED.
+     */
+    AdmissionControlLaw law() {
+        return law;
     }
 
     // ------------------------------------------------------------------

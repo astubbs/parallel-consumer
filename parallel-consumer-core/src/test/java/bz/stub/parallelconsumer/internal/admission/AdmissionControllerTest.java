@@ -8,19 +8,24 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.AdaptiveConcurrencyMode;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.internal.admission.AdmissionController.Outcome;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.threeten.extra.MutableClock;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionController.ADAPTIVE_DEFAULT_CEILING;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionController.REBALANCE_TARGET_FREEZE_COOLDOWN;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionController.SAMPLE_WINDOW_DURATION;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionControlLaw.DEFAULT_MIN_SAMPLES_PER_WINDOW;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionControlLaw.LIMIT_FLOOR_SLOTS;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.ADAPTING;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.APP_LIMITED;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.AT_CAP;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.AT_FLOOR;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.COOLDOWN;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -55,13 +60,18 @@ class AdmissionControllerTest {
      * and ticks past the time bound - the controller-level analogue of {@link TestWindows#saturated}.
      */
     private void feedWindowAndTick(AdmissionController controller, long meanServiceTimeNanos, int inFlightMedian) {
+        feedSamples(controller, meanServiceTimeNanos, inFlightMedian);
+        clock.add(SAMPLE_WINDOW_DURATION);
+        controller.tick();
+    }
+
+    /** The feeding half alone - for scenarios where the samples' fate (discarded vs acted-on) IS the assertion. */
+    private void feedSamples(AdmissionController controller, long meanServiceTimeNanos, int inFlightMedian) {
         for (int i = 0; i < SAMPLES; i++) {
             controller.recordServiceTime(meanServiceTimeNanos);
             controller.recordInFlight(inFlightMedian);
             controller.recordOutcome(Outcome.SUCCESS);
         }
-        clock.add(SAMPLE_WINDOW_DURATION);
-        controller.tick();
     }
 
     // ------------------------------------------------------------------
@@ -254,5 +264,195 @@ class AdmissionControllerTest {
         assertThat(controller.mode()).isEqualTo(AdaptiveConcurrencyMode.DISABLED);
         assertThat(controller.currentTarget()).isEqualTo(DEFAULT_MAX_CONCURRENCY);
         assertThat(module.admissionController()).isSameInstanceAs(controller);
+    }
+
+    // ------------------------------------------------------------------
+    // Lifecycle (the plan's U7/R13): the rebalance delta gate, the cooldown, and the window discard.
+    // Callbacks are driven here directly the way the engine drives them - revoke/assign pairs on one thread -
+    // asserting converged decisions, never tick paths.
+    // ------------------------------------------------------------------
+
+    static final TopicPartition TP_0 = new TopicPartition("lifecycle-topic", 0);
+    static final TopicPartition TP_1 = new TopicPartition("lifecycle-topic", 1);
+
+    /** ENFORCE under a user ceiling of 24 with a contracted seed of 8 - room to move in both directions. */
+    private AdmissionController seededEnforceController() {
+        return new AdmissionController(options(AdaptiveConcurrencyMode.ENFORCE, 24, 8), clock);
+    }
+
+    /** Warms the law: healthy saturated windows, so there is real history (baseline, estimate) to protect/discard. */
+    private void warm(AdmissionController controller) {
+        controller.onPartitionsAssigned(UniLists.of(TP_0));
+        for (int window = 0; window < 3; window++) {
+            feedWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        }
+        assertWithMessage("fixture: warming must have given the law a baseline")
+                .that(controller.law().getServiceTimeBaselineNanos()).isGreaterThan(0.0);
+    }
+
+    /**
+     * The startup arm of the delta gate: the FIRST assignment establishes the baseline without a cooldown - there
+     * is no history to protect yet, and freezing at t=0 would only delay warmup.
+     */
+    @Test
+    void firstAssignmentEstablishesTheBaselineWithoutACooldown() {
+        var controller = seededEnforceController();
+
+        controller.onPartitionsAssigned(UniLists.of(TP_0));
+        controller.tick();
+
+        assertThat(controller.lastDecisionReason()).isEmpty();
+        feedWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        assertWithMessage("adaptation must act on the very first window after the initial assignment")
+                .that(controller.lastDecisionReason()).hasValue(ADAPTING);
+    }
+
+    /**
+     * A REAL assignment delta (a partition swapped): the in-progress window and the law's whole history are
+     * discarded - the law is reconstructed, baseline zeroed - while the target itself carries over as the new
+     * law's prior (R13), frozen under reason COOLDOWN. The reset lands on the first tick after the cycle, before
+     * any window boundary.
+     */
+    @Test
+    void aRealAssignmentDeltaDiscardsHistoryAndFreezesTheTarget() {
+        var controller = seededEnforceController();
+        warm(controller);
+        var lawBefore = controller.law();
+        int targetBefore = controller.currentTarget();
+        feedSamples(controller, 10 * MS, targetBefore); // mid-window samples that must die with the old assignment
+
+        controller.onPartitionsRevoked(UniLists.of(TP_0));
+        controller.onPartitionsAssigned(UniLists.of(TP_1));
+        controller.tick();
+
+        assertThat(controller.lastDecisionReason()).hasValue(COOLDOWN);
+        assertWithMessage("the target carries over as the best available prior - a rebalance is not a verdict")
+                .that(controller.currentTarget()).isEqualTo(targetBefore);
+        assertWithMessage("the law must be reconstructed, not retained")
+                .that(controller.law()).isNotSameInstanceAs(lawBefore);
+        assertWithMessage("a reconstructed law has no baseline - the EWMAs were discarded")
+                .that(controller.law().getServiceTimeBaselineNanos()).isEqualTo(0.0);
+        assertWithMessage("the carried-over target seeds the new law")
+                .that(controller.law().getEstimatedLimit()).isEqualTo(targetBefore);
+    }
+
+    /**
+     * The freeze holds for the whole cooldown on the injected clock - growth-inducing windows landing inside it
+     * are discarded, reason COOLDOWN - and adaptation resumes once it lapses.
+     */
+    @Test
+    void theCooldownFreezesTheTargetUntilItLapsesThenAdaptationResumes() {
+        var controller = seededEnforceController();
+        warm(controller);
+        controller.onPartitionsRevoked(UniLists.of(TP_0));
+        controller.onPartitionsAssigned(UniLists.of(TP_1));
+        controller.tick();
+        int frozen = controller.currentTarget();
+
+        // Every window that CLOSES before the cooldown's end is discarded, however healthy.
+        long windowsInsideCooldown = REBALANCE_TARGET_FREEZE_COOLDOWN.toMillis() / SAMPLE_WINDOW_DURATION.toMillis() - 1;
+        for (long window = 0; window < windowsInsideCooldown; window++) {
+            feedWindowAndTick(controller, 10 * MS, frozen);
+            assertWithMessage("window %s inside the cooldown moved the frozen target", window)
+                    .that(controller.currentTarget()).isEqualTo(frozen);
+            assertThat(controller.lastDecisionReason()).hasValue(COOLDOWN);
+        }
+
+        // The cooldown has lapsed on the injected clock: the same healthy windows now move the target again.
+        for (int window = 0; window < 3; window++) {
+            feedWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        }
+        assertThat(controller.lastDecisionReason()).hasValue(ADAPTING);
+        assertWithMessage("adaptation must resume after the cooldown lapses")
+                .that(controller.currentTarget()).isGreaterThan(frozen);
+    }
+
+    /**
+     * THE DELTA GATE: an eager-protocol rebalance revokes everything and hands the SAME set back - and a
+     * cooperative no-op fires empty callbacks. Neither moved anything for this instance, so the law, its baseline
+     * and the in-progress window's samples must all survive; group churn must not starve the controller of
+     * history. (Sabotage-proofed: with the equals-gate removed from checkAssignmentDelta, this fails on
+     * COOLDOWN-instead-of-ADAPTING.)
+     */
+    @Test
+    void aNoDeltaRebalanceLeavesTheLawAndWindowIntact() {
+        var controller = seededEnforceController();
+        warm(controller);
+        var lawBefore = controller.law();
+        feedSamples(controller, 10 * MS, controller.currentTarget()); // mid-window samples that must SURVIVE
+
+        // eager identical re-assignment
+        controller.onPartitionsRevoked(UniLists.of(TP_0));
+        controller.onPartitionsAssigned(UniLists.of(TP_0));
+        // cooperative no-op cycle
+        controller.onPartitionsRevoked(UniLists.of());
+        controller.onPartitionsAssigned(UniLists.of());
+
+        clock.add(SAMPLE_WINDOW_DURATION);
+        controller.tick();
+
+        assertWithMessage("the surviving window's samples must be acted on - not discarded, not COOLDOWN")
+                .that(controller.lastDecisionReason()).hasValue(ADAPTING);
+        assertWithMessage("no delta, no reconstruction")
+                .that(controller.law()).isSameInstanceAs(lawBefore);
+    }
+
+    /**
+     * Partitions LOST (fenced) end a cycle with no assignment half - the delta gate must compare there too.
+     */
+    @Test
+    void aLossIsACycleEndAndARealDelta() {
+        var controller = seededEnforceController();
+        controller.onPartitionsAssigned(UniLists.of(TP_0, TP_1));
+        feedWindowAndTick(controller, 10 * MS, controller.currentTarget());
+
+        controller.onPartitionsLost(UniLists.of(TP_1));
+        controller.tick();
+
+        assertThat(controller.lastDecisionReason()).hasValue(COOLDOWN);
+    }
+
+    /**
+     * {@link AdmissionController#discardWindow()} - the engine's pause-poison lever: the in-progress window's
+     * samples never reach the law, but the law itself (and its baseline) survives, because a pause says nothing
+     * about the downstream.
+     */
+    @Test
+    void discardWindowDropsTheSamplesButKeepsTheLaw() {
+        var controller = seededEnforceController();
+        warm(controller);
+        var lawBefore = controller.law();
+        double baselineBefore = lawBefore.getServiceTimeBaselineNanos();
+        feedSamples(controller, 10 * MS, controller.currentTarget());
+
+        controller.discardWindow();
+        clock.add(SAMPLE_WINDOW_DURATION);
+        controller.tick();
+
+        assertWithMessage("the first window after the discard must close EMPTY - a hold, never a decision on "
+                + "discarded samples")
+                .that(controller.lastDecisionReason()).hasValue(APP_LIMITED);
+        assertThat(controller.law()).isSameInstanceAs(lawBefore);
+        assertWithMessage("an empty window leaves the baseline untouched (the law's arm 1 holds all state)")
+                .that(controller.law().getServiceTimeBaselineNanos()).isEqualTo(baselineBefore);
+    }
+
+    /**
+     * DISABLED stays inert through every lifecycle input - no NPE on the null window/law, no state movement.
+     */
+    @Test
+    void disabledIgnoresLifecycleInputs() {
+        var controller = controller(AdaptiveConcurrencyMode.DISABLED, 24);
+
+        controller.onPartitionsAssigned(UniLists.of(TP_0));
+        controller.onPartitionsRevoked(UniLists.of(TP_0));
+        controller.onPartitionsAssigned(UniLists.of(TP_1));
+        controller.onPartitionsLost(UniLists.of(TP_1));
+        controller.discardWindow();
+        clock.add(SAMPLE_WINDOW_DURATION.multipliedBy(2));
+        controller.tick();
+
+        assertThat(controller.currentTarget()).isEqualTo(24);
+        assertThat(controller.lastDecisionReason()).isEmpty();
     }
 }
