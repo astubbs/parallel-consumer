@@ -78,6 +78,16 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
     }
 
     /**
+     * @return false - see {@link AbstractParallelEoSStreamProcessor#supportsAdaptiveConcurrency()}. The concurrency
+     *         an adaptive controller would steer lives in the external runtime, not in a pool this library sizes -
+     *         the single dispatch thread here is not it.
+     */
+    @Override
+    protected boolean supportsAdaptiveConcurrency() {
+        return false;
+    }
+
+    /**
      * With Vertx and Reactor, a function hasn't succeeded until the inner vertx function has also succeeded logging
      */
     @Override

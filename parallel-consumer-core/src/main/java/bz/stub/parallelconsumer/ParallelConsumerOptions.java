@@ -15,12 +15,15 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.experimental.FieldNameConstants;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -47,6 +50,7 @@ import static java.time.Duration.ofMillis;
  * @see #builder()
  * @see ParallelConsumerOptions.ParallelConsumerOptionsBuilder
  */
+@Slf4j
 @Getter
 @Builder(toBuilder = true)
 @ToString
@@ -371,6 +375,126 @@ public class ParallelConsumerOptions<K, V> {
     @Builder.Default
     private final boolean useVirtualThreads = Boolean.getBoolean("pc.virtualThreads");
 
+    /**
+     * How much authority the adaptive-concurrency controller has over the in-flight target.
+     *
+     * @see #getAdaptiveConcurrencyMode()
+     */
+    public enum AdaptiveConcurrencyMode {
+
+        /**
+         * The controller does not exist. Concurrency behaves exactly as it always has: {@link #getMaxConcurrency()}
+         * is both the pool size and the in-flight target. The default.
+         */
+        DISABLED,
+
+        /**
+         * The controller runs its measurement and target calculation and reports what it <em>would</em> do (logs,
+         * metrics), but concurrency is not touched - {@link #getMaxConcurrency()} still governs alone. This is the
+         * strongest mode the {@value #ADAPTIVE_CONCURRENCY_MODE_PROPERTY} system property can select, so an operator
+         * flag can never change what a deployment actually runs.
+         */
+        OBSERVE,
+
+        /**
+         * The controller's target is enforced: it steers the effective concurrency between 1 and the ceiling.
+         * Selectable only through the builder - a deliberate line of code, never a launch flag.
+         */
+        ENFORCE
+    }
+
+    /**
+     * <b>EXPERIMENTAL</b> - the adaptive-concurrency controller is under active development; this surface may change
+     * in a minor release.
+     * <p>
+     * <b>What it is for.</b> Choosing {@link #maxConcurrency} by hand means guessing the downstream system's
+     * capacity, and the right answer changes with load. The adaptive controller measures how throughput responds to
+     * the current in-flight target and adjusts that target instead of trusting the guess.
+     * <p>
+     * <b>What it changes.</b> {@link AdaptiveConcurrencyMode#OBSERVE} only adds measurement and reporting - logs and
+     * metrics of what the controller would choose. {@link AdaptiveConcurrencyMode#ENFORCE} lets the controller steer
+     * the effective concurrency target. In ENFORCE, {@link #maxConcurrency} remains the ceiling the controller may
+     * never exceed - with one documented exception: leaving {@link #maxConcurrency} at the library default
+     * ({@value #DEFAULT_MAX_CONCURRENCY}) selects a documented adaptive default ceiling instead, because keeping the
+     * hand-tuning default while asking for adaptive behaviour is a contradiction. (That constant lands with the
+     * controller itself.)
+     * <p>
+     * <b>What it does not do.</b> It does not change ordering guarantees, offset management, or batching, and in
+     * OBSERVE it changes no runtime behaviour at all. Engines that dispatch into an external runtime (Vert.x,
+     * Reactor, Mutiny) and the measurement-only {@link #directPullEngine} cannot serve it - requesting it there logs
+     * one WARN at construction and behaves as {@link AdaptiveConcurrencyMode#DISABLED}.
+     * <p>
+     * Defaults from the {@value #ADAPTIVE_CONCURRENCY_MODE_PROPERTY} system property, for the same reason
+     * {@link #isDirectPullEngine()} does - but the property may select {@code DISABLED} or {@code OBSERVE} only:
+     * a property value of {@code ENFORCE} resolves to {@code OBSERVE} with a WARN. Enforcement changes what a
+     * deployment actually does to its downstream systems, so it must be a code decision, not an environment one.
+     *
+     * @see #getAdaptiveConcurrencyInitialTarget()
+     * @see #validate()
+     */
+    @Builder.Default
+    private final AdaptiveConcurrencyMode adaptiveConcurrencyMode = resolveAdaptiveConcurrencyModeFromProperty();
+
+    /**
+     * The system property {@link #adaptiveConcurrencyMode} defaults from. Carries an
+     * {@link AdaptiveConcurrencyMode} name, case-insensitively; absent means {@link AdaptiveConcurrencyMode#DISABLED}.
+     */
+    public static final String ADAPTIVE_CONCURRENCY_MODE_PROPERTY = "pc.adaptiveConcurrency";
+
+    /**
+     * Resolves {@link #adaptiveConcurrencyMode}'s default from {@value #ADAPTIVE_CONCURRENCY_MODE_PROPERTY}.
+     * <p>
+     * {@link Boolean#getBoolean} - what the other property-backed options use - is not the right reader here: the
+     * property carries an enum name, not a boolean. Parsing is case-insensitive; an absent property means
+     * {@link AdaptiveConcurrencyMode#DISABLED}; an unrecognised value fails loudly (at {@code build()}, where Lombok
+     * evaluates builder defaults - so before {@link #validate()} can even run) rather than silently falling back,
+     * matching this repo's fatal-on-unknown convention. {@code ENFORCE} downgrades to {@code OBSERVE} with a WARN -
+     * see {@link #getAdaptiveConcurrencyMode()} for why the property is not allowed to select enforcement.
+     */
+    static AdaptiveConcurrencyMode resolveAdaptiveConcurrencyModeFromProperty() {
+        String raw = System.getProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
+        if (raw == null) {
+            return AdaptiveConcurrencyMode.DISABLED;
+        }
+        final AdaptiveConcurrencyMode parsed;
+        try {
+            parsed = AdaptiveConcurrencyMode.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(msg("{}: system property {} has unrecognised value '{}' - " +
+                            "valid values are {} (ENFORCE is builder-only)",
+                    Fields.adaptiveConcurrencyMode, ADAPTIVE_CONCURRENCY_MODE_PROPERTY, raw,
+                    Arrays.toString(AdaptiveConcurrencyMode.values())), e);
+        }
+        if (parsed == AdaptiveConcurrencyMode.ENFORCE) {
+            log.warn("System property {} requested {}, which the property is not allowed to select - enforcement " +
+                            "changes what this deployment does to its downstream systems, so it must be an explicit " +
+                            "builder value ({}). Resolving to {} instead.",
+                    ADAPTIVE_CONCURRENCY_MODE_PROPERTY, AdaptiveConcurrencyMode.ENFORCE,
+                    Fields.adaptiveConcurrencyMode, AdaptiveConcurrencyMode.OBSERVE);
+            return AdaptiveConcurrencyMode.OBSERVE;
+        }
+        return parsed;
+    }
+
+    /**
+     * <b>EXPERIMENTAL</b> - see {@link #getAdaptiveConcurrencyMode()}.
+     * <p>
+     * <b>What it is for.</b> The concurrency target the adaptive controller starts from, when you know roughly where
+     * the downstream system's capacity lies and want to skip the ramp-up from the controller's own starting point.
+     * <p>
+     * <b>What it changes.</b> Only the first target the controller uses; measurement takes over from there. In
+     * {@link AdaptiveConcurrencyMode#OBSERVE} it seeds the reported (hypothetical) target only.
+     * <p>
+     * <b>What it does not do.</b> It is not a floor or a ceiling - the controller is free to move away from it
+     * immediately - and it has no effect when {@link #adaptiveConcurrencyMode} is
+     * {@link AdaptiveConcurrencyMode#DISABLED}; setting it there fails {@link #validate()}, because a seed that
+     * nothing will ever read is a configuration lie.
+     * <p>
+     * {@code 0} means unset (the {@link #messageBufferSize} sentinel convention): the controller chooses its own
+     * starting point. When set, it must be between 1 and {@link #maxConcurrency}.
+     */
+    private final int adaptiveConcurrencyInitialTarget;
+
     public static final Duration DEFAULT_STATIC_RETRY_DELAY = Duration.ofSeconds(1);
 
     // Default backoff for SaslAuthenticationException retry durion ConsumerManager.commitSync and ConsumerManager.poll.
@@ -521,6 +645,7 @@ public class ParallelConsumerOptions<K, V> {
         batchSizeValidation();
         transactionsValidation();
         virtualThreadsValidation();
+        adaptiveConcurrencyValidation();
     }
 
     /**
@@ -555,6 +680,40 @@ public class ParallelConsumerOptions<K, V> {
                             "They need a JDK 21 runtime - note that the Parallel Consumer artifact itself is still " +
                             "Java 8 bytecode, so only the runtime has to move, not your build.",
                     System.getProperty("java.vm.name"), System.getProperty("java.version")), e);
+        }
+    }
+
+    /**
+     * The seed only means something to a controller that will run, and only below the ceiling that controller
+     * honours. Both halves fail here, at validation, rather than as a silently ignored setting.
+     * <p>
+     * The ceiling checked is {@link #maxConcurrency}: at the options level that is the effective maximum. The
+     * ENFORCE-only substitution of a documented adaptive default ceiling (when {@link #maxConcurrency} is left at
+     * the library default) is the controller's decision, made where the controller is built - not re-derived here.
+     */
+    private void adaptiveConcurrencyValidation() {
+        if (adaptiveConcurrencyMode == AdaptiveConcurrencyMode.DISABLED) {
+            if (adaptiveConcurrencyInitialTarget != 0) {
+                throw new IllegalArgumentException(msg("{} is set ({}) but {} is {} - nothing will ever read the " +
+                                "seed, so the configuration would lie about what runs. Remove the seed or select a mode.",
+                        Fields.adaptiveConcurrencyInitialTarget, adaptiveConcurrencyInitialTarget,
+                        Fields.adaptiveConcurrencyMode, adaptiveConcurrencyMode));
+            }
+            return;
+        }
+        if (adaptiveConcurrencyInitialTarget == 0) {
+            // unset - the controller picks its own starting point
+            return;
+        }
+        if (adaptiveConcurrencyInitialTarget < 1) {
+            throw new IllegalArgumentException(msg("{} must be 1 or greater when set (0 means unset), but was: {}",
+                    Fields.adaptiveConcurrencyInitialTarget, adaptiveConcurrencyInitialTarget));
+        }
+        if (adaptiveConcurrencyInitialTarget > maxConcurrency) {
+            throw new IllegalArgumentException(msg("{} ({}) must not exceed {} ({}) - the controller would clamp it " +
+                            "on its first pass, so the seed as written can never take effect",
+                    Fields.adaptiveConcurrencyInitialTarget, adaptiveConcurrencyInitialTarget,
+                    Fields.maxConcurrency, maxConcurrency));
         }
     }
 

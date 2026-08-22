@@ -344,6 +344,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private PCMetrics pcMetrics;
 
+    /**
+     * Whether adaptive concurrency was requested ({@link ParallelConsumerOptions#getAdaptiveConcurrencyMode()} not
+     * {@code DISABLED}) <b>and</b> this engine can serve it ({@link #supportsAdaptiveConcurrency()}). Resolved once,
+     * in the constructor, before the worker pool is built - so pool construction can consult it - and is the single
+     * truth every downstream component reads: nothing else re-derives the mode-versus-capability decision. When the
+     * mode is requested but unsupported, resolution logs one WARN naming why and this stays {@code false} - the
+     * system then behaves as {@code DISABLED} everywhere.
+     */
+    @Getter(PROTECTED)
+    private final boolean adaptiveConcurrencyActive;
+
     protected AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions) {
         this(newOptions, new PCModule<>(newOptions));
     }
@@ -373,6 +384,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         pcMetrics = module.pcMetrics();
 
         this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
+
+        // Resolved BEFORE the worker pool below is forced, deliberately: pool sizing is allowed to depend on this
+        // decision, so the decision may never depend on the pool.
+        this.adaptiveConcurrencyActive = resolveAdaptiveConcurrencyActive();
 
         workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
         // Resolved here, not left to the first dispatch. The supplier is memoized and therefore lazy, but
@@ -464,6 +479,47 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     protected boolean supportsVirtualThreads() {
         return true;
+    }
+
+    /**
+     * Whether this engine can serve the adaptive-concurrency controller
+     * ({@link ParallelConsumerOptions#getAdaptiveConcurrencyMode()}).
+     * <p>
+     * False for {@link ExternalEngine}, for the same reason {@link #supportsDirectPull()} and
+     * {@link #supportsVirtualThreads()} are: its worker "pool" is one dispatch thread, and the concurrency to adapt
+     * lives in the external runtime, out of this library's reach.
+     * <p>
+     * The direct-pull engine cannot serve it either, but direct pull is an <em>option</em> on the core engine
+     * ({@link ParallelConsumerOptions#isDirectPullEngine()}), not a subclass - so that half of the answer is folded
+     * in here rather than expressed as an override.
+     *
+     * @see #isAdaptiveConcurrencyActive()
+     */
+    protected boolean supportsAdaptiveConcurrency() {
+        return !options.isDirectPullEngine();
+    }
+
+    /**
+     * The constructor-time half of {@link #isAdaptiveConcurrencyActive()}: folds the requested mode into the
+     * capability answer, and is the one place the "requested but unsupported" WARN is emitted.
+     */
+    private boolean resolveAdaptiveConcurrencyActive() {
+        boolean requested = options.getAdaptiveConcurrencyMode() != ParallelConsumerOptions.AdaptiveConcurrencyMode.DISABLED;
+        if (!requested) {
+            return false;
+        }
+        if (supportsAdaptiveConcurrency()) {
+            return true;
+        }
+        String reason = options.isDirectPullEngine()
+                ? "the direct-pull engine (isDirectPullEngine) has no executor queue for the controller to size - " +
+                "workers select their own work"
+                : msg("{} dispatches into an external runtime, so the concurrency to adapt lives out there, " +
+                "not in a pool this library sizes", this.getClass().getSimpleName());
+        log.warn("adaptiveConcurrencyMode is {} but this configuration cannot serve it: {}. Continuing with " +
+                        "adaptive concurrency DISABLED.",
+                options.getAdaptiveConcurrencyMode(), reason);
+        return false;
     }
 
     protected ExecutorService setupWorkerPool(int poolSize) {
