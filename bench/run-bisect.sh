@@ -468,8 +468,20 @@ run_one() {
   # has records out, so every run ends with roughly `concurrency` failures - see Bench#windowClosed,
   # which also records the control that established they are teardown and not a storm. Checking the
   # whole file would fire on every run, and a warning that always fires is not a warning.
-  local err=$WORK/last-run.err
+  # THE JVM'S EXIT STATUS IS THE RETURN VALUE OF THIS FUNCTION, and it was not until 2026-08-22.
+  #
+  # A shell function returns the status of its LAST command, and there are two checks below this
+  # pipeline - so `run_one` returned 0 no matter how the JVM died. The produce stage reported
+  # "produced 20000 records" for a run whose KafkaProducer constructor had thrown a ConfigException
+  # and written nothing at all, and the sweep proceeded to measure an empty topic. It also made
+  # Bench's ARRIVAL_VOID exit code (3) unreachable: the caller reads $? to distinguish a voided
+  # arrival run from a broken arm, and $? could only ever be 0 or the deadline's 124.
+  #
+  # PIPESTATUS[0] rather than $? - the pipeline's own status is parse_result's, and `grep` finding no
+  # RESULT line is a perfectly ordinary way for a failed run to end.
+  local err=$WORK/last-run.err rc
   java ${engine[@]+"${engine[@]}"} ${jfr[@]+"${jfr[@]}"} -cp "$cp" Bench "$@" 2>"$err" | parse_result
+  rc=${PIPESTATUS[0]}
   # `sed '/PAT/q'`, not `sed -n '1,/PAT/p'`: a `1,/PAT/` range does not test the end pattern on line
   # 1, so when the marker IS line 1 - which happens whenever an arm logs nothing during its run, the
   # healthy case - the range never closes and the whole teardown log is scanned. That fired the
@@ -495,6 +507,13 @@ run_one() {
     sed -n '/^NOTE:/p' "$err" | while IFS= read -r note; do log "         $note"; done
     log "         If this is a LOCAL row, check the core jar has not been replaced by another session."
   fi
+  # A NON-ZERO EXIT WITH NO RESULT LINE IS A DEAD ARM, and its stderr is the only thing that says
+  # why. Reported here rather than left in a file nobody opens, because the alternative - a bare
+  # RUN_FAILED - is what let an empty topic be measured six times in a row.
+  if [ "$rc" != 0 ]; then
+    log "       $* exited $rc; last stderr line: $(tail -1 "$err" 2>/dev/null)"
+  fi
+  return "$rc"
 }
 
 # --- the llingr arm --------------------------------------------------------------------------

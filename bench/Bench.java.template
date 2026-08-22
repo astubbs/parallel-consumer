@@ -714,7 +714,10 @@ public class Bench {
     static void applyBoundedDelivery(Properties p) {
         p.put("enable.idempotence", "false");
         p.put("acks", "1");
-        p.put("delivery.timeout.ms", System.getenv().getOrDefault("BENCH_DELIVERY_TIMEOUT_MS", "30000"));
+        // Comfortably above linger.ms + request.timeout.ms, which the client REQUIRES and which is
+        // easy to violate by picking a round number: request.timeout.ms defaults to 30,000, so a
+        // delivery timeout of 30,000 with any linger at all fails the KafkaProducer constructor.
+        p.put("delivery.timeout.ms", System.getenv().getOrDefault("BENCH_DELIVERY_TIMEOUT_MS", "120000"));
     }
 
     static Properties consumerProps(String bootstrap) {
