@@ -70,6 +70,51 @@ Removing it from the shard's selectable view while it waits is the cleaner end s
 with the `UNORDERED`-queue direction: the shard holds ordered work, the retry queue holds waiting
 work, and neither contains the other's.
 
+## Why a retried record goes back at all - and where it does not have to
+
+**Antony: "why do the retry entries need to go back into the original queue?"**
+
+**Ordering, and only ordering.** Under `KEY`, if offset 5 for key K fails and is waiting, offset 9 for
+K must not run. Today **the presence of record 5 in the shard is the blocking mechanism**: the scan
+reaches it, `isAvailableToTakeAsWork()` is false because `isDelayPassed()` is false, and then
+`if (isOrderRestricted()) break;` fires. Remove it from the shard and offset 9 becomes selectable -
+a correctness break, not a slowdown.
+
+So the record's return is not bookkeeping, it is the ordering guarantee, expressed as a side effect
+of where the object lives. **That is worth naming**, because it is the same implicit-mechanism shape
+that made the in-flight prefix walk necessary: a record stays put so that its presence means
+something.
+
+| Mode | Does it need to go back? |
+|---|---|
+| `UNORDERED` | **No.** Nothing is ordering it. One home - the retry queue - until it is taken |
+| `KEY`, `PARTITION` | **Yes today**, because presence is what blocks the shard. **Not necessarily tomorrow**: if the shard's blocked state were explicit - the in-flight count extended to mean "has a record out OR waiting to retry" - the record could live only in the retry queue and the shard would still refuse a second taker |
+
+That second row is the same trade as everywhere else in this family: make an implicit property
+explicit, and the structure stops having to hold something purely so that its presence can be
+observed.
+
+## The degenerate case is NOT the same problem
+
+**Antony's own objection: "in the worst case all records need retries, they all get moved to the
+retry queue, and we have the same problem again."**
+
+**It does not**, and the reason is the ordering key. The current problem is a **linear walk past
+ineligible entries** - the scan steps over every in-flight record to reach a claimable one.
+`RetryQueue` is sorted by **retry-due time**, so:
+
+- If the head is not due, **nothing is due**. That is one comparison, whatever the size.
+- If the head is due, take it - `firstEntry` on a `TreeMap` is O(log n).
+- There are no ineligible entries *before* the head to step over, because "eligible" is exactly the
+  sort key.
+
+So a retry queue holding every record still answers "is there work" in one comparison and "give me
+work" in O(log n). **The pathological case of the current design is the ordinary case of this one.**
+
+The one thing that would reintroduce a walk is leaving *taken* records in the queue, so that a
+selector steps past records other workers already hold. Removing on take - which the design does
+anyway - avoids it.
+
 ## Sequencing
 
 This is cheap and independent - the structure exists, the comparator is right, and the change is at
