@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -58,10 +59,28 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * <b>Observability.</b> When a {@link PCMetrics} is supplied and the mode is not {@code DISABLED}, construction
  * registers the four {@code pc.admission.*} meters (live target, would-be target, binding constraint, movement
- * count) - see {@link #initMetrics(PCMetrics)}. Independently of any registry, {@link #tick()} emits one
- * rate-limited line naming the binding constraint whenever the target is being HELD by one
- * ({@link #NO_MOVEMENT_CONSTRAINTS}), so an operator running {@code OBSERVE} with no Micrometer registry
- * configured still gets the mode's product.
+ * count) - see {@link #initMetrics(PCMetrics)}. Independently of any registry, {@link #tick()} narrates the
+ * target on TWO channels, so an operator running the feature with no Micrometer registry configured (the
+ * ordinary case for someone trying it out) still gets its product:
+ * <ul>
+ * <li>every window that MOVES the target logs one line - old and new target, the deciding arm, and the window
+ * aggregates that drove it ({@link #reportMovement});</li>
+ * <li>every window that HOLDS it behind a constraint logs one RATE-LIMITED line naming that constraint
+ * ({@link #NO_MOVEMENT_CONSTRAINTS}, {@link #maybeReportBindingConstraint}) - the condition is a steady state,
+ * not an event, so it is not repeated once per second.</li>
+ * </ul>
+ * <b>Watching just this.</b> Both lines come from THIS class's own logger -
+ * {@code bz.stub.parallelconsumer.internal.admission.AdmissionController} - and both open with the same stable
+ * prefix, {@value #LOG_PREFIX}, so they are greppable together and separable from everything else. Raising that
+ * one logger to {@code INFO} with the rest of the library at {@code WARN} shows the target's whole trajectory
+ * and nothing more:
+ * <pre>{@code
+ * <logger name="bz.stub.parallelconsumer.internal.admission.AdmissionController" level="info"/>
+ * }</pre>
+ * Both lines are INFO deliberately. A window is a second and most windows hold, so movements are infrequent by
+ * construction; the mode is opt-in and off by default, so no user who has not asked for adaptive concurrency
+ * ever sees either line; and the trajectory is the whole observable product of an experimental feature - DEBUG
+ * would hide it behind a level nobody enables without already suspecting something.
  * <p>
  * <b>Threading.</b> The control loop owns the decision surface - {@link #tick()} and every published-state read -
  * but service-time samples arrive from the WORKER threads (one per user-function invocation, recorded where the
@@ -134,6 +153,14 @@ public class AdmissionController {
      * {@code AbstractParallelEoSStreamProcessor}.
      */
     private static final int CONSTRAINT_REPORT_INTERVAL_SECONDS = 5;
+
+    /**
+     * The stable opening of EVERY line this class logs - the one token an operator filters on
+     * ({@code grep 'Adaptive concurrency'}) to see the target's trajectory and nothing else. Movements and holds
+     * share it deliberately: they are two halves of one narration, and a reader following a target that stopped
+     * moving needs the line that says why in the same filter as the ones that moved it.
+     */
+    private static final String LOG_PREFIX = "Adaptive concurrency";
 
     /**
      * How a completed invocation's outcome classifies for admission purposes - the pass-through vocabulary for
@@ -533,13 +560,67 @@ public class AdmissionController {
         // discovered-ceiling composition will extend here).
         int newTarget = clamp(decision.getTargetConcurrency(), AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling);
         if (newTarget != adaptiveTarget) {
+            int previousTarget = adaptiveTarget;
             adaptiveTarget = newTarget;
             lastMovementAt = now;
             if (movementCounter != null) {
                 movementCounter.increment();
             }
+            reportMovement(previousTarget, newTarget, decision.getReason(), closed);
         }
         maybeReportBindingConstraint(decision.getReason());
+    }
+
+    /**
+     * Says that the target MOVED, and what moved it - the counterpart to {@link #maybeReportBindingConstraint},
+     * and the line an operator watches a ramp on (see the class javadoc's "watching just this").
+     * <p>
+     * Not rate-limited, unlike the held line: a movement is an EVENT, one per closed window at most, and a window
+     * is a second - dropping one would leave a gap in the very trajectory this exists to show. It carries the
+     * window's own aggregates because the target alone is uninterpretable: the same {@code 8 -> 9} means
+     * something different at 2ms service time with 200 samples than at 200ms with 11.
+     * <p>
+     * Named for what actually moved: under {@code OBSERVE} the LIVE target never changes, so calling the moved
+     * number "the admission target" there would report an enforcement that is not happening.
+     */
+    private void reportMovement(int previousTarget, int newTarget, AdmissionDecisionReason reason,
+                                ClosedAdmissionWindow closed) {
+        log.info(LOG_PREFIX + " ({}): {} target {} -> {} slot(s), decided by {} - service time mean {}, " +
+                        "in-flight median {} (spread {}) over {} snapshot(s), {} sample(s), effective maximum {}.{}",
+                mode,
+                mode == AdaptiveConcurrencyMode.ENFORCE ? "live admission" : "would-be",
+                previousTarget,
+                newTarget,
+                reason,
+                formatNanosAsMillis(closed.getMeanServiceTimeNanos()),
+                closed.getInFlightMedian(),
+                closed.getInFlightSpread(),
+                closed.getInFlightSampleCount(),
+                closed.getSampleCount(),
+                effectiveMaximum(),
+                nonSuccessNote(closed));
+    }
+
+    /**
+     * The non-success fraction, rendered as a trailing sentence - and ONLY when it is non-zero. A healthy window
+     * would otherwise carry a permanent " non-success 0%" on every line, which is noise that trains the reader to
+     * stop looking at exactly the field that matters when it stops being zero.
+     */
+    private static String nonSuccessNote(ClosedAdmissionWindow closed) {
+        double fraction = closed.nonSuccessFraction();
+        if (fraction <= 0) {
+            return "";
+        }
+        return String.format(Locale.ROOT, " Non-success fraction %.2f of %d outcome(s).",
+                fraction, closed.totalOutcomeCount());
+    }
+
+    /**
+     * Service time in milliseconds - the unit an operator thinks in. {@link Locale#ROOT} so the decimal separator
+     * is the same in a log shipped from any machine.
+     */
+    private static String formatNanosAsMillis(double nanos) {
+        return String.format(Locale.ROOT, "%.2fms", nanos / 1_000_000d);
     }
 
     /**
@@ -555,7 +636,7 @@ public class AdmissionController {
             return;
         }
         constraintReportLimiter.performIfNotLimited(() ->
-                log.info("Adaptive concurrency ({}): the admission target is being held by {} - live target {} " +
+                log.info(LOG_PREFIX + " ({}): the admission target is being held by {} - live target {} " +
                                 "slot(s), would-be target {} slot(s), effective maximum {}.",
                         mode, reason, currentTarget(), wouldBeTarget(), effectiveMaximum()));
     }

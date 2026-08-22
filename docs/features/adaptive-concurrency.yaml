@@ -31,6 +31,7 @@ setup:
     - pc.admission.would.be.target against pc.admission.target - the whole product of OBSERVE, and the size of the static guess's error.
     - pc.admission.constraint - which constraint bound the last closed window, the gauge that answers "why is it not moving".
     - pc.admission.movements - how often the target actually changed value; flat next to a busy constraint gauge means the controller is deciding and finding nothing to do.
+    - The AdmissionController logger, with no MeterRegistry needed - one INFO line each time the target MOVES (old and new target, deciding arm, and the window aggregates behind it) and one rate-limited line naming the constraint while it is HELD. Both open with "Adaptive concurrency"; raise bz.stub.parallelconsumer.internal.admission.AdmissionController to INFO to see the trajectory and nothing else.
 opt_in:
   mechanism: Set adaptiveConcurrencyMode(OBSERVE) or (ENFORCE) when building ParallelConsumerOptions, or pass -Dpc.adaptiveConcurrency=OBSERVE.
   isolated_from_stable_modules: false

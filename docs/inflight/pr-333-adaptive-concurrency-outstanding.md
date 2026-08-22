@@ -3,25 +3,16 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
 
-The controller landed opt-in and off by default on astubbs#333. Four things are outstanding, in the
-order they are worth doing. The first is the widest gap between *the math is right* and *the feature
-works*; the last is the only one that can answer *does it help*.
+The controller landed opt-in and off by default on astubbs#333. Three things are outstanding, in the
+order they are worth doing. The last is the only one that can answer *does it help*.
 
-## 1. It has never run against a real broker
+The widest gap - that **every** adaptive test was a unit test, so the controller and a genuinely
+running engine had never been observed composing - is closed on this branch by
+`AdaptiveConcurrencyEnforceIT`: two instances in `ENFORCE` against a real broker, ramping, losing
+nothing and surviving a rebalance. It also found what only a real engine could
+([`bug-pcmodule-admission-controller-lazy-init-race.md`](bug-pcmodule-admission-controller-lazy-init-race.md)).
 
-**Every adaptive test is a unit test.** Eleven test classes, all under `src/test`, none under
-`src/test-integration` - so mock consumers and injected clocks, never a broker. The engine-level
-rip-out triad is driven through the tick path with real engine state rather than a live control
-loop, deliberately (a running loop races the test thread advancing the injected clock, and the
-alternative is real one-second windows, which buys wall time and flakiness). The consequence is that
-the controller and a genuinely running engine have never been observed composing: real poll cadence,
-real commit interaction, real rebalance, real thread scheduling.
-
-What is needed is small and unglamorous - stand an instance up in `ENFORCE` against a real broker
-and assert it runs, does not stall, loses no records, and survives a rebalance. Not a performance
-claim; a liveness and correctness claim.
-
-## 2. The probe-down cycles forever when it has already learned the answer
+## 1. The probe-down cycles forever when it has already learned the answer
 
 At the cap with flat latency the probe-down fires on its cadence, steps the target down by its
 ratio, finds no improvement, and lets the target regrow - then fires again five windows later,
@@ -37,7 +28,7 @@ Worth doing rather than tolerating: at the current cadence the engine spends rou
 below a cap it has already proven is fine, which is a permanent throughput loss on exactly the
 healthy workloads the feature is supposed to leave alone.
 
-## 3. The controller cannot report the most useful thing it knows
+## 2. The controller cannot report the most useful thing it knows
 
 The requirements say a starved workload is reported as `starved`. The decision-reason enum has no
 such value: the starvation signature produces the bounded probe (reported as `PROBING`) and
@@ -48,7 +39,7 @@ is the single most valuable diagnosis available.
 Either the enum gains the value or the requirement's vocabulary changes. The documentation currently
 describes what the code emits, not what the plan promised.
 
-## 4. Nothing has measured whether it helps
+## 3. Nothing has measured whether it helps
 
 The value claim - lower end-to-end latency at a given arrival rate, or a higher sustainable arrival
 rate, against a static guess - is only measurable below saturation, on the arrival-controlled
