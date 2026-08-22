@@ -490,6 +490,33 @@ elif [ -n "${BENCH_ASYNC_STUB:-}" ]; then CALLEE_LABEL=async
 else CALLEE_LABEL=blocking; fi
 MAX_POLL=${BENCH_MAX_POLL_RECORDS:-500}
 echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+# THE NON-BLOCKING ENGINES MUST NOT BE MEASURED WITH A BLOCKING CALLEE.
+#
+# vertx, reactor, mutiny and proxy exist to run a user function that does NOT hold a thread - that is
+# the entire proposition. Handed a callee that blocks, they hold a thread per record like everything
+# else, and the number produced says nothing about the engine: it measures the blocking stub, through
+# a more expensive path. Measured on 2026-08-22 at 5,000 concurrency, mutiny with a blocking callee
+# came back at 5,745 msg/s holding 180 records in flight - a figure with no meaning, sitting in a
+# table next to arms for which the same callee is entirely appropriate.
+#
+# So the harness refuses, rather than trusting whoever runs it to remember. Set BENCH_ASYNC_STUB=1
+# (the callee completes on a timer and holds no thread) or BENCH_TIMER_CALLEE=1 (no server at all).
+# BENCH_ALLOW_BLOCKING_ENGINE=1 overrides, for the one legitimate case: deliberately measuring what
+# an engine costs when a user gives it blocking work, which is a real question about a real mistake -
+# but it has to be asked on purpose.
+is_nonblocking_engine() { case $1 in vertx|pc|reactor|mutiny|proxy) return 0 ;; *) return 1 ;; esac; }
+
+if [ "$CALLEE_LABEL" = blocking ] && [ -z "${BENCH_ALLOW_BLOCKING_ENGINE:-}" ]; then
+  for m in $MODES; do
+    if is_nonblocking_engine "$m"; then
+      log "FATAL: mode '$m' is a non-blocking engine and the callee is blocking, which measures the stub rather than the engine."
+      log "       Set BENCH_ASYNC_STUB=1 (timer-completed callee, holds no thread) or BENCH_TIMER_CALLEE=1 (no server)."
+      log "       BENCH_ALLOW_BLOCKING_ENGINE=1 overrides, if measuring blocking work through an async engine IS the question."
+      exit 1
+    fi
+  done
+fi
+
 for mode in $MODES; do
   # The two Go arms differ only in which binary they build and what they call themselves, so they
   # share one branch rather than two near-identical copies of the sweep loop.
