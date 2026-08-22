@@ -54,7 +54,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * WHAT THE NUMBERS TURNED OUT TO BE, which is not what this test originally assumed. Both modes now examine
  * exactly one entry per record. UNORDERED did NOT: it examined 20.5 per record on this workload and was genuinely
  * quadratic, because in-flight records stay in the shard and every pass restarted from the beginning of it. That
- * is what {@link ShardOccupancy} removed, and the history is kept on {@link #EXPECTED_UNORDERED_EXAMINATIONS}
+ * is what departure-on-take removed, and the history is kept on {@link #EXPECTED_UNORDERED_EXAMINATIONS}
  * because the number moving is the only thing this test is for. The first version of this test asserted the two
  * modes cost "the same" within a factor of four, which was calibrated against the stopwatch and was simply wrong
  * about the code. The counts are exact and deterministic, so they are asserted exactly.
@@ -98,21 +98,27 @@ class OrderingModeDispatchParityTest {
      * The previous revision of this constant asserted that quadratic figure deliberately, and said that a LOWER
      * number meant someone had landed the optimisation and should update it saying which.
      * <p>
-     * <b>Which change did it: {@link ShardOccupancy}</b> - the unordered dispatch path walks an index of the
-     * offsets no worker is holding instead of the shard's whole entry map, so the in-flight prefix is not in the
-     * path at all. That is why the count collapses to one per record here and, more to the point, why it stops
-     * growing with concurrency: this workload never completes a record, so the old figure grew with the record
-     * count, and in a running consumer the same cost grew with {@code maxConcurrency}. It was the mechanism behind
-     * the direct-pull engine's collapse at 5,000 workers - 440 examinations per record with a SINGLE scanner,
-     * against 1.00 at ten. See {@code docs/inflight/perf-direct-pull-collapse-is-the-scan.md}.
+     * <b>Which change did it, and which change did NOT change it again.</b> It first collapsed to one per record
+     * when {@code ShardOccupancy} gave the unordered scan an index of the offsets no worker was holding to walk
+     * instead of the whole entry map. It stayed at one per record when that index was deleted in favour of
+     * <b>departure-on-take</b>: under {@code UNORDERED} a record now leaves the shard when it is claimed and
+     * re-enters, at its own offset, when its delivery lands, so there is no in-flight prefix for an index to
+     * route around. Same count, one structure fewer - which is the entire case for the second change, and why
+     * this constant is unchanged across it.
      * <p>
-     * <b>The ordering enforcement this used to be entangled with is untouched</b>, and that is deliberate: the
-     * ordered modes still walk the entry map, because in-flight records staying visible to that walk is how a
-     * {@code KEY} shard excludes a second taker. Only the unordered path, which has no ordering to enforce, reads
-     * the index.
+     * That is why the count stops growing with concurrency: this workload never completes a record, so the old
+     * figure grew with the record count, and in a running consumer the same cost grew with
+     * {@code maxConcurrency}. It was the mechanism behind the direct-pull engine's collapse at 5,000 workers -
+     * 440 examinations per record with a SINGLE scanner, against 1.00 at ten. See
+     * {@code docs/inflight/perf-direct-pull-collapse-is-the-scan.md}.
+     * <p>
+     * <b>The ordering enforcement this used to be entangled with is untouched</b>, and that is deliberate: under
+     * an ordered mode a claimed record STAYS in the entry map, because in-flight records staying visible to that
+     * walk is how a {@code KEY} shard excludes a second taker. Only the unordered path, which has no ordering to
+     * enforce, hands its records out of the shard.
      * <p>
      * So if this number CHANGES again, that is still the signal. Higher means the unordered scan has started
-     * looking at entries the index should have kept out of its way.
+     * looking at records it cannot offer.
      */
     static final long EXPECTED_UNORDERED_EXAMINATIONS = RECORDS;
 
@@ -132,9 +138,10 @@ class OrderingModeDispatchParityTest {
 
         assertWithMessage(
                 "UNORDERED dispatch examined %s shard entries for %s records, expected exactly one each. The "
-                        + "unordered path walks ShardOccupancy's index of unheld offsets, so the in-flight prefix "
-                        + "is not in its way at all. HIGHER means that index has stopped keeping records out of "
-                        + "the scan's path - and the cost of that is not the ratio you see here, it is that the "
+                        + "unordered path only ever holds records it can offer - a record leaves the shard when "
+                        + "it is taken - so the in-flight prefix is not in its way at all. HIGHER means records "
+                        + "the scan cannot use are back in its path - and the cost of that is not the ratio you "
+                        + "see here, it is that the "
                         + "figure starts growing with maxConcurrency again, which is what collapsed the "
                         + "direct-pull engine at 5,000 workers. This is a COUNT, not a timing: machine load "
                         + "cannot move it, so do not re-run hoping it passes.",

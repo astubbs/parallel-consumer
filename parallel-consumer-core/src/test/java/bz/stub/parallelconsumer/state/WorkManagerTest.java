@@ -1106,9 +1106,25 @@ public class WorkManagerTest {
         // partition 0 is re-assigned underneath its live work, bumping the epoch: everything still held for it
         // is now stale and gets swept, including records that are out at a worker right now
         assignPartition(0);
-        assertConservationHolds("after a stale sweep took records that were out at a worker");
+        assertConservationHolds("after a stale sweep that could not reach records out at a worker");
         assertThat(wm.getNumberOfRecordsInShards())
-                .as("both of partition 0's remaining records were swept as stale")
+                .as("under UNORDERED a record out at a worker has LEFT the shard, so the epoch sweep - which "
+                        + "walks the shard - cannot reach partition 0's two live deliveries. They are still the "
+                        + "system's responsibility until their worker reports, so the figure must still count "
+                        + "them. Reading 3 here would mean the shard had disowned records nobody has returned")
+                .isEqualTo(5);
+
+        // ...and they are retired the moment those deliveries land, not left behind. This is the departure path
+        // that moved: on the old design the sweep took them here, because in-flight records stayed in the shard.
+        // Each worker reports a verdict, as a real one does; the verdict is then discarded by the staleness
+        // branch, which is the point - the record's departure is its landing, whatever it landed with.
+        for (var stillOut : redelivered) {
+            stillOut.onUserFunctionSuccess();
+            wm.handleFutureResult(stillOut);
+        }
+        assertConservationHolds("after the two stale deliveries were handed back");
+        assertThat(wm.getNumberOfRecordsInShards())
+                .as("both of partition 0's remaining records are retired by their own landing, one each")
                 .isEqualTo(3);
 
         // partition 1 goes away holding one successful record's worth of history, one parked retry and one
@@ -1121,14 +1137,16 @@ public class WorkManagerTest {
         wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(1)));
         assertConservationHolds("after a revocation that took a parked record and one out at a worker");
         assertThat(wm.getNumberOfRecordsInShards())
-                .as("the revoked partition's records are gone, however they were being held")
-                .isZero();
+                .as("the parked record was in the shard and went with the revocation; the one still out at a "
+                        + "worker was not, so it is still counted until it comes back. The figure gates record "
+                        + "intake, and counting a live delivery is the safe direction - it fetches less, not more")
+                .isEqualTo(1);
 
         // the worker finally reports on the record whose partition was revoked out from under it
         wm.handleFutureResult(partitionOne.get(2));
         assertConservationHolds("after a stale result was handed back");
         assertThat(wm.getNumberOfRecordsInShards())
-                .as("the record was already retired at revocation - a stale return must not retire it twice")
+                .as("the landing IS this record's departure, and it must retire it exactly once")
                 .isZero();
 
         var population = wm.getSm().getRecordPopulation();

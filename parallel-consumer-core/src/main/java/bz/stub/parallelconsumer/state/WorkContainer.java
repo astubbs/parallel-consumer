@@ -207,21 +207,21 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private final AtomicReference<ExecutionState> state = new AtomicReference<>(ExecutionState.AVAILABLE);
 
     /**
-     * The occupancy record of the shard holding this record, charged when a delivery is claimed and released when
-     * that delivery lands - so the charge and its release are the two halves of one state transition and cannot
-     * drift apart. Null only for a container that never entered a shard, which in production cannot happen and in
-     * tests is common.
+     * The shard holding this record, told when a delivery is claimed and when that delivery lands - so the two
+     * are the halves of one state transition and cannot drift apart. Null only for a container that never entered
+     * a shard, which in production cannot happen and in tests is common.
      * <p>
      * Written once, by {@link ProcessingShard#addWorkContainer}, before the container is published into the shard's
      * entry map - so every thread that can reach this container through the map has already seen the write.
      * <p>
-     * It carries the shard's index of unheld offsets as well as its in-flight count, deliberately: both are
-     * derived from exactly this transition, and giving them one owner is what keeps the index from becoming a
-     * second thing that has to be remembered about. See {@link ShardOccupancy}.
+     * <b>This pair of calls is what makes departure-on-take possible under {@code UNORDERED}</b>: the shard's
+     * in-flight count and its membership of the offerable set are both derived from exactly this transition, so
+     * there is no removal site whose condition can be got wrong.
      *
-     * @see ProcessingShard#getCountOfWorkInFlight()
+     * @see ProcessingShard#onFlightBegan
+     * @see ProcessingShard#onFlightEnded
      */
-    private ShardOccupancy shardOccupancy;
+    private ProcessingShard<K, V> shard;
 
     /**
      * Counts deliveries of this record. Incremented every time it is queued for execution, so each delivery has
@@ -427,16 +427,16 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     private void chargeShardInFlight() {
-        ShardOccupancy occupancy = shardOccupancy;
-        if (occupancy != null) {
-            occupancy.onFlightBegan(offset());
+        ProcessingShard<K, V> owner = shard;
+        if (owner != null) {
+            owner.onFlightBegan(this);
         }
     }
 
     private void releaseShardInFlightCharge() {
-        ShardOccupancy occupancy = shardOccupancy;
-        if (occupancy != null) {
-            occupancy.onFlightEnded(offset());
+        ProcessingShard<K, V> owner = shard;
+        if (owner != null) {
+            owner.onFlightEnded(this);
         }
     }
 
@@ -444,8 +444,8 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * Called by the shard as it takes ownership of this record, before the container is published into the shard's
      * entry map.
      */
-    void onAdmittedToShard(ShardOccupancy shardOccupancy) {
-        this.shardOccupancy = shardOccupancy;
+    void onAdmittedToShard(ProcessingShard<K, V> shard) {
+        this.shard = shard;
     }
 
     /**

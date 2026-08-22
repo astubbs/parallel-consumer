@@ -179,7 +179,7 @@ class ShardInFlightCountTest {
 
         var taken = wm.getWorkIfAvailable(1);
         assertThat(taken).hasSize(1);
-        assertInFlightCountAgreesWithScan(shard, 1);
+        assertUnorderedInFlight(shard, 1);
 
         assertWithMessage("an unordered shard is never blocked, whatever it has in flight")
                 .that(shard.isBlockedByWorkInFlight()).isFalse();
@@ -190,7 +190,25 @@ class ShardInFlightCountTest {
         assertWithMessage("and it keeps handing out the rest of its records")
                 .that(rest).hasSize(4);
         assertThat(entriesExamined() - examinedBefore).isGreaterThan(0L);
-        assertInFlightCountAgreesWithScan(shard, 5);
+        assertUnorderedInFlight(shard, 5);
+    }
+
+    /**
+     * The {@code UNORDERED} counterpart of {@link #assertInFlightCountAgreesWithScan}, and it has to be a
+     * different assertion because the two structures it would compare no longer overlap: a record out at a worker
+     * has LEFT the shard's offerable entries, so scanning them for in-flight records must find none.
+     * <p>
+     * The independent check is therefore the complement - the shard is still responsible for the record (it is in
+     * the tracked total) while not offering it (it is not in the offerable set) - which a drifted counter alone
+     * cannot satisfy, because {@code countOfferable()} is the map's own size.
+     */
+    void assertUnorderedInFlight(ProcessingShard<String, String> shard, long expected) {
+        assertWithMessage("the O(1) in-flight count").that(shard.getCountOfWorkInFlight()).isEqualTo(expected);
+        assertWithMessage("no record out at a worker may still be offerable under UNORDERED - the whole point of "
+                        + "the record leaving when it is taken")
+                .that(shard.countWorkInFlightByScan()).isEqualTo(0L);
+        assertWithMessage("and the shard is still responsible for them: tracked = offerable + in flight")
+                .that(shard.getCountOfWorkTracked()).isEqualTo(shard.countOfferable() + expected);
     }
 
     // -----------------------------------------------------------------------------------------------------
