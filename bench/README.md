@@ -41,6 +41,7 @@ Override the sweep:
 PC_VERSIONS="0.3.0.2 0.5.3.2 LOCAL" CLIENT_PINS="NATIVE 3.9.2" bench/run-bisect.sh
 MODES="core llingr" DELAYS="0 2 20 100" bench/run-bisect.sh   # engine comparison across delays
 MODES="core llingr franz" CONCURRENCIES="1 10 100 1000" DELAYS=0 bench/run-bisect.sh
+MODES="pc reactor mutiny proxy" BENCH_ASYNC_STUB=1 bench/run-bisect.sh  # the four engines, async callee
 BENCH_WORK=/some/dir bench/run-bisect.sh     # keep resolved classpaths between sweeps
 BENCH_SKIP_PRODUCE=1 bench/run-bisect.sh     # topic already holds the dataset; don't re-produce
 ```
@@ -128,7 +129,13 @@ times slower at 5,000**, so any measurement of it at one concurrency is meaningl
   inside each measured run, which made a sweep unaffordable and meant no two arms read the same data.
 - **One harness source.** `Bench.java.template` is compiled once per arm with only `__PKG__`
   substituted, because the fork renamed `io.confluent.parallelconsumer` to `bz.stub.parallelconsumer`.
-  Nothing else differs between arms.
+  Nothing else differs between arms. Each engine's own ~30 lines live in `arms/<Engine>Arm.java.template`
+  and are resolved by name at runtime - [why, below](#the-engine-arms).
+- **Nothing compiled is ever cached.** Only the Maven classpath resolution is, keyed on the generated
+  pom's checksum. `prepare()` used to return early when `cp.txt` existed, and on 2026-08-21 that ran a
+  whole sweep against a harness build from hours earlier: `BENCH_ASYNC_STUB` was silently ignored and
+  three new engine modes all fell through the old template's `else` branch into the Vert.x arm. Four
+  "engines" that were one engine. Caught only because a control disagreed with a committed number.
 - **`kafka-clients` as its own dimension.** PC's transitive client moved 2.5.1 -> 3.9.2 across the
   bisect range, so a throughput change could be either. `CLIENT_PINS` separates them.
 - **A vanilla `KafkaConsumer` arm** (`Bench vanilla`) that touches no PC code, as the control for
@@ -140,6 +147,58 @@ times slower at 5,000**, so any measurement of it at one concurrency is meaningl
   comparison. [Its own section is below.](#the-franz-arm---the-client-control)
 
 - **Logging is pinned for every arm** (`bench/conf/logback.xml`, first on the classpath). See below.
+
+## The engine arms
+
+The project ships four engines. Until 2026-08-21 it compared one.
+
+| Mode | Engine | Arm file | Extra artifact |
+|---|---|---|---|
+| `core` | `ParallelEoSStreamProcessor` - **not** an `ExternalEngine` | in `Bench` itself | - |
+| `pc` (alias `vertx`) | `VertxParallelEoSStreamProcessor` | `arms/VertxArm.java.template` | - |
+| `reactor` | `ReactorProcessor` | `arms/ReactorArm.java.template` | `parallel-consumer-reactor` |
+| `mutiny` | `MutinyProcessor` | `arms/MutinyArm.java.template` | `parallel-consumer-mutiny` |
+| `proxy` | `ProxyProcessor` - what every non-JVM client runs on (astubbs#242) | `arms/ProxyArm.java.template` | `parallel-consumer-proxy` |
+
+**Why separate files.** `Bench.java.template` must still compile against every release in the version
+bisect, back to 0.3.0.2. Mutiny and the proxy exist in **no** published release, so importing them in
+the shared template would not add an arm - it would delete the bisect. Instead `Bench` names no engine
+class and resolves mode `foo` to class `FooArm` reflectively; `run-bisect.sh`'s arm table decides which
+arm sources to compile and which artifacts to put in the generated pom. Adding an engine is one new
+file plus one line in that table.
+
+**Sweeping `mutiny` or `proxy` over published `PC_VERSIONS` is expected to fail** - the artifact does
+not exist, so resolution fails and the row is recorded `COMPILE_FAILED`. That is the honest answer,
+and it fails only the mode that asked for it: the arm artifact is per mode, not per sweep.
+
+**These four arms have been smoke-run, not measured.** Each starts, consumes, and prints a parsing
+`RESULT` line. There are no rows for them in `results/`, deliberately: every run available so far was
+taken while another session held ~1,000% CPU against the same broker, where the same operating point
+returned 9,050 msg/s and then 1,883 four minutes later. Numbers taken there are not evidence, and
+this directory has already shipped one phantom finding from a comparison that looked sound.
+
+### The callee is the axis that matters, and it has three settings
+
+Every one of these engines is asynchronous, so the question that decides their numbers is **whether
+the thing they call holds a thread while it works**. The harness makes that a setting:
+
+| | What the callee is | Reaches concurrency? |
+|---|---|---|
+| *(default)* | WireMock, thread per request, listener sleeps on the serving thread | No - capped near `r x delay` (~2,650 at 100ms), server-side |
+| `BENCH_ASYNC_STUB=1` | a Vert.x HTTP server answering on `setTimer`, holding no thread | Yes |
+| `BENCH_TIMER_CALLEE=1` | no server at all - a bare timer. **A control, not a comparable row** | Yes, and with no HTTP client in the way |
+
+**A high-concurrency, long-delay number taken through the default stub is capped by this harness, not
+by Parallel Consumer** - see
+[`docs/inflight/perf-vertx-already-beats-the-thread-ceiling.md`](../docs/inflight/perf-vertx-already-beats-the-thread-ceiling.md).
+The third setting exists because the async-stub result left ~36% of theoretical throughput
+unattributed and named the HTTP client's connection pool as the suspect: with a timer there is no
+socket and no pool, so whatever ceiling remains is the engine's.
+
+**The proxy arm has no HTTP callee at all.** Its callee is a connected worker on the far side of the
+dispatch protocol, so `arms/ProxyArm.java.template` builds one, in the same two forms, selected by the
+same `BENCH_ASYNC_STUB`. It drives the engine directly across its `DispatchSink`/`report` seam: **no
+gRPC**, so its numbers are an upper bound on the deployed proxy and say nothing about the wire.
 
 ## The `llingr` arm - private research only
 
@@ -246,6 +305,26 @@ and only what llingr scores *above that floor* can be credited to llingr.
 
 The measurement it was built for is written up in
 [`docs/inflight/perf-throughput-regression-since-0-3.md`](../docs/inflight/perf-throughput-regression-since-0-3.md).
+
+## The machine is shared, and a concurrent benchmark is not background noise
+
+Several agent sessions run against this checkout at once, and more than one of them benchmarks. On
+2026-08-21 a second session's sweep held ~1,000% CPU against the *same* broker and the *same* topic;
+a run of this harness alongside it was scheduled at **0.2% CPU** and returned **1,883 msg/s at an
+operating point that had produced 9,050 four minutes earlier**. That is not noise to be averaged out.
+
+- **Check first**: `ps -Ao pcpu,etime,args -r | grep '[B]ench '` - any hit that is not yours means
+  wait, or your numbers are somebody else's scheduling artefact.
+- **Round-robin the repeats.** Run the sweep once per repeat rather than repeating each cell in
+  place, so an arm's repeats are spread across whatever else the machine is doing instead of all
+  landing inside one disturbance.
+- **Record `uptime` either side of every batch, and say so in the results file.** Load has ranged
+  from 8 to 667 on this machine in a single day.
+- **`peak_in_flight` is the load-robust column; `msg_per_sec` is not.** The in-flight plateau held at
+  2,438-2,840 across an 80x load range while throughput over the same range moved 4,648 to 22,844.
+  When the machine cannot be quietened, prefer the question that peak in-flight answers.
+- **Namespace your scratch directory.** Sessions share one scratchpad path, and two of them writing
+  `results.csv` or `assemble.sh` is silent.
 
 ## Four traps this harness has paid for - it encodes the first three, not the fourth
 

@@ -1,0 +1,46 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import __PKG__.vertx.VertxParallelEoSStreamProcessor;
+
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+
+import java.util.Collections;
+import java.util.HashMap;
+
+/**
+ * The Vert.x engine - an {@code ExternalEngine}, and the only one of the family that had ever been
+ * measured before 2026-08-21.
+ * <p>
+ * Its simulated work is a real non-blocking HTTP GET against the shared callee, issued through the
+ * Vert.x WebClient the engine builds for itself (maxPoolSize is set to maxConcurrency by
+ * {@code VertxParallelEoSStreamProcessor}, so the client's connection pool is not the binding
+ * constraint - which is worth knowing, because it is not configured deliberately anywhere else).
+ * <p>
+ * Historically mode "pc". The name is kept as an alias by {@code Bench#armFor} so that every
+ * committed results file still reads back against the arm it actually measured.
+ */
+public class VertxArm implements BenchArm {
+
+    @Override
+    public long run(String bootstrap, String topic, int expected, int delayMs, int concurrency, int bufferSize)
+            throws Exception {
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(Bench.consumerProps(bootstrap));
+        VertxParallelEoSStreamProcessor<String, String> pc =
+                new VertxParallelEoSStreamProcessor<>(Bench.options(consumer, concurrency, bufferSize));
+        pc.subscribe(Collections.singletonList(topic));
+        Bench.responses.set(0);
+        long start = System.currentTimeMillis();
+        pc.vertxHttpReqInfo(
+                record -> new VertxParallelEoSStreamProcessor.RequestInfo("localhost",
+                        Bench.calleePort(), "/", new HashMap<>()),
+                onSend -> { },
+                onResponse -> Bench.responses.incrementAndGet());
+        while (Bench.responses.get() < expected) Bench.sleep(25);
+        long took = System.currentTimeMillis() - start;
+        Bench.windowClosed();
+        try { pc.closeDrainFirst(); } catch (Exception ignored) { }
+        return took;
+    }
+}

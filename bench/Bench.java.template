@@ -4,7 +4,6 @@
 
 import __PKG__.ParallelConsumerOptions;
 import __PKG__.ParallelEoSStreamProcessor;
-import __PKG__.vertx.VertxParallelEoSStreamProcessor;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -42,17 +41,27 @@ import static com.github.tomakehurst.wiremock.client.WireMock.*;
  *
  *   Bench produce  <bootstrap> <topic> <count>
  *   Bench vanilla  <bootstrap> <topic> <count> <delayMs>
- *   Bench pc       <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
+ *   Bench pool     <bootstrap> <topic> <count> <delayMs> <concurrency>
  *   Bench core     <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
+ *   Bench <engine> <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
  *
- * "pc" drives the Vert.x engine (an ExternalEngine); "core" drives ParallelEoSStreamProcessor
- * directly. Both are needed because the two take DIFFERENT code paths through the control loop, and
- * a result from one says nothing about the other.
+ * "core" drives ParallelEoSStreamProcessor directly; every other engine mode is an ExternalEngine
+ * and is reached through a {@link BenchArm}. Both kinds are needed because the two take DIFFERENT
+ * code paths through the control loop, and a result from one says nothing about the other.
+ *
+ * ENGINE ARMS LIVE IN SEPARATE FILES, and that is not decoration. This template must still compile
+ * against every published release in the version bisect, and the fork's Reactor, Mutiny and proxy
+ * engines do not all exist in those - Mutiny and the proxy exist in NO published release. An import
+ * of them here would fail the whole sweep at 0.3.0.2. So each engine's ~30 lines live in
+ * bench/arms/<Engine>Arm.java.template, this file names none of them, and run-bisect.sh compiles
+ * only the arms the modes being swept actually need. Mode "foo" resolves to class "FooArm" by
+ * convention; "pc" is a historical alias for "vertx", kept so every committed results file still
+ * reads back.
  *
  * Prints one machine-readable result line: RESULT <mode> <count> <ms> <msgPerSec> peak=<maxInFlight>
  *
- * peak is measured at the stub, so it is what the engine actually had outstanding - not what it was
- * configured to allow.
+ * peak is measured at the CALLEE - the stub for an HTTP arm, the simulated worker for the proxy - so
+ * it is what the engine actually had outstanding, not what it was configured to allow.
  */
 public class Bench {
 
@@ -82,6 +91,7 @@ public class Bench {
         int delayMs = Integer.parseInt(args[4]);
         int concurrency = args.length > 5 ? Integer.parseInt(args[5]) : 0;
         int bufferSize = args.length > 6 ? Integer.parseInt(args[6]) : 0;
+        concurrencySetting = concurrency;
         long ms;
         if ("vanilla".equals(mode)) {
             startStub(delayMs, 8);
@@ -91,18 +101,186 @@ public class Bench {
         } else if ("core".equals(mode)) {
             ms = runCore(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         } else {
-            if (System.getenv("BENCH_ASYNC_STUB") != null) {
-                startAsyncStub(delayMs);
-            } else {
-                startStub(delayMs, concurrency * 2);
-            }
-            ms = runPc(bootstrap, topic, count, concurrency, bufferSize);
+            BenchArm arm = armFor(mode);
+            if (arm.usesSharedCallee()) startCallee(delayMs, concurrency);
+            ms = arm.run(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         }
         System.out.printf("RESULT %s %d %d %.1f peak=%d%n",
                 mode, count, ms, count * 1000.0 / ms, peakInFlight.get());
         if (stub != null) stub.stop();
         if (asyncStubVertx != null) asyncStubVertx.close();
+        if (calleeVertx != null) calleeVertx.close();
         System.exit(0);
+    }
+
+    /**
+     * Resolves a mode name to its engine arm, by convention: "reactor" -> {@code ReactorArm}.
+     * <p>
+     * Reflection is the whole point - see the class javadoc. A direct reference would drag every
+     * engine's types into this file, and this file has to compile against releases that do not have
+     * them. Failing here is a clear message rather than a NoClassDefFoundError, because the usual
+     * cause is a mode whose arm run-bisect.sh did not compile.
+     */
+    static BenchArm armFor(String mode) throws Exception {
+        // "pc" named the Vert.x arm before there was more than one engine arm; every committed
+        // results file uses it, so it stays an alias rather than becoming a renaming exercise.
+        String engine = "pc".equals(mode) ? "vertx" : mode;
+        String className = Character.toUpperCase(engine.charAt(0)) + engine.substring(1) + "Arm";
+        try {
+            return (BenchArm) Class.forName(className).getDeclaredConstructor().newInstance();
+        } catch (ClassNotFoundException absent) {
+            throw new IllegalArgumentException("no arm '" + className + "' for mode '" + mode
+                    + "' - run-bisect.sh compiles an arm only for the modes being swept", absent);
+        }
+    }
+
+    /**
+     * Starts whichever callee the run asked for, and this choice is the harness's single most
+     * consequential setting - see the two stubs' javadoc below.
+     */
+    static void startCallee(int delayMs, int concurrency) throws Exception {
+        if (timerCallee()) {
+            // Four threads, the same number bench/threads/AsyncCeiling.java used to hold 50,000 units
+            // in flight - so the control arm's callee is not a new unknown, it is that one.
+            calleeTimer = Executors.newScheduledThreadPool(4);
+            return;
+        }
+        if (asyncCallee()) {
+            startAsyncStub(delayMs);
+        } else {
+            startStub(delayMs, concurrency * 2);
+        }
+    }
+
+    static java.util.concurrent.ScheduledExecutorService calleeTimer;
+    static io.vertx.core.Vertx calleeVertx;
+    static io.vertx.ext.web.client.WebClient calleeClient;
+
+    /** maxConcurrency for this run, so the shared client can be sized the way the engines size theirs. */
+    static int concurrencySetting;
+
+    /**
+     * One simulated unit of work, as a stage that completes when the callee answers - the SHARED user
+     * function of every arm this harness writes itself.
+     * <p>
+     * Shared on purpose: the Reactor and Mutiny arms must differ by their engine and by nothing else,
+     * and a second copy of "issue a request and hand back a future" is exactly how two arms quietly
+     * stop measuring the same thing. It never blocks the calling thread, which is the property under
+     * test - an arm that wrapped a blocking call here would be measuring the thread ceiling again.
+     * <p>
+     * In HTTP mode the in-flight count is taken AT THE STUB, so nothing is counted here; in timer mode
+     * there is no stub, so the counting is done here instead. Counting in both would double it.
+     * <p>
+     * <b>It always completes with a NON-NULL value, and that is load-bearing rather than tidy.</b>
+     * {@code ReactorProcessor} subscribes the user's publisher with an onNext consumer and no onComplete
+     * one, so a record is marked done by its FIRST EMITTED ITEM: a publisher that completes empty - a
+     * {@code Mono<Void>}, or a stage completing with null - never completes its record and stalls the
+     * run. See bench/arms/ReactorArm.java.template.
+     */
+    static java.util.concurrent.CompletionStage<Object> callCallee(int delayMs) {
+        if (calleeTimer != null) {
+            calleeEnter();
+            java.util.concurrent.CompletableFuture<Object> done = new java.util.concurrent.CompletableFuture<>();
+            calleeTimer.schedule(() -> { calleeExit(); done.complete(Boolean.TRUE); },
+                    delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return done;
+        }
+        return calleeClient().get(calleePort(), "localhost", "/").send()
+                .map(response -> (Object) response)
+                .toCompletionStage();
+    }
+
+    /**
+     * The shared non-blocking HTTP client, built on first use.
+     *
+     * IT IS THE SAME CLIENT THE VERT.X ARM USES, AND THAT IS THE WHOLE POINT. The Vert.x engine
+     * calls the stub through a Vert.x WebClient it builds itself, with maxPoolSize set to
+     * maxConcurrency (see VertxParallelEoSStreamProcessor). An arm using any other client is not
+     * comparable with it: the difference between two such arms is engine PLUS client, and nothing
+     * separates the two afterwards.
+     *
+     * The first version used {@code java.net.http}, which was a second unmeasured variable for no
+     * gain. It was also, briefly, blamed for something it did not do - see the note on the shutdown
+     * marker below, where the accusation was tested and refuted.
+     *
+     * Pool size is maxConcurrency, matching the engine's own client exactly: a smaller pool would
+     * queue requests inside the client and report the queue as the engine's ceiling.
+     *
+     * Its own Vertx instance, not the async stub's: the caller and the callee must not share event
+     * loops, or the arm measures a client and a server contending for the same threads.
+     */
+    static io.vertx.ext.web.client.WebClient calleeClient() {
+        if (calleeClient == null) {
+            calleeVertx = io.vertx.core.Vertx.vertx();
+            calleeClient = io.vertx.ext.web.client.WebClient.create(calleeVertx,
+                    new io.vertx.ext.web.client.WebClientOptions()
+                            .setMaxPoolSize(Math.max(concurrencySetting, 1))
+                            .setKeepAlive(true));
+        }
+        return calleeClient;
+    }
+
+    /** Whichever callee is running, for an arm that needs to address it. */
+    static int calleePort() {
+        return stub != null ? stub.port() : asyncStubPort;
+    }
+
+    /** True when the run asked for the thread-free callee. Arms with no HTTP callee honour it too. */
+    static boolean asyncCallee() {
+        return System.getenv("BENCH_ASYNC_STUB") != null;
+    }
+
+    /**
+     * BENCH_TIMER_CALLEE=1 replaces the arm's HTTP call with a bare timer - THE CONTROL THAT SEPARATES
+     * THE ENGINE FROM ITS HTTP CLIENT, and the reason this flag is worth its lines.
+     * <p>
+     * The async-stub finding left ~36% of the theoretical throughput unattributed and named the HTTP
+     * client's connection pool as a suspect nobody had configured deliberately
+     * (docs/inflight/perf-vertx-already-beats-the-thread-ceiling.md). With a timer callee there is no
+     * socket, no connection pool and no server at all: whatever in-flight ceiling remains belongs to
+     * the engine and to nothing else. A number taken this way is NOT comparable with an HTTP row -
+     * it is a control arm, and the results files record it as a separate callee column.
+     * <p>
+     * Only the arms whose user function this harness writes can honour it. The Vert.x arm's HTTP call
+     * is made by the engine's own API ({@code vertxHttpReqInfo}), so it has no timer form.
+     */
+    static boolean timerCallee() {
+        return System.getenv("BENCH_TIMER_CALLEE") != null;
+    }
+
+    /**
+     * Marks the end of the measured window on stderr, so run-bisect.sh can tell a failing arm from a
+     * finished one. EVERY arm calls it, immediately after stopping the clock and before any teardown.
+     *
+     * WHY IT HAS TO EXIST. Tearing the harness down closes the callee while the engine still has
+     * records out, so each of those fails and the engine logs it. That is unavoidable and harmless -
+     * the result was computed before any of it - but it is indistinguishable, in a log, from an arm
+     * that was failing and retrying THROUGHOUT the run, which is not harmless at all: PC retries a
+     * failed user function after a second by default, so a real failure rate turns a throughput
+     * measurement into a measurement of retry scheduling.
+     *
+     * THAT DISTINCTION WAS DRAWN THE WRONG WAY ONCE, WHICH IS WHY THIS IS HERE. Reactor and Mutiny
+     * came in far below Vert.x, stderr showed hundreds of "fail signal" stack traces, and the
+     * conclusion drawn was a retry storm. The control: run the same arm at concurrency 100 instead of
+     * 1,000. A storm scales with the run; a teardown artefact scales with what is in flight at the
+     * end. The count came back as exactly 100 - one per in-flight record, none before - so the storm
+     * was refuted and the engines are simply slower than Vert.x here.
+     *
+     * Everything after this marker is teardown. Only what precedes it is evidence about the run.
+     */
+    static void windowClosed() {
+        System.err.println("BENCH_WINDOW_CLOSED");
+    }
+
+    /** Records one unit of work arriving at a callee this harness implements itself. */
+    static void calleeEnter() {
+        int now = inFlight.incrementAndGet();
+        peakInFlight.accumulateAndGet(now, Math::max);
+    }
+
+    /** Records one unit of work leaving a callee this harness implements itself. */
+    static void calleeExit() {
+        inFlight.decrementAndGet();
     }
 
     /**
@@ -172,7 +350,9 @@ public class Bench {
                 }
             }
         }
-        return System.currentTimeMillis() - start;
+        long took = System.currentTimeMillis() - start;
+        windowClosed();
+        return took;
     }
 
     /**
@@ -181,9 +361,9 @@ public class Bench {
      * Reflection rather than a direct call because the option does not exist in the older releases
      * this harness also compiles against, and one template has to build for all of them.
      */
-    static ParallelConsumerOptions<String, String> options(KafkaConsumer<String, String> consumer,
-                                                           int concurrency, int bufferSize) throws Exception {
-        Object builder = ParallelConsumerOptions.<String, String>builder()
+    static <K, V> ParallelConsumerOptions<K, V> options(KafkaConsumer<K, V> consumer,
+                                                        int concurrency, int bufferSize) throws Exception {
+        Object builder = ParallelConsumerOptions.<K, V>builder()
                 // An axis, because it changes what a SHARD IS and therefore what dispatch costs.
                 // UNORDERED and PARTITION shard by topic-partition, so a handful of shards each hold
                 // every in-flight record for their partition; KEY shards by record key, so a
@@ -202,8 +382,8 @@ public class Bench {
             }
         }
         @SuppressWarnings("unchecked")
-        ParallelConsumerOptions<String, String> built =
-                (ParallelConsumerOptions<String, String>) builder.getClass().getMethod("build").invoke(builder);
+        ParallelConsumerOptions<K, V> built =
+                (ParallelConsumerOptions<K, V>) builder.getClass().getMethod("build").invoke(builder);
         return built;
     }
 
@@ -258,6 +438,7 @@ public class Bench {
             while (done.get() < expected) sleep(5);
         }
         long took = System.currentTimeMillis() - start;
+        windowClosed();
         pool.shutdownNow();
         return took;
     }
@@ -282,24 +463,7 @@ public class Bench {
         });
         while (responses.get() < expected) sleep(25);
         long took = System.currentTimeMillis() - start;
-        try { pc.closeDrainFirst(); } catch (Exception ignored) { }
-        return took;
-    }
-
-    static long runPc(String bootstrap, String topic, int expected, int concurrency, int bufferSize) throws Exception {
-        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps(bootstrap));
-        VertxParallelEoSStreamProcessor<String, String> pc =
-                new VertxParallelEoSStreamProcessor<>(options(consumer, concurrency, bufferSize));
-        pc.subscribe(Collections.singletonList(topic));
-        responses.set(0);
-        long start = System.currentTimeMillis();
-        pc.vertxHttpReqInfo(
-                record -> new VertxParallelEoSStreamProcessor.RequestInfo("localhost",
-                        stub != null ? stub.port() : asyncStubPort, "/", new HashMap<>()),
-                onSend -> { },
-                onResponse -> responses.incrementAndGet());
-        while (responses.get() < expected) sleep(25);
-        long took = System.currentTimeMillis() - start;
+        windowClosed();
         try { pc.closeDrainFirst(); } catch (Exception ignored) { }
         return took;
     }
@@ -347,6 +511,18 @@ public class Bench {
     }
 
     static Properties consumerProps(String bootstrap) {
+        return consumerProps(bootstrap, "org.apache.kafka.common.serialization.StringDeserializer");
+    }
+
+    /**
+     * The same consumer for every arm, with only the deserializer varying.
+     * <p>
+     * The proxy engine is fixed at {@code byte[]} keys and values - it never deserializes, because a
+     * record's bytes cross the wire to be decoded in the worker's own language - so its arm needs a
+     * byte-array consumer. Everything else about the consumer must stay identical or the arms are not
+     * comparable, which is why this is one method with a parameter and not a second copy.
+     */
+    static Properties consumerProps(String bootstrap, String deserializer) {
         Properties p = new Properties();
         p.put("bootstrap.servers", bootstrap);
         p.put("group.id", "bench-" + System.nanoTime());
@@ -358,8 +534,8 @@ public class Bench {
         // that can be tested rather than assumed.
         p.put("max.poll.records", System.getenv("BENCH_MAX_POLL_RECORDS") == null
                 ? "500" : System.getenv("BENCH_MAX_POLL_RECORDS"));
-        p.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
-        p.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        p.put("key.deserializer", deserializer);
+        p.put("value.deserializer", deserializer);
         return p;
     }
 
