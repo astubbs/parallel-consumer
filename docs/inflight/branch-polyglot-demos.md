@@ -74,15 +74,21 @@ recorded objections in their own notes, by instruction. These are unresolved:
      against a JIT JVM and label its own margin unquotable. **The fix belongs here, not on the FFI
      branch** - it is demo parity, nothing to do with Graal - and merges down. Wanted by U3 of
      [`docs/plans/2026-08-22-001-feat-shared-c-transport-plan.md`](../plans/2026-08-22-001-feat-shared-c-transport-plan.md).
-5. **The credential rule binds only the fingerprint block**, while the Kafka clients dump
+5. **Not every client's README says how to run its demo.** Every client HAS a `demo/run.sh`; the
+   Java, Kotlin, Rust and Scala READMEs never mention it, so the demo is undiscoverable from the
+   one page a reader of that client actually opens. The others document it, which makes this a
+   parity gap rather than a missing feature - and the fix is a section in four READMEs, not new
+   code. **Belongs on this branch**, since it is about the demos rather than about any one
+   client's transport.
+6. **The credential rule binds only the fingerprint block**, while the Kafka clients dump
    `bootstrap.servers` at INFO several times a run. It should bind the whole run.
-6. **`bin/ci-demo-test.sh` is Java-only** - confirmed independently by every agent. Ten demos can
+7. **`bin/ci-demo-test.sh` is Java-only** - confirmed independently by every agent. Ten demos can
    ship while the contract claims both entry points are tested per language.
-7. ~~The big-replay title prints "would take 0s+" at small volumes.~~ **Fixed in all eleven**: the
+8. ~~The big-replay title prints "would take 0s+" at small volumes.~~ **Fixed in all eleven**: the
    unit is now chosen so the figure is never zero (`80s` at the demo's own defaults, `80ms` at CI's).
    Two languages had already fixed it independently and differently - Ruby omitted the clause, Python
    changed the unit - and Python's answer won because it keeps the information at every volume.
-8. **Every non-JVM demo container is a two-toolchain image** and the contract does not say so - the
+9. **Every non-JVM demo container is a two-toolchain image** and the contract does not say so - the
    sidecar is a child of the *running* demo, so it cannot be a discarded build stage.
 
 ## Product defects the fan-out found
@@ -158,10 +164,10 @@ records that it governs the reading demo only. That reconciliation, not the code
    unexplained baseline shift in [`next-demo-seed-followups.md`](next-demo-seed-followups.md) item 1
    resolved, because every ratio divides by a figure that moved 15% between sessions for reasons a
    control arm refuted.
-5. **The sidecar logging defect**, in the order its own record specifies - see
+6. **The sidecar logging defect**, in the order its own record specifies - see
    [`bug-sidecar-runtime-logging-and-address-leak.md`](bug-sidecar-runtime-logging-and-address-leak.md).
    Each step alone regresses something, which is why it is one job.
-6. **Owner decisions, not work**: the `enable.auto.commit` divergence between the two transports; the
+7. **Owner decisions, not work**: the `enable.auto.commit` divergence between the two transports; the
    KTD40 reconciliation (the plan still says every demo has three modes, the seed has none and says
    why); and whether the merged `demos/*` and `polish/*` branches and their worktrees are cleaned up.
 

@@ -203,6 +203,65 @@ no setup. It keeps the cross-language contract in
 item is that `--concurrency` defaults to 16 rather than the seed's 100 - here an in-flight record is
 a worker **process**.
 
+## Two transports: the sidecar, and the engine in this process
+
+By default this client spawns the sidecar and talks to it over gRPC. It can instead link Parallel
+Consumer **into your process** as a GraalVM shared library, over a C ABI - no sidecar, no gRPC, no
+JVM. Same client, same protocol frames, one option.
+
+```python
+ClientOptions(embedded=True, topics=["orders"])   # and no sidecar= argument; they are exclusive
+```
+
+Nothing native is loaded unless you ask: `ctypes` and the library are reached only inside that
+branch, so an ordinary install needs neither. If the library is missing, opening the session fails
+and names the file it wanted - it never falls back to the sidecar, because a silent fallback would
+let a run that was meant to exercise the embedded engine prove nothing.
+
+### Running the demo both ways
+
+```bash
+# the ordinary demo: AK core + sidecar, two arms
+demo/run.sh
+
+# build the shared library once - about 90 seconds, needs GraalVM with native-image
+../parallel-consumer-proxy-client-go/ffi/build-shared-library.sh session
+
+# the same demo with a third arm, the engine inside the process
+export PC_EMBEDDED_LIBRARY=$PWD/../parallel-consumer-proxy-client-go/ffi/build/libpc.dylib  # .so on Linux
+PC_DEMO_EMBEDDED=1 demo/run.sh
+```
+
+`PC_DEMO_EMBEDDED` is an environment variable rather than an eighth flag, because the demo contract
+fixes the flag table at seven across eleven languages. It is off by default so that
+`bin/ci-demo-conformance.sh`, which compares every language's output skeleton after reducing arm
+names to the roles `AK-CORE` and `SIDECAR`, does not see a third arm it has no role for.
+
+```
+  arm                              records    keys    elapsed          msg/s     vs AK core
+  AK core (confluent-kafka)            100     100       0.3s            336           1.0x
+  pc-python-grpc (this client)         100     100       0.0s          2,238           6.7x
+  pc-python-ffi (embedded)             100     100       0.0s          2,606           7.7x
+```
+
+Rates at that volume are startup-dominated and are not a transport result. The records/keys pair is
+the oracle.
+
+**The library still lives under the Go client**, which is why `PC_EMBEDDED_LIBRARY` is needed above -
+it is one shared library for every language and has not been moved to a shared home yet.
+
+### Two probes, if you want to see why this works
+
+```bash
+python3 ffi/probe_gil.py        # does ctypes release the GIL during a blocking pull?
+python3 ffi/probe_embedded.py   # end to end: records and keys, with no sidecar
+```
+
+The first is the one worth reading. A callback-based FFI would have to take the GIL on every call,
+which is why embedding Python was assumed to be hard; this design never calls back, so Python blocks
+in a pull instead - and `ctypes` releases the GIL while it does, measured at 1142x against a `PyDLL`
+control that differs in exactly one flag.
+
 ## Also here
 
 `poc/` is the preserved specification probe: a working client written from the protocol documents

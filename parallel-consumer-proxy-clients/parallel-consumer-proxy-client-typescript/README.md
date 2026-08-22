@@ -91,7 +91,18 @@ is recorded here because "we did not get to it yet" and "we decided not to" look
 outside.
 
 **It was tried, and it works.** A Node process can create the isolate, open a session and pull
-frames. See [`ffi/probe_eventloop.mjs`](ffi/probe_eventloop.mjs).
+frames. To see it:
+
+```bash
+# build the shared library once - about 90 seconds, needs GraalVM with native-image
+../parallel-consumer-proxy-client-go/ffi/build-shared-library.sh session
+
+cd ffi
+PC_EMBEDDED_LIBDIR=$PWD/../../parallel-consumer-proxy-client-go/ffi/build npm run build
+npm run probe
+```
+
+There is no embedded demo arm, because there is no embedded transport in this client - see below.
 
 **But the pull has to happen on a worker thread, and that is measured, not assumed.** The engine
 does not push frames at you; something must call in and wait. Doing that on the main thread stops
