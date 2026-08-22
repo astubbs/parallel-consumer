@@ -238,6 +238,13 @@ into it. Two rows that disagree are visibly two experiments instead of two repea
 | `direct-pull-delay-sweep.csv` | the shipped engine against the direct-pull engine, 3 delays x 2 concurrencies |
 | `direct-pull-concurrency-sweep-0ms.csv` | the same two engines at delay 0 across six concurrencies - where the result is |
 | `ordering-head-of-line-latency.csv` | `PARTITION` against `KEY` at three buffer depths, flat and tailed handler - the first latency comparison |
+| `saturated-skew-baseline.csv` | The saturated baseline on a Zipf key distribution: `KEY` / `PARTITION` / `UNORDERED` / `share-explicit` across three workloads, plus the distinct-key control. **`KEY` costs 0.13% on distinct keys and 3.1x on skewed ones** |
+| `arrival-tail-skew-matrix.csv` | The tail experiment: the same arms under **controlled arrival** at 50/70/90% of each arm's own capacity, skewed and distinct keys, flat / tailed / tailed-with-failures. The first file here with an end-to-end latency column |
+
+**The two skew files are the only ones taken on anything but all-distinct keys**, and that is the
+single most important caveat on every other row in this table: with distinct keys `KEY` ordering
+constrains nothing, so every `KEY` figure above is `UNORDERED` under a different name. See
+[`docs/inflight/perf-the-tail-experiment-ran-2026-08-22.md`](../docs/inflight/perf-the-tail-experiment-ran-2026-08-22.md).
 
 `ordering-head-of-line-latency.csv` carries three extra LEADING columns the others do not -
 `message_buffer_size` and `handler_p99_ms`, because both were swept and neither is a column the

@@ -1105,11 +1105,19 @@ public class Bench {
                 }
                 producer.flush();
                 long span = Math.max(1, lastSend - t0);
+                // THE RECEIPT IS PRINTED HERE, not after the try block, and that is not tidiness.
+                // This thread is a daemon and main calls System.exit as soon as the arm returns -
+                // which is as soon as the last record COMPLETES, and that can be before a line placed
+                // after the producer's close ever runs. The receipt was silently absent from the
+                // whole arrival path until this was moved, which is the same class of defect as
+                // everything else in this file's history: a diagnostic that is missing rather than
+                // wrong.
+                reportKeyDistribution(keyCounts, count);
                 achievedArrivalRate = (count - warmup) * 1000.0 / span;
             } catch (Exception e) {
                 arrivalFailure = "feeder threw: " + e;
+                reportKeyDistribution(keyCounts, count);
             }
-            reportKeyDistribution(keyCounts, count);
         }, "bench-arrival-feeder");
         feeder.setDaemon(true);
         feeder.start();
