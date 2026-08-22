@@ -4,6 +4,16 @@
 <!-- inflight-impact: performance -->
 <!-- inflight-labels: needs-measurement -->
 
+> **IT RAN, 2026-08-22 - results and predictions in
+> [`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md).** The
+> blocker below is removed: `BENCH_ARRIVAL_RATE` feeds records during the measured window, and
+> `BENCH_KEY_DISTRIBUTION` gives the run a workload in which `KEY` ordering constrains anything at
+> all. **What separated the arms was not the tail.** A 101x handler tail moves throughput by a few
+> percent for every arm, as prediction 1 said it would; the key distribution moves it by 3.1x and a
+> 1% failure rate by 40%. This note is kept for its reasoning and its predictions, which the results
+> note grades one by one. Delete it when the follow-on work it names is either done or has its own
+> note.
+
 **Antony's instruction, 2026-08-22: make sure we do this.** It is one sweep, and it answers three
 separate open questions that have each been argued rather than measured.
 

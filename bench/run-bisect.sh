@@ -257,15 +257,36 @@ POM
 parse_result() {
   grep '^RESULT' | awk '{
     p = $6; sub("peak=", "", p);
-    res = "-/-/-/-"; drain = "-/-/-/-";
+    res = "-/-/-/-"; drain = "-/-/-/-"; e2e = "-/-/-/-";
+    arr = "-/-"; feed = "-/-/-"; backlog = "-/-/-"; inflight = "-/-/-"; fails = "-";
     for (i = 7; i <= NF; i++) {
-      if ($i ~ /^res=/)   { res = substr($i, 5) }
-      if ($i ~ /^drain=/) { drain = substr($i, 7) }
+      if ($i ~ /^res=/)      { res = substr($i, 5) }
+      if ($i ~ /^drain=/)    { drain = substr($i, 7) }
+      if ($i ~ /^e2e=/)      { e2e = substr($i, 5) }
+      if ($i ~ /^arr=/)      { arr = substr($i, 5) }
+      if ($i ~ /^feed=/)     { feed = substr($i, 6) }
+      if ($i ~ /^backlog=/)  { backlog = substr($i, 9) }
+      if ($i ~ /^inflight=/) { inflight = substr($i, 10) }
+      if ($i ~ /^fails=/)    { fails = substr($i, 7) }
     }
-    if (res == "-")   { res = "-/-/-/-" }
-    if (drain == "-") { drain = "-/-/-/-" }
-    split(res, r, "/"); split(drain, d, "/");
-    print $5, p, r[1], r[2], r[3], r[4], d[1], d[2], d[3], d[4];
+    # EVERY FIELD MUST BE NON-EMPTY, and this is not cosmetic. The row is read back with a bare
+    # `read -r a b c ...`, whose default IFS collapses runs of whitespace - so an empty field does not
+    # produce an empty variable, it DISAPPEARS and shifts every value after it one column left. A
+    # results file written that way is not corrupt-looking; it is plausible, and wrong from the first
+    # empty cell rightwards. An arm that reported no backlog gauge put "0" under injected_failures the
+    # first time this was written.
+    if (res == "-")     { res = "-/-/-/-" }
+    if (drain == "-")   { drain = "-/-/-/-" }
+    if (e2e == "-")     { e2e = "-/-/-/-" }
+    if (arr == "-")     { arr = "-/-" }
+    if (feed == "-")    { feed = "-/-/-" }
+    if (backlog == "-") { backlog = "-/-/-" }
+    if (inflight == "-") { inflight = "-/-/-" }
+    if (fails == "")    { fails = "-" }
+    split(res, r, "/"); split(drain, d, "/"); split(e2e, e, "/");
+    split(arr, a, "/"); split(feed, f, "/"); split(backlog, b, "/"); split(inflight, n, "/");
+    print $5, p, n[1], r[1], r[2], r[3], r[4], d[1], d[2], d[3], d[4],
+          e[1], e[2], e[3], e[4], a[1], a[2], f[2], b[2], b[3], fails;
   }'
 }
 # A KILLED RUN'S LATENCY FIELDS ARE NOT A MEASUREMENT, and they are not absent either - the arm was
@@ -274,7 +295,10 @@ parse_result() {
 # column as a completed run's. The CSV was already blanked for a timeout; the LOG LINE was not, so the
 # two disagreed - the log quoted percentiles the results file did not contain, which is precisely the
 # shape of thing this harness has published wrongly before.
-clear_latency_fields() { rp50=; rp99=; rp999=; rmax=; dp50=; dp99=; dp999=; dmax=; }
+clear_latency_fields() {
+  ifp50=; rp50=; rp99=; rp999=; rmax=; dp50=; dp99=; dp999=; dmax=
+  ep50=; ep99=; ep999=; emax=; arrreq=; arrach=; feedp99=; backp99=; backmax=; fails=
+}
 
 # BENCH_JFR=<dir> records a Java Flight Recorder profile of each measured run into that directory,
 # one .jfr per arm. Off by default because recording is not free and every result in bench/results/
@@ -339,17 +363,37 @@ serial_projection_seconds() { echo $(( RECORDS * $1 / 1000 )); }
 #
 # Returns 124 on expiry, the same code GNU `timeout` uses, so a caller can tell a timeout from a
 # failure.
+#
+# THE DEADLINE DID NOT ACTUALLY KILL ANYTHING, until 2026-08-22, and the failure is silent in the
+# worst possible way: the row is recorded as RUN_TIMEOUT and the JVM CARRIES ON RUNNING. It keeps its
+# consumer group, its broker connections and a core's worth of CPU, and the next arm is measured
+# alongside it. A sweep that timed out twice was measuring three concurrent runs by its third cell.
+#
+# The old code did `kill -TERM $pid; sleep 2; kill -KILL $pid; pkill -KILL -P $pid`. $pid is the
+# backgrounded SUBSHELL; the JVM is its child. TERM kills the subshell first, the JVM is reparented
+# to init, and `pkill -P $pid` then looks for the children of a process that no longer exists and
+# finds none. The one line written to fix exactly this problem could not work, because it ran after
+# the thing that made it impossible.
+#
+# So descendants are collected and killed BOTTOM-UP, before the parent, while the parent tree still
+# exists to be walked.
+kill_tree() {
+  local parent=$1 child
+  for child in $(pgrep -P "$parent" 2>/dev/null); do
+    kill_tree "$child" "$2"
+  done
+  kill "-$2" "$parent" 2>/dev/null
+}
+
 run_with_deadline() {
   local secs=$1; shift
   "$@" &
   local pid=$! waited=0
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$waited" -ge "$secs" ]; then
-      kill -TERM "$pid" 2>/dev/null
+      kill_tree "$pid" TERM
       sleep 2
-      kill -KILL "$pid" 2>/dev/null
-      # the JVM is a grandchild of this shell, so killing the subshell is not enough
-      pkill -KILL -P "$pid" 2>/dev/null
+      kill_tree "$pid" KILL
       return 124
     fi
     sleep 1
@@ -426,8 +470,20 @@ run_one() {
   # has records out, so every run ends with roughly `concurrency` failures - see Bench#windowClosed,
   # which also records the control that established they are teardown and not a storm. Checking the
   # whole file would fire on every run, and a warning that always fires is not a warning.
-  local err=$WORK/last-run.err
+  # THE JVM'S EXIT STATUS IS THE RETURN VALUE OF THIS FUNCTION, and it was not until 2026-08-22.
+  #
+  # A shell function returns the status of its LAST command, and there are two checks below this
+  # pipeline - so `run_one` returned 0 no matter how the JVM died. The produce stage reported
+  # "produced 20000 records" for a run whose KafkaProducer constructor had thrown a ConfigException
+  # and written nothing at all, and the sweep proceeded to measure an empty topic. It also made
+  # Bench's ARRIVAL_VOID exit code (3) unreachable: the caller reads $? to distinguish a voided
+  # arrival run from a broken arm, and $? could only ever be 0 or the deadline's 124.
+  #
+  # PIPESTATUS[0] rather than $? - the pipeline's own status is parse_result's, and `grep` finding no
+  # RESULT line is a perfectly ordinary way for a failed run to end.
+  local err=$WORK/last-run.err rc
   java ${engine[@]+"${engine[@]}"} ${jfr[@]+"${jfr[@]}"} -cp "$cp" Bench "$@" 2>"$err" | parse_result
+  rc=${PIPESTATUS[0]}
   # `sed '/PAT/q'`, not `sed -n '1,/PAT/p'`: a `1,/PAT/` range does not test the end pattern on line
   # 1, so when the marker IS line 1 - which happens whenever an arm logs nothing during its run, the
   # healthy case - the range never closes and the whole teardown log is scanned. That fired the
@@ -453,6 +509,13 @@ run_one() {
     sed -n '/^NOTE:/p' "$err" | while IFS= read -r note; do log "         $note"; done
     log "         If this is a LOCAL row, check the core jar has not been replaced by another session."
   fi
+  # A NON-ZERO EXIT WITH NO RESULT LINE IS A DEAD ARM, and its stderr is the only thing that says
+  # why. Reported here rather than left in a file nobody opens, because the alternative - a bare
+  # RUN_FAILED - is what let an empty topic be measured six times in a row.
+  if [ "$rc" != 0 ]; then
+    log "       $* exited $rc; last stderr line: $(tail -1 "$err" 2>/dev/null)"
+  fi
+  return "$rc"
 }
 
 # --- the llingr arm --------------------------------------------------------------------------
@@ -532,32 +595,196 @@ start_broker
 # Ordering mode. An axis for the same reason partition count is: it changes the shape of the shard
 # map, which is what the dispatch scan walks. Recorded as a column so a swept file is readable back.
 ORDERING=${BENCH_ORDERING:-UNORDERED}
-export BENCH_ORDERING=$ORDERING
+# Orderings to sweep. Same contract as DELAYS and CONCURRENCIES: defaults to the single value, so
+# every existing invocation means what it always did.
+#
+# IT IS A SWEEP AXIS NOW BECAUSE THE ALTERNATIVE PRODUCED THE COUNT NOBODY WANTED TO SEE. Ordering
+# was a per-invocation environment variable, so comparing two orderings meant two sweeps - and across
+# every results file taken on 2026-08-22 that came to 369 UNORDERED rows, 7 KEY and 4 PARTITION.
+# UNORDERED is the mode Parallel Consumer has no differentiator in. Swept from one invocation the
+# arms also ALTERNATE, which is the only defence this harness has against machine drift between them.
+ORDERINGS=${ORDERINGS:-$ORDERING}
 PARTITIONS=${BENCH_PARTITIONS:-1}
 export BENCH_PARTITIONS=$PARTITIONS
-TOPIC=${BENCH_TOPIC:-bench-$RECORDS-p$PARTITIONS}
+
+# THE KEY DISTRIBUTION IS PART OF THE DATASET, so it is part of the topic name and a column.
+#
+# `distinct` - one key per record - was the only distribution this harness could produce, and it is
+# the best possible case for KEY ordering: every record is its own shard, so the ordering constraint
+# binds nothing and KEY behaves exactly like UNORDERED. See Bench.java.template's key-distribution
+# section. Two datasets that differ only in their key distribution must never share a topic name -
+# that is the same confound the partition count is already in the topic name to prevent.
+KEY_DIST=${BENCH_KEY_DISTRIBUTION:-distinct}
+export BENCH_KEY_DISTRIBUTION=$KEY_DIST
+KEY_SUFFIX=""
+[ "$KEY_DIST" != distinct ] && KEY_SUFFIX="-$KEY_DIST${BENCH_KEY_COUNT:+x$BENCH_KEY_COUNT}"
+TOPIC=${BENCH_TOPIC:-bench-$RECORDS-p$PARTITIONS$KEY_SUFFIX}
+
+# CONTROLLED ARRIVAL. Rates to sweep, in records per second; empty (the default) is the pre-produced
+# path this harness has always used, so every committed figure stays reproducible.
+#
+# WHY IT IS A SWEEP AND NOT A SETTING. At 100% utilisation every queueing system measures its own
+# backlog, so a single arrival rate near saturation answers the same question the pre-produced path
+# already answers. The interesting behaviour is where the percentiles turn up, and finding it needs
+# the rate swept as a fraction of the arm's own measured throughput - 50%, 70%, 90%.
+ARRIVAL_RATES=${ARRIVAL_RATES:-}
+arrival_mode() { [ -n "$ARRIVAL_RATES" ]; }
+
+# A FRESH TOPIC PER RUN, and only under controlled arrival.
+#
+# THE CONSUMER MUST NOT START WITH A BACKLOG - that is the whole point of the arrival axis, and there
+# were two ways to get it. Starting an existing topic's consumer at `latest` looked cheaper and is
+# wrong: the reset is applied at ASSIGNMENT, so any record produced between subscribe and assignment
+# is silently skipped, the run never reaches its expected count, and it fails as a timeout - which
+# reads as a slow arm. A fresh topic with the harness's usual `earliest` has no such race at all: a
+# record fed before the group joins is still consumed, from offset 0, it merely arrives early. The
+# race becomes a harmless ordering rather than a lost record, and the feeder's warmup barrier removes
+# even that.
+#
+# Deleted immediately after the run rather than at the end of the sweep: a sweep that is killed
+# half-way should not leave a hundred topics behind, and the delete costs a second outside any
+# measured window.
+fresh_topic_name() { echo "bench-arr-$$-$1"; }
+
+# Creates the run's topic through the broker's own CLI rather than by starting a JVM to do it.
+#
+# `Bench produce <topic> 0` also creates it, and that was the first implementation - but it is a
+# whole JVM start per run, four seconds, for one Admin call. Across an arrival matrix that is minutes
+# of wall clock spent on topic creation.
+create_topic() {
+  docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server "localhost:$BROKER_PORT" --create --topic "$1" \
+    --partitions "$PARTITIONS" --replication-factor 1 >/dev/null 2>&1
+}
+
+# WAITS FOR THE DELETION, because `--delete` returns before the broker has finished.
+#
+# A topic recreated under a name the broker is still tearing down comes back
+# OUT_OF_ORDER_SEQUENCE_NUMBER on the next produce, and the idempotent producer's default retry count
+# is Integer.MAX_VALUE - so the produce does not fail, it retries forever on two partitions while the
+# other twenty-two succeed, leaving a topic that is short by a few thousand records and a harness that
+# hangs. Bench#applyBoundedDelivery makes that failure loud; this makes it not happen.
+#
+# The names this harness generates are unique per run, so the window is narrow - but a caller
+# re-running a sweep with the same BENCH_TOPIC hits it head on, which is exactly how it was found.
+#
+# WAITING IS OPT-IN, and that is a measured decision rather than a preference. The broker takes
+# fifteen to twenty-five seconds to stop listing a deleted topic, and the arrival sweep deletes one
+# after EVERY run - so waiting unconditionally doubled the wall clock of a 42-cell matrix, for a
+# guarantee that only matters when the same name is about to be reused. It never is: the sweep's
+# names carry the shell's PID and a cell counter.
+delete_topic() {
+  docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server "localhost:$BROKER_PORT" --delete --topic "$1" >/dev/null 2>&1
+}
+
+# There is deliberately no wait-for-deletion helper. The window it guarded - producing into a name
+# the broker is still tearing down - was only dangerous because the producer was idempotent and
+# retried OUT_OF_ORDER_SEQUENCE_NUMBER two billion times. Bench#applyBoundedDelivery removed the
+# idempotence, so the window now costs a bounded retry rather than a hung sweep, and paying twenty
+# seconds per run to close it is not worth it. If you delete a bench topic BY HAND and immediately
+# re-produce into it, wait a few seconds.
+
+# THE LOCAL BUILD'S IDENTITY, as a column.
+#
+# `PC_VERSIONS=LOCAL` resolves to a Maven COORDINATE out of a ~/.m2 shared by every worktree and
+# every concurrent session on this machine. Whoever ran `mvn install` most recently owns it, and a
+# sweep in progress picks the change up at its next JVM start with nothing anywhere saying so - which
+# happened twice on 2026-08-22 and put four rows in a results file against code their author never
+# saw. `pc_version` said LOCAL for every row and identified nothing.
+# See docs/inflight/perf-local-is-a-coordinate-not-a-build.md, which names exactly this column as the
+# fix. Checked before AND after every run, so a swap that happens mid-cell voids that cell instead of
+# being averaged into it.
+pc_build_id() {
+  local jars count
+  jars=$(printf '%s' "$1" | tr ':' '\n' | grep -E 'parallel-consumer-core[^/]*\.jar$')
+  count=$(printf '%s' "$jars" | grep -c . )
+  [ "$count" = 1 ] || { echo ""; return; }
+  [ -f "$jars" ] || { echo ""; return; }
+  cksum < "$jars" | awk '{print $1}'
+}
 
 # The dataset: produced once, by the local build, and reused by every arm - including the Go one,
 # which is the only way an engine comparison means anything.
-if [ "${BENCH_SKIP_PRODUCE:-0}" = 1 ]; then
+# How many records the topic holds right now, or 0 when it does not exist.
+topic_depth() {
+  docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-get-offsets.sh \
+    --bootstrap-server "localhost:$BROKER_PORT" --topic "$1" 2>/dev/null |
+  awk -F: '{s += $3} END {print s + 0}'
+}
+
+LOCAL_CP=""
+if arrival_mode; then
+  # NOTHING IS PRE-PRODUCED under controlled arrival - the records are fed during each run, into a
+  # topic created for that run by the broker's own CLI. No classpath is needed here at all.
+  log "controlled arrival: rates [$ARRIVAL_RATES]/s, fresh topic per run, nothing pre-produced"
+elif [ "${BENCH_SKIP_PRODUCE:-0}" = 1 ]; then
   log "BENCH_SKIP_PRODUCE=1: assuming $TOPIC already holds >= $RECORDS records"
 else
   LOCAL_CP=$(prepare LOCAL NATIVE) || { log "FATAL: cannot build local arm"; exit 1; }
-  log "producing $RECORDS records into $TOPIC (once)"
-  # Bounded: a wedged broker here silently costs the whole sweep, and there is no output to watch -
-  # nothing is logged when the produce SUCCEEDS either, so a stale "producing..." line is the last
-  # thing on screen whether it finished a second ago or never will.
-  if ! run_with_deadline "$PRODUCE_TIMEOUT" run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null; then
-    rc=$?
-    if [ "$rc" = 124 ]; then
-      log "FATAL: producing $RECORDS records exceeded ${PRODUCE_TIMEOUT}s. Is the broker healthy? Raise BENCH_PRODUCE_TIMEOUT for a larger dataset."
-    else
-      log "FATAL: producing $RECORDS records failed (exit $rc)"
+  # THE PRODUCE APPENDED, so running the same sweep twice DOUBLED the dataset.
+  #
+  # A topic that already holds enough records is left alone. Before this, a second invocation into
+  # the same topic name simply added another RECORDS on top - and the resulting topic is not merely
+  # bigger, it changes what is being measured: the arm stops at its expected count with the engine
+  # still holding a full buffer of records it fetched and will never be billed for, and every
+  # measure rendered after teardown then describes the wrong window. That is how a KEY row came back
+  # at 1,285 msg/s - faster than UNORDERED on the same dataset - having simply stopped early.
+  have=$(topic_depth "$TOPIC")
+  if [ "$have" -ge "$RECORDS" ]; then
+    log "$TOPIC already holds $have records (>= $RECORDS); not producing again"
+  else
+    log "producing $RECORDS records into $TOPIC (once; it holds $have)"
+    # Bounded: a wedged broker here silently costs the whole sweep, and there is no output to watch -
+    # nothing is logged when the produce SUCCEEDS either, so a stale "producing..." line is the last
+    # thing on screen whether it finished a second ago or never will.
+    if ! run_with_deadline "$PRODUCE_TIMEOUT" run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null; then
+      rc=$?
+      if [ "$rc" = 124 ]; then
+        log "FATAL: producing $RECORDS records exceeded ${PRODUCE_TIMEOUT}s. Is the broker healthy? Raise BENCH_PRODUCE_TIMEOUT for a larger dataset."
+      else
+        log "FATAL: producing $RECORDS records failed (exit $rc)"
+      fi
+      exit 1
     fi
+    log "produced $RECORDS records into $TOPIC"
+  fi
+fi
+
+# THE TOPIC MUST ACTUALLY HOLD THE RECORDS THE ARMS WILL WAIT FOR.
+#
+# Every consumer arm here waits for a FIXED COUNT - `while (responses.get() < expected)` in runCore,
+# and the same shape in every other arm. Hand it a topic holding fewer records than that and it waits
+# FOREVER, at near-zero CPU, with nothing logged. On 2026-08-22 a topic holding 17,806 of the 20,000
+# its name claimed cost twenty-five minutes before anyone thought to count the offsets, and it was
+# only visible at all because the run deadline was ALSO not killing anything (see run_with_deadline).
+#
+# It is checked rather than trusted because the commonest way in is BENCH_SKIP_PRODUCE=1, whose whole
+# purpose is to assert a fact about a topic that nothing then verifies. One Admin call converts an
+# indefinite hang into a sentence.
+verify_topic_depth() {
+  local topic=$1 want=$2 have
+  have=$(docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-get-offsets.sh \
+           --bootstrap-server "localhost:$BROKER_PORT" --topic "$topic" 2>/dev/null |
+         awk -F: '{s += $3} END {print s + 0}')
+  if [ -z "$have" ] || [ "$have" -lt "$want" ]; then
+    log "FATAL: $topic holds ${have:-0} records, and every arm here waits for exactly $want."
+    log "       An arm handed a short topic does not fail - it waits forever at no CPU, and the row"
+    log "       comes back as a timeout, which reads as a slow arm rather than a missing dataset."
+    log "       Re-produce it, or lower the record count to what the topic actually has."
     exit 1
   fi
-  log "produced $RECORDS records into $TOPIC"
-fi
+  if [ "$have" -gt "$want" ]; then
+    log "WARNING: $topic holds $have records but the run consumes $want. The arm STOPS EARLY, with the"
+    log "         engine still holding records it fetched and will never be billed for - so msg_per_sec"
+    log "         is measured over whichever $want records finished first, not over the dataset. On a"
+    log "         skewed key distribution that flatters the ordered arms specifically, because the"
+    log "         records they are slowest at are exactly the ones left behind."
+  else
+    log "$topic holds $have records (>= $want)"
+  fi
+}
+arrival_mode || verify_topic_depth "$TOPIC" "$RECORDS"
 
 # delay_ms and concurrency are columns because both are now swept axes; without them a multi-delay
 # or multi-concurrency results file cannot be read back. Everything else is unchanged, so llingr,
@@ -605,16 +832,28 @@ load_1m() { uptime | sed 's/.*load averages*: //' | awk '{print $1}'; }
 #
 # p999 and max are here because a mean is what a serial engine hides behind: head-of-line blocking
 # shows up in the upper percentiles long before it shows up anywhere else.
-echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms" > "$RESULTS"
+#
+# e2e_* is the THIRD measure and it only exists under controlled arrival: completion minus the
+# record's INTENDED send instant. It is the one measure coordinated omission cannot fool. Residence
+# starts at poll-return, so a record that sat in the broker because the consumer was behind is
+# charged nothing for the wait - and under an arrival sweep that is precisely the failure mode that
+# would make a saturated arm look fast. Blank on the pre-produced path, where there is no arrival
+# instant to measure from because every record arrived before the run.
+#
+# arrival_requested/arrival_achieved, feed_lag_p99_ms and backlog_* are the EVIDENCE THAT THE
+# PRODUCER WAS NOT THE BOTTLENECK. If the feed cannot hold its schedule the whole experiment measures
+# the producer; the run is voided rather than recorded, and these columns are what a reader checks
+# when they want to know how close it came.
+echo "pc_version,pc_build,client_pin,mode,callee,ordering,key_dist,records,partitions,max_poll_records,buffer,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,inflight_p50,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms,e2e_p50_ms,e2e_p99_ms,e2e_p999_ms,e2e_max_ms,arrival_requested,arrival_achieved,feed_lag_p99_ms,backlog_p99,backlog_max,injected_failures" > "$RESULTS"
 
-# The eight latency fields on a row that HAS a measurement but could not report latency.
-NO_LATENCY=",,,,,,,"
+# The eighteen latency-and-arrival fields on a row that HAS a measurement but could not report them.
+NO_LATENCY=",,,,,,,,,,,,,,,,,"
 # EVERYTHING AFTER msg_per_sec on a row that has no measurement at all - peak, load, and the eight
 # latency fields, as ten empty cells. One variable rather than a hand-counted run of commas at each
 # of the four such sites: counting them by hand is what put the skip rows one column short the first
 # time this file grew a column, and a short row is silent - nothing reads a results file strictly
 # enough to notice. verify_row_widths below is the backstop.
-NO_MEASUREMENT=",,,,,,,,,,"
+NO_MEASUREMENT=",,,,,,,,,,,,,,,,,,,,,"
 # THE NON-BLOCKING ENGINES MUST NOT BE MEASURED WITH A BLOCKING CALLEE.
 #
 # vertx, reactor, mutiny and proxy exist to run a user function that does NOT hold a thread - that is
@@ -710,24 +949,29 @@ for mode in $MODES; do
       continue
     }
     ver=$(go_arm_version "$mode")
+    if arrival_mode; then
+      log "SKIP $mode: the Go arms take no arrival-rate flag and produce nothing, so a controlled-arrival sweep cannot include them"
+      echo "$ver,,franz,$mode,n/a,$ORDERING,$KEY_DIST,$RECORDS,$PARTITIONS,default,$BUFFER,,,,NO_ARRIVAL_SUPPORT$NO_MEASUREMENT" >> "$RESULTS"
+      continue
+    fi
     for c in $CONCURRENCIES; do
       for d in $DELAYS; do
         proj=$(serial_projection_seconds "$d")
         if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
           log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s$NO_MEASUREMENT" >> "$RESULTS"
+          echo "$ver,,franz,$mode,n/a,$ORDERING,$KEY_DIST,$RECORDS,$PARTITIONS,default,$BUFFER,$d,$c,,SKIPPED_SERIAL_${proj}s$NO_MEASUREMENT" >> "$RESULTS"
           continue
         fi
         for r in $(seq 1 "$REPEATS"); do
           load=$(load_1m)
           out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
-          read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
+          read -r rate peak ifp50 rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax ep50 ep99 ep999 emax arrreq arrach feedp99 backp99 backmax fails <<< "$out"
           if [ "$rc" = 124 ] || [ -z "$rate" ]; then
             [ "$rc" = 124 ] && rate=RUN_TIMEOUT_${RUN_TIMEOUT}s || rate=RUN_FAILED
             peak=; latency=$NO_LATENCY; clear_latency_fields
-          else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
+          else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax,$ep50,$ep99,$ep999,$emax,$arrreq,$arrach,$feedp99,$backp99,$backmax,$fails"; fi
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, load $load, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak,$load,$latency" >> "$RESULTS"
+          echo "$ver,,franz,$mode,n/a,$ORDERING,$KEY_DIST,$RECORDS,$PARTITIONS,default,$BUFFER,$d,$c,$r,$rate,$peak,$ifp50,$load,$latency" >> "$RESULTS"
         done
       done
     done
@@ -736,25 +980,60 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED$NO_MEASUREMENT" >> "$RESULTS"; continue; }
-      for c in $CONCURRENCIES; do
-        for d in $DELAYS; do
-          proj=$(serial_projection_seconds "$d")
-          if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
-            log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s$NO_MEASUREMENT" >> "$RESULTS"
-            continue
-          fi
-          for r in $(seq 1 "$REPEATS"); do
-            load=$(load_1m)
-            out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
-            read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
-            if [ "$rc" = 124 ] || [ -z "$rate" ]; then
-              [ "$rc" = 124 ] && rate=RUN_TIMEOUT_${RUN_TIMEOUT}s || rate=RUN_FAILED
-              peak=; latency=$NO_LATENCY; clear_latency_fields
-            else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
-            log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, load $load, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak,$load,$latency" >> "$RESULTS"
+      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,,$pin,$mode,$CALLEE_LABEL,$ORDERING,$KEY_DIST,$RECORDS,$PARTITIONS,$MAX_POLL,$BUFFER,,,,COMPILE_FAILED$NO_MEASUREMENT" >> "$RESULTS"; continue; }
+      for ord in $ORDERINGS; do
+        export BENCH_ORDERING=$ord
+        for c in $CONCURRENCIES; do
+          for d in $DELAYS; do
+            proj=$(serial_projection_seconds "$d")
+            if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
+              log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
+              echo "$pcv,,$pin,$mode,$CALLEE_LABEL,$ord,$KEY_DIST,$RECORDS,$PARTITIONS,$MAX_POLL,$BUFFER,$d,$c,,SKIPPED_SERIAL_${proj}s$NO_MEASUREMENT" >> "$RESULTS"
+              continue
+            fi
+            # 0 is the pre-produced path - one iteration, no arrival control, exactly as before.
+            # Written as a literal 0 rather than an empty string because `for x in ${VAR:-""}` is
+            # unquoted word splitting: an empty default produces ZERO iterations, not one, and the
+            # whole sweep silently does nothing.
+            for arrival in ${ARRIVAL_RATES:-0}; do
+              export BENCH_ARRIVAL_RATE=$arrival
+              for r in $(seq 1 "$REPEATS"); do
+                topic=$TOPIC
+                if [ "$arrival" != 0 ]; then
+                  CELL=$((${CELL:-0} + 1))
+                  topic=$(fresh_topic_name "$CELL")
+                  create_topic "$topic" \
+                    || { log "SKIP $mode $ord arrival=$arrival: could not create $topic"; continue; }
+                fi
+                build_before=$(pc_build_id "$CP")
+                load=$(load_1m)
+                out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$topic" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
+                build_after=$(pc_build_id "$CP")
+                read -r rate peak ifp50 rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax ep50 ep99 ep999 emax arrreq arrach feedp99 backp99 backmax fails <<< "$out"
+                if [ "$rc" = 124 ] || [ -z "$rate" ]; then
+                  if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s
+                  # Exit 3 is Bench's arrival verdict: the feed could not hold the schedule it was
+                  # asked for, so the run measured the producer. A DISTINCT label from RUN_FAILED,
+                  # because the two mean opposite things - this arm worked and the harness did not.
+                  elif [ "$rc" = 3 ]; then rate=ARRIVAL_VOID
+                  else rate=RUN_FAILED; fi
+                  peak=; latency=$NO_LATENCY; clear_latency_fields
+                else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax,$ep50,$ep99,$ep999,$emax,$arrreq,$arrach,$feedp99,$backp99,$backmax,$fails"; fi
+                # THE JAR CHANGED UNDER THE RUN. Not a slow row, not a noisy row - a row measured
+                # against two different builds, which is not a measurement of either.
+                if [ -n "$build_before" ] && [ "$build_before" != "$build_after" ]; then
+                  log "WARNING: the parallel-consumer-core jar changed during this run ($build_before -> $build_after)."
+                  log "         Another session installed over the LOCAL coordinate. Row voided."
+                  rate=BUILD_CHANGED_${build_before}_TO_${build_after}
+                  peak=; latency=$NO_LATENCY; clear_latency_fields
+                fi
+                arrival_note=""
+                [ "$arrival" != 0 ] && arrival_note=" arrival=${arrival}/s (achieved ${arrach:--}, feed lag p99 ${feedp99:--}ms, backlog p99 ${backp99:--}), e2e p50/p99/p99.9/max ${ep50:--}/${ep99:--}/${ep999:--}/${emax:--}ms,"
+                log "$pcv/$pin $mode $ord delay=${d}ms conc=$c run$r = $rate msg/s, in flight peak $peak / sustained ${ifp50:--}, load $load,$arrival_note residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
+                echo "$pcv,$build_before,$pin,$mode,$CALLEE_LABEL,$ord,$KEY_DIST,$RECORDS,$PARTITIONS,$MAX_POLL,$BUFFER,$d,$c,$r,$rate,$peak,$ifp50,$load,$latency" >> "$RESULTS"
+                [ "$arrival" != 0 ] && delete_topic "$topic"
+              done
+            done
           done
         done
       done

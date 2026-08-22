@@ -75,7 +75,13 @@ A row with in-flight far below the partition count is a starved run, whatever el
 
 ## Not yet done
 
-- Not established whether the same starvation reaches `KEY` ordering on a **skewed** key distribution,
-  where a few shards hold most records. The measurements here use all-distinct keys, which is the best
-  possible case for `KEY` and says nothing about the worst.
+- ~~Not established whether the same starvation reaches `KEY` ordering on a **skewed** key
+  distribution.~~ **ESTABLISHED 2026-08-22, and it is worse than this note guessed** - see
+  [`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md). On a
+  Zipf distribution over 200 keys, `KEY` ordering sustains **1 record in flight of a configured 24**
+  and runs at a third of `UNORDERED` on the identical records, with a flat handler and no failures.
+  **It is not the buffer**: `messageBufferSize` was already 20,000, the fix this note prescribes.
+  It is that a hot key is a serial queue whatever the buffer holds, so the ceiling is set by the
+  busiest shard rather than by the fetch. `peak_in_flight` reads 24 throughout and cannot see it,
+  which is why the harness gained an `inflight_p50` column.
 - The direct-pull engine takes work from the shards itself and may not share this; unmeasured.
