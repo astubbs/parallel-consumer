@@ -29,7 +29,7 @@ esac
 # GraalVM. GRAALVM_HOME wins; otherwise look where sdkman puts it. Never fall back to the default
 # JDK - native-image would simply be absent and the error would point at the wrong thing.
 if [ -z "${GRAALVM_HOME:-}" ]; then
-    for candidate in "$HOME"/.sdkman/candidates/java/*-graal; do
+    for candidate in $(ls -d "$HOME"/.sdkman/candidates/java/*-graal 2>/dev/null | sort -Vr); do
         [ -x "$candidate/bin/native-image" ] && GRAALVM_HOME="$candidate" && break
     done
 fi
@@ -56,19 +56,22 @@ mkdir -p "$BUILD_DIR"
 # The proxy module's classes plus its full runtime classpath. Built with JDK 17.
 echo "==> resolving the proxy module's runtime classpath"
 CP_FILE="$BUILD_DIR/proxy-classpath.txt"
-JAVA_HOME="$JDK17" "$REPO_ROOT/mvnw" -q -pl parallel-consumer-proxy -am \
+(cd "$REPO_ROOT" && JAVA_HOME="$JDK17" ./mvnw -q -pl parallel-consumer-proxy -am \
     -DskipTests -Dcopyright.skip=true \
     package dependency:build-classpath "-Dmdep.outputFile=$CP_FILE" -Dmdep.includeScope=runtime \
-    >"$BUILD_DIR/maven.log" 2>&1 || { echo "maven failed; see $BUILD_DIR/maven.log" >&2; exit 1; }
+    >"$BUILD_DIR/maven.log" 2>&1) || { echo "maven failed; see $BUILD_DIR/maven.log" >&2; exit 1; }
 
 PROXY_CLASSES="$REPO_ROOT/parallel-consumer-proxy/target/classes"
-CLASSPATH="$PROXY_CLASSES:$(cat "$CP_FILE")"
+# Jabel (the Java 17 -> 8 bytecode plugin) is on the proxy's RUNTIME classpath, where it does not
+# belong. javac 23 auto-loads it as a compiler plugin and then crashes with a NoSuchFieldError, so
+# it is filtered rather than tolerated - and it has no business in a native image either.
+CLASSPATH="$PROXY_CLASSES:$(tr ':' '\n' < "$CP_FILE" | grep -v jabel | paste -sd: -)"
 
 # Compile the FFI entry points against that classpath, with GraalVM's own javac so the class file
 # version cannot outrun the native-image that has to read it.
 echo "==> compiling the FFI entry points"
 mkdir -p "$BUILD_DIR/classes"
-"$GRAALVM_HOME/bin/javac" -nowarn -d "$BUILD_DIR/classes" -cp "$CLASSPATH" "$FFI_DIR"/java/*.java
+"$GRAALVM_HOME/bin/javac" -nowarn -proc:none -d "$BUILD_DIR/classes" -cp "$CLASSPATH" "$FFI_DIR"/java/*.java
 
 case "$TARGET" in
     probe)   IMAGE_NAME="libpcffi" ;;
@@ -79,6 +82,11 @@ esac
 # --shared is what makes this a library rather than an executable. The build-time initialisation
 # list is inherited from the native sidecar's recipe, where every one of those entries was added to
 # fix a build that had actually failed - see docs/inflight/perf-native-image-sidecar-works.md.
+#
+# No reachability flag is passed: the proxy ships its captured metadata at
+# META-INF/native-image/reachability-metadata.json, which native-image discovers from the
+# classpath on its own. That capture came from a traced sidecar run and covers only the paths
+# that run walked.
 echo "==> native-image --shared ($IMAGE_NAME)"
 cd "$BUILD_DIR"
 "$GRAALVM_HOME/bin/native-image" \
@@ -87,7 +95,6 @@ cd "$BUILD_DIR"
     -cp "$BUILD_DIR/classes:$CLASSPATH" \
     --initialize-at-build-time=ch.qos.logback,org.slf4j,org.xml.sax,com.sun.org.apache.xerces,javax.xml \
     -H:Name="$IMAGE_NAME" \
-    -H:ConfigurationFileDirectories="$FFI_DIR/native-image-config" \
     2>&1 | tee "$BUILD_DIR/native-image-$TARGET.log"
 
 echo
