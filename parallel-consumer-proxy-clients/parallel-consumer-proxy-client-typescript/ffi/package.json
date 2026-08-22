@@ -1,0 +1,10 @@
+{
+  "name": "pc-ffi-probe",
+  "private": true,
+  "type": "module",
+  "description": "Probes for the embedded-engine C ABI from Node. Copyright (C) 2026 Antony Stubbs and contributors.",
+  "scripts": {
+    "build": "clang -O2 -shared -fPIC -undefined dynamic_lookup -DNAPI_VERSION=8 -DNODE_GYP_MODULE_NAME=pc_addon -I$(node -p \"path.join(path.dirname(path.dirname(process.execPath)),'include','node')\") -o pc_addon.node pc_addon.c -L$PC_EMBEDDED_LIBDIR -lpc -Wl,-rpath,$PC_EMBEDDED_LIBDIR",
+    "probe": "node probe_eventloop.mjs"
+  }
+}
