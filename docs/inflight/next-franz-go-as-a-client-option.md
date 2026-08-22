@@ -27,6 +27,51 @@ most points and beats it at two. See
 
 **The Go floor also reaches a concurrency of 5,000 exactly, where both Java arms plateau near 2,800.**
 
+## 2026-08-22: how much of this gap survives virtual threads? Nobody has checked, and it may be most of it
+
+**The floors above were measured on 2026-08-21, before virtual threads landed.** Re-reading them
+against today's numbers changes what they mean.
+
+**The in-flight column is the tell.** That table's own text notes the Go floor "reaches a concurrency
+of 5,000 exactly, where both Java arms plateau near 2,800". Today, on a completely different workload -
+100,000 records over ONE partition rather than 500,000 over ten - the shipped PC engine peaked at
+**2,841** in flight at the same operating point. The Java floor (`pool`, no engine at all) peaked at
+**2,848** yesterday.
+
+**Same ceiling, different days, different partition counts, with and without PC.** It was never a
+Parallel Consumer property and it is not a client property either: it is the platform-thread ceiling,
+documented in [`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md),
+and the bare thread-pool arm hits it exactly as hard.
+
+**The Go floor reached 5,000 because goroutines are not platform threads.** Today `core-vt` and
+`core-dpvt` both hold 5,000 - and 40,000 when asked for 40,000. **Java has since acquired the answer
+to the constraint that produced a large part of this gap**, and none of the numbers above were taken
+with it.
+
+### The measurement that must come before any FFI work
+
+Re-run **the Java floor with virtual threads** against the Go floor, at the **same 500,000 records and
+ten partitions** as the table above - the conditions matter, and mixing them with today's
+single-partition figures is exactly the like-for-like error this repository has already published
+once.
+
+- Whatever gap **survives** is genuine client efficiency - protocol implementation, allocation,
+  fetch pipelining - and is what an FFI bridge would actually buy.
+- Whatever **closes** was the thread model, and was never about Go.
+
+**Until that is run, the size of the prize is unknown**, and it is the only input that decides whether
+embedding a Go client is worth its cost. A separate note covers what that cost looks like:
+[`next-embedding-franz-go-via-ffi.md`](next-embedding-franz-go-via-ffi.md).
+
+### And one caveat on today's single-partition figures generally
+
+Everything measured on 2026-08-22 used **one partition**, and every arm converged on ~25,000 msg/s
+regardless of concurrency or engine. Against yesterday's ten-partition figures - the Java floor alone
+did 96,246 msg/s at 0ms - **that plateau is very likely a single-partition fetch ceiling rather than
+anything about the engine.** It was recorded as "something upstream of the engine bounds all of them,
+and no arm has been profiled at that operating point". This is the likeliest answer, and it is cheap
+to test: re-run one cell at ten partitions and see whether the plateau moves.
+
 ## The capability case is stronger than expected - and share groups are the reason
 
 **franz-go is the only Go client with KIP-932 share groups.** Kafka made them GA in 4.2.0 on
