@@ -13,10 +13,10 @@ no latency. What is specific to Python is in `demo/README.md` beside this file.
   process. Always spelled "AK core", never bare "core", which reads as `parallel-consumer-core`
   (`CONCEPTS.md`) - and always with the client that actually ran, because "AK core" is a category
   and Python has more than one client in it.
-* **pc-python-grpc (this client)** - this repository's Python client library, which spawns the sidecar
-  as a child process, receives records over a socket, runs the user's function in **worker
-  processes**, and reports outcomes back. **The application does no Kafka I/O on this path**: the
-  sidecar owns the consumer, the producer, the group membership and the offsets.
+* **pc-python-grpc (this client)** - this repository's Python client library, which spawns
+  the sidecar as a child process, receives records over a socket, runs the user's function in
+  **worker processes**, and reports outcomes back. **The application does no Kafka I/O on this
+  path**: the sidecar owns the consumer, the producer, the group membership and the offsets.
 
 The seed carries four more arms because one JVM can hold every engine at once. Python cannot, and
 a language whose only Kafka client is its own has nothing to compare a wrapper or a raw wire
@@ -51,7 +51,6 @@ import multiprocessing
 import os
 import pathlib
 import re
-import shutil
 import sys
 import time
 from multiprocessing.context import ForkContext, SpawnContext
@@ -62,6 +61,7 @@ from typing import Any
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import demo_kafka
+from demo_jvm import java_binary
 import demo_options
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
@@ -475,24 +475,6 @@ def resolve_sidecar() -> SidecarCommand:
             "second one for you - run that instead.")
     return SidecarCommand(executable=pathlib.Path(java_binary()),
                           args=("-cp", classpath, SIDECAR_MAIN))
-
-
-def java_binary() -> str:
-    """The JVM to run the sidecar with. ``JAVA_HOME`` wins, as it does everywhere else here."""
-    explicit = os.environ.get("PC_DEMO_JAVA")
-    if explicit:
-        return explicit
-    java_home = os.environ.get("JAVA_HOME")
-    if java_home:
-        candidate = pathlib.Path(java_home) / "bin" / "java"
-        if candidate.is_file():
-            return str(candidate)
-    found = shutil.which("java")
-    if found is None:
-        raise FileNotFoundError(
-            "no java found for the sidecar: set JAVA_HOME, PC_DEMO_JAVA, or put a JDK 17 java on "
-            "PATH")
-    return found
 
 
 def duration(milliseconds: int) -> str:

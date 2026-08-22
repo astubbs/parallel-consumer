@@ -17,8 +17,10 @@ from ._session import (
     StreamsTransport,
     TopologyBuilder,
 )
+from ._transport import GrpcStreamsTransport
 
 __all__ = [
+    "GrpcStreamsTransport",
     "RecordFunction",
     "StreamsError",
     "StreamsSession",

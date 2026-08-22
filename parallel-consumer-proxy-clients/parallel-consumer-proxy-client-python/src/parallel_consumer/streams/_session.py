@@ -83,6 +83,7 @@ class StreamsSession:
         self._handles: dict[int, int] = {}
         self._ready = threading.Event()
         self._fault: str | None = None
+        self._closing = False
         self._lock = threading.Lock()
         self._reader: threading.Thread | None = None
 
@@ -107,6 +108,12 @@ class StreamsSession:
         self._transport.send(pb.StreamsClientMessage(describe_complete=pb.DescribeComplete()))
 
     def close(self) -> None:
+        """Ends the session. Sets the closing flag first, so the reader knows what it is seeing.
+
+        Order matters: closing the transport breaks the response stream, and a reader that learned
+        about the close afterwards would report the breakage as an engine fault.
+        """
+        self._closing = True
         self._transport.close()
 
     # ---- function registry -------------------------------------------------------
@@ -150,7 +157,10 @@ class StreamsSession:
                 else:
                     self._on_fault(f"the engine sent {kind}, which this client does not handle")
         except Exception as broken:
-            self._on_fault(str(broken))
+            # A transport that breaks because we closed it is not a fault, it is the close. Only a
+            # break we did not ask for says something went wrong.
+            if not self._closing:
+                self._on_fault(str(broken))
 
     def _on_handle(self, assigned: pb.HandleAssigned) -> None:
         with self._lock:

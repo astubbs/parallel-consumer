@@ -158,14 +158,87 @@ The sidecar is **not a compose service**, deliberately: the client library spawn
 so the user never installs, deploys or operates a process (KTD41). A compose service would show a
 deployment the product does not ask for.
 
+## A separate demo: Kafka Streams, described from Python
+
+Not a third row in the table above - a different proof, with its own engine module and its
+own protocol. It is run by the same script and shares the same broker and seeding.
+
+```bash
+# a topology built from Python, running in a JVM Streams engine
+demo/run.sh --streams --native
+```
+
+**Experimental, and opt-in for that reason.** It speaks a different protocol from the one above -
+`streams.proto`, versioned `v1alpha1` - which may change or disappear. The comparison demo's wire is
+frozen; this one is not, and they are kept apart so that stays true.
+
+What it does: Python names a source topic, a value transform, a group-by-key and a count, and the
+engine assembles a real `StreamsBuilder` from those calls. When a record reaches the transform, the
+engine calls **back into Python** and blocks its stream thread until Python answers. The topology
+runs in the JVM; the per-record function never leaves this process.
+
+Nothing of the user's code crosses the boundary. `register()` files the callable in a local dict and
+sends only an integer token; the engine names the token when it wants an answer. That is what makes
+the same design work over a socket today and over a C ABI later - neither side needs the other's
+address space.
+
+### What it proves, and what it does not
+
+It proves that a language with **no Kafka Streams implementation of its own** can describe and run
+one. That is the whole claim.
+
+It makes no speed claim, and the figures it prints are deliberately framed as within-session: they
+exist to show where the time goes, not to compare against anything. On the machine this was written
+on, a round trip is a few hundred microseconds and the Python function itself is a rounding error
+inside it - which is the useful finding, because it says the boundary is the cost, not the language.
+
+### Reading the counts
+
+The counts are **checked**, not displayed: the demo knows exactly what it seeded, so it compares.
+
+A count is a KTable changelog, so the sink topic carries every intermediate value per key - a key
+whose final count is 12 also carries 1 through 11 ahead of it. The demo reads the sink
+**last-value-per-key**. Summing the topic instead would report 78 for that key and call a correct
+run broken.
+
+It also watches the engine's consumer group *throughout* the run rather than once at the end,
+because a rebalance is a transient: a single-member group that gets evicted rejoins within a second
+and reads `STABLE` again. Sampling only at the finish would pronounce a run rebalance-free and say
+exactly the same thing about a run that had rebalanced twice in the middle. Samples taken while the
+engine is still joining are excluded - that is the engine arriving, not a rebalance.
+
+### The failure arm
+
+```bash
+# make the Python transform slow, and watch what breaks
+demo/run.sh --streams --native --records 300 --function-delay-ms 300 --timeout 45
+```
+
+This arm exists to show that a slow foreign function fails **visibly**. It was written expecting the
+engine to blow through `max.poll.interval.ms` and be evicted from its group. It is not what happens:
+Kafka Streams interleaves its polling and keeps its membership, and the real symptom is that
+throughput collapses to a few records a second and the run does not finish. The arm reports what it
+actually observed rather than the prediction.
+
+The one thing it never tolerates is a **wrong** count. Missing counts mean the run did not finish;
+a wrong count would mean something counted incorrectly, and that fails loudly in either arm.
+
+### There is no container path for this arm
+
+`--streams --docker` is refused rather than ignored, because the demo image's entrypoint is the
+comparison demo - a container run would build, start and report the wrong demo while looking like it
+had honoured the flag.
+
 ## The files
 
 | file | what it is |
 |---|---|
-| [`run.sh`](run.sh) | The entry point. Same flags as the seed, plus `--docker` / `--native`. |
+| [`run.sh`](run.sh) | The entry point. Same flags as the seed, plus `--docker` / `--native` and `--streams`. |
 | [`reference_demo.py`](reference_demo.py) | The arms, the timing and the two tables. |
 | [`demo_options.py`](demo_options.py) | The flags, the environment variables and the precedence between them. |
 | [`demo_kafka.py`](demo_kafka.py) | The topic, the seeded backlog, and the properties both arms' consumers use. |
+| [`demo_jvm.py`](demo_jvm.py) | Finding the JVM. Shared, so the two demos cannot disagree about which one they ran on. |
+| [`streams_demo.py`](streams_demo.py) | The Kafka Streams arm: the topology, the Python transform, and the count check. |
 | [`Dockerfile`](Dockerfile) | A JDK base with a Python interpreter added - two toolchains, because the application is Python and the sidecar is a JVM. |
 | [`docker-compose.yml`](docker-compose.yml) | The demo and its broker sibling. Also the broker the native path uses. |
 

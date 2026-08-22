@@ -191,3 +191,62 @@ def test_a_fault_surfaces_to_the_caller_rather_than_hanging() -> None:
     with pytest.raises(StreamsError, match="4242"):
         session.builder().source("in")
     engine.close()
+
+
+class BreakingEngine(FakeEngine):
+    """An engine whose response stream *raises* when it ends, the way a cancelled gRPC call does.
+
+    The base fake ends its iterator cleanly, which is the one shape that cannot reproduce the bug
+    this pair of tests covers: a clean end is silent either way.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.breakage = RuntimeError("Stream removed (Channel closed!)")
+
+    def responses(self) -> Iterator[pb.StreamsServerMessage]:
+        while True:
+            message = self._outbound.get()
+            if message is None:
+                raise self.breakage
+            yield message
+
+    def break_unasked(self) -> None:
+        """Breaks the stream without the client having asked for it."""
+        self._outbound.put(None)
+
+
+def _await_reader_exit(session: StreamsSession, timeout: float = 5.0) -> None:
+    reader = session._reader
+    assert reader is not None
+    reader.join(timeout)
+    assert not reader.is_alive(), "the reader thread did not exit"
+
+
+def test_closing_the_session_is_not_reported_as_a_fault() -> None:
+    """A deliberate close breaks the stream; that is the close, not an engine failure.
+
+    Without this the demo printed a CANCELLED error on every clean shutdown, which trains a reader
+    to ignore the one channel that would carry a real failure.
+    """
+    engine = BreakingEngine()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    session.close()
+    _await_reader_exit(session)
+
+    assert session._fault is None
+
+
+def test_a_stream_that_breaks_on_its_own_is_still_reported_as_a_fault() -> None:
+    """The other half: silence must be bought by the close, not by the exception handler."""
+    engine = BreakingEngine()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    engine.break_unasked()
+    _await_reader_exit(session)
+
+    assert session._fault is not None
+    assert "Channel closed" in session._fault
