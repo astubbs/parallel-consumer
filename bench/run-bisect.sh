@@ -361,17 +361,37 @@ serial_projection_seconds() { echo $(( RECORDS * $1 / 1000 )); }
 #
 # Returns 124 on expiry, the same code GNU `timeout` uses, so a caller can tell a timeout from a
 # failure.
+#
+# THE DEADLINE DID NOT ACTUALLY KILL ANYTHING, until 2026-08-22, and the failure is silent in the
+# worst possible way: the row is recorded as RUN_TIMEOUT and the JVM CARRIES ON RUNNING. It keeps its
+# consumer group, its broker connections and a core's worth of CPU, and the next arm is measured
+# alongside it. A sweep that timed out twice was measuring three concurrent runs by its third cell.
+#
+# The old code did `kill -TERM $pid; sleep 2; kill -KILL $pid; pkill -KILL -P $pid`. $pid is the
+# backgrounded SUBSHELL; the JVM is its child. TERM kills the subshell first, the JVM is reparented
+# to init, and `pkill -P $pid` then looks for the children of a process that no longer exists and
+# finds none. The one line written to fix exactly this problem could not work, because it ran after
+# the thing that made it impossible.
+#
+# So descendants are collected and killed BOTTOM-UP, before the parent, while the parent tree still
+# exists to be walked.
+kill_tree() {
+  local parent=$1 child
+  for child in $(pgrep -P "$parent" 2>/dev/null); do
+    kill_tree "$child" "$2"
+  done
+  kill "-$2" "$parent" 2>/dev/null
+}
+
 run_with_deadline() {
   local secs=$1; shift
   "$@" &
   local pid=$! waited=0
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$waited" -ge "$secs" ]; then
-      kill -TERM "$pid" 2>/dev/null
+      kill_tree "$pid" TERM
       sleep 2
-      kill -KILL "$pid" 2>/dev/null
-      # the JVM is a grandchild of this shell, so killing the subshell is not enough
-      pkill -KILL -P "$pid" 2>/dev/null
+      kill_tree "$pid" KILL
       return 124
     fi
     sleep 1
@@ -604,9 +624,27 @@ arrival_mode() { [ -n "$ARRIVAL_RATES" ]; }
 # half-way should not leave a hundred topics behind, and the delete costs a second outside any
 # measured window.
 fresh_topic_name() { echo "bench-arr-$$-$1"; }
+
+# WAITS FOR THE DELETION, because `--delete` returns before the broker has finished.
+#
+# A topic recreated under a name the broker is still tearing down comes back
+# OUT_OF_ORDER_SEQUENCE_NUMBER on the next produce, and the idempotent producer's default retry count
+# is Integer.MAX_VALUE - so the produce does not fail, it retries forever on two partitions while the
+# other twenty-two succeed, leaving a topic that is short by a few thousand records and a harness that
+# hangs. Bench#applyBoundedDelivery makes that failure loud; this makes it not happen.
+#
+# The names this harness generates are unique per run, so the window is narrow - but a caller
+# re-running a sweep with the same BENCH_TOPIC hits it head on, which is exactly how it was found.
 delete_topic() {
   docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server "localhost:$BROKER_PORT" --delete --topic "$1" >/dev/null 2>&1
+  local waited=0
+  while docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server "localhost:$BROKER_PORT" --list 2>/dev/null | grep -qx "$1"; do
+    sleep 1
+    waited=$((waited + 1))
+    [ "$waited" -ge 30 ] && { log "WARNING: $1 still present ${waited}s after delete"; return 1; }
+  done
 }
 
 # THE LOCAL BUILD'S IDENTITY, as a column.
@@ -656,6 +694,33 @@ else
   fi
   log "produced $RECORDS records into $TOPIC"
 fi
+
+# THE TOPIC MUST ACTUALLY HOLD THE RECORDS THE ARMS WILL WAIT FOR.
+#
+# Every consumer arm here waits for a FIXED COUNT - `while (responses.get() < expected)` in runCore,
+# and the same shape in every other arm. Hand it a topic holding fewer records than that and it waits
+# FOREVER, at near-zero CPU, with nothing logged. On 2026-08-22 a topic holding 17,806 of the 20,000
+# its name claimed cost twenty-five minutes before anyone thought to count the offsets, and it was
+# only visible at all because the run deadline was ALSO not killing anything (see run_with_deadline).
+#
+# It is checked rather than trusted because the commonest way in is BENCH_SKIP_PRODUCE=1, whose whole
+# purpose is to assert a fact about a topic that nothing then verifies. One Admin call converts an
+# indefinite hang into a sentence.
+verify_topic_depth() {
+  local topic=$1 want=$2 have
+  have=$(docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-get-offsets.sh \
+           --bootstrap-server "localhost:$BROKER_PORT" --topic "$topic" 2>/dev/null |
+         awk -F: '{s += $3} END {print s + 0}')
+  if [ -z "$have" ] || [ "$have" -lt "$want" ]; then
+    log "FATAL: $topic holds ${have:-0} records, and every arm here waits for exactly $want."
+    log "       An arm handed a short topic does not fail - it waits forever at no CPU, and the row"
+    log "       comes back as a timeout, which reads as a slow arm rather than a missing dataset."
+    log "       Re-produce it, or lower the record count to what the topic actually has."
+    exit 1
+  fi
+  log "$topic holds $have records (>= $want)"
+}
+arrival_mode || verify_topic_depth "$TOPIC" "$RECORDS"
 
 # delay_ms and concurrency are columns because both are now swept axes; without them a multi-delay
 # or multi-concurrency results file cannot be read back. Everything else is unchanged, so llingr,

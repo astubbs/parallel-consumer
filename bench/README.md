@@ -46,9 +46,70 @@ BENCH_WORK=/some/dir bench/run-bisect.sh     # keep resolved classpaths between 
 BENCH_SKIP_PRODUCE=1 bench/run-bisect.sh     # topic already holds the dataset; don't re-produce
 ```
 
-`MODES`, `DELAYS` and `CONCURRENCIES` are lists, so one invocation produces a whole comparison
-table - the full cross product of the three. `MODE` and the positional `delayMs` and `concurrency`
-still work and now just mean a list of one.
+`MODES`, `DELAYS`, `CONCURRENCIES`, `ORDERINGS` and `ARRIVAL_RATES` are lists, so one invocation
+produces a whole comparison table - the full cross product of the five. `MODE`, `BENCH_ORDERING` and
+the positional `delayMs` and `concurrency` still work and now just mean a list of one.
+
+### Controlled arrival - `ARRIVAL_RATES`, and why every latency figure before it was unusable
+
+```sh
+ARRIVAL_RATES="400 560 720" ORDERINGS="KEY PARTITION" MODES=core \
+  BENCH_KEY_DISTRIBUTION=zipf BENCH_KEY_COUNT=200 BENCH_DELAY_P99=1020 \
+  bench/run-bisect.sh 15000 20 24 2
+```
+
+**Every run this harness does by default drains a backlog produced before the window opened.**
+Residence time is then buffered depth over throughput, so two arms with the same buffer and the same
+throughput ceiling have equal residence *by construction*. That is not a subtle bias: `PARTITION` and
+`KEY` at 24 in flight over 24 partitions, with the handler's p99 at 50x its median, came back at
+residence p99 **15,568ms against 15,565ms**. The experiment could not have shown a difference had one
+existed.
+
+`ARRIVAL_RATES` feeds records **during** the measured window at a fixed rate, into a **topic created
+for that run**, so the consumer starts with nothing queued and residence measures the engine rather
+than the queue. It is a list because at 100% utilisation every queueing system measures its backlog -
+sweep it as a fraction of the arm's own measured throughput (50%, 70%, 90%) and the percentiles turn
+up somewhere in between.
+
+- **The schedule is absolute** - record *i* is due at `t0 + i / rate`, not "the last send plus an
+  interval" - so producer jitter cannot silently lower the arrival rate.
+- **`t0` is when the consumer is demonstrably live.** `BENCH_ARRIVAL_WARMUP` records go first and the
+  clock starts when the arm reports finishing one, so a slow group join is not fed into the arm as a
+  backlog.
+- **A run whose feed could not hold its schedule is VOIDED**, as `ARRIVAL_VOID`, not recorded. If the
+  producer is the bottleneck the whole run measures the producer, and its percentiles answer a
+  different question than the one in the column heading. `arrival_achieved`, `feed_lag_p99_ms` and
+  `backlog_p99` are the evidence, on every row, that it was not.
+- **`msg_per_sec` stops being a throughput measure** under controlled arrival. It is bounded by the
+  arrival rate by construction, and the run's wall clock includes the group join. Read it only as a
+  check that the arm kept up.
+
+**A fresh topic, rather than starting an existing one at `latest`.** The reset is applied at
+*assignment*, so a record produced between subscribe and assignment is silently skipped, the arm
+never reaches its expected count, and the row comes back as a timeout - which reads as a slow arm. A
+fresh topic with the harness's usual `earliest` turns that race into a harmless ordering.
+
+### Key distribution - `BENCH_KEY_DISTRIBUTION`, the axis that makes `KEY` ordering mean something
+
+| Value | What it produces |
+|---|---|
+| `distinct` (default) | `key-0`, `key-1`, ... - one key per record. Today's behaviour, byte for byte |
+| `zipf` | Zipf over `BENCH_KEY_COUNT` keys (default 1,000) with exponent `BENCH_ZIPF_EXPONENT` (default 1.0) |
+| `hot` | uniform over `BENCH_KEY_COUNT` keys - a bounded key set with **no** skew, the control that separates "few keys" from "unevenly used keys" |
+
+**All-distinct keys is the best possible case for any key-sharded design**, and it was the only one
+this harness could produce. A shard under `KEY` ordering is one key; with every key distinct, every
+record is its own shard of exactly one entry, so the ordering constraint binds nothing and `KEY`
+behaves precisely like `UNORDERED`. That is why the two have matched in every table here - **the
+project had never tested key ordering, it had tested `UNORDERED` wearing its name.**
+
+Seeded from `BENCH_WORK_SEED` by a single-threaded loop, so the key for record *i* depends only on
+*i* and every arm, repeat and sweep sees the identical key sequence. The producing run prints a
+`KEYDIST` receipt line - distinct keys, top-key share, top-ten share - because a skew that was
+requested and silently not applied looks exactly like a skew that was applied and did nothing.
+
+The distribution is part of the **topic name**, for the same reason the partition count is: two
+datasets differing only in their keys must never share a topic.
 
 Concurrency became an axis for the same reason delay did, and the finding that forced it is worth
 knowing before you use it: at delay 0 llingr beat PC while holding **two or three** records in
@@ -77,7 +138,7 @@ value into it that nobody measured. `curve.csv`, `core-curve.csv` and `matched-c
 predate `delay_ms` and were all taken at 2ms; `delay-sweep-llingr.csv` predates `concurrency` and
 was taken at 100.
 
-### The two latency columns, which are not two views of one thing
+### The three latency columns, which are not three views of one thing
 
 Until 2026-08-22 this harness measured throughput and nothing else, which is exactly the number a
 serial engine can hide behind: a run finishing in the same wall clock can have put one record in a
@@ -122,8 +183,32 @@ p50 of **4.98ms**, having silently forgotten all of them, while the meter's coun
 Without the filter, any run longer than Micrometer's rotation would publish percentiles for its tail
 alone, with nothing anywhere saying so. With it, the same probe reported 1,006ms.
 
+**`e2e_p50_ms` / `p99` / `p999` / `max` - the record's INTENDED send instant to completion.** Only
+populated under `ARRIVAL_RATES`, because only then does a record have an arrival instant at all.
+
+**It is the one measure coordinated omission cannot fool, and that is why it exists.** Residence
+starts at poll-return, so a record that sat in the broker because the consumer had fallen behind is
+charged **nothing** for the wait - under an arrival sweep that is precisely the failure mode that
+would make a saturated arm look fast, which is the same shape of false negative the backlog drain
+produced before controlled arrival existed. Each record carries its own scheduled send time in its
+value, so the measurement starts from the instant the workload *intended* to hand it over, not from
+whenever the producer managed to. It therefore also charges the feeder's own lateness, which is why
+`feed_lag_p99_ms` is gated and a late feed voids the run.
+
 **Read `p999` and `max`, not the mean.** Head-of-line blocking shows up in the upper percentiles long
 before it shows up anywhere else, which is the entire reason these columns exist.
+
+### `pc_build` - `LOCAL` names a coordinate, not a build
+
+`PC_VERSIONS=LOCAL` resolves to `bz.stub.parallelconsumer:*:0.6.0.0-SNAPSHOT` out of a `~/.m2` that
+every worktree and every concurrent session on the machine shares. Whoever ran `mvn install` most
+recently owns it, and a sweep already in progress picks the change up at its next JVM start. On
+2026-08-22 that happened twice in one evening and put four rows in a results file measured against
+code their author had never seen; `pc_version` read `LOCAL` for every row and identified nothing.
+
+`pc_build` carries the core jar's checksum, taken **before and after every run**, so a swap that
+happens mid-cell voids that cell as `BUILD_CHANGED_<before>_TO_<after>` rather than being averaged
+into it. Two rows that disagree are visibly two experiments instead of two repeats.
 
 ### Results in this directory
 

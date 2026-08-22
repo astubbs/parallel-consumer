@@ -672,6 +672,7 @@ public class Bench {
         p.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         p.put("linger.ms", "50");
         p.put("batch.size", "65536");
+        applyBoundedDelivery(p);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
         // The key sequence, not "key-" + i. Identical output when BENCH_KEY_DISTRIBUTION is unset,
         // which is why every pre-produced dataset this harness has ever made still reproduces.
@@ -686,6 +687,34 @@ public class Bench {
         }
         for (Future<RecordMetadata> f : sends) f.get();
         if (n > 0) reportKeyDistribution(keyCounts, n);
+    }
+
+    /**
+     * BOUNDS EVERY PRODUCE THIS HARNESS DOES, and turns an unbounded retry into a loud failure.
+     * <p>
+     * <b>The producer is idempotent by default</b> (Kafka 3.0+), which sets {@code acks=all} and makes
+     * the broker track a per-partition sequence number. Recreate a topic under a name the broker still
+     * holds producer state for - which is what deleting and re-producing a bench dataset does - and
+     * the next send comes back {@code OUT_OF_ORDER_SEQUENCE_NUMBER}. The default retry count is
+     * {@code Integer.MAX_VALUE}, so the client retries **two billion times**, silently, on stderr
+     * nobody reads.
+     * <p>
+     * <b>What that cost on 2026-08-22.</b> Two of twenty-four partitions were stuck in that loop while
+     * the other twenty-two produced fine. The produce never returned, the topic was left holding
+     * 17,806 of the 20,000 records its name claimed, and every consumer arm afterwards waited forever
+     * for a count the topic could not supply - at near-zero CPU, with nothing logged. Twenty-five
+     * minutes, and the visible symptom was "the benchmark hangs".
+     * <p>
+     * Idempotence buys this harness nothing: the dataset is written once, by one producer, and no arm
+     * cares whether a record was written twice. What it costs is an unbounded failure mode. So it is
+     * off, {@code acks=1}, and delivery is bounded - a send that cannot be delivered inside the
+     * timeout throws out of {@code f.get()} and fails the produce, which is the outcome that can be
+     * acted on.
+     */
+    static void applyBoundedDelivery(Properties p) {
+        p.put("enable.idempotence", "false");
+        p.put("acks", "1");
+        p.put("delivery.timeout.ms", System.getenv().getOrDefault("BENCH_DELIVERY_TIMEOUT_MS", "30000"));
     }
 
     static Properties consumerProps(String bootstrap) {
@@ -1008,8 +1037,11 @@ public class Bench {
             // accumulator waiting for a batch to fill. The pre-produced path keeps its linger of 50,
             // because there the only thing that matters is finishing.
             p.put("linger.ms", "0");
-            p.put("acks", "1");
             p.put("max.block.ms", "10000");
+            // Same bound as the pre-produced path, and it matters more here: a feeder stuck in an
+            // unbounded retry does not merely fail, it silently stops being the arrival schedule the
+            // run is claiming to have measured.
+            applyBoundedDelivery(p);
             KeySequence keys = newKeySequence();
             Map<String, Integer> keyCounts = new HashMap<>();
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(p)) {
