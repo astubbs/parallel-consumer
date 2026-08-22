@@ -353,6 +353,32 @@ distinguishes flaky from deterministic - and AGENTS.md's ban is on the automatic
 `surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job to learn
 something.
 
+#### 2026-08-22, `CoreBatchTest` under `-Dpc.directPull=true` - and this one has a cause, which settles the "two readings" above for the direct-pull engine at least
+
+Same alias, same 30-second timeout, same helper, and **the same `Expected size: 3 but was: 4`**. This
+sighting names what produced it: the batches were `[0,2] [4] [3] [1]`, so **all five records were
+delivered exactly once, no batch exceeded the batch size of two, and four workers did the selecting
+where the test assumes one.** `BatchTestMethods.simpleBatchTest` computes
+`ceil(numRecsExpected / batchSize)`, which is only the number of batches when a single selector fills
+each one - true of the shipped engine's control loop, never true of direct pull.
+
+**So on the direct-pull engine this is the third instance of a known class**, not a new mystery:
+`perf-direct-pull-measured.md` already records two tests asserting dispatch granularity that direct
+pull does not provide. It is not a lost-work failure and not a batcher defect.
+
+**It says nothing about the 2026-08-18 and 2026-08-19 sightings**, which were on the default engine
+where one thread does select every batch - the "contention versus product" split above still stands
+for those, and this does not close it.
+
+**Rates, because the change that surfaced it had to be ruled in or out.** `ShardOccupancy` (unheld-offset
+index for `UNORDERED` dispatch) makes concurrent selection genuinely concurrent, and it moved this from
+never-seen to every-run. Full core unit suite, twelve cores, one-minute load 5-9: direct pull **before**
+the change, 5 runs, one failure every time and always the deterministic
+`SubmitWorkToPoolShutdownRaceTest` one; direct pull **after**, 3 runs, that failure plus one more every
+time (`simpleBatchTest` twice, `inFlightMessagesCommittedIfProcessedDuringShutdown` once). **0 of 5
+against 3 of 3 is attributable, and it is attributed**, which is the only reason this sighting is worth
+more than a shrug.
+
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
 Seen 2026-08-12 on astubbs#287, a PR whose diff contained **no Java at all** - which is what settles

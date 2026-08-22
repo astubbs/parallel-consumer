@@ -207,17 +207,21 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private final AtomicReference<ExecutionState> state = new AtomicReference<>(ExecutionState.AVAILABLE);
 
     /**
-     * The in-flight meter of the shard holding this record, charged when a delivery is claimed and released when
+     * The occupancy record of the shard holding this record, charged when a delivery is claimed and released when
      * that delivery lands - so the charge and its release are the two halves of one state transition and cannot
      * drift apart. Null only for a container that never entered a shard, which in production cannot happen and in
      * tests is common.
      * <p>
      * Written once, by {@link ProcessingShard#addWorkContainer}, before the container is published into the shard's
      * entry map - so every thread that can reach this container through the map has already seen the write.
+     * <p>
+     * It carries the shard's index of unheld offsets as well as its in-flight count, deliberately: both are
+     * derived from exactly this transition, and giving them one owner is what keeps the index from becoming a
+     * second thing that has to be remembered about. See {@link ShardOccupancy}.
      *
      * @see ProcessingShard#getCountOfWorkInFlight()
      */
-    private LongAdder shardInFlightMeter;
+    private ShardOccupancy shardOccupancy;
 
     /**
      * Counts deliveries of this record. Incremented every time it is queued for execution, so each delivery has
@@ -423,16 +427,16 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     private void chargeShardInFlight() {
-        LongAdder meter = shardInFlightMeter;
-        if (meter != null) {
-            meter.increment();
+        ShardOccupancy occupancy = shardOccupancy;
+        if (occupancy != null) {
+            occupancy.onFlightBegan(offset());
         }
     }
 
     private void releaseShardInFlightCharge() {
-        LongAdder meter = shardInFlightMeter;
-        if (meter != null) {
-            meter.decrement();
+        ShardOccupancy occupancy = shardOccupancy;
+        if (occupancy != null) {
+            occupancy.onFlightEnded(offset());
         }
     }
 
@@ -440,8 +444,8 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * Called by the shard as it takes ownership of this record, before the container is published into the shard's
      * entry map.
      */
-    void onAdmittedToShard(LongAdder shardInFlightMeter) {
-        this.shardInFlightMeter = shardInFlightMeter;
+    void onAdmittedToShard(ShardOccupancy shardOccupancy) {
+        this.shardOccupancy = shardOccupancy;
     }
 
     /**

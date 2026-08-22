@@ -74,6 +74,25 @@ deleted. If it buys something, it becomes a candidate rather than a curiosity.
 **Do not re-derive the counts by timing.** Read them off `DispatchScanMeter`; the whole point is that
 they are deterministic.
 
+## Answered, 2026-08-22: the prediction above held exactly, in the engine it was made about
+
+**"The cost scales with `maxConcurrency`" is now a measured coefficient, not an expectation: one
+examination per in-flight record per shard.** With a single scanner, and therefore no claim contention
+of any kind, examinations per record dispatched went 1.00 at ten records in flight to **440.13 at five
+thousand**. That is the whole shape of the direct-pull engine's collapse, and it exists with nothing to
+contend over. `ShardOccupancy` removes it: the same arm now costs 1.00, and 5,000 workers against
+5,000 in flight cost 1.60 where they cost 1,621.89.
+
+**The qualifier at the top of this note is what turned out to matter most.** In-flight is bounded by
+`maxConcurrency`, not by the topic, so the cost only becomes real when `maxConcurrency` is large *and*
+something is actually paying it per record. The shipped engine is not: it amortises the walk across a
+batch on one thread, which is why three separate attempts to remove it all returned 0% end to end and
+why those results are still correct. **A cost that does not matter in one engine is not a cost that
+does not matter.**
+
+Full measurement, the control arm that separates the walk from claim contention, and the open
+end-to-end question: [`perf-direct-pull-collapse-is-the-scan.md`](perf-direct-pull-collapse-is-the-scan.md).
+
 ## Not a defect - and this is the part that gets forgotten
 
 In-flight records remaining in the shard is **how ordering is enforced**. The scan has to see them to

@@ -162,6 +162,34 @@ N takers against a shard queue, and see where it bends.
 keys; today's `LoopingResumingIterator` walks in shard-map order, which is an accident of iteration
 rather than a policy. That is a behaviour change worth stating in a release note if it lands.
 
+## What the contention measurement decided, 2026-08-22 - the trap above is the whole of it
+
+The direct-pull collapse has been measured with the two mechanisms separated, and **cause 1 is almost
+all of it**. With a **single scanner**, where claim contention cannot exist, examinations per record
+dispatched go from 1.00 at ten in flight to **440.13 at five thousand**; adding scanners at a fixed
+depth of 1,000 moves the count by under 10% between one scanner and a hundred. Full numbers:
+[`perf-direct-pull-collapse-is-the-scan.md`](perf-direct-pull-collapse-is-the-scan.md).
+
+**That does not shrink this proposal, but it does relocate its value, and the section above already
+said where.** The measured collapse is `UNORDERED`, this design deliberately leaves `UNORDERED`
+shards in the queue, and `ShardOccupancy` has since removed the walk for that mode - so the two do
+not compete, and neither supersedes the other. What is left for the shard queue is the ordered modes,
+where **it is not the walk it saves**: an ordered shard costs one examination whether it yields or
+not, and a shard already holding a record out is skipped in O(1) by `isBlockedByWorkInFlight()`
+without examining anything at all.
+
+**The cost it removes is the cost of VISITING shards that cannot yield** - `LoopingResumingIterator`
+walks the shard map, so with a hundred thousand keys and most shards occupied, a taker touches many
+shards to find one that will hand something over. That is a real cost and it is a different quantity
+from the one this session measured.
+
+**And `DispatchScanMeter` cannot see it**, which is the trap for whoever builds this: it counts
+entries examined *inside* a shard, and the busy-shard guard skips an occupied ordered shard without
+examining an entry. So the number that would justify or refute this proposal does not currently
+exist. **Building it means adding a shards-visited counter first** - one increment in
+`ShardManager#getWorkIfAvailable`'s loop, the same shape and for the same reason as the meter that
+settled `UNORDERED`.
+
 See also: [`next-pre-rendered-work-order-list.md`](next-pre-rendered-work-order-list.md),
 [`next-starvation-is-the-signal-not-queue-depth.md`](next-starvation-is-the-signal-not-queue-depth.md),
 [`perf-unordered-dispatch-rescans-the-inflight-prefix.md`](perf-unordered-dispatch-rescans-the-inflight-prefix.md).

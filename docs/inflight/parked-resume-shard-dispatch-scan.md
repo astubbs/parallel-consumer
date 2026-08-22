@@ -150,6 +150,28 @@ against the same question and the low-delay runs above explain why they must all
 is O(in-flight), and in-flight is bounded well below where it hurts by the Kafka client. A third
 mechanism removes the same cost the other two removed.
 
+### Built after all, 2026-08-22 - and the "already known" answer was known about the wrong engine
+
+`ShardOccupancy` is this design: one ordered collection as the base, untouched, plus an index of what
+is not in flight that **only the `UNORDERED` dispatch path consults**. Both cautions above were
+correct and both were designed for - the index means "not in flight" rather than "takeable now", and it
+sits alongside `availableWorkContainerCnt` rather than replacing it, because that counter is read on
+the broker-poll hot path and a set's `size()` is O(n). **Collapsing the two is still the real design
+work and is still not done.**
+
+**What changed is not the reasoning, it is which engine the reasoning was about.** Everything in this
+note about the shipped engine still holds: the walk is O(in-flight), in-flight is bounded by the Kafka
+client well below where it hurts, and three mechanisms all returned zero end to end. The direct-pull
+engine breaks the bound's premise - it pays the walk once per record on every worker instead of once
+per batch on one thread - and there the same walk costs **440 examinations per record dispatched at
+5,000 in flight, measured with a single scanner so that claim contention is not in the answer.** With
+the index it is 1.00.
+
+The restart conditions listed below were therefore met by the second one: *an operating point where
+in-flight per shard is far larger than anything tested*. Measurement, control arm and the open
+end-to-end question:
+[`perf-direct-pull-collapse-is-the-scan.md`](perf-direct-pull-collapse-is-the-scan.md).
+
 **Two things to know if it is ever built:**
 
 - **The index means "not in flight", not "takeable now".** A record whose retry delay has not elapsed

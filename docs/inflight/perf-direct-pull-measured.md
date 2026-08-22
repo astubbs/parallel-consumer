@@ -240,6 +240,13 @@ concurrency 5,000 with a zero-cost handler, which is scanning, not blocking.
   viable on this shard representation, and the measurement here does not say a direct-pull engine on a
   different one would be slow.** That is the experiment worth running next, and it is a bigger change
   than this one.
+
+  **Implemented 2026-08-22 as `ShardOccupancy`, and the prediction in the section above was confirmed
+  in isolation from the other candidate.** Dispatch work per record dispatched is now flat in
+  concurrency: 1.00 examinations at 5,000 in flight against 440.13 before, with a **single scanner**,
+  which is the arm that rules out claim contention as the explanation. **The throughput table in this
+  note has NOT been re-run** - it is exactly the experiment this section asks for and it is still open.
+  See [`perf-direct-pull-collapse-is-the-scan.md`](perf-direct-pull-collapse-is-the-scan.md).
 - **Batched claims are not implemented.** A worker could claim K records per scan and process them one
   at a time, amortising the walk the same way the control loop does. Deliberately left out: claiming K
   marks K records in flight at once, so peak in-flight and the meaning of `maxConcurrency` both change,
