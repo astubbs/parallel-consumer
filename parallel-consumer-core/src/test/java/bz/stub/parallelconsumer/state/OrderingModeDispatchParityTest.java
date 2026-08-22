@@ -51,13 +51,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * loaded machine and an idle one - so this test no longer has a timing budget, a warm-up, or a tolerance for
  * noise.
  * <p>
- * WHAT THE NUMBERS TURNED OUT TO BE, which is not what this test originally assumed. KEY examines exactly one
- * entry per record. UNORDERED examines 20.5 per record on this workload - it is genuinely quadratic, because
- * in-flight records stay in the shard and every pass restarts from the beginning of it. The first version of this
- * test asserted the two modes cost "the same" within a factor of four, which was calibrated against the stopwatch
- * and was simply wrong about the code. The counts are exact and deterministic, so they are asserted exactly; see
- * {@link #EXPECTED_UNORDERED_EXAMINATIONS} for why that quadratic cost is not a defect and what to do if the
- * number ever moves.
+ * WHAT THE NUMBERS TURNED OUT TO BE, which is not what this test originally assumed. Both modes now examine
+ * exactly one entry per record. UNORDERED did NOT: it examined 20.5 per record on this workload and was genuinely
+ * quadratic, because in-flight records stay in the shard and every pass restarted from the beginning of it. That
+ * is what {@link ShardOccupancy} removed, and the history is kept on {@link #EXPECTED_UNORDERED_EXAMINATIONS}
+ * because the number moving is the only thing this test is for. The first version of this test asserted the two
+ * modes cost "the same" within a factor of four, which was calibrated against the stopwatch and was simply wrong
+ * about the code. The counts are exact and deterministic, so they are asserted exactly.
  *
  * @author Antony Stubbs
  * @see ProcessingShard#getWorkIfAvailable
@@ -90,21 +90,31 @@ class OrderingModeDispatchParityTest {
     static final long EXPECTED_KEY_EXAMINATIONS = RECORDS;
 
     /**
-     * UNORDERED examines {@code BATCH x (1 + 2 + ... + PASSES)}, because every in-flight record stays in the shard
-     * and each pass restarts from the beginning of it: pass <i>k</i> walks past the {@code (k-1) x BATCH} records
-     * already taken before it reaches new ones.
+     * UNORDERED now examines exactly one entry per record, the same as KEY.
      * <p>
-     * <b>That is quadratic, it is known, and this test asserts it rather than tolerating it.</b> In-flight records
-     * remaining in the shard is HOW ORDERING IS ENFORCED - the scan has to see them to know the shard is blocked -
-     * so it is not a defect to be fixed in passing. Two branches have measured attempts at removing the rescan:
-     * {@code perf/split-shard-inflight} (10x cheaper dispatch, 0% end to end) and {@code perf/resume-shard-scan}
-     * (+0.2%). Neither shipped, because at any realistic per-record handler delay this cost is invisible - the
-     * end-to-end benchmark puts the two modes 0.9% apart.
+     * <b>It used to be {@code BATCH x (1 + 2 + ... + PASSES)} - 410,000 for the 20,000 records below, or 20.5 per
+     * record</b> - because every in-flight record stayed in the shard and each pass restarted from the beginning
+     * of it: pass <i>k</i> walked past the {@code (k-1) x BATCH} records already taken before it reached new ones.
+     * The previous revision of this constant asserted that quadratic figure deliberately, and said that a LOWER
+     * number meant someone had landed the optimisation and should update it saying which.
      * <p>
-     * So if this number CHANGES, that is the signal. Lower means someone landed the optimisation, and this
-     * constant should be updated deliberately along with a note saying which. Higher means the scan got worse.
+     * <b>Which change did it: {@link ShardOccupancy}</b> - the unordered dispatch path walks an index of the
+     * offsets no worker is holding instead of the shard's whole entry map, so the in-flight prefix is not in the
+     * path at all. That is why the count collapses to one per record here and, more to the point, why it stops
+     * growing with concurrency: this workload never completes a record, so the old figure grew with the record
+     * count, and in a running consumer the same cost grew with {@code maxConcurrency}. It was the mechanism behind
+     * the direct-pull engine's collapse at 5,000 workers - 440 examinations per record with a SINGLE scanner,
+     * against 1.00 at ten. See {@code docs/inflight/perf-direct-pull-collapse-is-the-scan.md}.
+     * <p>
+     * <b>The ordering enforcement this used to be entangled with is untouched</b>, and that is deliberate: the
+     * ordered modes still walk the entry map, because in-flight records staying visible to that walk is how a
+     * {@code KEY} shard excludes a second taker. Only the unordered path, which has no ordering to enforce, reads
+     * the index.
+     * <p>
+     * So if this number CHANGES again, that is still the signal. Higher means the unordered scan has started
+     * looking at entries the index should have kept out of its way.
      */
-    static final long EXPECTED_UNORDERED_EXAMINATIONS = (long) BATCH * PASSES * (PASSES + 1) / 2;
+    static final long EXPECTED_UNORDERED_EXAMINATIONS = RECORDS;
 
     @Test
     void keyAndUnorderedDispatchExamineTheExpectedNumberOfEntries() {
@@ -121,13 +131,14 @@ class OrderingModeDispatchParityTest {
                 .that(keyExamined).isEqualTo(EXPECTED_KEY_EXAMINATIONS);
 
         assertWithMessage(
-                "UNORDERED dispatch examined %s shard entries, expected %s (BATCH x PASSES x (PASSES+1) / 2, with "
-                        + "BATCH=%s and PASSES=%s). LOWER means the per-pass rescan of the in-flight set has been "
-                        + "removed or reduced - that is a WIN, update this constant and say which change did it. "
-                        + "HIGHER means the scan examines more than the whole in-flight prefix, which nothing "
-                        + "should need to. This is a COUNT, not a timing: machine load cannot move it, so do not "
-                        + "re-run hoping it passes.",
-                unorderedExamined, EXPECTED_UNORDERED_EXAMINATIONS, BATCH, PASSES)
+                "UNORDERED dispatch examined %s shard entries for %s records, expected exactly one each. The "
+                        + "unordered path walks ShardOccupancy's index of unheld offsets, so the in-flight prefix "
+                        + "is not in its way at all. HIGHER means that index has stopped keeping records out of "
+                        + "the scan's path - and the cost of that is not the ratio you see here, it is that the "
+                        + "figure starts growing with maxConcurrency again, which is what collapsed the "
+                        + "direct-pull engine at 5,000 workers. This is a COUNT, not a timing: machine load "
+                        + "cannot move it, so do not re-run hoping it passes.",
+                unorderedExamined, RECORDS)
                 .that(unorderedExamined).isEqualTo(EXPECTED_UNORDERED_EXAMINATIONS);
     }
 

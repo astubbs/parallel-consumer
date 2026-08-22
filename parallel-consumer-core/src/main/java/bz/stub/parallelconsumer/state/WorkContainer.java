@@ -208,20 +208,21 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private final AtomicReference<ExecutionState> state = new AtomicReference<>(ExecutionState.AVAILABLE);
 
     /**
-     * How many times this record has been handed to a worker. Incremented only by a WON claim, so a refused
-     * claim leaves it untouched - which is one of the properties {@code WorkClaimStateMachineTest} pins. Written
-     * only by the claim winner, read anywhere: the state field's compare-and-set orders the increment.
-     * The in-flight meter of the shard holding this record, charged when a delivery is claimed and released when
+     * The occupancy record of the shard holding this record, charged when a delivery is claimed and released when
      * that delivery lands - so the charge and its release are the two halves of one state transition and cannot
      * drift apart. Null only for a container that never entered a shard, which in production cannot happen and in
      * tests is common.
      * <p>
      * Written once, by {@link ProcessingShard#addWorkContainer}, before the container is published into the shard's
      * entry map - so every thread that can reach this container through the map has already seen the write.
+     * <p>
+     * It carries the shard's index of unheld offsets as well as its in-flight count, deliberately: both are
+     * derived from exactly this transition, and giving them one owner is what keeps the index from becoming a
+     * second thing that has to be remembered about. See {@link ShardOccupancy}.
      *
      * @see ProcessingShard#getCountOfWorkInFlight()
      */
-    private LongAdder shardInFlightMeter;
+    private ShardOccupancy shardOccupancy;
 
     /**
      * Counts deliveries of this record. Incremented every time it is queued for execution, so each delivery has
@@ -415,16 +416,16 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     private void chargeShardInFlight() {
-        LongAdder meter = shardInFlightMeter;
-        if (meter != null) {
-            meter.increment();
+        ShardOccupancy occupancy = shardOccupancy;
+        if (occupancy != null) {
+            occupancy.onFlightBegan(offset());
         }
     }
 
     private void releaseShardInFlightCharge() {
-        LongAdder meter = shardInFlightMeter;
-        if (meter != null) {
-            meter.decrement();
+        ShardOccupancy occupancy = shardOccupancy;
+        if (occupancy != null) {
+            occupancy.onFlightEnded(offset());
         }
     }
 
@@ -432,42 +433,12 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * Called by the shard as it takes ownership of this record, before the container is published into the shard's
      * entry map.
      */
-    void onAdmittedToShard(LongAdder shardInFlightMeter) {
-        this.shardInFlightMeter = shardInFlightMeter;
+    void onAdmittedToShard(ShardOccupancy shardOccupancy) {
+        this.shardOccupancy = shardOccupancy;
     }
 
-    /**
-     * Marks the given delivery of this work as returned without a verdict, so
-     * {@link WorkManager#handleFutureResult} returns it to scheduling rather than throwing. Does not touch
-     * {@link #numberOfFailedAttempts} or the retry delay - the record is redelivered as the same attempt it
-     * already was.
-     *
-     * @param delivery the {@link #getDeliveryCount()} value observed when the record was handed out. Callers
-     *                 must capture it at dispatch, not read it at return time: by then the record may already
-     *                 have been redelivered, and passing the current value would make a stale return look live.
-     */
-    public void markAbandoned(long delivery) {
-        log.trace("Abandoning delivery {} without verdict {}", delivery, this);
-        this.abandonedAtDelivery = delivery;
-    }
 
-    /**
-     * @return true when this record was abandoned on the delivery that is currently outstanding
-     */
-    public boolean isAbandonedForCurrentDelivery() {
-        return abandonedAtDelivery == deliveryCount;
-    }
 
-    /**
-     * @return true when a return carries no verdict and its abandon marker belongs to a delivery that has
-     *         already ended - a late duplicate, which must be ignored rather than acted on
-     */
-    public boolean isReturnForSupersededDelivery() {
-        // not isEmpty() - core compiles to Java 8 bytecode, where that Optional method does not exist
-        return !getMaybeUserFunctionSucceeded().isPresent()
-                && abandonedAtDelivery >= 0
-                && abandonedAtDelivery != deliveryCount;
-    }
 
     public TopicPartition getTopicPartition() {
         return toTopicPartition(getCr());
