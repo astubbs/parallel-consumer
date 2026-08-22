@@ -249,6 +249,14 @@ parse_result() {
     print $5, p, r[1], r[2], r[3], r[4], d[1], d[2], d[3], d[4];
   }'
 }
+# A KILLED RUN'S LATENCY FIELDS ARE NOT A MEASUREMENT, and they are not absent either - the arm was
+# killed after printing whatever it had managed, so the parser reads real-looking numbers taken over a
+# truncated window against a record count that was never reached. Those must not sit in the same
+# column as a completed run's. The CSV was already blanked for a timeout; the LOG LINE was not, so the
+# two disagreed - the log quoted percentiles the results file did not contain, which is precisely the
+# shape of thing this harness has published wrongly before.
+clear_latency_fields() { rp50=; rp99=; rp999=; rmax=; dp50=; dp99=; dp999=; dmax=; }
+
 # BENCH_JFR=<dir> records a Java Flight Recorder profile of each measured run into that directory,
 # one .jfr per arm. Off by default because recording is not free and every result in bench/results/
 # was taken without it - a profiled run and an unprofiled one are not comparable and must not be put
@@ -398,6 +406,23 @@ run_one() {
   if sed '/BENCH_WINDOW_CLOSED/q' "$err" 2>/dev/null | grep -qE '^ERROR|fail signal'; then
     log "WARNING: $* logged errors INSIDE the measured window - that result includes retries. See $err"
     cp "$err" "$err.$(echo "$*" | tr ' /' '__')"
+  fi
+  # A `NOTE:` FROM THE ARM MEANS IT COULD NOT MEASURE SOMETHING IT WAS ASKED FOR, and until this was
+  # surfaced the only symptom was a dash in a column - which reads as "this arm does not report that",
+  # the entirely normal case for an old release or a non-PC arm.
+  #
+  # What that hid: a concurrent session ran `mvn install` and replaced the shared ~/.m2 LOCAL
+  # 0.6.0.0-SNAPSHOT with a build from another branch, partway through a sweep. Half the rows lost
+  # their residence column and every one of them had its throughput measured against somebody else's
+  # code, with nothing anywhere saying so. `LOCAL` names a coordinate, not a build, and any session on
+  # this machine can change what it points at while a sweep is running.
+  #
+  # A warning cannot prevent that. What it can do is make the sweep say out loud that a column it was
+  # asked for is missing, which is the point at which somebody checks the jar.
+  if sed '/BENCH_WINDOW_CLOSED/q' "$err" 2>/dev/null | grep -qE '^NOTE:'; then
+    log "WARNING: $* could not measure something it was asked for:"
+    sed -n '/^NOTE:/p' "$err" | while IFS= read -r note; do log "         $note"; done
+    log "         If this is a LOCAL row, check the core jar has not been replaced by another session."
   fi
 }
 
@@ -589,8 +614,9 @@ for mode in $MODES; do
         for r in $(seq 1 "$REPEATS"); do
           out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
           read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
-          if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=; latency=$NO_LATENCY
-          elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; latency=$NO_LATENCY
+          if [ "$rc" = 124 ] || [ -z "$rate" ]; then
+            [ "$rc" = 124 ] && rate=RUN_TIMEOUT_${RUN_TIMEOUT}s || rate=RUN_FAILED
+            peak=; latency=$NO_LATENCY; clear_latency_fields
           else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
           echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak,$latency" >> "$RESULTS"
@@ -614,8 +640,9 @@ for mode in $MODES; do
           for r in $(seq 1 "$REPEATS"); do
             out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
             read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
-            if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=; latency=$NO_LATENCY
-            elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; latency=$NO_LATENCY
+            if [ "$rc" = 124 ] || [ -z "$rate" ]; then
+              [ "$rc" = 124 ] && rate=RUN_TIMEOUT_${RUN_TIMEOUT}s || rate=RUN_FAILED
+              peak=; latency=$NO_LATENCY; clear_latency_fields
             else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
             log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
             echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak,$latency" >> "$RESULTS"
