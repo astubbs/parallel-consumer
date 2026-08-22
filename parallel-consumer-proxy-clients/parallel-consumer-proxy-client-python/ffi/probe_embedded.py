@@ -20,8 +20,8 @@ from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from parallel_consumer import ClientOptions, ParallelConsumerClient  # noqa: E402
-from parallel_consumer.options import ProcessingOrder  # noqa: E402
+from parallel_consumer import ClientOptions, ParallelConsumerClient
+from parallel_consumer.options import ProcessingOrder
 
 BUDGET_SECONDS = 120.0
 
