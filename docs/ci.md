@@ -18,7 +18,7 @@ gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
 ```
 
 Then grep it: `Tests run:`, `<<< FAILURE`, and for broker integration tests the
-`=== AMBIENT PROBE AUTOPSY ===` block, which classifies contention-vs-bug before you start reading
+`AMBIENT PROBE AUTOPSY` block, which classifies contention-vs-bug before you start reading
 stack traces (see [`docs/testing.md`](testing.md)).
 
 ## Workflows
@@ -48,8 +48,11 @@ document. This section is the detail behind it.
   See [`docs/testing.md`](testing.md).
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
-  [`docs/releasing.md`](releasing.md)) and the issue-reference gate (`issue-ref-gate.js`, see
-  [`docs/issue-references.md`](issue-references.md)).
+  [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
+  [`docs/issue-references.md`](issue-references.md)) and the file-reference gate
+  (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails a cited repo path that
+  does not exist - whole tree, so a deletion that strands a citation fails the PR that made it. Each gate's logic is a unit-tested module and its self-test runs first, so a
+  broken rule fails loudly rather than passing - or failing - every PR silently.
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -67,7 +70,18 @@ document. This section is the detail behind it.
   package-rename tool (`bin/rename-packages.sh`) - a tool run by hand once per branch, which is
   exactly the shape that rots unnoticed between the day it is written and the day the whole rename
   depends on it. `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows. Self-tests run first. **`shell: sigpipe`
+  GitHub Action pinned to one version across all workflows.
+  `inflight-tags` runs `bin/check-inflight-tags.sh`, which validates every `docs/inflight/` note's
+  tags against the closed sets in `bin/lib/inflight-tags.sh`
+  ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their meanings) - failing the commit that
+  mistyped a tag, rather than leaving it to whoever starts the next session to notice the index
+  could not place a note. `test-log-config` runs `bin/check-test-log-config.sh`, which pins the
+  four library modules' `logback-test.xml` to the `pc.log.level`-driven harness and fails any
+  logger committed at debug/trace - a failure class that is otherwise silent: the log floods,
+  nothing goes red, and the volume alone has timed tests out (measurements in the script header;
+  [`docs/testing.md`](testing.md), "Seeing test output", owns the how-to). Both are new alongside
+  `tooling: package rename` and, like it, cannot join the ruleset until the jobs exist on master.
+  Self-tests run first. **`shell: sigpipe`
   and `workflows: action versions` are required status checks** - which is exactly why the job names
   are an API. They exist because the failures they catch are invisible rather than loud, and they
   gate precisely so those failures cannot be skimmed past. `tooling: package rename` is not in the
@@ -176,6 +190,12 @@ review" tightly enough that people batched pushes to avoid it. The two are now s
 | **Gate** (`claude-code-review.yml`) | every PR push | none - no Claude, no JDK, no build | the required check `claude-review` |
 | **Reviewer** (`claude-code-review-dispatch.yml`) | when dispatched | a full review | the review itself |
 
+**The second reviewer, Codex, is on request too - comment `@codex review` on the PR.** It reviewed
+every push automatically until 2026-08-19, and that setting lives in the Codex account settings
+rather than in this repo, so nothing here changes when it is toggled. Turning it off is why the
+review gate's coverage gap is now accepted rather than covered - see
+["The gate asks..."](#the-gate-asks-has-this-pr-been-reviewed-not-was-every-commit-reviewed).
+
 **`--ref master` is required, not cosmetic.** It is what lets the reviewer review a PR that edits
 the reviewer - see "Editing the reviewer" below. Dispatching from the PR's own branch reintroduces
 the trap it avoids.
@@ -223,6 +243,7 @@ new branch 'ci/ossindex-audit-job'` inside "Run Claude Code". So a `bin/` script
 PR's. What does **not** come from the PR is the workflow file, and therefore the allowlist - see
 "Editing the reviewer". Both routes grant `git rev-parse` so a reviewer can settle which tree it is
 standing in by looking, rather than inferring it from the workflow and getting it backwards.
+<!-- file-refs: N/A - a path inside claude-code-action, not this repo -->
 
 **On a fork PR this route answers but does not run anything** - and "answers" needs one
 qualification. Granting `./mvnw` and the `bin/` scripts against a fork's checkout would put
@@ -355,7 +376,8 @@ turn the gate green" below.)
 ### The gate asks "has this PR been reviewed?", not "was every commit reviewed?"
 
 <!-- CANONICAL: the gate contract. Nowhere else states what satisfies the gate - everything else
-     links here. If you change this paragraph, run bin/check-review-gate-contract.sh. -->
+     links here. Before you change this paragraph, find the mentions that link to it:
+     grep -rn "claude-review" . --exclude-dir=.git --exclude-dir=target -->
 
 **Any finished `claude[bot]` review on the PR satisfies it**, whenever it was posted. A review of
 the first commit therefore vouches for the twentieth, and that is a deliberate reversal of the
@@ -369,8 +391,8 @@ mention now links here instead of paraphrasing.
 It is a real trade, so it is worth knowing why it was made rather than discovering the cost by
 surprise. Strict is the stronger guarantee - a review of commit N genuinely does not vouch for
 commit N+1 - and it was abandoned not because it was wrong but because of **what enforcing it
-cost**, and because the per-commit coverage it protected already arrives from elsewhere: a
-separate auto-reviewer reads every push. What freshness cost was the **timestamp machinery**: a
+cost**, and because the per-commit coverage it protected arrived from elsewhere at the time: a
+separate auto-reviewer read every push. What freshness cost was the **timestamp machinery**: a
 contested comparison between the contributor-controlled committer date and the server-side
 check-suite time, same-second ties, an endpoint with undocumented ordering, and the reviewed-SHA
 plumbing crossing job boundaries. All of that is gone.
@@ -383,11 +405,20 @@ never have paid it off; retiring it needs the reviewer to raise a check run on t
 The distinction matters to anyone weighing a return to strictness: restoring it buys back the
 guarantee at the price of the timestamp machinery alone, not of a new privilege escalation.
 
-**The assumption that makes this safe is that the auto-review keeps happening.** If it ever stops,
-per-commit coverage stops coming from anywhere and nothing announces it - the gate keeps passing,
-because "a review exists on this PR" is still true. That trigger, and the archived strict
-implementation, are recorded in
-[`docs/inflight/parked-strict-review-gate-freshness.md`](inflight/parked-strict-review-gate-freshness.md).
+**The assumption that made leniency safe - that the auto-review keeps happening - expired on
+2026-08-19, and the answer is to accept the gap rather than close it.** That auto-review was
+switched off because a full review of every push spends more than the coverage is worth; it is now
+on request only, like the dispatched reviewer above. So a PR reviewed at commit 1 can merge at
+commit 20 with commits 2-20 read by nobody, and every check stays green.
+
+**Do not answer that by making a push invalidate the Claude review.** That moves the per-push spend
+onto the more expensive reviewer, which is the cost both splits were made to remove - the freshness
+rule was parked and the reviewer was taken off `pull_request` for the same reason. The condition
+that reopens the decision is the price of a review falling by roughly two orders of magnitude, not
+the rediscovery that the gap exists. Ask for a review when a PR is ready, and ask again after a
+push that changes what a reviewer already looked at; that judgement is deliberately a person's, not
+a gate's. The reasoning and the archived strict implementation are in
+[`docs/inflight/ci-strict-review-gate-freshness.md`](inflight/ci-strict-review-gate-freshness.md).
 Read it before re-proposing strictness; it is a considered trade, not an oversight.
 
 **There is deliberately no skip word, label or "trivial change" escape**, because any such escape

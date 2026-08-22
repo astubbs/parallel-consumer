@@ -513,7 +513,7 @@ jobs:
           # whether the review covered this head - only whether a finished review exists on the
           # PR - so a head that moved mid-review does not change the answer, and the reviewed
           # SHA no longer has to be carried across the job boundary. It went with the freshness
-          # rule; see docs/inflight/parked-strict-review-gate-freshness.md.
+          # rule; see docs/inflight/ci-strict-review-gate-freshness.md.
 
           # head_sha ALONE DOES NOT IDENTIFY THIS PR'S GATE RUN. One head can back more than one
           # PR - the same branch opened against `master` and a release branch - and the gate runs

@@ -1,5 +1,10 @@
 # The `@claude` trigger fires on prose about it, and the fix is a semantics change
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, the fix is an undecided semantics change -->
+
+
 `.github/workflows/claude.yml` decides whether to start on
 `contains(github.event.comment.body, '@claude')` - a plain substring test with no awareness of
 backticks, code fences or quotation. So any comment *discussing* the mechanism starts a billed job.

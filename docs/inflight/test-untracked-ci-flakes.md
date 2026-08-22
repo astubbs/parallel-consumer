@@ -1,5 +1,8 @@
 # Flakes CI was hiding, none of them tracked when found
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: misdirection -->
+
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
 
@@ -11,13 +14,42 @@ their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
-| `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
+| `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED; quarantined on its sighting ledger (rule 1) - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `ReactorBatchTest.simpleBatchTest(ProcessingOrder)[3]` | 1 seen (2026-08-18) | Not from the original scan - found while babysitting astubbs#308 (docs-only branch, head `d930ca98d`). Awaitility `ConditionTimeout`, alias 'expected number of batches' (30s), in the shared `BatchTestMethods` lambda; passed on re-run at `bb5799df0`. UNDIAGNOSED - classify (contention vs product) before touching |
+| `simpleBatchTest` in **both** `ReactorBatchTest` and `MutinyBatchTest` | 2 seen (2026-08-18, 2026-08-19) | Not from the original scan - both found while babysitting a **docs-only** branch (astubbs#308 head `d930ca98d`; astubbs#320 head `70a247184`). Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda - see below, the second sighting is what makes it worth diagnosing. UNDIAGNOSED - classify (contention vs product) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `simpleBatchTest` - the second sighting says it is the shared helper, not either wrapper
+
+2026-08-18 it was `ReactorBatchTest`. 2026-08-19 it was `MutinyBatchTest`, on
+astubbs/parallel-consumer#320 - and the failure is the same one, not a similar one: the alias, the
+30-second timeout and the lambda all come from `BatchTestMethods` in **core**, which both wrapper
+modules drive. One sighting looked like a Reactor flake. Two, in different modules, means the
+Reactor and Mutiny wrappers are not the variable.
+
+The 2026-08-19 assertion is the useful part, because it is off by exactly one in the direction that
+matters: **`Expected size: 3 but was: 4`** - grep `BatchTestMethods` for `expected number of
+batches`. The test received the right records in one batch too many, so this is a batch-BOUNDARY
+question, not a lost-work question. Two readings, and they need separating rather than assuming:
+
+- **Contention.** The runner is slow or loaded, so work arrives spread out and the batcher closes a
+  batch early. Test-side, and the honest fix is making the test drive the boundary it asserts
+  instead of racing it.
+- **Product.** The batcher can split a batch under a timing the library is supposed to tolerate,
+  in which case an over-eager boundary is a real defect and the test is right to complain.
+
+**Both sightings are on branches whose diffs contain no Java at all**, which is what rules out "a PR
+broke it" and makes it master state - the same reasoning applied to `ProducerManagerTest` below.
+That is also why neither was quarantined on the branch that met it: quarantine is master-state and
+needs a diagnosis, and neither sighting has one.
+
+The 2026-08-18 sighting passed on re-run. A re-run is diagnosis here, not a way to go green - it
+distinguishes flaky from deterministic - and AGENTS.md's ban is on the automatic
+`surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job to learn
+something.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
@@ -134,12 +166,16 @@ the narrative and found it does not fit:
 
 So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen`
 (actuals vary run to run - 136 and 132 have both been seen against an expected 139), and nothing
-currently explains why. Rule 1 - no quarantine without diagnosis - would keep it in the gating lane,
-but it fails often enough (4/45, the most frequent tracked flake) that leaving it red blocked every
-PR. **The repository owner decided to quarantine it anyway as an explicit rule-1 exception**: the
-registry entry carries no Owner (unowned, flagged advisory by the audit), `flapping = true`, and the
-diagnosis below remains the open task. The exception is a pressure-release, not a resolution - this
-entry stays open until the test is understood and fixed.
+currently explains why.
+
+**This entry is why rule 1 changed.** Under the old wording - *no quarantine without diagnosis* - an
+undiagnosed test stayed in the gating lane, so this one (4/45, the most frequent tracked flake)
+blocked every unrelated PR, and the repository owner had to quarantine it as an explicit
+rule-1 exception. It now qualifies on the rule itself: 4 failures in 45 runs, with the signature and
+runs recorded above, is exactly the *sighting ledger* rule 1 asks for. No exception is needed, and
+the entry is unchanged in every other respect - no Owner (unowned, flagged advisory by the audit),
+`flapping = true`, and the diagnosis below still the open task. Quarantine defers; it does not
+resolve. This entry stays open until the test is understood and fixed.
 
 **The open lead - an UNVERIFIED hypothesis, test it before acting on it.** The test computes
 `expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1`, and

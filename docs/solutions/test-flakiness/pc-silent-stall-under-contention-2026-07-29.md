@@ -321,6 +321,7 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 - Prior art: `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md`
   (the RebalanceEoSDeadlockTest contention → real confluentinc#857 deadlock finding, and the "diagnose before masking"
   rule it produced).
+  <!-- file-refs: N/A - the sentence says the document is on another branch, not on master -->
 
 ## Recommendations
 
@@ -406,3 +407,4 @@ masking):
   `calculateQuantityToRequest`); `.../internal/BrokerPollSystem.java` (`drain()`, `handlePoll()` and its
   "use this to just sleep" comment, `doPause`/`resumeIfPaused`); `.../internal/ConsumerManager.java`
   (`poll()`'s `while (!shutdownRequested.get())` short-circuit, `signalStop()`).
+<!-- file-refs: N/A - the bullet names the branch the document lives on -->

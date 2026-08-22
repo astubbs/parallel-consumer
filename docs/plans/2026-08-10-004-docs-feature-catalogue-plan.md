@@ -28,7 +28,7 @@ these are - take the collision-avoidance design and leave the rest.
 
 Fits the parked docs site (astubbs#208, MkDocs + Material, versioned with `mike`) - a directory of
 markdown files is exactly what it wants as input. Note the standing constraint in
-`parked-docs-site.md`: do not build anything new that depends on `README_TEMPLATE.adoc` embedding
+`docs-site.md`: do not build anything new that depends on `README_TEMPLATE.adoc` embedding
 other documents, because that coupling is being removed.
 
 Design questions to settle when this is picked up:
