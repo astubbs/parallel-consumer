@@ -28,6 +28,28 @@ virtual threads buy the ten non-JVM clients. A decision on B changes what A and 
 under Jabel's Java 8 target at every call site (B); does the reflective virtual-thread lookup survive
 native-image's closed-world analysis (C).
 
+## What the simplifications buy: maintainability, not throughput - Antony's ruling 2026-08-22
+
+**Say this first in any pitch for them.** `ShardOccupancy` took the measured win - 440 entries
+examined per record dispatched down to 1.00, and direct pull from unusable to the fastest arm when
+paired with virtual threads. **The performance problem these designs were reaching for is solved.**
+
+| Proposal | Throughput case | What it actually buys |
+|---|---|---|
+| `UNORDERED` available-work queue | **none** | Deletes `ShardOccupancy` and the prefix problem by construction. One structure fewer to keep in step |
+| Selectable-shard queue / merry-go-round | **none** - `KEY` already examines exactly 1 entry per record | Removes the scan from the ordered path; one rule, no mode branch |
+| Per-worker cursor, ring buffer | **refuted** - 100x the scanners moved cost under 10% | Nothing. Do not build |
+| Retry selection from `RetryQueue` | unmeasured, plausibly small | One home per record instead of two |
+| WorkManager as a thread | unmeasured | Non-thread-safe collections, no claim CAS - the exactly-once defect fixed today could not exist |
+| **Delete the load factor** | **measured** - the shipped engine reaches 543-768 of a configured 5,000 in flight | Removes the estimator and its per-executor special cases |
+| **Core futures API** | **measured** - 23% at 100ms, and every async engine reaches concurrency where core does not | Would make the engine modules largely redundant |
+
+**Two of seven have evidence. The rest are maintainability arguments** - fewer structures holding the
+same facts, in a codebase that spent 2026-08-22 on two separate sync-cascade bugs (the drifting
+counter, and the check-then-act claim). That is a real case. **It is not a performance case and must
+not be sold as one**, or the next person measures it, finds nothing, and concludes the whole family
+was wrong.
+
 ## 1. SETTLED - there was no UNORDERED dispatch regression
 
 This entry used to claim one, on the strength of `OrderingModeDispatchParityTest` failing. **It was
