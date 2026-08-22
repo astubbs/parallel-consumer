@@ -88,6 +88,18 @@ public class ProcessingShard<K, V> {
         }
     }
 
+    /**
+     * Which container currently occupies an offset, or null.
+     * <p>
+     * Read-only, and package-private for tests that need to assert WHICH container won a contested offset rather
+     * than merely how many are tracked. A read cannot break the invariants that keep {@link #entries} private -
+     * only a write can, which is why there is no corresponding setter and why {@link #addWorkContainer} remains
+     * the only way in.
+     */
+    WorkContainer<K, V> getWorkContainerAt(long offset) {
+        return entries.get(offset);
+    }
+
     public void onSuccess(WorkContainer<?, ?> wc) {
         // remove work from shard's queue
         entries.remove(wc.offset());
@@ -157,10 +169,15 @@ public class ProcessingShard<K, V> {
             var workContainer = iterator.next().getValue();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
-                if (workContainer.isAvailableToTakeAsWork()) {
+                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
+                // onQueueingForExecution() separately, and the gap between the two is what could let a record be
+                // delivered twice: the check read three terms and the act re-validated none of them, so a decision
+                // made before another worker completed the record could still win. onQueueingForExecution() now
+                // evaluates the whole decision and claims from the state it evaluated. Do not reintroduce a guard
+                // in front of it.
+                if (workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 
-                    workContainer.onQueueingForExecution();
                     workTaken.add(workContainer);
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);
