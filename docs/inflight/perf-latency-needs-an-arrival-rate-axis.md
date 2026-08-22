@@ -39,7 +39,7 @@ construction*. A 1,000ms slow record is 6% of a 15,568ms p99 and cannot be seen 
 `PARTITION` ordering only reaches its 24-way parallelism when the buffer is deep enough to hold a
 record for every partition - about `max.poll.records` x partitions, 12,000 here. Below that it starves:
 at `messageBufferSize` 240 it holds **2** records in flight and manages 37-39 msg/s.
-See [`perf-partition-ordering-starves-on-a-narrow-buffer.md`](perf-partition-ordering-starves-on-a-narrow-buffer.md).
+See [`bug-partition-ordering-starves-on-a-narrow-buffer.md`](bug-partition-ordering-starves-on-a-narrow-buffer.md).
 
 **So the two requirements are in direct conflict: deep enough to run is too deep to measure.** There is
 no buffer setting at which `PARTITION` both achieves its parallelism and has a queue shallow enough for

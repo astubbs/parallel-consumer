@@ -3,9 +3,14 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: throughput -->
 
-**`PARTITION` ordering over 24 partitions holds 2 to 6 records in flight, not 24.** Measured
-2026-08-22 with the residence timer, which is what made it legible: the records are fetched, they are
-sitting in the shards, and the engine is not running them.
+**You configure `maxConcurrency` 24 over 24 partitions and get 2 to 6.** Throughput is 37-68 msg/s
+where the same settings under `KEY` ordering give 532-723 - **an order of magnitude, with a uniform
+handler and nothing in the user function to blame.** No option a user would think to reach for says
+so, and the only outward sign is that the machine is idle.
+
+Measured 2026-08-22 with the residence timer, which is what made it legible: the records are fetched,
+they are sitting in the shards, and the engine is not running them. That distinction - not fetched
+versus fetched and queued - is the one thing no other meter could draw.
 
 Conditions, identical for every row: `core`, 10,000 records, 24 partitions, `maxConcurrency` 24, base
 delay 20ms, `max.poll.records` 500, seed 42, LOCAL build, two repeats, one-minute load 3.5-6.0.
@@ -40,11 +45,22 @@ time across **the two or three partitions the fetch buffer happens to hold**, wh
 than parallel, and no setting they would think to reach for says so. `messageBufferSize` is documented
 as a buffering knob, not as the thing that decides whether ordered parallelism happens at all.
 
-**The buffer needed scales as `max.poll.records` x partitions** - roughly 12,000 records here - because
-that is what it takes for the poll history to have touched every partition. A hundred-partition
-assignment would need five times that. The fix is not a bigger default: it is that the prefetch target
-should be expressed in terms the ordering mode actually consumes - **shard coverage** - rather than a
-flat record count that means completely different things under `KEY` and under `PARTITION`.
+## `messageBufferSize` is a WORKAROUND, and the fix is not built
+
+**Setting `messageBufferSize` high enough recovers the throughput - it is not the fix, because a user
+cannot be expected to derive the number.** The buffer needed scales as `max.poll.records` x
+partitions, roughly 12,000 here; a hundred-partition assignment would need five times that, and
+neither figure is written down anywhere or checked by anything. Set it too low and the symptom is
+silent idleness, which is exactly where this started. It is also not free: that buffer is records held
+in memory and, per [`perf-latency-needs-an-arrival-rate-axis.md`](perf-latency-needs-an-arrival-rate-axis.md),
+seconds of added residence time.
+
+**The fix is that the prefetch target should be expressed in terms the ordering mode actually
+consumes - shard coverage - rather than a flat record count that means completely different things
+under `KEY` and under `PARTITION`.** Under `KEY` with distinct keys, N records is N runnable shards;
+under `PARTITION`, N records may be one. **None of that is built**, and the design question it turns
+on is open: what the target should do when shards outnumber the concurrency budget, and whether
+coverage should drive the fetch or only the selection.
 
 ## What this costs the comparison it was found in
 
@@ -59,8 +75,6 @@ A row with in-flight far below the partition count is a starved run, whatever el
 
 ## Not yet done
 
-- No fix. The diagnosis is the buffer's shape; the design question - whether the load factor should
-  target shard coverage, and what it should do when shards outnumber the concurrency budget - is open.
 - Not established whether the same starvation reaches `KEY` ordering on a **skewed** key distribution,
   where a few shards hold most records. The measurements here use all-distinct keys, which is the best
   possible case for `KEY` and says nothing about the worst.
