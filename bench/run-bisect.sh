@@ -333,6 +333,20 @@ run_one() {
     shift
     set -- core "$@"
   fi
+  # core-dpvt: BOTH options at once, and they genuinely compose rather than merely coexisting.
+  # DirectPullWorkerPool#start takes an Executor and runs its pullers on it -
+  # `pool.start(workerThreadPool.get(), maxConcurrency)` - so whatever #setupWorkerPool returned is
+  # what the pullers run on. Turn on virtual threads and direct pull's workers ARE virtual threads.
+  #
+  # That makes this the combination most likely to be good, and it went unmeasured for a day: direct
+  # pull is the only arm that reaches its configured concurrency (5,000 of 5,000 in flight, against
+  # the shipped engine's 382-668 at 2ms), and virtual threads are what stop N pullers costing N
+  # platform threads - which is what made direct pull ruinous at 5,000 before the scan fix.
+  if [ "${1:-}" = "core-dpvt" ]; then
+    engine=(-Dpc.directPull=true -Dpc.virtualThreads=true)
+    shift
+    set -- core "$@"
+  fi
   local jfr=()
   if [ -n "${BENCH_JFR:-}" ]; then
     mkdir -p "$BENCH_JFR"
