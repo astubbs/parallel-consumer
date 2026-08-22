@@ -43,6 +43,19 @@
              dependencies, which is what makes the module-local Jackson pin below safe. -->
         <maven.deploy.skip>true</maven.deploy.skip>
         <maven.install.skip>true</maven.install.skip>
+
+        <!--
+            No javadoc jar, and the reason is mechanical rather than laziness. This module's
+            hand-written classes import protocol types generated into target/generated-protobuf,
+            which is on the compile path but not on javadoc's source path - so the delombok step
+            javadoc runs first cannot resolve them and fails the build. The protocol module never
+            hits this because its generated types reach consumers as a jar.
+
+            Skipping is safe here specifically because the module publishes nothing: a javadoc jar
+            for an unpublished experimental artifact has no reader. Any module that does publish
+            must fix the source path instead.
+        -->
+        <maven.javadoc.skip>true</maven.javadoc.skip>
     </properties>
 
     <dependencyManagement>
@@ -85,6 +98,18 @@
             <version>${kafka.version}</version>
         </dependency>
 
+        <!--
+            For the parent-death watchdog and the port-line prefix, reused rather than reimplemented.
+
+            The arrow is streams -> proxy and never the reverse: the constraint this module lives under is that
+            Kafka Streams must not reach the artifact the admin wrapper ships from, which forbids proxy -> streams.
+            Depending the other way costs nothing downstream, because this module publishes nothing.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
