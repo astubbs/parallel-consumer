@@ -203,6 +203,32 @@ image, which is its own reachability adventure.
 evidence, exactly as above. Tracked as a proof-of-concept in
 [`docs/inflight/next-kafka-streams-foreign-wrappers.md`](docs/inflight/next-kafka-streams-foreign-wrappers.md).
 
+### The gap runs both ways, and the return direction may be the larger market
+
+Everything above points one way: those ecosystems have no Kafka Streams, so give them Kafka Streams.
+**The same mechanism points the other way, at a bigger and better-funded audience.**
+
+Kafka Streams users are on the JVM. The JVM has no PyTorch, no scikit-learn, no transformers, no
+spaCy, no pandas. Today a team that wants one of those inside a topology has two options: export the
+model into something the JVM can run, which constrains what they can build, or stand up a service
+and call it over the network from inside the topology - a second deployment, a second scaling story,
+serialization twice, and hand-rolled retry semantics.
+
+**Our constraint is already their status quo.** A Kafka Streams operator is synchronous, so an HTTP
+call from inside one blocks the stream thread exactly as a call to a foreign function would, with
+the same rebalance exposure when it runs long. Against what they do now, this is not a compromise
+they must accept - it is the same blocking, minus the network hop and minus the second service.
+
+**And it needs a strict subset of the work.** A JVM team writes its topology in Java, so there is no
+topology description to carry and no handle protocol to design. All that crosses is the per-record
+function - the piece the language proxy already carries in four languages. The direction that serves
+non-JVM users needs everything; this one needs only the shared core.
+
+**The honest counterweight:** model serving over the network buys things a co-located process gives
+up - independent scaling, GPU pooling, model versioning and canarying. Teams already invested in a
+serving platform are not the ones to sell this to. The teams to sell it to are the ones who stood up
+a Flask service because they had no other way to get a Python function into a stream.
+
 ### Languages with no Kafka client at all
 
 **The reach argument is not mainly about languages that have gRPC and would rather not use it.** It
