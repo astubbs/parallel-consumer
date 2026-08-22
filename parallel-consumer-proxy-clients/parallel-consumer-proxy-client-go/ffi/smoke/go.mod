@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 module github.com/astubbs/parallel-consumer/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/ffi/smoke
 
 go 1.25.0
