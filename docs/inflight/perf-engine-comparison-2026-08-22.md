@@ -111,6 +111,24 @@ runtime the way the serial-arm guard already does. That cell is missing, not fai
 against a 0-of-5 baseline - all records delivered once, no batch over the limit, but four selectors
 where the test assumes one.
 
+## The released-upstream arm, and what "last public release" actually means
+
+**0.5.3.3 is genuinely public** - the jar resolves from Maven Central (HTTP 200) and Central's own
+metadata lists it as both `<latest>` and `<release>`. 0.5.3.2 and 0.5.3.1 are there too. So a
+comparison against the last thing a user could actually depend on is a real comparison, not a
+comparison against a tag.
+
+**Worth noting against how upstream is described elsewhere**: 0.5.3.3 shipped in **August 2025**, a
+year after 0.5.3.2. The README states upstream is unmaintained, and that remains true of the project's
+direction, but a release did land later than most summaries assume. Anything written about upstream's
+last activity should use this date.
+
+**Which modes may be swept at a released version, and which must not.** `core-dp` and `core-vt` select
+themselves with `-Dpc.directPull=true` and `-Dpc.virtualThreads=true`. **A released version does not
+have those options and will silently ignore the property**, producing a row labelled `core-dp` that is
+a plain `core` run. That is the same silent-duplicate failure the `prepare()` cache defect already
+produced once in this harness. **Sweep only `core` and `vertx` at released versions.**
+
 ## Caveats that bound all of it
 
 - **One partition, all-distinct keys, one broker, one machine.** A best case for any key-sharded
