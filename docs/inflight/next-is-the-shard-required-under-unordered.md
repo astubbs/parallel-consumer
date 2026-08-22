@@ -3,6 +3,11 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: architecture -->
 
+> **SCOPE: `UNORDERED` ONLY.** The ordered modes examine **exactly one entry per record dispatched**
+> (measured, `OrderingModeDispatchParityTest`), because the break fires after the head. There is no
+> walk to remove and therefore no reason to touch them - and their blocked state is currently implied
+> by a record's presence, so changing it trades a working guarantee for nothing.
+
 **Antony's question, 2026-08-22, asked while a fix for the symptom was being built.**
 
 ## The shard enforces nothing under UNORDERED

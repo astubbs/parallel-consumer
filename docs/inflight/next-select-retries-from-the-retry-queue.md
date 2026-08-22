@@ -3,6 +3,20 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: performance -->
 
+> **SCOPE: `UNORDERED` ONLY. Antony's ruling, 2026-08-22.** Do not extend any of this to `KEY` or
+> `PARTITION`, and do not treat that as an unfinished half.
+>
+> **There is nothing to win there.** `OrderingModeDispatchParityTest` measures `KEY` at **exactly one
+> entry examined per record dispatched** - the ordered break fires after the head, so the scan already
+> costs the minimum a scan can cost. Every design in this family exists to remove a walk that
+> `KEY` does not perform.
+>
+> **And there is real correctness risk.** Under the ordered modes a waiting record's *presence in the
+> shard* is what blocks a later record for the same key. Moving it elsewhere means replacing an
+> implicit guarantee with an explicit one, for a measured benefit of zero.
+>
+> So the ordered path stays exactly as it is. Everything below is the `UNORDERED` selection path.
+
 **Antony's proposal, 2026-08-22.** Keep records awaiting retry in a separate queue ordered by the
 time their retry falls due. A selector checks that queue's head first: if the soonest retry is due,
 take from there; otherwise take from the main available work. Both O(1)-ish, and retries never
