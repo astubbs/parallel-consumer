@@ -19,19 +19,16 @@ and are deliberately not recorded here; they go stale within a day.
 They exist so the negative results keep their evidence.
 
 **One of them DID ship, contradicting what this section used to claim.** `perf/lock-free-mailbox` is
-merged into the trunk: `AbstractParallelEoSStreamProcessor#workMailBox` is a `CountedTransferQueue`
-today, carrying an `EXPERIMENT:` comment. Its measurement is **+3.3% at 100ms and -2.7% at 0ms** - a
-trade, not a win, and the losing side is the 0ms operating point that the virtual-threads and
-thread-ceiling work has since made the interesting one. **That is a live decision, not a note:** keep
-it and delete the `EXPERIMENT:` comment, or revert it. It should not stay in the tree labelled as an
-experiment indefinitely.
+merged into the integration branch: `AbstractParallelEoSStreamProcessor#workMailBox` is a
+`CountedTransferQueue` today, carrying an `EXPERIMENT:` comment. Its measurement is **+3.3% at 100ms
+and -2.7% at 0ms**.
 
-| Branch | Base | What it measured |
-|---|---|---|
-| `perf/resume-shard-scan` | `rename/master-packages` | Resume the dispatch scan instead of restarting it. **+0.2%.** Also on the wrong base - see the base trap below |
-| `perf/split-shard-inflight` | recut | Split shard state into selectable and in-flight. **10x cheaper dispatch, 0% end to end.** Found that in-flight records staying in the shard is how ordering is enforced |
-| `perf/lock-free-worker-queue` | recut | `LinkedTransferQueue` for the pool queue, then a counted variant. **69% and 71% WORSE** - a lock can be the cheap way to park |
-| `perf/lock-free-mailbox` | recut | Lock-free mailbox. **+3.3% at 100ms, -2.7% at 0ms** - real, tiny, a trade |
+**Read that trade the right way round.** A 0ms delay means the user function does nothing - it is a
+DIAGNOSTIC operating point, where PC's own overhead becomes visible because nothing else is in the
+measurement. It is not where anybody runs. A user with no user function has no reason to use this
+library. So the change is worth +3.3% where real work happens and costs 2.7% where none does: **keep
+it and delete the `EXPERIMENT:` label.** It should not sit in the tree labelled as an open question
+indefinitely.
 
 **Dispatched 2026-08-21, returned by 2026-08-22.** Each was a separate agent and **none of them
 could see any of the others' code**, which is where the merge conflicts and the open regression
@@ -145,7 +142,7 @@ Pushed so the negative results survive the machine, not because any is a merge c
 |---|---|
 | `perf/split-shard-inflight` | Split shard state into selectable and in-flight. **10x cheaper dispatch, 0% end to end** - and it found that in-flight records staying in the shard is *how ordering is enforced*, at the cost of ten failing tests |
 | `perf/lock-free-worker-queue` | `LinkedTransferQueue` for the pool queue, then a counted variant. **69% and 71% WORSE** - a lock can be the cheap way to park |
-| `perf/lock-free-mailbox` | Lock-free mailbox. **+3.3% at 100ms, -2.7% at 0ms.** A trade, and it is **merged into the integration branch** carrying an `EXPERIMENT:` comment - which needs a keep-or-revert decision, because 0ms is now the operating point that matters |
+| `perf/lock-free-mailbox` | Lock-free mailbox. **+3.3% at 100ms, -2.7% at 0ms**, and it is **merged into the integration branch** carrying an `EXPERIMENT:` comment. The trade favours keeping it: 100ms is where a real user function sits, 0ms is where there is no user function at all. Needs the label removed, not the change reverted |
 | `perf/resume-shard-scan` | Resume the dispatch scan instead of restarting it. **+0.2%**, and cut from the wrong base |
 
 **Deliberately NOT pushed**: `research/market-analysis`. Superseded by the re-cut, and its history
