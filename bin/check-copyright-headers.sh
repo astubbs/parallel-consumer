@@ -184,6 +184,7 @@ go.mod|slash
 *.h|slash
 *.hpp|slash
 *.proto|slash
+*.css|slash
 # Java source compiled by the bench harnesses after a __PKG__ substitution. Not *.java, so the rule
 # above never saw them, and all three sat unclassified - which the check reports as a violation
 # rather than silently passing, which is how they were found.
@@ -302,6 +303,7 @@ ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 EXTRACTED_FROM_UPSTREAM="
 parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/ManagedPCInstance.java
 parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerTestBase.java
+parallel-consumer-vertx/src/test-integration/java/bz/stub/parallelconsumer/vertx/integrationTests/Demo.java
 ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 "
 
