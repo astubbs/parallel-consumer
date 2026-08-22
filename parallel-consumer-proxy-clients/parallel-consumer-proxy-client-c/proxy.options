@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # nanopb field bounds for the C reach probe.
 #
 # WHY BOUND THEM AT ALL. Without sizes nanopb emits pb_callback_t for every string, bytes, map and

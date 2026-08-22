@@ -193,6 +193,7 @@ go.mod|slash
 *.yaml|hash
 *.toml|hash
 *.properties|hash
+*.options|hash
 *.cmake|hash
 CMakeLists.txt|hash
 Dockerfile|hash

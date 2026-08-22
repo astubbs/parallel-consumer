@@ -192,18 +192,31 @@ scheduled callback is just another kind of work frame in a pull model), and Rock
 image, which is its own reachability adventure.
 
 **And the honest sequencing:** this is a long way past the current milestone. Admin first, on
-evidence, exactly as above.
+evidence, exactly as above. Tracked as a proof-of-concept in
+[`docs/inflight/next-kafka-streams-foreign-wrappers.md`](docs/inflight/next-kafka-streams-foreign-wrappers.md).
 
 ### Languages with no Kafka client at all
 
-The reach argument is not mainly about languages that have gRPC and would rather not use it. It is
-about the ones with **no usable Kafka client at any level**: R, Lua, Zig, Nim, Crystal, Julia, and
-the long enterprise tail. For those, wrapping the base client is worth more than Parallel Consumer
-is - they need `consume` before they need key-ordered concurrency - which is an argument for the
-admin-then-producer-then-consumer ordering rather than against it.
+**The reach argument is not mainly about languages that have gRPC and would rather not use it.** It
+is about the ones with nothing usable at any level - and that is a different, larger and more
+interesting group.
 
-C is the proof that this group is reachable: it consumes records today, and C is what every one of
-those runtimes binds through.
+- **R is the standout.** An enormous data-science population, no real Kafka client, and poor gRPC
+  support - so both of our existing routes are closed to it and the FFI route is the only one.
+- **Zig, Nim and Crystal** are growing and have nothing usable. They also have excellent C interop,
+  which makes them the cheapest of this group to reach.
+- **Julia** has a thin librdkafka wrapper and weak gRPC, so it is reachable today but badly served.
+- **Lua** has nothing, and is the embedded story rather than the application story.
+- **The enterprise tail - Delphi, Ada, COBOL** - where "nothing" is literal, and where a C ABI is the
+  only integration mechanism anyone will accept.
+
+**For all of them the base client is worth more than Parallel Consumer is**, because they need
+`consume` before they need key-ordered concurrency. That is an argument *for* the
+admin-then-producer-then-consumer ordering above rather than against it: the wrapper is the reach
+mechanism, and Parallel Consumer is what makes the reach interesting once it exists.
+
+C is the proof the group is reachable at all - it consumes records today, and C is what every one of
+these runtimes binds through.
 
 _Why it serves the approach:_ The client-side bet is that the queue belongs in the client. Nothing in
 that argument is about the JVM - but every implementation of it has been, which is a limit of the
