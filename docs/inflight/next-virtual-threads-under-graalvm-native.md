@@ -92,3 +92,29 @@ in full - which is a materially weaker pitch and should be known before it is ma
 See also: [`perf-virtual-threads-measured.md`](perf-virtual-threads-measured.md),
 [`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md),
 [`branch-language-proxy.md`](branch-language-proxy.md).
+
+## 2026-08-22: MEASURED. Both paths work in a native image, including the reflective one
+
+Oracle GraalVM 23 (`23-graal`), 20,000 tasks each sleeping 100ms, `--no-fallback`, **no
+`META-INF/native-image` reflection configuration added** - the state this note flags as the risk:
+
+| path | tasks | peak in flight | ran on virtual | thread name |
+|---|---:|---:|---:|---|
+| direct `newVirtualThreadPerTaskExecutor`, JVM | 20,000 | 20,000 | 20,000 | - |
+| direct, **native image** | 20,000 | 20,000 | 20,000 | - |
+| **the engine's own reflective sequence**, JVM | 20,000 | 20,000 | 20,000 | `pc-vt-1` |
+| **the engine's own reflective sequence, native image** | 20,000 | **20,000** | **20,000** | `pc-vt-0` |
+
+The fourth row is the one that matters. It replicates
+`AbstractParallelEoSStreamProcessor#setupVirtualThreadWorkerPool` verbatim -
+`Class.forName("java.lang.Thread").getMethod("ofVirtual")`, then `java.lang.Thread$Builder`'s
+`name(String, long)` and `factory()`, then `Executors.newThreadPerTaskExecutor` - and it produced
+correctly *named* virtual threads in a native binary. **So the specific risk this note names does not
+bite**: native-image's closed-world analysis auto-registered the constant-folded reflection (it
+reported 1,073 types registered) without being told anything. The note was right that "often is not a
+guarantee"; it is now measured rather than assumed, for this call site.
+
+**Still not proven, and it is the whole remaining job:** this was a standalone class with no
+dependencies. The sidecar carries gRPC/Netty and the Kafka client, which is where native-image
+reachability actually hurts. Building *the sidecar* as a native image is the next step, not a
+formality.
