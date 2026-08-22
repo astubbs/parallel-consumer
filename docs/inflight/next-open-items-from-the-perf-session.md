@@ -7,6 +7,27 @@
 Opened 2026-08-22. **The open items from the session, in the order they deserve attention**, so the
 next person does not have to reconstruct them from forty commits.
 
+## THE THREE, promoted to the top by Antony 2026-08-22 - do not let these sink again
+
+Each is queued, none is started, and each now has a measurement behind it that it did not have when
+it was first raised. **They are listed first because all three lost every slot today to whatever was
+red**, which is how the busy-shard count sat untouched for a day despite being the owner's own design.
+
+| | Item | The number that now backs it |
+|---|---|---|
+| **A** | **Can the async engines also run on virtual threads?** [`next-async-engines-on-virtual-threads.md`](next-async-engines-on-virtual-threads.md) | `ExternalEngine` returns a worker pool of ONE, so the two features have never met - yet `core-vt` reached 5,000 records in flight where `core` reached 2,824, and that difference is not the user function |
+| **B** | **The core futures API** [`next-core-async-user-function.md`](next-core-async-user-function.md) | Every async engine reaches its configured concurrency at 100ms; `core` reaches 2,824 of 5,000 and is **23% slower**. The advantage is reachable from core, and the engine modules are the only way to get it today |
+| **C** | **Virtual threads under GraalVM native, and the proxy** [`next-virtual-threads-under-graalvm-native.md`](next-virtual-threads-under-graalvm-native.md) | `proxy` came within **1%** of virtual threads at 2ms, on the path every non-JVM client takes. Java as a foreign language: virtual-thread concurrency without having virtual threads |
+
+**They are related, which is the argument for doing them together.** B would make the engine modules
+largely redundant; A asks whether those modules can take the feature B generalises; C is what B and
+virtual threads buy the ten non-JVM clients. A decision on B changes what A and C are worth.
+
+**Each has one untested assumption at its centre, and all three are cheap to falsify**: does
+`useVirtualThreads` even reach an `ExternalEngine` (A); does a `CompletableFuture` return compile
+under Jabel's Java 8 target at every call site (B); does the reflective virtual-thread lookup survive
+native-image's closed-world analysis (C).
+
 ## 1. SETTLED - there was no UNORDERED dispatch regression
 
 This entry used to claim one, on the strength of `OrderingModeDispatchParityTest` failing. **It was
