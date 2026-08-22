@@ -689,6 +689,13 @@ pc_build_id() {
 
 # The dataset: produced once, by the local build, and reused by every arm - including the Go one,
 # which is the only way an engine comparison means anything.
+# How many records the topic holds right now, or 0 when it does not exist.
+topic_depth() {
+  docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-get-offsets.sh \
+    --bootstrap-server "localhost:$BROKER_PORT" --topic "$1" 2>/dev/null |
+  awk -F: '{s += $3} END {print s + 0}'
+}
+
 LOCAL_CP=""
 if arrival_mode; then
   # NOTHING IS PRE-PRODUCED under controlled arrival - the records are fed during each run, into a
@@ -700,20 +707,33 @@ elif [ "${BENCH_SKIP_PRODUCE:-0}" = 1 ]; then
   log "BENCH_SKIP_PRODUCE=1: assuming $TOPIC already holds >= $RECORDS records"
 else
   LOCAL_CP=$(prepare LOCAL NATIVE) || { log "FATAL: cannot build local arm"; exit 1; }
-  log "producing $RECORDS records into $TOPIC (once)"
-  # Bounded: a wedged broker here silently costs the whole sweep, and there is no output to watch -
-  # nothing is logged when the produce SUCCEEDS either, so a stale "producing..." line is the last
-  # thing on screen whether it finished a second ago or never will.
-  if ! run_with_deadline "$PRODUCE_TIMEOUT" run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null; then
-    rc=$?
-    if [ "$rc" = 124 ]; then
-      log "FATAL: producing $RECORDS records exceeded ${PRODUCE_TIMEOUT}s. Is the broker healthy? Raise BENCH_PRODUCE_TIMEOUT for a larger dataset."
-    else
-      log "FATAL: producing $RECORDS records failed (exit $rc)"
+  # THE PRODUCE APPENDED, so running the same sweep twice DOUBLED the dataset.
+  #
+  # A topic that already holds enough records is left alone. Before this, a second invocation into
+  # the same topic name simply added another RECORDS on top - and the resulting topic is not merely
+  # bigger, it changes what is being measured: the arm stops at its expected count with the engine
+  # still holding a full buffer of records it fetched and will never be billed for, and every
+  # measure rendered after teardown then describes the wrong window. That is how a KEY row came back
+  # at 1,285 msg/s - faster than UNORDERED on the same dataset - having simply stopped early.
+  have=$(topic_depth "$TOPIC")
+  if [ "$have" -ge "$RECORDS" ]; then
+    log "$TOPIC already holds $have records (>= $RECORDS); not producing again"
+  else
+    log "producing $RECORDS records into $TOPIC (once; it holds $have)"
+    # Bounded: a wedged broker here silently costs the whole sweep, and there is no output to watch -
+    # nothing is logged when the produce SUCCEEDS either, so a stale "producing..." line is the last
+    # thing on screen whether it finished a second ago or never will.
+    if ! run_with_deadline "$PRODUCE_TIMEOUT" run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null; then
+      rc=$?
+      if [ "$rc" = 124 ]; then
+        log "FATAL: producing $RECORDS records exceeded ${PRODUCE_TIMEOUT}s. Is the broker healthy? Raise BENCH_PRODUCE_TIMEOUT for a larger dataset."
+      else
+        log "FATAL: producing $RECORDS records failed (exit $rc)"
+      fi
+      exit 1
     fi
-    exit 1
+    log "produced $RECORDS records into $TOPIC"
   fi
-  log "produced $RECORDS records into $TOPIC"
 fi
 
 # THE TOPIC MUST ACTUALLY HOLD THE RECORDS THE ARMS WILL WAIT FOR.
@@ -739,7 +759,15 @@ verify_topic_depth() {
     log "       Re-produce it, or lower the record count to what the topic actually has."
     exit 1
   fi
-  log "$topic holds $have records (>= $want)"
+  if [ "$have" -gt "$want" ]; then
+    log "WARNING: $topic holds $have records but the run consumes $want. The arm STOPS EARLY, with the"
+    log "         engine still holding records it fetched and will never be billed for - so msg_per_sec"
+    log "         is measured over whichever $want records finished first, not over the dataset. On a"
+    log "         skewed key distribution that flatters the ordered arms specifically, because the"
+    log "         records they are slowest at are exactly the ones left behind."
+  else
+    log "$topic holds $have records (>= $want)"
+  fi
 }
 arrival_mode || verify_topic_depth "$TOPIC" "$RECORDS"
 

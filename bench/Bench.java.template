@@ -166,8 +166,12 @@ public class Bench {
         System.out.printf("RESULT %s %d %d %.1f peak=%d res=%s drain=%s e2e=%s arr=%s "
                         + "feed=%s backlog=%s inflight=%s fails=%d%n",
                 mode, count, ms, count * 1000.0 / ms, peakInFlight.get(),
-                residenceMillis(), drain.render(), e2e.render(), arrivals,
-                feedLag.renderShort(), backlog.renderShort(), sustainedInFlight.renderShort(),
+                residenceMillis(),
+                rendered(drainSnapshot, drain, false),
+                rendered(e2eSnapshot, e2e, false), arrivals,
+                feedLag.renderShort(),
+                rendered(backlogSnapshot, backlog, true),
+                rendered(inFlightSnapshot, sustainedInFlight, true),
                 injectedFailures.get());
         if (stub != null) stub.stop();
         if (asyncStubVertx != null) asyncStubVertx.close();
@@ -368,6 +372,23 @@ public class Bench {
         // the first run of this actually did. This method is already the one point every arm reaches
         // between stopping its clock and touching anything, which is why the capture belongs in it.
         residenceSnapshot = residenceFromPcMeter();
+        // AND EVERY OTHER MEASURE, for exactly the same reason - which the residence capture above
+        // discovered and then did not generalise.
+        //
+        // drain and e2e were rendered at PRINT time, which is after closeDrainFirst(). Whatever the
+        // engine had fetched beyond the measured record count keeps completing during that drain, and
+        // every one of those completions was recorded into the same arrays the percentiles come from.
+        // Measured 2026-08-22 on a topic that happened to hold twice the run's record count: the arm
+        // reported 1,285 msg/s over a 9.3-second window and a drain p99 of 51,945ms - a percentile
+        // five times longer than the run it claimed to describe, which is not a number that can be
+        // wrong quietly, and yet it sat in a results file looking ordinary.
+        //
+        // The condition is not exotic: any topic holding more records than the run consumes does it,
+        // and re-running a sweep into an existing topic is the ordinary way to get one.
+        drainSnapshot = drain.render();
+        e2eSnapshot = e2e.render();
+        inFlightSnapshot = sustainedInFlight.renderShort();
+        backlogSnapshot = backlog.renderShort();
         System.err.println("BENCH_WINDOW_CLOSED");
     }
 
@@ -1490,6 +1511,23 @@ public class Bench {
 
     /** The engine's residence percentiles, taken at {@link #windowClosed()} before teardown. */
     static String residenceSnapshot;
+
+    /**
+     * The other four measures, taken at the same instant and for the same reason.
+     * <p>
+     * Everything after {@link #windowClosed()} is teardown, and teardown completes records. A measure
+     * rendered later describes a window nobody asked about.
+     */
+    static String drainSnapshot, e2eSnapshot, inFlightSnapshot, backlogSnapshot;
+
+    static String rendered(String snapshot, Latencies fallback, boolean shortForm) {
+        if (snapshot != null) {
+            return snapshot;
+        }
+        // An arm that never reached windowClosed did not finish, and its numbers are already voided
+        // by the harness - rendering live is only so the line is well-formed.
+        return shortForm ? fallback.renderShort() : fallback.render();
+    }
 
     /** The meter Parallel Consumer publishes; see PCMetricsDef.RECORD_RESIDENCE_TIME. */
     static final String RESIDENCE_METER = "pc.record.residence.time";
