@@ -127,6 +127,28 @@ report "$D" "bz.stub.parallelconsumer.SomeOtherTest" 380 0 0 8
 expect_exit "default mode needs no marker suite" 0 "$GUARD" default "$D"
 
 # ---------------------------------------------------------------------------------------------
+# The adaptive-concurrency row, proven WIRED rather than merely written. mode_marker() and
+# mode_selector() are two separate case statements, so a mode added to one and not the other is a
+# live possibility - and the halves fail differently: a missing mode_marker row is rejected as an
+# unknown mode (loud), while a missing mode_selector row aborts the script under `set -e` with no
+# explanation at all. Asserting the SELECTOR text appears in the report covers the quiet half.
+#
+# The all-skipped shape above has no analogue here: this mode's tests never skip by design (see
+# AdaptiveConcurrencyModeTest), because it is configuration rather than a runtime capability. That
+# leaves the missing-marker case as the one broken-lane shape worth pinning for it.
+# ---------------------------------------------------------------------------------------------
+D="$WORK/adaptive-green/target/surefire-reports"
+report "$D" "bz.stub.parallelconsumer.SomeOtherTest" 380 0 0 8
+report "$D" "bz.stub.parallelconsumer.internal.AdaptiveConcurrencyModeTest" 6 0 0 0
+expect_exit "adaptive-concurrency is a known mode and its marker suite counts" 0 "$GUARD" adaptive-concurrency "$D"
+expect_stdout_contains "...and names its selector so the run can be reproduced" "-Dpc.adaptiveConcurrency=OBSERVE"
+
+D="$WORK/adaptive-missing/target/surefire-reports"
+report "$D" "bz.stub.parallelconsumer.SomeOtherTest" 380 0 0 8
+expect_exit "adaptive-concurrency without its marker suite is a broken lane" 1 "$GUARD" adaptive-concurrency "$D"
+expect_stdout_contains "...and names the suite it wanted" "AdaptiveConcurrencyModeTest"
+
+# ---------------------------------------------------------------------------------------------
 # An unknown mode is a typo in the workflow, and must not silently pass.
 # ---------------------------------------------------------------------------------------------
 expect_exit "an unknown mode is rejected" 1 "$GUARD" no-such-mode "$WORK/green/target/surefire-reports"

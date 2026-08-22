@@ -128,6 +128,12 @@
              docs/inflight/test-opt-in-engine-paths-are-unexercised.md is why that matters. -->
         <pc.virtualThreads>false</pc.virtualThreads>
         <pc.directPull>false</pc.directPull>
+        <!-- Not a boolean: this one carries an AdaptiveConcurrencyMode NAME (see
+             ParallelConsumerOptions.ADAPTIVE_CONCURRENCY_MODE_PROPERTY), and its default must be the literal
+             DISABLED rather than empty. An empty forwarded value is not "absent" - the resolver only treats a
+             NULL property as absent, and `valueOf("")` throws, which would fail every options build in the
+             tree. The property may select at most OBSERVE; ENFORCE stays builder-only. -->
+        <pc.adaptiveConcurrency>DISABLED</pc.adaptiveConcurrency>
 
         <!-- version numbers -->
         <!-- plugins -->
@@ -1008,6 +1014,7 @@
                     <systemPropertyVariables>
                         <pc.virtualThreads>${pc.virtualThreads}</pc.virtualThreads>
                         <pc.directPull>${pc.directPull}</pc.directPull>
+                        <pc.adaptiveConcurrency>${pc.adaptiveConcurrency}</pc.adaptiveConcurrency>
                     </systemPropertyVariables>
                     <!-- Same group filtering as failsafe below - without this binding, surefire ignores
                          the quarantine/performance tags entirely and a @Quarantined UNIT test would

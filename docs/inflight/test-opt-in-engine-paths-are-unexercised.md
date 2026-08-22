@@ -16,6 +16,7 @@ run exercises none of them:**
 |---|---|---|---|
 | **Direct pull** | `-Dpc.directPull=true` | **no** | **no - and this is what is left of this note** |
 | **Virtual threads** | `-Dpc.virtualThreads=true` + a JDK 21 test JVM | no, by design - it is a mode, not a default | **yes**, `Unit Tests (virtual threads)` in `maven.yml` |
+| **Adaptive concurrency** | `adaptiveConcurrencyMode` (builder), or `-Dpc.adaptiveConcurrency=OBSERVE` | **yes** - `AdaptiveConcurrencyParityTest` turns `ENFORCE` on in its own options | **yes**, `Unit Tests (adaptive concurrency)` in `maven.yml`, scoped (see below) |
 | **Async user function** ([`next-core-async-user-function.md`](next-core-async-user-function.md)) | a different entry point | not yet built | not yet |
 
 **The axis now exists**, so what remains here is populating it. Adding direct pull is a matrix entry
@@ -23,11 +24,24 @@ in `maven.yml` plus a row in `bin/check-execution-mode.sh`'s `mode_marker()`/`mo
 shape is written into the workflow's own comment, with the direct-pull entry spelled out and
 deliberately left commented. **The mechanism to reuse is that one**; do not build a second.
 
+**Adaptive concurrency took that mechanism and narrowed one thing about it, deliberately.** Its row
+runs `-Dtest` scoped to the mode's own classes plus its parity test rather than the whole suite
+again: a whole-suite duplicate inside a 60-minute-capped lane with no retry means any flake in an
+experimental mode blocks unrelated PRs, which is the cost that left the direct-pull row commented out
+in the first place. **Widening it to the full suite is the later step**, once the mode leaves
+experimental - the workflow comment says so at the entry. Note also that the property may select at
+most `OBSERVE` by design, so the lane can never reach `ENFORCE`; enforcement is exercised because
+`AdaptiveConcurrencyParityTest` sets it in its own options, which is why that path is covered by the
+DEFAULT suite rather than only by a lane.
+
 Two things the virtual-thread entry settled that direct pull inherits:
 
 - **A `-D` on the Maven command line does not reach surefire's forked JVM.** The pom forwards
-  `pc.virtualThreads` and `pc.directPull` through `systemPropertyVariables`; without that,
-  `mvn test -Dpc.directPull=true` runs the whole suite on the default engine and reports green.
+  `pc.virtualThreads`, `pc.directPull` and `pc.adaptiveConcurrency` through `systemPropertyVariables`;
+  without that, `mvn test -Dpc.directPull=true` runs the whole suite on the default engine and reports
+  green. `pc.adaptiveConcurrency` is the one that is not a boolean - it carries a mode NAME, so its
+  forwarded default has to be the literal `DISABLED`: an empty value is not "absent" to the resolver,
+  and `valueOf("")` throws.
 - **`bin/check-execution-mode.sh` is the loud-skip guard this note asked for.** It reads the surefire
   XML rather than a log line, and refuses a green verdict when the mode's own tests did not execute.
   Its self-test caught two defects in it, one of which was the guard committing this note's own
