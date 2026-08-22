@@ -63,9 +63,15 @@ work through. The buffering question does not vanish so much as move: from "how 
 shared executor queue be" - a global quantity nobody can observe - to "how many should a worker hold
 ahead", which is local, bounded, and observable by the worker itself.
 
-**Under `KEY` ordering a batch can hold at most one record per key**, so batch size is bounded by the
-number of selectable shards rather than chosen freely. Under `UNORDERED` it is free. That asymmetry
-needs measuring before a batch size is picked.
+**A `KEY`-ordered batch draws from many keys, so this is not the constraint it first looks like.** A
+batch of 100 is 100 records from 100 different keys - which is what PC's existing `makeBatches`
+already produces, because `getWorkIfAvailable` draws across shards. Ordering is not threatened: each
+key contributes at most one record to a batch, so a worker may process them in any order it likes.
+
+The only real bound is **key cardinality**: batch size cannot exceed the number of currently
+selectable shards. That binds when distinct keys are few - and in exactly that case the available
+concurrency is low anyway, so a large batch would have nothing to carry. At realistic cardinalities
+the batch size is a free choice.
 
 **2. The manager thread becomes the ceiling.** Every record now passes through one thread. At 25,000
 msg/s with batch 100 that is 250 requests/sec, which is nothing; at batch 1 it is 25,000/sec, which a
