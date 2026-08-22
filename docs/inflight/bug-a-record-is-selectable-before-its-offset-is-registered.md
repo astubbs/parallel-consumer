@@ -3,7 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 
-Recorded 2026-08-22 on `integration/v6`. **Latent, not observed.** It is the second
+Recorded 2026-08-22 on `perf/engine-concurrency`. **Latent, not observed.** It is the second
 instance of the defect class that produced the direct-pull double delivery, and it is left open here
 because closing that one did not close this one.
 

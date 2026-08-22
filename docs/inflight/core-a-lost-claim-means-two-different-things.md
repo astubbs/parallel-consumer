@@ -3,7 +3,7 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
 
-Recorded 2026-08-22 on `integration/v6`, left open by the change that made the claim
+Recorded 2026-08-22 on `perf/engine-concurrency`, left open by the change that made the claim
 one atomic transition (`WorkContainer.ExecutionState`).
 
 `WorkContainer#onQueueingForExecution()` returning `false` is a `trace` log and nothing else. That is

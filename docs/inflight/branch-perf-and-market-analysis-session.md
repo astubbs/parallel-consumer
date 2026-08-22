@@ -12,7 +12,7 @@ and are deliberately not recorded here; they go stale within a day.
 |---|---|---|
 | `feats/classic-vertx-demo` | **yes** | The 2021 asciinema demo, rescued from the stranded `presentation` branch and made to run again. First commit is the original verbatim, author and date preserved. **The only branch here with finished, shippable work on it.** |
 | `perf/throughput-regression-since-0-3` | **yes** | The version bisect, the `bench/` harness, and the five-year `ExternalEngine` regression it found. **History was rewritten and force-pushed** - see below. |
-| `integration/v6` | **yes** | **Renamed from `research/market-analysis-recut` on 2026-08-22**, while it was still free - no PR had ever been opened on it, and a rename closes one. The old name described a market analysis; the branch carries virtual threads, direct pull, the atomic claim fix, the bench harness, the share-groups arm, and the inherited proxy and polyglot work. **The integration branch for everything heading into v6.** |
+| `perf/engine-concurrency` | **yes** | **Renamed from `research/market-analysis-recut` on 2026-08-22**, while it was still free - no PR had ever been opened on it, and a rename closes one. The old name described a market analysis; the branch carries virtual threads, direct pull, the atomic claim fix, the bench harness, the share-groups arm, and the inherited proxy and polyglot work. **The integration branch for everything heading into v6.** |
 | `research/market-analysis` | no | **Superseded. Delete.** Pre-re-cut, its history carries redacted material. |
 
 **Experiments - each a hypothesis, an implementation, a measurement, and a reason it did not ship.**
@@ -114,7 +114,7 @@ the load-robust column and `msg_per_sec` is not. See `branch-parallel-measuremen
 All on origin now. Divergence and merge state are `git` questions and are deliberately not recorded
 here; **what each branch means is not.**
 
-**Merged into `integration/v6`** - kept as named refs so a bisect can reach them:
+**Merged into `perf/engine-concurrency`** - kept as named refs so a bisect can reach them:
 
 | Branch | What it is |
 |---|---|

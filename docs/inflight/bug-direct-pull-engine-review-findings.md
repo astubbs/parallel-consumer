@@ -4,7 +4,7 @@
 <!-- inflight-impact: correctness -->
 
 Opened 2026-08-22 on `test/direct-pull-coverage`. `DirectPullWorkerPool` and the three shared-state
-changes it forced were merged onto `integration/v6` as a measurement, with no
+changes it forced were merged onto `perf/engine-concurrency` as a measurement, with no
 dedicated tests and - as far as the record shows - without anyone reading the code for correctness.
 [`perf-direct-pull-measured.md`](perf-direct-pull-measured.md) owns the design and the numbers; this
 note owns what a first correctness read found, and it is deliberately separated into what is proven
