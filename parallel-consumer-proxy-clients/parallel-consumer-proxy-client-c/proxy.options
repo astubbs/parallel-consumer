@@ -1,0 +1,44 @@
+# nanopb field bounds for the C reach probe.
+#
+# WHY BOUND THEM AT ALL. Without sizes nanopb emits pb_callback_t for every string, bytes, map and
+# repeated field, and the caller writes an encode and a decode callback for each. Fixed bounds turn
+# them into plain C arrays instead - which is not merely more convenient, it is the shape the
+# targets this probe exists for actually want: no malloc, no heap fragmentation, a struct whose size
+# is known at compile time.
+#
+# The numbers are demo-sized and deliberately stated rather than generous. A real client would
+# publish them as its documented limits, because in nanopb a field's maximum IS part of the API.
+
+parallelconsumer.proxy.v1.Configure.topics                 max_count:4  max_size:128
+parallelconsumer.proxy.v1.Configure.topic_pattern          max_size:128
+parallelconsumer.proxy.v1.Configure.capabilities           max_count:8  max_size:32
+parallelconsumer.proxy.v1.Configure.kafka_properties       max_count:16
+parallelconsumer.proxy.v1.Configure.launch_token           max_size:128
+parallelconsumer.proxy.v1.Configure.pc_instance_tag        max_size:64
+parallelconsumer.proxy.v1.Configure.terminal_topic         max_size:128
+parallelconsumer.proxy.v1.Configure.KafkaPropertiesEntry.key    max_size:64
+parallelconsumer.proxy.v1.Configure.KafkaPropertiesEntry.value  max_size:256
+
+parallelconsumer.proxy.v1.Configured.topics                max_count:4  max_size:128
+parallelconsumer.proxy.v1.Configured.topic_pattern         max_size:128
+parallelconsumer.proxy.v1.Configured.capabilities          max_count:8  max_size:32
+parallelconsumer.proxy.v1.Configured.pc_instance_tag       max_size:64
+parallelconsumer.proxy.v1.Configured.terminal_topic        max_size:128
+
+parallelconsumer.proxy.v1.Token.record_id                  max_size:64
+parallelconsumer.proxy.v1.Record.topic                     max_size:128
+parallelconsumer.proxy.v1.Record.key                       max_size:256
+parallelconsumer.proxy.v1.Record.value                     max_size:1024
+
+parallelconsumer.proxy.v1.Dispatch.records                 max_count:32
+parallelconsumer.proxy.v1.DispatchRecord.last_failure_reason  max_size:256
+
+parallelconsumer.proxy.v1.Report.Failure.reason            max_size:256
+parallelconsumer.proxy.v1.Report.Terminal.reason           max_size:256
+parallelconsumer.proxy.v1.Report.Success.produce           max_count:4
+parallelconsumer.proxy.v1.ProduceRecord.topic              max_size:128
+parallelconsumer.proxy.v1.ProduceRecord.key                max_size:256
+parallelconsumer.proxy.v1.ProduceRecord.value              max_size:1024
+
+parallelconsumer.proxy.v1.Manifest.tokens                  max_count:32
+parallelconsumer.proxy.v1.WorkerDied.tokens                max_count:32
