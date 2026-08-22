@@ -808,8 +808,14 @@ public class Bench {
     //
     // DETERMINISTIC BY SEED, because a run that cannot be repeated cannot be compared.
     // BENCH_WORK_SEED defaults to 42; every arm in a sweep therefore sees the SAME sequence of
-    // durations and the same failing offsets, which is what makes the comparison fair rather than
-    // merely similar.
+    // durations and the same NUMBER of failures.
+    //
+    // IT DOES NOT PROMISE THE SAME RECORDS FAIL IN TWO ARMS, and the comment here promised exactly
+    // that ("the same failing offsets") until 2026-08-23. Which record takes which draw depends on
+    // dispatch order, which is an engine property. The promise that can be kept, and the one a
+    // comparison actually needs, is that two arms are handed the same workload in aggregate - see
+    // WORK_DRAW, whose per-thread predecessor kept neither promise and silently handed the
+    // virtual-thread arms 1.85x the configured failure rate.
     static final long WORK_SEED = Long.getLong("bench.workSeed",
             Long.parseLong(System.getenv().getOrDefault("BENCH_WORK_SEED", "42")));
     static final double DELAY_STDDEV = Double.parseDouble(
@@ -819,9 +825,61 @@ public class Bench {
     static final double FAILURE_RATE = Double.parseDouble(
             System.getenv().getOrDefault("BENCH_FAILURE_RATE", "0"));
 
-    /** Per-record, so concurrent callers never contend on one Random and never share a sequence. */
-    static final ThreadLocal<java.util.Random> WORK_RANDOM =
-            ThreadLocal.withInitial(() -> new java.util.Random(WORK_SEED + Thread.currentThread().getId()));
+    /**
+     * The draw counter. Every work-model decision takes the NEXT value from it and mixes that, so the
+     * Nth draw of a run is the same number whichever thread makes it and whatever thread made the one
+     * before.
+     * <p>
+     * <b>IT WAS A PER-THREAD {@code Random} UNTIL 2026-08-23, AND THAT OVERSTATED THE FAILURE RATE BY
+     * 85% ON EXACTLY THE ARMS THIS PROJECT'S RELEASE HEADLINE IS ABOUT.</b>
+     * <p>
+     * The old form was {@code ThreadLocal.withInitial(() -> new Random(WORK_SEED + threadId))}, whose
+     * comment read "per-record, so concurrent callers never contend on one Random". On platform
+     * threads that is a fixed pool of a few dozen {@code Random}s each drawn thousands of times, and
+     * it is fine. **Virtual threads are one thread per task** -
+     * {@code Executors.newThreadPerTaskExecutor} in {@code AbstractParallelEoSStreamProcessor} - so
+     * every record got a BRAND NEW {@code Random} and exactly ONE draw from it, and the first draw of
+     * a freshly seeded {@code java.util.Random} is not uniform across consecutive seeds.
+     * <p>
+     * Measured off-broker, in forty lines, after the arm disagreed with its own configuration: at a
+     * configured 1% over 12,000 records, {@code new Random(seed + i).nextDouble() < 0.01} fires
+     * <b>222</b> times (1.85%), and one shared {@code Random} drawn 12,000 times fires <b>128</b>
+     * (1.07%). The {@code core-vt} arm had reported <b>222</b> injected failures and the platform
+     * {@code core} arm <b>128</b> - the two predicted numbers exactly, which is what turned a
+     * suspicion into a cause.
+     * <p>
+     * <b>So the virtual-thread arms were being handed nearly twice the failures of the arms they were
+     * being compared against</b>, in the only rows where failures exist, and the tell was a column
+     * nobody reads against its own configured rate.
+     * <p>
+     * SplitMix64 over a counter rather than a shared {@code Random}: a shared {@code Random} is a
+     * single CAS loop that thousands of concurrent callers would contend on, which is what the
+     * original comment was rightly avoiding. This has one atomic increment and no shared mutable
+     * state beyond it, and its output is uniform for consecutive inputs by construction.
+     * <p>
+     * <b>What this does and does not promise.</b> It promises every arm the same NUMBER of failures
+     * and the same DISTRIBUTION of durations, which is the property that makes a comparison fair. It
+     * does not promise the same records fail in two arms, because which record takes which draw
+     * depends on dispatch order - and neither did the per-thread form, whose interleaving across a
+     * pool was never reproducible either.
+     */
+    static final java.util.concurrent.atomic.AtomicLong WORK_DRAW = new java.util.concurrent.atomic.AtomicLong();
+
+    /** The next uniform [0,1) from the work model's own stream. SplitMix64 over the draw counter. */
+    static double nextWorkDraw() {
+        long z = WORK_DRAW.getAndIncrement() * 0x9E3779B97F4A7C15L + WORK_SEED;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        z = z ^ (z >>> 31);
+        return (z >>> 11) * 0x1.0p-53;
+    }
+
+    /** A standard normal from the same stream, for {@code BENCH_DELAY_STDDEV}. Box-Muller. */
+    static double nextWorkGaussian() {
+        double u1 = Math.max(nextWorkDraw(), Double.MIN_VALUE);
+        double u2 = nextWorkDraw();
+        return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
 
     /** True when nothing below is configured, so the constant-delay path stays exactly as it was. */
     static boolean workModelIsFlat() {
@@ -835,12 +893,11 @@ public class Bench {
      */
     static int workDelayMs(int delayMs) {
         if (workModelIsFlat()) return delayMs;
-        var rnd = WORK_RANDOM.get();
         if (DELAY_P99 > 0) {
-            return rnd.nextDouble() < 0.01 ? DELAY_P99 : delayMs;
+            return nextWorkDraw() < 0.01 ? DELAY_P99 : delayMs;
         }
         if (DELAY_STDDEV > 0) {
-            long d = Math.round(delayMs + rnd.nextGaussian() * DELAY_STDDEV);
+            long d = Math.round(delayMs + nextWorkGaussian() * DELAY_STDDEV);
             return (int) Math.max(0, d);
         }
         return delayMs;
@@ -848,7 +905,7 @@ public class Bench {
 
     /** Whether this invocation should throw. Retries are the point: a serial engine stalls for them too. */
     static boolean workShouldFail() {
-        return FAILURE_RATE > 0 && WORK_RANDOM.get().nextDouble() < FAILURE_RATE;
+        return FAILURE_RATE > 0 && nextWorkDraw() < FAILURE_RATE;
     }
 
     /** Thrown by the simulated user function, so a real bug is never mistaken for the injected rate. */
