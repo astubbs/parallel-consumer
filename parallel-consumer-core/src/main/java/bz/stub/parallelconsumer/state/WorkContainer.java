@@ -173,6 +173,28 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Getter
     private final ConsumerRecord<K, V> cr;
 
+    /**
+     * When this record ARRIVED in Parallel Consumer - the instant this container was constructed, which is the
+     * moment the record came out of the consumer and entered the engine's own queues.
+     * <p>
+     * <b>Deliberately not {@link #timeTakenAsWorkMs}</b>, which is stamped when a delivery is <em>claimed</em>.
+     * That one measures time in flight, so it cannot see the interval this exists for: how long a record sits in
+     * the shards after being fetched and before anything picks it up. Under a backlog that interval is Little's
+     * law applied to Parallel Consumer's own buffers - buffered depth divided by throughput - so it is the only
+     * quantity that separates "not fetched yet" from "fetched and queued behind other work", which no other
+     * meter distinguishes.
+     * <p>
+     * Produce time and time waiting on the broker are deliberately EXCLUDED: they are the environment, not the
+     * engine, and {@link ConsumerRecord#timestamp()} is there for anyone who wants them included.
+     * <p>
+     * Taken from the module clock, like {@link #succeededAt}, so a test driving a fake clock sees a residence
+     * time consistent with everything else it observes.
+     *
+     * @see #getResidenceTime()
+     */
+    @Getter
+    private final Instant arrivedAt;
+
     @Getter
     private int numberOfFailedAttempts = 0;
 
@@ -265,6 +287,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         this.cr = cr;
         this.workType = workType;
         this.module = module;
+        this.arrivedAt = module.clock().instant();
     }
 
     public WorkContainer(long epoch, ConsumerRecord<K, V> cr, PCModule<K, V> module) {
@@ -547,6 +570,21 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Override
     public String toString() {
         return "WorkContainer(tp:" + toTopicPartition(cr) + ":o:" + cr.offset() + ":k:" + cr.key() + ")";
+    }
+
+    /**
+     * How long this record has been inside Parallel Consumer: from {@link #getArrivedAt()} to now.
+     * <p>
+     * Asked at the moment the controller takes a delivery back, this is the record's RESIDENCE TIME - the
+     * quantity behind {@link bz.stub.parallelconsumer.metrics.PCMetricsDef#RECORD_RESIDENCE_TIME}. Because
+     * arrival is stamped once, at construction, a record that failed and was retried carries every one of those
+     * attempts and every retry delay in this figure, which is the point: excluding them would flatter exactly
+     * the case the metric exists to expose.
+     *
+     * @return the interval between this record entering Parallel Consumer and now, on the module clock
+     */
+    public Duration getResidenceTime() {
+        return Duration.between(arrivedAt, module.clock().instant());
     }
 
     public Duration getTimeInFlight() {
