@@ -383,3 +383,34 @@ on the point. Nothing done to PC's collections closes a gap that exists without 
 - **Keep the reason the skip list was introduced.** "Missing WorkContainers under high pressure" is a
   correctness bug, not a performance preference. Whatever replaces it must be shown not to reintroduce
   that, under the same pressure - which means the chaos and slam-style tests, not a benchmark.
+
+## The standing performance suite: which arms must always be in it
+
+**Antony's ruling, 2026-08-22: "those arms need to keep being part of our standard perf suite."**
+
+A sweep that measures only Parallel Consumer's engines cannot tell whether a number is good. Four arms
+are **controls**, not competitors, and dropping any of them makes the rest unfalsifiable:
+
+| Arm | What it controls for | What its absence costs |
+|---|---|---|
+| `vanilla` | The protocol floor - one thread, no engine | No way to know what Kafka itself costs |
+| `pool` | The Java floor - client plus a thread pool, no PC | **PC's own contribution is unmeasurable.** PC sits within a few percent of this at most operating points; without it, PC's number reads as PC's achievement |
+| `pool` + `BENCH_POOL_VIRTUAL=1` | The Java floor with the thread model changed and nothing else | Cannot separate "the Java client is slower" from "platform threads are slower" - the distinction that decides whether embedding a Go client is worth anything |
+| `franz` | The Go floor - franz-go, no engine | The llingr comparison is uncontrolled, and has been quoted uncontrolled before |
+| `llingr` | The competitor, engine included | No external reference point at all |
+
+**The failure this prevents has already happened twice.** The llingr figure has been reported without
+its `franz` control on two separate days, because `franz` is a serial arm and gets skipped at any
+non-trivial delay. And a whole engine comparison was nearly published with a blocking callee, which
+measured the stub rather than the engines.
+
+**Serial arms need their own conditions, not exclusion.** `vanilla` and `franz` process one record at
+a time, so their runtime is `records x delay` and the sweep skips them above a cap - correctly, since
+100,000 records at 100ms is nearly three hours. **The answer is a small-record-count run for the
+floors, not a suite that quietly omits them.** A few thousand records at each delay is enough to place
+the floor, and it costs seconds.
+
+**And they must be run under the same callee.** `BENCH_TIMER_CALLEE=1` for floor comparisons: an
+HTTP stub is a third variable, and at 0ms the `vanilla` arm exhausts the machine's ephemeral ports
+before it finishes - a `BindException`, not a measurement.
+

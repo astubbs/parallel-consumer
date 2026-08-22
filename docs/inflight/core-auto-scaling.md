@@ -133,3 +133,46 @@ that bear directly on this design, from a repeatable harness (`bench/run-bisect.
 
 Read as: the manual knob is hard to set, the adaptive mechanism that exists does not work, and the
 documented workaround does not apply to four of the five engines.
+
+## Inline execution: the bottom of the adaptive-concurrency range
+
+**Antony, 2026-08-22, on why PC is ~17% behind a bare Go consumer at 0ms delay: "would this be
+something we'd slide into the internal auto scaling work? it could be a reasonable workload when pc is
+running in ks and doing in memory stuff."** Yes to both, and the second point is the one that makes it
+worth building.
+
+**What it is.** When the user function is consistently fast and nothing is backpressured, run it
+**inline on the polling thread** instead of dispatching it. PC's per-record cost with an empty user
+function is roughly a dozen data-structure operations and **two thread handoffs** - register, shard
+insert, occupancy add, population admit, select, claim CAS, submit, run, mailbox return, control-loop
+drain, state transitions, shard remove, offset accounting. A bare consumer pays none of it. That cost
+only earns its place when the user function is slow enough to amortise it, and at 0ms there is nothing
+to amortise.
+
+**Why it belongs in the auto-scaling work (astubbs#227) rather than beside it.** Adaptive concurrency
+already has to measure user-function duration and react to it. "The function is fast enough that
+concurrency is costing more than it returns" is simply **the bottom of that control range** - the same
+input, the same loop, one more decision. Built separately it would be a second thing observing the
+same signal and deciding on its own, which is the state-duplication shape this codebase keeps paying
+for.
+
+**And the workload is real, which is the part I initially got wrong.** I dismissed this as optimising
+a case that does not exist in production. It does: **a Kafka Streams operator doing in-memory work** -
+a filter, a map, a projection, a local-store lookup - is genuinely sub-microsecond, and that is
+precisely the topology PC would be running under
+[`next-what-kafka-streams-on-pc-is-worth.md`](next-what-kafka-streams-on-pc-is-worth.md). A Streams
+topology is a *chain* of such operators, most of which do nothing expensive; paying a dispatch per
+record per operator would be absurd.
+
+**The catch, and it is what makes this a control problem rather than a flag.** Inline execution
+happens on the polling thread, so a record that turns out to be slow blocks polling - and therefore
+every other partition - for its duration. That is head-of-line blocking, reintroduced by the
+optimisation, which is the exact thing PC exists to remove. **So it must be reversible the instant a
+function stops being fast**, which needs the same hysteresis, the same measurement window and the same
+safety margin the load-factor work needs. It is not a switch.
+
+**Measure the prize before building it**: the gap it would close is ~17% at 0ms delay, narrowing to
+9% by 50ms and gone by 100ms. That is PC's worst case by construction - the one operating point where
+its entire reason for existing is switched off. Under a Streams topology, though, that operating point
+is the common case rather than the pathological one, which is what changes the answer.
+

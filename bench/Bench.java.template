@@ -412,9 +412,45 @@ public class Bench {
      * per-record completion tracking, and commits nothing. That is the point: it is a floor, not a
      * competitor.
      */
+    /**
+     * THE JAVA FLOOR. A plain consumer, a pool, a semaphore - no Parallel Consumer anywhere. Whatever
+     * this scores is what the Java client costs, and only what an engine scores ABOVE it is the
+     * engine's doing.
+     * <p>
+     * <b>{@code poolVirtual()} is why this arm matters twice.</b> The 2026-08-21 comparison against
+     * the franz-go floor put the Java client at 31-67% of the Go one - but it also recorded the Java
+     * arms plateauing near 2,848 records in flight where the Go floor reached exactly 5,000. That
+     * ~2,800 is the PLATFORM-THREAD CEILING, not a client property: the identical figure reappeared on
+     * 2026-08-22 with a different partition count and a different arm, with and without PC.
+     * <p>
+     * Goroutines are not platform threads, and virtual threads are Java's answer to that - so an
+     * unknown and possibly large share of the measured client gap may be a thread model rather than a
+     * protocol implementation. This arm run with {@code BENCH_POOL_VIRTUAL=1} changes ONE term - what
+     * a worker is - and the difference between the two runs is how much of the gap was never about Go.
+     */
+    static boolean poolVirtual() {
+        return System.getenv("BENCH_POOL_VIRTUAL") != null;
+    }
+
+    /**
+     * Reflective for the same reason {@code setupVirtualThreadWorkerPool} is: this template compiles
+     * against every released Parallel Consumer in a version bisect, on whatever JDK is present, and
+     * {@code Executors.newVirtualThreadPerTaskExecutor} is not on Java 8's API surface. Fails loudly
+     * rather than falling back to platform threads, because a silent fallback would make the two arms
+     * identical and the comparison meaningless.
+     */
+    static ExecutorService newVirtualPool() {
+        try {
+            return (ExecutorService) Executors.class.getMethod("newVirtualThreadPerTaskExecutor").invoke(null);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("BENCH_POOL_VIRTUAL needs a JDK 21+ java on PATH; this JVM is "
+                    + System.getProperty("java.version"), e);
+        }
+    }
+
     static long runPool(String bootstrap, String topic, int expected, int delayMs, int concurrency)
             throws Exception {
-        ExecutorService pool = Executors.newFixedThreadPool(concurrency);
+        ExecutorService pool = poolVirtual() ? newVirtualPool() : Executors.newFixedThreadPool(concurrency);
         // Caps work actually in progress at `concurrency`, so peak in-flight is comparable with the
         // engine arms rather than being whatever the poll loop happened to hand over.
         Semaphore permits = new Semaphore(concurrency);
