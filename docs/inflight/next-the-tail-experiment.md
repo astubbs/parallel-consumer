@@ -36,6 +36,50 @@ table.
 tailed handler is what it does to the *distribution*, and a mean hides it completely. Reporting msg/s
 here would produce a null result from an experiment that had not been run.
 
+## BLOCKED, and not on what this note first said - measured 2026-08-22
+
+**The blocker is not residence time. That landed. The blocker is that a saturated backlog drain cannot
+show a tail at all**, and this note as first written would have produced a confident null result.
+
+Measured on `perf/record-residence-time`: `PARTITION` and `KEY`, both held at 24 records in flight
+over 24 partitions, handler p99 at 50x its median. **Residence p99 15,568ms against 15,565ms** -
+indistinguishable.
+
+**The reason is arithmetic, not a fact about ordering.** Every run this harness does drains a backlog
+produced before the run began, so residence is *buffered depth over throughput*. Both arms have the
+same buffer and the same throughput ceiling, so their residence is equal **by construction**. A
+1,000ms slow record is 6% of a 15,568ms p99 and cannot surface.
+
+**And the buffer cannot simply be made shallower**: `PARTITION` only reaches its parallelism when the
+buffer covers every partition - about `max.poll.records x partitions`. **Deep enough to run is too
+deep to measure.**
+
+### What it actually needs: arrival below saturation
+
+Records fed in **during** the measured window at a controlled rate, swept - 50%, 70%, 90% of the
+throughput already measured. At 100% utilisation a queueing system measures its backlog; below it, the
+engine.
+
+This was raised on 2026-08-22, dropped when it was correctly pointed out that residence time is
+well-defined without producing during the test, and is now **re-established for a different reason**.
+Both are true and they are not the same claim:
+
+- **Defining** latency needs no producer change - residence is poll-to-completion, which works
+  against a pre-produced dataset.
+- **Discriminating** between engines on tail latency needs the system unsaturated, which does need
+  controlled arrival.
+
+**So the ordering is: arrival-rate control first, then this experiment.** Running it before then
+produces a null result from an experiment that was never performed - the exact failure this note
+exists to prevent, arrived at from an angle it did not anticipate.
+
+### The predictions below are NOT refuted
+
+They were tested under a condition that cannot express them. **Prediction 4's failure would have meant
+the argument this project is building is wrong - it did fail, and it does not mean that**, because the
+measurement could not have shown a difference had one existed. Leave them stated; re-run when the
+harness can answer.
+
 ## The run
 
 - **Arms**: `share`, `core-vt` in `UNORDERED`, `core-vt` in `KEY`, `core-vt` in `PARTITION`.
