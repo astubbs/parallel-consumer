@@ -152,6 +152,9 @@ public class Bench {
         }
     }
 
+    /** Injected failures actually thrown, so a results row can show the rate was really applied. */
+    static final java.util.concurrent.atomic.AtomicLong injectedFailures = new java.util.concurrent.atomic.AtomicLong();
+
     static java.util.concurrent.ScheduledExecutorService calleeTimer;
     static io.vertx.core.Vertx calleeVertx;
     static io.vertx.ext.web.client.WebClient calleeClient;
@@ -329,7 +332,9 @@ public class Bench {
         stub.addMockServiceRequestListener((rq, rs) -> {
             int now = inFlight.incrementAndGet();
             peakInFlight.accumulateAndGet(now, Math::max);
-            sleep(delayMs);
+            // workDelayMs, not delayMs: see the work model. Returns delayMs unchanged unless a
+            // distribution was configured, so a flat run is bit-for-bit the run it always was.
+            sleep(workDelayMs(delayMs));
             inFlight.decrementAndGet();
         });
         stub.start();
@@ -428,7 +433,7 @@ public class Bench {
                     pool.submit(() -> {
                         int now = inFlight.incrementAndGet();
                         peakInFlight.accumulateAndGet(now, Math::max);
-                        sleep(delayMs);
+                        sleep(workDelayMs(delayMs));
                         inFlight.decrementAndGet();
                         done.incrementAndGet();
                         permits.release();
@@ -454,11 +459,18 @@ public class Bench {
         long start = System.currentTimeMillis();
         // the parameter is deliberately unused, so this lambda compiles against both the old
         // Consumer<ConsumerRecord> signature and the newer Consumer<PollContext> one
-        pc.poll(ignored -> {
+        pc.poll(ctx -> {
             int now = inFlight.incrementAndGet();
             peakInFlight.accumulateAndGet(now, Math::max);
-            sleep(delayMs);
+            sleep(workDelayMs(delayMs));
             inFlight.decrementAndGet();
+            // THROWN AFTER the work, not before: a user function that fails usually fails at the end,
+            // having already spent the time. Failing first would model a validation rejection, which
+            // is cheap and is not what stalls a partition.
+            if (workShouldFail()) {
+                injectedFailures.incrementAndGet();
+                throw new InjectedWorkFailure(now);
+            }
             responses.incrementAndGet();
         });
         while (responses.get() < expected) sleep(25);
@@ -547,6 +559,80 @@ public class Bench {
             c.disconnect();
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // THE WORK MODEL. A fixed delay is the best possible case for a serial engine, and this harness
+    // measured nothing else until 2026-08-22.
+    //
+    // WHY THIS EXISTS. Kafka Streams runs one thread per partition, so a record that takes longer
+    // than usual adds its whole duration to the latency of every record behind it. With a CONSTANT
+    // delay there is no such record - every unit of work is identical, so there is no head of line to
+    // block, and a serial engine looks as good as a concurrent one. Real work is not constant: a GC
+    // pause, a compaction, an outsized payload or a rare expensive branch all produce a long tail,
+    // and the tail is the whole argument.
+    //
+    // So the delay becomes a DISTRIBUTION, and failures become a RATE. Both configurable, both off by
+    // default, so every figure taken before today still means what it meant.
+    //
+    //   BENCH_DELAY_STDDEV   normal distribution around delayMs with this standard deviation, in ms.
+    //                        Clamped at zero - a negative delay is not a thing.
+    //   BENCH_DELAY_P99      instead of a normal curve: this many ms for 1% of records, delayMs for
+    //                        the rest. A blunter instrument and a more honest model of the thing that
+    //                        actually hurts - one record in a hundred that takes 100x as long.
+    //   BENCH_FAILURE_RATE   fraction of user-function invocations that throw, 0.0 to 1.0. PC retries
+    //                        them; a serial engine stalls its partition for the retry delay too.
+    //
+    // DETERMINISTIC BY SEED, because a run that cannot be repeated cannot be compared.
+    // BENCH_WORK_SEED defaults to 42; every arm in a sweep therefore sees the SAME sequence of
+    // durations and the same failing offsets, which is what makes the comparison fair rather than
+    // merely similar.
+    static final long WORK_SEED = Long.getLong("bench.workSeed",
+            Long.parseLong(System.getenv().getOrDefault("BENCH_WORK_SEED", "42")));
+    static final double DELAY_STDDEV = Double.parseDouble(
+            System.getenv().getOrDefault("BENCH_DELAY_STDDEV", "0"));
+    static final int DELAY_P99 = Integer.parseInt(
+            System.getenv().getOrDefault("BENCH_DELAY_P99", "0"));
+    static final double FAILURE_RATE = Double.parseDouble(
+            System.getenv().getOrDefault("BENCH_FAILURE_RATE", "0"));
+
+    /** Per-record, so concurrent callers never contend on one Random and never share a sequence. */
+    static final ThreadLocal<java.util.Random> WORK_RANDOM =
+            ThreadLocal.withInitial(() -> new java.util.Random(WORK_SEED + Thread.currentThread().getId()));
+
+    /** True when nothing below is configured, so the constant-delay path stays exactly as it was. */
+    static boolean workModelIsFlat() {
+        return DELAY_STDDEV == 0 && DELAY_P99 == 0 && FAILURE_RATE == 0;
+    }
+
+    /**
+     * How long THIS record should take. The p99 switch wins over the normal curve when both are set,
+     * because the two model different things and silently blending them would produce a distribution
+     * nobody chose.
+     */
+    static int workDelayMs(int delayMs) {
+        if (workModelIsFlat()) return delayMs;
+        var rnd = WORK_RANDOM.get();
+        if (DELAY_P99 > 0) {
+            return rnd.nextDouble() < 0.01 ? DELAY_P99 : delayMs;
+        }
+        if (DELAY_STDDEV > 0) {
+            long d = Math.round(delayMs + rnd.nextGaussian() * DELAY_STDDEV);
+            return (int) Math.max(0, d);
+        }
+        return delayMs;
+    }
+
+    /** Whether this invocation should throw. Retries are the point: a serial engine stalls for them too. */
+    static boolean workShouldFail() {
+        return FAILURE_RATE > 0 && WORK_RANDOM.get().nextDouble() < FAILURE_RATE;
+    }
+
+    /** Thrown by the simulated user function, so a real bug is never mistaken for the injected rate. */
+    static class InjectedWorkFailure extends RuntimeException {
+        InjectedWorkFailure(long offset) {
+            super("bench: injected failure for offset " + offset + " at rate " + FAILURE_RATE);
         }
     }
 
