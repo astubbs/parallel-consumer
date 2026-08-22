@@ -136,6 +136,19 @@ before it shows up anywhere else, which is the entire reason these columns exist
 | `concurrency-sweep-2ms.csv` | the same three arms at delay 2ms, concurrency 25 / 100 / 1000 |
 | `direct-pull-delay-sweep.csv` | the shipped engine against the direct-pull engine, 3 delays x 2 concurrencies |
 | `direct-pull-concurrency-sweep-0ms.csv` | the same two engines at delay 0 across six concurrencies - where the result is |
+| `ordering-head-of-line-latency.csv` | `PARTITION` against `KEY` at three buffer depths, flat and tailed handler - the first latency comparison |
+
+`ordering-head-of-line-latency.csv` carries two extra leading columns the others do not -
+`message_buffer_size` and `handler_p99_ms` - because both were swept, and the one-minute load going
+into each cell, because the machine was shared throughout. **Read it with three caveats.** The
+`message_buffer_size` 240 cell has KEY rows only: the two PARTITION rows were voided when a
+concurrent session replaced the shared `LOCAL` build mid-cell
+([`docs/inflight/perf-local-is-a-coordinate-not-a-build.md`](../docs/inflight/perf-local-is-a-coordinate-not-a-build.md)).
+The second repeat of `20000,1000,PARTITION` came back at 13 in flight rather than 24 under a load of
+12 and disagrees with its own first repeat by a factor of two; it is left in rather than dropped,
+which is what the load column is for. And every row is a saturated backlog drain, so its residence
+figures are bounded by buffer depth over throughput - what they do and do not support is in
+[`docs/inflight/perf-latency-needs-an-arrival-rate-axis.md`](../docs/inflight/perf-latency-needs-an-arrival-rate-axis.md).
 
 What the two `concurrency-sweep-*` files mean is in
 [`docs/inflight/perf-throughput-regression-since-0-3.md`](../docs/inflight/perf-throughput-regression-since-0-3.md),
