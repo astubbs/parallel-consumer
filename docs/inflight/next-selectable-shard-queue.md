@@ -30,25 +30,59 @@ selectable" an O(1) *check*; this makes it something nobody has to ask, because 
 is not in the queue. **The count becomes the predicate that drives enqueue and dequeue** rather than
 something consulted on every pass.
 
-## THE TRAP: UNORDERED must not be exclusive
+## The merry-go-round, which removes the mode branch entirely
 
-**A naive implementation serialises `UNORDERED` to one worker.** Under `UNORDERED` there is one shard
-per topic-partition holding every in-flight record for it. If taking a shard removes it from the
-queue, then a single-partition `UNORDERED` topic has exactly one shard, one worker holds it, and
-every other worker waits - turning the mode with the most available parallelism into a serial one.
+**Antony, 2026-08-22: "in unordered the shards simply play merry go round - a shard taken in
+unordered immediately goes to the back of the queue."** That is better than the two-kinds-of-entry
+scheme this note originally proposed, because it collapses into **one rule with no mode branch**:
 
-So the queue has two kinds of entry, and the distinction already exists in the code as
-`isOrderRestricted()`:
+> Take the head shard. Take one record from it. **If the shard is still selectable, put it at the
+> tail.** Otherwise it re-enters when it becomes selectable again.
 
-| Shard kind | On take | Why |
+- **Ordered** - after the take its in-flight count is 1, so it is not selectable: not re-enqueued, and
+  it re-enters on completion.
+- **`UNORDERED`** - never blocked, so still selectable: straight to the tail.
+
+Same line of code. `isOrderRestricted()` drops out of the decision because the selectability
+predicate already encodes it, and a single-partition `UNORDERED` topic degenerates to one shard
+cycling head-to-tail - correct, rather than the serialisation the exclusive scheme would have caused.
+It also gives round-robin across partitions for free.
+
+**The queue head becomes the contention point**, since `UNORDERED` does two queue operations per
+record on a structure that may hold one element. That is a CAS on a head pointer instead of a walk
+past thousands of in-flight entries, so it should be orders of magnitude cheaper - but it is a single
+point and has to be measured, not assumed. It is also exactly what the 2022 per-thread variant
+(`5dcd39bb3`, `Map<Long, BlockingQueue<ProcessingShard>>`) was trying to avoid, which is worth
+reading before concluding a single queue is fine.
+
+## THE REMAINING GAP: which RECORD within the shard
+
+**A shard queue answers "which shard", not "which record".** Under `UNORDERED` one shard holds every
+in-flight record for its partition, so having taken the shard, a worker still has to find the next
+*available* record inside it - walking past everything already out. **That is the quadratic prefix
+walk, untouched.**
+
+So on its own this proposal fixes the ordered modes and leaves `UNORDERED`'s real cost exactly where
+it was.
+
+**The fix is the same idea one level down**: the shard keeps its *available* records in a queue, not
+just in an offset-ordered map. Then taking is O(1) at both levels and **nothing scans anywhere**.
+
+That combination is what
+[`next-pre-rendered-work-order-list.md`](next-pre-rendered-work-order-list.md) was reaching for, but
+decomposed into two small structures instead of one global one - which is materially better, because
+each is maintained locally by the thing that already owns the fact:
+
+| Level | Structure | Maintained when |
 |---|---|---|
-| Ordered (`KEY`, `PARTITION`) | **Removed**, re-enqueued when its in-flight count returns to zero | Only one record may be out at a time, so the shard is genuinely unavailable |
-| `UNORDERED` | **Stays**, many workers may hold it simultaneously | Never blocked; concurrent takers are already safe - the map is lock-free and the claim is a CAS |
+| Which shard | queue of selectable shards | a shard's in-flight count reaches or leaves zero |
+| Which record | per-shard queue of available records | a record is taken, returned, or its retry delay expires |
 
-`UNORDERED` therefore keeps its contention and its prefix walk, and this proposal does nothing for it.
-That is worth stating plainly rather than discovering later: **this is a fix for the ordered modes.**
-`UNORDERED`'s waste is a separate question - see
-[`next-direct-pull-unordered-selection.md`](next-direct-pull-unordered-selection.md).
+The offset-ordered map does not go away - it is still needed for stale sweeps and for offset lookups -
+so this **is** an added structure per shard, and it has to answer the same charge as every other
+proposal here: it is a second view of the same records, and this session has already paid twice for
+that class. The mitigating argument is that it is per-shard and local, so the sync is one insertion
+and one removal by the object that owns both views, rather than a global rendering.
 
 ## The transitions, which are the whole design
 
