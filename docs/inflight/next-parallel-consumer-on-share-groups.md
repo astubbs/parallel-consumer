@@ -94,3 +94,63 @@ gain the deletion of offset encoding and partition-assignment handling, which is
 bugs live.
 
 **Worth a spike, gated on constraint 2**, which is measurable today and cheap.
+
+## The better question: what does PC offer someone ALREADY using share groups?
+
+**Antony, reframing 2026-08-22: not what share groups would simplify in PC - what subsystem of PC is
+still useful to a user who has a share consumer and is happy with it?**
+
+A much cleaner product, because **everything contentious drops out.** No cross-instance ordering
+problem: an acquired batch is exclusively yours. No offset encoding, no partition assignment, no
+rebalance handling - the broker did those.
+
+### What a share-groups user still writes themselves
+
+| They need | They write today | PC already has |
+|---|---|---|
+| **Concurrency at all** | a thread pool and a semaphore | the worker pool, virtual threads, **self-tuning concurrency** |
+| **Per-key ordering inside the batch** | nothing, or a hand-rolled key lock | the shard machinery - **and inside one acquired batch it is exactly correct** |
+| **Retry with backoff** | hold the record and sleep, burning the acquisition lock | per-record retry delay, attempt limits, the retry queue |
+| **A DLQ with context** | `REJECT`, which archives and routes nowhere | DLQ with headers saying what failed and how often |
+| **Not acquiring more than it can finish** | guesswork against `share.record.lock.duration.ms` | residence measurement - exactly the number that decides it |
+| **Visibility into what is stuck** | broker-side metrics only | residence, in-flight, per-shard state |
+
+**Ordering inside a batch is the one to pause on.** If a batch holds three records for key K, a share
+user almost certainly wants them in order and has nothing to help. PC's shards do this - and **the
+cross-instance objection that sinks the full mode does not apply**, because the batch is exclusively
+held.
+
+### The product: PC's engine WITHOUT the Kafka parts
+
+```
+List<Verdict> verdicts = batchProcessor.process(records, userFunction);
+// caller applies them: ACCEPT / RELEASE / REJECT
+```
+
+**The caller keeps the consumer, the acknowledgement and the lock.**
+
+**That shape already exists here**, which is the best argument it is coherent: the language-proxy
+clients receive records and return verdicts, with ordering, retries and offset tracking staying in the
+engine. **This is the same seam pointed at a different caller** - and the conformance suite proving
+ten clients behave identically at that boundary would apply.
+
+### What it honestly is not
+
+**A refactor, not a wrapper.** `WorkManager` is coupled to `PartitionStateManager`, epochs and offset
+state; extracting ordering, concurrency and retry over a caller-supplied list is real work, and nobody
+has traced those dependencies.
+
+**It does not lift the batch-synchronous ceiling.** In-flight is still bounded by the batch. PC would
+make the batch run better, not bigger.
+
+**The acquisition lock stays the user's problem** - but PC would give them the number to reason about
+it with, which they do not have today.
+
+### Why it may be the better of the two ideas
+
+**Additive rather than competitive.** It asks nobody to stop using share groups, adopt PC's consumer,
+or give up broker-side state. It sells the part of PC that Kafka has not built and shows no sign of
+building: ordered concurrency, retry policy, and knowing what your workers are doing.
+
+It is [`next-what-survives-share-groups.md`](next-what-survives-share-groups.md) turned from a
+defensive position into a product.
