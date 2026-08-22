@@ -94,6 +94,53 @@ Making that concurrent is either fine-grained locking inside the store access pa
 store by key. Whichever it is, **it decides whether the other three matter**, and it is answerable on
 paper before another engine number is taken.
 
+## THE REAL ARGUMENT: head-of-line blocking, which is not about I/O at all
+
+**Antony, again, and this supersedes both framings above.** The sections before this argued about
+*throughput* - first that only I/O-bound topologies benefit, then that it is really about partitions
+versus cores. Both are true and both are secondary. **The argument that actually matters is latency.**
+
+**One thread per task means records in a partition are processed strictly serially.** So any record
+that takes longer than usual adds its full duration to the latency of **every record behind it**,
+immediately, and keeps it there until the backlog drains.
+
+**And "takes longer than usual" has nothing to do with I/O.** A non-exhaustive list of things that
+stall a Streams thread with no external call in sight:
+
+- a GC pause on that thread
+- RocksDB compaction, or a write stall - **a purely local-state topology, from the inside**
+- lock contention in a store
+- an unusually large message, or a pathological payload to deserialise
+- a rare expensive branch - a regex, a big aggregation, a range scan
+- a punctuator, which runs on the same thread as the records
+- page faults, a cold cache, the OS simply descheduling the thread
+
+**The waste is structural, and this is the part worth saying out loud.** A partition is a *mixture of
+keys*. A slow record for key A delays keys B, C and D, which have no semantic relationship to it.
+**Streams blocks on PARTITION; the actual ordering requirement is per KEY.** Everything in the gap
+between those two is blocking that buys nothing.
+
+**This holds even when partitions exceed cores and the work is uniform and CPU-bound**, which is
+exactly the case both earlier sections conceded. There is no configuration of stock Streams in which
+it does not hold, because it is a property of the execution model rather than of the workload.
+
+### It also invalidates how this project has been benchmarking
+
+**Every figure in `perf-engine-comparison-2026-08-22.md` uses a UNIFORM per-record delay.** Uniform
+work is the best possible case for a serial model: with no variance there is no head of line to block,
+so a benchmark built this way measures the one thing that flatters the design PC is arguing against,
+and reports nothing about the thing that actually hurts users.
+
+**What to measure instead**: a handler whose duration has a realistic tail - say a p99 at 50-100x the
+median - and report **latency percentiles, not just throughput**. Under a serial model p99 input
+latency degrades far worse than linearly with the tail, because every slow record's cost is inherited
+by its whole queue. Under per-key concurrency it stays close to the handler's own distribution.
+
+That is the measurement that would make the case, and this project does not have it. See
+[`next-benchmark-a-model-of-work-not-work.md`](next-benchmark-a-model-of-work-not-work.md), which
+already records the ask, and note that **it applies to the PC-versus-Streams case even more sharply
+than to the engine comparison it was written for.**
+
 ## The four things that decide whether it can be built, none of which are throughput
 
 1. **State stores.** Streams state is per-task and single-threaded. Concurrent processing of one
