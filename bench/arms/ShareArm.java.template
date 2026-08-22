@@ -1,0 +1,198 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.clients.admin.ConfigEntry;
+import org.apache.kafka.clients.consumer.AcknowledgeType;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaShareConsumer;
+import org.apache.kafka.common.config.ConfigResource;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Properties;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
+
+/**
+ * KIP-932 SHARE GROUPS - Kafka's own answer to the problem Parallel Consumer exists to solve.
+ *
+ * <p><b>NO PARALLEL CONSUMER ANYWHERE.</b> This is a bare-client arm, the same category as
+ * {@code vanilla}, {@code pool} and {@code franz}: a {@link KafkaShareConsumer} poll loop and
+ * nothing else. That is why it is not blocked on PC supporting Kafka 4 - the only Kafka-4 dependency
+ * is the broker, and {@code CLIENT_PINS} already pins {@code kafka-clients} per sweep independently
+ * of the PC version. Pin 4.2+ and this arm compiles; pin anything older and it does not, which is
+ * the honest failure.
+ *
+ * <p><b>WHY IT IS THE MOST INTERESTING ARM IN THE HARNESS.</b> Every other arm is a library. Share
+ * groups are the BROKER changing the rules: per-record acknowledgement, and concurrency that is not
+ * bounded by partition count. {@code STRATEGY.md} holds a position against them; this replaces the
+ * position with a number, and the number is allowed to go against us.
+ *
+ * <h2>The structural finding this arm's shape encodes</h2>
+ *
+ * <b>A share consumer cannot poll ahead of completion, and Parallel Consumer can.</b> That is not a
+ * tuning choice made here, it is what the two acknowledgement modes permit:
+ *
+ * <ul>
+ *   <li><b>Explicit</b> ({@code share.acknowledgement.mode=explicit}) - every delivered record must be
+ *       acknowledged before the next {@code poll()}, or the client throws
+ *       {@code IllegalStateException}. Polling ahead is forbidden outright.</li>
+ *   <li><b>Implicit</b> (the default) - {@code poll()} implicitly acknowledges everything the previous
+ *       poll delivered. Polling ahead is permitted, but it acknowledges records that have not been
+ *       processed yet, which is at-most-once delivery wearing an at-least-once label.</li>
+ * </ul>
+ *
+ * So BOTH modes are batch-synchronous for any honest processor: poll a batch, run it, finish it,
+ * poll again. The arm therefore holds at most one batch in flight, and its in-flight ceiling is
+ * {@code min(max.poll.records, share.partition.max.record.locks x partitions)} - NOT the
+ * {@code concurrency} axis. PC by contrast keeps records from many polls outstanding at once, which
+ * is exactly what its offset encoding buys.
+ *
+ * <p>The {@code concurrency} argument is still honoured as a semaphore cap so the axis means
+ * something when it is set BELOW the batch size, and so a share row and a PC row at the same
+ * nominal concurrency are not silently measuring different in-flight limits. Above the batch size it
+ * is inert, and {@code peak_in_flight} is what says so - which is the whole reason this harness
+ * reports it.
+ *
+ * <h2>Everything else is shared, deliberately</h2>
+ *
+ * The callee is {@link Bench#callCallee}, so {@code BENCH_TIMER_CALLEE} / {@code BENCH_ASYNC_STUB}
+ * mean here exactly what they mean for every other arm and the work per record is identical. The
+ * consumer properties are {@link Bench#consumerProps}, so the group-id shape, {@code max.poll.records}
+ * and the deserializers cannot drift from the arms this is compared against. An arm that reimplemented
+ * either would be measuring a different experiment - see {@link BenchArm}.
+ *
+ * <p>Because the callee is a {@link CompletionStage} and never blocks, this arm is registered as a
+ * non-blocking engine in run-bisect.sh: handed the thread-per-request WireMock callee it would
+ * measure the stub's container-thread pool rather than share groups, which is the failure the
+ * harness already refuses for vertx/reactor/mutiny/proxy.
+ *
+ * <h2>share.auto.offset.reset is a GROUP config, not a client one</h2>
+ *
+ * {@code auto.offset.reset} in {@link Bench#consumerProps} does nothing for a share consumer. The
+ * share-partition start offset comes from the {@code share.auto.offset.reset} GROUP config, whose
+ * broker default is {@code latest} - so without the {@link Admin} call below every run would join a
+ * fresh group, read zero records and hang until the run deadline killed it. It is applied before the
+ * clock starts, so the sweep is not billed for it.
+ */
+public class ShareArm implements BenchArm {
+
+    /**
+     * Explicit acknowledgement, selected by {@code -Dbench.shareAckMode=explicit} from the
+     * {@code share-explicit} mode suffix.
+     * <p>
+     * A system property rather than a second arm class for the reason {@code core-dp} and
+     * {@code core-vt} are system properties: it keeps the two modes one compilation unit that cannot
+     * drift apart, while leaving them distinct rows in the results file. The two are a real
+     * performance question - explicit costs a per-record {@code acknowledge()} call and sends an
+     * acknowledgement type per record, implicit sends one blanket acknowledgement per poll - and that
+     * choice may be the whole result.
+     */
+    static boolean explicitAcks() {
+        return "explicit".equals(System.getProperty("bench.shareAckMode"));
+    }
+
+    @Override
+    public long run(String bootstrap, String topic, int expected, int delayMs, int concurrency, int bufferSize)
+            throws Exception {
+        Properties props = Bench.consumerProps(bootstrap);
+        String groupId = props.getProperty("group.id");
+        // A SHARE CONSUMER REFUSES THESE TWO OUTRIGHT - not "ignores", refuses:
+        //   ConfigException: auto.offset.reset, enable.auto.commit cannot be set when using a share group
+        // which is the client telling you that neither concept survives the design. There is no
+        // consumer-side offset to auto-commit, because acknowledgement state is the broker's; and
+        // where to start is a property of the GROUP, not of a member joining it. Removing them here
+        // rather than building a separate property set keeps everything ELSE - group-id shape,
+        // max.poll.records, deserializers - identical to the arms this is compared against.
+        props.remove("auto.offset.reset");
+        props.remove("enable.auto.commit");
+        if (explicitAcks()) props.put("share.acknowledgement.mode", "explicit");
+
+        startAtEarliest(bootstrap, groupId);
+
+        // Caps work actually in progress at `concurrency`, the same way runPool does, so a share row
+        // and a pool row at the same concurrency are bounded identically. Inert whenever concurrency
+        // exceeds the batch, which is the common case and is what peak_in_flight reveals.
+        Semaphore permits = new Semaphore(Math.max(concurrency, 1));
+
+        int seen = 0;
+        int maxBatch = 0;
+        int polls = 0;
+        long start;
+        try (KafkaShareConsumer<String, String> consumer = new KafkaShareConsumer<>(props)) {
+            consumer.subscribe(Collections.singletonList(topic));
+            start = System.currentTimeMillis();
+            while (seen < expected) {
+                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofSeconds(1));
+                if (polled.isEmpty()) continue;
+                polls++;
+                maxBatch = Math.max(maxBatch, polled.count());
+
+                // Dispatch the whole batch, then wait for the whole batch. The wait is the structural
+                // property described in the class javadoc, not a simplification: neither acknowledgement
+                // mode lets a correct processor poll again while this batch is outstanding.
+                List<CompletableFuture<Void>> batch = new ArrayList<>();
+                List<ConsumerRecord<String, String>> acked = new ArrayList<>();
+                for (ConsumerRecord<String, String> record : polled) {
+                    if (seen + batch.size() >= expected) break;
+                    permits.acquire();
+                    acked.add(record);
+                    CompletionStage<Object> work = Bench.callCallee(delayMs);
+                    batch.add(work.toCompletableFuture().thenAccept(ignored -> permits.release()));
+                }
+                CompletableFuture.allOf(batch.toArray(new CompletableFuture[0])).join();
+
+                // AFTER the work, and on the poll thread. KafkaShareConsumer is not thread-safe, so an
+                // acknowledgement from a callee-completion thread would be a data race; and
+                // acknowledging BEFORE the work completes would be the at-most-once shortcut this arm
+                // exists to not take.
+                if (explicitAcks()) {
+                    for (ConsumerRecord<String, String> record : acked) {
+                        consumer.acknowledge(record, AcknowledgeType.ACCEPT);
+                    }
+                }
+                seen += batch.size();
+            }
+            long took = System.currentTimeMillis() - start;
+            // THE BATCH SIZE IS THIS ARM'S CONCURRENCY, so it is printed with every run rather than
+            // inferred later from peak_in_flight. A share consumer cannot poll while a batch is
+            // outstanding, so whatever one poll returns IS the in-flight ceiling - and it is not
+            // max.poll.records: KafkaShareConsumer treats that as a floor-ish hint and returns as
+            // much as the share session acquired, which is bounded by share.partition.max.record.locks
+            // (group config, default 2000) per share-partition. A reader comparing this arm's
+            // concurrency against PC's needs to know which of those two bound the run.
+            System.err.printf("SHARE_BATCH mode=%s polls=%d maxBatch=%d records=%d%n",
+                    explicitAcks() ? "explicit" : "implicit", polls, maxBatch, seen);
+            Bench.windowClosed();
+            return took;
+        }
+    }
+
+    /**
+     * Sets {@code share.auto.offset.reset=earliest} on this run's group before it is joined.
+     * <p>
+     * Every run uses a fresh group (see {@link Bench#consumerProps}) so that each re-reads the same
+     * dataset from the beginning - the property that makes any two rows in this harness comparable.
+     * For a share group that beginning is a group config with a broker default of {@code latest}, so
+     * this call is what stops the arm reading nothing at all.
+     */
+    static void startAtEarliest(String bootstrap, String groupId) throws Exception {
+        Properties adminProps = new Properties();
+        adminProps.put("bootstrap.servers", bootstrap);
+        try (Admin admin = Admin.create(adminProps)) {
+            ConfigResource group = new ConfigResource(ConfigResource.Type.GROUP, groupId);
+            admin.incrementalAlterConfigs(Collections.singletonMap(group,
+                            Collections.singletonList(new AlterConfigOp(
+                                    new ConfigEntry("share.auto.offset.reset", "earliest"),
+                                    AlterConfigOp.OpType.SET))))
+                    .all().get();
+        }
+    }
+}

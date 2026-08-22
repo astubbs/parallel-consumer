@@ -79,8 +79,6 @@ PRODUCE_TIMEOUT=${BENCH_PRODUCE_TIMEOUT:-30}
 # complete the workload, a failure is a broken arm.
 RUN_TIMEOUT=${BENCH_RUN_TIMEOUT:-60}
 
-BROKER_NAME=pc-bench-broker
-BOOTSTRAP=localhost:19092
 WORK=${BENCH_WORK:-$(mktemp -d)}
 # mktemp -d creates its directory; a caller-supplied BENCH_WORK is just a path, and every write
 # below assumed otherwise - results.csv and the Go build log both failed on a first-run directory.
@@ -116,6 +114,11 @@ arm_class() {
     reactor)  echo ReactorArm ;;
     mutiny)   echo MutinyArm ;;
     proxy)    echo ProxyArm ;;
+    # KIP-932 share groups. NOT an engine and NOT Parallel Consumer - a bare KafkaShareConsumer, the
+    # same category as vanilla and franz - which is precisely why it needs no PC support for Kafka 4
+    # and no arm artifact. Both acknowledgement modes are ONE class selected by a system property;
+    # see run_one's share-explicit branch.
+    share|share-explicit) echo ShareArm ;;
   esac
 }
 # The base pom already carries parallel-consumer-vertx (it supplies both the Vert.x engine and the
@@ -138,6 +141,22 @@ arm_artifact() {
 # The broker lives in bench/lib/broker.sh, shared with run-divergence.sh: two harnesses quietly
 # agreeing on a DIFFERENT partition count would produce numbers that look comparable and are not.
 . "$HERE/lib/broker.sh"
+
+# WHICH BROKER, and why it is a variable now.
+#
+# BENCH_BROKER=share selects a Kafka 4.3.1 broker with KIP-932 enabled, on its own name and port, so
+# the share arm can be measured WITHOUT disturbing the 3.9.0 container other sessions on this machine
+# are using. Anything else - including unset - is the 3.9.0 broker on 19092 that every committed
+# results file was taken against, byte for byte the configuration it always had.
+#
+# BROKER_NAME/BROKER_PORT/BROKER_IMAGE may also be set directly, for a broker this table does not
+# know about. BOOTSTRAP is DERIVED rather than set, so it cannot disagree with the port - the two
+# were independent hardcoded constants before, which is one edit away from a sweep that starts one
+# broker and measures another.
+[ "${BENCH_BROKER:-}" = share ] && use_share_broker
+BROKER_NAME=${BROKER_NAME:-pc-bench-broker}
+BROKER_PORT=${BROKER_PORT:-19092}
+BOOTSTRAP=localhost:$BROKER_PORT
 
 # Resolves a classpath for one (pcVersion, clientPin) pair and compiles the harness against it.
 # Echoes "<classesDir>:<classpath>" on success, nothing on failure.
@@ -347,6 +366,16 @@ run_one() {
     shift
     set -- core "$@"
   fi
+  # share-explicit: the same mode-suffix trick, and here it is not about old versions - it is about
+  # keeping the two acknowledgement modes in ONE arm class so they cannot drift apart, while leaving
+  # them two distinct rows in the results file. Implicit acknowledges a whole poll at once; explicit
+  # acknowledges every record individually and refuses to poll while any is outstanding. That is a
+  # real difference in broker load and it may be the whole result, so it has to be a column value.
+  if [ "${1:-}" = "share-explicit" ]; then
+    engine=(-Dbench.shareAckMode=explicit)
+    shift
+    set -- share "$@"
+  fi
   local jfr=()
   if [ -n "${BENCH_JFR:-}" ]; then
     mkdir -p "$BENCH_JFR"
@@ -518,7 +547,39 @@ echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_rec
 # BENCH_ALLOW_BLOCKING_ENGINE=1 overrides, for the one legitimate case: deliberately measuring what
 # an engine costs when a user gives it blocking work, which is a real question about a real mistake -
 # but it has to be asked on purpose.
-is_nonblocking_engine() { case $1 in vertx|pc|reactor|mutiny|proxy) return 0 ;; *) return 1 ;; esac; }
+#
+# THE SHARE ARMS ARE IN THIS SET TOO, though they are not engines. Their user function is a
+# CompletionStage that never blocks - Bench#callCallee, the same one every arm here uses - so handed
+# the thread-per-request WireMock callee they would measure its container-thread pool rather than
+# share groups, which is exactly the failure this guard exists for.
+is_nonblocking_engine() { case $1 in vertx|pc|reactor|mutiny|proxy|share|share-explicit) return 0 ;; *) return 1 ;; esac; }
+
+# A SHARE ARM AGAINST A BROKER WITHOUT SHARE GROUPS FAILS AS "RUN_FAILED", which is the same row a
+# broken arm produces - so the harness checks instead of leaving it to be diagnosed. This is not
+# hypothetical: the first share sweep run here said "reusing running broker pc-bench-broker" and
+# produced exactly that row, because BENCH_BROKER=share had been silently ignored (see lib/broker.sh).
+#
+# The check is on the FEATURE, not on the image tag, because the feature is what actually decides:
+# share.version must be finalized at level 1 AND the share rebalance protocol must be enabled, and a
+# 4.3 broker started without group.coordinator.rebalance.protocols=...,share has the first and not
+# the second.
+for m in $MODES; do
+  case $m in share|share-explicit)
+    # THE OUTPUT IS CAPTURED FIRST, then matched - it is not piped into `grep -q`. This script runs
+    # under `set -o pipefail`, and `grep -q` exits the instant it matches, which SIGPIPEs the
+    # producer: `docker exec ... | grep -q` therefore returns 141 ON SUCCESS. Written the obvious way
+    # this guard fired against a broker that had share groups perfectly well, and its error message
+    # told the reader to do the thing they had already done.
+    features=$(docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-features.sh --bootstrap-server "localhost:$BROKER_PORT" describe 2>/dev/null)
+    if ! printf '%s\n' "$features" | grep -Eq 'share\.version.*FinalizedVersionLevel: [1-9]'; then
+      log "FATAL: mode '$m' needs KIP-932 share groups, and broker '$BROKER_NAME' does not have them finalized."
+      log "       Share groups went GA in Kafka 4.2.0. Run with BENCH_BROKER=share to start a 4.3.1"
+      log "       broker on its own name and port, leaving the 3.9.0 one other sessions use untouched."
+      exit 1
+    fi
+    break ;;
+  esac
+done
 
 if [ "$CALLEE_LABEL" = blocking ] && [ -z "${BENCH_ALLOW_BLOCKING_ENGINE:-}" ]; then
   for m in $MODES; do
