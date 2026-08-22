@@ -36,17 +36,21 @@ on evidence that the tail exists rather than on symmetry with librdkafka.
 
 ## PARTLY ANSWERED BY MEASUREMENT, 2026-08-22
 
-A Go process has now run the engine in-process over a GraalVM `--shared` library - see
-[`perf-go-embeds-the-engine-over-ffi.md`](perf-go-embeds-the-engine-over-ffi.md).
+Go **and Python** processes have now run the engine in-process over a GraalVM `--shared` library -
+see [`perf-embedding-the-engine-over-ffi.md`](perf-embedding-the-engine-over-ffi.md).
 
 **The callback table below, introduced as the breakdown that "decides the whole proposal", ranks a
 design that turned out not to be necessary.** It assumes the engine calls *out* into the host on
 many threads. The surface built instead is a pull model - the host pulls work frames and pushes
 verdict frames on its own threads - so nothing re-enters Java from a foreign thread, and Go's
 "medium" ranking was never exercised. Whether that reopens Python, Ruby and Node is now an open
-question: their hard cases were the GIL and the event loop, both callback-entry problems. It does
-not reopen them on its own, because "their work is slow, so the hop is noise" is untouched and was
-always the stronger half of that argument.
+question - and for Python it is now answered. **The GIL objection is measured dead**: `ctypes`
+releases the GIL around a blocking pull, 1142x against a `PyDLL` control that differs in one flag.
+The table's "hard mechanically" ranking for Python is false under the pull model.
+
+It does not follow that Python should embed. "Their work is slow, so the hop is noise" is untouched
+and was always the stronger half - **but it is a different argument, and this file ran the two
+together.** What fell is the difficulty claim, not the value claim.
 
 **What did NOT change**: the release-matrix objection, which this file calls decisive. An embedded
 engine still rebuilds on every Kafka bump. The measurement proves feasibility, not that it ships.

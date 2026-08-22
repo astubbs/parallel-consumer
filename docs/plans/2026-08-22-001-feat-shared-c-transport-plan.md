@@ -6,14 +6,14 @@ artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: legacy-requirements
 execution: code
-origin: docs/inflight/perf-go-embeds-the-engine-over-ffi.md
+origin: docs/inflight/perf-embedding-the-engine-over-ffi.md
 ---
 
 # Shared C Transport - Plan
 
 Tracking issue: astubbs#242 (the language-proxy fan-out). Parent plan:
 [`2026-08-14-001-feat-language-proxy-plan.md`](2026-08-14-001-feat-language-proxy-plan.md).
-Proven on branch `feats/go-vendored-pc`.
+Proven in **two languages** on branch `feats/go-vendored-pc`: Go over cgo, Python over ctypes.
 
 **Identifiers in this document are prefixed `CT` (requirement) and `CTD` (key technical decision),
 never `R` or `KTD`.** The parent plan states that no ID may mean two things across documents, and it
@@ -32,7 +32,7 @@ writes a `ClientMessage` onto a gRPC stream and reads a `ProxyMessage` back, it 
 pulls the same serialised bytes across a function call.
 
 The Go proof exists and is measured -
-[`perf-go-embeds-the-engine-over-ffi.md`](../inflight/perf-go-embeds-the-engine-over-ffi.md).
+[`perf-embedding-the-engine-over-ffi.md`](../inflight/perf-embedding-the-engine-over-ffi.md).
 This plan is about whether and how that generalises, and it is **gated**: CTD1 is a decision, not a
 task.
 
@@ -132,6 +132,10 @@ if any of these holds:**
   confirmed rather than refuted.
 - A second language cannot be bound within the CT4 bar. If it takes a fork rather than a transport
   swap, the generalisation claim is false and the Go result was a special case.
+  **NOT TRIGGERED, 2026-08-22.** Python bound at the bar: a transport implementation plus a switch,
+  with the session state machine untouched. Its gRPC stream is a request iterator rather than a send
+  method, so the transport is shaped quite differently from Go's, and the protocol shape still
+  survived. One kill condition down, two open.
 
 ### CTD3 - The measurement must compare like with like
 
@@ -154,6 +158,16 @@ Every entry point calls `graal_get_current_thread` and attaches if it returns nu
 **This is the single most transferable hazard in the whole design** and every binding MUST document
 that it does this.
 
+### CTD4b - The isolate must never be inherited across a fork
+
+A process that forks while holding a GraalVM isolate inherits an isolate whose threads do not exist
+in the child. Any binding in a language that forks - Python's worker pool, preforking servers,
+`multiprocessing` - MUST create the isolate only after the last fork, or confine it to one process.
+
+Python happens to be safe already: its worker pool is forked before any transport exists, for the
+unrelated reason that gRPC Core cannot survive a fork. **That is luck, not design**, and the next
+binding may not inherit it.
+
 ### CTD5 - Host-thread serialisation is the binding's responsibility
 
 `ConfigureHandler.SessionObserver` documents that its state needs no locking **because gRPC
@@ -171,6 +185,11 @@ changes the difficulty column, so the ranking is now driven by demand alone:
 | **Build** | Rust, C++ | Edge and embedded targets where a second process is unavailable, plus the latency-sensitive fast-record workloads where the hop is the cost |
 | **Cheap to add** | Swift, C#, Go | Straightforward FFI, real parallelism; Go is already done |
 | **Do not build** | Python, Ruby, Node, PHP, Java | Their work is I/O-bound and slow, so the hop is noise. The pull model removes their *mechanical* difficulty but not the reason it is not worth doing. Java has `java-direct` already |
+
+**Python is now the measured case, and it is in the "do not build" row on purpose.** It binds
+cleanly and its GIL objection is dead (1142x, measured against a `PyDLL` control). It stays here
+because "hard" and "not worth it" were always two arguments, the parked note ran them together, and
+only the first one fell. A binding that exists as an experiment is not the same as one we ship.
 
 **Python, Ruby and Node move from "hard" to "possible but pointless".** That is a real change in the
 reasoning and should not be mistaken for a change in the recommendation.
@@ -220,10 +239,12 @@ platform, with the Go binding as its first consumer and no Go-specific content r
 
 Test: the Go demo's embedded arm keeps reporting its deterministic records/keys pair after the move.
 
-### U5. Bind a second language (see the experiment note below)
+### U5. Bind a second language - DONE, ahead of U4
 
-Depends on U4. **Feeds CTD2's third kill condition**: if it is not a transport swap within CT4's
-bar, the generalisation claim is false.
+Python, 2026-08-22, before the library was extracted. **CTD2's third kill condition is not
+triggered.** Doing it before U4 was not the plan and it surfaced U4's cost immediately: the Python
+binding's default library path points at a shared home that does not exist yet, so it has to be told
+where the library is with `PC_EMBEDDED_LIBRARY`.
 
 ### U6. GC coexistence under pressure
 

@@ -1,10 +1,11 @@
-# A Go process ran Parallel Consumer with no sidecar, and the callback problem never arose
+# Two languages now run Parallel Consumer in-process, and the callback problem never arose
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: throughput -->
 <!-- inflight-labels: release-note, needs-measurement -->
 
-**Branch: `feats/go-vendored-pc`**, stacked on `feats/native-image-sidecar`.
+**Branch: `feats/go-vendored-pc`**, stacked on `feats/native-image-sidecar`. (The branch name
+predates the Python half and is now narrower than its contents.)
 
 Measured 2026-08-22. The Go demo's own standard output, from a build with `-tags pcffi`. The
 40,000-record replay is the one worth reading:
@@ -36,6 +37,45 @@ invalidating a naive comparison - it says to run the sidecar as a native image t
 identical on both arms. This is also a single run on a busy box with no warm/cold separation. What
 the figures do support is the weaker and still useful claim that **embedding is not slower**, which
 is not obvious in advance: the C ABI could have cost more than it saved.
+
+## Python, second, and chosen because it was the one we might be wrong about
+
+```
+  200 records over 200 keys in 3.6s
+  PARALLEL CONSUMER RAN INSIDE THIS PYTHON PROCESS - no sidecar, no gRPC, no JVM
+```
+
+**Rust would have been the wrong experiment.** It is the better first product - trivial callbacks,
+true parallelism, a population that wants an in-process engine - and that is exactly why binding it
+would have taught us nothing. Python is where the prediction was weakest.
+
+**The GIL objection is measured dead.** The claim was that `ctypes` releases the GIL while Python
+blocks in `pc_next`, so a pull does not stall the interpreter. That was reasoning, so
+`ffi/probe_gil.py` measured it, against a control that differs in exactly one flag - `CDLL`
+releases the GIL, `PyDLL` does not, same library, same function, same 2.02s block:
+
+| | Python thread advanced |
+|---|---|
+| `CDLL` (releases the GIL) | 57,237,944 |
+| `PyDLL` (holds it) | 50,130 |
+
+1142x. A fast counter under `CDLL` alone would only have shown that something was fast.
+
+**This does not mean Python should embed.** The other half of the argument is untouched and is the
+stronger half: Python's typical work is I/O-bound and slow, so the hop is noise. What changed is
+that "Python is hard" is now false, while "Python is not worth it" still stands. Those are
+different claims and the parked note conflated them.
+
+**The generalisation held at the intended bar.** A transport implementation and a switch; the
+session state machine did not move. Python's gRPC bidi stream is a request *iterator* rather than a
+send method, so its transport owns an outbound queue and a generator where Go's owned a `Send`
+call - and both still reduce to push, pull, half-close, cancel.
+
+**Forking turned out to be safe by accident, which is the finding most likely to have bitten.** The
+Python client forks its worker pool at step 1 and `pool.start()` only messages the already-forked
+launcher, so the GraalVM isolate - created at step 3 - is never inherited across a fork. The
+fork-safety design built because gRPC Core cannot survive a fork protects the embedded engine for
+free.
 
 ## The finding that matters most: the callback problem is avoidable
 
