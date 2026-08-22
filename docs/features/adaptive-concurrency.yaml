@@ -1,0 +1,84 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Adaptive concurrency (per-instance admission control)
+category: operability
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+readme_anchor: adaptive-concurrency
+summary: >-
+  Discover the sustainable in-flight target instead of trusting a static maxConcurrency guess. A
+  controller measures per-record service time, outcome classification and sustained achieved
+  in-flight, and moves the admission target between one slot and a ceiling it may never exceed. Off
+  by default; the observe-only mode reports every decision without acting on any of them.
+use_this_when:
+  - You cannot tell whether a throughput plateau is your concurrency cap, the host, the broker, or the downstream service - and want the engine's own answer before changing anything.
+  - The right maxConcurrency differs between instances in one group, or shifts with time of day, so no single deploy-time number stays correct.
+  - You suspect the configured cap floods a downstream system, or strands throughput, and want the gap between configured and sustainable made visible.
+setup:
+  options:
+    - ParallelConsumerOptions.adaptiveConcurrencyMode - DISABLED (default), OBSERVE, or ENFORCE; also defaults from the pc.adaptiveConcurrency system property, which may select at most OBSERVE.
+    - ParallelConsumerOptions.adaptiveConcurrencyInitialTarget - optional seed for the starting target; unset, the controller starts where today's static configuration would.
+  validation: >-
+    ParallelConsumerOptions.validate() rejects a seed set while the mode is DISABLED, a seed below
+    one, and a seed above maxConcurrency. An unrecognised pc.adaptiveConcurrency value fails at
+    build(); a value of ENFORCE resolves to OBSERVE with a WARN.
+  observe:
+    - pc.admission.would.be.target against pc.admission.target - the whole product of OBSERVE, and the size of the static guess's error.
+    - pc.admission.constraint - which constraint bound the last closed window, the gauge that answers "why is it not moving".
+    - pc.admission.movements - how often the target actually changed value; flat next to a busy constraint gauge means the controller is deciding and finding nothing to do.
+opt_in:
+  mechanism: Set adaptiveConcurrencyMode(OBSERVE) or (ENFORCE) when building ParallelConsumerOptions, or pass -Dpc.adaptiveConcurrency=OBSERVE.
+  isolated_from_stable_modules: false
+boundaries:
+  - >-
+    ENFORCE is unvalidated. The arrival-controlled bench harness that would establish what it is
+    worth lands separately, and no benchmark result is published, so the documentation describes
+    enforcement without recommending it. OBSERVE is the mode to adopt: it changes no runtime
+    behaviour at all.
+  - >-
+    Adaptive concurrency only helps a workload bounded by how much is in flight. Under KEY or
+    PARTITION ordering with skewed keys, the shards serialise and the instance sustains a fraction of
+    its configured target with every remaining slot idle - admission is not the binding constraint,
+    and no controller can raise throughput there. The controller recognises that signature (sustained
+    in-flight far below target, narrow spread, flat service time), takes one bounded probe upward,
+    and otherwise holds and reports it rather than reading the idle slots as headroom.
+  - >-
+    The mode is fixed at construction because options are immutable - promoting OBSERVE to ENFORCE is
+    a restart, not a runtime call.
+  - >-
+    The system property may select DISABLED or OBSERVE only. Enforcement changes what a deployment
+    does to somebody else's system, so it must be a code decision rather than an environment one.
+  - >-
+    Core engine, pre-loaded queue path only. Engines dispatching into an external runtime (Vert.x,
+    Reactor, Mutiny) and the measurement-only direct-pull engine refuse it with one WARN at
+    construction and run static - never a silent ignore.
+  - >-
+    In ENFORCE, maxConcurrency is the ceiling and is never exceeded, with one documented exception -
+    leaving it at the library default selects a higher adaptive default ceiling instead, because
+    keeping the hand-tuning default while asking for adaptive behaviour is a contradiction. Set
+    maxConcurrency explicitly to pin a ceiling.
+  - >-
+    While the mode is on, the dynamic load factor is pinned to a static factor: exactly one component
+    owns the admission arithmetic, so two heuristics can never adjust overlapping numbers.
+  - >-
+    OBSERVE is open-loop by construction - its samples come from one fixed operating point, so it
+    validates signal intake and decision computation, never closed-loop properties like convergence
+    or oscillation bounds.
+references:
+  - label: The options surface and its validation
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
+  - label: The controller - lifecycle, ceiling substitution and target ownership
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/admission/AdmissionController.java
+  - label: The control law and its decision arms
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/admission/AdmissionControlLaw.java
+  - label: The binding-constraint values the gauge publishes
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/admission/AdmissionDecisionReason.java
+  - label: Metric definitions
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java
+  - label: The plan - product contract, requirements and scope boundaries
+    path: docs/plans/2026-08-18-001-feat-self-scaling-concurrency-plan.md

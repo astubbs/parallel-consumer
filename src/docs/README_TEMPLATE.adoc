@@ -342,6 +342,7 @@ without operational burden or harming the cluster's performance
 * Zero~ dependencies (`Slf4j` and `Lombok`) for the core module
 * Java 8 compatibility
 * Throttle control and broker liveliness management
+* Adaptive concurrency (experimental): rather than trusting a static `maxConcurrency` guess, measure how the workload responds and discover the sustainable in-flight target - with an observe-only mode that reports what it would do without acting, see the <<adaptive-concurrency>> section
 * Clean draining shutdown cycle
 * Manual global pause / resume of all partitions, without unsubscribing from topics (useful for implementing a simplistic https://en.wikipedia.org/wiki/Circuit_breaker_design_pattern[circuit breaker])
 ** Circuit breaker patterns for individual paritions or keys can be done through throwing failure exceptions in the processing function (see https://github.com/confluentinc/parallel-consumer/pull/291[confluentinc PR #291 Explicit terminal and retriable exceptions] for further refinement)
@@ -966,6 +967,96 @@ For a code example, see the <<streams-usage-code>> section.
 
 .Example usage with Kafka Streams
 image::https://lucid.app/publicSegments/view/43f2740c-2a7f-4b7f-909e-434a5bbe3fbf/image.png[Kafka Streams Usage,align="center"]
+[[adaptive-concurrency]]
+== Adaptive Concurrency
+
+WARNING: *Experimental.* This surface may change in a minor release, and enforcement is *unvalidated* - see <<adaptive-concurrency-status>> before turning it on. It is designed to be adopted observe-first.
+
+`maxConcurrency` is a compile-time guess about a runtime quantity.
+The right value depends on the capacity of whatever your processing function talks to, on the data currently in this instance's assigned partitions, and on the time of day - so one static number is wrong in both directions.
+Too low silently strands throughput that nobody files an issue about; too high floods the downstream system.
+From the outside, the two look much the same: a plateau, with no way to tell whether the cap, the host, the broker or the downstream service is holding it there.
+
+Adaptive concurrency measures how service time responds to the work currently in flight and moves the *admission target* - the number of records allowed in flight at once - between a floor of one slot and a ceiling it may never exceed.
+The thread pool is not resized; admission is the control variable, and it is the same variable that already governs dispatch quantity and broker back-pressure.
+
+=== The three modes
+
+[cols="1,4"]
+|===
+| Mode | What it does
+
+| `DISABLED`
+| The default. The controller does not exist, and concurrency behaves exactly as it always has - `maxConcurrency` is both the pool size and the in-flight target.
+
+| `OBSERVE`
+| The controller measures, decides, and reports what it *would* do - through metrics and a rate-limited log line - while changing no runtime behaviour at all. This is the safe first step, and the one to adopt today.
+
+| `ENFORCE`
+| The controller's target actually steers dispatch and broker intake, between one slot and the ceiling.
+|===
+
+[source,java]
+----
+ParallelConsumerOptions.<String, String>builder()
+        .consumer(consumer)
+        .maxConcurrency(64)
+        .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.OBSERVE)
+        .build();
+----
+
+Options are immutable, so the mode is fixed at construction: *promoting `OBSERVE` to `ENFORCE` is a restart*, not a runtime call.
+
+The mode also defaults from the `pc.adaptiveConcurrency` system property, so an existing deployment can be put into observation without touching its source.
+*The property can select at most `OBSERVE`*: a property value of `ENFORCE` resolves to `OBSERVE` and logs a WARN.
+Enforcement changes what your application does to somebody else's system, so it has to be a deliberate line of code rather than a launch flag.
+
+`adaptiveConcurrencyInitialTarget` optionally seeds the starting target - useful when you already know roughly where the sustainable point is and do not want to spend the deploy window ramping into it.
+Left unset, the controller starts from the target today's static configuration derives, so at startup admission is never above what you run now.
+The seed is validated against the floor and the ceiling, and setting it while the mode is `DISABLED` is a configuration error rather than a silent no-op.
+
+In `ENFORCE`, `maxConcurrency` is the ceiling the controller may never exceed - with one documented exception.
+Leaving `maxConcurrency` at the library default of 16 selects a higher adaptive default ceiling of 64 instead, because keeping the hand-tuning default while asking for adaptive behaviour is a contradiction.
+Set `maxConcurrency` explicitly whenever you want a specific ceiling.
+
+=== Where it does not apply
+
+The controller serves the core engine's pre-loaded queue path only.
+The engines that dispatch into an external runtime - Vert.x, Reactor and Mutiny - and the measurement-only direct-pull engine cannot serve it, because the concurrency an admission controller would steer lives outside anything this library sizes.
+Requesting adaptive mode on any of them logs one WARN at construction and runs static.
+It is never silently ignored.
+
+=== What to watch
+
+All four meters are in the `processor` subsystem - see the <<metrics>> section for the full listing and setup.
+
+`pc.admission.target`:: The live target, in slots. Under `OBSERVE` this stays at the static `maxConcurrency`-derived value; it moves only under `ENFORCE`.
+`pc.admission.would.be.target`:: The target the controller *would* publish. This is the whole product of `OBSERVE`: watching it against the live target tells you how wrong your static guess is, and in which direction, before you let anything act on it.
+`pc.admission.constraint`:: Which constraint bound the most recent sample window, as an enum-valued gauge. *This is the meter that answers "why is it not moving".*
+`pc.admission.movements`:: How many times the target actually changed value. A window that closes on a hold, or on a clamp landing on the same slot count, does not count - so a flat movement count next to a busy constraint gauge means the controller is deciding and finding nothing to do.
+
+The constraint values are `APP_LIMITED` (too few samples to judge, or the application is not filling the target - the window says nothing about downstream capacity), `BACKOFF` (an admission was dropped for overload), `FAILURE_LIMITED` (the non-success fraction froze growth - a fast-failing downstream *lowers* measured service time, which a naive controller would read as headroom), `PROBING` (a bounded step taken to test a suspicion), `ADAPTING` (ordinary gradient adaptation), `AT_CAP` and `AT_FLOOR` (the clamps bound), and `COOLDOWN` (a rebalance discarded the measurement history).
+Zero means no window has closed yet.
+The numeric mapping is published in the meter description, and the values are hand-assigned rather than ordinals so that adding a reason never renumbers one your dashboard is already keyed on.
+
+[[adaptive-concurrency-ordering-starvation]]
+=== Where admission is not the binding constraint
+
+Adaptive concurrency can only help a workload whose throughput is bounded by *how much is in flight*.
+Under `KEY` or `PARTITION` ordering with a skewed key distribution, it is not: the shards serialise, and the instance can sustain a single record in flight of a configured twenty-four while every slot sits empty and service time stays flat.
+No admission controller can raise throughput there, because admission is not what is holding it back.
+
+The controller is built to recognise that signature rather than mistake the idle slots for headroom - sustained in-flight far below the target, with a narrow spread and flat service time.
+It takes one bounded probe upward (`PROBING`) to check that it is not looking at starvation it manufactured itself, and otherwise holds and reports `APP_LIMITED`.
+So on an ordering-starved workload the honest outcome is a *diagnosis*, not a speed-up: the fix is the ordering mode, the key distribution, or the buffer sizing described under <<ordering-guarantees>>, not the concurrency number.
+
+[[adaptive-concurrency-status]]
+=== Status: observe-first, and enforcement unvalidated
+
+The measuring harness that would establish what `ENFORCE` is worth lands separately, and *no benchmark result has been published yet*.
+Until one is, this documentation describes enforcement; it does not recommend it.
+`OBSERVE` is the mode to adopt: it is a diagnostic that costs nothing to run, and it answers a question - how far the sustainable target is from your configured one - that you currently cannot answer at all.
+
 // [[mertics]] is a long-standing misspelling. Kept so existing links still resolve.
 [[mertics]]
 [[metrics]]
