@@ -381,6 +381,18 @@ operating point that had produced 9,050 four minutes earlier**. That is not nois
 - **Namespace your scratch directory.** Sessions share one scratchpad path, and two of them writing
   `results.csv` or `assemble.sh` is silent.
 
+## The Vert.x arm has NO timer-callee form, and scores well without one
+
+`vertx`/`pc` issue their HTTP request through the engine's own `vertxHttpReqInfo`, so the arm cannot
+be handed a callee that is not an HTTP server. Under `BENCH_TIMER_CALLEE` there is no server:
+`Bench#calleePort` returns 0, every request fails, and **the arm still prints a plausible figure** -
+17,221 msg/s, mid-table - because the engine's `onResponse` callback fires on failures too. The only
+tell is `peak_in_flight` = 0.
+
+It is expensive as well as wrong: the failing runs spun at 190% CPU and took the machine's load from
+12 to 44, contaminating every other arm measured in the same round. **`run-bisect.sh` now refuses the
+combination**; use `BENCH_ASYNC_STUB=1` for a non-blocking callee this arm can actually reach.
+
 ## Four traps this harness has paid for - it encodes the first three, not the fourth
 
 - **Jabel must be stripped from the compile classpath.** It ships as a transitive of older PC

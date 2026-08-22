@@ -13,7 +13,9 @@ same simulated work per record, same machine, same minute.
 This replaces the *position* `STRATEGY.md` holds against share groups with a *number*, which is worth
 more - and the number goes against us.
 
-**It is bounded, and the bounds matter as much as the figure.** Read
+**And it inverts at a longer delay: at 100ms PC wins by 14.5%.** The 2.5x is a per-record-overhead
+result, not a general one - it appears where framework cost dominates the work and vanishes where the
+work dominates the framework. **Neither row may be quoted without the other.** Read
 [What it does NOT show](#what-it-does-not-show) before quoting any of this.
 
 ## The comparison
@@ -81,6 +83,43 @@ at-most-once delivery wearing an at-least-once label. So an honest share process
 batch-synchronous: poll, run the batch, finish it, poll again. **PC keeps records from many polls
 outstanding at once, and that is what its offset encoding buys.**
 
+## At 100ms the result INVERTS, and PC wins - the prediction held
+
+Stated before the run, from the in-flight ceilings alone: at a long delay throughput is bounded by
+records-in-flight over delay, the share arm's ceiling is its batch (~2,606) and PC's is its
+configured 5,000 - so PC should win at 100ms even though it loses at 2ms.
+
+| Arm | msg/s (median of 3) | peak in flight | ceiling implied by peak |
+|---|---:|---:|---:|
+| `core-dpvt` | **18,328** | **5,000** | 50,000 |
+| `core-vt` | **18,275** | **5,000** | 50,000 |
+| `share-explicit` | 16,098 | 2,606 | 26,060 |
+| `share` | 15,957 | 2,606 | 26,060 |
+| `core` shipped default | 12,943 | 3,053 | 30,530 |
+| `pool` | 11,950 | 2,877 | 28,770 |
+
+**PC's best arm beats share groups by 14.5% at 100ms.** So the 2.5x at 2ms is not a general result,
+it is a *per-record-overhead* result: it appears where the framework cost dominates the work, and it
+disappears where the work dominates the framework. **Which operating point a reader cares about
+decides which of these two rows is the answer**, and neither one may be quoted alone.
+
+**And it is the harness's own concurrency limit that decides it.** Share groups cannot be asked for
+more than `share.partition.max.record.locks` per share-partition, so on one partition the arm cannot
+reach 5,000 in flight however it is configured. On a topic with more partitions that ceiling rises
+and this row would move - **untested, and the most obvious next measurement.**
+
+### The `vertx` row taken alongside these is void, and the harness now refuses it
+
+`vertx` was added to this campaign to get a fully callee-matched comparison - it and the share arms
+were the two arms sharing `Bench#callCallee`. It cannot be: the Vert.x engine issues its own HTTP
+request through `vertxHttpReqInfo`, so under `BENCH_TIMER_CALLEE` there is no server, every request
+fails, and the arm STILL prints a plausible 17,221 msg/s because the engine's `onResponse` fires on
+failures. The only tell was `peak_in_flight` = 0.
+
+It also drove the machine's load from 12 to 44 while spinning at 190% CPU, contaminating the other
+arms in the same round. `run-bisect.sh` now refuses the combination. **A callee-matched share-versus-
+engine comparison still has not been taken** - it needs `BENCH_ASYNC_STUB=1` for both sides.
+
 ## The throughput win is bought with broker CPU - about 5x of it
 
 **No results file in this repository has ever recorded what the broker was doing**, and this is the
@@ -136,7 +175,9 @@ disappears:
 | `pool` | 16,844 | 17,152 | +1.8% |
 
 **Every arm is within 2.4%, and the sign is not consistent** - two arms up, two down. That is noise,
-not a broker effect.
+not a broker effect. **The 100ms campaign says the same**: `core-vt` 18,258 against 18,275 (+0.1%),
+`core-dpvt` 18,152 against 18,328 (+1.0%), `core` 12,614 against 12,943 (+2.6%), `pool` 12,015 against
+11,950 (-0.5%). Two operating points, eight comparisons, no consistent direction.
 
 **So no existing figure in this repository needs re-stating for the broker version.** They need
 re-stating for who else was using the broker, which is a different and much older problem -
@@ -185,10 +226,12 @@ offset semantics - not throughput.** That is the same shape as the already-recor
 
 ## Still open
 
-- **The 100ms operating point**, where the prediction is that PC wins: throughput there is bounded by
-  in-flight over delay, and the share arm's in-flight ceiling is its batch (~2,520) against PC's 5,000.
+- **More than one partition.** Share groups' in-flight ceiling is per share-partition, so the 100ms
+  row - the one PC wins - is set by a limit that rises with partition count. This is the single most
+  obvious next measurement and it could move the only operating point PC currently wins.
 - **A callee-matched engine row.** `core`/`core-vt`/`pool` do their simulated work as an inline
-  blocking sleep, while `share` and the `ExternalEngine` arms share `Bench#callCallee`. `vertx` against
-  `share` is the fully callee-matched comparison and is not in the table above.
+  blocking sleep, while `share` uses `Bench#callCallee`. The obvious matched arm, `vertx`, turned out
+  to have no timer form at all (see above), so this comparison still needs taking with
+  `BENCH_ASYNC_STUB=1` on both sides.
 - **Nothing about retries, redelivery, lock expiry or rebalance**, which is where per-record
   acknowledgement should cost share groups something and where PC's offset encoding is hardest to beat.

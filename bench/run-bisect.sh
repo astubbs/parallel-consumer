@@ -595,6 +595,33 @@ for m in $MODES; do
   esac
 done
 
+# THE VERT.X ARM HAS NO TIMER FORM, AND SILENTLY SCORES WELL WITHOUT ONE.
+#
+# bench/README.md has said this in prose since the timer callee was added - the Vert.x engine issues
+# the HTTP call itself, through `vertxHttpReqInfo`, so it cannot be handed a callee that is not an
+# HTTP server. Nothing enforced it, and on 2026-08-22 a sweep did exactly that.
+#
+# What it produces is not an error. `VertxArm` points the engine at `Bench#calleePort`, which returns
+# 0 when no stub is running; every request fails; the engine's `onResponse` callback still fires, so
+# the arm reaches its expected count and prints a NUMBER - 17,221 msg/s, comfortably mid-table,
+# sitting in a results file next to arms that did the work. The one visible tell is `peak_in_flight`
+# = 0, because nothing ever arrived at a callee, and no reader is required to notice that.
+#
+# It is also expensive: the failing runs spun at 190% CPU and drove the machine's load average from
+# 12 to 44, which then contaminated every OTHER arm measured in the same round.
+for m in $MODES; do
+  case $m in
+    vertx|pc)
+      if [ -n "${BENCH_TIMER_CALLEE:-}" ]; then
+        log "FATAL: mode '$m' issues its own HTTP request through the engine (vertxHttpReqInfo), so it"
+        log "       has no BENCH_TIMER_CALLEE form - there is no server to call, every request fails,"
+        log "       and the arm still prints a plausible throughput figure with peak_in_flight 0."
+        log "       Use BENCH_ASYNC_STUB=1 for a non-blocking callee this arm can actually reach."
+        exit 1
+      fi ;;
+  esac
+done
+
 if [ "$CALLEE_LABEL" = blocking ] && [ -z "${BENCH_ALLOW_BLOCKING_ENGINE:-}" ]; then
   for m in $MODES; do
     if is_nonblocking_engine "$m"; then
