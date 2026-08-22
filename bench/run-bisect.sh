@@ -227,9 +227,28 @@ POM
   echo "$dir/classes:$cp"
 }
 
-# RESULT <mode> <count> <ms> <msgPerSec> peak=<n>  ->  "<msgPerSec> <n>"
+# RESULT <mode> <count> <ms> <msgPerSec> peak=<n> res=<p50/p99/p999/max> drain=<p50/p99/p999/max>
+#   ->  "<msgPerSec> <peak> <res p50> <res p99> <res p999> <res max> <drain p50> ... <drain max>"
 # One parser for every arm, which is the point of making the Go arm print the identical line.
-parse_result() { grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; }
+#
+# THE LATENCY FIELDS ARE OPTIONAL, and the parser is written so that an arm which does not print them
+# still yields the two fields it always did, followed by eight dashes. The Go arms print the old line
+# and are not being rewritten for this; a parser that demanded the new fields would turn their rows
+# into RUN_FAILED, which is the shape of failure this harness has already published once.
+parse_result() {
+  grep '^RESULT' | awk '{
+    p = $6; sub("peak=", "", p);
+    res = "-/-/-/-"; drain = "-/-/-/-";
+    for (i = 7; i <= NF; i++) {
+      if ($i ~ /^res=/)   { res = substr($i, 5) }
+      if ($i ~ /^drain=/) { drain = substr($i, 7) }
+    }
+    if (res == "-")   { res = "-/-/-/-" }
+    if (drain == "-") { drain = "-/-/-/-" }
+    split(res, r, "/"); split(drain, d, "/");
+    print $5, p, r[1], r[2], r[3], r[4], d[1], d[2], d[3], d[4];
+  }'
+}
 # BENCH_JFR=<dir> records a Java Flight Recorder profile of each measured run into that directory,
 # one .jfr per arm. Off by default because recording is not free and every result in bench/results/
 # was taken without it - a profiled run and an unprofiled one are not comparable and must not be put
@@ -503,7 +522,26 @@ if [ -n "${BENCH_TIMER_CALLEE:-}" ]; then CALLEE_LABEL=timer
 elif [ -n "${BENCH_ASYNC_STUB:-}" ]; then CALLEE_LABEL=async
 else CALLEE_LABEL=blocking; fi
 MAX_POLL=${BENCH_MAX_POLL_RECORDS:-500}
-echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+# THE LATENCY COLUMNS, and why there are eight of them rather than one.
+#
+# residence_* is poll-return to completion - what a record spends INSIDE the engine, read off Parallel
+# Consumer's own pc.record.residence.time meter for a PC arm and measured the same way in Bench for
+# vanilla and pool. It is the only measure here that is not a restatement of throughput: PC chooses how
+# much to fetch and how deep to buffer, so residence is Little's law applied to those buffers.
+#
+# drain_* is engine start to completion. The dataset is produced once, before any arm runs, so engine
+# start is a valid common arrival instant for every record - but for a fixed record count it is roughly
+# position/throughput, so IT LARGELY RESTATES msg_per_sec IN LATENCY UNITS. It is not independent
+# corroboration of a residence figure and must never be read as such. It earns its place as the honest
+# measure of a backlog drain, which is what an operator feels when a consumer restarts or catches up.
+#
+# p999 and max are here because a mean is what a serial engine hides behind: head-of-line blocking
+# shows up in the upper percentiles long before it shows up anywhere else.
+echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms" > "$RESULTS"
+# Trailing commas for the eight latency columns on a row that never produced a measurement. Written
+# once so a skip row and a failure row cannot disagree about the column count - a results file whose
+# rows have different widths cannot be read back by anything.
+NO_LATENCY=",,,,,,,"
 # THE NON-BLOCKING ENGINES MUST NOT BE MEASURED WITH A BLOCKING CALLEE.
 #
 # vertx, reactor, mutiny and proxy exist to run a user function that does NOT hold a thread - that is
@@ -545,16 +583,17 @@ for mode in $MODES; do
         proj=$(serial_projection_seconds "$d")
         if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
           log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s,$NO_LATENCY" >> "$RESULTS"
           continue
         fi
         for r in $(seq 1 "$REPEATS"); do
           out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
-          read -r rate peak <<< "$out"
-          if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
-          elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
-          log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+          read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
+          if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=; latency=$NO_LATENCY
+          elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; latency=$NO_LATENCY
+          else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
+          log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak,$latency" >> "$RESULTS"
         done
       done
     done
@@ -563,22 +602,23 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED," >> "$RESULTS"; continue; }
+      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED,$NO_LATENCY" >> "$RESULTS"; continue; }
       for c in $CONCURRENCIES; do
         for d in $DELAYS; do
           proj=$(serial_projection_seconds "$d")
           if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
             log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s,$NO_LATENCY" >> "$RESULTS"
             continue
           fi
           for r in $(seq 1 "$REPEATS"); do
             out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
-            read -r rate peak <<< "$out"
-            if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
-            elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
-            log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+            read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
+            if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=; latency=$NO_LATENCY
+            elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; latency=$NO_LATENCY
+            else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
+            log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak,$latency" >> "$RESULTS"
           done
         done
       done

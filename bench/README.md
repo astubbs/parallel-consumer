@@ -68,13 +68,62 @@ bz.stub.parallelconsumer does not exist` - and, far worse, it resolved a **diffe
 every other arm. See the logging trap below.
 
 Results land in `$BENCH_WORK/results.csv` as
-`pc_version,client_pin,mode,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight`. `delay_ms` and
+`pc_version,client_pin,mode,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight` plus the eight
+latency columns below. `delay_ms` and
 `concurrency` were each added when that setting became a swept axis - without them a file sweeping
 it cannot be read back. **Older files under `results/` are left alone rather than backfilled**: they
 are records of what was run, and rewriting a measurement file to a newer schema invites reading a
 value into it that nobody measured. `curve.csv`, `core-curve.csv` and `matched-concurrency.csv`
 predate `delay_ms` and were all taken at 2ms; `delay-sweep-llingr.csv` predates `concurrency` and
 was taken at 100.
+
+### The two latency columns, which are not two views of one thing
+
+Until 2026-08-22 this harness measured throughput and nothing else, which is exactly the number a
+serial engine can hide behind: a run finishing in the same wall clock can have put one record in a
+hundred through a queue ten times as long, and no column here would have moved. There are now two
+latency measures, and reading either as corroboration of the other is the mistake to avoid.
+
+**`residence_p50_ms` / `p99` / `p999` / `max` - poll-return to completion.** What a record spends
+INSIDE the engine. For any Parallel Consumer arm this is read off PC's own
+`pc.record.residence.time` meter, which starts when the `WorkContainer` is built from a poll batch
+and stops when the control loop finishes with the delivery - failures, abandonments and every retry
+included. Produce time and broker wait are deliberately excluded: they are the environment, not the
+engine.
+
+**This is the only column that is not a restatement of throughput.** PC decides for itself how much
+to fetch and how deep to buffer, so under a backlog residence is Little's law applied to those
+buffers - buffered depth over throughput. It is therefore what distinguishes an arm holding 543
+records of a configured 5,000 because nothing more has been fetched, from one holding 543 because
+they are fetched and queued. Nothing else here can tell those apart.
+
+**`drain_p50_ms` / `p99` / `p999` / `max` - engine start to completion.** The dataset is produced
+once, before any arm runs, so engine start is a genuine common arrival instant for every record.
+**For a fixed record count this is roughly position/throughput, so it largely restates `msg_per_sec`
+in latency units** - say so wherever it is quoted, and never present the two as agreeing evidence.
+It earns its column because it is the honest measure of a backlog drain: a consumer restarting, or
+catching up on lag, which is a real operational situation rather than a benchmark artefact, and the
+number an operator actually feels.
+
+**Which arms report which.** `residence` is blank (`-`) for `llingr` and `franz`, which are not PC
+and do not print it. `vanilla` and `pool` measure it themselves, from the same two instants -
+poll-return, and the completion of the work - so their numbers sit in the same column legitimately.
+An arm that could only approximate it reports blank instead: **a blank column is recoverable and a
+number measured a different way is not.** Residence is never taken by timing the user function; the
+handler's duration is the harness's INPUT (see the work model), so measuring it would be measuring
+the question.
+
+**Precision differs between the two, deliberately.** `drain` is computed by sorting every recorded
+sample, so its percentiles are exact. `residence` for a PC arm comes through Micrometer's percentile
+histogram and is accurate to roughly 3% at these magnitudes. The bench also installs a MeterFilter
+widening that histogram's expiry before PC registers anything, and that is load-bearing rather than
+tidy: a probe that recorded 1,000 samples at 1,000ms, waited 70 seconds and asked again reported a
+p50 of **4.98ms**, having silently forgotten all of them, while the meter's count still read 1,010.
+Without the filter, any run longer than Micrometer's rotation would publish percentiles for its tail
+alone, with nothing anywhere saying so. With it, the same probe reported 1,006ms.
+
+**Read `p999` and `max`, not the mean.** Head-of-line blocking shows up in the upper percentiles long
+before it shows up anywhere else, which is the entire reason these columns exist.
 
 ### Results in this directory
 

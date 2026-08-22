@@ -58,10 +58,16 @@ import static com.github.tomakehurst.wiremock.client.WireMock.*;
  * convention; "pc" is a historical alias for "vertx", kept so every committed results file still
  * reads back.
  *
- * Prints one machine-readable result line: RESULT <mode> <count> <ms> <msgPerSec> peak=<maxInFlight>
+ * Prints one machine-readable result line:
+ *
+ *   RESULT <mode> <count> <ms> <msgPerSec> peak=<maxInFlight> res=<p50/p99/p999/max> drain=<p50/p99/p999/max>
  *
  * peak is measured at the CALLEE - the stub for an HTTP arm, the simulated worker for the proxy - so
  * it is what the engine actually had outstanding, not what it was configured to allow.
+ *
+ * res and drain are the two LATENCY measures, in milliseconds, and they answer different questions -
+ * see the latency section near the bottom of this file, which also says why they must not be read as
+ * corroborating one another. Either prints "-" when the arm cannot see it.
  */
 public class Bench {
 
@@ -92,6 +98,12 @@ public class Bench {
         int concurrency = args.length > 5 ? Integer.parseInt(args[5]) : 0;
         int bufferSize = args.length > 6 ? Integer.parseInt(args[6]) : 0;
         concurrencySetting = concurrency;
+        sizeLatencyRecorders(count);
+        // Fallback stamp for the engine arms, whose clocks live in their own files. runVanilla,
+        // runPool and runCore overwrite it with their own precise start a moment later, so only an
+        // arm reached through BenchArm carries this slightly-early one - and what it adds is the
+        // consumer construction, which the measured window already includes anyway.
+        runStartMs = System.currentTimeMillis();
         long ms;
         if ("vanilla".equals(mode)) {
             startStub(delayMs, 8);
@@ -105,8 +117,9 @@ public class Bench {
             if (arm.usesSharedCallee()) startCallee(delayMs, concurrency);
             ms = arm.run(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         }
-        System.out.printf("RESULT %s %d %d %.1f peak=%d%n",
-                mode, count, ms, count * 1000.0 / ms, peakInFlight.get());
+        System.out.printf("RESULT %s %d %d %.1f peak=%d res=%s drain=%s%n",
+                mode, count, ms, count * 1000.0 / ms, peakInFlight.get(),
+                residenceMillis(), drain.render());
         if (stub != null) stub.stop();
         if (asyncStubVertx != null) asyncStubVertx.close();
         if (calleeVertx != null) calleeVertx.close();
@@ -272,6 +285,12 @@ public class Bench {
      * Everything after this marker is teardown. Only what precedes it is evidence about the run.
      */
     static void windowClosed() {
+        // Take the engine's residence percentiles HERE, not at print time. PCMetrics#close deregisters
+        // every meter it registered, and closeDrainFirst runs a few lines after this in each arm - so
+        // reading the registry after teardown finds nothing and reports a blank column, which is what
+        // the first run of this actually did. This method is already the one point every arm reaches
+        // between stopping its clock and touching anything, which is why the capture belongs in it.
+        residenceSnapshot = residenceFromPcMeter();
         System.err.println("BENCH_WINDOW_CLOSED");
     }
 
@@ -347,10 +366,16 @@ public class Bench {
         try (KafkaConsumer<String, String> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
             c.subscribe(Collections.singletonList(topic));
             start = System.currentTimeMillis();
+            runStartMs = start;
             while (seen < expected) {
                 ConsumerRecords<String, String> poll = c.poll(Duration.ofSeconds(1));
+                // The arrival instant for every record in this batch: when the poll returned. That is
+                // the SAME definition Parallel Consumer's own residence timer uses, which is the only
+                // reason this arm's number may sit in the same column as a PC arm's.
+                long polledAt = System.currentTimeMillis();
                 for (Object ignored : poll) {
                     blockingGet(url);
+                    recordCompletion(polledAt);
                     if (++seen >= expected) break;
                 }
             }
@@ -386,6 +411,7 @@ public class Bench {
                 System.err.println("NOTE: messageBufferSize not available in this version; ignored");
             }
         }
+        attachMeterRegistry(builder);
         @SuppressWarnings("unchecked")
         ParallelConsumerOptions<K, V> built =
                 (ParallelConsumerOptions<K, V>) builder.getClass().getMethod("build").invoke(builder);
@@ -460,8 +486,11 @@ public class Bench {
         try (KafkaConsumer<String, String> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
             c.subscribe(Collections.singletonList(topic));
             start = System.currentTimeMillis();
+            runStartMs = start;
             while (submitted < expected) {
                 ConsumerRecords<String, String> polled = c.poll(Duration.ofSeconds(1));
+                // See runVanilla: poll-return is this arm's arrival instant, matching PC's.
+                long polledAt = System.currentTimeMillis();
                 for (Object ignored : polled) {
                     if (submitted >= expected) break;
                     submitted++;
@@ -471,6 +500,7 @@ public class Bench {
                         peakInFlight.accumulateAndGet(now, Math::max);
                         sleep(workDelayMs(delayMs));
                         inFlight.decrementAndGet();
+                        recordCompletion(polledAt);
                         done.incrementAndGet();
                         permits.release();
                     });
@@ -493,6 +523,7 @@ public class Bench {
         pc.subscribe(Collections.singletonList(topic));
         responses.set(0);
         long start = System.currentTimeMillis();
+        runStartMs = start;
         // the parameter is deliberately unused, so this lambda compiles against both the old
         // Consumer<ConsumerRecord> signature and the newer Consumer<PollContext> one
         pc.poll(ctx -> {
@@ -507,6 +538,10 @@ public class Bench {
                 injectedFailures.incrementAndGet();
                 throw new InjectedWorkFailure(now);
             }
+            // Drain latency only. Residence for a PC arm comes off the engine's own meter, never from
+            // here: this instant is where the USER FUNCTION finished, which is the input to the
+            // measurement rather than its output.
+            recordCompletion(-1);
             responses.incrementAndGet();
         });
         while (responses.get() < expected) sleep(25);
@@ -670,6 +705,295 @@ public class Bench {
         InjectedWorkFailure(long offset) {
             super("bench: injected failure for offset " + offset + " at rate " + FAILURE_RATE);
         }
+    }
+
+
+    // =============================================================================================
+    // LATENCY. Every figure this harness has ever produced is throughput, and throughput is the one
+    // number a serial engine can hide behind: a run that finishes in the same wall clock can have put
+    // one record in a hundred through a queue ten times as long, and nothing here would have shown it.
+    //
+    // TWO MEASURES, and they are NOT two views of one thing.
+    //
+    //   res=   RESIDENCE - poll-return to completion, per record. Read off Parallel Consumer's own
+    //          pc.record.residence.time meter for a PC arm, and measured the same way in this file for
+    //          the arms that have no PC. It is not derivable from throughput, because PC decides for
+    //          itself how much to fetch and how deep to buffer: residence is Little's law applied to
+    //          those buffers, so it is what separates "not fetched" from "fetched and queued".
+    //
+    //   drain= BACKLOG-DRAIN - engine start to completion, per record. The whole dataset is produced
+    //          before the run, so engine start is a valid common arrival instant for every record.
+    //          IT IS LARGELY THE THROUGHPUT NUMBER IN LATENCY UNITS - for a fixed record count it is
+    //          roughly position/throughput - so it must NOT be read as independent corroboration of a
+    //          residence figure. It is here because it is the honest measure for a real operational
+    //          situation the residence figure does not describe: a consumer restarting, or catching up
+    //          on lag, where what an operator feels is how long the whole backlog takes to clear.
+    //
+    // WHAT IS DELIBERATELY NOT DONE: residence is never approximated by timing the user function.
+    // The handler's own duration is the INPUT to this experiment - it is configured, by the work model
+    // below - so measuring it would be measuring the question rather than the answer.
+    //
+    // Arms with no Parallel Consumer report residence only if they can see the same two instants
+    // directly, which vanilla and pool can (poll-return, and the completion of the work). An arm that
+    // can see neither prints "-", because a blank column is recoverable and a number measured a
+    // different way is not.
+
+    /** Engine start, for the drain measure. Set by each arm as it starts its own clock. */
+    static volatile long runStartMs;
+
+    /** Backlog-drain latencies: completion minus engine start, one per completed record. */
+    static Latencies drain = new Latencies(0);
+
+    /** Residence, for the arms that have no Parallel Consumer to read it off. */
+    static Latencies benchResidence = new Latencies(0);
+
+    /**
+     * Sizes both recorders once the record count is known.
+     * <p>
+     * Four times the record count, because a run with an injected failure rate completes a record more
+     * than once and a fixed-size buffer that silently stopped recording would bias the distribution
+     * towards the early, uncontended part of the run - which is the direction that flatters.
+     */
+    static void sizeLatencyRecorders(int count) {
+        drain = new Latencies(count * 4);
+        benchResidence = new Latencies(count * 4);
+    }
+
+    /**
+     * One record finished. Records the drain latency always, and the residence latency when the caller
+     * knows this record's poll-return instant.
+     *
+     * @param polledAtMs when the poll that produced this record returned, or -1 when the arm cannot see
+     *                   it - which is every Parallel Consumer arm, whose residence comes off the engine
+     *                   meter instead.
+     */
+    static void recordCompletion(long polledAtMs) {
+        long now = System.currentTimeMillis();
+        drain.record(now - runStartMs);
+        if (polledAtMs >= 0) {
+            benchResidence.record(now - polledAtMs);
+        }
+    }
+
+    /**
+     * Exact percentiles over every sample, deliberately - no histogram, no bucketing, no estimate.
+     * <p>
+     * A few hundred thousand longs is nothing next to the dataset the run already holds, and sorting
+     * them once at the end costs milliseconds. Micrometer's histogram, which the residence figure has
+     * to come through for a PC arm, is accurate to about 3% at these magnitudes; these are accurate
+     * full stop, and the difference is worth having in a column that is compared across arms.
+     */
+    static final class Latencies {
+
+        private final long[] samples;
+        private final AtomicInteger next = new AtomicInteger();
+
+        Latencies(int capacity) {
+            this.samples = new long[Math.max(capacity, 0)];
+        }
+
+        void record(long millis) {
+            int i = next.getAndIncrement();
+            if (i < samples.length) {
+                samples[i] = millis;
+            }
+        }
+
+        int count() {
+            return Math.min(next.get(), samples.length);
+        }
+
+        /** @return "p50/p99/p999/max" in milliseconds, or "-" when this arm recorded nothing */
+        String render() {
+            int n = count();
+            if (n == 0) {
+                return "-";
+            }
+            long[] sorted = Arrays.copyOf(samples, n);
+            Arrays.sort(sorted);
+            return quantile(sorted, 0.50) + "/" + quantile(sorted, 0.99) + "/"
+                    + quantile(sorted, 0.999) + "/" + sorted[n - 1];
+        }
+
+        private static long quantile(long[] sorted, double q) {
+            int i = (int) Math.ceil(q * sorted.length) - 1;
+            return sorted[Math.min(Math.max(i, 0), sorted.length - 1)];
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Reading residence off Parallel Consumer's own meter.
+    //
+    // ENTIRELY REFLECTIVE, for the same reason the engine arms live in other files: this template
+    // compiles against 0.3.0.2, which has no Micrometer on its classpath at all, so an import of
+    // io.micrometer here would delete the version bisect. A release without ParallelConsumerOptions
+    // #meterRegistry simply reports "-" rather than failing, which is the honest outcome - the metric
+    // does not exist there.
+
+    static Object pcRegistry;
+
+    /**
+     * Gives Parallel Consumer a registry to publish into, if this version can take one.
+     * <p>
+     * The registry is configured with an expiry-widening filter FIRST, and that is not a detail. A
+     * Micrometer percentile histogram rotates its buckets on a timer, and its default keeps roughly the
+     * last 40 seconds: a probe recording 1,000 samples at 1,000ms, waiting 70 seconds and asking again
+     * reported a p50 of 4.98ms, having silently forgotten all of them, while its count still read
+     * 1,010. A run longer than that rotation would therefore publish percentiles for its tail alone,
+     * with nothing anywhere saying so. With the filter installed the same probe reported 1,006ms.
+     */
+    static void attachMeterRegistry(Object builder) {
+        pcRegistry = null;
+        try {
+            Class<?> registryType = Class.forName("io.micrometer.core.instrument.MeterRegistry");
+            java.lang.reflect.Method takesRegistry;
+            try {
+                takesRegistry = builder.getClass().getMethod("meterRegistry", registryType);
+            } catch (NoSuchMethodException absent) {
+                System.err.println("NOTE: ParallelConsumerOptions.meterRegistry not available in this "
+                        + "version; residence will be reported as '-'");
+                return;
+            }
+            Object registry = Class.forName("io.micrometer.core.instrument.simple.SimpleMeterRegistry")
+                    .getDeclaredConstructor().newInstance();
+            widenPercentileWindow(registry);
+            takesRegistry.invoke(builder, registry);
+            pcRegistry = registry;
+        } catch (Exception noMicrometer) {
+            System.err.println("NOTE: no Micrometer on this classpath (" + noMicrometer
+                    + "); residence will be reported as '-'");
+        }
+    }
+
+    /**
+     * Installs a MeterFilter widening every distribution's expiry to an hour with a single buffer, so
+     * no sample recorded during the run rotates out of the percentile view before it is read.
+     * <p>
+     * A dynamic proxy rather than a class, because MeterFilter cannot be named here. Its three methods
+     * are implemented explicitly rather than delegated to the interface defaults: InvocationHandler
+     * #invokeDefault needs a Java 16 compiler, and this template is compiled by whatever javac the
+     * machine running the sweep happens to have.
+     */
+    static void widenPercentileWindow(Object registry) throws Exception {
+        Class<?> configType = Class.forName(
+                "io.micrometer.core.instrument.distribution.DistributionStatisticConfig");
+        Object builder = configType.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("expiry", Duration.class).invoke(builder, Duration.ofHours(1));
+        builder.getClass().getMethod("bufferLength", Integer.class).invoke(builder, 1);
+        Object widened = builder.getClass().getMethod("build").invoke(builder);
+        java.lang.reflect.Method merge = configType.getMethod("merge", configType);
+
+        Class<?> filterType = Class.forName("io.micrometer.core.instrument.config.MeterFilter");
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        Class<? extends Enum> replyType = (Class<? extends Enum>) Class.forName(
+                "io.micrometer.core.instrument.config.MeterFilterReply");
+        Object filter = java.lang.reflect.Proxy.newProxyInstance(
+                filterType.getClassLoader(), new Class<?>[]{filterType}, (proxy, method, args) -> {
+                    switch (method.getName()) {
+                        case "configure":
+                            return merge.invoke(widened, args[1]);
+                        case "accept":
+                            return Enum.valueOf(replyType, "NEUTRAL");
+                        case "map":
+                            return args[0];
+                        case "toString":
+                            return "bench-widened-percentile-window";
+                        case "hashCode":
+                            return System.identityHashCode(proxy);
+                        case "equals":
+                            return proxy == args[0];
+                        default:
+                            throw new UnsupportedOperationException(
+                                    "MeterFilter gained a method this proxy does not implement: "
+                                            + method.getName());
+                    }
+                });
+
+        Object config = Class.forName("io.micrometer.core.instrument.MeterRegistry")
+                .getMethod("config").invoke(registry);
+        config.getClass().getMethod("meterFilter", filterType).invoke(config, filter);
+    }
+
+    /**
+     * @return "p50/p99/p999/max" residence in milliseconds, or "-" when this arm cannot see it
+     */
+    static String residenceMillis() {
+        if (residenceSnapshot != null) {
+            return residenceSnapshot;
+        }
+        // vanilla and pool, which measure poll-return to completion in this file
+        return benchResidence.render();
+    }
+
+    /** The engine's residence percentiles, taken at {@link #windowClosed()} before teardown. */
+    static String residenceSnapshot;
+
+    /** The meter Parallel Consumer publishes; see PCMetricsDef.RECORD_RESIDENCE_TIME. */
+    static final String RESIDENCE_METER = "pc.record.residence.time";
+
+    /**
+     * @return the engine's residence percentiles, or null when this version publishes no such meter -
+     *         which is every release before the fork added it, and is why this returns null rather
+     *         than throwing
+     */
+    static String residenceFromPcMeter() {
+        if (pcRegistry == null) {
+            return null;
+        }
+        try {
+            // Every method is looked up on the PUBLIC interface rather than on the implementation
+            // class: SimpleMeterRegistry's timers are package-private, so a Method taken from
+            // getClass() would look up fine and then fail to invoke.
+            Class<?> meterType = Class.forName("io.micrometer.core.instrument.Meter");
+            Class<?> idType = Class.forName("io.micrometer.core.instrument.Meter$Id");
+            Class<?> histogramSupport = Class.forName(
+                    "io.micrometer.core.instrument.distribution.HistogramSupport");
+            java.lang.reflect.Method getId = meterType.getMethod("getId");
+            java.lang.reflect.Method getName = idType.getMethod("getName");
+            java.lang.reflect.Method takeSnapshot = histogramSupport.getMethod("takeSnapshot");
+
+            Object registryMeters = Class.forName("io.micrometer.core.instrument.MeterRegistry")
+                    .getMethod("getMeters").invoke(pcRegistry);
+            for (Object meter : (List<?>) registryMeters) {
+                Object id = getId.invoke(meter);
+                if (!RESIDENCE_METER.equals(getName.invoke(id))) {
+                    continue;
+                }
+                Object snapshot = takeSnapshot.invoke(meter);
+                Class<?> snapshotType = snapshot.getClass();
+                long samples = (Long) snapshotType.getMethod("count").invoke(snapshot);
+                if (samples == 0) {
+                    return null;
+                }
+                double max = (Double) snapshotType.getMethod("max", java.util.concurrent.TimeUnit.class)
+                        .invoke(snapshot, java.util.concurrent.TimeUnit.MILLISECONDS);
+                Object[] percentiles = (Object[]) snapshotType.getMethod("percentileValues")
+                        .invoke(snapshot);
+                return pcPercentile(percentiles, 0.50) + "/" + pcPercentile(percentiles, 0.99) + "/"
+                        + pcPercentile(percentiles, 0.999) + "/" + Math.round(max);
+            }
+            System.err.println("NOTE: this version publishes no " + RESIDENCE_METER
+                    + " meter; residence will be reported as '-'");
+            return null;
+        } catch (Exception cannotRead) {
+            System.err.println("NOTE: could not read " + RESIDENCE_METER + " (" + cannotRead
+                    + "); residence will be reported as '-'");
+            return null;
+        }
+    }
+
+    /** One published percentile out of a HistogramSnapshot, rounded to whole milliseconds. */
+    static long pcPercentile(Object[] percentileValues, double wanted) throws Exception {
+        for (Object v : percentileValues) {
+            double at = (Double) v.getClass().getMethod("percentile").invoke(v);
+            if (Math.abs(at - wanted) < 1e-9) {
+                return Math.round((Double) v.getClass()
+                        .getMethod("value", java.util.concurrent.TimeUnit.class)
+                        .invoke(v, java.util.concurrent.TimeUnit.MILLISECONDS));
+            }
+        }
+        // The meter publishes 0, 0.5, 0.75, 0.95, 0.99 and 0.999; anything else is a mistake here.
+        throw new IllegalStateException("percentile " + wanted + " is not published by " + RESIDENCE_METER);
     }
 
     static void sleep(long ms) {
