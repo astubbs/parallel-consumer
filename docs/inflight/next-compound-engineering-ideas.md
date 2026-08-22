@@ -8,6 +8,10 @@ a skill, a check, a dispatch convention, or a rule other projects could adopt.
 Add to it as the fan-out continues. Do not rank here — ranking is the end-of-work step, with the
 owner.
 
+**Sibling ledger**: [`next-compound-ideas-from-the-engine-performance-work.md`](next-compound-ideas-from-the-engine-performance-work.md)
+does the same for the engine-performance work. Same instruction, same rule - rank both together at the
+end rather than separately.
+
 ## The strong ones
 
 **1. Falsification by fresh context.** Give an agent with no prior context *only* the specification
