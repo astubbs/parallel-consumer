@@ -55,6 +55,53 @@ point and has to be measured, not assumed. It is also exactly what the 2022 per-
 (`5dcd39bb3`, `Map<Long, BlockingQueue<ProcessingShard>>`) was trying to avoid, which is worth
 reading before concluding a single queue is fine.
 
+## Ring buffer instead of a queue - and the cheaper thing it points at
+
+**Antony, 2026-08-22: "instead of a queue of the shards what about a ring buffer? No head
+contention."**
+
+**Partly.** A ring buffer is genuinely better than a linked queue on the axes that matter here -
+pre-allocated slots so there is no node allocation per take, contiguous memory so the scan is
+prefetch-friendly, and claiming a slot is a single `getAndIncrement` rather than a CAS retry loop
+against a head pointer. Under heavy contention that difference is large.
+
+**But it is not "no contention".** A shared sequence counter still ping-pongs one cache line across
+every core that touches it, and at 5,000 workers that line is the hottest address in the process. It
+is *cheaper* contention, not absent contention.
+
+**Where it fits and where it does not**, and the split is the opposite of the shard queue's:
+
+| Mode | Shard membership | Ring buffer? |
+|---|---|---|
+| `UNORDERED` | **Static** - one shard per assigned partition, always selectable | **Excellent.** The ring never needs republishing: `getAndIncrement() % shardCount` **is** the merry-go-round. No queue, no re-enqueue, no allocation |
+| `KEY` / `PARTITION` | **Dynamic** - shards leave when a record is out and return when it completes | **Poor.** A fixed ring cannot express "not currently selectable" without a tombstone, and skipping tombstones is scanning again |
+
+So a ring helps exactly the mode the shard queue does not, and vice versa. **Together they cover
+both** - which is a reason to treat them as complementary rather than as competing proposals.
+
+### The cheaper idea underneath it: a PER-WORKER cursor, with no shared state at all
+
+If the only thing the shared sequence buys is "workers start in different places", then **give each
+worker its own cursor** and drop the shared atomic entirely. Collisions become possible but rare, and
+under `UNORDERED` a collision is already safe and already handled - the claim decides, and a loser
+skips.
+
+**This is not hypothetical, and the current code is the worst case of it.** `ShardManager` line 105:
+
+```java
+private volatile Optional<ShardKey> iterationResumePoint = Optional.empty();
+```
+
+**One shared field.** `LoopingResumingIterator` resumes from it, so under direct pull every one of N
+workers begins its scan at the same shard. They are pointed at the same place by construction, which
+guarantees the maximum possible collision rate rather than merely permitting it.
+
+**Making that resume point per-worker is a very small change with no new data structure**, and it
+should be measured before anything larger is built here - if most of the direct-pull collapse is N
+workers starting at the same shard, a ring buffer and a shard queue are both solving a problem that a
+`ThreadLocal` would have removed. It would not fix the prefix walk below it, which remains the other
+half.
+
 ## THE REMAINING GAP: which RECORD within the shard
 
 **A shard queue answers "which shard", not "which record".** Under `UNORDERED` one shard holds every
