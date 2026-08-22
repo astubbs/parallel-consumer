@@ -165,21 +165,31 @@ client was years behind, or who will want Share Groups first. That segment skews
 sophisticated users are the ones most willing to run a sidecar, so the segment that needs the
 advantage is also the one that tolerates its cost.
 
-**Against Share Groups, narrowly - and half of this has now been measured, with the throughput half
-going against us.** Acknowledgement here is local and commits are batched, where Share Groups
-acknowledge per message to the broker. That was written as "so per-record overhead should be lower",
-and a 2026-08-22 measurement splits the claim in two:
+**Against Share Groups - measured 2026-08-22, and the throughput half went against us.**
+Acknowledgement here is local and commits are batched, where Share Groups acknowledge per message to
+the broker. That was written as "so per-record overhead should be lower". It is not, in the consumer:
+a bare `KafkaShareConsumer` with no Parallel Consumer in it at all ran **2.5x faster than PC's best
+arm** at 2ms of work per record. **The throughput argument against Share Groups should not be made.**
 
-- **Consumer-side throughput: false.** A bare `KafkaShareConsumer` with no Parallel Consumer in it at
-  all ran **2.5x faster than PC's best arm** and 3.8x the shipped default, at 100,000 records,
-  `UNORDERED`, one partition, 2ms of work per record.
-- **Broker-side cost: true, and by more than expected.** Share-group acknowledgement cost the broker
-  about **48x** what PC's batched encoded commit cost per record, and roughly 5x the total per-record
-  broker CPU. The saving is real; it accrues to the cluster, not to the application that pays for it.
+**What survives is structural, and it is stronger than the number that fell.**
 
-**So the throughput argument against Share Groups should not be made.** What survives is ordering -
-Share Groups have no per-key guarantee and no equivalent of one - plus retry semantics and the load
-placed on shared broker infrastructure. Numbers, method and bounds:
+- **A share consumer cannot get ahead of its own batch.** Neither acknowledgement mode allows polling
+  while records are unacknowledged - explicit throws, and implicit acknowledges records that have not
+  been processed, which is at-most-once delivery wearing an at-least-once label. So an honest share
+  processor is **batch-synchronous**: poll, finish the batch, poll again. Parallel Consumer keeps
+  records from many polls outstanding at once, which is what the offset encoding buys.
+- **So the result inverts as soon as work takes real time.** At 100ms per record PC wins by 14.5%,
+  holding 5,000 records in flight against the share arm's 2,606 - its batch. The 2.5x is a
+  per-record-overhead result at a near-zero handler, not a general one, and neither figure may be
+  quoted without the other.
+- **No per-key ordering, and no equivalent of one.** This is the differentiator, and it is a
+  capability Share Groups lack rather than a benchmark they lose.
+- **Retry semantics**, which stay broker-side there.
+- Acknowledgement also costs the broker about 48x what a batched encoded commit does per record.
+  Noted for completeness rather than as an argument - it is a real difference, but it accrues to the
+  cluster and is not the reason to choose either design.
+
+Numbers, method and bounds:
 [`docs/inflight/perf-share-groups-versus-pc-2026-08-22.md`](docs/inflight/perf-share-groups-versus-pc-2026-08-22.md).
 
 **Wrapping the core client APIs is a staged possibility, not a plan.** The sidecar already embeds a
