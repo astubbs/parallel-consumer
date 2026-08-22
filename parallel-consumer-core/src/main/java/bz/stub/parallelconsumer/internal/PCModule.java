@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.admission.AdmissionController;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -122,6 +123,28 @@ public class PCModule<K, V> {
             pcMetrics = new PCMetrics(options().getMeterRegistry(), optionsInstance.getMetricsTags(), optionsInstance.getPcInstanceTag());
         }
         return pcMetrics;
+    }
+
+    private AdmissionController admissionController;
+
+    /**
+     * The adaptive-admission controller - always constructed, whatever the
+     * {@link ParallelConsumerOptions#getAdaptiveConcurrencyMode() mode}: in {@code DISABLED} it is inert (no window,
+     * no law, static target), which keeps every downstream read unconditional - the same
+     * cheap-always-construct choice {@link #dynamicExtraLoadFactor()} makes. Whether adaptive concurrency is
+     * ACTIVE (mode requested AND the engine can serve it) stays the processor's call
+     * ({@code AbstractParallelEoSStreamProcessor#isAdaptiveConcurrencyActive()}); the controller's own DISABLED
+     * guard is defensive depth.
+     */
+    public AdmissionController admissionController() {
+        if (admissionController == null) {
+            admissionController = initAdmissionController();
+        }
+        return admissionController;
+    }
+
+    private AdmissionController initAdmissionController() {
+        return new AdmissionController(options(), clock());
     }
 
     private DynamicLoadFactor initDynamicLoadFactor() {
