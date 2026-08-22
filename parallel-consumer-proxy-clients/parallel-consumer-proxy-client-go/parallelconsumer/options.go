@@ -42,6 +42,13 @@ const (
 // Everything here except the Sidecar fields travels in Configure and nowhere else. Nothing reaches
 // the proxy by argv, environment or file.
 type Options struct {
+	// Embedded runs the engine INSIDE this process, through the C ABI of a GraalVM shared library,
+	// instead of spawning the sidecar and dialling it over gRPC. SidecarPath is then unused.
+	//
+	// It requires a build with -tags pcffi and the library built by ../ffi/build-shared-library.sh;
+	// without them Open fails and says so, rather than silently falling back to the sidecar. A
+	// fallback would make a run that was meant to exercise the embedded engine prove nothing.
+	Embedded bool
 	// SidecarPath is the ABSOLUTE path of the sidecar binary. It is never resolved through PATH or
 	// relative to the working directory: this process hands the sidecar the Kafka credentials, so
 	// which binary runs is security-relevant.
@@ -95,10 +102,15 @@ type Options struct {
 var implementedCapabilities = []string{CapabilityDispatch}
 
 func (o Options) validate() error {
-	if o.SidecarPath == "" {
+	if o.Embedded {
+		if o.SidecarPath != "" {
+			return errors.New("parallelconsumer: Embedded and SidecarPath are mutually exclusive - " +
+				"an embedded engine has no sidecar to launch")
+		}
+	} else if o.SidecarPath == "" {
 		return errors.New("parallelconsumer: SidecarPath is required")
 	}
-	if !filepath.IsAbs(o.SidecarPath) {
+	if !o.Embedded && !filepath.IsAbs(o.SidecarPath) {
 		return fmt.Errorf("parallelconsumer: SidecarPath must be absolute, got %q - a relative or "+
 			"PATH-resolved sidecar is a binary an attacker can influence", o.SidecarPath)
 	}

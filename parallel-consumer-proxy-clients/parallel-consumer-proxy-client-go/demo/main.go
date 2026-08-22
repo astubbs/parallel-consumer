@@ -129,6 +129,13 @@ func (d demo) run(ctx context.Context) error {
 		return err
 	}
 	small := []armResult{akCore, sidecarArm}
+	if embeddedArmEnabled {
+		embeddedArm, err := d.goEmbedded(ctx, d.options.records)
+		if err != nil {
+			return err
+		}
+		small = append(small, embeddedArm)
+	}
 	report(fmt.Sprintf("Small replay - every arm over the same %d records (the comparison)",
 		d.options.records), small, &akCore, false)
 
@@ -151,6 +158,14 @@ func (d demo) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	bigArms := []armResult{big}
+	if embeddedArmEnabled {
+		bigEmbedded, err := d.goEmbedded(ctx, total)
+		if err != nil {
+			return err
+		}
+		bigArms = append(bigArms, bigEmbedded)
+	}
 	// the unit is chosen so the figure is never zero - see the demo contract.
 	serialMillis := total * d.options.delayMs
 	serialCost := fmt.Sprintf("%dms", serialMillis)
@@ -158,6 +173,6 @@ func (d demo) run(ctx context.Context) error {
 		serialCost = fmt.Sprintf("%ds", serialMillis/1000)
 	}
 	report(fmt.Sprintf("Big replay - %d records, parallel arms only (AK core is serial and would take %s+)",
-		total, serialCost), []armResult{big}, &akCore, true)
+		total, serialCost), bigArms, &akCore, true)
 	return nil
 }

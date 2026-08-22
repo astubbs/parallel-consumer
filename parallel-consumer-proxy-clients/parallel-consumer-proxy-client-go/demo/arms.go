@@ -25,6 +25,8 @@ import (
 const (
 	armAKCore    = "AK core (franz-go)"
 	armGoSidecar = "pc-go-grpc (this client)"
+	// The engine linked into THIS process over the C ABI - no sidecar, no gRPC.
+	armGoEmbedded = "pc-go-ffi (embedded)"
 )
 
 // armBudget is how long an arm may take before the demo calls it stalled rather than slow.
@@ -161,9 +163,7 @@ func (d demo) akCore(ctx context.Context, target int) (armResult, error) {
 // produces the backlog and runs the AK core arm with franz-go, because a comparison needs both
 // sides.
 func (d demo) goSidecar(ctx context.Context, target int) (armResult, error) {
-	logf("\n=== %s starting over %d records ===", armGoSidecar, target)
-
-	client, err := parallelconsumer.Open(ctx, parallelconsumer.Options{
+	return d.proxyArm(ctx, armGoSidecar, target, parallelconsumer.Options{
 		SidecarPath:     d.sidecar.path,
 		SidecarArgs:     d.sidecar.args,
 		SidecarStderr:   os.Stderr,
@@ -173,13 +173,36 @@ func (d demo) goSidecar(ctx context.Context, target int) (armResult, error) {
 		KafkaProperties: d.broker.consumerProperties(groupID("pc-go-grpc")),
 		InstanceTag:     "pc-go-demo",
 	})
+}
+
+// goEmbedded runs the SAME arm against an engine linked into this process. Everything below the
+// options is shared with the sidecar arm on purpose: the two rows in the table then differ by
+// transport and by nothing else, which is the only thing that makes comparing them honest.
+//
+// Needs a build with -tags pcffi and the shared library from ../ffi. Without them Open returns an
+// error saying so, and the arm fails loudly rather than quietly becoming a second sidecar run.
+func (d demo) goEmbedded(ctx context.Context, target int) (armResult, error) {
+	return d.proxyArm(ctx, armGoEmbedded, target, parallelconsumer.Options{
+		Embedded:        true,
+		Topics:          []string{d.topic},
+		Ordering:        parallelconsumer.OrderUnordered,
+		MaxConcurrency:  int32(d.options.maxConcurrency),
+		KafkaProperties: d.broker.consumerProperties(groupID("pc-go-ffi")),
+		InstanceTag:     "pc-go-demo-ffi",
+	})
+}
+
+func (d demo) proxyArm(ctx context.Context, arm string, target int, opts parallelconsumer.Options) (armResult, error) {
+	logf("\n=== %s starting over %d records ===", arm, target)
+
+	client, err := parallelconsumer.Open(ctx, opts)
 	if err != nil {
-		return armResult{}, fmt.Errorf("%s: opening the session: %w", armGoSidecar, err)
+		return armResult{}, fmt.Errorf("%s: opening the session: %w", arm, err)
 	}
 	defer func() {
 		// Close is what reaps the sidecar, so it runs even on the failure paths below.
 		if err := client.Close(); err != nil {
-			logf("%s: closing the session: %v", armGoSidecar, err)
+			logf("%s: closing the session: %v", arm, err)
 		}
 	}()
 
@@ -208,7 +231,7 @@ func (d demo) goSidecar(ctx context.Context, target int) (armResult, error) {
 		return parallelconsumer.Succeed(), nil
 	})
 	if pollErr != nil {
-		return armResult{}, fmt.Errorf("%s: starting the poll: %w", armGoSidecar, pollErr)
+		return armResult{}, fmt.Errorf("%s: starting the poll: %w", arm, pollErr)
 	}
 
 	select {
@@ -221,15 +244,15 @@ func (d demo) goSidecar(ctx context.Context, target int) (armResult, error) {
 		count := int(processed.Load())
 		if err := client.Err(); err != nil {
 			return armResult{}, fmt.Errorf("%s: the session ended at %d of %d: %w",
-				armGoSidecar, count, target, err)
+				arm, count, target, err)
 		}
-		return armResult{}, fmt.Errorf("%s: the session ended cleanly at %d of %d", armGoSidecar, count, target)
+		return armResult{}, fmt.Errorf("%s: the session ended cleanly at %d of %d", arm, count, target)
 	case <-time.After(armBudget):
-		return armResult{}, fmt.Errorf("%s stalled at %d of %d", armGoSidecar, processed.Load(), target)
+		return armResult{}, fmt.Errorf("%s stalled at %d of %d", arm, processed.Load(), target)
 	case <-ctx.Done():
-		return armResult{}, fmt.Errorf("%s: cancelled at %d of %d", armGoSidecar, processed.Load(), target)
+		return armResult{}, fmt.Errorf("%s: cancelled at %d of %d", arm, processed.Load(), target)
 	}
-	return finished(armGoSidecar, started, int(processed.Load()), keys.size()), nil
+	return finished(arm, started, int(processed.Load()), keys.size()), nil
 }
 
 func finished(arm string, started time.Time, processed, keys int) armResult {

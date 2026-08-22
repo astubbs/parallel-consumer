@@ -53,7 +53,7 @@ type Client struct {
 	opts    Options
 	side    *sidecar
 	conn    *grpc.ClientConn
-	stream  proxyv1.ProxyService_SessionClient
+	stream  sessionTransport
 	cancel  context.CancelFunc
 	session Session
 
@@ -103,6 +103,10 @@ type Client struct {
 func Open(ctx context.Context, opts Options) (*Client, error) {
 	if err := opts.validate(); err != nil {
 		return nil, err
+	}
+
+	if opts.Embedded {
+		return openEmbedded(ctx, opts)
 	}
 
 	side, err := startSidecar(ctx, opts)
@@ -483,12 +487,16 @@ func (c *Client) shutdown() error {
 	c.cancel()
 	c.receiver.Wait()
 
-	_ = c.conn.Close()
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
 
 	// Closing the lifecycle pipe is the reap. Never kill a sidecar with the stream still open -
 	// that turns a clean drain into a reconnect-window recovery for the next group member.
-	if err := c.side.stop(defaultReapGrace); err != nil {
-		c.fail(err)
+	if c.side != nil {
+		if err := c.side.stop(defaultReapGrace); err != nil {
+			c.fail(err)
+		}
 	}
 
 	// The session has ended by the application's own hand. Done fires here rather than in Close, so
