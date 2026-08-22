@@ -169,6 +169,30 @@ Python happens to be safe already: its worker pool is forked before any transpor
 unrelated reason that gRPC Core cannot survive a fork. **That is luck, not design**, and the next
 binding may not inherit it.
 
+### CTD8 - Node stays on the sidecar, and the reason is architectural rather than difficulty
+
+Node CAN embed - measured. The pull must run on a worker thread, because a blocking pull on the main
+thread takes the event loop to zero turns, and a worker restores baseline.
+
+**It should not, and the argument is specific to Node rather than the generic one about slow work.**
+Embedding exists to remove a hop. libuv watches network sockets on the loop thread itself, so a
+frame from the sidecar reaches application code in one hop and lands where that code already runs.
+The embedded path removes that socket hop and inserts a worker-thread hop plus a structured-clone
+copy:
+
+| | Path a frame takes |
+|---|---|
+| Sidecar | socket -> libuv -> application, on the main thread |
+| Embedded | `pc_next` -> worker -> `postMessage` -> main thread -> application |
+
+**This is reasoning, not measurement, and is labelled as such wherever it is written down.** Two
+things would overturn it: transferable `ArrayBuffer`s or `SharedArrayBuffer` remove the copy, and a
+loopback or Unix-socket hop is already cheap. If anyone races the two paths and the embedded one
+wins, this decision is void and the numbers replace it.
+
+Recorded in the client's own README as well as here, because "not done yet" and "decided against"
+are indistinguishable from outside and the next contributor will otherwise re-derive it.
+
 ### CTD7 - No FFI layer that executes calls on its own stack
 
 A binding MUST call the library down the calling OS thread's real stack. FFI layers that run

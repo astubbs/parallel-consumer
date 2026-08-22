@@ -83,6 +83,58 @@ event loop, not threads. The reasoning, in short:
 The transport never blocks on a processor regardless: dispatched records are queued synchronously
 and the executors are separate async loops.
 
+## Why this client stays on the sidecar, and does not vendor the engine
+
+Some clients can link Parallel Consumer **into** the host process, as a GraalVM shared library, and
+skip the sidecar entirely - Go and Python both do. **Node deliberately does not**, and the reasoning
+is recorded here because "we did not get to it yet" and "we decided not to" look identical from
+outside.
+
+**It was tried, and it works.** A Node process can create the isolate, open a session and pull
+frames. See [`ffi/probe_eventloop.mjs`](ffi/probe_eventloop.mjs).
+
+**But the pull has to happen on a worker thread, and that is measured, not assumed.** The engine
+does not push frames at you; something must call in and wait. Doing that on the main thread stops
+the event loop completely - not slows it, stops it:
+
+```
+  baseline (no FFI call)   loop turned 152,860 times
+  blocking on MAIN thread  loop turned       0 times
+  blocking on WORKER       loop turned 149,106 times
+```
+
+**And that is where the case for embedding falls apart for Node specifically.** The whole point of
+linking the engine in is to remove a hop. Here is what the two paths actually cost:
+
+| | Path a frame takes |
+|---|---|
+| Sidecar (today) | socket -> libuv -> your code, on the main thread |
+| Embedded | `pc_next` -> worker thread -> `postMessage` -> main thread -> your code |
+
+libuv - the C library that *is* Node's event loop - watches network sockets **on the loop thread
+itself**. A frame from the sidecar therefore lands exactly where your code runs, in one hop. The
+embedded path removes that socket hop and adds a thread hop plus a structured-clone copy in its
+place. **You would be trading a hop libuv is built for against one it is not.**
+
+This last part is *reasoning, not measurement* - nobody has raced the two. It is recorded as the
+current strategy rather than as a finding, and two things could change it:
+
+- The copy is avoidable. Transferable `ArrayBuffer`s move ownership rather than copying, and
+  `SharedArrayBuffer` skips the boundary entirely.
+- The socket hop is already cheap over loopback or a Unix domain socket.
+
+If someone measures it and the embedded path wins, this section is wrong and should be replaced by
+the numbers.
+
+**One hard constraint if anyone does try**, because the symptom does not point at the cause:
+[koffi](https://koffi.dev) cannot call this library at all. It executes foreign calls on a stack it
+allocates itself - its configurable `sync_stack_size` is the tell - while GraalVM derives its stack
+guard zones from the calling thread's *real* stack. The result is a fatal `StackOverflowError`
+inside `graal_create_isolate` whose own first suggested cause is "the wrong IsolateThread", which is
+not the problem. Raising the stack to koffi's 16 MiB maximum changes nothing; size was never it. An
+N-API addon calls straight down the thread's own stack and works - [`ffi/pc_addon.c`](ffi/pc_addon.c)
+is about 150 lines and needs no node-gyp.
+
 ## Building, testing, and the local gate
 
 Requires Node 20.11+ (CI pins 22.17.0) and, for the end-to-end test, a JDK 17.
