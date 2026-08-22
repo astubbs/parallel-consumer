@@ -131,6 +131,11 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>com.google.truth</groupId>
+            <artifactId>truth</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams-test-utils</artifactId>
             <version>${kafka.version}</version>
@@ -140,6 +145,38 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>io.github.ascopes</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+                <version>3.10.3</version>
+                <configuration>
+                    <protocVersion>${proxy.protoc}</protocVersion>
+                    <!--
+                        NOT the plugin's default of target/generated-sources/protobuf. The root
+                        pom's build-helper-maven-plugin adds target/generated-sources as a TEST
+                        source root in every module, and a source root sweeps its whole subtree - so
+                        anything generated beneath it is compiled twice, once as a main source and
+                        again into test-classes, where the duplicate precedes target/classes on the
+                        surefire classpath. The protocol module measured this and pays the same
+                        cost the same way. GeneratedCodePlacementTest is the guard.
+                    -->
+                    <outputDirectory>${project.build.directory}/generated-protobuf</outputDirectory>
+                    <binaryMavenPlugins>
+                        <binaryMavenPlugin>
+                            <groupId>io.grpc</groupId>
+                            <artifactId>protoc-gen-grpc-java</artifactId>
+                            <version>${grpc.version}</version>
+                        </binaryMavenPlugin>
+                    </binaryMavenPlugins>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>

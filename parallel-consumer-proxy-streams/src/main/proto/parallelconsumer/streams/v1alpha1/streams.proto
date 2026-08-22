@@ -1,0 +1,141 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
+syntax = "proto3";
+
+// EXPERIMENTAL AND UNFROZEN, deliberately, and this is the whole reason the schema lives here
+// rather than beside the v1 wire.
+//
+// The v1 protocol is additive-only: nothing may be removed, renumbered, retyped or renamed. A
+// message shape chosen to keep an argument type system OUT of a proof does not belong in a
+// contract every client library inherits forever. Everything below may change or disappear.
+//
+// Keeping it in this module also keeps three gates clean. The specification-coverage test reads
+// only the descriptor file that declares the v1 Configure message, so this file is invisible to
+// it. The lint gate runs over the protocol module's proto root, which this is not under. And the
+// breaking-change gate refuses to run at all if it finds a second copy of the frozen file's path.
+//
+// Promotion into the frozen wire is a separate, later decision taken against a real Kafka Streams
+// design - not a side effect of this proof.
+package parallelconsumer.streams.v1alpha1;
+
+option java_package = "bz.stub.parallelconsumer.streams.protocol.v1alpha1";
+option java_multiple_files = true;
+option java_outer_classname = "StreamsProto";
+
+// One bidirectional stream carries a whole session: the handshake, the topology description, and
+// then per-record invocations for as long as the topology runs.
+//
+// It does NOT reuse the v1 Session RPC, and that is forced rather than stylistic. The v1 handshake
+// rejects a Configure naming neither a topic list nor a topic pattern, and builds a Parallel
+// Consumer engine from that subscription. A Streams topology names its own sources, so a Streams
+// session cannot open on it without fabricating a subscription and standing up an engine nothing
+// uses.
+service StreamsService {
+  rpc Session(stream StreamsClientMessage) returns (stream StreamsServerMessage);
+}
+
+message StreamsClientMessage {
+  oneof message {
+    Open open = 1;
+    BuilderCall builder_call = 2;
+    RegisterFunction register_function = 3;
+    DescribeComplete describe_complete = 4;
+    InvocationResult invocation_result = 5;
+  }
+}
+
+message StreamsServerMessage {
+  oneof message {
+    Ready ready = 1;
+    HandleAssigned handle_assigned = 2;
+    Invocation invocation = 3;
+    Fault fault = 4;
+  }
+}
+
+// The handshake. First message on the stream; nothing else is accepted before it.
+message Open {
+  optional string application_id = 1;
+  // Passed to the Kafka Streams instance as-is. Credentials travel here and are never echoed back.
+  map<string, string> kafka_properties = 2;
+}
+
+message Ready {
+  optional string application_id = 1;
+}
+
+// One call against the topology builder. The client chooses call_id and the server echoes it on
+// the HandleAssigned that answers, so a client can match answers without assuming ordering.
+message BuilderCall {
+  optional int64 call_id = 1;
+  oneof call {
+    Source source = 2;
+    MapValues map_values = 3;
+    GroupByKey group_by_key = 4;
+    Count count = 5;
+    Sink sink = 6;
+  }
+}
+
+message Source {
+  optional string topic = 1;
+}
+
+// The one operator that crosses the boundary. function_token names a function the client
+// registered; no callable, address or source text ever crosses.
+message MapValues {
+  optional int64 handle = 1;
+  optional int64 function_token = 2;
+}
+
+message GroupByKey {
+  optional int64 handle = 1;
+}
+
+// The aggregation. Its store is in-memory by design - see the plan's decision on state stores.
+message Count {
+  optional int64 handle = 1;
+  optional string store_name = 2;
+}
+
+message Sink {
+  optional int64 handle = 1;
+  optional string topic = 2;
+}
+
+// Handles are server-minted and opaque to the client, which may only name them back.
+message HandleAssigned {
+  optional int64 call_id = 1;
+  optional int64 handle = 2;
+}
+
+message RegisterFunction {
+  optional int64 token = 1;
+  // Free text for diagnostics only; the engine never interprets it.
+  optional string description = 2;
+}
+
+// The topology is built and started on this message, and not before.
+message DescribeComplete {
+}
+
+// Sent when an operator reaches a client-supplied function. The stream thread that emitted it is
+// blocked until the matching result returns.
+message Invocation {
+  optional int64 correlation = 1;
+  optional int64 function_token = 2;
+  optional bytes key = 3;
+  optional bytes value = 4;
+}
+
+message InvocationResult {
+  optional int64 correlation = 1;
+  optional bytes value = 2;
+  // Set instead of value when the client's function failed. The record fails rather than silently
+  // succeeding: a wrong value entering an aggregation is worse than a failed record.
+  optional string error = 3;
+}
+
+message Fault {
+  optional string reason = 1;
+}
