@@ -13,7 +13,8 @@ origin: docs/inflight/perf-embedding-the-engine-over-ffi.md
 
 Tracking issue: astubbs#242 (the language-proxy fan-out). Parent plan:
 [`2026-08-14-001-feat-language-proxy-plan.md`](2026-08-14-001-feat-language-proxy-plan.md).
-Proven in **two languages** on branch `feats/go-vendored-pc`: Go over cgo, Python over ctypes.
+Proven in **three languages** on branch `feats/go-vendored-pc`: Go over cgo, Python over
+ctypes, Node over a hand-written N-API addon.
 
 **Identifiers in this document are prefixed `CT` (requirement) and `CTD` (key technical decision),
 never `R` or `KTD`.** The parent plan states that no ID may mean two things across documents, and it
@@ -168,6 +169,23 @@ Python happens to be safe already: its worker pool is forked before any transpor
 unrelated reason that gRPC Core cannot survive a fork. **That is luck, not design**, and the next
 binding may not inherit it.
 
+### CTD7 - No FFI layer that executes calls on its own stack
+
+A binding MUST call the library down the calling OS thread's real stack. FFI layers that run
+foreign calls on a stack they allocate themselves are incompatible with a GraalVM shared library,
+which derives its stack guard zones from the thread's actual stack.
+
+**Measured, 2026-08-22.** koffi - the maintained Node FFI library - dies inside
+`graal_create_isolate` with a fatal `StackOverflowError`. Its own configurable `sync_stack_size` is
+the tell that it swaps stacks; raising it from 1 MiB to koffi's 16 MiB maximum changes nothing,
+because size was never the problem. An N-API addon against the same library in the same process
+worked first time.
+
+**The symptom does not point at the cause**, which is why this is a decision rather than a
+footnote. The error's own first suggested explanation is "the wrong IsolateThread", and the thread
+was correct. Any binding built on `cffi`'s ABI mode, a stack-switching coroutine runtime, or a
+similar layer needs checking against this before it is attempted.
+
 ### CTD5 - Host-thread serialisation is the binding's responsibility
 
 `ConfigureHandler.SessionObserver` documents that its state needs no locking **because gRPC
@@ -185,6 +203,11 @@ changes the difficulty column, so the ranking is now driven by demand alone:
 | **Build** | Rust, C++ | Edge and embedded targets where a second process is unavailable, plus the latency-sensitive fast-record workloads where the hop is the cost |
 | **Cheap to add** | Swift, C#, Go | Straightforward FFI, real parallelism; Go is already done |
 | **Do not build** | Python, Ruby, Node, PHP, Java | Their work is I/O-bound and slow, so the hop is noise. The pull model removes their *mechanical* difficulty but not the reason it is not worth doing. Java has `java-direct` already |
+
+**Node is measured too, and it defines the shape of the hardest case.** A blocking pull on the
+main thread takes the event loop to *zero* turns - a stall, not a degradation - and a worker thread
+restores it to baseline. So Node is possible, at the cost of a worker thread and a native addon,
+and it stays in "do not build" on the same value argument as the rest of the row.
 
 **Python is now the measured case, and it is in the "do not build" row on purpose.** It binds
 cleanly and its GIL objection is dead (1142x, measured against a `PyDLL` control). It stays here

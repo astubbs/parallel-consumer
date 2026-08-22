@@ -1,4 +1,4 @@
-# Two languages now run Parallel Consumer in-process, and the callback problem never arose
+# Three languages now run Parallel Consumer in-process, and the callback problem never arose
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: throughput -->
@@ -76,6 +76,42 @@ Python client forks its worker pool at step 1 and `pool.start()` only messages t
 launcher, so the GraalVM isolate - created at step 3 - is never inherited across a fork. The
 fork-safety design built because gRPC Core cannot survive a fork protects the embedded engine for
 free.
+
+## Node, third, and it found the design's edge
+
+Node is the only remaining runtime *shape*. Go and Python have real threads, so something else runs
+while one blocks; Node is a single event loop, and the question neither could ask is whether the
+pull model works when there is nothing else to run.
+
+```
+  baseline (no FFI call)   loop turned 152,860 times
+  blocking on MAIN thread  loop turned       0 times (rc -3, 2006ms)
+  blocking on WORKER       loop turned 149,106 times (rc -3, 2022ms)
+```
+
+**Yes, off the main thread - and the main-thread arm is a stall, not a slowdown.** Zero turns. Same
+call, same duration, same session; the only difference is which thread makes it.
+
+### koffi cannot call this library at all, and the symptom lies
+
+This is the transferable part. The first attempt died inside `graal_create_isolate` with a fatal
+`StackOverflowError` whose own first suggested cause is *"the wrong IsolateThread"* - and the thread
+was correct.
+
+koffi runs foreign calls on **a stack it allocates itself**; its configurable `sync_stack_size` is
+the tell. GraalVM derives its stack guard zones from the calling OS thread's *real* stack, so the
+two cannot agree.
+
+- **Size ruled out by controlled variation**: 1 MiB and koffi's 16 MiB maximum fail identically.
+- **Mechanism confirmed the same way**: an N-API addon - which calls down the thread's own stack,
+  exactly as `ctypes` and cgo do - worked first time, same process, same library.
+
+So a GraalVM shared library is incompatible with any FFI layer that swaps stacks. That is now
+`CTD7` of the plan, because it constrains every future binding and nothing about the failure points
+at it.
+
+The addon is about 150 lines of C against Node's own headers, built with clang and no node-gyp.
+The probe runs with `node_modules` deleted, so the Node path costs no third-party dependency.
 
 ## The finding that matters most: the callback problem is avoidable
 
