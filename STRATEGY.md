@@ -85,7 +85,12 @@ have, without giving up the ordering guarantee Kafka gave them.
   sequential succeeded offset: the records processed that vanilla Kafka would still be waiting
   on. Derivable today from two existing gauges; not emitted as its own meter.
 - **End-to-end record latency, median and p99** - poll to completion, not just user function
-  time. Not measured today - `pc.user.function.processing.time` covers only part of it.
+  time. Emitted as `pc.record.residence.time`, with percentiles: from the record leaving the
+  consumer to Parallel Consumer finishing with it, retries and client-side queueing included,
+  produce time and broker wait excluded. It is the only meter that distinguishes records not yet
+  fetched from records fetched and queued. **Measuring it below saturation is still missing** -
+  the benchmark harness drains a pre-produced backlog, and at 100% utilisation this number
+  measures the backlog rather than the engine.
 - **Discovered concurrency vs sustainable ceiling** - does the engine find and hold its
   plateau? Regresses if the controller hunts, oscillates, or undershoots. Until the
   self-tuning controller ships, read as achieved fan-out vs configured max (partly derivable

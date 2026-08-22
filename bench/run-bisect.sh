@@ -246,9 +246,36 @@ POM
   echo "$dir/classes:$cp"
 }
 
-# RESULT <mode> <count> <ms> <msgPerSec> peak=<n>  ->  "<msgPerSec> <n>"
+# RESULT <mode> <count> <ms> <msgPerSec> peak=<n> res=<p50/p99/p999/max> drain=<p50/p99/p999/max>
+#   ->  "<msgPerSec> <peak> <res p50> <res p99> <res p999> <res max> <drain p50> ... <drain max>"
 # One parser for every arm, which is the point of making the Go arm print the identical line.
-parse_result() { grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; }
+#
+# THE LATENCY FIELDS ARE OPTIONAL, and the parser is written so that an arm which does not print them
+# still yields the two fields it always did, followed by eight dashes. The Go arms print the old line
+# and are not being rewritten for this; a parser that demanded the new fields would turn their rows
+# into RUN_FAILED, which is the shape of failure this harness has already published once.
+parse_result() {
+  grep '^RESULT' | awk '{
+    p = $6; sub("peak=", "", p);
+    res = "-/-/-/-"; drain = "-/-/-/-";
+    for (i = 7; i <= NF; i++) {
+      if ($i ~ /^res=/)   { res = substr($i, 5) }
+      if ($i ~ /^drain=/) { drain = substr($i, 7) }
+    }
+    if (res == "-")   { res = "-/-/-/-" }
+    if (drain == "-") { drain = "-/-/-/-" }
+    split(res, r, "/"); split(drain, d, "/");
+    print $5, p, r[1], r[2], r[3], r[4], d[1], d[2], d[3], d[4];
+  }'
+}
+# A KILLED RUN'S LATENCY FIELDS ARE NOT A MEASUREMENT, and they are not absent either - the arm was
+# killed after printing whatever it had managed, so the parser reads real-looking numbers taken over a
+# truncated window against a record count that was never reached. Those must not sit in the same
+# column as a completed run's. The CSV was already blanked for a timeout; the LOG LINE was not, so the
+# two disagreed - the log quoted percentiles the results file did not contain, which is precisely the
+# shape of thing this harness has published wrongly before.
+clear_latency_fields() { rp50=; rp99=; rp999=; rmax=; dp50=; dp99=; dp999=; dmax=; }
+
 # BENCH_JFR=<dir> records a Java Flight Recorder profile of each measured run into that directory,
 # one .jfr per arm. Off by default because recording is not free and every result in bench/results/
 # was taken without it - a profiled run and an unprofiled one are not comparable and must not be put
@@ -409,6 +436,23 @@ run_one() {
     log "WARNING: $* logged errors INSIDE the measured window - that result includes retries. See $err"
     cp "$err" "$err.$(echo "$*" | tr ' /' '__')"
   fi
+  # A `NOTE:` FROM THE ARM MEANS IT COULD NOT MEASURE SOMETHING IT WAS ASKED FOR, and until this was
+  # surfaced the only symptom was a dash in a column - which reads as "this arm does not report that",
+  # the entirely normal case for an old release or a non-PC arm.
+  #
+  # What that hid: a concurrent session ran `mvn install` and replaced the shared ~/.m2 LOCAL
+  # 0.6.0.0-SNAPSHOT with a build from another branch, partway through a sweep. Half the rows lost
+  # their residence column and every one of them had its throughput measured against somebody else's
+  # code, with nothing anywhere saying so. `LOCAL` names a coordinate, not a build, and any session on
+  # this machine can change what it points at while a sweep is running.
+  #
+  # A warning cannot prevent that. What it can do is make the sweep say out loud that a column it was
+  # asked for is missing, which is the point at which somebody checks the jar.
+  if sed '/BENCH_WINDOW_CLOSED/q' "$err" 2>/dev/null | grep -qE '^NOTE:'; then
+    log "WARNING: $* could not measure something it was asked for:"
+    sed -n '/^NOTE:/p' "$err" | while IFS= read -r note; do log "         $note"; done
+    log "         If this is a LOCAL row, check the core jar has not been replaced by another session."
+  fi
 }
 
 # --- the llingr arm --------------------------------------------------------------------------
@@ -546,7 +590,31 @@ MAX_POLL=${BENCH_MAX_POLL_RECORDS:-500}
 # that best describes the machine a run is about to meet is the one measured going in.
 load_1m() { uptime | sed 's/.*load averages*: //' | awk '{print $1}'; }
 
-echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,load_1m" > "$RESULTS"
+# THE LATENCY COLUMNS, and why there are eight of them rather than one.
+#
+# residence_* is poll-return to completion - what a record spends INSIDE the engine, read off Parallel
+# Consumer's own pc.record.residence.time meter for a PC arm and measured the same way in Bench for
+# vanilla and pool. It is the only measure here that is not a restatement of throughput: PC chooses how
+# much to fetch and how deep to buffer, so residence is Little's law applied to those buffers.
+#
+# drain_* is engine start to completion. The dataset is produced once, before any arm runs, so engine
+# start is a valid common arrival instant for every record - but for a fixed record count it is roughly
+# position/throughput, so IT LARGELY RESTATES msg_per_sec IN LATENCY UNITS. It is not independent
+# corroboration of a residence figure and must never be read as such. It earns its place as the honest
+# measure of a backlog drain, which is what an operator feels when a consumer restarts or catches up.
+#
+# p999 and max are here because a mean is what a serial engine hides behind: head-of-line blocking
+# shows up in the upper percentiles long before it shows up anywhere else.
+echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms" > "$RESULTS"
+
+# The eight latency fields on a row that HAS a measurement but could not report latency.
+NO_LATENCY=",,,,,,,"
+# EVERYTHING AFTER msg_per_sec on a row that has no measurement at all - peak, load, and the eight
+# latency fields, as ten empty cells. One variable rather than a hand-counted run of commas at each
+# of the four such sites: counting them by hand is what put the skip rows one column short the first
+# time this file grew a column, and a short row is silent - nothing reads a results file strictly
+# enough to notice. verify_row_widths below is the backstop.
+NO_MEASUREMENT=",,,,,,,,,,"
 # THE NON-BLOCKING ENGINES MUST NOT BE MEASURED WITH A BLOCKING CALLEE.
 #
 # vertx, reactor, mutiny and proxy exist to run a user function that does NOT hold a thread - that is
@@ -647,17 +715,19 @@ for mode in $MODES; do
         proj=$(serial_projection_seconds "$d")
         if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
           log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s,," >> "$RESULTS"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s$NO_MEASUREMENT" >> "$RESULTS"
           continue
         fi
         for r in $(seq 1 "$REPEATS"); do
           load=$(load_1m)
           out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
-          read -r rate peak <<< "$out"
-          if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
-          elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
-          log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak,$load" >> "$RESULTS"
+          read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
+          if [ "$rc" = 124 ] || [ -z "$rate" ]; then
+            [ "$rc" = 124 ] && rate=RUN_TIMEOUT_${RUN_TIMEOUT}s || rate=RUN_FAILED
+            peak=; latency=$NO_LATENCY; clear_latency_fields
+          else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
+          log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, load $load, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak,$load,$latency" >> "$RESULTS"
         done
       done
     done
@@ -666,29 +736,48 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED,," >> "$RESULTS"; continue; }
+      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED$NO_MEASUREMENT" >> "$RESULTS"; continue; }
       for c in $CONCURRENCIES; do
         for d in $DELAYS; do
           proj=$(serial_projection_seconds "$d")
           if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
             log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s,," >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s$NO_MEASUREMENT" >> "$RESULTS"
             continue
           fi
           for r in $(seq 1 "$REPEATS"); do
             load=$(load_1m)
             out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
-            read -r rate peak <<< "$out"
-            if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
-            elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
-            log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak,$load" >> "$RESULTS"
+            read -r rate peak rp50 rp99 rp999 rmax dp50 dp99 dp999 dmax <<< "$out"
+            if [ "$rc" = 124 ] || [ -z "$rate" ]; then
+              [ "$rc" = 124 ] && rate=RUN_TIMEOUT_${RUN_TIMEOUT}s || rate=RUN_FAILED
+              peak=; latency=$NO_LATENCY; clear_latency_fields
+            else latency="$rp50,$rp99,$rp999,$rmax,$dp50,$dp99,$dp999,$dmax"; fi
+            log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak, load $load, residence p50/p99/p99.9/max ${rp50:--}/${rp99:--}/${rp999:--}/${rmax:--}ms, drain ${dp50:--}/${dp99:--}/${dp999:--}/${dmax:--}ms"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak,$load,$latency" >> "$RESULTS"
           done
         done
       done
     done
   done
 done
+
+# A SHORT ROW IS SILENT, so check rather than trust. Every time this file has grown a column, at
+# least one of the four no-measurement sites has been left a comma short - the sweep still finishes,
+# the file still opens, and every value to the right of the gap is read against the wrong heading.
+verify_row_widths() {
+  local want got bad=0
+  want=$(head -1 "$RESULTS" | awk -F, '{print NF}')
+  while IFS= read -r row; do
+    got=$(printf '%s' "$row" | awk -F, '{print NF}')
+    if [ "$got" != "$want" ]; then
+      log "WARNING: results row has $got fields, header has $want: $row"
+      bad=$((bad + 1))
+    fi
+  done < <(tail -n +2 "$RESULTS")
+  [ "$bad" = 0 ] || log "WARNING: $bad malformed row(s) - the columns to the right of the gap are misaligned."
+}
+verify_row_widths
 
 log "results: $RESULTS"
 cat "$RESULTS"

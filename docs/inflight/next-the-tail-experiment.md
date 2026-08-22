@@ -30,11 +30,12 @@ table.
 |---|---|
 | Tailed work model - `BENCH_DELAY_P99`, `BENCH_DELAY_STDDEV`, `BENCH_FAILURE_RATE`, seeded | **Built** 2026-08-22, off by default |
 | The `share` arm and a Kafka 4.3.1 broker | **Built** 2026-08-22, merged |
-| Latency percentiles from record residence time | **In progress** - `perf/record-residence-time`. **This is the blocker** |
+| Latency percentiles from record residence time | **Built** - `pc.record.residence.time`, and the `residence_*` and `drain_*` columns in `bench/run-bisect.sh`. It was named the blocker here; it is not, see below |
 
-**It cannot run until residence time lands**, because throughput will barely move - the point of a
+It could not have run before residence time landed, because throughput barely moves - the point of a
 tailed handler is what it does to the *distribution*, and a mean hides it completely. Reporting msg/s
-here would produce a null result from an experiment that had not been run.
+here would produce a null result from an experiment that had not been run. **That reasoning was right
+and the blocker it named was wrong**, which the next section is about.
 
 ## BLOCKED, and not on what this note first said - measured 2026-08-22
 
@@ -72,6 +73,29 @@ Both are true and they are not the same claim:
 **So the ordering is: arrival-rate control first, then this experiment.** Running it before then
 produces a null result from an experiment that was never performed - the exact failure this note
 exists to prevent, arrived at from an angle it did not anticipate.
+
+### One arm DID show the effect, because its queue is shallow
+
+The measurement is not entirely empty-handed. `vanilla` (a plain consumer, strictly serial) against
+`pool` (the same consumer with a thread pool), same records, same delay, both reporting residence
+measured the same way - poll-return to completion, in `Bench` itself: **p50 900ms against 18ms, p99
+1,848ms against 32ms.** A serial consumer's residence is fifty times a concurrent one's on identical
+work, and it is visible precisely because neither arm buffers deeply.
+
+**It is not a substitute for the experiment** - `vanilla` runs one record at a time in *total*, not one
+per partition, so it confounds ordering with concurrency, and its handler is flat. What it does show is
+that the residence measure resolves this class of effect perfectly well when the backlog is not
+drowning it, which is the strongest available evidence that the null above is the operating point's
+fault rather than the instrument's.
+
+### A second finding, which bounds the `PARTITION` arm of this experiment
+
+`PARTITION` ordering does not reach its own parallelism at default settings - 2 to 6 records in flight
+over 24 partitions, with a **flat** handler. See
+[`bug-partition-ordering-starves-on-a-narrow-buffer.md`](bug-partition-ordering-starves-on-a-narrow-buffer.md).
+Until that is fixed, **the `PARTITION` arm of this run measures that defect and would report it as the
+cost of serial execution.** Set `messageBufferSize` well above `max.poll.records x partitions`, and
+check `peak_in_flight` against the partition count before believing any `PARTITION` row.
 
 ### The predictions below are NOT refuted
 

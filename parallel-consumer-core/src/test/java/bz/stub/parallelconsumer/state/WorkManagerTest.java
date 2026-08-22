@@ -594,8 +594,13 @@ public class WorkManagerTest {
         var records = ktu.generateRecords(i);
 
         var treeMap = new TreeMap<Long, WorkContainer<String, String>>();
+        // The class's own PCModuleTestEnv, not a mock of it. PCModuleTestEnv is already a test double
+        // with a working MutableClock; mocking it stubbed that clock out to null, which went unnoticed
+        // only while nothing in WorkContainer's constructor read the module. Stamping the arrival
+        // instant does read it, and every sibling test that mocks PCModule for this purpose stubs
+        // clock() by hand - see ShardManagerTest#retryQueueOrdering. The real one needs no stubbing.
         for (ConsumerRecord<String, String> record : records) {
-            treeMap.put(record.offset(), new WorkContainer<>(0, record, mock(PCModuleTestEnv.class)));
+            treeMap.put(record.offset(), new WorkContainer<>(0, record, module));
         }
 
         // read back, assert correct order

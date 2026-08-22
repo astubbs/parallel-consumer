@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.Timer;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
@@ -82,6 +83,21 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private Gauge inflightRecordsNumberGauge;
     private Map<TopicPartition, Counter> succeededRecordsCounters = new HashMap<>();
     private Map<TopicPartition, Counter> failedRecordsCounters = new HashMap<>();
+
+    /**
+     * How long each record spent inside Parallel Consumer, from arrival to the controller finishing with it.
+     * <p>
+     * <b>One timer for the whole consumer, deliberately NOT tagged by topic-partition</b>, unlike the two
+     * counters above. Two reasons, and the second is the binding one. A percentile histogram per partition is a
+     * far heavier meter than a counter - an instance assigned a hundred partitions would carry a hundred of
+     * them. And percentiles cannot be merged after the fact: per-partition timers can never be combined into a
+     * consumer-wide p99, whereas an operator hunting a slow partition still has the per-partition counters and
+     * offset gauges to narrow it with. A per-partition breakdown, if it is ever wanted, has to be an additional
+     * meter rather than a re-tagging of this one.
+     *
+     * @see WorkContainer#getResidenceTime()
+     */
+    private Timer recordResidenceTimer;
 
     private final PCMetrics pcMetrics;
 
@@ -170,6 +186,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         log.trace("Work success ({}), removing from processing shard queue", wc);
 
         incrementCounterIfPresent(succeededRecordsCounters, wc.getTopicPartition());
+        recordResidenceTime(wc);
 
         wc.endFlight();
 
@@ -195,6 +212,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public void onFailureResult(WorkContainer<K, V> wc) {
         // error occurred, put it back in the queue if it can be retried
         incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
+        recordResidenceTime(wc);
         wc.endFlight();
         pm.onFailure(wc);
         sm.onFailure(wc);
@@ -223,6 +241,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
         log.debug("Work returned without a verdict, returning to scheduling {}", wc);
 
+        recordResidenceTime(wc);
         wc.endFlight();
         sm.onAbandoned(wc);
         numberRecordsOutForProcessing.decrementAndGet();
@@ -410,6 +429,26 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 this, WorkManager::getNumberOfWorkQueuedInShardsAwaitingSelection);
         inflightRecordsNumberGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.INFLIGHT_RECORDS,
                 this, WorkManager::getNumberRecordsOutForProcessing);
+        recordResidenceTimer = pcMetrics.getTimerFromMetricDef(PCMetricsDef.RECORD_RESIDENCE_TIME);
+    }
+
+    /**
+     * Records how long this record has been inside Parallel Consumer, at the moment the controller finishes with
+     * the delivery.
+     * <p>
+     * <b>Called from every outcome - success, failure and abandonment - not only success.</b> A record that is
+     * failing and being retried is precisely the case a residence-time metric exists to expose, and sampling only
+     * the successes would make the distribution look best exactly when the engine is doing worst.
+     * <p>
+     * The instant taken is the CONTROLLER's, not the worker's {@link WorkContainer#getSucceededAt()}. The hop
+     * from the worker's mailbox back to the control loop is Parallel Consumer's own queueing, so it belongs
+     * inside the number rather than outside it - and taking it here is the one point that is common to all three
+     * outcomes, two of which stamp no completion instant at all.
+     */
+    private void recordResidenceTime(WorkContainer<K, V> wc) {
+        if (recordResidenceTimer != null) {
+            recordResidenceTimer.record(wc.getResidenceTime());
+        }
     }
 
     private void initTopicPartitionSpecificMetrics(Collection<TopicPartition> partitions) {
