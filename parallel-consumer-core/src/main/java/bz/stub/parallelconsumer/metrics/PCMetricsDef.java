@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.metrics;
 
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.internal.State;
+import bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import lombok.Getter;
@@ -23,6 +24,11 @@ public enum PCMetricsDef {
 
     USER_FUNCTION_PROCESSING_TIME("user.function.processing.time", "User function processing time", PCMetricsSubsystem.PROCESSOR, TIMER),
     DYNAMIC_EXTRA_LOAD_FACTOR("dynamic.load.factor", "Dynamic load factor - load of processing buffers", PCMetricsSubsystem.PROCESSOR, GAUGE),
+
+    ADMISSION_TARGET("admission.target", "Adaptive concurrency - the LIVE admission target in slots, the number of user function invocations that may be in flight at once. Moves only under adaptiveConcurrencyMode=ENFORCE; under OBSERVE it is the static maxConcurrency-derived value", PCMetricsSubsystem.PROCESSOR, GAUGE),
+    ADMISSION_WOULD_BE_TARGET("admission.would.be.target", "Adaptive concurrency - the target the controller WOULD publish in slots. The whole product of adaptiveConcurrencyMode=OBSERVE, where it moves while the live target stays static; under ENFORCE it equals the live target", PCMetricsSubsystem.PROCESSOR, GAUGE),
+    ADMISSION_CONSTRAINT("admission.constraint", "Adaptive concurrency - which constraint bound the most recent closed sample window, reported as number with following mapping - " + AdmissionDecisionReason.getReasonToValueListing(), PCMetricsSubsystem.PROCESSOR, GAUGE),
+    ADMISSION_MOVEMENTS("admission.movements", "Adaptive concurrency - number of times the admission target actually changed value. A window that closes on a hold, or on a clamp landing on the same slot count, does not count", PCMetricsSubsystem.PROCESSOR, COUNTER),
 
     INFLIGHT_RECORDS("inflight.records", "Total number of records currently being processed or waiting for retry", PCMetricsSubsystem.WORK_MANAGER, GAUGE),
     WAITING_RECORDS("waiting.records", "Total number of records waiting to be selected for processing", PCMetricsSubsystem.WORK_MANAGER, GAUGE),

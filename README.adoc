@@ -1275,6 +1275,30 @@ Gauge `pc.dynamic.load.factor{subsystem=processor}`
 
 Dynamic load factor - load of processing buffers
 
+**Admission Target**
+
+Gauge `pc.admission.target{subsystem=processor}`
+
+Adaptive concurrency - the LIVE admission target in slots, the number of user function invocations that may be in flight at once. Moves only under adaptiveConcurrencyMode=ENFORCE; under OBSERVE it is the static maxConcurrency-derived value
+
+**Admission Would Be Target**
+
+Gauge `pc.admission.would.be.target{subsystem=processor}`
+
+Adaptive concurrency - the target the controller WOULD publish in slots. The whole product of adaptiveConcurrencyMode=OBSERVE, where it moves while the live target stays static; under ENFORCE it equals the live target
+
+**Admission Constraint**
+
+Gauge `pc.admission.constraint{subsystem=processor}`
+
+Adaptive concurrency - which constraint bound the most recent closed sample window, reported as number with following mapping - 0:NONE, 1:APP_LIMITED, 2:BACKOFF, 3:FAILURE_LIMITED, 4:PROBING, 5:ADAPTING, 6:AT_CAP, 7:AT_FLOOR, 8:COOLDOWN
+
+**Admission Movements**
+
+Counter `pc.admission.movements{subsystem=processor}`
+
+Adaptive concurrency - number of times the admission target actually changed value. A window that closes on a hold, or on a clamp landing on the same slot count, does not count
+
 **Pc Status**
 
 Gauge `pc.status{subsystem=processor}`

@@ -143,8 +143,15 @@ public class PCModule<K, V> {
         return admissionController;
     }
 
+    /**
+     * Constructed WITH the metrics subsystem, which is safe in either construction order and cycle-free:
+     * {@link #pcMetrics()} depends only on the options, never on the controller, so forcing it here either finds
+     * the instance the processor already made (the normal path - the processor initialises metrics first,
+     * deliberately, so module objects can bind meters) or makes it early on a module that has no processor. The
+     * controller registers nothing when the mode is {@code DISABLED}.
+     */
     private AdmissionController initAdmissionController() {
-        return new AdmissionController(options(), clock());
+        return new AdmissionController(options(), clock(), pcMetrics());
     }
 
     /**

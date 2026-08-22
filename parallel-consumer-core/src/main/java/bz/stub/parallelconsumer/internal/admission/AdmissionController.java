@@ -6,12 +6,19 @@ package bz.stub.parallelconsumer.internal.admission;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.AdaptiveConcurrencyMode;
+import bz.stub.parallelconsumer.internal.RateLimiter;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.TopicPartition;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -47,8 +54,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@code AbstractParallelEoSStreamProcessor#isAdaptiveConcurrencyActive()}; the DISABLED guard here is defensive
  * depth, not the decision.
  * <p>
- * No clock reads outside the injected {@link Clock} (the module's, so tests drive time), no threads of its own, no
- * metrics (Micrometer exposure is a later unit's job).
+ * No clock reads outside the injected {@link Clock} (the module's, so tests drive time) and no threads of its own.
+ * <p>
+ * <b>Observability.</b> When a {@link PCMetrics} is supplied and the mode is not {@code DISABLED}, construction
+ * registers the four {@code pc.admission.*} meters (live target, would-be target, binding constraint, movement
+ * count) - see {@link #initMetrics(PCMetrics)}. Independently of any registry, {@link #tick()} emits one
+ * rate-limited line naming the binding constraint whenever the target is being HELD by one
+ * ({@link #NO_MOVEMENT_CONSTRAINTS}), so an operator running {@code OBSERVE} with no Micrometer registry
+ * configured still gets the mode's product.
  * <p>
  * <b>Threading.</b> The control loop owns the decision surface - {@link #tick()} and every published-state read -
  * but service-time samples arrive from the WORKER threads (one per user-function invocation, recorded where the
@@ -63,6 +76,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@code parallel-consumer-core/pom.xml} - see {@code AbstractParallelEoSStreamProcessor#userFunctionTaskAccounting()}
  * for the constraint.
  */
+@Slf4j
 public class AdmissionController {
 
     /**
@@ -96,6 +110,30 @@ public class AdmissionController {
      * Package-visible so tests derive their clock steps from it.
      */
     static final Duration REBALANCE_TARGET_FREEZE_COOLDOWN = Duration.ofSeconds(30);
+
+    /**
+     * The reasons that describe the target being HELD by something rather than adapting: a window closed, and the
+     * constraint named is why the target is where it is. These are the ones worth SAYING out loud (see
+     * {@link #maybeReportBindingConstraint}), because each is a steady state an operator can act on - raise the cap,
+     * fix the downstream, feed the consumer more work - and none of them will change on their own.
+     * <p>
+     * {@code ADAPTING}, {@code BACKOFF} and {@code PROBING} are deliberately absent: those MOVED the target, which
+     * the movement counter and the target gauges already report.
+     */
+    private static final Set<AdmissionDecisionReason> NO_MOVEMENT_CONSTRAINTS = EnumSet.of(
+            AdmissionDecisionReason.AT_CAP,
+            AdmissionDecisionReason.AT_FLOOR,
+            AdmissionDecisionReason.APP_LIMITED,
+            AdmissionDecisionReason.FAILURE_LIMITED,
+            AdmissionDecisionReason.COOLDOWN);
+
+    /**
+     * How often at most the binding-constraint line above may speak. The condition it describes is a steady state
+     * that persists across every window, not an event, so unlimited it would repeat once per closed window forever -
+     * the same shape (and the same interval) as the load-factor ceiling notice in
+     * {@code AbstractParallelEoSStreamProcessor}.
+     */
+    private static final int CONSTRAINT_REPORT_INTERVAL_SECONDS = 5;
 
     /**
      * How a completed invocation's outcome classifies for admission purposes - the pass-through vocabulary for
@@ -160,12 +198,32 @@ public class AdmissionController {
 
     /**
      * The law-driven target in slots: the LIVE target in ENFORCE, the would-be target in OBSERVE.
+     * <p>
+     * Volatile because the reported state is now read off the control thread as well as on it - Micrometer scrapes
+     * the gauges below from whatever thread the registry's publisher runs on, and the poller gate already read
+     * {@link #currentTarget()} from the broker-poll thread. Only the control thread ever WRITES it, so this adds a
+     * visibility guarantee and no coordination.
      */
-    private int adaptiveTarget;
+    private volatile int adaptiveTarget;
 
     private Instant windowOpenedAt;
-    private AdmissionDecisionReason lastDecisionReason = null;
-    private Instant lastMovementAt = null;
+
+    /** Volatile for the same reason as {@link #adaptiveTarget} - the constraint gauge reads it. */
+    private volatile AdmissionDecisionReason lastDecisionReason = null;
+
+    private volatile Instant lastMovementAt = null;
+
+    // Meters - held in FIELDS, as the processor holds its own: a Micrometer gauge that loses the object it reads
+    // silently reports NaN forever, so the reference is never left to chance (PCMetrics#gaugeFromMetricDef sets
+    // strongReference on the meter, and this keeps the meters themselves reachable for the same reason). Null when
+    // no PCMetrics was supplied, and in DISABLED, which registers nothing at all.
+    private Gauge targetGauge;
+    private Gauge wouldBeTargetGauge;
+    private Gauge constraintGauge;
+    private Counter movementCounter;
+
+    /** Limits how often {@link #maybeReportBindingConstraint} speaks - see the interval's javadoc. */
+    private final RateLimiter constraintReportLimiter = new RateLimiter(CONSTRAINT_REPORT_INTERVAL_SECONDS);
 
     /**
      * End of the post-rebalance target freeze on the injected clock; null when no cooldown is running.
@@ -194,8 +252,20 @@ public class AdmissionController {
     /** The broker-poll-thread-to-control-thread handoff: set on a real delta, consumed at {@link #tick()}. */
     private final AtomicBoolean assignmentDeltaPending = new AtomicBoolean(false);
 
+    /**
+     * Constructs an UNINSTRUMENTED controller - no meters are registered. For callers that have no metrics
+     * subsystem to hand (bare-module and unit-test environments); {@code PCModule} uses the
+     * {@link #AdmissionController(ParallelConsumerOptions, Clock, PCMetrics) instrumented} constructor.
+     */
     public AdmissionController(ParallelConsumerOptions<?, ?> options, Clock clock) {
-        this(options, clock, AdmissionControlLaw.newBuilder());
+        this(options, clock, AdmissionControlLaw.newBuilder(), null);
+    }
+
+    /**
+     * The production constructor: as above, plus the {@code pc.admission.*} meters bound to {@code pcMetrics}.
+     */
+    public AdmissionController(ParallelConsumerOptions<?, ?> options, Clock clock, PCMetrics pcMetrics) {
+        this(options, clock, AdmissionControlLaw.newBuilder(), pcMetrics);
     }
 
     /**
@@ -204,6 +274,12 @@ public class AdmissionController {
      * ITS resolution to own, whatever the caller set.
      */
     AdmissionController(ParallelConsumerOptions<?, ?> options, Clock clock, AdmissionControlLaw.Builder lawBuilder) {
+        this(options, clock, lawBuilder, null);
+    }
+
+    /** The tuned-law seam with metrics attached - what the instrumentation tests drive. */
+    AdmissionController(ParallelConsumerOptions<?, ?> options, Clock clock, AdmissionControlLaw.Builder lawBuilder,
+                        PCMetrics pcMetrics) {
         this.mode = options.getAdaptiveConcurrencyMode();
         this.clock = clock;
         this.staticTarget = options.getMaxConcurrency();
@@ -235,6 +311,35 @@ public class AdmissionController {
                     .build();
         }
         this.windowOpenedAt = clock.instant();
+        initMetrics(pcMetrics);
+    }
+
+    /**
+     * Registers the {@code pc.admission.*} meters, mode-gated: {@code DISABLED} registers NOTHING, because an inert
+     * controller has nothing to report and a flat gauge reads as "measured and steady" rather than "switched off".
+     * <p>
+     * The gate is the MODE, not the engine's resolved
+     * {@code AbstractParallelEoSStreamProcessor#isAdaptiveConcurrencyActive()} flag, because that flag does not
+     * exist yet at this point: under {@code ENFORCE} the module builds this controller while resolving
+     * {@code dynamicExtraLoadFactor()}, which the processor forces BEFORE it resolves capability. The blast radius
+     * is an engine that requested a mode and refused it (external engines, direct pull): its meters exist and sit
+     * at the static values, alongside the WARN the refusal already logged.
+     * <p>
+     * Every meter is held in a field and registered through {@link PCMetrics}, so the existing
+     * {@code deregisterMeters()} / {@link PCMetrics#close()} path reclaims them with everything else - the
+     * controller owns no shutdown hook of its own.
+     */
+    private void initMetrics(PCMetrics pcMetrics) {
+        if (pcMetrics == null || mode == AdaptiveConcurrencyMode.DISABLED) {
+            return;
+        }
+        this.targetGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.ADMISSION_TARGET,
+                this, AdmissionController::currentTarget);
+        this.wouldBeTargetGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.ADMISSION_WOULD_BE_TARGET,
+                this, AdmissionController::wouldBeTarget);
+        this.constraintGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.ADMISSION_CONSTRAINT,
+                this, AdmissionController::bindingConstraintValue);
+        this.movementCounter = pcMetrics.getCounterFromMetricDef(PCMetricsDef.ADMISSION_MOVEMENTS);
     }
 
     // ------------------------------------------------------------------
@@ -415,6 +520,7 @@ public class AdmissionController {
             if (now.isBefore(cooldownUntil)) {
                 // Frozen: the closed window is discarded, the target holds at its carried-over value.
                 lastDecisionReason = AdmissionDecisionReason.COOLDOWN;
+                maybeReportBindingConstraint(AdmissionDecisionReason.COOLDOWN);
                 return;
             }
             cooldownUntil = null;
@@ -429,7 +535,29 @@ public class AdmissionController {
         if (newTarget != adaptiveTarget) {
             adaptiveTarget = newTarget;
             lastMovementAt = now;
+            if (movementCounter != null) {
+                movementCounter.increment();
+            }
         }
+        maybeReportBindingConstraint(decision.getReason());
+    }
+
+    /**
+     * Says, at most once per {@link #CONSTRAINT_REPORT_INTERVAL_SECONDS}, which constraint is holding the target
+     * where it is - the observe-only reporting channel that works with NO {@code MeterRegistry} configured, which
+     * is the ordinary case for someone trying {@code OBSERVE} out.
+     * <p>
+     * Both targets are named because they differ in exactly the mode this matters most for: under {@code OBSERVE}
+     * the live target is the static one and the would-be target is the finding.
+     */
+    private void maybeReportBindingConstraint(AdmissionDecisionReason reason) {
+        if (!NO_MOVEMENT_CONSTRAINTS.contains(reason)) {
+            return;
+        }
+        constraintReportLimiter.performIfNotLimited(() ->
+                log.info("Adaptive concurrency ({}): the admission target is being held by {} - live target {} " +
+                                "slot(s), would-be target {} slot(s), effective maximum {}.",
+                        mode, reason, currentTarget(), wouldBeTarget(), effectiveMaximum()));
     }
 
     /**
@@ -524,6 +652,16 @@ public class AdmissionController {
      */
     public Optional<AdmissionDecisionReason> lastDecisionReason() {
         return Optional.ofNullable(lastDecisionReason);
+    }
+
+    /**
+     * {@link #lastDecisionReason()} as the number the {@code pc.admission.constraint} gauge publishes -
+     * {@link AdmissionDecisionReason#NO_DECISION_YET_VALUE} until the first window closes (and always in
+     * {@code DISABLED}, which never registers the gauge anyway).
+     */
+    public int bindingConstraintValue() {
+        AdmissionDecisionReason reason = lastDecisionReason;
+        return reason == null ? AdmissionDecisionReason.NO_DECISION_YET_VALUE : reason.getValue();
     }
 
     /**
