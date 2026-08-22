@@ -63,6 +63,15 @@ class ClientOptions:
     # the moment the package shipped its PEP 561 marker (astubbs#242, see
     # docs/client-static-analysis.md); a tuple is itself a Sequence, so the post-init
     # normalisation still satisfies this type.
+    #: Run the engine INSIDE this process, over the C ABI of a GraalVM shared library, instead
+    #: of spawning the sidecar and dialling it. ``sidecar=`` is then unused.
+    #:
+    #: Requires the library built by
+    #: ``parallel-consumer-proxy-client-go/ffi/build-shared-library.sh session``, or
+    #: ``PC_EMBEDDED_LIBRARY``. Absent it, opening the session fails and says so - it never falls
+    #: back to the sidecar, because a silent fallback would make a run that was meant to exercise
+    #: the embedded engine prove nothing.
+    embedded: bool = False
     topics: Sequence[str] = ()
     topic_pattern: str | None = None
     max_concurrency: int | None = None

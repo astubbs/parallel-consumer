@@ -21,13 +21,10 @@ import logging
 import queue
 import threading
 import time
-from typing import Any
 
-import grpc
-
+from . import _transport as _transport_module
 from . import _wire
 from ._generated import proxy_pb2 as pb
-from ._generated import proxy_pb2_grpc as pb_grpc
 from ._pool import WorkerPool
 from .errors import ProtocolViolation
 from .options import ClientOptions
@@ -35,7 +32,6 @@ from .records import InboundRecord
 
 log = logging.getLogger(__name__)
 
-_HALF_CLOSE = None
 """Send-queue sentinel: the request iterator ends, which is how a client half-closes."""
 
 _POLL = 0.05
@@ -61,12 +57,11 @@ class Session:
     constructed after the worker pool exists, which is what keeps the fork safe.
     """
 
-    def __init__(self, port: int, options: ClientOptions, pool: WorkerPool,
+    def __init__(self, port: int | None, options: ClientOptions, pool: WorkerPool,
                  *, drain_timeout: float = 30.0) -> None:
         self._pool = pool
         self._drain_timeout = drain_timeout
         self._queue: queue.Queue[_Queued] = queue.Queue()
-        self._sends: queue.Queue[Any] = queue.Queue()
         self._lock = threading.Lock()
         self._outstanding = 0
         self._draining = False
@@ -76,15 +71,17 @@ class Session:
         self._failure: BaseException | None = None
         self._threads: list[threading.Thread] = []
 
-        self._channel = grpc.insecure_channel(f"127.0.0.1:{port}")
-        self._sends.put(pb.ClientMessage(
-            configure=_wire.configure_message(options, CAPABILITIES)))
-        # protoc's gRPC output carries no annotations, so the strict pass sees an untyped call here.
-        # Suppressed at the site rather than by relaxing the module: this is the ONE crossing into
-        # generated code, and pyproject's warn_unused_ignores deletes this line for us the day
-        # protoc starts emitting stubs.
-        self._call = pb_grpc.ProxyServiceStub(  # type: ignore[no-untyped-call]
-            self._channel).Session(self._requests())
+        first = pb.ClientMessage(configure=_wire.configure_message(options, CAPABILITIES))
+        self._transport: _transport_module.Transport
+        if options.embedded:
+            # Imported here rather than at module scope: it loads a native library, and a client
+            # that never asks for the embedded engine should never touch ctypes.
+            from ._embedded import EmbeddedTransport
+            self._transport = EmbeddedTransport(first)
+        else:
+            if port is None:
+                raise ValueError("the sidecar transport needs a port")
+            self._transport = _transport_module.GrpcTransport(port, first)
 
         configured = self._handshake()
         self.max_concurrency: int = configured.max_concurrency
@@ -119,10 +116,10 @@ class Session:
         if not self._stopping:
             self._drain()
             self._stopping = True
-            self._sends.put(_HALF_CLOSE)
+            self._transport.half_close()
         for thread in self._threads:
             thread.join(timeout=self._drain_timeout)
-        self._channel.close()
+        self._transport.close()
         self._finished.set()
 
     @property
@@ -132,16 +129,8 @@ class Session:
 
     # ---- the stream ----------------------------------------------------------------
 
-    def _requests(self) -> Any:
-        """The outbound half of the stream: everything the client says, in one place."""
-        while True:
-            message = self._sends.get()
-            if message is _HALF_CLOSE:
-                return
-            yield message
-
     def _send(self, message: pb.ClientMessage) -> None:
-        self._sends.put(message)
+        self._transport.send(message)
 
     def _handshake(self) -> pb.Configured:
         """Sends Configure, reads Configured. Inline, so the caller has the count on return.
@@ -150,10 +139,10 @@ class Session:
         liveness failure, and liveness is the lease's job rather than a one-off timer here.
         """
         try:
-            first = next(self._call)
-        except grpc.RpcError as refused:
+            first = next(self._transport.responses)
+        except self._transport.errors as refused:
             raise ProtocolViolation(
-                f"the proxy refused the session: {refused.code().name} - {refused.details()}"
+                f"the proxy refused the session: {self._transport.describe(refused)}"
             ) from refused
         if first.WhichOneof("message") != "configured":
             raise ProtocolViolation(
@@ -176,7 +165,7 @@ class Session:
     def _read(self) -> None:
         """The reader. Appends and returns to the stream; it never waits for a worker."""
         try:
-            for message in self._call:
+            for message in self._transport.responses:
                 kind = message.WhichOneof("message")
                 if kind == "dispatch":
                     self._on_dispatch(message.dispatch)
@@ -190,7 +179,7 @@ class Session:
                 else:
                     self._violated(f"the proxy sent {kind}, which this session did not negotiate")
                     return
-        except grpc.RpcError as broken:
+        except self._transport.errors as broken:
             if not self._stopping:
                 self._failure = broken
         finally:
@@ -218,7 +207,7 @@ class Session:
         log.debug("proxy asked for shutdown; draining")
         self._drain()
         self._stopping = True
-        self._sends.put(_HALF_CLOSE)
+        self._transport.half_close()
 
     # ---- hand-out and reporting ----------------------------------------------------
 
@@ -289,5 +278,5 @@ class Session:
         self._failure = ProtocolViolation(problem)
         log.error("protocol violation: %s", problem)
         self._stopping = True
-        self._call.cancel()
+        self._transport.cancel()
         self._finished.set()

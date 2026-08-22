@@ -108,8 +108,8 @@ def main() -> int:
     path = library_path()
     if not path.exists():
         print(f"no shared library at {path}\n"
-              f"build it with parallel-consumer-proxy-client-go/ffi/build-shared-library.sh session,"
-              f" or set PC_EMBEDDED_LIBRARY")
+              f"build it with ffi/build-shared-library.sh session under the Go client, "
+              f"or set PC_EMBEDDED_LIBRARY")
         return 2
     print(f"library: {path}\nblocking for {BLOCK_MS}ms in pc_next, twice\n")
 
@@ -126,7 +126,8 @@ def main() -> int:
     # A tenfold difference is far beyond scheduling noise, and the absolute numbers differ by
     # machine, so the assertion is on the ratio rather than on any particular rate.
     if released > held * 10:
-        print("\nPASS  ctypes releases the GIL: a blocking pull does NOT stall other Python threads.")
+        print("\nPASS  ctypes releases the GIL: a blocking pull does NOT stall other "
+              "Python threads.")
         print("      The pull model removes the GIL objection to embedding in Python.")
         return 0
     print("\nFAIL  the blocking pull stalled the interpreter - the GIL objection stands.")
