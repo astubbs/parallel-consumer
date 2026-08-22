@@ -4,7 +4,11 @@
 <!-- inflight-impact: throughput -->
 <!-- inflight-labels: release-note, needs-measurement -->
 
-Measured 2026-08-22 on `feats/native-image-sidecar`. **A Python application, with no JVM anywhere in
+**Branch: `feats/native-image-sidecar`**, stacked on `feats/polyglot-demos`
+(astubbs/parallel-consumer#331) - that is where the sidecar's `Main` entry point and the eleven demos
+both live, which is why the work sits there rather than on the virtual-threads research branch.
+
+Measured 2026-08-22. **A Python application, with no JVM anywhere in
 its stack, ran Parallel Consumer through a native binary it spawned itself:**
 
 ```
