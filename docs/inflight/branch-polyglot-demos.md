@@ -67,6 +67,13 @@ recorded objections in their own notes, by instruction. These are unresolved:
 4. **The sidecar-location variable has three names already** (`PC_DEMO_SIDECAR`,
    `PC_DEMO_SIDECAR_CLASSPATH`, `PC_DEMO_SIDECAR_JAVA`). The contract's flag table has no slot for it
    and every non-JVM demo needs one.
+   - **TASK, and it is now blocking a measurement: the Go demo does not honour `PC_DEMO_SIDECAR` at
+     all.** Python, Ruby, C++ and .NET do; `demo/sidecar.go` can only build a `java -cp ...` command
+     line, so the Go demo cannot be pointed at a native sidecar binary. That made the AOT-versus-AOT
+     comparison impossible on `feats/go-vendored-pc`, which had to record an embedded native image
+     against a JIT JVM and label its own margin unquotable. **The fix belongs here, not on the FFI
+     branch** - it is demo parity, nothing to do with Graal - and merges down. Wanted by U3 of
+     [`docs/plans/2026-08-22-001-feat-shared-c-transport-plan.md`](../plans/2026-08-22-001-feat-shared-c-transport-plan.md).
 5. **The credential rule binds only the fingerprint block**, while the Kafka clients dump
    `bootstrap.servers` at INFO several times a run. It should bind the whole run.
 6. **`bin/ci-demo-test.sh` is Java-only** - confirmed independently by every agent. Ten demos can

@@ -139,6 +139,13 @@ a run that was meant to exercise the embedded engine prove nothing.
   an embedded engine rebuilds on every Kafka bump, because the Kafka client is inside the binary.
   Nothing here makes that cheaper. This proves feasibility, not that it should ship.
 
+## Where this goes next
+
+[`docs/plans/2026-08-22-001-feat-shared-c-transport-plan.md`](../plans/2026-08-22-001-feat-shared-c-transport-plan.md)
+generalises this into one shared library serving every FFI-capable language. It is **gated on the
+release-matrix question** and carries a written kill criterion, because a feasibility result is the
+easiest thing to mistake for a decision to ship.
+
 ## Prior art this builds on
 
 - [`parked-a-c-client-and-the-ffi-question.md`](parked-a-c-client-and-the-ffi-question.md) - the
