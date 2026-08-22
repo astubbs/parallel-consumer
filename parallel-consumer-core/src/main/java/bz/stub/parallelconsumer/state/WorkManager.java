@@ -413,8 +413,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             if (userFunctionSucceeded.isPresent()) {
                 if (TRUE.equals(userFunctionSucceeded.get())) {
                     onSuccessResult(wc);
+                    recordAdmissionOutcome(wc, true);
                 } else {
                     onFailureResult(wc);
+                    recordAdmissionOutcome(wc, false);
                 }
             } else if (wc.isAbandonedForCurrentDelivery()) {
                 onAbandonedResult(wc);
@@ -422,6 +424,27 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");
             }
         }
+    }
+
+    /**
+     * The admission controller's OUTCOME tap - this method sits on the one verdict-carrying completion path, on the
+     * control thread, AFTER the superseded-delivery and stale-partition filters above, so late duplicates and
+     * revoked-partition returns never count. Verdict-free returns (abandoned work) carry no outcome either: the
+     * delivery will run again, and only its eventual verdict is signal.
+     * <p>
+     * Retry attempts DO route through here - a retry's failure counts as failure signal even though its latency
+     * never enters the service-time window (that exclusion is the sampler's,
+     * {@code AbstractParallelEoSStreamProcessor#admissionServiceTimeSampleNanos}). Classification lives behind
+     * {@link bz.stub.parallelconsumer.internal.admission.AdmissionController#recordCompletion(boolean, Throwable)}.
+     * Pure tap: reads only; gated on {@link PCModule#adaptiveSignalsActive()} so an engine that refused the mode
+     * feeds nothing.
+     */
+    private void recordAdmissionOutcome(WorkContainer<K, V> wc, boolean succeeded) {
+        if (!module.adaptiveSignalsActive()) {
+            return;
+        }
+        Optional<Throwable> failureReason = succeeded ? Optional.empty() : wc.getLastFailureReason();
+        module.admissionController().recordCompletion(succeeded, failureReason == null ? null : failureReason.orElse(null));
     }
 
     public boolean isNoRecordsOutForProcessing() {

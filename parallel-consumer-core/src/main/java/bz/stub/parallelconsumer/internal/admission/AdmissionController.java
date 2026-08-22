@@ -42,8 +42,14 @@ import java.util.Optional;
  * {@code AbstractParallelEoSStreamProcessor#isAdaptiveConcurrencyActive()}; the DISABLED guard here is defensive
  * depth, not the decision.
  * <p>
- * No clock reads outside the injected {@link Clock} (the module's, so tests drive time), no threads, no metrics
- * (Micrometer exposure is a later unit's job). Single-threaded by design: the control loop owns every call.
+ * No clock reads outside the injected {@link Clock} (the module's, so tests drive time), no threads of its own, no
+ * metrics (Micrometer exposure is a later unit's job).
+ * <p>
+ * <b>Threading.</b> The control loop owns the decision surface - {@link #tick()} and every published-state read -
+ * but service-time samples arrive from the WORKER threads (one per user-function invocation, recorded where the
+ * invocation ran), so all {@link #window} access and the recorded-signal counters are guarded by one internal
+ * lock. The lock is uncontended in DISABLED (records return before reaching it) and cheap everywhere else: each
+ * record is a counter bump or list append.
  * <p>
  * Accessors deliberately have no {@code get} prefix, and this class stays OUT of the Truth-generator allowlist in
  * {@code parallel-consumer-core/pom.xml} - see {@code AbstractParallelEoSStreamProcessor#userFunctionTaskAccounting()}
@@ -109,6 +115,21 @@ public class AdmissionController {
     private final AdmissionControlLaw law;
 
     /**
+     * Guards {@link #window} and the recorded-signal counters below - see the class javadoc's threading note.
+     * Never held while consulting the law or moving the target: those stay control-loop-owned.
+     */
+    private final Object windowLock = new Object();
+
+    // Recorded-signal counters: how many of each signal reached the window since construction (windows reset on
+    // close; these never do). Reported state for the signal-plumbing tests and the later metrics unit; guarded by
+    // windowLock, and never incremented in DISABLED, whose records return before reaching the window.
+    private long serviceTimeSamplesRecorded = 0;
+    private long inFlightSamplesRecorded = 0;
+    private long successOutcomesRecorded = 0;
+    private long ignoreOutcomesRecorded = 0;
+    private long overloadDropOutcomesRecorded = 0;
+
+    /**
      * The law-driven target in slots: the LIVE target in ENFORCE, the would-be target in OBSERVE.
      */
     private int adaptiveTarget;
@@ -164,11 +185,16 @@ public class AdmissionController {
 
     /**
      * Records one user-function invocation's service time - already fill-normalized by the caller (batch
-     * normalization is the CALLER's job, per {@link AdmissionSampleWindow}'s contract).
+     * normalization is the CALLER's job, per {@link AdmissionSampleWindow}'s contract). The one input that arrives
+     * from worker threads, hence the lock.
      */
     public void recordServiceTime(long serviceTimeNanos) {
-        if (window != null) {
+        if (window == null) {
+            return;
+        }
+        synchronized (windowLock) {
             window.addServiceTimeSample(serviceTimeNanos);
+            serviceTimeSamplesRecorded++;
         }
     }
 
@@ -176,8 +202,12 @@ public class AdmissionController {
      * Records a snapshot of how many invocations were in flight.
      */
     public void recordInFlight(int inFlight) {
-        if (window != null) {
+        if (window == null) {
+            return;
+        }
+        synchronized (windowLock) {
             window.addInFlightSample(inFlight);
+            inFlightSamplesRecorded++;
         }
     }
 
@@ -188,17 +218,39 @@ public class AdmissionController {
         if (window == null) {
             return;
         }
-        switch (outcome) {
-            case SUCCESS:
-                window.recordSuccess();
-                break;
-            case IGNORE:
-                window.recordIgnore();
-                break;
-            case OVERLOAD_DROP:
-                window.recordOverloadDrop();
-                break;
+        synchronized (windowLock) {
+            switch (outcome) {
+                case SUCCESS:
+                    window.recordSuccess();
+                    successOutcomesRecorded++;
+                    break;
+                case IGNORE:
+                    window.recordIgnore();
+                    ignoreOutcomesRecorded++;
+                    break;
+                case OVERLOAD_DROP:
+                    window.recordOverloadDrop();
+                    overloadDropOutcomesRecorded++;
+                    break;
+            }
         }
+    }
+
+    /**
+     * Records one completed invocation by its raw completion facts, classifying the outcome here so the engine
+     * never names outcomes itself: success maps to {@link Outcome#SUCCESS}; a failure goes through
+     * {@link AdmissionOutcomeClassifier}, which in v1 answers {@link Outcome#IGNORE} for every cause and owns the
+     * documented overload-drop socket.
+     * <p>
+     * Retry attempts route here like any other completion - their failures COUNT as failure signal, even though
+     * their latency is excluded from {@link #recordServiceTime(long)} by the sampler.
+     *
+     * @param succeeded    the user function's verdict on this delivery
+     * @param failureCause the failure's cause when {@code succeeded} is false; ignored (and expected {@code null})
+     *                     on success
+     */
+    public void recordCompletion(boolean succeeded, Throwable failureCause) {
+        recordOutcome(succeeded ? Outcome.SUCCESS : AdmissionOutcomeClassifier.classifyFailure(failureCause));
     }
 
     // ------------------------------------------------------------------
@@ -220,7 +272,10 @@ public class AdmissionController {
         if (Duration.between(windowOpenedAt, now).compareTo(SAMPLE_WINDOW_DURATION) < 0) {
             return;
         }
-        ClosedAdmissionWindow closed = window.close();
+        ClosedAdmissionWindow closed;
+        synchronized (windowLock) {
+            closed = window.close();
+        }
         AdmissionDecision decision = law.onWindowClosed(closed);
         windowOpenedAt = now;
         lastDecisionReason = decision.getReason();
@@ -291,6 +346,44 @@ public class AdmissionController {
      */
     public Optional<Instant> lastMovementAt() {
         return Optional.ofNullable(lastMovementAt);
+    }
+
+    /**
+     * How many service-time samples have been recorded since construction (windows reset on close; this never
+     * does). Zero always in DISABLED, whose records are no-ops.
+     */
+    public long serviceTimeSamplesRecorded() {
+        synchronized (windowLock) {
+            return serviceTimeSamplesRecorded;
+        }
+    }
+
+    /**
+     * How many in-flight snapshots have been recorded since construction. Zero always in DISABLED.
+     */
+    public long inFlightSamplesRecorded() {
+        synchronized (windowLock) {
+            return inFlightSamplesRecorded;
+        }
+    }
+
+    /**
+     * How many completions have been recorded as the given {@link Outcome} since construction. Zero always in
+     * DISABLED.
+     */
+    public long outcomesRecorded(Outcome outcome) {
+        synchronized (windowLock) {
+            switch (outcome) {
+                case SUCCESS:
+                    return successOutcomesRecorded;
+                case IGNORE:
+                    return ignoreOutcomesRecorded;
+                case OVERLOAD_DROP:
+                    return overloadDropOutcomesRecorded;
+                default:
+                    throw new IllegalArgumentException("Unknown outcome: " + outcome);
+            }
+        }
     }
 
     private static int clamp(int value, int floor, int ceiling) {

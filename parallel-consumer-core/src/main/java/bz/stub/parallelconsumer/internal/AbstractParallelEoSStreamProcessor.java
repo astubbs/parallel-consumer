@@ -1248,6 +1248,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             retrieveAndDistributeNewWork(userFunction, callback);
         }
 
+        // one in-flight snapshot per pass - the admission controller's third input (its tick stays unwired here;
+        // that is the next unit's job)
+        sampleAdmissionInFlight();
+
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
         this.controlLoopHooks.forEach(Runnable::run);
@@ -1289,6 +1293,27 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (log.isTraceEnabled()) {
             log.trace("End of control loop, waiting processing {}, remaining in partition queues: {}, out for processing: {}. In state: {}",
                     wm.getNumberOfWorkQueuedInShardsAwaitingSelection(), wm.getNumberOfIncompleteOffsets(), wm.getNumberRecordsOutForProcessing(), state);
+        }
+    }
+
+    /**
+     * The admission controller's IN-FLIGHT tap: one snapshot per {@link #controlLoop} pass of the EXISTING
+     * conservation-derived accounting, {@link WorkManager#getNumberRecordsOutForProcessing()} - no new counter, and
+     * a pure read (nothing drained, nothing altered).
+     * <p>
+     * Sampled from the control loop deliberately, never from the completion path: completion-driven samples land
+     * just after decrements, biasing the distribution low exactly when throughput is high. The loop's fixed cadence
+     * samples the level, not the events. Sits after dispatch, so the snapshot includes work this very pass put out
+     * - the concurrency actually deployed, which is what the control law sizes against. Runs in {@code OBSERVE} as
+     * well as {@code ENFORCE} (signals flowing without acting is OBSERVE's whole point); gated only on
+     * {@link #isAdaptiveConcurrencyActive()}, one final-field read, so the inactive cost is nil.
+     * <p>
+     * Package-private (non-{@code get}-prefixed, see {@link #userFunctionTaskAccounting()}) so the per-pass
+     * contract is testable without driving a real control loop - the {@link #checkPipelinePressure()} pattern.
+     */
+    void sampleAdmissionInFlight() {
+        if (isAdaptiveConcurrencyActive()) {
+            module.admissionController().recordInFlight(wm.getNumberRecordsOutForProcessing());
         }
     }
 
@@ -2094,8 +2119,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                                                                     final Consumer<R> callback,
                                                                                     final List<WorkContainer<K, V>> activeWorkContainers) {
         List<R> resultsFromUserFunction;
+        // System.nanoTime, not the module clock: this is a DURATION on the thread that ran the function, and the
+        // module's java.time.Clock is a wall clock (no monotonic nano source). Measured around the same call the
+        // user-function timer wraps, but independent of it - the admission signal must flow with no MeterRegistry
+        // configured. Taken unconditionally: two nanoTime reads cost nothing against a user-function invocation.
+        long serviceTimeStartNanos = System.nanoTime();
         resultsFromUserFunction = userProcessingTimer.record(() -> usersFunction.apply(context));
-
+        maybeRecordAdmissionServiceTime(System.nanoTime() - serviceTimeStartNanos, activeWorkContainers);
 
         for (final WorkContainer<K, V> kvWorkContainer : activeWorkContainers) {
             onUserFunctionSuccess(kvWorkContainer, resultsFromUserFunction);
@@ -2115,6 +2145,54 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("User function future registered");
 
         return intermediateResults;
+    }
+
+    /**
+     * Feeds one user-function invocation's service time to the admission controller - the SERVICE-TIME tap (the
+     * plan's U6), riding {@link #runUserFunctionInternal}'s worker thread.
+     * <p>
+     * Only when adaptive concurrency is ACTIVE ({@code OBSERVE} or {@code ENFORCE} on an engine that can serve
+     * it), and only for invocations that RETURNED: a throwing user function never reaches this, deliberately - a
+     * fast-failing function would otherwise read as the system speeding up, the same lie the retry exclusion
+     * below prevents. Failed invocations still count, as outcome signal, at
+     * {@link WorkManager#handleFutureResult}'s tap.
+     */
+    private void maybeRecordAdmissionServiceTime(long elapsedNanos, List<WorkContainer<K, V>> batch) {
+        if (!isAdaptiveConcurrencyActive()) {
+            return;
+        }
+        OptionalLong sampleNanos = admissionServiceTimeSampleNanos(elapsedNanos, batch);
+        if (sampleNanos.isPresent()) {
+            module.admissionController().recordServiceTime(sampleNanos.getAsLong());
+        }
+    }
+
+    /**
+     * Derives the admission service-time sample from one invocation's elapsed time: ONE sample per invocation,
+     * fill-normalized - a batch of 5 taking 50ms is one sample of 10ms, never five duplicated samples, so a
+     * half-full batch does not read as the system speeding up.
+     * <p>
+     * <b>Retry exclusion, whole-batch rule:</b> when ANY record in the batch is a retry
+     * ({@link WorkContainer#hasPreviouslyFailed()}), the whole invocation yields NO sample. A retry attempt's
+     * execution must never enter the latency window - fast-failing retries read as improvement - and a mixed
+     * batch's duration cannot be attributed record-by-record, so excluding the contaminated whole is the simple,
+     * conservative rule: it under-samples (the law holds via {@code APP_LIMITED} on thin windows) rather than
+     * ever polluting the signal.
+     * <p>
+     * Static and pure, so the arithmetic is testable without threads or clocks.
+     *
+     * @return the fill-normalized sample, or empty when the batch is empty or carries any retry
+     */
+    static OptionalLong admissionServiceTimeSampleNanos(long elapsedNanos, List<? extends WorkContainer<?, ?>> batch) {
+        if (batch.isEmpty()) {
+            return OptionalLong.empty();
+        }
+        for (WorkContainer<?, ?> workContainer : batch) {
+            if (workContainer.hasPreviouslyFailed()) {
+                return OptionalLong.empty();
+            }
+        }
+        return OptionalLong.of(elapsedNanos / batch.size());
     }
 
     private void cleanUpContext(final PollContextInternal<K, V> context) {

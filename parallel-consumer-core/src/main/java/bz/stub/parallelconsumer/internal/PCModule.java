@@ -148,6 +148,21 @@ public class PCModule<K, V> {
     }
 
     /**
+     * Whether the admission controller's INPUT signals should flow at all: adaptive concurrency resolved ACTIVE on
+     * the attached processor ({@code AbstractParallelEoSStreamProcessor#isAdaptiveConcurrencyActive()} - true under
+     * {@code OBSERVE} too, signals flowing without acting being that mode's whole point). False in {@code DISABLED},
+     * on an engine that refused the mode (where the controller is NOT inert, so the DISABLED guard alone would not
+     * stop accumulation), and with no processor attached yet (bare-{@code WorkManager} test envs).
+     * <p>
+     * The gate for every signal tap outside the processor itself - the processor's own taps read its field
+     * directly. Reads the processor <em>field</em> for the same reason {@link #admissionTargetRecords()} does.
+     */
+    public boolean adaptiveSignalsActive() {
+        AbstractParallelEoSStreamProcessor<K, V> processor = parallelEoSStreamProcessor;
+        return processor != null && processor.isAdaptiveConcurrencyActive();
+    }
+
+    /**
      * The record-denominated admission target the dispatch chain and the poller gate consume - the one seam through
      * which the LIVE target reaches the arithmetic (the plan's KTD1,
      * {@code docs/plans/2026-08-18-001-feat-self-scaling-concurrency-plan.md}).
