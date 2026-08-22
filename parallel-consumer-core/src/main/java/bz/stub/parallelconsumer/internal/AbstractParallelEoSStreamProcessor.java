@@ -522,6 +522,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return false;
     }
 
+    /**
+     * Whether the LIVE admission target is allowed to steer dispatch and intake: adaptive concurrency resolved
+     * ACTIVE ({@link #isAdaptiveConcurrencyActive()}) <b>and</b> the mode is
+     * {@link ParallelConsumerOptions.AdaptiveConcurrencyMode#ENFORCE}. {@code OBSERVE} measures without acting, so
+     * every seam read ({@link PCModule#admissionTargetRecords()}, {@link #getQueueTargetLoaded()},
+     * {@link #timeToBlockFor()}) keeps today's static arithmetic there, exactly as in {@code DISABLED}.
+     * <p>
+     * Package-private with no {@code is} prefix for the Truth-generator reason on
+     * {@link #userFunctionTaskAccounting()}; package-private also lets {@link PCModule} consult it, keeping this the
+     * single place the mode-versus-capability decision meets the mode split.
+     */
+    boolean adaptiveEnforcementActive() {
+        return adaptiveConcurrencyActive
+                && options.getAdaptiveConcurrencyMode() == ParallelConsumerOptions.AdaptiveConcurrencyMode.ENFORCE;
+    }
+
     protected ExecutorService setupWorkerPool(int poolSize) {
         if (options.isUseVirtualThreads()) {
             if (supportsVirtualThreads()) {
@@ -1206,7 +1222,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         final boolean shouldTryCommitNow = maybeAcquireCommitLock();
 
         // make sure all work that's been completed are arranged ready for commit
-        Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
+        Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : timeToBlockFor();
         processWorkCompleteMailBox(timeToBlockFor);
 
         //
@@ -1636,8 +1652,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * <p>
      * The factor is <em>not</em> disabled in this mode - it is still doing its other job. See
      * {@link #isVirtualThreadPool()}.
+     * <p>
+     * <b>Under active ENFORCE the live target is consumed un-multiplied for the same reason</b> (the plan's KTD10):
+     * the factor's meaning - "keep the workers N deep in <em>buffered</em> work" - held only while pool size equaled
+     * the target. With the pool at the ceiling and a live target below it, target x factor records would
+     * <em>run</em>, not buffer. The factor keeps its intake-buffer job in {@code WorkManager#isSufficientlyLoaded()}'s
+     * threshold, which is buffer arithmetic.
      */
     protected int getQueueTargetLoaded() {
+        if (adaptiveEnforcementActive()) {
+            return getPoolLoadTarget();
+        }
         if (isVirtualThreadPool()) {
             return getPoolLoadTarget();
         }
@@ -1733,10 +1758,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * @return aim to never have the pool queue drop below this
+     * @return aim to never have the pool queue drop below this - the LIVE admission target when
+     *         {@link #adaptiveEnforcementActive()}, today's static derivation otherwise
+     *         ({@link PCModule#admissionTargetRecords()} owns that split)
      */
     private int getPoolLoadTarget() {
-        return options.getTargetAmountOfRecordsInFlight();
+        return module.admissionTargetRecords();
     }
 
     private boolean isPoolQueueLow() {
@@ -1824,11 +1851,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * The amount of time to block poll in this cycle
+     * <p>
+     * The in-flight-versus-target test deliberately reads the PINNED (static, ceiling-derived) target even when the
+     * live admission target has contracted below it - {@link WorkManager#isWorkInFlightMeetingTarget()}, the plan's
+     * KTD7 "bounded pin": swapping the live target in here would let a contracted target slow the control loop's
+     * own wake-ups, and with them the admission controller's recovery cadence. The pin's cost - this branch firing
+     * on passes it would not have fired on before - is bounded under active ENFORCE by clamping the result to the
+     * remaining time to the next commit check, below.
+     * <p>
+     * Package-private with no {@code get} prefix (Truth-generator constraint, see
+     * {@link #userFunctionTaskAccounting()}) so the KTD7 bound is testable without a control loop.
      *
      * @return either the duration until next commit, or next work retry
      * @see ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()
      */
-    private Duration getTimeToBlockFor() {
+    Duration timeToBlockFor() {
         // if less than target work already in flight, don't sleep longer than the next retry time for failed work, if it exists - so that we can wake up and maybe retry the failed work
         if (!wm.isWorkInFlightMeetingTarget()) {
             // though check if we have work awaiting retry
@@ -1841,6 +1878,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 Duration timeBetweenCommits = getTimeBetweenCommits();
                 Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
                 Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
+                if (adaptiveEnforcementActive()) {
+                    // KTD7 bound: this branch measures against the FULL commit interval, never the remaining one -
+                    // an overshoot that predates adaptive mode, but a contracted live target keeps in-flight below
+                    // the pinned target far more of the time, making this the loop's common branch under ENFORCE.
+                    // Unbounded, a pass landing near the end of the interval would block past the next commit
+                    // check by up to a whole interval (worst in transactional mode's short cadence). DISABLED and
+                    // OBSERVE keep today's arithmetic byte-for-byte.
+                    Duration remainingToCommitCheck = getTimeToNextCommitCheck();
+                    if (remainingToCommitCheck.compareTo(result) < 0) {
+                        result = remainingToCommitCheck;
+                    }
+                }
                 log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
                 return result;
             }

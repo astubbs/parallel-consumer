@@ -147,6 +147,29 @@ public class PCModule<K, V> {
         return new AdmissionController(options(), clock());
     }
 
+    /**
+     * The record-denominated admission target the dispatch chain and the poller gate consume - the one seam through
+     * which the LIVE target reaches the arithmetic (the plan's KTD1,
+     * {@code docs/plans/2026-08-18-001-feat-self-scaling-concurrency-plan.md}).
+     * <p>
+     * When adaptive enforcement is active
+     * ({@code AbstractParallelEoSStreamProcessor#adaptiveEnforcementActive()} - the processor stays the single owner
+     * of the mode-versus-capability decision) this is the controller's live target in slots times the batch size.
+     * Everywhere else - {@code DISABLED}, {@code OBSERVE}, an engine that refused the mode, or no processor attached
+     * yet (bare-{@code WorkManager} test envs) - it is exactly today's static derivation,
+     * {@link ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()}.
+     * <p>
+     * Reads the processor <em>field</em> deliberately: {@link #pc()} would construct a whole processor on a module
+     * that never had one.
+     */
+    public int admissionTargetRecords() {
+        AbstractParallelEoSStreamProcessor<K, V> processor = parallelEoSStreamProcessor;
+        if (processor != null && processor.adaptiveEnforcementActive()) {
+            return admissionController().currentTarget() * options().getBatchSize();
+        }
+        return options().getTargetAmountOfRecordsInFlight();
+    }
+
     private DynamicLoadFactor initDynamicLoadFactor() {
         if (options().getMessageBufferSize() > 0) {
             int staticLoadFactor = (options().getMessageBufferSize() / options().getTargetAmountOfRecordsInFlight()) + (options().getMessageBufferSize() % options().getTargetAmountOfRecordsInFlight() == 0 ? 0 : 1);
