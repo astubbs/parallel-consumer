@@ -4,7 +4,7 @@ type: feat
 date: 2026-08-22
 topic: kafka-streams-foreign-wrappers
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: requirements-only
+artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 ---
@@ -199,3 +199,195 @@ All remaining questions are answered during planning or codebase exploration; no
 - [`parallel-consumer-proxy/docs/protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) - capabilities as the sole versioning mechanism.
 - [`parallel-consumer-examples/parallel-consumer-example-streams`](../../parallel-consumer-examples/parallel-consumer-example-streams) - the only existing Streams usage, where Streams feeds Parallel Consumer, and the Java half of the rejected topic-chained baseline.
 - `docs/inflight/branch-ks-streams-handover.md`, on branch `feats/ks-on-pc-spike` - astubbs#255's nine branches, open defects and traps, including the parked question of two Kafka Streams jars on one classpath. Not present on this branch.
+
+**Off-branch prior art.** The Kafka Streams learning corpus for this repo lives on `feats/ks-on-pc-spike` and is not present here. Read with `git show feats/ks-on-pc-spike:<path>`. The three that change how this work is built:
+`docs/solutions/integration-issues/kafka-streams-couples-polling-and-processing-on-one-thread.md` (a stream thread polls and processes on one thread, so anything that waits inside an operator delays the next poll),
+`docs/inflight/bug-core-tests-jar-junit-parallelism-leak.md` (core's tests jar puts a parallel-execution property on any consumer's test classpath; it failed 159 of Kafka's own tests on state-directory lock contention),
+`docs/inflight/test-upstream-suite-silently-skipped-by-dtest.md` (`-Dtest=` overrides an execution's includes, so a scoped run reports green having executed nothing).
+
+---
+
+## Planning Contract
+
+### Key Technical Decisions
+
+- KTD1. **An in-memory state store, not RocksDB.** `Stores.inMemoryKeyValueStore` exercises everything the claim needs - engine-side state, the changelog, commit behaviour - while removing a JNI-backed native library whose per-platform problems are documented and land on this project's own platform: the container native build hardcodes a linux64 variant, the artifact ships Linux binaries only, and an older release was not compiled for macOS arm64 at all. This is what keeps the native-image question *independent of* this PoC rather than deferred by it. Governs R3.
+- KTD2. **A second sidecar entry point, not a second service on the existing listener.** `ProxyServer` accepts one bindable service and constructs one connection guard per start, and it deliberately compiles against no generated protocol type. Hosting two services there would force a choice about whether the single-connection slot is shared, and would breach that one-way seam. A separate entry point is the established pattern here - the test-mode sidecar already does exactly this - and gives the Streams session its own server, its own guard and its own lifecycle for free. Governs R7.
+- KTD3. **The experimental schema lives in the new module, not the protocol module.** Three gates decide this. The specification-coverage test reads only the descriptor file that declares `Configure`, so a second file is invisible to it. The lint gate runs over the protocol module's whole proto root, so a file placed there must satisfy its standard rules. The breaking-change gate refuses to run at all if it finds more than one tracked copy of the frozen file's path. Owning the schema in the new module keeps all three clean and the frozen file untouched. Governs R6, R7, R8.
+- KTD4. **Stock Kafka Streams through the public builder API only.** The existing Streams module reaches internals by patching Kafka at build time, which carries the parked "two jars on one classpath" problem - classpath order is a convention rather than a guarantee, class loading is per class so the result is always a mixture, and split packages are illegal on the module path. A PoC that ships no class in Kafka's own packages inherits none of it. Nothing here unpacks, patches or shadows Kafka. Governs R3.
+- KTD5. **Generated sources land outside `target/generated-sources`.** The root build adds that directory as an integration-test source root in every module, so anything generated there is compiled twice and the test copy shadows the main one. The protocol module already pays this cost by generating into a sibling directory; this module copies that. Governs R6.
+- KTD6. **Test parallelism is pinned off in this module.** Core's tests jar places a parallel-execution property at the classpath root of any module that consumes it, and Kafka Streams tests are written for a serial runner - it failed 159 of Kafka's own tests on state-directory lock contention. Surefire configuration parameters outrank the property file. Governs R9.
+- KTD7. **The end-to-end run is a demo, not a unit test.** The Python client's suite is deliberately free of Docker, and a real topology needs a broker. The demo harness already owns broker startup, seeding and the sidecar classpath. Governs R10.
+
+### Assumptions
+
+- The sidecar's own logging goes to stdout, which is also the lifecycle channel a client drains for the port line, and the suppression of Kafka's config dump currently depends on a test-scope logging config. This is an open defect elsewhere; the demo entry point resolves the classpath with runtime scope to avoid inheriting it, and does not attempt the wider fix.
+- The frozen wire's additive-only rule is a stated contract whose automated gate baselines against a moving reference, so it catches drift within a change rather than protecting the contract over time. Nothing here depends on that gate, because the experimental schema is not in the frozen file.
+- Demo throughput figures in this repo have been observed to vary between sessions on one machine without explanation. R11's latency and derived ceiling are within-session figures and must be reported as such.
+
+---
+
+## Implementation Units
+
+### U1. The engine module
+
+- **Goal:** A new Maven module that builds green, publishes nothing, and keeps Kafka Streams out of the sidecar artifact.
+- **Requirements:** R3.
+- **Dependencies:** none.
+- **Files:** `pom.xml` (add the module before the examples aggregator), `parallel-consumer-proxy-streams/pom.xml`, `docs/data/module-maturity.d/parallel-consumer-proxy-streams.yaml`, `parallel-consumer-proxy-streams/src/test/java/bz/stub/parallelconsumer/streams/TestConventionsArchTest.java`.
+- **Approach:**
+  1. Model the pom on the proxy module: inherited groupId and version, an explicit `release.target` of 17 with the reason stated, and every plugin version resolved.
+  2. Import the Jackson BOM in a module-local dependency-management block, copying the reasoning from the streams example - the BOM rather than a bare databind pin, and module-local because hoisting it breaks another module's tests through a shared transitive dependency.
+  3. Pin surefire's parallel-execution configuration parameter off (KTD6).
+  4. Add the maturity fragment; a module in any module list without one fails a CI check that is not part of the Maven build.
+- **Patterns to follow:** `parallel-consumer-proxy/pom.xml` for shape; `parallel-consumer-examples/parallel-consumer-example-streams/pom.xml` for the Jackson pin; `docs/data/module-maturity.d/parallel-consumer-proxy-protocol.yaml` for the fragment.
+- **Test scenarios:**
+  - The module compiles and its tests run under `./mvnw -pl .,parallel-consumer-proxy-streams` - the leading `.` is required or the reactor-convergence rule fails with a message about the enforcer rather than the mistake.
+  - The architecture convention test runs and passes, mirroring the copy every other module carries.
+  - `bin/check-copyright-headers.sh` passes with the fork-point check forced, run **after** staging - it only sees tracked files, so an unstaged new file is invisible to it.
+- **Verification:** a full `./mvnw` on the tree stays green, and the module produces a jar nothing else depends on yet.
+
+### U2. The experimental protocol
+
+- **Goal:** A schema for the Streams session that the frozen wire never sees.
+- **Requirements:** R6, R7, R8.
+- **Dependencies:** U1.
+- **Files:** `parallel-consumer-proxy-streams/src/main/proto/parallelconsumer/streams/v1alpha1/streams.proto`, `parallel-consumer-proxy-streams/pom.xml` (codegen), `parallel-consumer-proxy-streams/src/test/java/bz/stub/parallelconsumer/streams/GeneratedCodePlacementTest.java`.
+- **Approach:**
+  1. One bidirectional service with its own handshake - an open message naming the application id and Kafka properties, answered by a ready message. It does not reuse the frozen wire's configure message, which requires a subscription and builds a Parallel Consumer engine from it.
+  2. The full message set per R8: a request per builder method, a handle response, function registration, description-complete, and the correlated invocation pair.
+  3. Codegen uses the same plugin and version as the protocol module, with the output directory set outside `target/generated-sources` (KTD5).
+  4. The package name must match its directory or the lint rules reject it, if this schema is ever brought under the protocol module's lint root.
+- **Patterns to follow:** `parallel-consumer-proxy-protocol/pom.xml` for the codegen block and the output-directory reasoning.
+- **Test scenarios:**
+  - Generated classes are compiled exactly once and never into test-classes - mirror the protocol module's placement test, which exists because the root build's test source root sweeps that directory.
+  - A round-trip encode and decode of each message type preserves every field.
+  - The frozen proto file is unmodified: assert the tracked v1 path still has exactly one copy, since the breaking-change gate refuses to run when it finds two.
+- **Verification:** the protocol module's own gates are untouched, and the specification-coverage test still passes without listing any new message.
+
+### U3. Topology assembly from replayed calls
+
+- **Goal:** Turn a sequence of builder calls into a running topology, with handles resolved server-side.
+- **Requirements:** R1, R3.
+- **Dependencies:** U2.
+- **Files:** `parallel-consumer-proxy-streams/src/main/java/bz/stub/parallelconsumer/streams/TopologyAssembler.java`, `parallel-consumer-proxy-streams/src/main/java/bz/stub/parallelconsumer/streams/HandleTable.java`, tests alongside in `src/test/java/bz/stub/parallelconsumer/streams/`.
+- **Approach:**
+  1. A handle table maps an opaque integer to the builder object a prior call returned. Handles are server-minted and opaque to the host.
+  2. Five methods only. An unrecognised method or an unknown handle is refused with a named error rather than a generic failure - a foreign caller cannot debug a stack trace it never sees.
+  3. The aggregation uses an in-memory store (KTD1), named so the topology is reproducible.
+  4. Description-complete builds the topology and starts the streams instance; nothing starts before it.
+- **Test scenarios:**
+  - A source call returns a handle, and a transform call naming that handle is accepted.
+  - A call naming an unknown handle is refused, and the error names the handle rather than throwing.
+  - A call naming a method outside the five is refused, and the error names the method.
+  - Description-complete on the five-call sequence produces a topology whose structure matches the calls issued - this is the definition-path oracle of AE5 in unit form.
+  - Description-complete twice on one session is refused.
+  - The built topology uses an in-memory store, not a persistent one.
+- **Verification:** the assembled topology's description matches the issued call sequence, with no hardcoded knowledge of the chain.
+
+### U4. The invocation bridge
+
+- **Goal:** A value mapper that hands a record to the host and blocks for the answer.
+- **Requirements:** R2, R4, R5, R6.
+- **Dependencies:** U2.
+- **Files:** `parallel-consumer-proxy-streams/src/main/java/bz/stub/parallelconsumer/streams/ForeignValueMapper.java`, `parallel-consumer-proxy-streams/src/main/java/bz/stub/parallelconsumer/streams/InvocationRegistry.java`, tests alongside.
+- **Approach:**
+  1. The registry mints a correlation id per invocation and parks the calling thread on a future; the inbound frame reader completes it. Several stream threads are in flight at once, so the registry is the only shared mutable state and is the thing to get right.
+  2. Keys and values cross as bytes in both directions; nothing is deserialized here.
+  3. A configurable timeout fails the invocation rather than parking forever. On timeout the record fails rather than silently succeeding - a wrong value entering an aggregation is worse than a failed record.
+- **Execution note:** implement the registry test-first. It is the one piece where a concurrency defect is invisible to a single-threaded run, and the whole design's safety rests on it.
+- **Test scenarios:**
+  - A result carrying a correlation id completes exactly the invocation that minted it, with several outstanding.
+  - A result carrying an unknown correlation id is discarded and logged, not applied to another invocation.
+  - Two threads invoking concurrently each receive their own result, asserted by distinct payloads rather than by count.
+  - An invocation that receives no result within the timeout fails, and the failure names the timeout.
+  - Nothing calls back into the host runtime: only the host's own frames drive it.
+- **Verification:** under concurrent invocation, no result is ever delivered to the wrong caller.
+
+### U5. The Streams sidecar entry point
+
+- **Goal:** A second entry point that serves the experimental service and behaves like the existing sidecar from a client's point of view.
+- **Requirements:** R3, R7.
+- **Dependencies:** U3, U4.
+- **Files:** `parallel-consumer-proxy-streams/src/main/java/bz/stub/parallelconsumer/streams/StreamsMain.java`, tests alongside.
+- **Approach:**
+  1. Announce the listening port on stdout as the first line, using the same prefix the existing sidecar and the test-mode sidecar both use - a client scans for it rather than asserting position, so a log line before it is survivable but the prefix must match.
+  2. Watch the inherited stdin pipe for parent death and exit, with a parent-pid poll as the backstop. A leaked Streams instance holds state-store locks as well as group membership.
+  3. Its own server instance, its own connection guard (KTD2). Bind to loopback on an ephemeral port.
+- **Patterns to follow:** `parallel-consumer-proxy/src/main/java/bz/stub/parallelconsumer/proxy/Main.java` for the announcement and the watchdog; `TestModeMain` in the proxy module's test sources for the second-entry-point precedent.
+- **Test scenarios:**
+  - The port line is printed and parseable, and the server is accepting by the time it appears.
+  - Closing the lifeline pipe exits the process, and the exit is clean rather than a timeout when no topology was ever described.
+  - A second connection while one is live is refused, matching the existing sidecar's behaviour.
+- **Verification:** a client can spawn it, read its port, connect and disconnect without the process leaking.
+
+### U6. The Python Streams client
+
+- **Goal:** A Python surface that describes a topology and registers a function.
+- **Requirements:** R1, R2.
+- **Dependencies:** U2.
+- **Files:** `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/src/parallel_consumer/streams/__init__.py`, `.../streams/_builder.py`, `.../streams/_session.py`, generated stubs under `.../_generated/`, `.../tools/generate_proto.py` (extend for the second schema), tests under `.../tests/`.
+- **Approach:**
+  1. A small builder whose methods mirror the five, each returning a handle the next call can name. The user's function is registered against a token; no callable crosses.
+  2. Reuse the client's existing transport protocol shape - it already exists as an abstraction so a session can run over a different carrier - rather than inventing a second one.
+  3. The stub generator currently hardcodes the frozen schema's path and generates flat; extend it for the second schema rather than duplicating it, and keep the drift check passing.
+- **Test scenarios:**
+  - The builder emits the five calls in order, each naming the prior handle.
+  - Registering a function yields a token, and the token is what appears in the emitted frames - assert no callable, address or source text is present.
+  - An invocation frame is answered with a result carrying the same correlation id.
+  - The generated stubs match the schema - the existing drift check must stay green.
+- **Verification:** the client's own suite passes with no Docker, as it does today.
+
+### U7. The demo
+
+- **Goal:** One command that seeds, runs and reports per-key counts.
+- **Requirements:** R9, R10, R11.
+- **Dependencies:** U5, U6.
+- **Files:** `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/demo/streams_demo.py`, `.../demo/run.sh` (an opt-in arm), `.../Makefile` if a target is needed.
+- **Approach:**
+  1. Reuse the demo harness's broker startup and seeding. Do not write a third topic-creation helper; a prior drift between two of them flaked a required gate.
+  2. Resolve the sidecar classpath with runtime scope. The default scope drags in a test jar whose logging config prints ahead of the port line.
+  3. Read the sink as last-value-per-key: a count is a changelog, so the topic carries every intermediate value.
+  4. Assert no rebalance occurred during the measured window, and report the round-trip latency and derived ceiling as within-session figures.
+- **Execution note:** prefer a runtime smoke proof here over unit coverage - this unit is wiring, and its value is that it runs.
+- **Test scenarios:**
+  - Per-key counts read from the sink match the seeding exactly, on a run asserted rebalance-free.
+  - A run whose function exceeds the poll interval is observed separately and reports no counts.
+  - The demo's own output rules stay consistent with the cross-language contract the other demos are held to.
+- **Verification:** a reader who does not know the internals runs one command and sees matching counts.
+
+### U8. The protocol-gap record
+
+- **Goal:** The discovery half of the objective has an artifact.
+- **Requirements:** R12.
+- **Dependencies:** U7.
+- **Files:** `docs/inflight/next-kafka-streams-foreign-wrappers.md` (update in place).
+- **Approach:** Record what the run encountered: invocation timeout and failure semantics, liveness under rebalancing, interactive queries, punctuators, more than one foreign operator, and whether the five-method set can grow a sixth taking a typed argument without redesigning the wire - which is the kill criterion's first condition.
+- **Test scenarios:** `Test expectation: none -- documentation unit, no behaviour.`
+- **Verification:** every deferred capability named in Scope Boundaries appears with what it would need.
+
+---
+
+## Verification Contract
+
+| Gate | Command | Applies to | Done signal |
+|---|---|---|---|
+| Module builds | `./mvnw -pl .,parallel-consumer-proxy-streams -am` with JDK 17 set per command | U1-U5 | green, and the run states which suite executed rather than assuming |
+| Whole tree | `./mvnw` with JDK 17 set per command | all | green; the copyright check runs at validate on every invocation |
+| Copyright | `COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 bin/check-copyright-headers.sh`, run **after** staging | all | zero violations |
+| Schema gates | `bin/check-proto-lint.sh`, `bin/check-proto-breaking.sh` | U2 | both green, and the breaking gate reports that it ran rather than exiting on a duplicate path |
+| Python | `make -C parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python lint test` | U6 | green, no Docker required |
+| Demo | the demo's one command | U7 | per-key counts match the seeding, rebalance-free |
+
+**Never scope a Maven test run with `-Dtest=`.** It overrides an execution's includes, so the suite silently does not run and the build reports success. Read the counts from the surefire reports instead.
+
+---
+
+## Definition of Done
+
+- A Python program describes the five-call topology, supplies one function, and the sink holds exactly the expected count per key on a rebalance-free run.
+- The topology's structure read back from the engine matches what Python issued, and no Java topology source exists for that run.
+- The frozen proto file is unmodified and its gates are untouched.
+- Kafka Streams appears in no artifact the admin wrapper ships from.
+- The whole tree builds green with the copyright gate run after staging.
+- The protocol-gap record names every deferred capability and what it would need.
