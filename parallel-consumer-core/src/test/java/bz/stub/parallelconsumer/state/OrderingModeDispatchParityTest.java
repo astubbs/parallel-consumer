@@ -77,6 +77,15 @@ class OrderingModeDispatchParityTest {
     /**
      * KEY examines exactly one entry per record, because a distinct-key workload puts each record in its own
      * shard and the scan leaves after the head.
+     * <p>
+     * <b>The busy-shard in-flight guard was expected to lower this and does not, which is worth knowing before
+     * anyone concludes the guard is inert.</b> That guard skips an ordered shard entirely when it already has a
+     * record out at a worker, so a skipped shard is an entry never examined - but this workload never gives it
+     * the chance. Records here are taken and never returned, and {@code LoopingResumingIterator} resumes each
+     * pass from where the previous one stopped, so each of the {@link #RECORDS} shards is entered exactly once
+     * and none is ever revisited while occupied. That the guard does fire, and does suppress examinations, is
+     * asserted against this same meter by
+     * {@link ShardInFlightCountTest#anOrderedShardWithWorkInFlightIsNotEnteredAtAll}.
      */
     static final long EXPECTED_KEY_EXAMINATIONS = RECORDS;
 
