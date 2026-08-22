@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Cross-Language Conformance</name>
+    <artifactId>parallel-consumer-proxy-conformance</artifactId>
+
+    <!--
+        THE SHARED CONFORMANCE SUITE: one Java test module that drives every language's client
+        through the same scenarios, in parallel, and asserts the same things about each
+        (astubbs#242, confluentinc#154). The runner contract every language implements is in this
+        module's README.md.
+
+        NO MAIN SOURCES, DELIBERATELY. Everything here is a test: the scenarios, the assertions and
+        the process plumbing that spawns a foreign runner. Nothing downstream may depend on it,
+        which is what keeps the engine edge below contained.
+
+        IT DEPENDS ON THE ENGINE, AND THAT IS WHY IT IS A LEAF. A test-scope dependency is not
+        transitive on the classpath but IS an edge in the Maven reactor, so `-pl <x> -am` on
+        anything that depended on this module would drag parallel-consumer-proxy into an ordinary
+        build - and bin/build.sh opens with `clean`, so that build would delete the very sidecar
+        jars other languages' tests spawn. The JVM clients' equivalent leaf is
+        parallel-consumer-proxy-client-java-harness, which records the same hazard from its side.
+        The measurement, not an assertion:
+
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        must not print parallel-consumer-proxy. Rerun it before adding any dependency here.
+    -->
+
+    <properties>
+        <!-- The engine and its gRPC transport both require it; see parallel-consumer-proxy's pom. -->
+        <release.target>17</release.target>
+        <!--
+            Declared empty so the prebuild execution below can forward it whether or not the run
+            named a language. Unset, `-Dpc.conformance.language=` reaches the prebuild's JVM as a
+            blank value, which ConformanceBindings.select treats exactly as "every binding" - the
+            same reading the matrix gives it. It is a FORWARDING slot, not a default to edit: the
+            selector's own name and semantics belong to ConformanceBindings.LANGUAGE_PROPERTY.
+        -->
+        <pc.conformance.language></pc.conformance.language>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <!--
+                The matrix is one parameterised method over (language x scenario) - a method per
+                language is how ten clients end up with ten slightly different definitions of the
+                same scenario. Declared here because the root pom's global test dependencies stop
+                at junit-jupiter-api/engine; core, reactor and mutiny each declare this the same way.
+            -->
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            The engine and the fixture that drives it from mock Kafka clients: ProxyHarness (the
+            in-process engine lane, which binds a real gRPC server on an ephemeral loopback port)
+            and the HarnessScenario names that are this suite's shared vocabulary.
+
+            Test scope, not compile: nothing here is published, and compile scope would make the
+            engine a transitive dependency of a module that must remain a leaf.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- LongPollingMockConsumer and friends, which the harness stands on -->
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!--
+                Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+                commons-lang3, and test scope is not transitive, so relying on core to supply it
+                would break the moment core stopped using it.
+            -->
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            THE JVM CLIENTS, WHICH THIS SUITE DRIVES AS OBJECTS RATHER THAN AS CHILD PROCESSES.
+
+            A foreign client is reached by spawning a binary the registry names, so the suite needs
+            no Maven dependency on it at all - the only thing it knows about Go is a path. A JVM
+            client is reached by constructing it, so it has to be on this module's test classpath,
+            and JvmClientBinding's javadoc carries the reasoning for driving them that way.
+
+            Both transports, deliberately: the direct one binds core in-process with no protocol
+            underneath and the gRPC one speaks the real wire, and the shared API's central claim is
+            that the same scenarios hold for both. Test scope, like everything else here - this
+            module publishes nothing and must stay a leaf.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-direct</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            THE KOTLIN CLIENT, WHICH IS A SPAWNED RUNNER LIKE ANY OTHER LANGUAGE - so this
+            dependency is not for the classpath, and nothing here imports a Kotlin type.
+
+            It is here to put the module in THIS module's reactor, which is what builds the runner.
+            Every other language's registry entry carries a build command that shells out to its own
+            toolchain; Kotlin's toolchain is the Maven build already running, and a nested `mvn`
+            would rewrite the class directories of the very JVM executing this suite while it ran.
+            Being a dependency instead means `-pl :parallel-consumer-proxy-conformance -am` compiles
+            the runner and writes its classpath file before a single scenario starts, so the Kotlin
+            entry in LanguageRunners needs no build command at all.
+        -->
+        <!--
+            KOTLIN AND SCALA ARE <type>pom</type> ON PURPOSE - DO NOT "FIX" THEM BACK TO A JAR.
+            Neither module's classes are ever used here: both are SPAWNED runners, invoked as
+            scripts/conformance-runner exactly like go and python, so the only thing these two
+            dependencies buy is the reactor edge that builds their runner before the suite looks
+            for it. Typing them `jar` asserted a classpath need that does not exist, and cost a
+            real failure: ossindex's audit goal is bound to `validate` in the root pom and needs
+            the whole test-scope tree resolved, so before `compile` the reactor has nothing to
+            substitute and Maven goes to the repository - where these two never appear, because a
+            module nobody consumes a jar from never gets installed. `./mvnw validate` then died on
+            them. The reactor supplies a `pom` artifact straight from the project file on disk, so
+            it resolves with nothing built, and `-pl :parallel-consumer-proxy-conformance -am`
+            still pulls both modules in. Verified: full-reactor validate green, the measurement
+            above still 0, no kotlin or scala transitives on the test classpath, and both
+            languages' conformance scenarios green.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-kotlin</artifactId>
+            <version>${project.version}</version>
+            <type>pom</type>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Scala, here for exactly the reason Kotlin is: a JVM client whose toolchain IS the Maven
+            build already running, so it earns its place in this reactor rather than a build command
+            that would start a nested one. Its registry entry is correspondingly empty-commanded.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-scala</artifactId>
+            <version>${project.version}</version>
+            <type>pom</type>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!--
+                    THE RUNNERS ARE BUILT HERE, ONCE, BEFORE SUREFIRE FORKS ANYTHING - and that phase
+                    is the whole point of the binding.
+
+                    A scenario that built its own runner raced every other scenario for that language:
+                    a build command writes into ONE output directory, the matrix runs four at a time
+                    (src/test/resources/junit-platform.properties), and the `ci` profile forks a JVM
+                    per core (surefire.forkCount=1C) and spreads this module's test classes across
+                    them. Two JVMs therefore started the same `dotnet build` and the loser died on the
+                    file the winner was writing. Memoising inside the test JVM cannot fix that, and
+                    neither can a JUnit lifecycle hook: the second builder is a DIFFERENT JVM.
+                    process-test-classes can, because it has to finish before surefire starts.
+
+                    Version from the clients aggregator's pluginManagement. That aggregator's
+                    foreign-clients profile also contributes managed exec executions to every module
+                    declaring this plugin; they are guarded by pc.foreign.skip, which this module
+                    inherits as true and does not override, so -Dpc.foreignClients adds nothing here.
+
+                    ConformanceRunnerPrebuild's javadoc carries the measurement and the reasoning;
+                    what is here is the wiring.
+                -->
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>build-conformance-runners</id>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Skipped with the unit tests it exists to serve, so -DskipTests does not
+                                 drag eight foreign toolchains into a compile-only build. -->
+                            <skip>${skipUTs}</skip>
+                            <!-- The same JVM surefire is pinned to, for the same reason: this repo's
+                                 JDK 17 is not necessarily the one on PATH. -->
+                            <executable>${jvm.location}/bin/java</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <classpathScope>test</classpathScope>
+                            <arguments>
+                                <!-- Forwarded, not re-implemented: the prebuild selects with the suite's
+                                     own ConformanceBindings, so a CI row that installed one toolchain
+                                     builds one runner, and an unregistered name fails here rather than
+                                     building ten runners for a matrix that will refuse to run. -->
+                                <argument>-Dpc.conformance.language=${pc.conformance.language}</argument>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>bz.stub.parallelconsumer.conformance.ConformanceRunnerPrebuild</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

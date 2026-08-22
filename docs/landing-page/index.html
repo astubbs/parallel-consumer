@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallel Consumer - process a Kafka partition in parallel, in order</title>
+<meta name="description" content="Parallel Consumer decouples concurrency from partition count. Keep your ordering guarantee - per key, per partition, or none at all - and choose the concurrency your workload actually needs. Apache-2.0.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="styles.css">
+<!--
+  Landing page prototype. Content is governed by docs/data/landing-page.yaml.
+  Every claim below traces to that file. Sections the plan marks `needs-evidence` or `needs-data`
+  are rendered as visible editorial holds rather than filled with a number nobody measured.
+  No third-party requests: no CDN, no fonts, no analytics, no remote images.
+-->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "Parallel Consumer",
+  "description": "A Java library for concurrent message processing from Apache Kafka with a single consumer, keeping ordering guarantees by partition or key without raising partition counts.",
+  "programmingLanguage": "Java",
+  "license": "https://www.apache.org/licenses/LICENSE-2.0",
+  "codeRepository": "https://github.com/astubbs/parallel-consumer"
+}
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wrap masthead__inner">
+    <a class="wordmark" href="#top">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" focusable="false">
+        <rect x="1" y="3"  width="6" height="4" rx="1" fill="var(--c-accent)"></rect>
+        <rect x="9" y="3"  width="6" height="4" rx="1" fill="var(--c-accent)"></rect>
+        <rect x="1" y="9"  width="6" height="4" rx="1" fill="var(--c-accent)"></rect>
+        <rect x="9" y="9"  width="6" height="4" rx="1" fill="var(--c-signal)"></rect>
+        <rect x="1" y="15" width="6" height="4" rx="1" fill="var(--c-accent)"></rect>
+        <rect x="9" y="15" width="6" height="4" rx="1" fill="var(--c-accent)"></rect>
+        <path d="M18.5 2.5 V19.5" stroke="var(--c-iris)" stroke-width="1.6" stroke-linecap="round"></path>
+      </svg>
+      Parallel Consumer
+    </a>
+    <nav aria-label="Sections">
+      <a href="#the-problem">The ceiling</a>
+      <a href="#offset-map">Offset map</a>
+      <a href="#admission-by-shard">Shards</a>
+      <a href="#correctness">Correctness</a>
+      <a href="#quickstart">Quickstart</a>
+    </nav>
+    <a class="btn btn--mini" href="https://github.com/astubbs/parallel-consumer" rel="noopener">Source</a>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ===================================================================== -->
+<!-- HERO                                                                  -->
+<!-- ===================================================================== -->
+<section class="hero" id="top">
+  <div class="wrap">
+    <h1>Process a Kafka partition in parallel, in order, without adding partitions.</h1>
+    <p class="lede">
+      Parallel Consumer decouples concurrency from partition count. Keep your ordering guarantee -
+      per key, per partition, or none at all - and choose the concurrency your workload actually
+      needs.
+    </p>
+    <div class="hero__ctas">
+      <a class="btn btn--primary" href="#quickstart">Get started</a>
+      <a class="btn btn--ghost" href="#offset-map">How it works</a>
+    </div>
+    <p class="hero__proof">
+      <strong>Apache-2.0.</strong> No licence key, no patent claim, no sidecar. A library you add to a
+      consumer you already have.
+    </p>
+
+    <div class="hero__strip">
+      <svg viewBox="0 0 720 68" role="img" aria-labelledby="heroStripTitle heroStripDesc">
+        <title id="heroStripTitle">One partition, mid-flight</title>
+        <desc id="heroStripDesc">A row of offsets in a single partition: most complete, one record
+          stuck, several still in flight, and the commit marker sitting at the lowest offset that is
+          not yet done.</desc>
+        <rect class="cell is-done" x="30" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="45" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="60" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="75" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="90" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="105" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="120" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="135" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="150" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="165" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="180" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="195" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="210" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="225" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="240" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="255" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="270" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="285" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="300" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="315" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="330" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="345" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="360" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-flight" x="375" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-stuck" x="390" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-flight" x="405" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="420" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="435" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="450" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-done" x="465" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell is-flight" x="480" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="495" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="510" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="525" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="540" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="555" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="570" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="585" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="600" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="615" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="630" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="645" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="660" y="20" width="11" height="18" rx="2"></rect>
+        <rect class="cell" x="675" y="20" width="11" height="18" rx="2"></rect>
+        <g transform="translate(380.5,0)">
+          <path d="M0 42 l6 9 l-12 0 z" class="marker-body"></path>
+          <text x="0" y="62" class="marker-text" text-anchor="middle">commit</text>
+        </g>
+        <text x="30" y="14" class="svg-label svg-label--strong">one partition, mid-flight</text>
+        <text x="690" y="14" class="svg-label" text-anchor="end">offset &#8594;</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 01 THE PROBLEM                                                        -->
+<!-- ===================================================================== -->
+<section class="band" id="the-problem">
+  <div class="wrap">
+    <p class="eyebrow"><b>01</b> The ceiling</p>
+    <div class="split split--narrow-first">
+      <div>
+        <h2 class="section-title">Partitions are the unit of both concurrency and cost.</h2>
+        <p class="lede">
+          A Kafka consumer processes one partition on one thread. If each record takes 20ms, that
+          partition moves 50 records a second, and the only conventional lever is more partitions -
+          which means more cost, more rebalance surface, and a number you can raise but never lower.
+        </p>
+        <ul class="checklist" style="margin-top: var(--sp-6)">
+          <li><strong>Partition count outlives the reason it was made.</strong></li>
+          <li><strong>Adding partitions changes key-to-partition assignment</strong>, which is a
+            data-layout change, not a tuning knob.</li>
+        </ul>
+      </div>
+      <div>
+        <div class="arith" aria-label="Throughput arithmetic for one partition">
+          <div>1 partition</div>
+          <div>1 consumer thread</div>
+          <div>20 ms per record</div>
+          <span class="arith__rule"></span>
+          <div><b>50 records / second</b></div>
+        </div>
+        <div class="hold" style="margin-top: var(--sp-5)">
+          <p class="hold__label">Editorial hold - one supporting point</p>
+          <p>
+            The content plan holds a third supporting point - <i>"the cost lands on brokers, on
+            rebalance time, and on whoever coordinates the change across teams"</i> - until a
+            third-party citation is chosen for it. It is rendered here rather than asserted as body
+            copy.
+          </p>
+          <p><b>Source:</b> <code>landing-page.yaml</code> &rarr; <code>the-problem.status_note</code>:
+            "Needs a citation chosen before publish. Do not assert the cost without one."</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 02 THE OFFSET MAP                                                     -->
+<!-- ===================================================================== -->
+<section class="band band--sunk" id="offset-map">
+  <div class="wrap">
+    <p class="eyebrow"><b>02</b> The offset map</p>
+    <h2 class="section-title">One slow record does not undo the work behind it.</h2>
+    <p class="lede" style="margin-bottom: var(--sp-7)">
+      Parallel Consumer records which offsets completed, not just how far it got. That completion set
+      travels with the commit, so a restart resumes from what is actually outstanding - not from the
+      last record before the first gap.
+    </p>
+
+    <figure class="viz" id="offsetViz" style="margin: 0 0 var(--sp-7)">
+      <div class="viz__stage">
+        <svg viewBox="0 0 720 178" role="img" aria-labelledby="omTitle omDesc">
+          <title id="omTitle">How the offset map survives a crash</title>
+          <desc id="omDesc">A row of 44 offsets in one partition. Records complete out of order; one
+            record is stuck and three more are still in flight. The commit is taken at the lowest
+            incomplete offset and carries the set of completions that follow it. After a crash, only
+            the four records that were never completed are processed again.</desc>
+
+          <!-- metadata bracket: the completion set that rides with the commit -->
+          <g class="meta-bracket is-on" id="metaBracket">
+            <path d="M332 34 V26 H689 V34"></path>
+            <text x="510" y="18" text-anchor="middle">completion set travels with the commit</text>
+          </g>
+
+          <!-- the row -->
+          <g id="offsetRow">
+            <rect class="cell is-kept" data-i="0" x="32" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="1" x="47" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="2" x="62" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="3" x="77" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="4" x="92" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="5" x="107" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="6" x="122" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="7" x="137" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="8" x="152" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="9" x="167" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="10" x="182" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="11" x="197" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="12" x="212" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="13" x="227" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="14" x="242" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="15" x="257" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="16" x="272" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="17" x="287" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="18" x="302" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="19" x="317" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-replay" data-i="20" x="332" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-replay" data-i="21" x="347" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-replay" data-i="22" x="362" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-replay" data-i="23" x="377" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="24" x="392" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="25" x="407" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="26" x="422" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="27" x="437" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="28" x="452" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="29" x="467" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="30" x="482" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="31" x="497" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="32" x="512" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="33" x="527" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="34" x="542" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="35" x="557" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="36" x="572" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="37" x="587" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="38" x="602" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="39" x="617" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="40" x="632" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="41" x="647" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="42" x="662" y="86" width="12" height="26" rx="2"></rect>
+            <rect class="cell is-kept" data-i="43" x="677" y="86" width="12" height="26" rx="2"></rect>
+          </g>
+
+          <!-- commit marker: sits at the lowest offset not yet complete -->
+          <g id="commitMarker" transform="translate(300,0)">
+            <text x="32" y="52" class="marker-text" text-anchor="middle">commit</text>
+            <path d="M32 58 l6 0 l-6 9 l-6 -9 z" class="marker-body"></path>
+            <path d="M32 70 V124" class="marker-line"></path>
+          </g>
+
+          <!-- crash wipe -->
+          <g class="crash-line is-on" id="crashLine">
+            <line x1="32" y1="72" x2="32" y2="126"></line>
+            <text x="32" y="64" text-anchor="middle">crash</text>
+          </g>
+
+          <line x1="30" y1="132" x2="690" y2="132" class="svg-axis"></line>
+          <text x="30" y="152" class="svg-label">earlier offsets</text>
+          <text x="690" y="152" class="svg-label" text-anchor="end">later offsets &#8594;</text>
+          <text x="30" y="170" class="svg-label svg-label--strong" id="omState">4 records processed again · 40 not</text>
+        </svg>
+      </div>
+      <div class="legend" aria-hidden="true">
+        <span><i></i>not started</span>
+        <span><i class="k-flight"></i>in flight</span>
+        <span><i class="k-done"></i>complete</span>
+        <span><i class="k-stuck"></i>stuck</span>
+        <span><i class="k-kept"></i>complete, not processed again</span>
+        <span><i class="k-replay"></i>processed again after the crash</span>
+      </div>
+      <figcaption class="viz__bar">
+        <p class="viz__caption" id="omCaption">
+          <b>After the crash.</b> The four records that never completed are the only ones processed
+          again. Everything else was recorded as done and stays done.
+        </p>
+        <div class="viz__controls">
+          <div class="viz__phases" id="omPhases" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span class="is-on"></span>
+          </div>
+          <button class="btn btn--mini" type="button" id="omReplay">Replay</button>
+        </div>
+      </figcaption>
+    </figure>
+
+    <div class="split">
+      <div>
+        <div class="figure-block">
+          <div class="figure-block__value">6,412<span class="figure-block__unit"> records reprocessed</span></div>
+          <p class="figure-block__conditions">
+            measured: one crash &middot; one stuck record &middot; one 200,000-record partition
+          </p>
+        </div>
+        <p class="source">
+          <b>Evidence.</b> <code>bench/run-divergence.sh</code> - committed, reproducible, real broker.<br>
+          <b>Design property.</b> <code>parallel-consumer-core/&hellip;/state/PartitionState.java</code>,
+          stated in its own javadoc.
+        </p>
+      </div>
+      <div>
+        <h3 style="font-size: var(--fs-lg); margin-bottom: var(--sp-4)">Nine bytes of recovery state</h3>
+        <p>
+          The recovery state for that partition was <strong>9 bytes of commit metadata</strong> - a
+          run-length encoding of one incomplete record followed by one run of 199,998 completed ones.
+        </p>
+        <div class="payload-note">
+          A gap in the offsets is treated the same way as an offset that succeeded: either way there
+          is no work outstanding for it. That is why compacted topics, transaction markers and
+          aborted transactions need no special case - the completion set is built from the records
+          that were actually delivered.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 03 ADMISSION BY SHARD                                                 -->
+<!-- ===================================================================== -->
+<section class="band" id="admission-by-shard">
+  <div class="wrap">
+    <p class="eyebrow"><b>03</b> A scenario, not a claim</p>
+    <h2 class="section-title">Work is admitted by shard, not by slot.</h2>
+    <p class="lede" style="margin-bottom: var(--sp-7)">
+      A partition holds 1 record with key <code>A</code>, then 249 records with key <code>B</code>,
+      then 1,000 records each with a distinct key. Key <code>B</code> is slow. Check the shape
+      against your own key distribution.
+    </p>
+
+    <figure class="viz" id="shardViz" style="margin: 0 0 var(--sp-7)">
+      <div class="viz__stage">
+        <svg viewBox="0 0 720 300" role="img" aria-labelledby="sdTitle sdDesc">
+          <title id="sdTitle">Dispatch across 1,002 shards</title>
+          <desc id="sdDesc">Three shard groups drawn to scale, every mark one record. Key A holds
+            one record. Key B holds 249 records which are processed in order on their own shard. A
+            thousand further shards hold one record each and are processed immediately and
+            concurrently, finishing long before key B drains.</desc>
+
+          <defs>
+            <pattern id="dotsB" patternUnits="userSpaceOnUse" width="11.3333" height="2.2892">
+              <rect x="2" y="0.45" width="7" height="1.35" rx="0.5"></rect>
+            </pattern>
+            <pattern id="dotsBDone" patternUnits="userSpaceOnUse" width="11.3333" height="2.2892">
+              <rect x="2" y="0.45" width="7" height="1.35" rx="0.5"></rect>
+            </pattern>
+            <pattern id="dotsField" patternUnits="userSpaceOnUse" width="9.5" height="7.6">
+              <circle cx="4.75" cy="3.8" r="2.1"></circle>
+            </pattern>
+            <pattern id="dotsFieldDone" patternUnits="userSpaceOnUse" width="9.5" height="7.6">
+              <circle cx="4.75" cy="3.8" r="2.1"></circle>
+            </pattern>
+            <clipPath id="clipB"><rect id="shardBDrain" x="0" y="0" width="34" height="57.23"></rect></clipPath>
+            <clipPath id="clipField"><rect id="fieldSweep" x="0" y="0" width="380" height="190"></rect></clipPath>
+          </defs>
+
+          <!-- one shard, one record -->
+          <text x="30" y="24" class="svg-title">key A</text>
+          <g transform="translate(30,44)">
+            <rect class="shard-frame" x="-5" y="-5" width="26" height="26" rx="4"></rect>
+            <circle id="shardADot" cx="8" cy="8" r="6" fill="var(--c-accent)"></circle>
+          </g>
+          <text x="30" y="266" class="shard-count" id="cntA">1 / 1</text>
+
+          <!-- one shard, 249 records, drained in order -->
+          <text x="88" y="24" class="svg-title">key B</text>
+          <g transform="translate(88,44)">
+            <rect class="shard-frame" x="-5" y="-5" width="44" height="200" rx="4"></rect>
+            <rect x="0" y="0" width="34" height="190" fill="url(#dotsB)"></rect>
+            <g clip-path="url(#clipB)">
+              <rect x="0" y="0" width="34" height="190" fill="url(#dotsBDone)"></rect>
+            </g>
+          </g>
+          <text x="88" y="266" class="shard-count" id="cntB">75 / 249</text>
+
+          <!-- 1,000 shards, one record each -->
+          <text x="164" y="24" class="svg-title">1,000 distinct keys<tspan class="shard-note" dx="8">one record each &#183; every dot is one record</tspan></text>
+          <g transform="translate(164,44)">
+            <rect class="shard-frame" x="-5" y="-5" width="390" height="200" rx="4"></rect>
+            <rect x="0" y="0" width="380" height="190" fill="url(#dotsField)"></rect>
+            <g clip-path="url(#clipField)">
+              <rect x="0" y="0" width="380" height="190" fill="url(#dotsFieldDone)"></rect>
+            </g>
+            <line id="sweepEdge" x1="380" y1="-7" x2="380" y2="197" stroke="var(--c-accent)"
+                  stroke-width="1.5" opacity="0"></line>
+          </g>
+          <text x="164" y="266" class="shard-count" id="cntField">1,000 / 1,000</text>
+
+          <!-- callouts -->
+          <g class="shard-callout is-on" id="callout1" transform="translate(566,60)">
+            <rect x="0" y="0" width="124" height="66"></rect>
+            <text x="11" y="22"><tspan>1,001 records</tspan><tspan x="11" dy="16">complete.</tspan></text>
+            <text x="11" y="55" class="shard-note">B is still draining</text>
+          </g>
+          <g class="shard-callout" id="callout2" transform="translate(566,158)">
+            <rect x="0" y="0" width="124" height="66"></rect>
+            <text x="11" y="22"><tspan>B&#8217;s 249 complete,</tspan><tspan x="11" dy="16">in order.</tspan></text>
+            <text x="11" y="55" class="shard-note">nothing else waited</text>
+          </g>
+
+          <line x1="30" y1="280" x2="690" y2="280" class="svg-axis"></line>
+          <text x="690" y="274" class="svg-label" text-anchor="end">time &#8594;</text>
+          <text x="30" y="296" class="svg-label svg-label--strong" id="sdState">all 1,251 records placed into their shards on arrival</text>
+        </svg>
+      </div>
+      <figcaption class="viz__bar">
+        <p class="viz__caption" id="sdCaption">
+          <b>Mid-run.</b> The 1,000 single-record shards and key <code>A</code> are finished. Key
+          <code>B</code> proceeds in order on its own shard, and nothing else is waiting on it.
+        </p>
+        <div class="viz__controls">
+          <button class="btn btn--mini" type="button" id="sdReplay">Replay</button>
+        </div>
+      </figcaption>
+    </figure>
+
+    <div class="split">
+      <div>
+        <h3 style="font-size: var(--fs-lg); margin-bottom: var(--sp-4)">What happens</h3>
+        <p>
+          All 1,251 records go into their shards on arrival. The control loop dispatches across every
+          shard, so the 1,000 distinct keys are processed immediately and concurrently while
+          <code>B</code>'s records proceed in order on their own shard.
+        </p>
+        <p class="source">
+          <b>Source.</b> <code>parallel-consumer-core/&hellip;/state/ShardManager.java</code><br>
+          <b>Wanted.</b> A named integration test asserting exactly this shape, so the scenario is
+          executable rather than described.
+        </p>
+      </div>
+      <div class="limit">
+        <p class="limit__label">The honest limit</p>
+        <p>
+          Records sharing a key are still serial. That is the ordering guarantee, not a shortcoming -
+          <code>B</code>'s 249 records take as long as they take. What is guaranteed is that the
+          other 1,001 do not wait for them.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 04 ORDERING MODES                                                     -->
+<!-- ===================================================================== -->
+<section class="band band--sunk" id="ordering-modes">
+  <div class="wrap">
+    <p class="eyebrow"><b>04</b> Ordering</p>
+    <h2 class="section-title">Three ordering modes. Pick the guarantee your workload needs.</h2>
+    <div class="grid" style="margin-top: var(--sp-6)">
+      <div class="card mode-card">
+        <p class="mode-card__name">UNORDERED</p>
+        <h3>Use the whole budget</h3>
+        <p>Uses the full concurrency budget regardless of how your keys are distributed.</p>
+      </div>
+      <div class="card mode-card">
+        <p class="mode-card__name">KEY</p>
+        <h3>Serial per key, parallel across them</h3>
+        <p>Serial processing within a key, and parallelism across keys.</p>
+      </div>
+      <div class="card mode-card">
+        <p class="mode-card__name">PARTITION</p>
+        <h3>Keep today's guarantee</h3>
+        <p>Preserves the guarantee you have today while still overlapping work across partitions.</p>
+      </div>
+    </div>
+    <p class="source"><b>Feature record.</b> <code>docs/features/ordering-modes.yaml</code></p>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 05 CORRECTNESS                                                        -->
+<!-- ===================================================================== -->
+<section class="band" id="correctness">
+  <div class="wrap">
+    <p class="eyebrow"><b>05</b> Trust</p>
+    <div class="split split--narrow-first">
+      <div>
+        <h2 class="section-title">What is tested, and what is not.</h2>
+        <p class="lede">
+          A correctness page that states the failure boundary out loud: what is guaranteed on a
+          graceful rebalance, what duplication is possible on a hard failure, and what that
+          duplication is bounded by.
+        </p>
+      </div>
+      <div>
+        <ul class="checklist">
+          <li><strong>The delivery guarantee</strong>, stated precisely, with the conditions attached.</li>
+          <li><strong>Compacted topics, transaction markers and aborted transactions</strong> -
+            handled as a design property, not a patch.</li>
+          <li><strong>The test surface</strong>: what runs against a real broker, what runs under
+            chaos, what is model-checked.</li>
+          <li><strong>The honest-comparison charter</strong>: publish the case we expect to lose.</li>
+        </ul>
+        <div class="hold">
+          <p class="hold__label">Editorial hold - destination page</p>
+          <p>This section links to a correctness page that does not exist yet. The list above is the
+            plan's contents for it.</p>
+          <p><b>Source:</b> <code>landing-page.yaml</code> &rarr; <code>correctness.includes</code>;
+            evidence <code>docs/inflight/parked-testing-as-a-feature-for-the-clients.md</code>,
+            <code>docs/features/compacted-topic-offset-recovery.yaml</code>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 06 REACH  (needs-evidence: rendered as a hold, not published)         -->
+<!-- ===================================================================== -->
+<section class="band band--sunk band--tight" id="reach">
+  <div class="wrap">
+    <p class="eyebrow"><b>06</b> Reach <span class="tag tag--iris">not publishable yet</span></p>
+    <div class="hold">
+      <p class="hold__label">Editorial hold - blocked on evidence</p>
+      <h3 style="font-size: var(--fs-lg); margin-bottom: var(--sp-3)">Runs where you already are.</h3>
+      <p>
+        Intended copy: <i>"Java 8 and up. A wide range of Kafka client and broker versions. No
+        platform upgrade required before you can try it."</i>
+      </p>
+      <p>
+        The Java half has a feature record (<code>docs/features/java-compatibility.yaml</code>). The
+        Kafka client and broker half does not, and the content plan is explicit that this section
+        cannot publish until a support matrix exists - <b>the matrix is the claim</b>. A vague
+        compatibility statement is worse than none, because the reader's next question is the exact
+        version they are on.
+      </p>
+      <p><b>Source:</b> <code>landing-page.yaml</code> &rarr; <code>reach.status: needs-evidence</code>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 07 BENCHMARKS  (needs-data: the rule publishes, the numbers do not)   -->
+<!-- ===================================================================== -->
+<section class="band" id="benchmarks">
+  <div class="wrap">
+    <p class="eyebrow"><b>07</b> Measurement</p>
+    <div class="split split--narrow-first">
+      <div>
+        <h2 class="section-title">Measured, with the conditions stated.</h2>
+        <p class="lede">
+          Never publish a throughput or efficiency figure without the key distribution, the
+          per-record delay, the concurrency setting, and whether a real broker was in the path. A
+          number whose conditions are stated persuades more than a larger number whose conditions are
+          not.
+        </p>
+        <p style="margin-top: var(--sp-5)">
+          Excluding broker protocol cost makes a number bigger and makes it mean less. Fetch sizing,
+          batching and commit round trips are a real and large part of what a Kafka consumer does.
+        </p>
+      </div>
+      <div>
+        <div class="hold">
+          <p class="hold__label">Editorial hold - blocked on data</p>
+          <p>No figures are published here yet. When they are, the chart carries these axes:</p>
+          <ul>
+            <li>Key distribution as an <b>axis, not a constant</b> - all-unique, uniform, Zipf,
+              single hot key.</li>
+            <li>Unordered mode across all distributions, where the result should be flat.
+              <b>Flatness is the finding.</b></li>
+            <li>A real broker in the path, and the protocol cost that comes with it, shown rather
+              than excluded.</li>
+          </ul>
+          <p><b>Source:</b> <code>landing-page.yaml</code> &rarr; <code>benchmarks.status:
+            needs-data</code>; harness <code>bench/run-bisect.sh</code>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 08 TRY IT                                                             -->
+<!-- ===================================================================== -->
+<section class="band band--sunk" id="try-it">
+  <div class="wrap">
+    <p class="eyebrow"><b>08</b> Try it on your own shape</p>
+    <div class="split">
+      <div>
+        <h2 class="section-title">Run the comparison on your own broker.</h2>
+        <p class="lede">
+          A containerised demo that runs a plain consumer and Parallel Consumer side by side against a
+          real broker.
+        </p>
+        <p style="margin-top: var(--sp-5)">
+          It answers "will this help <i>my</i> workload", which a chart cannot. The dials are the
+          point: you find your own shape and watch what happens.
+        </p>
+      </div>
+      <div>
+        <div class="card">
+          <h3>The dials</h3>
+          <div class="table-scroll">
+            <table>
+              <caption class="visually-hidden">Demo controls</caption>
+              <tbody>
+                <tr><td>key-set size</td><td>as a percentage of records</td></tr>
+                <tr><td>per-record delay</td><td>how long your processing takes</td></tr>
+                <tr><td>failure rate</td><td>how often processing fails</td></tr>
+                <tr><td>concurrency</td><td>the in-flight target</td></tr>
+                <tr><td>partitions</td><td>the topic's partition count</td></tr>
+                <tr><td>instances</td><td>how many consumers are running</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="source"><b>Source.</b> <code>docs/inflight/branch-classic-comparison-demo.md</code>
+            - the demo is in flight; this page does not link a running instance yet.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 09 LICENCE                                                            -->
+<!-- ===================================================================== -->
+<section class="band" id="licence">
+  <div class="wrap">
+    <p class="eyebrow"><b>09</b> Licence</p>
+    <div class="split split--narrow-first">
+      <div>
+        <h2 class="section-title">Apache-2.0. No licence key, no patent claim, no commercial tier on the core.</h2>
+      </div>
+      <div>
+        <p class="lede">
+          Use it in a closed-source product, ship it in an appliance, run it as a service. There is
+          nothing to negotiate and nothing to renew.
+        </p>
+        <p class="source"><b>Evidence.</b>
+          <a href="https://github.com/astubbs/parallel-consumer/blob/master/LICENSE" rel="noopener">LICENSE</a>
+          in the repository &middot;
+          <a href="https://www.apache.org/licenses/LICENSE-2.0" rel="noopener">Apache License 2.0</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 10 PROVENANCE                                                         -->
+<!-- ===================================================================== -->
+<section class="band band--sunk" id="provenance">
+  <div class="wrap">
+    <p class="eyebrow"><b>10</b> Provenance</p>
+    <div class="split split--narrow-first">
+      <div>
+        <h2 class="section-title">Years of production history, actively maintained.</h2>
+      </div>
+      <div>
+        <p class="lede">
+          Originated at Confluent and used in production for years. Now maintained in this fork, with
+          the defect backlog worked down in public and every fix guarded by a test that would catch
+          its return.
+        </p>
+        <div class="hold" style="margin-top: var(--sp-5)">
+          <p class="hold__label">Editorial hold - the link, not the summary</p>
+          <p>
+            Credibility here is not won by claiming it. It is won by a visible, dated record of
+            defects closed and guards added. That public record does not exist yet, so this section
+            has nothing to link, and the content plan says to link it rather than summarise it.
+          </p>
+          <p><b>Source:</b> <code>landing-page.yaml</code> &rarr;
+            <code>provenance.the_hard_part</code> and its <code>needs-page</code> evidence entry.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 11 ECOSYSTEM                                                          -->
+<!-- ===================================================================== -->
+<section class="band" id="ecosystem">
+  <div class="wrap">
+    <p class="eyebrow"><b>11</b> Shape</p>
+    <h2 class="section-title">A library on the JVM, not a sidecar.</h2>
+    <p class="lede">
+      Core, Vert.x, Reactor and Mutiny engines, with Kafka Streams and Connect integrations on the
+      roadmap. No extra process to deploy, monitor or version.
+    </p>
+    <div class="grid" style="margin-top: var(--sp-6)">
+      <div class="card"><h3>Core</h3><p>The engine, and the only thing the others depend on.</p></div>
+      <div class="card"><h3>Vert.x</h3><p>For processing that uses Vert.x asynchronous APIs.</p></div>
+      <div class="card"><h3>Reactor</h3><p>For processing that uses Project Reactor.</p></div>
+      <div class="card"><h3>Mutiny</h3><p>For processing that uses SmallRye Mutiny.</p></div>
+    </div>
+    <p class="source"><b>Source.</b> <code>docs/data/module-maturity.yaml</code> - the per-module
+      maturity, minimum Java version and support posture are published there.</p>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 12 ROADMAP                                                            -->
+<!-- ===================================================================== -->
+<section class="band band--sunk" id="roadmap">
+  <div class="wrap">
+    <p class="eyebrow"><b>12</b> Roadmap</p>
+    <h2 class="section-title">Not shipped. Coming.</h2>
+    <p class="lede" style="margin-bottom: var(--sp-6)">
+      Everything in this section is roadmap, and nothing from it appears anywhere else on this page.
+    </p>
+    <div class="roadmap-grid">
+      <div class="roadmap-item">
+        <span class="tag tag--iris">roadmap</span>
+        <h3>Concurrency that finds its own ceiling</h3>
+        <p>Feedback-driven, internal and external scaling as one loop.</p>
+      </div>
+      <div class="roadmap-item">
+        <span class="tag tag--iris">roadmap</span>
+        <h3>The same engine from other languages</h3>
+      </div>
+      <div class="roadmap-item">
+        <span class="tag tag--iris">roadmap</span>
+        <h3>See what a running instance is actually doing</h3>
+      </div>
+      <div class="roadmap-item">
+        <span class="tag tag--iris">roadmap</span>
+        <h3>A dead letter queue for records that cannot succeed</h3>
+      </div>
+    </div>
+    <p class="source"><b>Source.</b> <code>docs/data/roadmap.yaml</code></p>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 13 QUICKSTART                                                         -->
+<!-- ===================================================================== -->
+<section class="band" id="quickstart">
+  <div class="wrap">
+    <p class="eyebrow"><b>13</b> Quickstart</p>
+    <div class="split split--narrow-first">
+      <div class="final-cta">
+        <h2 class="section-title">Add it to a consumer you already have.</h2>
+        <p class="lede">One dependency, one builder, one lambda.</p>
+        <div class="hero__ctas">
+          <a class="btn btn--primary" href="https://github.com/astubbs/parallel-consumer" rel="noopener">Read the docs</a>
+        </div>
+        <div class="hold" style="margin-top: var(--sp-6)">
+          <p class="hold__label">Editorial hold - version</p>
+          <p>
+            The content plan requires this snippet to be executable verbatim and tested. It is built
+            from the repository&rsquo;s own compiled example
+            (<code>parallel-consumer-examples/&hellip;/CoreApp.java</code>) and the coordinates in
+            <code>README.adoc</code>, with two deliberate edits: the producer is dropped, because
+            <code>ParallelConsumerOptions</code>&rsquo;s javadoc says the consumer is the only
+            required option, and the example&rsquo;s third-party <code>of(&hellip;)</code> becomes
+            <code>singletonList(&hellip;)</code> so nothing outside the JDK is needed to paste it.
+            <b>The version shown is the release in preparation</b> - confirm the current published
+            version on Maven Central, and compile this snippet as written, before the page goes live.</p>
+        </div>
+      </div>
+      <div class="stack-lg">
+        <div class="codeblock">
+          <div class="codeblock__head"><span>pom.xml</span><span>Maven Central</span></div>
+          <pre><code><span class="tok-tag">&lt;dependency&gt;</span>
+    <span class="tok-tag">&lt;groupId&gt;</span>bz.stub.parallelconsumer<span class="tok-tag">&lt;/groupId&gt;</span>
+    <span class="tok-tag">&lt;artifactId&gt;</span>parallel-consumer-core<span class="tok-tag">&lt;/artifactId&gt;</span>
+    <span class="tok-tag">&lt;version&gt;</span>0.6.0.0<span class="tok-tag">&lt;/version&gt;</span>
+<span class="tok-tag">&lt;/dependency&gt;</span></code></pre>
+        </div>
+        <div class="codeblock">
+          <div class="codeblock__head"><span>CoreApp.java</span><span>Java</span></div>
+          <pre><code><span class="tok-com">// import static ...ParallelConsumerOptions.ProcessingOrder.KEY;
+// import static java.util.Collections.singletonList;</span>
+
+<span class="tok-com">// the consumer is the only required option</span>
+<span class="tok-key">var</span> options = <span class="tok-type">ParallelConsumerOptions</span>.&lt;String, String&gt;builder()
+        .ordering(KEY)
+        .maxConcurrency(<span class="tok-str">1000</span>)
+        .consumer(kafkaConsumer)
+        .build();
+
+<span class="tok-key">var</span> pc = <span class="tok-type">ParallelStreamProcessor</span>
+        .createEosStreamProcessor(options);
+
+pc.subscribe(singletonList(inputTopic));
+
+pc.poll(record -&gt;
+        log.info(<span class="tok-str">"Concurrently processing a record: {}"</span>, record)
+);</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="wrap site-foot__grid">
+    <div>
+      <h4>Parallel Consumer</h4>
+      <p>
+        A Java library for concurrent message processing from Apache Kafka with a single consumer,
+        keeping ordering guarantees by partition or key without raising partition counts.
+      </p>
+      <p style="margin-top: var(--sp-4)">
+        Apache-2.0. No analytics on this page, and no third-party requests of any kind.
+      </p>
+    </div>
+    <div>
+      <h4>Elsewhere</h4>
+      <ul>
+        <li><a href="https://github.com/astubbs/parallel-consumer" rel="noopener">Source</a></li>
+        <li><a href="https://github.com/astubbs/parallel-consumer/issues" rel="noopener">Issues</a></li>
+        <li><a href="https://www.apache.org/licenses/LICENSE-2.0" rel="noopener">Licence</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>On this page</h4>
+      <ul>
+        <li><a href="#offset-map">The offset map</a></li>
+        <li><a href="#admission-by-shard">Admission by shard</a></li>
+        <li><a href="#correctness">Correctness</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top: var(--sp-6); font-size: var(--fs-2xs); font-family: var(--ff-mono); color: var(--c-ink-3)">
+    KAFKA is a registered trademark of The Apache Software Foundation.
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

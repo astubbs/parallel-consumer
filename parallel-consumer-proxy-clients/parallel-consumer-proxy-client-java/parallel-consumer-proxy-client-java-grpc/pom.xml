@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-client-java</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java gRPC</name>
+    <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+
+    <!--
+        The gRPC transport: the shared API implemented over the RPC hop to the sidecar
+        (astubbs#242, docs/plans/2026-08-14-001-feat-language-proxy-plan.md - U29's spike; U25
+        makes it the reference implementation). It depends on the api module and the protocol
+        module (KTD34: engine and clients are both consumers of the protocol, which owns itself).
+
+        IT DEPENDS ON THE ENGINE IN NO SCOPE, AND THAT IS LOAD-BEARING RATHER THAN TIDY. A
+        test-scope dependency is still a reactor edge, so while the harness-backed conformance run
+        lived here, `-pl <any module wrapping this one> -am` built parallel-consumer-proxy - and
+        `bin/build.sh` opens with `clean`, so the routine build of a wrapper deleted the sidecar
+        jar every other language's conformance test spawns. That is why the Kotlin client reached
+        for the protocol module and reimplemented the session rather than wrapping this one. The
+        harness-backed conformance run now lives in the sibling harness module, which holds the
+        engine dependency for the whole JVM side; what is left here is the transport plus the
+        tests that need no engine. Before adding any dependency to this pom, check what it does to
+
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        which must not print parallel-consumer-proxy.
+    -->
+
+    <properties>
+        <!--
+            This module's real runtime floor is Java 17, and it must say so - the transport stack
+            requires it, exactly as the proxy module's own release.target comment explains at
+            length (the release level constrains platform API, not classpath reads, so a too-low
+            setting ships bytecode claiming a JVM it cannot run on).
+        -->
+        <release.target>17</release.target>
+
+        <!-- ${grpc.version} is NOT declared here. The generated stubs and this module's channel
+             runtime must agree on one gRPC version, and the root pom owns that single property for
+             every module that speaks the protocol. -->
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- the channel stack, matching the transport the proxy's feasibility gate cleared (shaded netty) -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <!--
+            TestConventionRules, the shared ArchUnit rule library. Core's test-jar is the only
+            engine-side artifact this module touches, and it is not the hazardous one: core is
+            already in the reactor of anything that reaches the protocol module, whereas
+            parallel-consumer-proxy is not.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+            commons-lang3, and test scope is not transitive, so relying on core to supply it here
+            would break the moment core stopped using it.
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

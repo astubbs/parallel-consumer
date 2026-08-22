@@ -1,0 +1,45 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The Rust client for the Parallel Consumer language proxy (astubbs#242). Wave one: connect,
+# Configure, one Dispatch wave, the user's function, the report, and a clean shutdown. The pom.xml
+# beside this file wraps the crate into the Maven reactor under -Dpc.foreignClients; an ordinary
+# Maven build runs no Rust toolchain at all.
+
+[package]
+name = "parallel-consumer-proxy-client"
+version = "0.1.0"
+edition = "2021"
+# 1.75 is the floor the surface actually needs: `impl Future` in return position in a trait (RPITIT)
+# is what lets RecordProcessor be async without boxing every invocation.
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "Rust client for the Parallel Consumer proxy: key-ordered concurrent Kafka processing, in Rust, with the engine in a sidecar"
+repository = "https://github.com/astubbs/parallel-consumer"
+# Publishing to crates.io is a later wave of the plan, and a half-implemented protocol client must
+# not be installable by an unsuspecting user in the meantime.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The narrow slice of gRPC the protocol specification permits: one bidirectional stream, an ordinary
+# host:port authority, no TLS, no interceptors, no load balancing, no xDS.
+tonic = "0.14"
+# tonic 0.14 split its prost integration out of the core crate; the generated code names
+# tonic_prost::ProstCodec, so this is not optional even though nothing here calls it directly.
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tokio = { version = "1", features = ["rt", "sync", "time", "process", "io-util", "macros"] }
+# Multi-consumer queues, twice over: the dispatch queue is one producer (the transport task) and
+# executor_count consumers, which tokio::sync::mpsc cannot express, and bounded try_send is exactly
+# the overflow-is-a-protocol-violation shape the queue rules ask for.
+async-channel = "2"
+thiserror = "2"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "io-util"] }

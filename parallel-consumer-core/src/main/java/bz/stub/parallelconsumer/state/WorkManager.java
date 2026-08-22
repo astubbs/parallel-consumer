@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.Timer;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
@@ -21,6 +22,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static java.lang.Boolean.TRUE;
@@ -62,8 +64,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private final DynamicLoadFactor dynamicLoadFactor;
 
-    @Getter
-    private int numberRecordsOutForProcessing = 0;
+    /**
+     * Atomic because the direct-pull engine increments this from every worker thread as it takes its own work, while
+     * the control loop still decrements it on return. It gates the broker poller, so drift in it stalls the consumer
+     * while it still looks alive - see {@link #isSufficientlyLoaded()}. Under the default engine only the control
+     * loop touches it and a plain {@code int} would do.
+     */
+    private final AtomicInteger numberRecordsOutForProcessing = new AtomicInteger();
+
     private PCModule<K, V> module;
     /**
      * Useful for testing
@@ -75,6 +83,21 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private Gauge inflightRecordsNumberGauge;
     private Map<TopicPartition, Counter> succeededRecordsCounters = new HashMap<>();
     private Map<TopicPartition, Counter> failedRecordsCounters = new HashMap<>();
+
+    /**
+     * How long each record spent inside Parallel Consumer, from arrival to the controller finishing with it.
+     * <p>
+     * <b>One timer for the whole consumer, deliberately NOT tagged by topic-partition</b>, unlike the two
+     * counters above. Two reasons, and the second is the binding one. A percentile histogram per partition is a
+     * far heavier meter than a counter - an instance assigned a hundred partitions would carry a hundred of
+     * them. And percentiles cannot be merged after the fact: per-partition timers can never be combined into a
+     * consumer-wide p99, whereas an operator hunting a slow partition still has the per-partition counters and
+     * offset gauges to narrow it with. A per-partition breakdown, if it is ever wanted, has to be an additional
+     * meter rather than a re-tagging of this one.
+     *
+     * @see WorkContainer#getResidenceTime()
+     */
+    private Timer recordResidenceTimer;
 
     private final PCMetrics pcMetrics;
 
@@ -155,7 +178,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     getNumberRecordsOutForProcessing(),
                     getNumberOfIncompleteOffsets());
         }
-        numberRecordsOutForProcessing += work.size();
+        numberRecordsOutForProcessing.addAndGet(work.size());
         return work;
     }
 
@@ -163,6 +186,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         log.trace("Work success ({}), removing from processing shard queue", wc);
 
         incrementCounterIfPresent(succeededRecordsCounters, wc.getTopicPartition());
+        recordResidenceTime(wc);
 
         wc.endFlight();
 
@@ -173,7 +197,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // notify listeners
         successfulWorkListeners.forEach(c -> c.accept(wc));
 
-        numberRecordsOutForProcessing--;
+        numberRecordsOutForProcessing.decrementAndGet();
     }
 
     /**
@@ -188,10 +212,39 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     public void onFailureResult(WorkContainer<K, V> wc) {
         // error occurred, put it back in the queue if it can be retried
         incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
+        recordResidenceTime(wc);
         wc.endFlight();
         pm.onFailure(wc);
         sm.onFailure(wc);
-        numberRecordsOutForProcessing--;
+        numberRecordsOutForProcessing.decrementAndGet();
+    }
+
+    /**
+     * Work returned with no verdict at all - neither succeeded nor failed. Reached when the process holding a
+     * record goes away before reporting on it: the record has to go back into scheduling without the return
+     * counting as a processing attempt.
+     * <p>
+     * Deliberately not {@link #onFailureResult}: that increments the failure counter, records failure history
+     * against the partition, and queues a retry the record never earned. The only thing shared is the in-flight
+     * bookkeeping, which must net out exactly - {@link #numberRecordsOutForProcessing} gates the broker poller,
+     * and drift in it stalls the consumer silently while it still looks alive.
+     * <p>
+     * Not an entry point. Engines mark the delivery with {@link WorkContainer#markAbandoned(long)} and hand the
+     * container back through {@link #handleFutureResult}, which owns the superseded-delivery and revoked-partition
+     * checks. Calling this directly skips both, and an increment landing on a revoked shard is never swept.
+     */
+    void onAbandonedResult(WorkContainer<K, V> wc) {
+        if (wc.isNotInFlight()) {
+            log.warn("Abandoned work is not in flight, ignoring the return {}", wc);
+            return;
+        }
+
+        log.debug("Work returned without a verdict, returning to scheduling {}", wc);
+
+        recordResidenceTime(wc);
+        wc.endFlight();
+        sm.onAbandoned(wc);
+        numberRecordsOutForProcessing.decrementAndGet();
     }
 
     public long getNumberOfIncompleteOffsets() {
@@ -233,20 +286,42 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        long awaitingSelection = getNumberOfWorkQueuedInShardsAwaitingSelection();
-        long outForProcessing = getNumberRecordsOutForProcessing();
+        long workable = getNumberOfWorkableRecordsInSystem();
         long threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
-        boolean loaded = (awaitingSelection + outForProcessing) > threshold;
-        // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while no
-        // records are actually flowing, the poller never resumes and the PC stalls. A high outForProcessing with
-        // no awaitingSelection and no real progress is the numberRecordsOutForProcessing counter-drift signature.
+        boolean loaded = workable > threshold;
+        // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while
+        // no records are actually flowing, the poller never resumes and the PC stalls. Because the figure below is
+        // derived by conservation, "stays true with nothing flowing" now means records really are being held and not
+        // finished with - a leak in the shards - rather than possibly just a counter that has drifted.
         // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled()) {
-            log.debug("isSufficientlyLoaded={} (awaitingSelection={} + outForProcessing={} = {} vs target({})*loadingFactor({})={})",
-                    loaded, awaitingSelection, outForProcessing, awaitingSelection + outForProcessing,
+            log.debug("isSufficientlyLoaded={} (inShards={} - parkedForRetry={} = {} vs target({})*loadingFactor({})={})",
+                    loaded, sm.getNumberOfRecordsInShards(), sm.getNumberOfRecordsParkedForRetry(), workable,
                     options.getTargetAmountOfRecordsInFlight(), getLoadingFactor(), threshold);
         }
         return loaded;
+    }
+
+    /**
+     * How many records the system is holding that it can actually make progress on - the figure that gates record
+     * intake from the broker.
+     * <p>
+     * <b>Derived by conservation, not counted.</b> The gate only ever wanted the <em>sum</em> of "queued in shards"
+     * and "out for processing", never the split, and that sum is simply "records inside the system": everything
+     * admitted from the broker that has not yet been finished with. {@link ShardManager} keeps that as
+     * {@code admitted - retired} over the one collection that holds the records, which is why it cannot drift the
+     * way the two separately-maintained counters it replaces could - a defect the previous implementation
+     * acknowledged with a clamp on one of them.
+     * <p>
+     * Records waiting out a retry delay are excluded: they occupy the buffer but no amount of worker capacity can
+     * advance them, so a consumer whose whole buffer is in back-off should keep fetching rather than idle.
+     * <p>
+     * The one thing this does <em>not</em> count, which the old expression did, is a record whose partition was
+     * revoked while it was still out at a worker. That record has been dropped from the shards and its result will
+     * be discarded on return, so counting it as loaded only ever delayed a fetch.
+     */
+    public long getNumberOfWorkableRecordsInSystem() {
+        return sm.getNumberOfRecordsInShards() - sm.getNumberOfRecordsParkedForRetry();
     }
 
     private int getLoadingFactor() {
@@ -255,6 +330,20 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public boolean workIsWaitingToBeProcessed() {
         return sm.workIsWaitingToBeProcessed();
+    }
+
+    /**
+     * @see ShardManager#getUpperBoundOnSelectableWork()
+     */
+    public long getUpperBoundOnSelectableWork() {
+        return sm.getUpperBoundOnSelectableWork();
+    }
+
+    /**
+     * @return the number of records currently handed out for processing and not yet returned
+     */
+    public int getNumberRecordsOutForProcessing() {
+        return numberRecordsOutForProcessing.get();
     }
 
     public boolean hasWorkInFlight() {
@@ -269,6 +358,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
     }
 
+    /**
+     * @see ShardManager#getNumberOfRecordsInShards()
+     */
+    public long getNumberOfRecordsInShards() {
+        return sm.getNumberOfRecordsInShards();
+    }
+
     public boolean hasIncompleteOffsets() {
         return pm.hasIncompleteOffsets();
     }
@@ -277,7 +373,21 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return sm.getNumberOfWorkQueuedInShardsAwaitingSelection() > 0;
     }
 
+    /**
+     * Control thread only. Results must reach here through the controller's mailbox rather than being applied on
+     * whichever thread finished the work: the decrements here have to be ordered against the partition and shard
+     * state they accompany, which is not thread safe, and {@link #numberRecordsOutForProcessing} gates the broker
+     * poller. The direct-pull engine changes only who *takes* work, never who returns it.
+     */
     public void handleFutureResult(WorkContainer<K, V> wc) {
+        // Must come before the stale-partition branch, which decrements unconditionally. An abandoned record is
+        // immediately re-selectable and the control loop re-selects in the same iteration it drains returns, so
+        // a late duplicate would otherwise end a live delivery's flight and decrement a second time.
+        if (wc.isReturnForSupersededDelivery()) {
+            log.debug("Ignoring a verdict-free return for a delivery that has already ended {}", wc);
+            return;
+        }
+
         // Third of the three staleness checkpoints - see PartitionState#epochIsStale for the scheme.
         // Work that went stale mid-flight never reaches onSuccessResult/onFailureResult, which is what
         // stops a returning stale result removing a FRESH container that replaced it at the same offset.
@@ -285,7 +395,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             // no op, partition has been revoked
             log.debug("Work result received, but from an old generation. Dropping work from revoked partition {}", wc);
             wc.endFlight();
-            this.numberRecordsOutForProcessing--;
+            this.numberRecordsOutForProcessing.decrementAndGet();
         } else {
             Optional<Boolean> userFunctionSucceeded = wc.getMaybeUserFunctionSucceeded();
             if (userFunctionSucceeded.isPresent()) {
@@ -294,6 +404,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 } else {
                     onFailureResult(wc);
                 }
+            } else if (wc.isAbandonedForCurrentDelivery()) {
+                onAbandonedResult(wc);
             } else {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");
             }
@@ -317,6 +429,26 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 this, WorkManager::getNumberOfWorkQueuedInShardsAwaitingSelection);
         inflightRecordsNumberGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.INFLIGHT_RECORDS,
                 this, WorkManager::getNumberRecordsOutForProcessing);
+        recordResidenceTimer = pcMetrics.getTimerFromMetricDef(PCMetricsDef.RECORD_RESIDENCE_TIME);
+    }
+
+    /**
+     * Records how long this record has been inside Parallel Consumer, at the moment the controller finishes with
+     * the delivery.
+     * <p>
+     * <b>Called from every outcome - success, failure and abandonment - not only success.</b> A record that is
+     * failing and being retried is precisely the case a residence-time metric exists to expose, and sampling only
+     * the successes would make the distribution look best exactly when the engine is doing worst.
+     * <p>
+     * The instant taken is the CONTROLLER's, not the worker's {@link WorkContainer#getSucceededAt()}. The hop
+     * from the worker's mailbox back to the control loop is Parallel Consumer's own queueing, so it belongs
+     * inside the number rather than outside it - and taking it here is the one point that is common to all three
+     * outcomes, two of which stamp no completion instant at all.
+     */
+    private void recordResidenceTime(WorkContainer<K, V> wc) {
+        if (recordResidenceTimer != null) {
+            recordResidenceTimer.record(wc.getResidenceTime());
+        }
     }
 
     private void initTopicPartitionSpecificMetrics(Collection<TopicPartition> partitions) {

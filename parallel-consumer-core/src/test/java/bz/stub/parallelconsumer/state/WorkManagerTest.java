@@ -45,6 +45,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
@@ -593,8 +594,13 @@ public class WorkManagerTest {
         var records = ktu.generateRecords(i);
 
         var treeMap = new TreeMap<Long, WorkContainer<String, String>>();
+        // The class's own PCModuleTestEnv, not a mock of it. PCModuleTestEnv is already a test double
+        // with a working MutableClock; mocking it stubbed that clock out to null, which went unnoticed
+        // only while nothing in WorkContainer's constructor read the module. Stamping the arrival
+        // instant does read it, and every sibling test that mocks PCModule for this purpose stubs
+        // clock() by hand - see ShardManagerTest#retryQueueOrdering. The real one needs no stubbing.
         for (ConsumerRecord<String, String> record : records) {
-            treeMap.put(record.offset(), new WorkContainer<>(0, record, mock(PCModuleTestEnv.class)));
+            treeMap.put(record.offset(), new WorkContainer<>(0, record, module));
         }
 
         // read back, assert correct order
@@ -772,6 +778,424 @@ public class WorkManagerTest {
         works = wm.getWorkIfAvailable(maxWorkToGet);
         assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection()).isEqualTo(total - works.size());
 
+    }
+
+
+    // -----------------------------------------------------------------------------------------------------
+    // Verdict-free work return (astubbs#242) - a record can go back to scheduling with no verdict at all,
+    // without the return counting as a processing attempt. Used by external engines when the process holding
+    // a record disappears before reporting on it.
+    // -----------------------------------------------------------------------------------------------------
+
+    /**
+     * Returns work through the real dispatch path rather than calling the result handler directly, so the
+     * branch selection in {@link WorkManager#handleFutureResult} is what is under test.
+     */
+    private void abandon(WorkContainer<String, String> wc) {
+        wc.markAbandoned(wc.getDeliveryCount());
+        wm.handleFutureResult(wc);
+    }
+
+    private void setupUnordered() {
+        setupWorkManager(ParallelConsumerOptions.builder().ordering(UNORDERED).build());
+    }
+
+    @Test
+    void abandonedWorkBecomesSelectableAgain() {
+        setupUnordered();
+        registerSomeWork();
+
+        var taken = wm.getWorkIfAvailable(1);
+        assertThat(taken).hasSize(1);
+        var wc = taken.get(0);
+
+        abandon(wc);
+
+        var retaken = wm.getWorkIfAvailable(1);
+        assertThat(retaken)
+                .as("work returned without a verdict is immediately selectable again - it earned no retry delay")
+                .hasSize(1);
+        assertThat(retaken.get(0).offset()).isEqualTo(wc.offset());
+    }
+
+    @Test
+    void abandoningDoesNotConsumeARetryAttempt() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        assertThat(wc.getNumberOfFailedAttempts()).isEqualTo(0);
+
+        abandon(wc);
+
+        assertThat(wc.getNumberOfFailedAttempts())
+                .as("a dropped connection is not a processing attempt")
+                .isEqualTo(0);
+        assertThat(wc.getLastFailedAt()).isEmpty();
+    }
+
+    /**
+     * Covers AE9: a worker killed while holding a record on its second attempt must see that record redelivered
+     * still reporting one prior failure, not two.
+     */
+    @Test
+    void abandonAfterAPriorFailureKeepsTheAttemptCount() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        fail(wc);
+        assertThat(wc.getNumberOfFailedAttempts()).isEqualTo(1);
+
+        advanceClockByDelay();
+        var retaken = wm.getWorkIfAvailable(1);
+        assertThat(retaken).hasSize(1);
+        var second = retaken.get(0);
+        assertThat(second.offset()).isEqualTo(wc.offset());
+
+        abandon(second);
+
+        assertThat(second.getNumberOfFailedAttempts())
+                .as("attempt count is unchanged by a verdict-free return")
+                .isEqualTo(1);
+
+        // Without clearing the stale verdict on redelivery, this record still carries
+        // maybeUserFunctionSucceeded == false from its earlier failure, takes the failure path, and lands in the
+        // retry queue behind a delay it never earned - so it would NOT be selectable here.
+        var third = wm.getWorkIfAvailable(1);
+        assertThat(third)
+                .as("selectable immediately - an abandoned record earns no retry delay, even after a prior failure")
+                .hasSize(1);
+        assertThat(third.get(0).getNumberOfFailedAttempts())
+                .as("redelivered still reporting one prior failure, not two")
+                .isEqualTo(1);
+    }
+
+    /**
+     * The in-flight counter gates the broker poller. Drift in it stalls the consumer silently while it still
+     * looks alive, so this asserts the exact number rather than merely that work keeps flowing.
+     */
+    @Test
+    void abandonReturnsTheInFlightCounterToItsPreviousValue() {
+        setupUnordered();
+        registerSomeWork();
+
+        long baseline = wm.getNumberRecordsOutForProcessing();
+        assertThat(baseline).isEqualTo(0);
+
+        var taken = wm.getWorkIfAvailable(2);
+        assertThat(taken).hasSize(2);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(2);
+
+        abandon(taken.get(0));
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("exactly one decrement per abandoned record")
+                .isEqualTo(1);
+
+        abandon(taken.get(1));
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("counter is back to where it started, with no work lost")
+                .isEqualTo(baseline);
+    }
+
+    @Test
+    void aDuplicateReturnAfterRedeliveryIsIgnored() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        abandon(wc);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(0);
+
+        // The control loop drains returns and re-selects in the same iteration, so by the time a duplicate
+        // arrives the record is live again on a later delivery.
+        var redelivered = wm.getWorkIfAvailable(1);
+        assertThat(redelivered).hasSize(1);
+        assertThat(redelivered.get(0)).isSameAs(wc);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        // the late duplicate, carrying the delivery it was actually raised for
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("the superseded return is ignored - it must not end the live delivery's flight")
+                .isEqualTo(1);
+        assertThat(wc.isInFlight())
+                .as("the live delivery is still in flight")
+                .isTrue();
+    }
+
+    @Test
+    void aSupersededReturnDoesNotOrphanTheAwaitingSelectionCount() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        abandon(wc);
+
+        var redelivered = wm.getWorkIfAvailable(1).get(0);
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        // the live delivery now completes normally
+        succeed(redelivered);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("counter nets out - a superseded return must not decrement")
+                .isEqualTo(0);
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("two of three records remain selectable; a superseded return must not orphan an increment")
+                .isEqualTo(2);
+    }
+
+    @Test
+    void aSupersededReturnOnARevokedPartitionDoesNotDecrement() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        abandon(wc);
+        var redelivered = wm.getWorkIfAvailable(1).get(0);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        // the partition goes away while the duplicate is still in flight
+        wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(0)));
+
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("the superseded check runs before the stale-partition branch, which decrements unconditionally")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void workWithNeitherVerdictNorAbandonMarkerStillThrows() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+
+        assertThatThrownBy(() -> wm.handleFutureResult(wc))
+                .as("an empty verdict with no abandon marker is still the bug it always was")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("without a success flag");
+    }
+
+    /**
+     * Covers AE15: every worker disconnecting is not an end-of-life signal. The returned records stay in
+     * scheduling rather than being dropped or retried.
+     */
+    @Test
+    void everyWorkerDisconnectingLeavesAllWorkInScheduling() {
+        setupUnordered();
+        registerSomeWork();
+
+        var taken = wm.getWorkIfAvailable(3);
+        assertThat(taken).hasSize(3);
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection()).isEqualTo(0);
+
+        // the whole fleet goes away without reporting on anything
+        taken.forEach(this::abandon);
+
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(0);
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("all three records are back awaiting selection, none discarded")
+                .isEqualTo(3);
+
+        var retaken = wm.getWorkIfAvailable(3);
+        assertThat(retaken)
+                .as("and all three are handed out again once a worker reconnects")
+                .hasSize(3);
+    }
+
+    /**
+     * Revoking a partition whose record is parked in retry back-off used to leave the shard's available-work
+     * counter permanently one too high: {@link ProcessingShard#remove(long)} only deducted for records that were
+     * {@code isAvailableToTakeAsWork()}, and a record waiting out a retry delay is not - even though
+     * {@link ProcessingShard#markAvailableAgain()} had already counted it. The retry queue entry, which is what
+     * cancels that increment out in
+     * {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()}, is removed on the same path, so the
+     * increment is left with nothing to offset it.
+     * <p>
+     * Drift in this direction is the one the clamp never caught, and it throttles record intake and can stop
+     * {@code drain()} from ever transitioning to closing.
+     */
+    @Test
+    void revokingARecordParkedInRetryBackoffLeavesNoPhantomAwaitingSelection() {
+        setupUnordered();
+        registerSomeWork();
+
+        var taken = wm.getWorkIfAvailable(3);
+        assertThat(taken).hasSize(3);
+
+        // one record parked in retry back-off, the rest gone
+        fail(taken.get(0));
+        succeed(taken.get(1));
+        succeed(taken.get(2));
+
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("the one surviving record is waiting out its retry delay, so nothing is selectable yet")
+                .isZero();
+
+        wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(0)));
+
+        assertThat(wm.getSm().sumOfShardAvailableCounters())
+                .as("the shard holds no records at all, so its raw available counter must be zero - not clamped to it")
+                .isZero();
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("the partition is gone; there is no record left anywhere to select")
+                .isZero();
+    }
+
+    /**
+     * The invariant the conservation figure exists to hold: {@code admitted - retired} must equal the number of
+     * records the shards are actually holding, after every way a record can arrive and every way it can leave.
+     * <p>
+     * A conservation figure is only as good as its enumeration of the departure paths - miss one and it leaks,
+     * with no clamp to catch it - so this drives all of them through {@link WorkManager} in one sequence:
+     * success, failure into retry back-off, retry redelivery, abandonment without a verdict, a stale sweep
+     * triggered by a partition being re-assigned underneath live work, a partition revocation that takes both a
+     * parked record and one still out at a worker, and the stale result that worker later hands back.
+     */
+    @Test
+    void theConservationFigureMatchesTheShardsThroughEveryKindOfDeparture() {
+        setupUnordered();
+
+        registerSomeWork(0);
+        registerSomeWork(1);
+
+        assertConservationHolds("after admitting two partitions' worth of records");
+        assertThat(wm.getNumberOfRecordsInShards()).isEqualTo(6);
+
+        var taken = wm.getWorkIfAvailable(6);
+        assertThat(taken).hasSize(6);
+        assertConservationHolds("with every record out at a worker");
+        assertThat(wm.getNumberOfRecordsInShards())
+                .as("selection is not a departure - the record is still the system's responsibility")
+                .isEqualTo(6);
+
+        var partitionZero = workOn(taken, 0);
+        var partitionOne = workOn(taken, 1);
+
+        // the ordinary departure
+        succeed(partitionZero.get(0));
+        assertConservationHolds("after a success");
+        assertThat(wm.getNumberOfRecordsInShards()).isEqualTo(5);
+
+        // failure parks the record for retry - it is still held, so still in the system
+        fail(partitionZero.get(1));
+        assertConservationHolds("after a failure");
+        assertThat(wm.getNumberOfRecordsInShards()).isEqualTo(5);
+
+        // returned with no verdict at all - immediately selectable again, also still held
+        abandon(partitionZero.get(2));
+        assertConservationHolds("after an abandonment");
+        assertThat(wm.getNumberOfRecordsInShards()).isEqualTo(5);
+
+        // the retry falls due and the abandoned record is selectable, so both go back out
+        advanceClockByDelay();
+        var redelivered = wm.getWorkIfAvailable(6);
+        assertThat(redelivered)
+                .as("the parked retry and the abandoned record are both selectable again")
+                .hasSize(2);
+        assertConservationHolds("after a retry redelivery");
+        assertThat(wm.getNumberOfRecordsInShards()).isEqualTo(5);
+
+        // partition 0 is re-assigned underneath its live work, bumping the epoch: everything still held for it
+        // is now stale and gets swept, including records that are out at a worker right now
+        assignPartition(0);
+        assertConservationHolds("after a stale sweep took records that were out at a worker");
+        assertThat(wm.getNumberOfRecordsInShards())
+                .as("both of partition 0's remaining records were swept as stale")
+                .isEqualTo(3);
+
+        // partition 1 goes away holding one successful record's worth of history, one parked retry and one
+        // record still out at a worker
+        succeed(partitionOne.get(0));
+        fail(partitionOne.get(1));
+        assertConservationHolds("before revoking partition 1");
+        assertThat(wm.getNumberOfRecordsInShards()).isEqualTo(2);
+
+        wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(1)));
+        assertConservationHolds("after a revocation that took a parked record and one out at a worker");
+        assertThat(wm.getNumberOfRecordsInShards())
+                .as("the revoked partition's records are gone, however they were being held")
+                .isZero();
+
+        // the worker finally reports on the record whose partition was revoked out from under it
+        wm.handleFutureResult(partitionOne.get(2));
+        assertConservationHolds("after a stale result was handed back");
+        assertThat(wm.getNumberOfRecordsInShards())
+                .as("the record was already retired at revocation - a stale return must not retire it twice")
+                .isZero();
+
+        var population = wm.getSm().getRecordPopulation();
+        assertThat(population.getAdmittedTotal())
+                .as("six records were admitted, once each")
+                .isEqualTo(6);
+        assertThat(population.getRetiredTotal())
+                .as("and every one of them was retired exactly once, by whichever path took it")
+                .isEqualTo(6);
+        assertThat(wm.getSm().sumOfShardAvailableCounters())
+                .as("the shards are empty, so the raw available counter must be exactly zero without a clamp")
+                .isZero();
+    }
+
+    /**
+     * The load gate reads the conservation figure, so it has to agree with the shards' real contents rather than
+     * with a counter that describes them - including in the revoke-a-parked-retry sequence that leaves the old
+     * available-work counter high.
+     */
+    @Test
+    void theLoadGateAgreesWithTheShardsAfterARevocation() {
+        setupUnordered();
+        registerSomeWork();
+
+        var taken = wm.getWorkIfAvailable(3);
+        fail(taken.get(0));
+        succeed(taken.get(1));
+        succeed(taken.get(2));
+
+        assertThat(wm.getNumberOfWorkableRecordsInSystem())
+                .as("one record is held, but parked in retry back-off, so it is not workable")
+                .isZero();
+
+        wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(0)));
+
+        assertConservationHolds("after revoking a partition holding a parked retry");
+        assertThat(wm.getNumberOfWorkableRecordsInSystem())
+                .as("nothing is held any more, so the poller must not be told the pipeline is loaded")
+                .isZero();
+        assertThat(wm.isSufficientlyLoaded())
+                .as("an empty system is never sufficiently loaded")
+                .isFalse();
+    }
+
+    /**
+     * Holds the O(1) conservation figure against an O(n) scan of what the shards actually contain. The two are
+     * deliberately computed by different means - if they can be made to disagree, the conservation figure has a
+     * departure path it does not know about.
+     */
+    private void assertConservationHolds(String stage) {
+        assertThat(wm.getNumberOfRecordsInShards())
+                .as("conservation figure (admitted - retired) vs a scan of the shards, %s", stage)
+                .isEqualTo(wm.getSm().countRecordsInShardsByScan());
+    }
+
+    private List<WorkContainer<String, String>> workOn(List<WorkContainer<String, String>> work, int partition) {
+        var onPartition = work.stream()
+                .filter(wc -> wc.getTopicPartition().partition() == partition)
+                .sorted(Comparator.comparingLong(WorkContainer::offset))
+                .collect(Collectors.toList());
+        assertThat(onPartition).hasSize(3);
+        return onPartition;
     }
 
 }

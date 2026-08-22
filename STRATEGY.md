@@ -85,7 +85,12 @@ have, without giving up the ordering guarantee Kafka gave them.
   sequential succeeded offset: the records processed that vanilla Kafka would still be waiting
   on. Derivable today from two existing gauges; not emitted as its own meter.
 - **End-to-end record latency, median and p99** - poll to completion, not just user function
-  time. Not measured today - `pc.user.function.processing.time` covers only part of it.
+  time. Emitted as `pc.record.residence.time`, with percentiles: from the record leaving the
+  consumer to Parallel Consumer finishing with it, retries and client-side queueing included,
+  produce time and broker wait excluded. It is the only meter that distinguishes records not yet
+  fetched from records fetched and queued. **Measuring it below saturation is still missing** -
+  the benchmark harness drains a pre-produced backlog, and at 100% utilisation this number
+  measures the backlog rather than the engine.
 - **Discovered concurrency vs sustainable ceiling** - does the engine find and hold its
   plateau? Regresses if the controller hunts, oscillates, or undershoots. Until the
   self-tuning controller ships, read as achieved fan-out vs configured max (partly derivable
@@ -135,6 +140,80 @@ server.
 
 _Why it serves the approach:_ A broker has to be generic; a library living inside your
 application does not. This is where the backflips are.
+
+### Other runtimes
+
+**An experiment.** One claim below has evidence behind it; the rest are things being tried. There is
+no third category, and nothing here predicts that it works. The v1 framing is: Parallel Consumer in
+other languages, plus some things we are trying.
+
+Parallel Consumer runs in a sidecar that hands records to an application's worker processes over a
+local RPC boundary, so runtimes that are not the JVM get key-ordered concurrency beyond partition
+count. **The wrapper is the layer, and Java is the degenerate case of it** - one client model in every
+language, with the Java case having one fewer hop underneath because it sits directly on the engine
+with no protobuf between.
+
+**The architectural claim, which is the part that is proven: our currency costs a version bump, and
+librdkafka's costs a reimplementation.** That is structural and permanent, because the boundary sits
+at the process edge rather than the language edge - every language reaches one Java client instead of
+each reimplementing a protocol.
+
+**And in the same breath, the qualifier: Parallel Consumer is not current with Kafka today.** The
+architecture *can* be current; the product is not yet. Only the first is proven. Catching up is close
+to a dependency bump for us, which is precisely the asymmetry the line above claims - but it has not
+been done, and writing the claim without this qualifier would be claiming the experiment's outcome as
+its premise.
+
+**Who it might fit, as an observation rather than a sizing:** a possibility for users who need to be
+more current than librdkafka is - the people who wanted KIP-848 early, or transactions when the C
+client was years behind, or who will want Share Groups first. That segment skews sophisticated, and
+sophisticated users are the ones most willing to run a sidecar, so the segment that needs the
+advantage is also the one that tolerates its cost.
+
+**Against Share Groups - measured 2026-08-22, and the throughput half went against us.**
+Acknowledgement here is local and commits are batched, where Share Groups acknowledge per message to
+the broker. That was written as "so per-record overhead should be lower". It is not, in the consumer:
+a bare `KafkaShareConsumer` with no Parallel Consumer in it at all ran **2.5x faster than PC's best
+arm** at 2ms of work per record. **The throughput argument against Share Groups should not be made.**
+
+**What survives is structural, and it is stronger than the number that fell.**
+
+- **A share consumer cannot get ahead of its own batch.** Neither acknowledgement mode allows polling
+  while records are unacknowledged - explicit throws, and implicit acknowledges records that have not
+  been processed, which is at-most-once delivery wearing an at-least-once label. So an honest share
+  processor is **batch-synchronous**: poll, finish the batch, poll again. Parallel Consumer keeps
+  records from many polls outstanding at once, which is what the offset encoding buys.
+- **So the result inverts as soon as work takes real time.** At 100ms per record PC wins by 14.5%,
+  holding 5,000 records in flight against the share arm's 2,606 - its batch. The 2.5x is a
+  per-record-overhead result at a near-zero handler, not a general one, and neither figure may be
+  quoted without the other.
+- **No per-key ordering, and no equivalent of one.** This is the differentiator, and it is a
+  capability Share Groups lack rather than a benchmark they lose.
+- **Retry semantics**, which stay broker-side there.
+- Acknowledgement also costs the broker about 48x what a batched encoded commit does per record.
+  Noted for completeness rather than as an argument - it is a real difference, but it accrues to the
+  cluster and is not the reason to choose either design.
+
+Numbers, method and bounds:
+[`docs/inflight/perf-share-groups-versus-pc-2026-08-22.md`](docs/inflight/perf-share-groups-versus-pc-2026-08-22.md).
+
+**Wrapping the core client APIs is a staged possibility, not a plan.** The sidecar already embeds a
+full Java Kafka client, so exposing consume, produce and admin over the same protocol would give every
+language the reference client rather than a reimplementation. It is not where to start: for a base
+client the per-record hop is proportionally large and C wins for embedded and edge, whereas for
+higher-level functionality the hop is noise against processing time. If it is ever picked up, admin
+goes first - pure request/response, low frequency, and where librdkafka wrappers are thinnest and
+currency bites hardest - then producer, and plain consumer last or never, being the API Parallel
+Consumer exists to replace. Start with the simplest subset that works without much thinking, and
+extend on evidence.
+
+**Earmarked, not adopted:** whether this is "Parallel Consumer for other languages" or "the Kafka
+client for other languages" is a question worth returning to, and the admin wrapper is the cheapest
+probe of whether the one-stop-shop framing actually pulls users.
+
+_Why it serves the approach:_ The client-side bet is that the queue belongs in the client. Nothing in
+that argument is about the JVM - but every implementation of it has been, which is a limit of the
+library rather than of the idea.
 
 ## Marketing
 

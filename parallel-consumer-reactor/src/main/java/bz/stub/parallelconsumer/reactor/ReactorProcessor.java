@@ -72,6 +72,12 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
      * <p>
      * Make sure that you do any work immediately in a Publisher / Flux - do not block this thread.
      * <p>
+     * A record is marked successful when its publisher <b>completes</b>, and failed when it <b>errors</b> - the items
+     * it emits along the way are yours, and the engine neither counts nor inspects them. So a publisher that emits
+     * nothing at all ({@link Mono#empty()}, a {@code Mono<Void>} from {@link Mono#fromRunnable(Runnable)}, a
+     * {@link reactor.core.publisher.Flux} that filters everything away) is a perfectly ordinary success, and one
+     * that emits many items still completes its record exactly once.
+     * <p>
      *
      * @param reactorFunction user function that takes a single record, and returns some type of Publisher to process
      *                        their work.
@@ -96,11 +102,25 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
             pollContext.streamWorkContainers()
                     .forEach(x -> x.setWorkType(REACTOR_TYPE));
 
+            // Completion is bound to the TERMINAL signal, not to onNext. A record's work is done when its
+            // publisher finishes, whether or not it produced anything - Mono.empty(), a Mono<Void> from
+            // Mono.fromRunnable(..), a Flux that filtered everything away. Wiring onComplete to the onNext
+            // consumer instead loses every such record: it is never completed, so it holds its in-flight slot
+            // forever, and once maxConcurrency slots are held the engine stops selecting work and the consumer
+            // stalls with no exception and nothing in the log. It also over-completes a publisher that emits
+            // more than once, decrementing the in-flight counter once per item.
+            // The Mutiny engine already has these semantics (MutinyProcessor#onRecord); the two engines are
+            // offered as interchangeable, so they must agree on what "produced no value" means.
             Disposable flux = Mono.fromCallable(() -> carefullyRun(reactorFunction, pollContext.getPollContext()))
                     .flatMapMany(it -> it)
                     .doOnNext(signal -> log.trace("doOnNext {}", signal))
                     .subscribeOn(getScheduler())
-                    .subscribe(ignore -> onComplete(pollContext), throwable -> onError(pollContext, throwable));
+                    .subscribe(
+                            // items are the user's business, not ours - already traced by doOnNext above
+                            ignored -> {
+                            },
+                            throwable -> onError(pollContext, throwable),
+                            () -> onComplete(pollContext));
 
             log.trace("asyncPoll - user function finished ok.");
             return UniLists.of(flux);

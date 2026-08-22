@@ -1,0 +1,26 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the protocol work ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-protocol
+    maturity: alpha
+    minimum_java: 17
+    reliability_confidence: >-
+      Provisional wire schema exercised by round-trip and unknown-field tests only; no engine or
+      client has carried a record over it yet.
+    api_expectation: >-
+      PROVISIONAL, deliberately: fields may be renamed, renumbered or deleted without ceremony
+      until the language-proxy plan's freeze unit (astubbs#242) completes and freezes the schema.
+      Do not build a client against it before the freeze.
+    support_posture: >-
+      Internal to the language-proxy work; not yet a client-facing contract and not supported for
+      external use.
+    evidence_id: proxy-protocol
+    tracking: astubbs#242
+    use_this_if: >-
+      You are working on the language proxy itself. Client authors should wait for the frozen
+      protocol specification.

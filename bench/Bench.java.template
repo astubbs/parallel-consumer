@@ -1,0 +1,1002 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import __PKG__.ParallelConsumerOptions;
+import __PKG__.ParallelEoSStreamProcessor;
+
+import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
+
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URL;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static com.github.tomakehurst.wiremock.client.WireMock.*;
+
+/**
+ * One measurement, against a broker and a dataset someone else already prepared.
+ *
+ * The point of the split is that a bisect runs this dozens of times: starting a broker and
+ * producing the dataset inside the measured process would put container startup and a few hundred
+ * thousand produces into every data point, and would also let the dataset differ between arms.
+ * Here the broker and topic are arguments, so every version in the sweep reads THE SAME BYTES from
+ * THE SAME BROKER, and the only thing that changes between runs is the classpath.
+ *
+ * Consumer group is fresh per run, so each run re-reads the topic from the beginning.
+ *
+ *   Bench produce  <bootstrap> <topic> <count>
+ *   Bench vanilla  <bootstrap> <topic> <count> <delayMs>
+ *   Bench pool     <bootstrap> <topic> <count> <delayMs> <concurrency>
+ *   Bench core     <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
+ *   Bench <engine> <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
+ *
+ * "core" drives ParallelEoSStreamProcessor directly; every other engine mode is an ExternalEngine
+ * and is reached through a {@link BenchArm}. Both kinds are needed because the two take DIFFERENT
+ * code paths through the control loop, and a result from one says nothing about the other.
+ *
+ * ENGINE ARMS LIVE IN SEPARATE FILES, and that is not decoration. This template must still compile
+ * against every published release in the version bisect, and the fork's Reactor, Mutiny and proxy
+ * engines do not all exist in those - Mutiny and the proxy exist in NO published release. An import
+ * of them here would fail the whole sweep at 0.3.0.2. So each engine's ~30 lines live in
+ * bench/arms/<Engine>Arm.java.template, this file names none of them, and run-bisect.sh compiles
+ * only the arms the modes being swept actually need. Mode "foo" resolves to class "FooArm" by
+ * convention; "pc" is a historical alias for "vertx", kept so every committed results file still
+ * reads back.
+ *
+ * Prints one machine-readable result line:
+ *
+ *   RESULT <mode> <count> <ms> <msgPerSec> peak=<maxInFlight> res=<p50/p99/p999/max> drain=<p50/p99/p999/max>
+ *
+ * peak is measured at the CALLEE - the stub for an HTTP arm, the simulated worker for the proxy - so
+ * it is what the engine actually had outstanding, not what it was configured to allow.
+ *
+ * res and drain are the two LATENCY measures, in milliseconds, and they answer different questions -
+ * see the latency section near the bottom of this file, which also says why they must not be read as
+ * corroborating one another. Either prints "-" when the arm cannot see it.
+ */
+public class Bench {
+
+    static WireMockServer stub;
+    static final AtomicInteger responses = new AtomicInteger();
+
+    /**
+     * Peak requests being served at once. This is the engine's ACTUAL in-flight count, observed from
+     * outside it, and it is the whole reason this harness can tell a throughput change from a
+     * dispatch-accounting change: an engine that ignores maxConcurrency looks fast for a reason that
+     * has nothing to do with being fast.
+     */
+    static final AtomicInteger inFlight = new AtomicInteger();
+    static final AtomicInteger peakInFlight = new AtomicInteger();
+
+    public static void main(String[] args) throws Exception {
+        String mode = args[0], bootstrap = args[1], topic = args[2];
+        int count = Integer.parseInt(args[3]);
+
+        if ("produce".equals(mode)) {
+            createTopic(bootstrap, topic);
+            produce(bootstrap, topic, count);
+            System.out.println("RESULT produce " + count + " 0 0");
+            return;
+        }
+
+        int delayMs = Integer.parseInt(args[4]);
+        int concurrency = args.length > 5 ? Integer.parseInt(args[5]) : 0;
+        int bufferSize = args.length > 6 ? Integer.parseInt(args[6]) : 0;
+        concurrencySetting = concurrency;
+        sizeLatencyRecorders(count);
+        // Fallback stamp for the engine arms, whose clocks live in their own files. runVanilla,
+        // runPool and runCore overwrite it with their own precise start a moment later, so only an
+        // arm reached through BenchArm carries this slightly-early one - and what it adds is the
+        // consumer construction, which the measured window already includes anyway.
+        runStartMs = System.currentTimeMillis();
+        long ms;
+        if ("vanilla".equals(mode)) {
+            startStub(delayMs, 8);
+            ms = runVanilla(bootstrap, topic, count);
+        } else if ("pool".equals(mode)) {
+            ms = runPool(bootstrap, topic, count, delayMs, concurrency);
+        } else if ("core".equals(mode)) {
+            ms = runCore(bootstrap, topic, count, delayMs, concurrency, bufferSize);
+        } else {
+            BenchArm arm = armFor(mode);
+            if (arm.usesSharedCallee()) startCallee(delayMs, concurrency);
+            ms = arm.run(bootstrap, topic, count, delayMs, concurrency, bufferSize);
+        }
+        System.out.printf("RESULT %s %d %d %.1f peak=%d res=%s drain=%s%n",
+                mode, count, ms, count * 1000.0 / ms, peakInFlight.get(),
+                residenceMillis(), drain.render());
+        if (stub != null) stub.stop();
+        if (asyncStubVertx != null) asyncStubVertx.close();
+        if (calleeVertx != null) calleeVertx.close();
+        System.exit(0);
+    }
+
+    /**
+     * Resolves a mode name to its engine arm, by convention: "reactor" -> {@code ReactorArm}.
+     * <p>
+     * Reflection is the whole point - see the class javadoc. A direct reference would drag every
+     * engine's types into this file, and this file has to compile against releases that do not have
+     * them. Failing here is a clear message rather than a NoClassDefFoundError, because the usual
+     * cause is a mode whose arm run-bisect.sh did not compile.
+     */
+    static BenchArm armFor(String mode) throws Exception {
+        // "pc" named the Vert.x arm before there was more than one engine arm; every committed
+        // results file uses it, so it stays an alias rather than becoming a renaming exercise.
+        String engine = "pc".equals(mode) ? "vertx" : mode;
+        String className = Character.toUpperCase(engine.charAt(0)) + engine.substring(1) + "Arm";
+        try {
+            return (BenchArm) Class.forName(className).getDeclaredConstructor().newInstance();
+        } catch (ClassNotFoundException absent) {
+            throw new IllegalArgumentException("no arm '" + className + "' for mode '" + mode
+                    + "' - run-bisect.sh compiles an arm only for the modes being swept", absent);
+        }
+    }
+
+    /**
+     * Starts whichever callee the run asked for, and this choice is the harness's single most
+     * consequential setting - see the two stubs' javadoc below.
+     */
+    static void startCallee(int delayMs, int concurrency) throws Exception {
+        if (timerCallee()) {
+            // Four threads, the same number bench/threads/AsyncCeiling.java used to hold 50,000 units
+            // in flight - so the control arm's callee is not a new unknown, it is that one.
+            calleeTimer = Executors.newScheduledThreadPool(4);
+            return;
+        }
+        if (asyncCallee()) {
+            startAsyncStub(delayMs);
+        } else {
+            startStub(delayMs, concurrency * 2);
+        }
+    }
+
+    /** Injected failures actually thrown, so a results row can show the rate was really applied. */
+    static final java.util.concurrent.atomic.AtomicLong injectedFailures = new java.util.concurrent.atomic.AtomicLong();
+
+    static java.util.concurrent.ScheduledExecutorService calleeTimer;
+    static io.vertx.core.Vertx calleeVertx;
+    static io.vertx.ext.web.client.WebClient calleeClient;
+
+    /** maxConcurrency for this run, so the shared client can be sized the way the engines size theirs. */
+    static int concurrencySetting;
+
+    /**
+     * One simulated unit of work, as a stage that completes when the callee answers - the SHARED user
+     * function of every arm this harness writes itself.
+     * <p>
+     * Shared on purpose: the Reactor and Mutiny arms must differ by their engine and by nothing else,
+     * and a second copy of "issue a request and hand back a future" is exactly how two arms quietly
+     * stop measuring the same thing. It never blocks the calling thread, which is the property under
+     * test - an arm that wrapped a blocking call here would be measuring the thread ceiling again.
+     * <p>
+     * In HTTP mode the in-flight count is taken AT THE STUB, so nothing is counted here; in timer mode
+     * there is no stub, so the counting is done here instead. Counting in both would double it.
+     * <p>
+     * <b>It always completes with a NON-NULL value, and that is load-bearing rather than tidy.</b>
+     * {@code ReactorProcessor} subscribes the user's publisher with an onNext consumer and no onComplete
+     * one, so a record is marked done by its FIRST EMITTED ITEM: a publisher that completes empty - a
+     * {@code Mono<Void>}, or a stage completing with null - never completes its record and stalls the
+     * run. See bench/arms/ReactorArm.java.template.
+     */
+    static java.util.concurrent.CompletionStage<Object> callCallee(int delayMs) {
+        if (calleeTimer != null) {
+            calleeEnter();
+            java.util.concurrent.CompletableFuture<Object> done = new java.util.concurrent.CompletableFuture<>();
+            calleeTimer.schedule(() -> { calleeExit(); done.complete(Boolean.TRUE); },
+                    delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return done;
+        }
+        return calleeClient().get(calleePort(), "localhost", "/").send()
+                .map(response -> (Object) response)
+                .toCompletionStage();
+    }
+
+    /**
+     * The shared non-blocking HTTP client, built on first use.
+     *
+     * IT IS THE SAME CLIENT THE VERT.X ARM USES, AND THAT IS THE WHOLE POINT. The Vert.x engine
+     * calls the stub through a Vert.x WebClient it builds itself, with maxPoolSize set to
+     * maxConcurrency (see VertxParallelEoSStreamProcessor). An arm using any other client is not
+     * comparable with it: the difference between two such arms is engine PLUS client, and nothing
+     * separates the two afterwards.
+     *
+     * The first version used {@code java.net.http}, which was a second unmeasured variable for no
+     * gain. It was also, briefly, blamed for something it did not do - see the note on the shutdown
+     * marker below, where the accusation was tested and refuted.
+     *
+     * Pool size is maxConcurrency, matching the engine's own client exactly: a smaller pool would
+     * queue requests inside the client and report the queue as the engine's ceiling.
+     *
+     * Its own Vertx instance, not the async stub's: the caller and the callee must not share event
+     * loops, or the arm measures a client and a server contending for the same threads.
+     */
+    static io.vertx.ext.web.client.WebClient calleeClient() {
+        if (calleeClient == null) {
+            calleeVertx = io.vertx.core.Vertx.vertx();
+            calleeClient = io.vertx.ext.web.client.WebClient.create(calleeVertx,
+                    new io.vertx.ext.web.client.WebClientOptions()
+                            .setMaxPoolSize(Math.max(concurrencySetting, 1))
+                            .setKeepAlive(true));
+        }
+        return calleeClient;
+    }
+
+    /** Whichever callee is running, for an arm that needs to address it. */
+    static int calleePort() {
+        return stub != null ? stub.port() : asyncStubPort;
+    }
+
+    /** True when the run asked for the thread-free callee. Arms with no HTTP callee honour it too. */
+    static boolean asyncCallee() {
+        return System.getenv("BENCH_ASYNC_STUB") != null;
+    }
+
+    /**
+     * BENCH_TIMER_CALLEE=1 replaces the arm's HTTP call with a bare timer - THE CONTROL THAT SEPARATES
+     * THE ENGINE FROM ITS HTTP CLIENT, and the reason this flag is worth its lines.
+     * <p>
+     * The async-stub finding left ~36% of the theoretical throughput unattributed and named the HTTP
+     * client's connection pool as a suspect nobody had configured deliberately
+     * (docs/inflight/perf-vertx-already-beats-the-thread-ceiling.md). With a timer callee there is no
+     * socket, no connection pool and no server at all: whatever in-flight ceiling remains belongs to
+     * the engine and to nothing else. A number taken this way is NOT comparable with an HTTP row -
+     * it is a control arm, and the results files record it as a separate callee column.
+     * <p>
+     * Only the arms whose user function this harness writes can honour it. The Vert.x arm's HTTP call
+     * is made by the engine's own API ({@code vertxHttpReqInfo}), so it has no timer form.
+     */
+    static boolean timerCallee() {
+        return System.getenv("BENCH_TIMER_CALLEE") != null;
+    }
+
+    /**
+     * Marks the end of the measured window on stderr, so run-bisect.sh can tell a failing arm from a
+     * finished one. EVERY arm calls it, immediately after stopping the clock and before any teardown.
+     *
+     * WHY IT HAS TO EXIST. Tearing the harness down closes the callee while the engine still has
+     * records out, so each of those fails and the engine logs it. That is unavoidable and harmless -
+     * the result was computed before any of it - but it is indistinguishable, in a log, from an arm
+     * that was failing and retrying THROUGHOUT the run, which is not harmless at all: PC retries a
+     * failed user function after a second by default, so a real failure rate turns a throughput
+     * measurement into a measurement of retry scheduling.
+     *
+     * THAT DISTINCTION WAS DRAWN THE WRONG WAY ONCE, WHICH IS WHY THIS IS HERE. Reactor and Mutiny
+     * came in far below Vert.x, stderr showed hundreds of "fail signal" stack traces, and the
+     * conclusion drawn was a retry storm. The control: run the same arm at concurrency 100 instead of
+     * 1,000. A storm scales with the run; a teardown artefact scales with what is in flight at the
+     * end. The count came back as exactly 100 - one per in-flight record, none before - so the storm
+     * was refuted and the engines are simply slower than Vert.x here.
+     *
+     * Everything after this marker is teardown. Only what precedes it is evidence about the run.
+     */
+    static void windowClosed() {
+        // Take the engine's residence percentiles HERE, not at print time. PCMetrics#close deregisters
+        // every meter it registered, and closeDrainFirst runs a few lines after this in each arm - so
+        // reading the registry after teardown finds nothing and reports a blank column, which is what
+        // the first run of this actually did. This method is already the one point every arm reaches
+        // between stopping its clock and touching anything, which is why the capture belongs in it.
+        residenceSnapshot = residenceFromPcMeter();
+        System.err.println("BENCH_WINDOW_CLOSED");
+    }
+
+    /** Records one unit of work arriving at a callee this harness implements itself. */
+    static void calleeEnter() {
+        int now = inFlight.incrementAndGet();
+        peakInFlight.accumulateAndGet(now, Math::max);
+    }
+
+    /** Records one unit of work leaving a callee this harness implements itself. */
+    static void calleeExit() {
+        inFlight.decrementAndGet();
+    }
+
+    /**
+     * An HTTP stub that holds NO THREAD for the duration of its delay.
+     * <p>
+     * The WireMock stub below is thread-per-request: its listener sleeps on a Jetty container thread,
+     * so serving N concurrent requests needs N sleeping platform threads - and platform threads stop
+     * scaling somewhere under 3,000 (bench/threads/ThreadCeiling.java). That makes it impossible to
+     * tell whether an engine reached its concurrency or the STUB refused to. Every Vert.x measurement
+     * taken against WireMock is capped by the harness, not by Parallel Consumer.
+     * <p>
+     * This one answers on a Vert.x timer: the response is registered to fire later and the event-loop
+     * thread returns immediately. A handful of threads serve any concurrency, so whatever ceiling is
+     * then observed belongs to the engine under test.
+     */
+    static io.vertx.core.Vertx asyncStubVertx;
+    static int asyncStubPort;
+
+    static void startAsyncStub(int delayMs) throws Exception {
+        asyncStubVertx = io.vertx.core.Vertx.vertx();
+        var latch = new java.util.concurrent.CountDownLatch(1);
+        asyncStubVertx.createHttpServer().requestHandler(req -> {
+            int now = inFlight.incrementAndGet();
+            peakInFlight.accumulateAndGet(now, Math::max);
+            if (delayMs <= 0) {
+                inFlight.decrementAndGet();
+                req.response().setStatusCode(200).end();
+            } else {
+                asyncStubVertx.setTimer(delayMs, id -> {
+                    inFlight.decrementAndGet();
+                    req.response().setStatusCode(200).end();
+                });
+            }
+        }).listen(0).onComplete(ar -> {
+            if (ar.succeeded()) asyncStubPort = ar.result().actualPort();
+            latch.countDown();
+        });
+        latch.await();
+        if (asyncStubPort == 0) throw new IllegalStateException("async stub failed to bind");
+    }
+
+    static void startStub(int delayMs, int threads) {
+        stub = new WireMockServer(WireMockConfiguration.wireMockConfig()
+                .dynamicPort().containerThreads(Math.max(threads, 6)));
+        stub.stubFor(get(urlPathEqualTo("/")).willReturn(aResponse()));
+        stub.addMockServiceRequestListener((rq, rs) -> {
+            int now = inFlight.incrementAndGet();
+            peakInFlight.accumulateAndGet(now, Math::max);
+            // workDelayMs, not delayMs: see the work model. Returns delayMs unchanged unless a
+            // distribution was configured, so a flat run is bit-for-bit the run it always was.
+            sleep(workDelayMs(delayMs));
+            inFlight.decrementAndGet();
+        });
+        stub.start();
+    }
+
+    static long runVanilla(String bootstrap, String topic, int expected) throws Exception {
+        URL url = URI.create("http://localhost:" + stub.port() + "/").toURL();
+        int seen = 0;
+        long start;
+        try (KafkaConsumer<String, String> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
+            c.subscribe(Collections.singletonList(topic));
+            start = System.currentTimeMillis();
+            runStartMs = start;
+            while (seen < expected) {
+                ConsumerRecords<String, String> poll = c.poll(Duration.ofSeconds(1));
+                // The arrival instant for every record in this batch: when the poll returned. That is
+                // the SAME definition Parallel Consumer's own residence timer uses, which is the only
+                // reason this arm's number may sit in the same column as a PC arm's.
+                long polledAt = System.currentTimeMillis();
+                for (Object ignored : poll) {
+                    blockingGet(url);
+                    recordCompletion(polledAt);
+                    if (++seen >= expected) break;
+                }
+            }
+        }
+        long took = System.currentTimeMillis() - start;
+        windowClosed();
+        return took;
+    }
+
+    /**
+     * Builds options, applying messageBufferSize only if this version has it.
+     * <p>
+     * Reflection rather than a direct call because the option does not exist in the older releases
+     * this harness also compiles against, and one template has to build for all of them.
+     */
+    static <K, V> ParallelConsumerOptions<K, V> options(KafkaConsumer<K, V> consumer,
+                                                        int concurrency, int bufferSize) throws Exception {
+        Object builder = ParallelConsumerOptions.<K, V>builder()
+                // An axis, because it changes what a SHARD IS and therefore what dispatch costs.
+                // UNORDERED and PARTITION shard by topic-partition, so a handful of shards each hold
+                // every in-flight record for their partition; KEY shards by record key, so a
+                // distinct-key workload gets one shard per record holding one entry. Same records,
+                // opposite data shape, and the dispatch scan walks one of them per pass.
+                .ordering(ParallelConsumerOptions.ProcessingOrder.valueOf(
+                        System.getenv("BENCH_ORDERING") == null ? "UNORDERED" : System.getenv("BENCH_ORDERING")))
+                .consumer(consumer)
+                .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
+                .maxConcurrency(concurrency);
+        if (bufferSize > 0) {
+            try {
+                builder.getClass().getMethod("messageBufferSize", int.class).invoke(builder, bufferSize);
+            } catch (NoSuchMethodException absent) {
+                System.err.println("NOTE: messageBufferSize not available in this version; ignored");
+            }
+        }
+        attachMeterRegistry(builder);
+        @SuppressWarnings("unchecked")
+        ParallelConsumerOptions<K, V> built =
+                (ParallelConsumerOptions<K, V>) builder.getClass().getMethod("build").invoke(builder);
+        return built;
+    }
+
+    /**
+     * The Java-side counterpart of the franz arm: a plain {@link KafkaConsumer}, a fixed thread pool,
+     * a semaphore capping in-flight work, a sleep, and a counter. NO ENGINE.
+     * <p>
+     * It exists because every PC-versus-anything comparison so far has confounded two things. PC
+     * reaches Kafka through the Java client; the Go arms reach it through franz-go. A gap between them
+     * is some mixture of client and engine, and until this arm existed nothing could separate the two
+     * on the Java side - so a PC number bounded PC and the Java client jointly, and any deficit was
+     * silently attributed to PC.
+     * <p>
+     * Whatever this scores is the JAVA CLIENT FLOOR at a given concurrency. Only what PC scores ABOVE
+     * that floor is attributable to PC's engine, and only what it scores BELOW it is PC's to answer
+     * for. Deliberately the same shape as bench/franz so the two are comparable: same in-flight cap,
+     * same sleep, same counting, no ordering guarantees and no offset tracking beyond what the plain
+     * consumer does on its own.
+     * <p>
+     * NOT a fair fight on features, and it is not meant to be - it makes no ordering promise, does no
+     * per-record completion tracking, and commits nothing. That is the point: it is a floor, not a
+     * competitor.
+     */
+    /**
+     * THE JAVA FLOOR. A plain consumer, a pool, a semaphore - no Parallel Consumer anywhere. Whatever
+     * this scores is what the Java client costs, and only what an engine scores ABOVE it is the
+     * engine's doing.
+     * <p>
+     * <b>{@code poolVirtual()} is why this arm matters twice.</b> The 2026-08-21 comparison against
+     * the franz-go floor put the Java client at 31-67% of the Go one - but it also recorded the Java
+     * arms plateauing near 2,848 records in flight where the Go floor reached exactly 5,000. That
+     * ~2,800 is the PLATFORM-THREAD CEILING, not a client property: the identical figure reappeared on
+     * 2026-08-22 with a different partition count and a different arm, with and without PC.
+     * <p>
+     * Goroutines are not platform threads, and virtual threads are Java's answer to that - so an
+     * unknown and possibly large share of the measured client gap may be a thread model rather than a
+     * protocol implementation. This arm run with {@code BENCH_POOL_VIRTUAL=1} changes ONE term - what
+     * a worker is - and the difference between the two runs is how much of the gap was never about Go.
+     */
+    static boolean poolVirtual() {
+        return System.getenv("BENCH_POOL_VIRTUAL") != null;
+    }
+
+    /**
+     * Reflective for the same reason {@code setupVirtualThreadWorkerPool} is: this template compiles
+     * against every released Parallel Consumer in a version bisect, on whatever JDK is present, and
+     * {@code Executors.newVirtualThreadPerTaskExecutor} is not on Java 8's API surface. Fails loudly
+     * rather than falling back to platform threads, because a silent fallback would make the two arms
+     * identical and the comparison meaningless.
+     */
+    static ExecutorService newVirtualPool() {
+        try {
+            return (ExecutorService) Executors.class.getMethod("newVirtualThreadPerTaskExecutor").invoke(null);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("BENCH_POOL_VIRTUAL needs a JDK 21+ java on PATH; this JVM is "
+                    + System.getProperty("java.version"), e);
+        }
+    }
+
+    static long runPool(String bootstrap, String topic, int expected, int delayMs, int concurrency)
+            throws Exception {
+        ExecutorService pool = poolVirtual() ? newVirtualPool() : Executors.newFixedThreadPool(concurrency);
+        // Caps work actually in progress at `concurrency`, so peak in-flight is comparable with the
+        // engine arms rather than being whatever the poll loop happened to hand over.
+        Semaphore permits = new Semaphore(concurrency);
+        AtomicInteger done = new AtomicInteger();
+        int submitted = 0;
+        long start;
+        try (KafkaConsumer<String, String> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
+            c.subscribe(Collections.singletonList(topic));
+            start = System.currentTimeMillis();
+            runStartMs = start;
+            while (submitted < expected) {
+                ConsumerRecords<String, String> polled = c.poll(Duration.ofSeconds(1));
+                // See runVanilla: poll-return is this arm's arrival instant, matching PC's.
+                long polledAt = System.currentTimeMillis();
+                for (Object ignored : polled) {
+                    if (submitted >= expected) break;
+                    submitted++;
+                    permits.acquire();
+                    pool.submit(() -> {
+                        int now = inFlight.incrementAndGet();
+                        peakInFlight.accumulateAndGet(now, Math::max);
+                        sleep(workDelayMs(delayMs));
+                        inFlight.decrementAndGet();
+                        recordCompletion(polledAt);
+                        done.incrementAndGet();
+                        permits.release();
+                    });
+                }
+            }
+            while (done.get() < expected) sleep(5);
+        }
+        long took = System.currentTimeMillis() - start;
+        windowClosed();
+        pool.shutdownNow();
+        return took;
+    }
+
+    /** The core engine, which does NOT go through ExternalEngine and its overrides. */
+    static long runCore(String bootstrap, String topic, int expected, int delayMs,
+                        int concurrency, int bufferSize) throws Exception {
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps(bootstrap));
+        ParallelEoSStreamProcessor<String, String> pc =
+                new ParallelEoSStreamProcessor<>(options(consumer, concurrency, bufferSize));
+        pc.subscribe(Collections.singletonList(topic));
+        responses.set(0);
+        long start = System.currentTimeMillis();
+        runStartMs = start;
+        // the parameter is deliberately unused, so this lambda compiles against both the old
+        // Consumer<ConsumerRecord> signature and the newer Consumer<PollContext> one
+        pc.poll(ctx -> {
+            int now = inFlight.incrementAndGet();
+            peakInFlight.accumulateAndGet(now, Math::max);
+            sleep(workDelayMs(delayMs));
+            inFlight.decrementAndGet();
+            // THROWN AFTER the work, not before: a user function that fails usually fails at the end,
+            // having already spent the time. Failing first would model a validation rejection, which
+            // is cheap and is not what stalls a partition.
+            if (workShouldFail()) {
+                injectedFailures.incrementAndGet();
+                throw new InjectedWorkFailure(now);
+            }
+            // Drain latency only. Residence for a PC arm comes off the engine's own meter, never from
+            // here: this instant is where the USER FUNCTION finished, which is the input to the
+            // measurement rather than its output.
+            recordCompletion(-1);
+            responses.incrementAndGet();
+        });
+        while (responses.get() < expected) sleep(25);
+        long took = System.currentTimeMillis() - start;
+        windowClosed();
+        try { pc.closeDrainFirst(); } catch (Exception ignored) { }
+        return took;
+    }
+
+    /**
+     * Partition count for the dataset topic, from BENCH_PARTITIONS, defaulting to 1.
+     * <p>
+     * It is an axis because it was a SUSPECT, and ruling it out is what made the real finding legible.
+     * At a 100ms delay and maxConcurrency 5,000, in-flight plateaued around 2,750; the first
+     * hypothesis was that one partition could not supply records fast enough. Ten partitions produced
+     * the same plateau to within 8%, so the limit is not the broker. Keeping it as a recorded axis
+     * matters anyway: a number taken at one partition and a number taken at ten are two different
+     * experiments, and printing them in the same table without the column is how a confound ships.
+     * <p>
+     * An environment variable rather than an argument because this template also compiles against
+     * releases whose argument list this harness does not control.
+     */
+    static int partitions() {
+        String v = System.getenv("BENCH_PARTITIONS");
+        return v == null || v.isEmpty() ? 1 : Integer.parseInt(v);
+    }
+
+    static void createTopic(String bootstrap, String topic) {
+        Properties p = new Properties();
+        p.put("bootstrap.servers", bootstrap);
+        try (Admin admin = Admin.create(p)) {
+            admin.createTopics(Collections.singletonList(new NewTopic(topic, partitions(), (short) 1))).all().get();
+        } catch (Exception e) {
+            // already there is fine - the dataset is produced once and reused
+        }
+    }
+
+    static void produce(String bootstrap, String topic, int n) throws Exception {
+        Properties p = new Properties();
+        p.put("bootstrap.servers", bootstrap);
+        p.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        p.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        p.put("linger.ms", "50");
+        p.put("batch.size", "65536");
+        List<Future<RecordMetadata>> sends = new ArrayList<>();
+        try (KafkaProducer<String, String> pr = new KafkaProducer<>(p)) {
+            for (int i = 0; i < n; i++) sends.add(pr.send(new ProducerRecord<>(topic, "key-" + i, "value-" + i)));
+        }
+        for (Future<RecordMetadata> f : sends) f.get();
+    }
+
+    static Properties consumerProps(String bootstrap) {
+        return consumerProps(bootstrap, "org.apache.kafka.common.serialization.StringDeserializer");
+    }
+
+    /**
+     * The same consumer for every arm, with only the deserializer varying.
+     * <p>
+     * The proxy engine is fixed at {@code byte[]} keys and values - it never deserializes, because a
+     * record's bytes cross the wire to be decoded in the worker's own language - so its arm needs a
+     * byte-array consumer. Everything else about the consumer must stay identical or the arms are not
+     * comparable, which is why this is one method with a parameter and not a second copy.
+     */
+    static Properties consumerProps(String bootstrap, String deserializer) {
+        Properties p = new Properties();
+        p.put("bootstrap.servers", bootstrap);
+        p.put("group.id", "bench-" + System.nanoTime());
+        p.put("auto.offset.reset", "earliest");
+        p.put("enable.auto.commit", "false");
+        // An axis, not a constant. At maxConcurrency 5,000 the engine's in-flight count plateaued
+        // near 2,700 regardless of partition count, which points at record INTAKE rather than at
+        // dispatch - and intake is bounded by how many records one poll can return. Overridable so
+        // that can be tested rather than assumed.
+        p.put("max.poll.records", System.getenv("BENCH_MAX_POLL_RECORDS") == null
+                ? "500" : System.getenv("BENCH_MAX_POLL_RECORDS"));
+        p.put("key.deserializer", deserializer);
+        p.put("value.deserializer", deserializer);
+        return p;
+    }
+
+    static void blockingGet(URL url) {
+        try {
+            HttpURLConnection c = (HttpURLConnection) url.openConnection();
+            c.setRequestMethod("GET");
+            c.getResponseCode();
+            c.disconnect();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // THE WORK MODEL. A fixed delay is the best possible case for a serial engine, and this harness
+    // measured nothing else until 2026-08-22.
+    //
+    // WHY THIS EXISTS. Kafka Streams runs one thread per partition, so a record that takes longer
+    // than usual adds its whole duration to the latency of every record behind it. With a CONSTANT
+    // delay there is no such record - every unit of work is identical, so there is no head of line to
+    // block, and a serial engine looks as good as a concurrent one. Real work is not constant: a GC
+    // pause, a compaction, an outsized payload or a rare expensive branch all produce a long tail,
+    // and the tail is the whole argument.
+    //
+    // So the delay becomes a DISTRIBUTION, and failures become a RATE. Both configurable, both off by
+    // default, so every figure taken before today still means what it meant.
+    //
+    //   BENCH_DELAY_STDDEV   normal distribution around delayMs with this standard deviation, in ms.
+    //                        Clamped at zero - a negative delay is not a thing.
+    //   BENCH_DELAY_P99      instead of a normal curve: this many ms for 1% of records, delayMs for
+    //                        the rest. A blunter instrument and a more honest model of the thing that
+    //                        actually hurts - one record in a hundred that takes 100x as long.
+    //   BENCH_FAILURE_RATE   fraction of user-function invocations that throw, 0.0 to 1.0. PC retries
+    //                        them; a serial engine stalls its partition for the retry delay too.
+    //
+    // DETERMINISTIC BY SEED, because a run that cannot be repeated cannot be compared.
+    // BENCH_WORK_SEED defaults to 42; every arm in a sweep therefore sees the SAME sequence of
+    // durations and the same failing offsets, which is what makes the comparison fair rather than
+    // merely similar.
+    static final long WORK_SEED = Long.getLong("bench.workSeed",
+            Long.parseLong(System.getenv().getOrDefault("BENCH_WORK_SEED", "42")));
+    static final double DELAY_STDDEV = Double.parseDouble(
+            System.getenv().getOrDefault("BENCH_DELAY_STDDEV", "0"));
+    static final int DELAY_P99 = Integer.parseInt(
+            System.getenv().getOrDefault("BENCH_DELAY_P99", "0"));
+    static final double FAILURE_RATE = Double.parseDouble(
+            System.getenv().getOrDefault("BENCH_FAILURE_RATE", "0"));
+
+    /** Per-record, so concurrent callers never contend on one Random and never share a sequence. */
+    static final ThreadLocal<java.util.Random> WORK_RANDOM =
+            ThreadLocal.withInitial(() -> new java.util.Random(WORK_SEED + Thread.currentThread().getId()));
+
+    /** True when nothing below is configured, so the constant-delay path stays exactly as it was. */
+    static boolean workModelIsFlat() {
+        return DELAY_STDDEV == 0 && DELAY_P99 == 0 && FAILURE_RATE == 0;
+    }
+
+    /**
+     * How long THIS record should take. The p99 switch wins over the normal curve when both are set,
+     * because the two model different things and silently blending them would produce a distribution
+     * nobody chose.
+     */
+    static int workDelayMs(int delayMs) {
+        if (workModelIsFlat()) return delayMs;
+        var rnd = WORK_RANDOM.get();
+        if (DELAY_P99 > 0) {
+            return rnd.nextDouble() < 0.01 ? DELAY_P99 : delayMs;
+        }
+        if (DELAY_STDDEV > 0) {
+            long d = Math.round(delayMs + rnd.nextGaussian() * DELAY_STDDEV);
+            return (int) Math.max(0, d);
+        }
+        return delayMs;
+    }
+
+    /** Whether this invocation should throw. Retries are the point: a serial engine stalls for them too. */
+    static boolean workShouldFail() {
+        return FAILURE_RATE > 0 && WORK_RANDOM.get().nextDouble() < FAILURE_RATE;
+    }
+
+    /** Thrown by the simulated user function, so a real bug is never mistaken for the injected rate. */
+    static class InjectedWorkFailure extends RuntimeException {
+        InjectedWorkFailure(long offset) {
+            super("bench: injected failure for offset " + offset + " at rate " + FAILURE_RATE);
+        }
+    }
+
+
+    // =============================================================================================
+    // LATENCY. Every figure this harness has ever produced is throughput, and throughput is the one
+    // number a serial engine can hide behind: a run that finishes in the same wall clock can have put
+    // one record in a hundred through a queue ten times as long, and nothing here would have shown it.
+    //
+    // TWO MEASURES, and they are NOT two views of one thing.
+    //
+    //   res=   RESIDENCE - poll-return to completion, per record. Read off Parallel Consumer's own
+    //          pc.record.residence.time meter for a PC arm, and measured the same way in this file for
+    //          the arms that have no PC. It is not derivable from throughput, because PC decides for
+    //          itself how much to fetch and how deep to buffer: residence is Little's law applied to
+    //          those buffers, so it is what separates "not fetched" from "fetched and queued".
+    //
+    //   drain= BACKLOG-DRAIN - engine start to completion, per record. The whole dataset is produced
+    //          before the run, so engine start is a valid common arrival instant for every record.
+    //          IT IS LARGELY THE THROUGHPUT NUMBER IN LATENCY UNITS - for a fixed record count it is
+    //          roughly position/throughput - so it must NOT be read as independent corroboration of a
+    //          residence figure. It is here because it is the honest measure for a real operational
+    //          situation the residence figure does not describe: a consumer restarting, or catching up
+    //          on lag, where what an operator feels is how long the whole backlog takes to clear.
+    //
+    // WHAT IS DELIBERATELY NOT DONE: residence is never approximated by timing the user function.
+    // The handler's own duration is the INPUT to this experiment - it is configured, by the work model
+    // below - so measuring it would be measuring the question rather than the answer.
+    //
+    // Arms with no Parallel Consumer report residence only if they can see the same two instants
+    // directly, which vanilla and pool can (poll-return, and the completion of the work). An arm that
+    // can see neither prints "-", because a blank column is recoverable and a number measured a
+    // different way is not.
+
+    /** Engine start, for the drain measure. Set by each arm as it starts its own clock. */
+    static volatile long runStartMs;
+
+    /** Backlog-drain latencies: completion minus engine start, one per completed record. */
+    static Latencies drain = new Latencies(0);
+
+    /** Residence, for the arms that have no Parallel Consumer to read it off. */
+    static Latencies benchResidence = new Latencies(0);
+
+    /**
+     * Sizes both recorders once the record count is known.
+     * <p>
+     * Four times the record count, because a run with an injected failure rate completes a record more
+     * than once and a fixed-size buffer that silently stopped recording would bias the distribution
+     * towards the early, uncontended part of the run - which is the direction that flatters.
+     */
+    static void sizeLatencyRecorders(int count) {
+        drain = new Latencies(count * 4);
+        benchResidence = new Latencies(count * 4);
+    }
+
+    /**
+     * One record finished. Records the drain latency always, and the residence latency when the caller
+     * knows this record's poll-return instant.
+     *
+     * @param polledAtMs when the poll that produced this record returned, or -1 when the arm cannot see
+     *                   it - which is every Parallel Consumer arm, whose residence comes off the engine
+     *                   meter instead.
+     */
+    static void recordCompletion(long polledAtMs) {
+        long now = System.currentTimeMillis();
+        drain.record(now - runStartMs);
+        if (polledAtMs >= 0) {
+            benchResidence.record(now - polledAtMs);
+        }
+    }
+
+    /**
+     * Exact percentiles over every sample, deliberately - no histogram, no bucketing, no estimate.
+     * <p>
+     * A few hundred thousand longs is nothing next to the dataset the run already holds, and sorting
+     * them once at the end costs milliseconds. Micrometer's histogram, which the residence figure has
+     * to come through for a PC arm, is accurate to about 3% at these magnitudes; these are accurate
+     * full stop, and the difference is worth having in a column that is compared across arms.
+     */
+    static final class Latencies {
+
+        private final long[] samples;
+        private final AtomicInteger next = new AtomicInteger();
+
+        Latencies(int capacity) {
+            this.samples = new long[Math.max(capacity, 0)];
+        }
+
+        void record(long millis) {
+            int i = next.getAndIncrement();
+            if (i < samples.length) {
+                samples[i] = millis;
+            }
+        }
+
+        int count() {
+            return Math.min(next.get(), samples.length);
+        }
+
+        /** @return "p50/p99/p999/max" in milliseconds, or "-" when this arm recorded nothing */
+        String render() {
+            int n = count();
+            if (n == 0) {
+                return "-";
+            }
+            long[] sorted = Arrays.copyOf(samples, n);
+            Arrays.sort(sorted);
+            return quantile(sorted, 0.50) + "/" + quantile(sorted, 0.99) + "/"
+                    + quantile(sorted, 0.999) + "/" + sorted[n - 1];
+        }
+
+        private static long quantile(long[] sorted, double q) {
+            int i = (int) Math.ceil(q * sorted.length) - 1;
+            return sorted[Math.min(Math.max(i, 0), sorted.length - 1)];
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Reading residence off Parallel Consumer's own meter.
+    //
+    // ENTIRELY REFLECTIVE, for the same reason the engine arms live in other files: this template
+    // compiles against 0.3.0.2, which has no Micrometer on its classpath at all, so an import of
+    // io.micrometer here would delete the version bisect. A release without ParallelConsumerOptions
+    // #meterRegistry simply reports "-" rather than failing, which is the honest outcome - the metric
+    // does not exist there.
+
+    static Object pcRegistry;
+
+    /**
+     * Gives Parallel Consumer a registry to publish into, if this version can take one.
+     * <p>
+     * The registry is configured with an expiry-widening filter FIRST, and that is not a detail. A
+     * Micrometer percentile histogram rotates its buckets on a timer, and its default keeps roughly the
+     * last 40 seconds: a probe recording 1,000 samples at 1,000ms, waiting 70 seconds and asking again
+     * reported a p50 of 4.98ms, having silently forgotten all of them, while its count still read
+     * 1,010. A run longer than that rotation would therefore publish percentiles for its tail alone,
+     * with nothing anywhere saying so. With the filter installed the same probe reported 1,006ms.
+     */
+    static void attachMeterRegistry(Object builder) {
+        pcRegistry = null;
+        try {
+            Class<?> registryType = Class.forName("io.micrometer.core.instrument.MeterRegistry");
+            java.lang.reflect.Method takesRegistry;
+            try {
+                takesRegistry = builder.getClass().getMethod("meterRegistry", registryType);
+            } catch (NoSuchMethodException absent) {
+                System.err.println("NOTE: ParallelConsumerOptions.meterRegistry not available in this "
+                        + "version; residence will be reported as '-'");
+                return;
+            }
+            Object registry = Class.forName("io.micrometer.core.instrument.simple.SimpleMeterRegistry")
+                    .getDeclaredConstructor().newInstance();
+            widenPercentileWindow(registry);
+            takesRegistry.invoke(builder, registry);
+            pcRegistry = registry;
+        } catch (Exception noMicrometer) {
+            System.err.println("NOTE: no Micrometer on this classpath (" + noMicrometer
+                    + "); residence will be reported as '-'");
+        }
+    }
+
+    /**
+     * Installs a MeterFilter widening every distribution's expiry to an hour with a single buffer, so
+     * no sample recorded during the run rotates out of the percentile view before it is read.
+     * <p>
+     * A dynamic proxy rather than a class, because MeterFilter cannot be named here. Its three methods
+     * are implemented explicitly rather than delegated to the interface defaults: InvocationHandler
+     * #invokeDefault needs a Java 16 compiler, and this template is compiled by whatever javac the
+     * machine running the sweep happens to have.
+     */
+    static void widenPercentileWindow(Object registry) throws Exception {
+        Class<?> configType = Class.forName(
+                "io.micrometer.core.instrument.distribution.DistributionStatisticConfig");
+        Object builder = configType.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("expiry", Duration.class).invoke(builder, Duration.ofHours(1));
+        builder.getClass().getMethod("bufferLength", Integer.class).invoke(builder, 1);
+        Object widened = builder.getClass().getMethod("build").invoke(builder);
+        java.lang.reflect.Method merge = configType.getMethod("merge", configType);
+
+        Class<?> filterType = Class.forName("io.micrometer.core.instrument.config.MeterFilter");
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        Class<? extends Enum> replyType = (Class<? extends Enum>) Class.forName(
+                "io.micrometer.core.instrument.config.MeterFilterReply");
+        Object filter = java.lang.reflect.Proxy.newProxyInstance(
+                filterType.getClassLoader(), new Class<?>[]{filterType}, (proxy, method, args) -> {
+                    switch (method.getName()) {
+                        case "configure":
+                            return merge.invoke(widened, args[1]);
+                        case "accept":
+                            return Enum.valueOf(replyType, "NEUTRAL");
+                        case "map":
+                            return args[0];
+                        case "toString":
+                            return "bench-widened-percentile-window";
+                        case "hashCode":
+                            return System.identityHashCode(proxy);
+                        case "equals":
+                            return proxy == args[0];
+                        default:
+                            throw new UnsupportedOperationException(
+                                    "MeterFilter gained a method this proxy does not implement: "
+                                            + method.getName());
+                    }
+                });
+
+        Object config = Class.forName("io.micrometer.core.instrument.MeterRegistry")
+                .getMethod("config").invoke(registry);
+        config.getClass().getMethod("meterFilter", filterType).invoke(config, filter);
+    }
+
+    /**
+     * @return "p50/p99/p999/max" residence in milliseconds, or "-" when this arm cannot see it
+     */
+    static String residenceMillis() {
+        if (residenceSnapshot != null) {
+            return residenceSnapshot;
+        }
+        // vanilla and pool, which measure poll-return to completion in this file
+        return benchResidence.render();
+    }
+
+    /** The engine's residence percentiles, taken at {@link #windowClosed()} before teardown. */
+    static String residenceSnapshot;
+
+    /** The meter Parallel Consumer publishes; see PCMetricsDef.RECORD_RESIDENCE_TIME. */
+    static final String RESIDENCE_METER = "pc.record.residence.time";
+
+    /**
+     * @return the engine's residence percentiles, or null when this version publishes no such meter -
+     *         which is every release before the fork added it, and is why this returns null rather
+     *         than throwing
+     */
+    static String residenceFromPcMeter() {
+        if (pcRegistry == null) {
+            return null;
+        }
+        try {
+            // Every method is looked up on the PUBLIC interface rather than on the implementation
+            // class: SimpleMeterRegistry's timers are package-private, so a Method taken from
+            // getClass() would look up fine and then fail to invoke.
+            Class<?> meterType = Class.forName("io.micrometer.core.instrument.Meter");
+            Class<?> idType = Class.forName("io.micrometer.core.instrument.Meter$Id");
+            Class<?> histogramSupport = Class.forName(
+                    "io.micrometer.core.instrument.distribution.HistogramSupport");
+            java.lang.reflect.Method getId = meterType.getMethod("getId");
+            java.lang.reflect.Method getName = idType.getMethod("getName");
+            java.lang.reflect.Method takeSnapshot = histogramSupport.getMethod("takeSnapshot");
+
+            Object registryMeters = Class.forName("io.micrometer.core.instrument.MeterRegistry")
+                    .getMethod("getMeters").invoke(pcRegistry);
+            for (Object meter : (List<?>) registryMeters) {
+                Object id = getId.invoke(meter);
+                if (!RESIDENCE_METER.equals(getName.invoke(id))) {
+                    continue;
+                }
+                Object snapshot = takeSnapshot.invoke(meter);
+                Class<?> snapshotType = snapshot.getClass();
+                long samples = (Long) snapshotType.getMethod("count").invoke(snapshot);
+                if (samples == 0) {
+                    return null;
+                }
+                double max = (Double) snapshotType.getMethod("max", java.util.concurrent.TimeUnit.class)
+                        .invoke(snapshot, java.util.concurrent.TimeUnit.MILLISECONDS);
+                Object[] percentiles = (Object[]) snapshotType.getMethod("percentileValues")
+                        .invoke(snapshot);
+                return pcPercentile(percentiles, 0.50) + "/" + pcPercentile(percentiles, 0.99) + "/"
+                        + pcPercentile(percentiles, 0.999) + "/" + Math.round(max);
+            }
+            System.err.println("NOTE: this version publishes no " + RESIDENCE_METER
+                    + " meter; residence will be reported as '-'");
+            return null;
+        } catch (Exception cannotRead) {
+            System.err.println("NOTE: could not read " + RESIDENCE_METER + " (" + cannotRead
+                    + "); residence will be reported as '-'");
+            return null;
+        }
+    }
+
+    /** One published percentile out of a HistogramSnapshot, rounded to whole milliseconds. */
+    static long pcPercentile(Object[] percentileValues, double wanted) throws Exception {
+        for (Object v : percentileValues) {
+            double at = (Double) v.getClass().getMethod("percentile").invoke(v);
+            if (Math.abs(at - wanted) < 1e-9) {
+                return Math.round((Double) v.getClass()
+                        .getMethod("value", java.util.concurrent.TimeUnit.class)
+                        .invoke(v, java.util.concurrent.TimeUnit.MILLISECONDS));
+            }
+        }
+        // The meter publishes 0, 0.5, 0.75, 0.95, 0.99 and 0.999; anything else is a mistake here.
+        throw new IllegalStateException("percentile " + wanted + " is not published by " + RESIDENCE_METER);
+    }
+
+    static void sleep(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+}

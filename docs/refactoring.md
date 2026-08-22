@@ -210,6 +210,26 @@ Do not start one casually.
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
   While in `ConsumerManager`, fix the `erroneousWakups` typo.
 
+### Rename offset vocabulary in code to match CONCEPTS.md
+
+Four different things are called "the offset" across `state/` and `offsets/`, and conflating them
+already produced a wrong conclusion in a written analysis on 2026-08-21. `CONCEPTS.md` now defines
+the vocabulary; **the code has not been updated to match**, which is the gap:
+
+| Concept | Meaning | Current code |
+|---|---|---|
+| **base offset** | lowest incomplete; what goes in Kafka's committed-offset field | variously "committed offset", "offset to commit", `getOffsetHighestSequentialSucceeded()` |
+| **frontier offset** | highest *persisted* acknowledgement in the payload | `offsetHighestSucceeded` - the closest existing name, and the one to rename |
+| **complete / incomplete set** | acknowledged vs outstanding between base and frontier | `incompleteOffsets` (already good) |
+| **offset payload** | the encoded sets in commit metadata | "offset map", "offset metadata", "encoded offsets" - three names for one thing |
+
+The rename worth making first is **`offsetHighestSucceeded` -> frontier offset**, because it is the
+concept with no good current name and the one a reader most often misreads as the committed offset.
+`getOffsetHighestSequentialSucceeded()` is the base offset and should say so.
+
+Mechanical, wide, and touches public-ish names in `PartitionState` - so it belongs with a major, and
+should be one commit that changes names and nothing else.
+
 ### Performance
 - **confluentinc#884** - "Parallel Consumer is 30x slower than normal consumer" - the
   headline perf issue to characterise before/after any hot-path change.
@@ -646,8 +666,19 @@ Cross-cutting above; the rest:
 - `origin/refactor/double-ended-queue` @58a2b997 - block on work submission to the pool
   instead of on results (backpressure).
 - `origin/refactor/worker-queues` @a616de9e - worker-queue rework.
-- `origin/refactor/gpt3-central-queue-direct-pull` @7e775a11 - central queue, direct pull
-  (noted: poller-throttling issue, didn't help).
+- `origin/refactor/gpt3-central-queue-direct-pull` @7e775a11 - central queue, direct pull.
+  Its own commit `0df84c9e5` records **~1/3 the speed of the ThreadPoolExecutor version**, and poller
+  throttling as the suspect that "doesn't seem to help". **Both statements are about a design that is
+  not direct pull**: by that commit the worker's live path was `CentralQueue.take()`, an ordinary
+  `LinkedBlockingQueue` the control loop pushed into. Direct pull lived earlier on the branch
+  (`c167b94b0`..`5dcd39bb3`) and its idle path was a busy-spin, so it never produced a number at all.
+  Also carries `5dcd39bb3` "ThreadLocal attempt for not sharing a queue" - the per-thread-queue idea -
+  and `58826c349` "Central queue facade over Shards", the queue-that-is-not-a-queue.
+  **The architecture has since been rebuilt and measured** on `perf/direct-pull-measured`, with a real
+  blocking wait: `docs/inflight/perf-direct-pull-measured.md` carries the numbers and the cause.
+  Read-out of the branch itself in `docs/inflight/parked-2022-central-queue-rework.md`. **Reasons, not
+  verdicts:** this entry said "didn't help" for years, which hid that the alternative had been built
+  and lost.
 - `origin/refactor/gpt3-queue-management-with-msg-push` @9ee80ffb - central distribution via
   actor message, batch-100.
 - `origin/external-engine-higher-pressure` @944808e9 - backpressure/pressure system for the
@@ -773,3 +804,32 @@ ThreadPoolExecutor), [confluentinc#172](https://github.com/confluentinc/parallel
 _Seeded 2026-07-28 from a code scan (TODO/FIXME + large-class signals) and a
 branch/issue/prior-PR sweep. Keep it pruned: delete items when done, and promote to
 a branch/PR only when you actually start one._
+
+## Every module must have a README - ten do not
+
+Owner's rule, stated 2026-08-15: **all modules must have a README.** The two new proxy modules were
+missing one and got theirs in astubbs/parallel-consumer#293
+(`parallel-consumer-proxy`, `parallel-consumer-proxy-protocol`). The rest predate that branch and are
+listed here rather than fixed there, because a docs sweep across unrelated modules does not belong in
+the language-proxy PR:
+
+- `parallel-consumer-core`
+- `parallel-consumer-vertx`
+- `parallel-consumer-reactor`
+- `parallel-consumer-mutiny`
+- `parallel-consumer-examples`, and each of its five example modules
+
+Nothing enforces this. The check is one line and worth adding with the sweep:
+
+```bash
+for d in $(find . -name pom.xml -not -path '*/target/*' | xargs -n1 dirname | grep -v '^\.$'); do
+  ls "$d"/README* >/dev/null 2>&1 || echo "MISSING: $d"
+done
+```
+
+## Simplifications considered and rejected
+
+Proxy-specific, so it lives with the module:
+[`parallel-consumer-proxy/docs/simplifications-declined.md`](../parallel-consumer-proxy/docs/simplifications-declined.md)
+**owns that list**. Not repeated here - these are decisions that the current code is better, not
+deferred work, and this file is the deferred-work backlog.

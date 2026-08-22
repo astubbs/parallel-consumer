@@ -1,0 +1,314 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Kotlin</name>
+    <artifactId>parallel-consumer-proxy-client-kotlin</artifactId>
+
+    <!--
+        The Kotlin client: a coroutine-native client for the frozen v1 protocol, and the one
+        non-Java client with NO foreign-toolchain wrapper - Kotlin is a JVM language, builds with
+        kotlin-maven-plugin from Central like any other plugin, and needs nothing installed that
+        the JVM reactor does not already have. Kotlin wave of the language-proxy plan (astubbs#242).
+
+        IT WRAPS THE JAVA gRPC TRANSPORT, and it did not always.
+
+        Wave one reimplemented the session against parallel-consumer-proxy-protocol on three
+        grounds, one measurable and two design. The measurable one was real and is now fixed at
+        source: java-grpc test-depended on the ENGINE, so `-pl <this> -am` pulled
+        parallel-consumer-proxy into the reactor and `bin/build.sh` would `clean` the very jar every
+        other language's conformance test spawns as its sidecar. The engine dependency now lives in
+        parallel-consumer-proxy-client-java-harness, a module nothing wraps. Verify rather than
+        trust, before and after any dependency change here:
+
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        which must not print parallel-consumer-proxy.
+
+        The second ground - that wrapping would put Java's thread pool under a coroutine surface,
+        one `runBlocking` per record - was also real, and was also fixed at source: the reference
+        API now takes an AsyncRecordProcessor returning a CompletionStage, which a coroutine
+        completes without any thread waiting. The third, that a wrapper could not answer the two
+        known specification defects, is simply void: java-grpc answers both, and inheriting its
+        answers is the point.
+
+        What remains here is what is genuinely Kotlin. This module keeps its own spelling of the
+        types where Kotlin says the thing better - nullability rather than Optional, default
+        arguments rather than a builder, a sealed Outcome, one nullable PreviousFailure rather than
+        two - and imports the reference API's own types where it does not. That boundary is one
+        file, Bridge.kt, so the cost of being a Kotlin client stays visible and countable.
+
+        It therefore depends on parallel-consumer-proxy-client-java-grpc and on nothing else of its
+        own: protobuf, gRPC and the protocol module all arrive transitively through the transport,
+        and no code in this module names any of them.
+    -->
+
+    <properties>
+        <!--
+            This module's real runtime floor is Java 17: the gRPC channel stack requires it, as
+            the java-grpc module's pom explains at length. Kotlin's own jvmTarget below is set to
+            match, so bytecode and claim agree.
+        -->
+        <release.target>17</release.target>
+
+        <kotlin.version>2.4.10</kotlin.version>
+        <kotlinx.coroutines.version>1.11.0</kotlinx.coroutines.version>
+
+        <!--
+            THE ONE TEST THAT NEEDS THE JVM-SIDE HARNESS, and the switch that lets it exist without
+            a permanent reactor edge to the engine. Excluded by name in an ordinary build; the
+            kotlin-e2e-harness profile below flips this to a pattern matching nothing, so
+            -Dpc.foreignClients (which the module's CI row passes) runs it. Two things follow from
+            that arrangement and neither is obvious: the exclusion is by CLASS NAME, so renaming
+            the test silently re-enables it in a lane with no classpath file - and the test fails
+            rather than skips when the file is missing, so that mistake is loud.
+        -->
+        <pc.kotlin.sidecar.test.exclude>**/OneRecordThroughTheSidecarTest.*</pc.kotlin.sidecar.test.exclude>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-core</artifactId>
+            <version>${kotlinx.coroutines.version}</version>
+        </dependency>
+        <!--
+            The session, shared with every other JVM client: the stream, the handshake, the
+            dispatch queue and its overflow rule, the verbatim token echo. The protocol module,
+            protobuf and the gRPC channel stack all arrive through it, and nothing in this module
+            names them - which is the check that this really is a wrapper and not a fork.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-test</artifactId>
+            <version>${kotlinx.coroutines.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A PROFILE.
+
+            The one end-to-end test spawns the real test-mode sidecar (TestModeMain, in the proxy
+            module's TEST jar - it must never reach a client package) over the real wire, so it
+            needs that jar, the proxy's main jar, and core's test jar underneath, plus a classpath
+            file naming them. Declaring those OUTSIDE a profile would give this module a permanent
+            reactor edge to the engine: `-pl <this> -am` would then build - and `bin/build.sh`
+            would `clean` - the proxy module, whose target/ holds the sidecar jar that every other
+            language's conformance test spawns. Scoped here, the edge exists only in the opt-in
+            lane, which is the same arrangement the Python module uses and for the same reason.
+
+            The three jars are reached through ONE dependency, the java-harness module, which holds
+            them at compile scope for exactly this purpose. Restating them here would be a second
+            copy of a set that has already drifted once; the next JVM client - Scala - declares the
+            same single line.
+
+            The remaining harness dependencies - awaitility, truth, logback - are inherited from
+            the root pom by every module, so they are not restated. If the harness ever grows one
+            that is not, the sidecar dies at startup with a NoClassDefFoundError, and the spawn
+            code keeps the sidecar's stderr tail precisely so the failure names itself.
+        -->
+        <profile>
+            <id>kotlin-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <properties>
+                <!-- matches no test class: the sidecar test runs in this lane -->
+                <pc.kotlin.sidecar.test.exclude>**/NoTestIsExcludedInTheHarnessLane.*</pc.kotlin.sidecar.test.exclude>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy-client-java-harness</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- after the dependencies above resolve, before the test phase
+                                     that reads the file -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <!-- version from the root pom -->
+                        <configuration>
+                            <!--
+                                THE ENGINE IS THE SIDECAR'S CLASSPATH, NOT THIS TEST'S - and saying
+                                so here is what keeps the CI row's own command working.
+
+                                The dependencies above exist to be handed to a CHILD PROCESS; this
+                                JVM needs none of them, and having them costs rather than helps. In
+                                a reactor run (`-pl <this> -am`, which is exactly what the CI row
+                                does) a `test-jar` dependency on a module that has not reached the
+                                package phase resolves to a class directory that is not the one
+                                holding its test classes - so core's JUnit
+                                `TestExecutionListener` service file arrives without the listener
+                                it names, and the fork dies before any test runs with
+                                `ServiceConfigurationError: Provider ... MyRunListener not found`.
+                                Verified both ways: red with `-am` before this stanza, green after.
+                            -->
+                            <classpathDependencyExcludes>
+                                <classpathDependencyExclude>
+                                    bz.stub.parallelconsumer:parallel-consumer-core
+                                </classpathDependencyExclude>
+                                <classpathDependencyExclude>
+                                    bz.stub.parallelconsumer:parallel-consumer-proxy
+                                </classpathDependencyExclude>
+                            </classpathDependencyExcludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <executions>
+                    <execution>
+                        <!--
+                            THE CONFORMANCE RUNNER'S CLASSPATH, in the DEFAULT build rather than a
+                            profile.
+
+                            scripts/conformance-runner is the executable the shared suite's registry
+                            names, and a JVM client's "binary" is a JVM plus a resolved classpath -
+                            so this file is what makes that wrapper a runnable thing. It is not in
+                            the harness profile because the runner needs no engine: it spawns the
+                            SIDECAR SHIM the suite hands it on its sidecar flag, which is the client
+                            library's real spawn path, and the engine lives in the suite's own JVM.
+
+                            Written at generate-test-resources, before test-compile emits the runner
+                            beside it, so an ordinary `test-compile` of this module leaves both
+                            halves current. Nothing regenerates it at run time, deliberately: the
+                            reactor that runs the suite already builds this module, and a nested
+                            `mvn` would rewrite class directories under the JVM executing the suite.
+                        -->
+                        <id>conformance-classpath</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>build-classpath</goal>
+                        </goals>
+                        <configuration>
+                            <outputFile>${project.build.directory}/conformance-classpath.txt</outputFile>
+                            <!--
+                                Test scope, so the runner's own JVM gets logback and the diagnostics
+                                the suite attaches to a failure are readable. In the harness lane the
+                                engine artifacts join it too and are simply unused - the runner never
+                                names them, because it never spawns TestModeMain.
+                            -->
+                            <includeScope>test</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+                <version>${kotlin.version}</version>
+                <configuration>
+                    <jvmTarget>${release.target}</jvmTarget>
+                    <args>
+                        <!--
+                            EXPLICIT API MODE, strict. Every public declaration states its
+                            visibility and its return type, so nothing reaches the published
+                            surface by forgetting to write `internal` - the library equivalent of
+                            the reference module's discipline about what may appear on the shared
+                            API, enforced by the compiler instead of by review.
+                        -->
+                        <arg>-Xexplicit-api=strict</arg>
+                    </args>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>compile</id>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>test-compile</id>
+                        <goals>
+                            <goal>test-compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
+                            </sourceDirs>
+                            <args combine.self="override">
+                                <!-- tests are not a published surface; explicit API mode would
+                                     only add ceremony to them -->
+                            </args>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <!-- version from the root pom -->
+                <configuration>
+                    <excludes>
+                        <!-- the root pom's own exclusions, restated: a child <excludes> replaces
+                             the parent's list rather than adding to it -->
+                        <exclude>**/integrationTest*/**/*.java</exclude>
+                        <exclude>**/*IT.java</exclude>
+                        <exclude>${pc.kotlin.sidecar.test.exclude}</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

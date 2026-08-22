@@ -1,0 +1,409 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
+// ============================================================================
+// FROZEN SCHEMA - THIS IS THE CONTRACT (v1).
+//
+// Frozen by the language-proxy plan's freeze unit (astubbs#242), on the
+// spike's evidence: the provisional schema carried one record end to end
+// through both Java transports unchanged, and the message set was then
+// completed for the lease/reconnect, terminal-outcome and lifecycle units,
+// each message specified by a named unit's scenarios.
+//
+// After this freeze the wire may only GAIN, never change. A protocol change
+// is an event with a cost, not an edit (KTD21):
+//   - fields and messages may be ADDED; nothing may be removed, renumbered,
+//     retyped or renamed - `buf breaking` in the FILE category enforces this
+//     in CI (bin/check-proto-breaking.sh), and FILE is deliberate: WIRE would
+//     permit source-breaking changes the compatibility promise (R38) forbids;
+//   - every addition ships with a capability entry (see Configure/Configured
+//     `capabilities`) so it is negotiated in the handshake, never inferred
+//     from field presence;
+//   - every addition ships with a note naming which client libraries must be
+//     revisited.
+//
+// The human-readable contract is parallel-consumer-proxy/docs/
+// protocol-specification.md - a client author reads that, not the proxy's
+// Java. The two are kept in lockstep by a schema-coverage test that fails
+// when a message or field here is missing from the specification. A golden
+// serialized session (src/test/resources/.../golden-*.bin) pins the wire
+// bytes every language's parser must accept.
+// ============================================================================
+
+syntax = "proto3";
+
+package parallelconsumer.proxy.v1;
+
+option java_package = "bz.stub.parallelconsumer.proxy.protocol.v1";
+option java_multiple_files = true;
+option java_outer_classname = "ProxyProto";
+
+// Every other target language's placement option, declared here rather than
+// left to each client's protoc command line. Without them a generator either
+// refuses to run (Go) or derives a name from the proto package that the
+// client author then has to override identically in nine places - so the one
+// authority on where generated code lands is this file, for every language,
+// the same way it already is for Java.
+//
+// They are wire-invisible: file options name nothing that is serialized, so
+// the golden fixtures and every conformance stream are unchanged. They are
+// added BEFORE the freeze reaches master deliberately - `buf breaking`'s FILE
+// category treats a change to one of these as breaking, so a language that
+// arrives later would otherwise have to choose between a bad name and a gate
+// override. Found by the Go client wave, which hit the Go case first.
+option go_package = "github.com/astubbs/parallel-consumer/clients/go/parallelconsumer/gen/parallelconsumer/proxy/v1;proxyv1";
+option csharp_namespace = "Bz.Stub.ParallelConsumer.Proxy.Protocol.V1";
+option ruby_package = "Bz::Stub::ParallelConsumer::Proxy::V1";
+option php_namespace = "Bz\\Stub\\ParallelConsumer\\Proxy\\V1";
+option objc_class_prefix = "PCP";
+option swift_prefix = "PCP";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// The single bidirectional session stream between a client library's admin
+// connection and the sidecar proxy. The first client message must be
+// Configure (fresh session) or Manifest (reconnect within the protection
+// window); the proxy replies Configured either way, and then dispatches
+// records.
+service ProxyService {
+  rpc Session(stream ClientMessage) returns (stream ProxyMessage);
+}
+
+// Everything the client can say to the proxy.
+message ClientMessage {
+  oneof message {
+    Configure configure = 1;
+    Report report = 2;
+    Heartbeat heartbeat = 3;
+    Manifest manifest = 4;
+    WorkerDied worker_died = 5;
+  }
+}
+
+// Everything the proxy can say to the client.
+message ProxyMessage {
+  oneof message {
+    Configured configured = 1;
+    Dispatch dispatch = 2;
+    Drop drop = 3;
+    Shutdown shutdown = 4;
+    SetExecutorCount set_executor_count = 5;
+  }
+}
+
+// Mirrors core's ParallelConsumerOptions.ProcessingOrder. UNSPECIFIED means
+// "take core's default" - the proxy never guesses a different one.
+enum ProcessingOrder {
+  PROCESSING_ORDER_UNSPECIFIED = 0;
+  PROCESSING_ORDER_UNORDERED = 1;
+  PROCESSING_ORDER_PARTITION = 2;
+  PROCESSING_ORDER_KEY = 3;
+}
+
+// Mirrors core's ParallelConsumerOptions.CommitMode. The transactional mode is
+// expressible but always refused at Configure time (KTD7: exactly-once through
+// the proxy is impossible in v1); it stays in the enum so the refusal can name
+// exactly what was asked for.
+enum CommitMode {
+  COMMIT_MODE_UNSPECIFIED = 0;
+  COMMIT_MODE_PERIODIC_TRANSACTIONAL_PRODUCER = 1;
+  COMMIT_MODE_PERIODIC_CONSUMER_SYNC = 2;
+  COMMIT_MODE_PERIODIC_CONSUMER_ASYNCHRONOUS = 3;
+}
+
+// Mirrors core's ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.
+enum InvalidOffsetMetadataPolicy {
+  INVALID_OFFSET_METADATA_POLICY_UNSPECIFIED = 0;
+  INVALID_OFFSET_METADATA_POLICY_FAIL = 1;
+  INVALID_OFFSET_METADATA_POLICY_IGNORE = 2;
+}
+
+// Connect-time configuration: the first message on a fresh session, and the
+// only place configuration ever travels (R39). Only scalar, enum and Duration
+// options are expressible - the five object-valued core options (consumer,
+// producer, meterRegistry, metricsTags, retryDelayProvider) never travel,
+// per R10. An unset optional field or UNSPECIFIED enum means "take the
+// proxy's default", and Configured reports the defaulted value.
+//
+// Every scalar is marked `optional` deliberately, here and throughout this
+// file: explicit presence is part of the frozen contract, because
+// retrofitting it later is a source break in several generated languages
+// even though the wire stays compatible.
+message Configure {
+  // The subscription, fixed for the process lifetime (R36). Exactly one of
+  // topics or topic_pattern must be given.
+  repeated string topics = 1;
+  optional string topic_pattern = 3;
+
+  // Maximum records the proxy may have in flight to this client (R40).
+  // Absent means "take the proxy's default". There is no "unlimited": the
+  // in-flight ceiling is always finite, and Configured always reports it.
+  optional int32 max_concurrency = 2;
+
+  // The Kafka client credentials and connection settings (R48): the proxy
+  // constructs its consumer and producer from these. They are received, used,
+  // and never echoed - Configured has no counterpart field, and no proxy log
+  // line may carry an entry of this map at any level.
+  map<string, string> kafka_properties = 4;
+
+  // The protocol capabilities this client implements, as tokens defined by
+  // the protocol specification. Empty means the v1 baseline (the complete
+  // frozen v1 message set). The proxy replies with the negotiated
+  // intersection and neither side sends outside it (R38).
+  repeated string capabilities = 5;
+
+  optional ProcessingOrder ordering = 6;
+  optional CommitMode commit_mode = 7;
+  google.protobuf.Duration commit_interval = 8;
+  google.protobuf.Duration default_message_retry_delay = 9;
+  google.protobuf.Duration send_timeout = 10;
+  google.protobuf.Duration offset_commit_timeout = 11;
+  google.protobuf.Duration shutdown_timeout = 12;
+  google.protobuf.Duration drain_timeout = 13;
+  google.protobuf.Duration threshold_for_time_spend_in_queue_warning = 14;
+  google.protobuf.Duration sasl_authentication_retry_timeout = 15;
+  google.protobuf.Duration sasl_authentication_exception_retry_backoff = 16;
+  optional int32 max_failure_history = 17;
+  optional InvalidOffsetMetadataPolicy invalid_offset_metadata_policy = 18;
+
+  // Reserved at the freeze for the post-v6 admission-hardening work KTD11
+  // records: a per-launch token the parent writes down the lifecycle pipe at
+  // spawn, echoed here, so the admission slot is unclaimable by a process
+  // that did not inherit it. UNUSED in v1: clients omit it and the v1 proxy
+  // ignores it. It exists now because adding an OPTIONAL field later is
+  // additive, while retrofitting a REQUIRED-at-connect one is the change R38
+  // forbids.
+  optional string launch_token = 19;
+
+  // The destination topic for terminally failed records (R7/R8). Presence is
+  // what enables terminal reports: a Report.Terminal on a session that did
+  // not configure this is a protocol violation. "Enabled without a
+  // destination" is structurally inexpressible on the wire, which is R8's
+  // no-silent-drop rule made physical.
+  optional string terminal_topic = 20;
+
+  // Liveness tuning (R42/R46; the engine behaviour is the lease/reconnect
+  // unit's). Absent means the proxy's defaults, which Configured reports.
+  google.protobuf.Duration lease_duration = 21;
+  google.protobuf.Duration heartbeat_interval = 22;
+  google.protobuf.Duration reconnect_window = 23;
+
+  // Core's buffer tuning trio and instance tag, completing the scalar option
+  // surface (deferred from the provisional schema to this freeze).
+  optional int32 message_buffer_size = 24;
+  optional int32 initial_load_factor = 25;
+  optional int32 maximum_load_factor = 26;
+  optional string pc_instance_tag = 27;
+}
+
+// The proxy's reply: the EFFECTIVE values it is running with, so a client can
+// assert what it got rather than what it asked for. Structurally excludes
+// Configure's kafka_properties and launch_token - the echo must never carry
+// credentials or the admission secret, so the fields do not exist here rather
+// than being present-but-emptied.
+//
+// Field numbers align with Configure's for the same concept, so an author
+// reads the two messages as one table. Every field the proxy computes is
+// ALWAYS set on the wire despite the `optional` markers (which exist for
+// presence-API stability, not to permit absence): a Configured missing
+// max_concurrency or executor_count is a protocol violation, and absence
+// never means "unlimited". The carve-outs match the specification's:
+// pc_instance_tag is set exactly when configured, topics/topic_pattern echo
+// whichever subscription form was given, and the capability-gated fields
+// (terminal_topic, lease_duration, heartbeat_interval, reconnect_window)
+// are absent when their capability was not negotiated.
+message Configured {
+  reserved 19; // Configure.launch_token - deliberately never echoed
+
+  repeated string topics = 1;
+  optional string topic_pattern = 3;
+  optional int32 max_concurrency = 2;
+
+  // How many executors the client should run: a pure function of connect-time
+  // configuration, computed once, sent once here, never revised (KTD38, R47).
+  // Clients must not assume any particular formula relating it to
+  // max_concurrency.
+  optional int32 executor_count = 4;
+
+  // The negotiated intersection of the client's declared capabilities and the
+  // proxy's own. Neither side sends a message type outside this list.
+  repeated string capabilities = 5;
+
+  optional ProcessingOrder ordering = 6;
+  optional CommitMode commit_mode = 7;
+  google.protobuf.Duration commit_interval = 8;
+  google.protobuf.Duration default_message_retry_delay = 9;
+  google.protobuf.Duration send_timeout = 10;
+  google.protobuf.Duration offset_commit_timeout = 11;
+  google.protobuf.Duration shutdown_timeout = 12;
+  google.protobuf.Duration drain_timeout = 13;
+  google.protobuf.Duration threshold_for_time_spend_in_queue_warning = 14;
+  google.protobuf.Duration sasl_authentication_retry_timeout = 15;
+  google.protobuf.Duration sasl_authentication_exception_retry_backoff = 16;
+  optional int32 max_failure_history = 17;
+  optional InvalidOffsetMetadataPolicy invalid_offset_metadata_policy = 18;
+
+  optional string terminal_topic = 20;
+  google.protobuf.Duration lease_duration = 21;
+  google.protobuf.Duration heartbeat_interval = 22;
+  google.protobuf.Duration reconnect_window = 23;
+  optional int32 message_buffer_size = 24;
+  optional int32 initial_load_factor = 25;
+  optional int32 maximum_load_factor = 26;
+  optional string pc_instance_tag = 27;
+}
+
+// The fencing token, modelled as (record_id, epoch): Kafka's own exactly-once
+// idea, borrowed (KTD8). The epoch is WorkContainer.getDeliveryCount()
+// captured at dispatch - a Java long, hence int64; a report naming a
+// superseded epoch is discarded by the proxy. The client treats the whole
+// token as opaque, stores nothing, and echoes it verbatim - it must never
+// derive meaning from either field.
+message Token {
+  optional string record_id = 1;
+  optional int64 epoch = 2;
+}
+
+// One Kafka record. key and value are optional because Kafka distinguishes a
+// null key/value (e.g. a tombstone) from an empty one, and the wire must too.
+message Record {
+  optional string topic = 1;
+  optional int32 partition = 2;
+  optional int64 offset = 3;
+  optional bytes key = 4;
+  optional bytes value = 5;
+}
+
+// A wave: one or more records dispatched in a single protocol message (R50,
+// KTD10). Under restricted ordering the records of one wave are drawn from
+// distinct shards; under unordered processing there is no shard constraint.
+// Each record is reported independently, and hand-out inside the client is
+// FIFO by this message's record order (KTD39).
+message Dispatch {
+  repeated DispatchRecord records = 1;
+}
+
+// One record handed to the client for processing, carrying the PC-derived
+// state an in-process user function would see - not only the Kafka record.
+message DispatchRecord {
+  Token token = 1;
+  Record record = 2;
+
+  // Which delivery attempt this is: 1 on first delivery, 2 on the first
+  // redelivery. Product data, distinct from the opaque fencing token.
+  optional int32 attempt = 3;
+
+  // Absent on first delivery - presence is the wire form of "has failed
+  // before", never a zero timestamp.
+  optional google.protobuf.Timestamp last_failure_at = 4;
+
+  // Worker-supplied text from the previous failure, echoed back on
+  // redelivery. May embed record payload: untrusted input.
+  optional string last_failure_reason = 5;
+}
+
+// The worker's outcome for one dispatched record, keyed by the echoed token.
+// A Report with no recognized outcome (OUTCOME_NOT_SET at the receiver) is a
+// protocol violation, never a default: with capability negotiation in the
+// handshake, an unknown outcome can only be a client bug or an un-negotiated
+// revision, and the proxy refuses rather than guesses.
+message Report {
+  Token token = 1;
+
+  oneof outcome {
+    Success success = 2;
+    Failure failure = 3;
+    Terminal terminal = 4;
+    Released released = 5;
+  }
+
+  message Success {
+    // Records for the proxy to produce with its own producer - the only
+    // sanctioned route for worker output. Optional: empty means produce
+    // nothing. The produce is at-least-once.
+    repeated ProduceRecord produce = 1;
+  }
+
+  message Failure {
+    // Worker-supplied text. May embed record payload: untrusted input.
+    optional string reason = 1;
+  }
+
+  // The worker declares the record terminally failed (R7): the proxy resolves
+  // it to the configured terminal_topic and advances the offset rather than
+  // retrying forever. Only valid on a session whose Configure named a
+  // terminal_topic.
+  message Terminal {
+    // Worker-supplied text. May embed record payload: untrusted input. The
+    // proxy sanitises it before any log line and bounds its length (R8).
+    optional string reason = 1;
+  }
+
+  // The client returns a record it never ran - the Shutdown path for queued
+  // records (KTD39 rule 5). The engine treats it exactly as an abandonment at
+  // the captured epoch: back to scheduling, attempt count unchanged. The
+  // client never invents a verdict for work it did not do.
+  message Released {
+  }
+}
+
+// A record the worker asks the proxy to produce on success.
+message ProduceRecord {
+  optional string topic = 1;
+  optional bytes key = 2;
+  optional bytes value = 3;
+}
+
+// Connection-level liveness (R46): extends the lease of EVERY record
+// currently dispatched on this session, queued or executing. Sent by the
+// client's admin every heartbeat_interval. Deliberately empty: the lease is
+// connection-scoped, so there is nothing per-record to say - and heartbeats
+// must never be withheld because the dispatch queue is full (KTD39 rule 4).
+message Heartbeat {
+}
+
+// The first message on a RECONNECT stream (R43): the delivery tokens the
+// client's live workers still hold, echoed verbatim from their dispatches. A
+// record the manifest does not name is returned to scheduling; a token naming
+// a superseded delivery is answered with Drop; a token naming the current
+// delivery stays in flight untouched. Records that were queued but never
+// handed to an executor are DISCARDED by the client on connection loss and
+// must not appear here - the manifest names only what live workers hold, so
+// it stays truthful (KTD39).
+message Manifest {
+  repeated Token tokens = 1;
+}
+
+// The client reports the death of one of its workers (R45), naming the tokens
+// that worker held, so those records return to scheduling immediately rather
+// than waiting for lease expiry. This is the primary reclaim path - the lease
+// and the reconnect window are backstops.
+message WorkerDied {
+  repeated Token tokens = 1;
+}
+
+// The proxy orders the client to drop a superseded delivery: reconnect
+// reconciliation's answer to a manifest token whose delivery has been
+// superseded (R43). The client discards the worker's eventual result and
+// sends no Report for it; a Report sent anyway is discarded by the proxy's
+// epoch fencing.
+message Drop {
+  Token token = 1;
+}
+
+// The proxy tells the client the session is draining (R12): stop handing
+// records to executors, report every queued record Released, let executing
+// records finish and report normally within the drain timeout. After this
+// message the proxy dispatches nothing further and, once drained, completes
+// the stream and exits.
+message Shutdown {
+}
+
+// DECLARED AND UNUSED (KTD38). A v1 proxy NEVER sends this: the executor
+// count is a pure function of connect-time configuration, sent once in
+// Configured. This message exists so a future dynamic count is an additive
+// change under R38 (gated by its own capability token) rather than a breaking
+// one. A client receiving it in v1 treats it as a protocol violation.
+message SetExecutorCount {
+  optional int32 executor_count = 1;
+}

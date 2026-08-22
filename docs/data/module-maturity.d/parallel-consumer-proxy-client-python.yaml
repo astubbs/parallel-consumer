@@ -1,0 +1,30 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the Python client wave ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-client-python
+    maturity: alpha
+    reliability_confidence: >-
+      No reliability claim. The first wave carries one record end to end against the real protocol and
+      nothing beyond it; the liveness lease, reconnect reconciliation, worker-death reporting and terminal
+      outcomes are later waves, so a record whose session is interrupted has no recovery path yet.
+    api_expectation: >-
+      Experimental and expected to change. The surface mirrors the shared client API every language
+      implements, and changes to that shared shape land here.
+    support_posture: >-
+      Not published to any package index and not supported for production use; installed from a checkout.
+      The stable modules' release gate says nothing about this module.
+    evidence_id: proxy-client-python-alpha
+    use_this_if: >-
+      You want ordered concurrent Kafka consumption from Python without the GIL bounding throughput, and
+      you are willing to track an experimental client through its remaining waves.
+    opt_in: >-
+      Nothing reaches it unless an application constructs it. Its Maven module runs no Python at all
+      unless -Dpc.foreignClients is passed, so the reactor build is unaffected by its presence.
+    isolated_from_stable_modules: true
+    tracking: >-
+      astubbs#242 - the language-proxy plan; this row is updated by each Python wave as its scope grows.

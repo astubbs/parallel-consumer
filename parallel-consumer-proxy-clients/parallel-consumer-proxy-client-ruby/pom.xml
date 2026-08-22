@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Ruby</name>
+    <artifactId>parallel-consumer-proxy-client-ruby</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over Bundler (Gemfile beside this file). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for
+        why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this skeleton
+        and runs no Ruby toolchain at all.
+
+        THE TEST PHASE RUNS `rake`, NOT `rspec`, and the difference is deliberate: rake's default
+        task is rubocop-then-spec, so the bug finder runs in the same lane as the specs and on a
+        developer's box rather than only in CI. The clients matrix runs its own rubocop step on
+        top; that is a redundancy, not the first place the check fires.
+
+        THE SPECS NEED THE PROXY MODULE'S TEST JAR, AND THE PROFILE BELOW IS HOW MAVEN ORDERS IT.
+        The conformance spec spawns the harness (TestModeMain, in parallel-consumer-proxy's test
+        jar). An earlier note in this place said Maven could not order that for us and told the
+        reader to build the proxy by hand first; it can, the same way the Go, Python and TypeScript
+        modules already do it, and the clients matrix row - which cannot run a hand command - was
+        red on exactly this. Locally the hand command still works and is still the fastest way:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The spec fails with that command in its message rather than skipping, because a test that
+        quietly does not run is not a passing test. Recorded as a wave finding in
+        docs/inflight/clients/ruby.md (astubbs#242).
+    -->
+    <!--
+        THE COMPILE PHASE RUNS scripts/build.sh, NOT `bundle install`, AND THAT IS THE POINT.
+        Installing gems is not compiling: with `bundle install` as the whole of the compile phase,
+        `mvn compile -Dpc.foreignClients` reported BUILD SUCCESS on a lib/ file ending in
+        `this is not valid ruby @@@`, because nothing in the phase ever parsed a source file. The
+        script installs the gems and then runs `rake syntax`, which is `ruby -c` over every source
+        file; the script's header says why the two steps cannot be one property, and the Rakefile
+        task says why `ruby -c` rather than RuboCop. Ruby wave of the language-proxy plan,
+        astubbs#242.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>${project.basedir}/scripts/build.sh</pc.foreign.build.executable>
+        <!--
+            EMPTY ON PURPOSE: the script takes no arguments, and the aggregator's exec execution
+            reads this property unconditionally, so it has to resolve to something. An empty value
+            resolves to no arguments at all, which was verified rather than assumed.
+        -->
+        <pc.foreign.build.args></pc.foreign.build.args>
+        <pc.foreign.test.executable>bundle</pc.foreign.test.executable>
+        <pc.foreign.test.args>exec rake</pc.foreign.test.args>
+    </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE CONFORMANCE SPEC DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            spec/support/harness.rb spawns the real test-mode sidecar over the real wire, which
+            needs the proxy module's test jar (TestModeMain and the harness) and its main jar.
+            Declaring them here is what makes the CI row's own command build the proxy before this
+            module's test phase; the row runs `package` rather than `test` for the other half of
+            it, because the harness looks for jar FILES and `test` stops one phase short of
+            producing them.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all, so a
+            scoped build still runs no Ruby toolchain and never reaches the engine. Modelled on the
+            go-e2e-harness profile, which was written when the Go row failed this same way.
+        -->
+        <profile>
+            <id>ruby-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml. Test scope does
+                         not travel transitively, so the proxy's own test dependencies are not ours
+                         unless named - and the sidecar starts, then dies without them. -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <!--
+                                    THE HARNESS ASKS MAVEN FOR THIS LIST ITSELF IF IT IS NOT HERE,
+                                    AND IN CI THAT SECOND ASK FAILS. Its fallback runs a nested
+                                    `./mvnw -pl :parallel-consumer-proxy dependency:build-classpath`
+                                    with no -am, so parallel-consumer-core has to come from the
+                                    local repository - which a CI job never installs into, since
+                                    the reactor stops at `package`. Writing the file here, from the
+                                    reactor that already has every module resolved, means the
+                                    fallback is only ever the developer's path. Same arrangement as
+                                    the Go module's sidecar-classpath.txt, one filename apart
+                                    because each harness chose its own.
+                                -->
+                                <id>proxy-test-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the foreign suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/proxy-test-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <!--
+        NO maven-clean-plugin FILESETS HERE, AND THAT IS A MEASUREMENT RATHER THAN AN OVERSIGHT.
+
+        Ruby compiles to nothing, and this module emits nothing of its own for `mvn clean` to
+        remove. Measured against a tree carrying none of it: `bundle install` produced vendor/
+        and nothing else, and `bundle exec rubocop` and `bundle exec rspec` produced nothing at
+        all. A `git status` run afterwards, with the ignored files included, listed exactly one
+        entry: vendor/. (An XML comment may not contain two consecutive dashes, which is why that
+        command is described rather than quoted; it has broken a pom in this tree before.)
+
+        Each of the four candidates, and why it is not a clean target:
+
+        - vendor/bundle is the INSTALLED BUNDLE. That makes it this language's local repository,
+          not build output; `mvn clean` deletes target/ and does not empty ~/.m2. Deleting it would
+          cost a full reinstall of 27 gems, two of them with native extensions.
+        - lib/parallelconsumer/ is protoc's output but it is COMMITTED (see .gitignore, which says
+          why: a consumer of this library must find the stubs already there). Committed generated
+          code is source here, and clean does not delete source.
+        - RuboCop's cache is ~/.cache/rubocop_cache - outside the module, shared with every other
+          checkout on the box, and out of bounds for that reason alone.
+        - target/proxy-test-classpath.txt, written by the profile above, is under target/, which
+          the default clean execution already removes. Everything else the specs write goes to
+          Dir.mktmpdir, under the system temp directory.
+
+        So the correct configuration for this module is none, and the answer is recorded here
+        rather than left as an absence, because an empty configuration and an unconsidered one
+        look identical.
+    -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

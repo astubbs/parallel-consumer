@@ -1,0 +1,44 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Rust client wave ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-client-rust
+    artifact: parallel-consumer-proxy-client-rust
+    coverage: >-
+      One conformance scenario, a-processed-record-advances-the-committed-offset, run end to end
+      over real gRPC against the test-mode sidecar: the sidecar is spawned as a child process, its
+      port read from the lifecycle channel, the fresh-session handshake completed, a dispatch wave
+      queued and handed to a tokio executor task, the user function run, the outcome reported with
+      the token echoed verbatim, and the session closed by half-close and the lifecycle pipe.
+      Fifteen unit tests cover the parts a live session cannot reach cheaply: queue FIFO order,
+      queue overflow as a protocol violation naming the count, a panicking processor becoming a
+      failure outcome, a Configured missing its ceiling or executor count, the port-line scan, the
+      declared capability set, and that the options type's Debug redacts kafka_properties. The
+      assertion that the end-to-end test can fail was established by a negative control - returning
+      Err from the user function instead of succeeding produced two redeliveries with the attempt
+      count incremented and the failure reason verbatim, and the test went red.
+      Beside that, and not replacing it, Rust is wired into the shared cross-language conformance
+      suite: a conformance runner at src/bin/conformance-runner.rs implements the contract every
+      language implements, and the suite drives it through all five scenarios the harness serves -
+      the processed record, the unreported record, the failure-and-redelivery history, a held record
+      admitting a concurrent delivery on another key, and the in-flight ceiling holding this client to exactly two unresolved records at once - asserting engine state this
+      crate cannot see. It runs on a CURRENT-THREAD tokio runtime, which makes the ordering scenario a
+      real test of this client's stated hazard: a processor that blocked instead of awaiting would
+      deadlock rather than being rescued by a spare core. Each of the first four was proven able to fail
+      by sabotaging the runner. The fifth, the in-flight ceiling, was proven able to fail once for every language rather than here - in Go and in Kotlin, by declaring double the ceiling the scenario prescribed - and the conformance module's own evidence records it.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/src/bin/conformance-runner.rs
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/tests/session.rs
+    limitation: >-
+      One scenario of eleven, and the harness negotiates only the dispatch capability, so every
+      liveness, reconnect, worker-death, terminal and drain duty is untested because it is
+      un-negotiated rather than because it passed. Subscription is not a live variable either: the
+      mock harness seeds its records regardless of the topic a client subscribes to, so a
+      wrong-topic run still passes and cannot be used as a control. The crate's own tests exercise one record; three
+      records with a held one arrive only through the shared conformance suite, and FIFO hand-out
+      with FEWER executors than records is still covered only by unit tests over the queue itself,
+      because every conformance scenario sizes the ceiling to its own shape.

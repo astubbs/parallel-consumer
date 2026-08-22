@@ -1,0 +1,45 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Virtual threads for the user function
+category: operability
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+summary: >-
+  Run the processing function on virtual threads instead of a fixed pool of platform threads, so a handler
+  that blocks stops holding an OS thread. Opt-in, off by default, and it needs a JDK 21 runtime - the
+  published artifact is unchanged Java 8 bytecode, so only the runtime has to move, not the build.
+use_this_when:
+  - Your handler blocks - on HTTP, a database, another broker - and raising maxConcurrency past a few thousand stops increasing the records actually in flight.
+  - Measured in-flight concurrency plateaus well below the configured maxConcurrency while the machine is not CPU-bound.
+  - You are on a JDK 21 or later runtime, or can move to one, without changing your own build.
+setup:
+  options:
+    - ParallelConsumerOptions.useVirtualThreads - default false; also defaults from the pc.virtualThreads system property, so a harness or CI matrix can select it without changing source.
+  runtime: A JDK 21 runtime. The JDK 21 API is reached reflectively, so the artifact still targets Java 8 bytecode.
+  validation: ParallelConsumerOptions.validate() fails at construction with UnsupportedOperationException, naming the option and the JVM, when the runtime cannot provide virtual threads.
+opt_in:
+  mechanism: Set useVirtualThreads(true) when building ParallelConsumerOptions, or pass -Dpc.virtualThreads=true.
+  isolated_from_stable_modules: true
+boundaries:
+  - maxConcurrency becomes a target the control loop aims at rather than a cap the pool enforces - the pool is unbounded, so a burst of already-submitted work can briefly exceed it.
+  - The option takes precedence over managedExecutorService and managedThreadFactory, which describe a pool that does not exist in this mode.
+  - External engines (Vert.x, Reactor, Mutiny) ignore it and log a warning - their worker pool is one dispatch thread by design and their concurrency lives in the external runtime.
+  - Micrometer's executor meters are not registered in this mode, because ExecutorServiceMetrics can only introspect a ThreadPoolExecutor. Parallel Consumer's own in-flight and queued figures are unaffected.
+  - The dynamic load factor no longer multiplies the in-flight target in this mode, because there is no executor queue for the surplus to wait in; it still sizes the record buffer that gates the broker poller.
+  - On JDK 21 to 23 a synchronized block can still pin a carrier thread (fixed by JEP 491 in JDK 24). The monitors on the worker path were migrated to ReentrantLock; the commit monitor deliberately was not, pending astubbs#29.
+references:
+  - label: The option
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
+  - label: Pool construction and the pressure system
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java
+  - label: Why the executor's queue depth had to be replaced
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/UserFunctionTaskAccounting.java
+  - label: The measurement against Parallel Consumer itself
+    path: docs/inflight/perf-virtual-threads-measured.md
+  - label: The thread ceiling this removes
+    path: docs/inflight/perf-platform-threads-are-the-ceiling.md

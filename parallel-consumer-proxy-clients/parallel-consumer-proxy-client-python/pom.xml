@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Python</name>
+    <artifactId>parallel-consumer-proxy-client-python</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over the Python client's own tooling: pyproject.toml and the Makefile
+        beside this file are the real build, and `make` is the one recipe both a developer and CI
+        run. The exec bindings below fire ONLY under -Dpc.foreignClients (the foreign-clients
+        profile in the clients aggregator), so an ordinary `bin/build.sh -am` builds this module
+        as an empty Maven skeleton and starts no Python interpreter at all.
+
+        Python wave of the language-proxy plan, astubbs#242.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>make</pc.foreign.build.executable>
+        <pc.foreign.build.args>build</pc.foreign.build.args>
+        <pc.foreign.test.executable>make</pc.foreign.test.executable>
+        <pc.foreign.test.args>test</pc.foreign.test.args>
+    </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            The Python suite's one end-to-end test spawns the real test-mode sidecar over the real
+            wire - which needs the proxy module's test jar (TestModeMain and the harness), its main
+            jar, and core's test jar underneath. Declaring them here is what makes
+            `./mvnw test -pl :parallel-consumer-proxy-client-python -am -Dpc.foreignClients` - the
+            CI matrix row's exact command - build those modules first and resolve them; and
+            build-classpath below writes the resulting classpath where the test reads it.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all: the
+            edge exists only in the opt-in lane that runs the foreign test suite, and it is a
+            test-scoped harness dependency rather than anything this client ships. The Python
+            client itself obtains the protocol the way every non-JVM client does, by generating
+            from the .proto by path, with no Maven dependency.
+
+            The remaining harness dependencies - awaitility, truth, logback - are inherited from
+            the root pom by every module, so they are not restated here. If the harness ever grows
+            one that is not, the sidecar fails at startup with a NoClassDefFoundError; the test's
+            spawn helper captures the sidecar's stderr precisely so that names itself.
+        -->
+        <profile>
+            <id>python-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above are resolvable, before the test
+                                     phase where the foreign suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                WHAT `mvn clean` REMOVES FOR THIS MODULE, AND WHAT IT DELIBERATELY LEAVES.
+
+                Every path below was observed appearing on a tree that had none of it: `make build`
+                leaves src/parallel_consumer.egg-info, `make test` leaves .pytest_cache and a
+                __pycache__ beside every package it imported, `make lint` leaves .ruff_cache and
+                .mypy_cache, and an sdist or wheel build leaves build/ and dist/. Nothing here is
+                guessed from what a Python project usually emits.
+
+                .venv IS NOT LISTED, AND THAT IS THE POINT. It holds fetched dependencies, which
+                makes it this language's local repository, not build output; `mvn clean` deletes
+                target/ and does not empty ~/.m2. Listing it would turn a sub-second clean into a
+                multi-minute refetch of grpcio, mypy and their wheels. `make distclean` is the
+                developer's opt-in for that, and Maven deliberately does not call it.
+
+                THE __pycache__ FILESETS NEED BOTH PATTERNS. maven-clean-plugin deletes a directory
+                only once it is empty, so an include that selects the directory alone selects none
+                of the .pyc files inside it and removes nothing. They are also rooted at the four
+                source directories rather than at the module, because a module-wide `**/__pycache__`
+                would descend into .venv and start deleting inside the dependency directory.
+
+                NOT IN A PROFILE, matching the rest of this tree: deleting a directory needs no
+                toolchain, so `./mvnw clean` must work on a box with no Python venv built. Gating it
+                behind -Dpc.foreignClients would make cleaning require the very toolchain the
+                profile exists to keep optional.
+
+                The Makefile's `clean` target is the developer-facing equivalent and removes the
+                same paths. Two lists that must agree: change one, change the other.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/build</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/dist</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/src/parallel_consumer.egg-info</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/.pytest_cache</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/.ruff_cache</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/.mypy_cache</directory>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/src</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/tests</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/tools</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                        <fileset>
+                            <directory>${project.basedir}/scripts</directory>
+                            <includes>
+                                <include>**/__pycache__</include>
+                                <include>**/__pycache__/**</include>
+                            </includes>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

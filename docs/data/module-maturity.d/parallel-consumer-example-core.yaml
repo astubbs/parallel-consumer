@@ -1,0 +1,15 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-example-core
+    deferred:
+      reason: >-
+        Sample code under the parallel-consumer-examples aggregate row, excluded from publication
+        by skipPublishing; there is no per-module artifact for a maturity claim to describe.
+      lifted_by: >-
+        Only a change that publishes this example as its own artifact; none is planned.

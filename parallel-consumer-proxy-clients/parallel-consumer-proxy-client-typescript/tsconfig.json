@@ -1,0 +1,39 @@
+{
+  "//": [
+    "Copyright (C) 2026 Antony Stubbs and contributors",
+    "",
+    "CommonJS output, deliberately. ts-proto emits extensionless relative imports, which ESM under",
+    "Node rejects; CommonJS resolves them, is what @grpc/grpc-js itself ships, and is importable",
+    "from ESM consumers through Node's interop. The cost is one module-system generation behind",
+    "the fashion; the benefit is that no consumer needs a bundler or a loader flag.",
+    "",
+    "`strict` plus the four extra checks below is half of this module's bug-finding (the other half",
+    "is the type-aware eslint rules in eslint.config.mjs, which need the project reference this",
+    "file provides). They are on for the generated stubs too: protoc's output is compiled code",
+    "here, not a vendored blob, so it either type-checks or the generator options are wrong."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "ESNext.Disposable"],
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "rootDir": ".",
+    "outDir": "dist",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["src", "test"]
+}

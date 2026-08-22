@@ -260,6 +260,67 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
     }
 
 
+    /**
+     * Residence time is the interval from a record leaving the consumer to Parallel Consumer finishing with it,
+     * and the assertions here pin the two properties that make it worth having.
+     * <p>
+     * <b>The sample COUNT is asserted exactly, not "greater than zero".</b> Every outcome records one - the 999
+     * records that succeed first time, plus the failing delivery, plus that record's successful retry - so the
+     * count is one more than the record count. An implementation that recorded only successes would produce
+     * exactly the record count and would pass a "greater than zero" assertion, which is precisely the mistake
+     * this metric exists to avoid.
+     * <p>
+     * <b>The MAXIMUM is asserted against the retry delay</b>, which is the only observable that separates a
+     * residence time from a time-in-flight. The redelivered record spends the default one-second retry delay
+     * parked, doing nothing, and that second is in its residence time because arrival is stamped once, at
+     * construction. A measure taken from the claim instant instead cannot exceed the handler's own runtime.
+     */
+    @Test
+    @SneakyThrows
+    void recordResidenceTimeCoversRetriesAndFailures() {
+        final int quantity = 1000;
+        final int offsetToFailOnce = 5;
+
+        ktu.send(consumerSpy, ktu.generateRecords(0, quantity));
+
+        AtomicInteger succeeded = new AtomicInteger();
+        AtomicBoolean alreadyFailedOnce = new AtomicBoolean(false);
+        parallelConsumer.poll(recordContexts -> recordContexts.forEach(recordContext -> {
+            if (recordContext.offset() == offsetToFailOnce && !alreadyFailedOnce.getAndSet(true)) {
+                throw new RuntimeException("Failing offset " + offsetToFailOnce + " once, to prove its retry "
+                        + "delay lands inside its residence time");
+            }
+            succeeded.incrementAndGet();
+        }));
+
+        // The retried record cannot succeed before its one second retry delay expires, so the budget has to
+        // clear that with room for the commit cycle behind it.
+        await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
+                assertThat(succeeded.get()).isEqualTo(quantity));
+
+        // Short budget deliberately: the await above already established that every record finished, so the
+        // samples are in the timer by now. This only covers the meter publishing behind the counter.
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            assertThat(registeredTimerCountFor(PCMetricsDef.RECORD_RESIDENCE_TIME))
+                    .as("one sample per outcome: %d successes, one failure, one retried success", quantity - 1)
+                    .isEqualTo(quantity + 1);
+            assertThat(registeredTimerMaxMillisFor(PCMetricsDef.RECORD_RESIDENCE_TIME))
+                    .as("the retried record was parked for the default one second retry delay, which is inside "
+                            + "its residence time and could not be inside a time-in-flight")
+                    .isGreaterThanOrEqualTo(ParallelConsumerOptions.DEFAULT_STATIC_RETRY_DELAY.toMillis());
+        });
+    }
+
+    private long registeredTimerCountFor(PCMetricsDef metricsDef, String... tags) {
+        return Optional.ofNullable(registry.find(metricsDef.getName()).tags(tags).timer())
+                .map(Timer::count).orElse(-1L);
+    }
+
+    private double registeredTimerMaxMillisFor(PCMetricsDef metricsDef, String... tags) {
+        return Optional.ofNullable(registry.find(metricsDef.getName()).tags(tags).timer())
+                .map(timer -> timer.max(TimeUnit.MILLISECONDS)).orElse(-1.0);
+    }
+
     private double registeredGaugeValueFor(PCMetricsDef metricsDef, String... filterTags) {
         return Optional.ofNullable(registry.find(metricsDef.getName()).tags(filterTags).gauge()).map(Gauge::value).orElse(-1.0);
     }

@@ -646,3 +646,13 @@ a one-off.
 passed all seven chaos scenarios. Two adjacent commits, a prose-only diff between them, red then
 green: whatever draws this signature is drawn per seed, and no tree-content explanation survives that
 pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
+
+## A technique with a named target here (2026-08-21)
+
+A competitor's TLA+ verification reports finding, by exhaustive state exploration, **a race between
+offset commit and partition revocation** - a commit tick executing inside a revoked window before
+revocation completed, producing silent duplicates under specific rebalance interleavings. That is the
+shape of this family, found by construction rather than by seeded replay.
+[`next-formal-verification-and-correctness-methods.md`](next-formal-verification-and-correctness-methods.md)
+argues the case and scopes it: model the commit-advancement and drain/revoke paths only, not the
+whole system.

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # Cheap, repo-wide static checks: things that need no JDK, no broker and no build.
 #
 # Separate from copyright.yml deliberately: these checks are not about copyright and never were,
@@ -137,6 +139,64 @@ jobs:
       - name: One version per action
         run: bash bin/check-action-versions.sh
 
+  deferred-modules:
+    name: "clients: deferred modules"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads the working tree and asks git what is in it; no history needed, so shallow is fine.
+      - uses: actions/checkout@v6
+
+      # The check parses clients.yml and the maturity fragments structurally, the same way
+      # bin/check-docs-data.sh and clients.yml's own gate step do. Installed rather than assumed:
+      # the image ships PyYAML today, and a check that silently changed meaning when it stopped
+      # would be the failure this whole job exists to prevent.
+      - name: Install the YAML parser the check needs
+        run: python3 -m pip install --quiet pyyaml
+
+      # Self-test first, as everywhere else here. Its two control arms are what make the rest
+      # meaningful: the same source file with the deferral LIFTED passes, and the same source file
+      # in a module that was never deferred passes - so the check is failing on the pairing, not on
+      # the presence of source.
+      - name: Self-test the deferral guard
+        run: bash bin/test-check-deferred-modules.sh
+
+      # clients.yml skips a language row when that module's maturity fragment says `deferred:`,
+      # which is right for a seeded skeleton and has no counterpart in the other direction: a wave
+      # that writes a real client and forgets to lift the deferral gets a row that reports green
+      # while building, testing and linting nothing, indefinitely. `lifted_by:` is a note to a
+      # human. This is the check.
+      - name: A module with real source must not still be deferred
+        run: bash bin/check-deferred-modules.sh
+
+  client-scanners:
+    name: "clients: static analysis coverage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads the workflow and the modules as files; no history needed, so shallow is fine.
+      - uses: actions/checkout@v6
+
+      # Same reasoning as the job above: the check parses clients.yml structurally, and PyYAML is
+      # installed rather than assumed so it cannot quietly stop meaning what it means.
+      - name: Install the YAML parser the check needs
+        run: python3 -m pip install --quiet pyyaml
+
+      # Self-test first, as everywhere else here. Its control arm is what makes the rest
+      # meaningful: an empty scanner-cmd passes on the language that DECLARES it delegates and
+      # fails on every other, so the check is failing on the emptiness being undeclared rather
+      # than on emptiness itself.
+      - name: Self-test the scanner-coverage guard
+        run: bash bin/test-check-client-scanners.sh
+
+      # clients.yml skips the static-analysis step when a row's scanner-cmd is empty - which is
+      # right for the Swift row, whose container already lints on the way to its artifact, and
+      # invisible for everyone else: the row would report green having linted nothing. This is the
+      # check, and for a delegating row it also verifies the file it delegates to still runs the
+      # analyser.
+      - name: Every client row must analyse its module somewhere
+        run: bash bin/check-client-scanners.sh
+
   cve-exclusions:
     name: "deps: CVE exclusion expiry"
     runs-on: ubuntu-latest
@@ -164,3 +224,27 @@ jobs:
       # check needs no JDK, no secrets and no network - the charter of this workflow.
       - name: Temporary CVE exclusions must expire
         run: bash bin/check-cve-exclusions.sh
+
+  dependabot-coverage:
+    name: "deps: Dependabot coverage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads .github/dependabot.yml and walks the working tree for manifests; no history needed.
+      - uses: actions/checkout@v6
+
+      # Self-test first, as everywhere else here. Its integration arm is the real repository, and
+      # its fixture arms cover both directions the guard checks plus both of its "cannot run" cases.
+      - name: Self-test the Dependabot coverage guard
+        run: bash bin/test-check-dependabot-coverage.sh
+
+      # An ecosystem Dependabot was never told about produces no error, no warning and no PR - it
+      # is indistinguishable from an ecosystem with nothing to update. That is how seven of the
+      # nine ecosystems in this tree went unwatched for the whole of the language-proxy work
+      # (astubbs#242), and it surfaced only when a gRPC CVE was found by a CI scan rather than by a
+      # bot. Adding a manifest for a new language now fails this check until an entry exists, and a
+      # typo'd `directory` fails it too - Dependabot reports that only in a settings page.
+      - name: Every ecosystem in the tree has an update path
+        run: |
+          set -o pipefail
+          bash bin/check-dependabot-coverage.sh | tee -a "$GITHUB_STEP_SUMMARY"

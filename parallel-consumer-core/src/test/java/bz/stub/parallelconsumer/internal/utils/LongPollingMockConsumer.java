@@ -187,19 +187,36 @@ public class LongPollingMockConsumer<K, V> extends MockConsumer<K, V> {
         }
     }
 
+    /**
+     * Assigns the given topics' partitions to this consumer and makes them pollable from offset zero.
+     * <p>
+     * <b>The beginning offsets are seeded BEFORE the rebalance, and that order is load-bearing.</b>
+     * {@link MockConsumer#rebalance} assigns the partitions and, on kafka-clients 3.7+, fires the registered
+     * rebalance listener from inside the call - so a consumer thread can be polling these partitions before
+     * this method returns. {@link MockConsumer#poll} on an assigned partition whose beginning offset has not
+     * been recorded throws {@code IllegalStateException: MockConsumer didn't have beginning offset specified,
+     * but tried to seek to beginning}, which kills Parallel Consumer's broker-poll thread and takes the engine
+     * down with it; the test then fails on whatever deadline it was awaiting rather than on the cause.
+     * Seeding first removes the window rather than narrowing it: {@link MockConsumer#updateBeginningOffsets} is
+     * a map merge that requires no assignment, and {@code rebalance} never touches that map.
+     * <p>
+     * Established by widening the window rather than by argument: with a sleep between the two calls,
+     * {@code GrpcSpikeConformanceTest} fails with exactly that exception on every test; with the same sleep and
+     * the seeding moved ahead of the rebalance, it passes.
+     */
     public void subscribeWithRebalanceAndAssignment(final List<String> topics, int partitions) {
         List<TopicPartition> topicPartitions = topics.stream()
                 .flatMap(y -> IntStream.range(0, partitions).boxed()
                         .map(x -> new TopicPartition(y, x)))
                 .collect(Collectors.toList());
-        rebalance(topicPartitions);
 
-        //
         HashMap<TopicPartition, Long> beginningOffsets = new HashMap<>();
         for (var tp : topicPartitions) {
             beginningOffsets.put(tp, 0L);
         }
         super.updateBeginningOffsets(beginningOffsets);
+
+        rebalance(topicPartitions);
     }
 
     @SneakyThrows

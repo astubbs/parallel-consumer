@@ -1223,8 +1223,10 @@ The published modules share one answer to both. They all depend on `parallel-con
 there is no per-module reliability gradient to publish. What does differ is the experimental artifacts, which are a
 separate and explicit opt-in and cannot change an application that does not depend on one.
 
-Virtual threads, micro-batching and a dead-letter queue are intentionally deferred capabilities, not exceptions to the
-critical-defect gate.
+Micro-batching and a dead-letter queue are intentionally deferred capabilities, not exceptions to the critical-defect
+gate. Virtual threads are no longer among them: the processing function can run on virtual threads via the opt-in
+`useVirtualThreads` option, on a JDK 21 runtime. The published artifacts are unchanged Java 8 bytecode, so only the
+runtime has to move.
 
 |===
 | Module | Status | Reliability confidence | API expectation | Use this if

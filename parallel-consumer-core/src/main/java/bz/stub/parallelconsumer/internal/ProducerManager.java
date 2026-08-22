@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
@@ -69,6 +70,11 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     @Getter
     private ReentrantReadWriteLock producerTransactionLock;
+
+    /**
+     * @see #syncBeginTransaction()
+     */
+    private final ReentrantLock beginTransactionLock = new ReentrantLock();
 
     /**
      * Installed on every send. Built once, because whether this manager uses transactions is already decided before
@@ -187,14 +193,27 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     /**
-     * Pessimistic lock (synchronized method) on beginning a transaction
+     * Pessimistic lock on beginning a transaction.
      * <p>
      * Thread safe.
+     * <p>
+     * A {@link ReentrantLock} rather than {@code synchronized} because this is the only monitor on the user
+     * function's own hot path: {@code produceMessages} -> {@code lazyMaybeBeginTransaction} -> here runs on the
+     * worker thread, once per produce. On a JDK before 24 (JEP 491), a virtual thread that blocks inside
+     * {@code synchronized} pins its carrier, so with
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#isUseVirtualThreads()} and transactions this would
+     * take carriers out of circulation under exactly the contention it exists to manage. {@code ReentrantLock}
+     * parks the virtual thread instead and releases the carrier.
      */
-    private synchronized void syncBeginTransaction() {
-        boolean txNotBegunAlready = !producerWrapper.isTransactionOpen();
-        if (txNotBegunAlready) {
-            beginTransaction();
+    private void syncBeginTransaction() {
+        beginTransactionLock.lock();
+        try {
+            boolean txNotBegunAlready = !producerWrapper.isTransactionOpen();
+            if (txNotBegunAlready) {
+                beginTransaction();
+            }
+        } finally {
+            beginTransactionLock.unlock();
         }
     }
 

@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Go</name>
+    <artifactId>parallel-consumer-proxy-client-go</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over the Go toolchain (go.mod beside this file). The commands below run
+        ONLY under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator
+        for why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this
+        skeleton and runs no Go toolchain at all.
+
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, and the go-e2e-harness profile below is what
+        gets it. `go test` here spawns the conformance harness (TestModeMain, in
+        parallel-consumer-proxy's test jar), and with no Maven dependency at all `-am` did not pull
+        the proxy into the reactor - so the CI row's own command,
+        `./mvnw test -pl :parallel-consumer-proxy-client-go -am -Dpc.foreignClients`, ran the Go
+        test against an unbuilt `parallel-consumer-proxy/target` and failed there. The profile
+        declares that dependency in the opt-in lane only, exactly as the Python and TypeScript
+        modules do, and writes the resolved classpath where the test reads it.
+
+        The Go test still fails rather than skipping when the harness is absent, because a test
+        that quietly does not run is not a passing test. Recorded as a wave finding in
+        docs/inflight/clients/go.md (astubbs#242).
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>go</pc.foreign.build.executable>
+        <pc.foreign.build.args>build ./...</pc.foreign.build.args>
+        <pc.foreign.test.executable>go</pc.foreign.test.executable>
+        <pc.foreign.test.args>test ./...</pc.foreign.test.args>
+    </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            The Go suite's end-to-end test spawns the real test-mode sidecar over the real wire -
+            which needs the proxy module's test jar (TestModeMain and the harness), its main jar,
+            and core's test jar underneath. Declaring them here is what makes the CI matrix row's
+            exact command build those modules first and resolve them; build-classpath below writes
+            the resulting classpath to target/sidecar-classpath.txt, where internal/harness reads
+            it.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all, so
+            an ordinary scoped build still runs no Go toolchain and never reaches the engine. The
+            edge exists only in the opt-in lane that runs the foreign test suite. The Go client
+            itself obtains the protocol the way every non-JVM client does, by generating from the
+            .proto by path, with no Maven dependency. Modelled on the python-e2e-harness profile.
+
+            NOT NEEDED BY THE CONFORMANCE RUNNER. cmd/conformance-runner is driven by the shared
+            suite (parallel-consumer-proxy-conformance), which hosts the engine in its OWN JVM and
+            hands the runner a sidecar to spawn - so that lane needs nothing from here.
+        -->
+        <profile>
+            <id>go-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above are resolvable, before the test
+                                     phase where the Go suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                NO maven-clean-plugin FILESET HERE, AND THAT IS A MEASURED RESULT RATHER THAN AN
+                OMISSION - the note exists because "nothing to clean" and "nobody wired the clean"
+                look identical in a pom (astubbs#242).
+
+                GO WRITES NOTHING INTO THIS DIRECTORY. `go build ./...` matches several packages, and
+                for that form the toolchain compiles as a check and DISCARDS the objects - verified
+                by running it in a pristine tree and finding not one new file, tracked or ignored.
+                What it produces instead goes to the build cache, GOCACHE (~/.cache/go-build), with
+                the modules in GOMODCACHE (~/go/pkg/mod). Both are outside the module, both are
+                shared with every other checkout and agent on the machine, and both are this
+                language's ~/.m2 - so `go clean -cache` or `-modcache` is exactly the deletion this
+                repo forbids, not the one it wants. `go vet` and `go tool staticcheck` are the same
+                story.
+
+                THE ONE BUILT ARTEFACT IS ALREADY COVERED. The shared conformance suite prebuilds
+                `go build -o target/conformance-runner ./cmd/conformance-runner` - grep
+                `target/conformance-runner` in the conformance module's LanguageRunners - and Maven's
+                default clean takes target/ whole, no configuration needed. Proven both ways: the
+                binary is there after the suite's prebuild and gone after `mvn clean`.
+
+                gen/ IS SOURCE, NOT OUTPUT. The protobuf stubs under gen/ are committed on purpose,
+                because Go has no codegen step at `go get` time - scripts/generate-proto.sh says so
+                in its header. Deleting them would break a consumer of this module, and the
+                regeneration check is `git status` staying clean, not a clean removing them.
+
+                So if a future change here starts emitting into the module - a `go build -o` landing
+                outside target/, a `go test -c` binary - it needs a fileset added below, and this
+                paragraph is the reason nobody had to write one before.
+            -->
+        </plugins>
+    </build>
+
+</project>

@@ -1,0 +1,186 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import __PKG__.ParallelConsumerOptions;
+import __PKG__.proxy.engine.DispatchSink;
+import __PKG__.proxy.engine.LivenessSettings;
+import __PKG__.proxy.engine.ProxyProcessor;
+import __PKG__.proxy.protocol.v1.Dispatch;
+import __PKG__.proxy.protocol.v1.DispatchRecord;
+import __PKG__.proxy.protocol.v1.Report;
+import __PKG__.proxy.protocol.v1.Token;
+
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+
+import java.time.Clock;
+import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * The proxy engine - {@code ProxyProcessor}, the {@code ExternalEngine} the whole language-proxy
+ * programme (astubbs#242) sits on, and the one nobody had ever measured.
+ *
+ * WHY IT MATTERS MORE THAN THE OTHER TWO ARMS. Reactor and Mutiny are alternatives a user may choose.
+ * The proxy is not optional: every non-JVM client - Go, Python, Rust, .NET, all of them - reaches
+ * Parallel Consumer through this engine and through nothing else. If it escapes the platform-thread
+ * ceiling, that is a selling point for the entire proxy strategy. If it does not, it is a defect on
+ * the critical path of the roadmap, and one that no amount of client-side work can fix.
+ *
+ * WHAT "THE CALLEE" IS HERE, and why this arm builds its own instead of using the shared HTTP one.
+ * The proxy's callee is not an HTTP server: it is a connected worker on the far side of the dispatch
+ * protocol. A record leaves through {@link DispatchSink#dispatch}, the worker does whatever it does,
+ * and it comes back through {@code ProxyProcessor#report}. So this arm implements a worker, and gives
+ * it the SAME two forms the shared stub has, selected by the SAME environment variable, so the
+ * question "does the engine escape the ceiling when the callee holds no thread" is asked of the proxy
+ * in exactly the terms it was asked of Vert.x:
+ *
+ *   default              a thread-per-record worker: a fixed pool, one thread sleeping per record in
+ *                        progress. The analogue of the WireMock stub, and the shape a naive worker in
+ *                        any language has.
+ *   BENCH_ASYNC_STUB=1   a worker that registers its report on a shared timer and holds no thread.
+ *                        The analogue of the async stub, and the shape an async worker has.
+ *
+ * WHAT THIS ARM DOES NOT MEASURE, stated plainly because it bounds every number it produces. There is
+ * no gRPC here. The engine is driven directly across its {@code DispatchSink}/{@code report} seam, in
+ * process, so serialization, the wire and the session's inbound lane are all absent. TWO consequences,
+ * and they point the same way:
+ *
+ *   1. These are an UPPER BOUND on the deployed proxy, not a prediction of it.
+ *   2. In production the transport calls {@code report} from gRPC's SINGLE SERIALIZED INBOUND CALLBACK
+ *      for the session - the engine's own javadoc says so - whereas this arm reports from the worker's
+ *      own threads, in parallel. If a ceiling shows up HERE, the wire cannot remove it; if none shows
+ *      up here, the wire has still not been ruled out.
+ *
+ * The end-to-end arm is buildable - {@code ConfigureHandler} already wires the transport to the engine
+ * and {@code GrpcParallelConsumerClient} already speaks the protocol - and is the obvious next
+ * measurement. It is not this one.
+ *
+ * FIXED AT {@code byte[]}: the proxy never deserializes, because a record's bytes are decoded in the
+ * worker's own language. Hence the byte-array consumer, which is the ONLY thing about the consumer
+ * that differs from every other arm.
+ */
+public class ProxyArm implements BenchArm {
+
+    /** The proxy's callee is a worker, not the shared HTTP stub. */
+    @Override
+    public boolean usesSharedCallee() {
+        return false;
+    }
+
+    @Override
+    public long run(String bootstrap, String topic, int expected, int delayMs, int concurrency, int bufferSize)
+            throws Exception {
+        KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(
+                Bench.consumerProps(bootstrap, "org.apache.kafka.common.serialization.ByteArrayDeserializer"));
+        ParallelConsumerOptions<byte[], byte[]> options = Bench.options(consumer, concurrency, bufferSize);
+
+        // Leases stay ENABLED and are heartbeated, which is what a real session does. Disabling them
+        // would have been simpler and would have measured a cheaper engine: with leases on, the
+        // control loop sweeps the in-flight registry for expiries at the end of every pass, and that
+        // sweep is part of what a proxy user pays for.
+        LivenessSettings liveness = LivenessSettings.defaults(true, Clock.systemUTC());
+
+        // Assigned before the engine, because a dispatch can arrive on the control-loop thread the
+        // instant start() returns and the worker must already exist to receive it.
+        Worker worker = new Worker(delayMs, concurrency);
+        ProxyProcessor engine = new ProxyProcessor(options, worker, ProxyProcessor.DEFAULT_COALESCING_WINDOW,
+                liveness);
+        worker.engine = engine;
+
+        engine.subscribe(Collections.singletonList(topic));
+        Bench.responses.set(0);
+        long start = System.currentTimeMillis();
+        engine.start();
+        ScheduledExecutorService heartbeats = Executors.newSingleThreadScheduledExecutor(daemon("pc-bench-hb"));
+        // A third of the lease, which is the interval the protocol tells a client to use.
+        heartbeats.scheduleAtFixedRate(engine::heartbeat, 1, 5, TimeUnit.SECONDS);
+
+        while (Bench.responses.get() < expected) Bench.sleep(25);
+        long took = System.currentTimeMillis() - start;
+        Bench.windowClosed();
+        heartbeats.shutdownNow();
+        // THE ENGINE CLOSES BEFORE THE WORKER, and the order is not cosmetic. closeDrainFirst keeps
+        // dispatching whatever is still selected, so a worker shut down first rejects those
+        // dispatches and the rejection propagates out of the DispatchSink onto the control-loop
+        // thread - which fails the consumer, exactly as DispatchSink's contract says it will. Written
+        // the other way round, every proxy run ended in a RejectedExecutionException stack trace.
+        try { engine.closeDrainFirst(); } catch (Exception ignored) { }
+        worker.close();
+        return took;
+    }
+
+    private static java.util.concurrent.ThreadFactory daemon(String name) {
+        return runnable -> {
+            Thread thread = new Thread(runnable, name);
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
+    /**
+     * The simulated worker on the far side of the dispatch protocol: takes a wave, does the delay, and
+     * reports each record back.
+     * <p>
+     * {@link DispatchSink#dispatch} is called on the ENGINE'S CONTROL-LOOP THREAD and its contract
+     * forbids both throwing and blocking, so nothing here waits: a wave is handed to the pool or to the
+     * timer and the control thread returns immediately. Blocking here would stall record selection and
+     * the measurement would be of this class rather than of the engine.
+     */
+    private static final class Worker implements DispatchSink {
+
+        private final int delayMs;
+        private final boolean async = Bench.asyncCallee();
+        private final ExecutorService pool;
+        private final ScheduledExecutorService timer;
+        volatile ProxyProcessor engine;
+
+        Worker(int delayMs, int concurrency) {
+            this.delayMs = delayMs;
+            // Exactly one of the two exists, so a run cannot accidentally use both and report a peak
+            // drawn from two different worker models.
+            this.pool = async ? null : Executors.newFixedThreadPool(Math.max(concurrency, 1), daemon("pc-bench-worker"));
+            // Four threads: the number bench/threads/AsyncCeiling.java held 50,000 units in flight on.
+            this.timer = async ? Executors.newScheduledThreadPool(4, daemon("pc-bench-worker-timer")) : null;
+        }
+
+        @Override
+        public void dispatch(Dispatch wave) {
+            for (DispatchRecord record : wave.getRecordsList()) {
+                Token token = record.getToken();
+                if (async) {
+                    // Counted at ARRIVAL, matching the async stub, which counts a request when it lands
+                    // rather than when a thread picks it up - there is no thread to pick it up.
+                    Bench.calleeEnter();
+                    timer.schedule(() -> complete(token), delayMs, TimeUnit.MILLISECONDS);
+                } else {
+                    // Counted INSIDE the task, matching WireMock, which counts a request when a container
+                    // thread begins serving it. Counting at submission would report the queue depth as
+                    // in-flight work and hide exactly the ceiling this arm exists to look for.
+                    pool.submit(() -> {
+                        Bench.calleeEnter();
+                        Bench.sleep(delayMs);
+                        complete(token);
+                    });
+                }
+            }
+        }
+
+        private void complete(Token token) {
+            Bench.calleeExit();
+            engine.report(Report.newBuilder()
+                    .setToken(token)
+                    .setSuccess(Report.Success.newBuilder().build())
+                    .build());
+            Bench.responses.incrementAndGet();
+        }
+
+        void close() {
+            if (pool != null) pool.shutdownNow();
+            if (timer != null) timer.shutdownNow();
+        }
+    }
+}

@@ -1,0 +1,145 @@
+package bz.stub.parallelconsumer.client.grpc;
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import bz.stub.parallelconsumer.client.ClientOptions;
+import bz.stub.parallelconsumer.client.InboundRecord;
+import bz.stub.parallelconsumer.client.Outcome;
+import bz.stub.parallelconsumer.client.OutboundRecord;
+import bz.stub.parallelconsumer.proxy.protocol.WireDurations;
+import bz.stub.parallelconsumer.proxy.protocol.WireTimestamps;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Configured;
+import bz.stub.parallelconsumer.proxy.protocol.v1.DispatchRecord;
+import bz.stub.parallelconsumer.proxy.protocol.v1.ProcessingOrder;
+import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
+import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
+import com.google.protobuf.ByteString;
+
+import java.util.LinkedHashSet;
+
+/**
+ * The wire boundary of the gRPC transport: API types in, protocol messages out, and back. Everything
+ * protobuf-shaped in this module funnels through here, so the client classes above it read in API terms - and
+ * so the mapping is unit-testable without a connection.
+ * <p>
+ * <b>The token is echoed verbatim (KTD8):</b> {@link #toReport} sets the report's token to the very message
+ * object the dispatch carried - no rebuild, no field access, no interpretation - and the client stores nothing
+ * about the record anywhere. A stateless client cannot have a state bug.
+ *
+ * @author Antony Stubbs
+ */
+final class WireMapping {
+
+    private WireMapping() {
+    }
+
+    /**
+     * The tokens this transport actually implements, declared rather than left empty.
+     * <p>
+     * An empty {@code capabilities} list does not mean "nothing" on the wire - the specification reads it as the
+     * complete v1 baseline, so declaring nothing claims heartbeats, manifest reconciliation, worker-death
+     * reporting, terminal outcomes and the shutdown drain. This transport performs exactly one of those. The
+     * claim was harmless only while the proxy's own set was {@code dispatch} alone and the negotiated
+     * intersection could not exceed it; once the proxy grants {@code heartbeat}, a client that never heartbeats
+     * has every in-flight record returned at lease expiry and its later reports fenced as superseded, so nothing
+     * commits. Grow this list as each duty is genuinely implemented, never ahead of it.
+     */
+    private static final String DISPATCH_CAPABILITY = "dispatch";
+
+    /** The connect-time {@code Configure}: the API's options carried to the sidecar, unmodified (KTD5, R39). */
+    static Configure toConfigure(ClientOptions options) {
+        var configure = Configure.newBuilder()
+                .addAllTopics(options.topics())
+                .addCapabilities(DISPATCH_CAPABILITY)
+                .putAllKafkaProperties(options.kafkaProperties());
+        options.maxConcurrency().ifPresent(configure::setMaxConcurrency);
+        options.ordering().ifPresent(ordering -> configure.setOrdering(toWireOrdering(ordering)));
+        options.commitInterval().ifPresent(interval -> configure.setCommitInterval(WireDurations.toWire(interval)));
+        options.defaultMessageRetryDelay().ifPresent(delay ->
+                configure.setDefaultMessageRetryDelay(WireDurations.toWire(delay)));
+        return configure.build();
+    }
+
+    /**
+     * The handshake reply as the effective session this client will obey.
+     * <p>
+     * <b>An absent ceiling or executor count is a violation, never an "unlimited".</b> Both are always set by
+     * a conforming proxy, so absence carries no meaning to fall back on - and the fallback that reads best,
+     * "one", is the one that silently serialises a client that asked for concurrency. The Kotlin client found
+     * this while writing its own session; every language wrapping this transport now inherits the check
+     * instead of rediscovering it.
+     */
+    static NegotiatedSession toNegotiatedSession(Configured configured) {
+        if (!configured.hasMaxConcurrency() || !configured.hasExecutorCount()) {
+            throw new ProxyProtocolViolation(
+                    "the proxy's Configured omitted max_concurrency or executor_count; both are always set, "
+                            + "and absence never means unlimited");
+        }
+        return new NegotiatedSession(configured.getExecutorCount(), configured.getMaxConcurrency(),
+                new LinkedHashSet<>(configured.getCapabilitiesList()));
+    }
+
+    /**
+     * One dispatched record as the processor sees it. Absent wire fields map to the API's own absences: a
+     * missing key or value is {@code null} (Kafka's tombstone distinction), missing failure state means "has
+     * not failed" (R5's absence-is-the-form rule).
+     */
+    static InboundRecord toInboundRecord(DispatchRecord dispatch) {
+        var record = dispatch.getRecord();
+        return new InboundRecord(
+                record.getTopic(),
+                record.getPartition(),
+                record.getOffset(),
+                record.hasKey() ? record.getKey().toByteArray() : null,
+                record.hasValue() ? record.getValue().toByteArray() : null,
+                dispatch.hasAttempt() ? dispatch.getAttempt() : 1,
+                dispatch.hasLastFailureAt() ? WireTimestamps.toJava(dispatch.getLastFailureAt()) : null,
+                dispatch.hasLastFailureReason() ? dispatch.getLastFailureReason() : null);
+    }
+
+    /**
+     * The processor's outcome as the wire report, keyed by the dispatch's token <b>echoed verbatim</b> - the
+     * same message object, byte-identical on the wire (KTD8).
+     */
+    static Report toReport(Token token, Outcome outcome) {
+        var report = Report.newBuilder().setToken(token);
+        if (outcome.isSuccess()) {
+            var success = Report.Success.newBuilder();
+            for (OutboundRecord outbound : outcome.produce()) {
+                success.addProduce(toProduceRecord(outbound));
+            }
+            report.setSuccess(success);
+        } else {
+            var failure = Report.Failure.newBuilder();
+            outcome.failureReason().ifPresent(failure::setReason);
+            report.setFailure(failure);
+        }
+        return report.build();
+    }
+
+    private static ProduceRecord toProduceRecord(OutboundRecord outbound) {
+        var produce = ProduceRecord.newBuilder().setTopic(outbound.topic());
+        if (outbound.key() != null) {
+            produce.setKey(ByteString.copyFrom(outbound.key()));
+        }
+        if (outbound.value() != null) {
+            produce.setValue(ByteString.copyFrom(outbound.value()));
+        }
+        return produce.build();
+    }
+
+    private static ProcessingOrder toWireOrdering(bz.stub.parallelconsumer.client.ProcessingOrder ordering) {
+        switch (ordering) {
+            case UNORDERED:
+                return ProcessingOrder.PROCESSING_ORDER_UNORDERED;
+            case PARTITION:
+                return ProcessingOrder.PROCESSING_ORDER_PARTITION;
+            case KEY:
+            default:
+                return ProcessingOrder.PROCESSING_ORDER_KEY;
+        }
+    }
+}

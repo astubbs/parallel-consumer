@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 name: PR Dependency Check
 
 # synchronize is REQUIRED in the types list: this check is a required status, and required checks

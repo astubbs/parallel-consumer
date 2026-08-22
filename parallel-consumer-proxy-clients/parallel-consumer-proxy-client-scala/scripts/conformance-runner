@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The Scala conformance runner, as one executable path.
+#
+# WHY A WRAPPER AT ALL. The suite's registry checks that a runner is an EXECUTABLE FILE, because "an
+# interpreter plus a script" is not a path and the entry would then be a different shape in every
+# language. For a JVM client the "binary" is a JVM plus a resolved classpath, so this is where that
+# awkwardness lives - one file, beside the runner it launches, exactly as the interpreted languages
+# do it, and exactly as the Kotlin client's wrapper does.
+#
+# WHERE THE CLASSPATH COMES FROM. Maven writes it: the module's `conformance-classpath` execution of
+# dependency:build-classpath, at generate-test-resources, so it is current whenever the module has
+# been built. It is NOT regenerated here, and the registry entry deliberately carries no build
+# command - the reactor that runs the suite already builds this module, and a nested `mvn` would
+# rewrite the class directories of the very JVM executing the suite while it ran.
+#
+# A MISSING CLASSPATH FILE FAILS LOUDLY. Absence must never read as agreement, so this exits non-zero
+# naming the command that fixes it rather than falling back to something that might work.
+#
+# THE RUNNER IS IN target/test-classes, not target/classes: it is test tooling, and this module's
+# published surface is the client and nothing else.
+#
+# JAVA_HOME FIRST, then PATH: this repository's JDK 17 is installed by a version manager and is
+# deliberately not on PATH, so the JVM that ran Maven is the one to reuse - it is inherited through
+# the environment of the process that spawned this.
+#
+# exec, not a subshell: the suite reaps this process, and a shell left in the middle would hold the
+# runner's stdout open after it exited - and would also hold the sidecar's parent-death lifeline.
+
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+module="$(dirname "$here")"
+classpath_file="$module/target/conformance-classpath.txt"
+
+if [ ! -f "$classpath_file" ]; then
+  echo "conformance-runner: $classpath_file is missing - build the module first:" >&2
+  echo "  ./mvnw --batch-mode test-compile -pl :parallel-consumer-proxy-client-scala -am" >&2
+  exit 1
+fi
+
+if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+  java="$JAVA_HOME/bin/java"
+elif command -v java >/dev/null 2>&1; then
+  java=java
+else
+  echo "conformance-runner: no java on PATH and JAVA_HOME is unset or has no bin/java" >&2
+  exit 1
+fi
+
+exec "$java" \
+  -cp "$module/target/classes:$module/target/test-classes:$(cat "$classpath_file")" \
+  bz.stub.parallelconsumer.client.scaladsl.conformance.ConformanceRunner \
+  "$@"

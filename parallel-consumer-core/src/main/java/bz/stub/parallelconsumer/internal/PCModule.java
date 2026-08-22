@@ -127,6 +127,10 @@ public class PCModule<K, V> {
     private DynamicLoadFactor initDynamicLoadFactor() {
         if (options().getMessageBufferSize() > 0) {
             int staticLoadFactor = (options().getMessageBufferSize() / options().getTargetAmountOfRecordsInFlight()) + (options().getMessageBufferSize() % options().getTargetAmountOfRecordsInFlight() == 0 ? 0 : 1);
+            // Initial == maximum on purpose: the user asked for a fixed buffer, so the factor must not drift off it.
+            // The consequence is that DynamicLoadFactor#isMaxReached() is true from construction onwards - see
+            // DynamicLoadFactor#isStatic(), which is how callers tell "saturated after climbing" apart from "never
+            // able to move", and why AbstractParallelEoSStreamProcessor does not warn about this case.
             return new DynamicLoadFactor(staticLoadFactor, staticLoadFactor);
         } else {
             return new DynamicLoadFactor(options().initialLoadFactor, options().maximumLoadFactor);

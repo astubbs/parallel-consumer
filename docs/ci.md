@@ -31,7 +31,9 @@ document. This section is the detail behind it.
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
   (`bin/ci-build.sh`). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
-  detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
+  detection, PR-scoped mutation testing (PIT), dependency vulnerability scanning, and the
+  `proto: breaking` freeze gate (`bin/check-proto-breaking.sh` - the frozen proxy wire schema may
+  only gain, never change; buf `FILE` category against origin/master). Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
@@ -107,6 +109,44 @@ document. This section is the detail behind it.
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
     when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
     status check** - adding it to the master ruleset is a separate, deliberate act.
+  - `deferred-modules` runs `bin/check-deferred-modules.sh`, the **reverse** of the gate in
+    `clients.yml`. That workflow skips a language row while the module's maturity fragment carries
+    `deferred:`, which is right for a seeded skeleton and has no counterpart the other way: a wave
+    that writes a real client and forgets to lift the deferral gets a row reporting green while
+    building, testing and linting nothing, and `lifted_by:` is a note to a human. Source beyond the
+    skeleton plus `deferred:` still set fails, naming the module and the one edit that fixes it.
+    What counts as skeleton is an **allowlist** stated in the script's header - deliberately, since
+    an extension list would go stale silently, which is the failure the check exists to prevent.
+    Scope is whatever `clients.yml`'s matrix has a row for, read from the workflow, so a new row is
+    covered the day it is added; the rest of the maturity corpus is out of scope because `deferred:`
+    there also means "an aggregator or test module with no maturity claim to make", which skips
+    nothing. **`clients: deferred modules` is a new job name and is NOT yet a required status
+    check.**
+  - `client-scanners` runs `bin/check-client-scanners.sh`, which guards the other way a client row
+    can report green having checked nothing. `clients.yml` skips a row's static-analysis step when
+    its `scanner-cmd` is empty, which the Swift row needs - its module builds in a container that
+    already lints on the way to the artifact stage, so a host step would be the same command
+    written twice. Emptiness is therefore legal only for a language listed in the script's
+    `DELEGATED` table, and the entry is a claim the check tests: the named file must exist and must
+    still run the named analyser, so taking the lint out of that Dockerfile fails here rather than
+    silently. It also asks that every row name its `scanner`, and that a `scanner-cmd` pointing at
+    a module script (`scripts/analyse.sh`) points at one that is there. **`clients: static analysis
+    coverage` is a new job name and is NOT yet a required status check.**
+  - `dependabot-coverage` runs `bin/check-dependabot-coverage.sh`, which asserts that
+    `.github/dependabot.yml` and the manifests actually in the tree agree, **in both directions**. An
+    ecosystem Dependabot was never told about produces no error, no warning and no PR, so it is
+    indistinguishable from an ecosystem with nothing to update - which is how seven of this repo's
+    nine ecosystems went unwatched for the whole of the language-proxy work, surfacing only when a
+    gRPC CVE was found by a CI scan rather than by a bot. A manifest with no entry covering it fails
+    (the recurring direction: a new language arrives), and so does an entry whose `directory` does
+    not exist or holds no manifest of its ecosystem, because Dependabot reports *that* only in a
+    repository settings page nobody opens. It checks coverage **only** - never grouping, schedule or
+    ignores, which are policy the config argues for itself entry by entry. `parallel-consumer-proxy-
+    client-cpp` is genuinely uncoverable (no package manager) and is printed on every run, green ones
+    included, so it stays a stated fact rather than an absence. **Exit 1** = the check could not run
+    (no config, unparseable YAML); **exit 2** = a real coverage gap - the
+    `bin/check-ossindex-audit.sh` split, for the same reason. **`deps: Dependabot coverage` is a new
+    job name and is NOT yet a required status check.**
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
@@ -168,6 +208,38 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
     with `-Dossindex.fail=false` deliberately, so a findings-bearing run still reaches the guard
     instead of dying in the Maven step and taking the summary with it.
     `bin/test-check-ossindex-audit.sh` runs first.
+- **`clients.yml`** - "Clients", one job per non-Java client language. Builds, tests, runs the
+  conformance suite and the language's static analysis, and - since astubbs#242 - **audits that
+  language's dependencies for published vulnerabilities**, via `bin/client-audit.sh`. The workflow's
+  own header owns everything else about it (the maturity gate, the caching rule, the toolchain pins).
+  - **What the audit covers that nothing else does.** `dependency-audit.yml` above scans the Maven
+    tree; Go, Rust, npm, Ruby, Python and .NET dependencies were scanned by nothing at all, which is
+    how a stale gRPC pin carrying a published CVE shipped on the proxy branch. Dependabot does not
+    close it either, even with those ecosystems declared: it reads the **default branch**, and a pin
+    chosen at the start of a long-lived branch goes stale *during* the branch. This lane runs on the
+    branch, which is the only place that is visible.
+  - **Each language's own auditor**, because each reads its own lockfile and its own advisory
+    database - `govulncheck` even resolves whether the vulnerable *symbol* is reachable. npm and the
+    .NET SDK ship theirs; `govulncheck`, `bundler-audit` and `pip-audit` are pinned in the module's
+    own manifest exactly as its linters are; `cargo-audit` is the one with no manifest slot, so the
+    Rust row installs it pinned. **Swift and C++ have no auditor** - SwiftPM has no audit command and
+    the C++ module has no package manager - and both say so on every run rather than skipping
+    silently. A language with no recorded decision **fails**.
+  - **The exit code of an auditor is not a verdict, and that is why there is a script.** Measured:
+    `govulncheck -format json` and `dotnet list package --vulnerable` both print findings and **exit
+    0**; `npm audit` and `bundler-audit` use exit 1 for *found something* and for *could not find a
+    lockfile*. Each language is therefore classified structurally from its report, with the same
+    exit-code split as `bin/check-ossindex-audit.sh` - **1** the lane is broken and nothing was
+    learned, **2** the tree has a finding. `bin/test-client-audit.sh` runs first and is hermetic:
+    every auditor is replaced by a shim replaying recorded real output, so the two exit-0-with-
+    findings cases are *shown* to go red rather than assumed to.
+  - **Suppress a false positive in that ecosystem's own ignore mechanism** (`.cargo/audit.toml`,
+    `.bundler-audit.yml`, `pip-audit --ignore-vuln`), not in a registry here - a second list would
+    drift from the tool's, which is the defect the root pom's exclusion list already needs a guard
+    for.
+  - **The Go row's patch pin is load-bearing.** `govulncheck` reports advisories against the
+    toolchain's own stdlib, so a `toolchain:` behind on Go security releases reddens the row, naming
+    them. That is the freshness signal, and the fix is one line in the matrix.
 - **`release.yml`** - the dispatch-triggered release. See [`docs/releasing.md`](releasing.md).
 
 ## The automated review

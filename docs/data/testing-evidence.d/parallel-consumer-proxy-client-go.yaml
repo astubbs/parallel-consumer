@@ -1,0 +1,42 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Go client wave ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-client-go
+    artifact: parallel-consumer-proxy-client-go
+    coverage: >-
+      One conformance scenario, a-processed-record-advances-the-committed-offset, run end to end
+      over real gRPC against the test-mode sidecar: the sidecar is spawned as a child process, its
+      port read from the lifecycle channel, the fresh-session handshake completed, a dispatch wave
+      queued and handed to a goroutine executor, the user function run, the outcome reported with
+      the token echoed verbatim, and the session closed by half-close and the lifecycle pipe. The
+      assertion that it can fail was established by a negative control - returning an error from
+      the user function instead of succeeding produced two redeliveries with the attempt count
+      incremented and the failure reason verbatim, and the test went red.
+      Beside that, and not replacing it, Go is the first language wired into the shared
+      cross-language conformance suite: a conformance runner at cmd/conformance-runner implements the
+      contract every language implements, and the suite drives it through all five scenarios the
+      harness serves - the processed record, the unreported record, the failure-and-redelivery
+      history, a held record admitting a concurrent delivery on another key, and the in-flight
+      ceiling holding this client to exactly two unresolved records at once - asserting engine state
+      Go cannot see. Each of the five was proven able to fail by sabotaging the runner; the ceiling
+      by declaring double the ceiling the scenario prescribed, which the suite read as a peak of four
+      against a bound of two. The two
+      layers answer different questions: the shared suite proves this client behaves like every other
+      client on the protocol, while the tests above catch what is invisible from outside the process.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/parallelconsumer/session_test.go
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/cmd/conformance-runner/main.go
+    limitation: >-
+      One scenario of eleven, and the harness negotiates only the dispatch capability, so every
+      liveness, reconnect, worker-death, terminal and drain duty is untested because it is
+      un-negotiated rather than because it passed. Subscription is not a live variable either: the
+      mock harness seeds its records regardless of the topic a client subscribes to, so a
+      wrong-topic run still passes and cannot be used as a control. The regenerate-and-diff check
+      on the committed stubs is not wired into the build yet - the module's
+      parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/scripts/generate-proto.sh
+      is run by hand.

@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Rust</name>
+    <artifactId>parallel-consumer-proxy-client-rust</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over Cargo (Cargo.toml beside this file). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for
+        why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this skeleton
+        and runs no Rust toolchain at all.
+
+        THE BUILD STEP IS `cargo clippy`, NOT `cargo build`, AND THAT IS THE LINT GATE. The exact
+        command is the pc.foreign.build.args property below (an XML comment may not contain two
+        consecutive dashes, so its flags cannot be repeated here - that restriction is what makes
+        this paragraph read oddly, and it has already broken one sibling module's pom). Clippy
+        type-checks and lints every target, library and tests and build script alike, and denying
+        warnings turns every finding, clippy's and rustc's, into a failure; `cargo test` below then
+        does the real compile, so nothing is skipped by not running `cargo build`. Wiring the gate
+        here rather than only in CI means the command a developer runs locally is the one that
+        fails the Maven build. Proven to fail rather than assumed: see
+        docs/inflight/clients/rust.md (astubbs#242).
+
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND THE PROFILE BELOW IS HOW MAVEN ORDERS IT.
+        `cargo test` here spawns the conformance harness (TestModeMain, in parallel-consumer-proxy's
+        test jar). An earlier note in this place said Maven could not order that for us and told the
+        reader to build the proxy by hand first; it can, the same way the Go, Python and TypeScript
+        modules already do it, and the clients matrix row - which cannot run a hand command - was
+        red on exactly this. Locally the hand command still works and is still the fastest way:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The Rust test fails with that command in its message rather than skipping, because a test
+        that quietly does not run is not a passing test.
+
+        `protoc` is required too: the crate generates from the frozen .proto in build.rs. Its
+        header names the three places it looks, one of which is the copy Maven itself downloads.
+
+        CARGO AND MAVEN SHARE target/, SO `mvn clean` DELETES THE RUST BUILD OUTPUT and the next
+        foreign build recompiles the dependency tree from scratch (about a minute; the downloaded
+        crates themselves are cached in ~/.cargo and are not re-fetched). Left deliberately: a
+        clean that leaves a foreign toolchain's output behind is a clean that lies, and moving
+        cargo's output elsewhere would need a .cargo/config.toml whose only purpose is to hide from
+        the clean.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>cargo</pc.foreign.build.executable>
+        <pc.foreign.build.args>clippy --all-targets -- -D warnings</pc.foreign.build.args>
+        <pc.foreign.test.executable>cargo</pc.foreign.test.executable>
+        <pc.foreign.test.args>test</pc.foreign.test.args>
+    </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            tests/harness spawns the real test-mode sidecar over the real wire, which needs the
+            proxy module's test jar (TestModeMain and the harness) and its main jar. Declaring them
+            here is what makes the CI row's own command build the proxy before this module's test
+            phase; the row runs `package` rather than `test` for the other half of it, because the
+            harness looks for jar FILES and `test` stops one phase short of producing them.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all, so a
+            scoped build still runs no Rust toolchain and never reaches the engine. Modelled on the
+            go-e2e-harness profile, which was written when the Go row failed this same way.
+
+            The crate obtains the protocol the way every non-JVM client does, by generating from
+            the .proto by path in build.rs, with no Maven dependency.
+        -->
+        <profile>
+            <id>rust-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml. Test scope does
+                         not travel transitively, so the proxy's own test dependencies are not ours
+                         unless named - and the sidecar starts, then dies without them. -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <!--
+                                    THE HARNESS ASKS MAVEN FOR THIS LIST ITSELF IF IT IS NOT HERE,
+                                    AND IN CI THAT SECOND ASK FAILS. Its fallback runs a nested
+                                    `./mvnw -pl :parallel-consumer-proxy dependency:build-classpath`
+                                    with no -am, so parallel-consumer-core has to come from the
+                                    local repository - which a CI job never installs into, since
+                                    the reactor stops at `package`. Writing the file here, from the
+                                    reactor that already has every module resolved, means the
+                                    fallback is only ever the developer's path. Same arrangement as
+                                    the Go module's sidecar-classpath.txt, one filename apart
+                                    because each harness chose its own.
+                                -->
+                                <id>proxy-test-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the foreign suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/proxy-test-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                NO maven-clean-plugin FILESET HERE, AND THAT IS A MEASURED RESULT RATHER THAN AN
+                OMISSION - the note exists because "nothing to clean" and "nobody wired the clean"
+                look identical in a pom (astubbs#242).
+
+                CARGO ALREADY WRITES WHERE MAVEN ALREADY CLEANS. This crate declares no workspace and
+                no build.target-dir, so cargo's output directory is target/ beside Cargo.toml - the
+                same path as ${project.build.directory}, which the default clean removes whole. The
+                header above records the same collision from the other side, as the reason a `mvn
+                clean` costs the next foreign build about a minute of recompilation. Proven both
+                ways rather than reasoned about: target/debug/conformance-runner - the artefact the
+                shared conformance suite prebuilds by asking cargo to build that one binary target
+                (grep `conformance-runner` in the conformance module's LanguageRunners for the exact
+                argument list, which an XML comment may not repeat: it contains two consecutive
+                dashes) - is present after a build and gone after `mvn clean`.
+
+                THE FETCHED CRATES ARE NOT OUTPUT and stay: the registry and its sources live in
+                ~/.cargo, which is this language's ~/.m2, and `mvn clean` does not empty ~/.m2.
+                `cargo clean` is not used either - it needs the toolchain present to delete files,
+                and the whole premise of the foreign-clients profile is that the toolchain is absent
+                on an ordinary machine. Cargo.lock is committed source, not output.
+
+                So if a future change here moves cargo's output - a .cargo/config.toml setting
+                target-dir, a workspace root above this crate - the clean silently stops working,
+                and a fileset must be added below.
+            -->
+        </plugins>
+    </build>
+
+</project>

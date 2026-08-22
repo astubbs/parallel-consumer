@@ -77,7 +77,49 @@ ranking. Where a note sits is `inflight-state`'s job; what it is ranked against 
 | `web-` | The web GUI / demo |
 
 New prefixes are fine when something genuinely does not fit **and names an area, not a status**. Do
-not add subdirectories - the prefix is the grouping.
+not add subdirectories - the prefix is the grouping. One deliberate exception exists: `clients/<lang>.md` holds the language-proxy
+fan-out's per-language notes (astubbs#242) - a family of parallel same-shape items where a prefix
+would just re-spell the directory; do not add a second subdirectory without the same argument.
+
+## Labels, and the trailer that outlives the note
+
+Two tags already exist on most notes and are read by tooling and by agents scanning the directory:
+
+```
+<!-- inflight-type: bug | test | ci | deps | pr | branch | release | parked | next | feature | task -->
+<!-- inflight-impact: performance | correctness | coordination | process | architecture -->
+```
+
+**A third is now available**, for cross-cutting marks that are not the note's type or its impact:
+
+```
+<!-- inflight-labels: release-note, security, breaking-change, needs-measurement -->
+```
+
+Comma-separated, lowercase, hyphenated. Add a label when something needs to be **found later by a
+scan that does not know which note to look in** - the release-note sweep being the obvious one.
+`grep -rl 'inflight-labels:.*release-note' docs/inflight/` is the whole mechanism.
+
+**But a label on a note cannot survive the note.** This directory's first rule is that a closed item
+gets `git rm`'d, so anything that must still be findable after the work lands does **not** belong only
+here. Put it in the **commit message**, as a trailer:
+
+```
+Release-Note: Adaptive concurrency now backs off when the downstream system saturates.
+```
+
+Git history is the durable index. `git log --grep='^Release-Note:'` finds every one of them, across
+every note that has since been deleted, and it works at release time when the inflight file that
+prompted it is long gone. The repo already uses `Upstream-Issue:` the same way.
+
+**Use both when both apply**: the label so the open item is findable while it is open, the trailer so
+the *outcome* is findable once it is not. A label alone is a note to ourselves; a trailer is the
+record.
+
+**What earns a `Release-Note:` trailer**: a user- or operator-visible change. Not refactors, not test
+work, not internal measurement. The bar is the same as `CHANGELOG.adoc`'s - see the root AGENTS.md on
+changelog discipline - and the trailer exists to make assembling that changelog a scan rather than an
+archaeology exercise.
 
 ## Rules
 
@@ -85,6 +127,22 @@ not add subdirectories - the prefix is the grouping.
   When something closes, **`git rm` its file**. Do not rewrite it into a "FIXED/DONE" narrative:
   making a stale entry *accurate* is the wrong move. If it leaves open follow-ups, shrink the file to
   those and rename it.
+- **Before you `git rm` a note, ask what it knew that its outcome does not record - and relocate that
+  first.** Deleting is right; deleting *unread* is how this directory loses the only durable thing it
+  produces. A closed note's result usually survives in the code, a test, or a commit message. **What
+  does not survive is the method**: the comparison that would have been dishonest, the control arm
+  that made a difference attributable, the confound that reproduced perfectly across five rounds and
+  was still wrong, the instrument that read healthy while lying.
+
+  Those go to [`docs/solutions/`](../solutions/), which exists for exactly this and is the only place
+  a future reader looks that is not tied to a branch. **A note that taught nothing beyond its own
+  result can just go.** One that taught a method leaves the method behind.
+
+  The tell that you are about to lose something: if writing the deletion commit needs a paragraph
+  explaining what was learned, that paragraph belongs in `docs/solutions/` and the commit should cite
+  it. Worked example, from the Share Groups measurement whose proposal note was deleted the moment
+  its arm existed:
+  [`docs/solutions/best-practices/benchmark-a-rival-on-the-semantics-it-actually-offers.md`](../solutions/best-practices/benchmark-a-rival-on-the-semantics-it-actually-offers.md).
 - **Work your current PR resolves is tracked by that PR - delete its file in that PR.** Never leave a
   "delete this when #NN merges" marker on `master`. The merge is exactly when nobody is looking here,
   so the marker outlives the work and the next reader inherits a stale note that reads as live.

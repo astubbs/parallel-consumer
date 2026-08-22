@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Java reference implementation work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - artifact: parallel-consumer-proxy-client-java-harness
+    deferred:
+      reason: >-
+        The tests this module runs are evidence for the gRPC transport, not for itself - they are recorded against parallel-consumer-proxy-client-java-grpc, where a reader looking for that transport's evidence will look. A second entry here would be the same claim counted twice.
+      lifted_by: >-
+        Nothing is expected to lift it; this module has no published surface of its own to evidence.

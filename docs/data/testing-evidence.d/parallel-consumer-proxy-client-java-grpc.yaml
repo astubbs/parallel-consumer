@@ -1,0 +1,35 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Java client wave ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-client-java-grpc
+    artifact: parallel-consumer-proxy-client-java-grpc
+    coverage: >-
+      All four shared conformance scenarios, run as an in-JVM binding against a real gRPC server on
+      an ephemeral loopback port. In-JVM rather than a spawned subprocess for a reason particular to
+      this client: it has no spawn of its own - starting the sidecar belongs to the lifecycle unit,
+      not the transport - so a subprocess runner would have had to write the spawn the library lacks
+      and then test that instead. Every byte still crosses a genuine stream.
+      Beside that, and not replacing it, GrpcSpikeConformanceTest and the java-harness module cover
+      what the shared scenarios do not: the produce payload, FIFO hand-out through a single
+      executor, the async processor answering off-thread, the session-end stage, and the
+      records-out-for-processing leak check. SessionEndTest pins that a mid-session stream error
+      ends the session with its cause and releases the executors, each half proven by reverting the
+      behaviour while keeping the API so it still compiled.
+      Each scenario was established able to fail by sabotage rather than assumed: four mutations,
+      each turning exactly its own scenario red across every binding while the other rows stayed
+      green.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/JvmClientBindings.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src/test/java/bz/stub/parallelconsumer/client/grpc/SessionEndTest.java
+    limitation: >-
+      Four scenarios, and the harness negotiates only the dispatch capability, so every liveness,
+      reconnect, worker-death, terminal and drain duty is untested because it is un-negotiated
+      rather than because it passed. The sidecar spawn-and-reap path is not exercised here at all,
+      by design - this client does not own it - so it is covered by the languages that do. The mock
+      harness also seeds its records regardless of the subscribed topic, so subscription cannot be
+      used as a control.

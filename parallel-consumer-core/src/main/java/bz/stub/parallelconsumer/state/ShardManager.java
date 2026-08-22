@@ -72,6 +72,24 @@ public class ShardManager<K, V> {
 
 
     /**
+     * How many records the shards are currently holding, derived by conservation rather than counted.
+     * <p>
+     * Shared with every {@link ProcessingShard} this manager creates, so that the admissions and retirements of
+     * all shards reduce to one figure that can be read in O(1) from the control thread.
+     *
+     * @see #getNumberOfRecordsInShards()
+     */
+    private final RecordPopulation recordPopulation = new RecordPopulation();
+
+    /**
+     * Shared by every shard this manager creates, so it survives the removal of emptied shards.
+     *
+     * @see DispatchScanMeter
+     */
+    @Getter
+    private final DispatchScanMeter dispatchScanMeter = new DispatchScanMeter();
+
+    /**
      * View of {@link WorkContainer}s that need retrying sorted by retryDue.
      */
     @Getter(AccessLevel.PACKAGE) // visible for testing
@@ -81,7 +99,10 @@ public class ShardManager<K, V> {
      * Iteration resume point, to ensure fairness (prevent shard starvation) when we can't process messages from every
      * shard.
      */
-    private Optional<ShardKey> iterationResumePoint = Optional.empty();
+    // volatile because the direct-pull engine has every worker running getWorkIfAvailable concurrently. It is a
+    // fairness hint, not state anything depends on, so a lost update is harmless - but a thread reading a stale
+    // reference forever would starve a shard, and volatile costs nothing on a field written once per scan.
+    private volatile Optional<ShardKey> iterationResumePoint = Optional.empty();
 
     private Gauge shardsSizeGauge;
     private Gauge numberOfShardsGauge;
@@ -131,6 +152,99 @@ public class ShardManager<K, V> {
                 .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
                 .sum();
         return retryQueueSizeAndNumberReadyToBeRetried.getRight() + (diffBetweenShardsAndRetrySize < 0 ? 0 : diffBetweenShardsAndRetrySize);
+    }
+
+    /**
+     * How many records the shards currently hold - selectable, out at a worker, or waiting out a retry delay.
+     * <p>
+     * Derived by conservation ({@code admitted - retired}) rather than counted, so it cannot disagree with the
+     * shards' contents the way a separately maintained running total can, and it is O(1) to read.
+     *
+     * @see RecordPopulation
+     */
+    public long getNumberOfRecordsInShards() {
+        return recordPopulation.getInSystem();
+    }
+
+    /**
+     * How many records the shards hold that are parked waiting out a retry delay, and so cannot be worked on yet
+     * however much capacity there is.
+     * <p>
+     * Subtracted from {@link #getNumberOfRecordsInShards()} to get the figure that gates record intake: a
+     * consumer whose entire buffer is in retry back-off should keep fetching, or it would idle its workers
+     * waiting on delays.
+     */
+    public long getNumberOfRecordsParkedForRetry() {
+        var sizeAndReady = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
+        return sizeAndReady.getLeft() - sizeAndReady.getRight();
+    }
+
+    /**
+     * The conservation counters themselves, for tests that need to assert on both sides of the balance.
+     */
+    // visible for testing
+    RecordPopulation getRecordPopulation() {
+        return recordPopulation;
+    }
+
+    /**
+     * Ground truth for {@link #getNumberOfRecordsInShards()}: counts the shards' contents by scanning them.
+     * <p>
+     * O(n) and deliberately independent of the conservation counters, so a test can hold the two against each
+     * other. Not for production use - that is the whole reason the conservation figure exists.
+     */
+    // visible for testing
+    long countRecordsInShardsByScan() {
+        return processingShards.values().stream()
+                .mapToLong(ProcessingShard::getCountOfWorkTracked)
+                .sum();
+    }
+
+    /**
+     * The raw sum of the per-shard available-work counters, with no flooring applied.
+     * <p>
+     * {@link #getNumberOfWorkQueuedInShardsAwaitingSelection()} floors its result, which hides both directions of
+     * counter drift from any test that reads it. This exposes the unfloored figure so drift can be asserted on
+     * directly.
+     */
+    // visible for testing
+    long sumOfShardAvailableCounters() {
+        return processingShards.values().stream()
+                .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
+                .sum();
+    }
+
+    /**
+     * An upper bound on how many records could be handed out <em>right now</em>, used by the direct-pull engine to
+     * decide how many parked workers to wake.
+     * <p>
+     * Not the same as {@link #getNumberOfWorkQueuedInShardsAwaitingSelection()}, and the difference is the whole
+     * point: under an ordered mode a shard hands out at most one record at a time, so a shard holding 25,000 queued
+     * records still offers exactly one. Waking a worker per queued record there sends every thread in the pool to
+     * contend over a handful of selectable records, which costs far more than the records are worth.
+     * <p>
+     * <b>Under an ordered mode this now counts the shards that can actually yield</b>, rather than estimating with
+     * the shard total. It used to be {@code min(awaitingSelection, shardCount)} only because the per-shard truth
+     * was unavailable: a shard already holding a record out at a worker offers <em>nothing</em>, not one, and
+     * before {@link ProcessingShard#getCountOfWorkInFlight()} there was no O(1) way to tell. In the steady state
+     * of an ordered workload most shards are occupied, so the old figure over-reported by roughly the worker
+     * count on every pass, and every one of those wake-ups found nothing.
+     *
+     * @return the number of records that could plausibly be taken now, at most
+     */
+    public long getUpperBoundOnSelectableWork() {
+        long awaitingSelection = getNumberOfWorkQueuedInShardsAwaitingSelection();
+        if (options.getOrdering() == ProcessingOrder.UNORDERED) {
+            // Unordered shards will hand out as many as are asked for, so the queued count IS the bound.
+            return awaitingSelection;
+        }
+        long shardsThatCouldYield = processingShards.values().stream()
+                .filter(shard -> !shard.isBlockedByWorkInFlight())
+                .filter(shard -> shard.getCountOfWorkAwaitingSelection() > 0)
+                .count();
+        // still bounded by the queued count, which nets out records parked in retry back-off - a shard's own
+        // available counter deliberately does not
+        return Math.min(awaitingSelection, shardsThatCouldYield);
     }
 
     public boolean workIsWaitingToBeProcessed() {
@@ -183,7 +297,7 @@ public class ShardManager<K, V> {
 
         // don't need to synchronise on /adding/ elements, as the iterator would just stop early
         var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm()));
+                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation, dispatchScanMeter));
         shard.addWorkContainer(wc);
     }
 
@@ -226,10 +340,22 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().onFailure();
+            shardOptional.get().markAvailableAgain();
             this.retryQueue.add(wc);
         }
 
+    }
+
+    /**
+     * Work returned without a verdict - restores shard availability but, unlike {@link #onFailure}, does
+     * <em>not</em> insert into the retry queue. There is nothing to retry: the record was never attempted to a
+     * conclusion, so it becomes immediately selectable rather than waiting out a retry delay it never earned.
+     */
+    public void onAbandoned(WorkContainer<?, ?> wc) {
+        log.debug("Work ABANDONED without verdict");
+
+        var key = computeShardKey(wc);
+        getShard(key).ifPresent(ProcessingShard::markAvailableAgain);
     }
 
     /**
@@ -283,7 +409,7 @@ public class ShardManager<K, V> {
             long tracked = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked).sum();
             if (tracked > 0) {
                 long awaitingSelection = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection).sum();
-                long inFlight = processingShards.values().stream().mapToLong(ProcessingShard::getCountWorkInFlight).sum();
+                long inFlight = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkInFlight).sum();
                 var retry = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
                 // Interpretation guide:
                 //  - returned 0 with awaitingSelection > 0  => STALL: selectable work exists but was not handed out (a real bug)
@@ -322,8 +448,7 @@ public class ShardManager<K, V> {
 
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
-                this, shardManager -> shardManager.processingShards.values().stream()
-                        .mapToInt(processingShard -> processingShard.getEntries().size()).sum());
+                this, ShardManager::getNumberOfRecordsInShards);
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
                 this, shardManager -> shardManager.processingShards.keySet().size());
     }

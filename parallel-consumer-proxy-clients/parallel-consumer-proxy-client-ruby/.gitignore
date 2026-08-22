@@ -1,0 +1,18 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Ruby build artefacts. The repository's root .gitignore covers `target/` (Maven's, and where this
+# module's cached sidecar classpath lands); everything below is this language's own.
+#
+# NOTE: lib/parallelconsumer/ is NOT ignored. The generated stubs are committed deliberately -
+# Ruby has no codegen step at `bundle install` time, so a consumer of this library must find them
+# already there. scripts/generate-proto.sh regenerates them, and re-running it on an unchanged
+# .proto must leave `git status` clean.
+#
+# .bundle/config IS committed, and that is not an oversight: it pins the install path to
+# vendor/bundle, which is what the clients CI matrix caches for this row. Without it a CI run
+# installs to the system gem directory and caches an empty directory.
+
+vendor/
+.yardoc/
+doc/
+*.gem

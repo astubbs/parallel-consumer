@@ -1,0 +1,21 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the protocol work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-protocol
+    artifact: parallel-consumer-proxy-protocol
+    coverage: >-
+      Codegen wiring proven by compiled protobuf and gRPC stubs; full-field round-trips of every
+      provisional message including optional-field presence; unknown-field preservation across
+      re-serialization; generated output verified byte-identical across independent clean builds
+      and across the downloaded-protoc and PATH-protoc build paths.
+    inspect:
+      - parallel-consumer-proxy-protocol/src/test/java/bz/stub/parallelconsumer/proxy/protocol/ProxyProtocolRoundTripTest.java
+    limitation: >-
+      The schema is provisional until the language-proxy plan's freeze unit (astubbs#242), so this
+      evidence proves serialization fidelity of the current message set, not protocol semantics -
+      the engine and spike units own those, and no client has carried these messages yet.

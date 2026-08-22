@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+//
 // Pure logic behind the "Verify new changelog entries cite an issue" step in
 // .github/workflows/pr-checklist.yml. It lives here rather than inline in the workflow YAML so it
 // can be unit tested - the same job runs changelog-ref-gate.test.js before the gate, so a

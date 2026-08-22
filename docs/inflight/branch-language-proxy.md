@@ -1,0 +1,249 @@
+# Branch: language proxy (astubbs#242)
+
+<!-- inflight-type: feature -->
+<!-- inflight-impact: coordination -->
+
+Requirements for a sidecar that runs Parallel Consumer and hands records to a non-Java
+application's worker processes over loopback. Plan lives at
+`docs/plans/2026-08-14-001-feat-language-proxy-plan.md` (the 2026-08-12 plan is retired). The
+module family is seeded and the spike has run; the protocol schema is FROZEN
+(`parallel-consumer-proxy/docs/protocol-specification.md` is the contract, and
+`bin/check-proto-breaking.sh` is the gate).
+
+## U1 gate outcomes: gRPC cleared both, and one hint is not optional
+
+Both gates KTD1 owed are cleared, measured on a throwaway probe (gRPC 1.73.0, protobuf-java 3.25.5,
+GraalVM CE 25.0.2), not desk research. The probe is discarded; these outcomes are its only output.
+U2 may author a schema against gRPC.
+
+**R29 — declarable authority: CLEARED.** A `ServerInterceptor` reads the connection's declared
+`:authority` from `ServerCall.getAuthority()` and rejects an unlisted one with `PERMISSION_DENIED`.
+The rejection lands *before* application handling: closing the call in `interceptCall` and returning
+a no-op listener means the service method never runs. Proven by counters rather than by inspection —
+across a rejected connection both the service-invocation count and the application-message count
+were unchanged. A connection declaring no authority is accepted, which is the default R29 asks for.
+Behaves identically on the JVM and in the native image, so U6's allowlist has a real seam to enforce
+on.
+
+**R25 — native image: CLEARED.** The bidirectional-streaming hand-out loop builds with
+`--no-fallback` and runs as a 45MB ELF binary under Substrate VM, completing the full
+credit/record/outcome cycle. Build takes 33–52s.
+
+### The protobuf hints, and the one that fails silently
+
+Where the metadata actually comes from, since almost none of it is protobuf's:
+
+- **`protobuf-java` 3.25.5 ships no native-image metadata at all.** Verified in the jar.
+- **`grpc-netty-shaded` ships its own** — 19 `native-image.properties`, mostly Netty
+  `--initialize-at-run-time`. Automatic, nothing to do. It warns that these sit under a
+  non-recommended layout; harmless.
+- **The GraalVM reachability metadata repository** (`native-maven-plugin`,
+  `<metadataRepository><enabled>true</enabled>`) contributes exactly **one** entry:
+  `java.time.Instant` with `allDeclaredMethods`, conditional on
+  `io.grpc.internal.InstantTimeProvider`. It carries no entry for gRPC 1.73.0 and silently resolves
+  to the `1.69.0` directory. The pin has since moved to 1.75.0 (GHSA-prj3-ccx8-p6x4) and this is
+  unchanged: `1.69.0` is still the only `io.grpc/grpc-core` directory the 0.10.6 repository ships,
+  so every version we could pin resolves to it.
+
+**Direct generated-API use needs no protobuf hints.** `setRecordId`/`getRecord` and the generated
+parser are plain Java. That is the entire hand-out path, and it is why the first native build passed
+without any hand-written config.
+
+**Descriptor-driven reflection does need hints, and its absence is invisible until runtime.**
+`getDescriptorForType`, `getField`, `TextFormat`, `JsonFormat` and `DynamicMessage` all go through
+`GeneratedMessageV3.FieldAccessorTable`, which reflects on the generated accessors. Unregistered,
+the build stays green, the binary runs, and the call fails only when that path is first exercised:
+
+```
+IllegalStateException: Generated message class "probe.gen.Record" missing method "getRecordId"
+```
+
+The fix, verified by rebuilding and re-running rather than assumed: a `reflect-config.json` under
+`META-INF/native-image/` registering **each generated message class and its `$Builder`** with
+`allDeclaredMethods` and `allDeclaredFields`. That moved the image from 3,209 to 3,214 reflective
+types and from 2,279 to 2,821 methods, and the descriptor path then worked natively.
+
+This is the same failure shape as the `release.target` trap below — compiles happily, fails at
+runtime, build cannot detect it. So U2 should decide deliberately whether the schema's consumers may
+touch the descriptor path at all, rather than discovering it in U7 when the sidecar is packaged.
+
+## Interaction model: what is settled, and one dead end
+
+The credit-based design in the plan is **superseded**. The sidecar registers as PC's user function and
+returns a future completed when a worker reports — it is an `ExternalEngine`, the same seam Vert.x and
+Reactor already use. The plan on disk has not been rewritten yet, so it still reads as if the credit
+ledger were live; treat this note as current where the two disagree.
+
+- **The wrapper is the layer, and Java is the degenerate case of it.** "PC in every language" means
+  every language gets the same client wrapper; to the user it looks native. Java's wrapper is the same
+  layer with one fewer hop, because it sits directly on the engine with no protobuf underneath. This is
+  one client model with a missing layer in the Java case, not two architectures.
+- **Workers never produce to Kafka directly.** A worker's output travels back through the engine over
+  the protocol, and the sidecar produces. This keeps exactly-once entirely on the JVM side: one producer,
+  one transactional id, behind one epoch check. Settled deliberately, for simplicity.
+- **Fencing is Kafka's own EoS model, borrowed.** Each delivery carries an epoch; a dead client is
+  fenced and the epoch increments when the record is handed to another worker. PC already implements
+  the mechanism internally — `WorkContainer.deliveryCount` captured at dispatch, with
+  `isReturnForSupersededDelivery()` discarding a return that names a superseded delivery. What the
+  protocol adds is making that epoch explicit on the wire, echoed by the worker.
+  Note the boundary honestly: this fences reports and Kafka-side effects. It cannot fence a worker's
+  *external* side effects — a database write or an HTTP call — which is true of any at-least-once
+  system and should not be implied otherwise.
+
+- **The engine puppeteers; the client spawns.** The app starts the sidecar. The sidecar decides how many
+  executors and when, and says so in a message; the client library — already holding the user's function —
+  spawns them using its own language's mechanism. The engine never learns what the function is.
+  This deletes the bind-race election (one app process starts one sidecar, so there is nothing to elect)
+  and the detached process group (that existed only so the sidecar could outlive the worker that won the
+  race; the app is now the parent that should own it). It also avoids the sidecar needing to know how to
+  start the user's program, which would have forced the user function to be an importable name rather than
+  a closure. Supersedes KTD7.
+- **Configuration is code, delivered connect-time over the protocol.** No config files, no environment
+  variables, no shell. Lean on the target language's own tooling; generated stubs are not a translation
+  layer. This moves R9, which currently says options are startup configuration and that no worker sets
+  sidecar-wide options over the protocol.
+- **Max concurrency keeps the meaning it already has.** Set by the app, sent to the engine, used as the
+  in-flight ceiling — which is exactly what `maxConcurrency × batchSize` already means to an
+  `ExternalEngine`. No core change. Two proposals to withdraw the option were both wrong.
+- **App shutdown shuts down the sidecar.** Drain in-flight work within the bounded timeout per R12, commit,
+  leave the group. R33's no-connection grace period is no longer needed — the app's death is the signal
+  rather than something inferred from zero connections. One backstop is still required: on SIGKILL nothing
+  runs, so the sidecar must watch its parent and exit itself (closing pipe, or `PR_SET_PDEATHSIG` on Linux),
+  or a JVM leaks while still holding group membership and partitions do not rebalance until session timeout.
+- **Credentials now travel the protocol, revising R35.** The original forbade it because the loopback
+  surface is unauthenticated, and rejected argv because `/proc` is world-readable. The revision rests on a
+  stronger argument: the sidecar accepts exactly one connection, from the process that spawned it, and does
+  nothing until configured — so nothing sits on disk or in `/proc`, and there is no window for a second
+  local process to connect.
+
+**Correction to a claim made during ideation:** KTD7 was reported as a `session-settled: user-directed`
+decision. It is not — it carries no such label; only KTD1 and KTD2 do among the KTDs. Superseding it
+reverses nothing the user directed.
+
+**Dead end — do not re-propose: compiling PC to a native shared library.** The idea was to emit a
+C-ABI library via GraalVM `native-image --shared` so non-JVM languages could run the engine in-process
+with no protocol at all. It was an agent's extrapolation during ideation, not a proposal, and it is
+rejected. Two things undercut it even on its own terms, recorded so the next session does not
+rediscover them: the native-image gate this branch cleared produced an **executable**, not a `--shared`
+export, which is materially different (entry-point surface, isolate and thread-attach semantics, GC
+coexistence with a foreign runtime, callbacks re-entering from foreign threads — none tested); and the
+Temporal precedent usually cited for it is narrower than it looks, since Temporal's Go and Java SDKs
+are independent implementations rather than bindings over its shared core.
+
+**Superseded 2026-08-17.** The rejection above was on direction, and the owner has now proposed the
+direction — which dissolves that half while the untested caveats stand as a qualification probe's
+checklist. The worked continuation lives in
+`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html` (the `native-bindings`
+section): the FFI track is re-scoped to Rust, C++ and edge targets; Go, Python, Ruby, Node and .NET
+are better served by the sidecar; and the run's larger outcome is KTD41 in the plan — the invisible
+sidecar (each language package vendors and spawns the cleared native executable; attach is the escape
+hatch) is the product's recovered original intent. The plan's Scope Boundaries and KTD11 carry the
+matching updates.
+
+## Owed: the data records, and not before the module exists
+
+A new user-visible module needs three YAML records, and all three must land in the PR that lands
+the module, not in this one:
+
+- A row in `docs/data/module-maturity.yaml` (fields per `docs/data/schema.yaml`, anchor
+  `module_required:`), or a staged row in `docs/data/staging/module-maturity-rows.yaml` until then.
+- A matching entry in `docs/data/testing-evidence.yaml` (anchor `module_evidence_required:`) whose
+  id is what the maturity row's `evidence_id` points at.
+- A feature record under `docs/features/` per `docs/features/README.md`, anchor `## Page contract`.
+
+Writing them now would be wrong, and the corpus already has the scar: two feature records were
+removed rather than shipped because their modules were not in `pom.xml`, so the Maven coordinates
+they published could not resolve. `docs/inflight/next-experimental-module-records.md` holds that
+rule. `bin/check-docs-data.sh` validates the schema but does **not** cross-check the module list
+against `pom.xml`, so a missing row is silent — the gate will not catch this for us.
+
+## Everywhere a new module has to be registered
+
+Collected because missing one is the failure mode here, and two of them are easy to miss:
+
+- Root `pom.xml`, anchor `<modules>` — before `parallel-consumer-examples`, which stays last.
+- `.github/workflows/maven.yml`, **two** duplicate-code detector lists with **different
+  separators** — anchor `duplicate-code-cross-check` is space-separated, anchor
+  `duplicate-code-detection-tool` is comma-separated.
+- The two YAML data files above.
+- `.github/workflows/publish.yml` and `release.yml`, anchor `-pl '!:parallel-consumer-examples`,
+  only if the module should not publish to Central.
+- `src/docs/README_TEMPLATE.adoc` and `AGENTS.md` anchor `## Module Structure`. `README.adoc` is
+  generated — editing it directly is wrong.
+
+## Traps this branch has already paid for finding
+
+- **`release.target` is 8.** The build compiles Java 17 source to Java 8 bytecode via Jabel, so
+  modern networking APIs are invisible. A wire-protocol module almost certainly needs the override
+  `parallel-consumer-mutiny/pom.xml` already models. Its comment records why this must be
+  deliberate: at the wrong target the module compiled happily and failed at runtime, because the
+  build cannot detect the mistake.
+- **The duplicate-code cap is 5% absolute and the baseline is ~4.2%.** Copying the dashboard's
+  `HostAllowlist` and port-walk into a sibling module is the shape of change that exceeds it. The
+  cheaper order is to land this module depending on nothing from `feats/web-gui`, then extract a
+  shared serving module once both are on trunk, where the extraction deletes duplication instead of
+  creating it.
+- **`gh` resolves to confluentinc unless `gh repo set-default astubbs/parallel-consumer` has run in
+  the clone.** The config is local and uncommitted, so every fresh worktree and sandbox starts
+  without it.
+- **`native-image` needs a C toolchain, and its absence reads like a compile error.** It never links
+  anything itself — it shells out to `gcc` — so a missing compiler surfaces at the link step and
+  looks like a fault in the code being built. `build-essential` and `zlib1g-dev` are now in the
+  Ansible workstation role. `gcc-14-base` alone is only runtime support files, so `command -v gcc`
+  is precisely the check that misleads here. The image links `dl`, `pthread`, `rt` and `z`.
+
+## What collides
+
+`feats/web-gui` (astubbs/parallel-consumer#268) touches the same root `pom.xml` module line, the
+same two workflow lists, `AGENTS.md`, and `NOTICE`. It also carries the `controlLoopHooks`
+`CopyOnWriteArrayList` fix and the whole chaos scenario framework, both of which this work would
+want. Whichever lands second resolves; nothing here depends on that branch by construction.
+
+## Still open — none of it blocks a start
+
+ASM3 — whether the users who asked for a Python client need key-ordered concurrency or the parallel
+consumption Share Groups now supply — is **settled**: conversations with requesting users confirm
+the narrower claim is what they need. The plan's Problem Frame records it. It is not an open risk
+and should not be reopened as one.
+
+Two values remain unset, and the plan carries them as explicit assumptions in its Planning Contract
+rather than as blockers: ASM1, the Go client's effort budget, and ASM2, the latency multiple the
+first success criterion is judged against. Each names what would falsify it.
+
+## From the first review checkpoint (2026-08-14): one decision owed, and freeze-window notes
+
+**Decision owed (human): should the testing-evidence corpus get the same forward reactor
+cross-check as module-maturity?** Today a module's `testing-evidence.d/` fragment — deferral and
+all — deletes cleanly with every gate green (verified empirically in review). The catch: example
+modules carry maturity fragments but no evidence records, so the check either scopes to the
+fragment convention or those modules need evidence deferrals seeded. Small either way; needs the
+scoping call first.
+
+## Stacked on this branch
+
+[`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) (`feats/classic-vertx-demo`)
+rescues the 2021 asciinema demo and builds the per-language comparison demo on top of the clients.
+It jumps U35's queue and is blocked, proxy-side, on U10's sidecar entry point.
+
+## The dial direction is a decision, and it should be documented as one (2026-08-21)
+
+astubbs#242's design has the **sidecar as the gRPC server** and the application dialling in. A
+competitor doing the same job (llingr's relay) chose the **opposite** - the engine dials out and the
+application runs the gRPC server, which is also how Envoy's `ext_proc` filter works. Apache Beam's
+portability framework chose PC's direction, and states why: *runners often sit where they cannot
+accept inbound connections.*
+
+**Neither is wrong, and the networking argument is not the real one here** - the plan already has a
+loopback/UDS path with a single-connection guard, so both sides are on the same host by construction.
+
+**The real reason is lifecycle**, and it should be written down: PC's direction falls out of *"the app
+spawns the sidecar, so the app connects to it"*, which is what deletes the bind-race election and the
+detached process group from this design. An engine that dials out must know its handler's address
+before the handler exists, which is an ordering problem this design does not have. The competitor's
+direction falls out of the relay being an independently deployed container that must go and find its
+handler. Each is internally consistent, and each follows from who owns process startup.
+
+**Actions:** state this in the plan's KTD set as a considered choice with Beam cited; carry it into
+user-facing documentation, because "why does my app connect to the sidecar rather than the other way
+round?" is a question every client author will ask; and give it a feature record so the reasoning is
+not only in a plan.

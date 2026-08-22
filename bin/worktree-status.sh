@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+
 # worktree-status — show who/what owns each git worktree.
 # Reads the local-only `.worktree-owner` marker in each worktree and cross-checks
 # live process holders via lsof. The marker convention answers the question the

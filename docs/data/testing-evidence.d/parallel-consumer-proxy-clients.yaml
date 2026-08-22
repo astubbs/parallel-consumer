@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the language-proxy branch work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - artifact: parallel-consumer-proxy-clients
+    deferred:
+      reason: >-
+        No test evidence is claimed for an aggregator packaging pom; its children carry their own evidence as their waves start.
+      lifted_by: >-
+        astubbs#242 - the language-proxy plan's release-documentation pass.

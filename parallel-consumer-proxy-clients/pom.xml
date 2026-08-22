@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Clients</name>
+    <artifactId>parallel-consumer-proxy-clients</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        THE SHARED SURFACE OF THE CLIENT FAN-OUT - seeded complete, edited by no language agent.
+        Every client module is listed here from the outset (astubbs#242,
+        docs/plans/2026-08-14-001-feat-language-proxy-plan.md), so an agent implementing one
+        client only ever adds files inside its own module directory and never touches a file
+        another agent owns. If you are a language wave and believe you need to edit this pom,
+        stop: the thing you need belongs in your own module's pom, or the seed was wrong and the
+        fix is its own change, not a side effect of yours.
+
+        The Java variants nest one level deeper (singular inside plural, the
+        parallel-consumer-examples convention); the nine non-JVM clients are thin Maven wrappers
+        that drive their language's own build tooling - see the foreign-clients profile below.
+        Kotlin is the exception among the non-Java entries: it is a JVM language, builds with
+        Maven directly, and needs no foreign toolchain, so it carries no wrapper wiring.
+    -->
+    <modules>
+        <module>parallel-consumer-proxy-client-java</module>
+        <module>parallel-consumer-proxy-client-kotlin</module>
+        <module>parallel-consumer-proxy-client-scala</module>
+        <!--
+            NOT A CLIENT: the shared cross-language conformance suite, which drives every client
+            module's runner through one scenario set and asserts the same things about each
+            (astubbs#242). It is a leaf - nothing depends on it - which is what lets it depend on
+            the engine's test jar without dragging the engine into any client's ordinary build. Its
+            own pom carries that reasoning and the reactor measurement that checks it.
+        -->
+        <module>parallel-consumer-proxy-conformance</module>
+    </modules>
+
+    <!--
+        Skeletons publish nothing to Maven Central. Inherited by every client module; a wave whose
+        module reaches publishable content overrides these in ITS OWN pom
+        (maven.deploy.skip=false etc.), never here - per-module ownership is the whole design.
+        The examples aggregator models the same trio and records the central-publishing plugin
+        version trap that makes the explicit plugin declaration below necessary.
+    -->
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+        <gpg.skip>true</gpg.skip>
+        <!--
+            Foreign exec executions are skipped unless a module opts in by overriding this to
+            false. The guard is NOT redundant with the foreign-clients profile below: the root pom
+            declares exec-maven-plugin (for the copyright check, inherited=false), and Maven still
+            carries that plugin DECLARATION into every child's effective model - so when the
+            profile is active, its managed executions would bind to every module in this tree,
+            aggregators and Java modules included, and fail on the modules that define no foreign
+            command. Verified empirically: without this guard, -Dpc.foreignClients ran
+            foreign-build on this aggregator itself.
+        -->
+        <pc.foreign.skip>true</pc.foreign.skip>
+        <!--
+            Placeholder command, never meant to run: exec's 'executable' parameter is REQUIRED and
+            Maven validates it before the mojo's own skip check runs, so on a module that leaves
+            pc.foreign.skip=true the property must still resolve to something. /bin/false rather
+            than /bin/true, deliberately: if the skip guard ever regresses, the build goes red and
+            names the bug, instead of a no-op quietly reading as a passing foreign build.
+        -->
+        <pc.foreign.build.executable>false</pc.foreign.build.executable>
+        <pc.foreign.build.args>placeholder-never-runs</pc.foreign.build.args>
+        <pc.foreign.test.executable>false</pc.foreign.test.executable>
+        <pc.foreign.test.args>placeholder-never-runs</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <!--
+                    Version pin only, active in every build: each foreign-client module declares
+                    this plugin, and the enforcer's requirePluginVersions needs the version present
+                    whether or not the foreign-clients profile below contributes executions.
+                    3.5.0 matches the root pom's own exec-maven-plugin use.
+                -->
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
+                <!--
+                    No codegen pluginManagement yet, deliberately: the protocol module owns Java
+                    codegen from proxy.proto (a later unit on astubbs#242), and non-JVM clients
+                    generate from the .proto by path inside their own native builds - so nothing
+                    shared is missing here, and pinning an unused plugin version would be a guess
+                    nothing tests. If Java-side codegen ever needs shared config, it lands here
+                    before the fan-out releases any agent, when this file still has one owner.
+                -->
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <!-- version comes from the parent's pluginManagement -->
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!--
+            FOREIGN TOOLCHAINS ARE OPT-IN, and that is load-bearing. Nine always-on exec bindings
+            would make go, cargo, swift, dotnet, node, ruby and cmake mandatory for anyone
+            building core, and toolchain ABSENCE is the normal state of every machine that is not
+            that language's CI matrix runner. An ordinary build therefore builds eleven Maven
+            skeletons and runs no foreign tool at all; a CI matrix row (or a developer, locally)
+            opts one language in with -Dpc.foreignClients.
+
+            Wired once here rather than eight times: each foreign-client module declares
+            exec-maven-plugin and sets four pc.foreign.* properties naming its language's build
+            and test commands; this profile contributes the executions that run them. With the
+            profile inactive the declared plugin has no executions and does nothing. A foreign
+            build that fails exits non-zero and fails the Maven build - exec-maven-plugin
+            propagates the exit code - so a red row means a real failure.
+
+            CLEAN IS NOT WIRED THROUGH exec, AND CANNOT BE. `compile` and `test` run a foreign
+            command; `clean` deletes directories with maven-clean-plugin's filesets, configured by
+            each module in its OWN pom. The asymmetry is forced, and both halves of the reason
+            matter (astubbs#242):
+
+            1. EVERY SHELL-OUT MOJO DEMANDS TEST-SCOPE RESOLUTION, AND NOTHING IS BUILT AT CLEAN
+               TIME. Read from the plugin descriptors, not assumed:
+               exec-maven-plugin's `exec` and maven-antrun-plugin's `run` both declare
+               <requiresDependencyResolution>test</requiresDependencyResolution>, so Maven resolves
+               the whole test tree BEFORE the mojo's own skip check is even consulted - and binding
+               either one to `clean` therefore fails every module in this tree, including the ones
+               that supply no foreign command at all, because the plugin declaration the root pom
+               contributes carries these managed executions into every child's effective model.
+               Measured failure: `./mvnw clean -Dpc.foreignClients` died on
+               parallel-consumer-proxy-client-kotlin unable to resolve
+               parallel-consumer-proxy-client-java-harness:jar. The go/rust/dotnet modules survived
+               it only because a stale 0.6.0.0-SNAPSHOT happened to be installed in that machine's
+               ~/.m2 - the "declared is not resolvable" trap, in full, in
+               docs/solutions/build-errors/maven-multi-module-plugin-and-resolution-traps.md.
+               maven-clean-plugin's `clean` declares no resolution requirement at all, so it is
+               immune by construction rather than by luck.
+
+            2. DELETING A DIRECTORY NEEDS NO TOOLCHAIN, so cleaning must not be gated on one. The
+               whole point of this profile is that go, cargo, dotnet, node, ruby, swift and cmake
+               are absent from the normal machine. A command-driven clean would mean that a
+               developer who built once, then changed machines or uninstalled a toolchain, can no
+               longer delete the output - and that `bin/build.sh`, which is `clean package` with no
+               flag, leaves eight languages' output standing. So the filesets are NOT inside this
+               profile: plain `./mvnw clean` removes foreign build output too, which is what clean
+               means. Rust already behaved this way by accident, cargo and Maven sharing target/.
+
+            WHAT A MODULE MAY LIST: build OUTPUT, inside the module, by directory relative to
+            ${project.basedir}; a directory that does not exist is skipped silently, so the config
+            is idempotent and costs nothing on a tree that was never built. Do NOT list target/ -
+            the default clean already takes it. Do NOT list fetched dependencies (node_modules,
+            .venv, vendor, ~/.cargo, ~/.nuget): those are that language's ~/.m2, and `mvn clean`
+            does not empty ~/.m2. Do NOT reach outside the module for container images or BuildKit
+            cache - bin/build-client.sh's `build_natively` records why, and it binds harder here,
+            because several agents and worktrees share this machine and would lose output nobody
+            asked to rebuild.
+        -->
+        <profile>
+            <id>foreign-clients</id>
+            <!--
+                THE EIGHT FOREIGN MODULES LIVE HERE, NOT IN THE DEFAULT <modules>.
+
+                An ordinary Java build must not require go, cargo, dotnet, node, ruby and Docker,
+                so these modules did nothing unless -Dpc.foreignClients was set - but they still
+                appeared in the reactor, and printed SUCCESS for work that never ran. That is the
+                same untruth as a check that passes without having run, which this repo takes
+                seriously enough to have a solutions write-up for.
+
+                Excluding them is the honest form: the reactor now contains only what it builds.
+                The cost is that a developer cannot discover the other eight from the build, and
+                that is bought back by the notice the root pom prints once at the start.
+
+                CLEAN FOLLOWS PARTICIPATION. Each module's own clean is maven-clean-plugin, outside
+                any profile, so `mvn clean -Dpc.foreignClients` removes their output. A module that
+                is not in the build is not cleaned either, which is the consistent reading and the
+                owner's call.
+            -->
+            <modules>
+                <module>parallel-consumer-proxy-client-python</module>
+                <module>parallel-consumer-proxy-client-go</module>
+                <module>parallel-consumer-proxy-client-swift</module>
+                <module>parallel-consumer-proxy-client-rust</module>
+                <module>parallel-consumer-proxy-client-dotnet</module>
+                <module>parallel-consumer-proxy-client-typescript</module>
+                <module>parallel-consumer-proxy-client-ruby</module>
+                <module>parallel-consumer-proxy-client-cpp</module>
+            </modules>
+            <properties></properties>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <plugin>
+                            <groupId>org.codehaus.mojo</groupId>
+                            <artifactId>exec-maven-plugin</artifactId>
+                            <executions>
+                                <execution>
+                                    <id>foreign-build</id>
+                                    <phase>compile</phase>
+                                    <goals>
+                                        <goal>exec</goal>
+                                    </goals>
+                                    <configuration>
+                                        <skip>${pc.foreign.skip}</skip>
+                                        <executable>${pc.foreign.build.executable}</executable>
+                                        <commandlineArgs>${pc.foreign.build.args}</commandlineArgs>
+                                        <workingDirectory>${project.basedir}</workingDirectory>
+                                    </configuration>
+                                </execution>
+                                <!--
+                                    THERE IS DELIBERATELY NO foreign-clean EXECUTION HERE, AND IT IS
+                                    NOT AN OVERSIGHT - see "CLEAN IS NOT WIRED THROUGH exec" below.
+                                -->
+                                <execution>
+                                    <id>foreign-test</id>
+                                    <phase>test</phase>
+                                    <goals>
+                                        <goal>exec</goal>
+                                    </goals>
+                                    <configuration>
+                                        <skip>${pc.foreign.skip}</skip>
+                                        <executable>${pc.foreign.test.executable}</executable>
+                                        <commandlineArgs>${pc.foreign.test.args}</commandlineArgs>
+                                        <workingDirectory>${project.basedir}</workingDirectory>
+                                    </configuration>
+                                </execution>
+                            </executions>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+        </profile>
+    </profiles>
+
+</project>

@@ -7,7 +7,7 @@
 > Extracted from `origin/docs/ideate-perf-comparison-matrix` @3dd35926a, `docs/inflight/perf-comparison-matrix.md`.
 
 Candidate work, ranked in full in `docs/ideation/2026-08-17-perf-comparison-matrix-ideation.html`
-(branch `docs/ideate-perf-comparison-matrix`, stacked on `feats/proxy-requirements`, no PR). The ask
+(on `feats/proxy-requirements`, riding astubbs#293). The ask
 it serves: the classic README intro performance test running in each proxy language - the
 double-click demo wanted before astubbs#293 merges - across big-data replay, a slow processing
 stage, and a Kafka Streams augment-and-republish, comparing plain consumer, plain Streams, PC core,
@@ -55,3 +55,10 @@ under the recorded constraints (fingerprinted config, ratio framing, no absolute
 **Next step.** Brainstorm idea 1 (the harness architecture - everything else attaches to it) or
 idea 6 (the live loop) into requirements, then implement as a stacked PR off
 `feats/proxy-requirements`.
+
+**A consumer of this track's schema now exists (2026-08-20):**
+[`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) builds the per-language
+comparison demo this file's opening ask names. It needs the parameterised scenario definition -
+delay, ordering mode, failure percentage, max concurrency - so the constraint recorded here is now
+load-bearing rather than anticipated. Its arms are foreign-over-PC vs that language's own native
+client, and for Java specifically core-vs-sidecar, which is the attribution ladder's first rung.

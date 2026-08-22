@@ -1,0 +1,43 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Python client wave ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-client-python-alpha
+    artifact: parallel-consumer-proxy-client-python
+    coverage: >-
+      One end-to-end test drives the real test-mode sidecar over the real gRPC wire, on the shared
+      conformance scenario a-processed-record-advances-the-committed-offset - spawn, configure, receive a
+      dispatch wave, run the user's function in a worker process, report success with the delivery token
+      echoed, and drain. Unit tests cover the fork-safety ordering the design exists to protect (the
+      worker pool is created before any channel), the executor count arriving from the handshake, the
+      byte-for-byte token echo, and the translation of a returned, raised or malformed result into exactly
+      one outcome. `make proto-check` proves the committed stubs still match the frozen schema. A separate test pins
+      the shutdown's own duty: a worker whose function never returns is reaped rather than orphaned,
+      asserted through a descriptor the worker inherited reaching EOF - a process count cannot see it,
+      because the parent's bookkeeping knows nothing about the launcher's children. That test was
+      proven red against the defect it documents.
+      Beside that, and not replacing it, Python is wired into the shared cross-language conformance
+      suite: a conformance runner at scripts/conformance_runner.py implements the contract every
+      language implements, and the suite drives it through all five scenarios the harness serves -
+      the processed record, the unreported record, the failure-and-redelivery history, a held record
+      admitting a concurrent delivery on another key, and the in-flight ceiling holding this client to exactly two unresolved records at once - asserting engine state Python
+      cannot see. The fifth, the in-flight ceiling, was proven able to fail once for every language rather than here - in Go and in Kotlin, by declaring double the ceiling the scenario prescribed - and the conformance module's own evidence records it. Each of the first four was proven able to fail by sabotaging the runner, including the one
+      sabotage that works on the ordering scenario: a lock around the whole processor, which
+      deadlocks and exits 1. That sweep is also what found the worker-reaping defect: the negative control read an empty
+      transcript from a runner that had printed and exited, because an orphaned interpreter still held
+      the write end of its stdout.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/scripts/conformance_runner.py
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_worker_reaping.py
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_one_record_end_to_end.py
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_fork_safety.py
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_wire_and_outcomes.py
+    limitation: >-
+      Wave one only. The suite exercises one record on a mock-Kafka sidecar: there is no broker test, no
+      multi-record concurrency or FIFO hand-out test, and nothing covering connection loss, lease expiry,
+      worker death or terminal outcomes - because none of those paths is implemented yet. The shared conformance suite now drives four scenarios here, but they are the four the mock
+      harness serves, not the eleven the authoring guide names.

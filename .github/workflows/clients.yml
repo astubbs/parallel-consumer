@@ -1,0 +1,676 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Proxy-client language matrix: one row per non-Java client language (astubbs#242).
+# The three Java client modules are in the Maven reactor and are covered by maven.yml's
+# ordinary lanes; Kotlin is JVM but NOT Java, so it rides this matrix like the others -
+# its row just needs no foreign toolchain beyond the shared JDK.
+#
+# THIS FILE HAS ONE WRITER, AND IT ALREADY RAN. It was seeded complete by U23 of
+# docs/plans/2026-08-14-001-feat-language-proxy-plan.md, and no language wave edits it:
+# a row flips from skipped to running when its module's OWN maturity fragment
+# (docs/data/module-maturity.d/<module>.yaml) drops its `deferred:` block - the gate
+# step below derives the skip from that file on every run. Editing this workflow to
+# start a wave is therefore always wrong; edit your module's fragment instead.
+#
+# Skip semantics (KTD35): a row whose module's wave has not begun runs its gate step,
+# writes the fragment's stated reason into the job summary, and skips everything else -
+# green-as-skipped, never red, so a red row during the fan-out always means a real
+# failure in a STARTED module. fail-fast is off so one language's breakage cannot
+# hide another's. The reverse - a module with real source whose fragment still says
+# `deferred:`, which would be skipped indefinitely while looking green - is enforced by
+# bin/check-deferred-modules.sh in the Repo Hygiene workflow, because nothing in a
+# skipped row can notice its own skip.
+#
+# One run, as much breakage as it can find: within a row the later steps carry
+# `!cancelled()` rather than the implicit "only if everything before me passed", so a
+# failing test suite still reports its lint findings and its conformance result; and
+# every Maven invocation here carries --fail-at-end. Both are the same argument as
+# --fail-at-end on the reactor lanes in bin/ci-*.sh.
+#
+# Caching strategy: same discipline as maven.yml - explicit cache/restore + cache/save
+# with a rotating (run_id-suffixed) save key, restore-keys as fallback. Do NOT switch a
+# row to a setup-* action's built-in cache (`cache: maven`, setup-go's `cache: true`,
+# `bundler-cache: true`): those use immutable keys and can freeze an incomplete cache
+# permanently. See the header of maven.yml and
+# docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md
+# The Maven cache is restore-only here; maven.yml's prepare-deps job owns saving it.
+# Each language's own package cache is per-language, keyed clients-<language>-.
+#
+# Pinning: GitHub-owned actions follow the repo's one-tag-everywhere rule
+# (bin/check-action-versions.sh; Dependabot bumps all uses together). Every non-GitHub
+# action is pinned to a commit SHA, matching the astubbs/* precedent in maven.yml.
+# Language toolchains are exact versions in the matrix - a version that stops resolving
+# fails loudly at setup, per the plan's pinnability check (ASM8), and the wave that
+# starts a module owns bumping its pins from then on. Nothing here uses
+# pull_request_target, and nothing here may ever pair it with a mutable ref.
+
+name: Clients
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  client:
+    name: "clients: ${{ matrix.language }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Fail the row, not the matrix: one language's breakage must not hide another's.
+      fail-fast: false
+      matrix:
+        include:
+          # Fields:
+          #   language    - matrix key; also names the row and the per-language cache
+          #   module      - Maven artifactId, and the maturity fragment's filename stem
+          #   toolchain   - exact toolchain version the language's setup step installs
+          #   scanner     - the language-native static-analysis tool (step title)
+          #   scanner-cmd - how to run it, from the module directory. PREFER THE MODULE'S OWN
+          #                 RECIPE (scripts/analyse.sh, `make lint`, `npm run check`) over an
+          #                 invocation spelled out here: a command written twice is a command that
+          #                 drifts, and the version a developer runs then differs from the version
+          #                 that gates. Where a row does spell the tool out, the module's config
+          #                 file is still the authority, and a row/module mismatch is the first
+          #                 thing to check when a row fails on a diff that looks unrelated.
+          #                 docs/client-static-analysis.md owns the per-language policy: which tool,
+          #                 what it catches, the local command, and what fails versus warns.
+          #   cache-path  - the language's package cache ('' = no per-language cache)
+          #   lockfile    - hashFiles() pattern keying that cache (empty hash until the
+          #                 wave lands one; restore-keys covers the gap)
+          #   protoc      - 'true' on a row whose module runs protoc ON THE RUNNER during its
+          #                 build, which is a smaller set than "generates from the schema": Go,
+          #                 Ruby and TypeScript commit their stubs, .NET's Grpc.Tools NuGet ships
+          #                 its own protoc, and C++ and Swift generate inside their container
+          #                 images. Rust is the one row left - build.rs runs prost/tonic codegen
+          #                 on every `cargo build`, which is why all three of its steps failed
+          #                 identically before this field existed. Unset means the row needs
+          #                 nothing; the provisioning step below is skipped entirely.
+          - language: go
+            module: parallel-consumer-proxy-client-go
+            # THE PATCH LEVEL IS LOAD-BEARING NOW, not cosmetic: govulncheck (the dependency audit
+            # step below) reports advisories against the TOOLCHAIN'S OWN STDLIB as well as against
+            # the module's dependencies, so this pin decides whether that step is green. Measured
+            # on 2026-08-17: 1.25.13 -> zero findings of any kind; a toolchain behind on security
+            # patches -> a red row naming the stdlib advisories, two of them symbol-reachable from
+            # this module. That is the freshness signal a pin chosen at the start of a long branch
+            # otherwise never gets, and the fix is this one line. Bump to the newest patch of THIS
+            # minor line - a minor bump is the Go wave's call, not the auditor's.
+            toolchain: '1.25.13'
+            # go vet catches misuse the compiler accepts (format args, copied locks, lost struct
+            # tags); staticcheck adds the classes vet does not look for (dead stores, unused
+            # unexported code, nil-deref, misused stdlib). It is pinned as a `tool` directive in
+            # go.mod, so `go tool staticcheck` builds THAT version and nothing is installed
+            # globally. The 1.25 LINE above is staticcheck v0.7.0's floor rather than an arbitrary
+            # choice; which patch of it is a separate question, answered by the audit note above.
+            scanner: go vet + staticcheck
+            scanner-cmd: scripts/analyse.sh
+            cache-path: ~/go/pkg/mod
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/go.sum
+          - language: python
+            module: parallel-consumer-proxy-client-python
+            toolchain: '3.13.5'
+            # `make lint` is ruff (pyflakes + bugbear + bandit) and mypy (strict over src,
+            # check-untyped-defs over tests). Both come out of the module's own venv, pinned in
+            # pyproject.toml's dev extra - the row no longer pip-installs a second, separately
+            # pinned ruff, which was a version this file could hold at a value the module had
+            # moved past with nothing to notice.
+            scanner: ruff + mypy
+            scanner-cmd: make lint
+            cache-path: ~/.cache/pip
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/pyproject.toml
+          - language: swift
+            module: parallel-consumer-proxy-client-swift
+            # NO HOST TOOLCHAIN, AND NO SETUP ACTION - the module's Dockerfile (FROM swift:6.1) is
+            # this row's toolchain pin, and the Maven step below drives it through
+            # bin/build-client.sh swift. The host Swift was only ever powering the duplicate
+            # formatter run in the static-analysis step, which the image already runs.
+            #
+            # It is also unobtainable. swift-actions/setup-swift's newest RELEASE (v2.4.0) stops at
+            # Swift 5.x, and its v3.0.0-beta.1 - the version this row used to pin by SHA - installs
+            # Swiftly and gpg-verifies the download without importing any key, so on a runner's
+            # empty keyring it aborts with "Can't check signature: No public key" before Swift is
+            # ever installed. Supplying the keyring, or passing skip-verify-signature, would both
+            # have been ways to keep a beta action that fails at its own signature check; the
+            # container the module already builds in needs neither.
+            toolchain: ''
+            # swift-format ships inside the Swift 6 toolchain - no extra install to pin.
+            #
+            # NOT UPGRADED TO A BUG-FINDER, and that is a recorded result rather than an omission:
+            # Swift has no mature standalone analyser in the SpotBugs/staticcheck class. SwiftLint
+            # is a style linter, and the real defect detection lives in the compiler - Swift 6
+            # language mode's strict concurrency checking, which the module's Package.swift turns on
+            # by declaring swift-tools-version 6.0 and which makes a data race a compile ERROR rather
+            # than a finding; its hand-written targets add -warnings-as-errors on top. Reasoning in
+            # docs/client-static-analysis.md; this row stays a formatter check, and is labelled so
+            # nobody reads it as more.
+            #
+            # THE FORMATTER RUNS IN THE BUILD STEP, INSIDE THE IMAGE, so this row has no separate
+            # static-analysis command: the Dockerfile's `swift format lint --strict --recursive
+            # Sources` is on the path to the artifact stage, and a formatting failure therefore
+            # fails the build step itself. Running it a second time on the host was the older
+            # arrangement - the one that needed a host toolchain - and it is exactly the
+            # command-written-twice this file's header warns about.
+            scanner: swift-format, inside the module's container (formatting only - no mature Swift bug-finder)
+            scanner-cmd: ''
+            # Nothing on the host to cache: the build happens in BuildKit, whose cache is its own.
+            cache-path: ''
+            lockfile: ''
+          - language: rust
+            module: parallel-consumer-proxy-client-rust
+            # ABOVE Cargo.toml's rust-version (the MSRV the surface needs), deliberately, and
+            # Nothing enforces this yet: bin/check-client-toolchain-pins.sh was cited here before it
+            # was written, and does not exist. Either write it or stop claiming a guard.
+            toolchain: '1.88.0'
+            scanner: clippy
+            scanner-cmd: cargo clippy --all-targets -- -D warnings
+            cache-path: ~/.cargo/registry
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/Cargo.lock
+            # build.rs generates from the frozen schema on every cargo invocation - see the field
+            # list above, and the provisioning step below for where protoc comes from.
+            protoc: 'true'
+          - language: dotnet
+            module: parallel-consumer-proxy-client-dotnet
+            toolchain: '8.0.404'
+            # Roslyn analyzers, which run INSIDE the compiler - nothing external to install.
+            # The build is therefore the gate, given the csproj's AnalysisLevel=latest-recommended
+            # and TreatWarningsAsErrors (the .NET wave owns both). This used to be `dotnet format
+            # analyzers --verify-no-changes`, which only verifies the analyzer diagnostics that
+            # happen to ship a code FIX - a genuine null-dereference warning has none, so it passed
+            # clean through the check that was supposed to catch it.
+            scanner: Roslyn analyzers (warnings as errors)
+            scanner-cmd: dotnet build --configuration Release --no-incremental -warnaserror
+            cache-path: ~/.nuget/packages
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet/**/*.csproj
+          - language: typescript
+            module: parallel-consumer-proxy-client-typescript
+            toolchain: '22.17.0'
+            # `npm run check` is the module's own script: `tsc --build` then `eslint .`, both from
+            # its pinned devDependencies (the wave owns package.json and package-lock.json), never
+            # an ambient npx fetch. Running the script rather than the tools keeps one recipe -
+            # and the TYPE CHECK is the half that matters: bare eslint without type information
+            # cannot see a misused Promise or an impossible narrowing, which is most of what a
+            # TypeScript bug looks like. typescript-eslint's recommended-type-checked config and
+            # tsc's strict flags are the module's to set, in tsconfig.json and eslint.config.js.
+            scanner: tsc + typescript-eslint (type-checked)
+            scanner-cmd: npm run --silent check
+            cache-path: ~/.npm
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript/package-lock.json
+          - language: kotlin
+            module: parallel-consumer-proxy-client-kotlin
+            # JVM language: the shared Temurin 17 step below is its whole toolchain,
+            # and the Maven cache is its dependency cache.
+            toolchain: ''
+            scanner: detekt
+            # The CLI fat jar is resolved from Maven Central, not the GitHub release
+            # page: Central artifacts are immutable once published, where a release
+            # asset can be replaced in place under the same URL. The sha256 is pinned
+            # on top of that - it makes the download tamper-evident end to end and
+            # names the exact bytes reviewed (byte-identical to the v1.23.7 GitHub
+            # release asset when pinned, 2026-08-14). A version bump recomputes it:
+            # sha256sum on the freshly fetched jar.
+            #
+            # NO --config, AND THAT IS THE KOTLIN WAVE'S DECISION, NOT AN OMISSION: detekt does not
+            # auto-discover a config file, so passing one here and not there (or the reverse) is the
+            # one skew that matters - green locally, red in CI. The module therefore keeps NO
+            # detekt.yml at all and satisfies the default ruleset, suppressing an individual rule
+            # with an @Suppress in the code, where the reason is reviewable. Do not add --config
+            # without changing the module's detekt.sh in the same commit; the two are two copies of
+            # one invocation on purpose, because a workflow cannot source a variable from a script.
+            scanner-cmd: >-
+              curl -sSL --fail -o /tmp/detekt-cli.jar
+              https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/1.23.7/detekt-cli-1.23.7-all.jar
+              && echo '84beded283012cb2b38bcaef4996452fcd6069d2e9ca74b50eaa79e0ad21897e  /tmp/detekt-cli.jar' | sha256sum -c -
+              && java -jar /tmp/detekt-cli.jar --input src --build-upon-default-config
+            cache-path: ''
+            lockfile: ''
+          - language: scala
+            module: parallel-consumer-proxy-client-scala
+            # JVM language: the shared Temurin 17 step below is its whole toolchain,
+            # and the Maven cache is its dependency cache. Scala 2.13 rather than 3.x -
+            # the module's pom carries the audience argument.
+            #
+            # THIS ROW IS THE ONE EXCEPTION TO THIS FILE'S "ALREADY RAN" HEADER, and it is
+            # the case that header did not cover: the Scala module was seeded AFTER these
+            # rows were written, so it had no row to un-defer. Adding it is the Scala
+            # wave's own task, named as such in docs/inflight/clients/scala.md and in the
+            # skeleton pom this wave replaced. Nothing else here changed.
+            toolchain: ''
+            # THE ANALYSER IS THE COMPILER, and that is a recorded result rather than a
+            # gap. Scala's standalone analysers - scapegoat, WartRemover - are compiler
+            # plugins that must be published for the exact Scala patch version in use, so
+            # gating on one makes a Scala bump wait on someone else's release; neither
+            # tracks releases reliably enough for the "only if mature" filter every other
+            # client applied. Scalafix is a rewriter whose useful rules here are mostly
+            # formatting. What is left is the compiler's own lint - maintained by
+            # definition - with -Werror turning it from advice into a gate.
+            #
+            # The flags live in the module's pom (scala-maven-plugin's <args>), so unlike
+            # the detekt row there is no local/CI skew to guard against: a compiler flag
+            # cannot be passed from here without the build agreeing to it. scripts/analyse.sh
+            # is the module's own recipe and runs exactly the compile that applies them.
+            scanner: scalac -Xlint -Wunused -Werror
+            scanner-cmd: scripts/analyse.sh
+            cache-path: ''
+            lockfile: ''
+          - language: ruby
+            module: parallel-consumer-proxy-client-ruby
+            toolchain: '3.4.4'
+            # `bundle exec`, not `gem install`: the Ruby wave pins rubocop in the module's Gemfile,
+            # and a version pinned in two places is a version that drifts in one of them. The
+            # module's .rubocop.yml is what weights it towards Lint/ and Security/ cops over style
+            # arbitration - rubocop discovers that file itself, so unlike detekt no flag is needed.
+            scanner: rubocop (Lint + Security)
+            scanner-cmd: bundle exec rubocop
+            cache-path: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/vendor/bundle
+            lockfile: parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/Gemfile.lock
+          - language: cpp
+            module: parallel-consumer-proxy-client-cpp
+            # Compiler and cmake come from the runner image; the image version is the
+            # pin, which is the loosest in the matrix - the C++ wave tightens it if the
+            # image's drift ever bites.
+            toolchain: ''
+            # The MODULE'S OWN recipe, per this file's header, now that the module has one. It was a
+            # spelled-out invocation while the module was an empty skeleton; the C++ wave replaced it
+            # with scripts/analyse.sh, which the image build runs too, so there is one command rather
+            # than two that drift.
+            #
+            # That script adds --check-level=exhaustive, and not for taste: --error-exitcode=1 fires
+            # on an `information` message as readily as on a finding, and the default level emits
+            # `information: Limiting analysis of branches` on several of these files - so the line
+            # this replaces would have failed the row on a clean codebase.
+            scanner: cppcheck
+            scanner-cmd: scripts/analyse.sh
+            cache-path: ''
+            lockfile: ''
+    steps:
+      - uses: actions/checkout@v6
+
+      # ── The gate: derive this row's fate from its module's own fragment ──────
+      # docs/data/module-maturity.d/<module>.yaml carries a `deferred:` block (with
+      # reason and lifted_by) while the module is a seeded-but-unstarted skeleton.
+      # While it is present, this row skips and quotes the reason; the wave that
+      # starts the module removes the block from that one file - which it already
+      # owns - and the row starts gating for real.
+      #
+      # The fragment is read STRUCTURALLY, with the same parse bin/check-docs-data.sh
+      # applies (PyYAML ships on the ubuntu-latest image): the modules entry named by
+      # the filename is deferred iff it carries a `deferred` key. A text grep here
+      # would be a second reader with different semantics for the same file - prose
+      # that merely mentions 'deferred:' must not skip a started row. Every shape
+      # this reader cannot classify - a MISSING fragment, an empty or unparseable
+      # one, no entry for this artifact - is a HARD ERROR, never a fall-through to
+      # started: U27's corpus requires a well-formed fragment per module, so an
+      # unreadable one means the corpus is broken, and running an unstarted module's
+      # build on that evidence would turn a bookkeeping defect into a misleading red.
+      - name: Gate on the module's maturity fragment
+        id: gate
+        run: |
+          python3 - "docs/data/module-maturity.d/${{ matrix.module }}.yaml" \
+                    "${{ matrix.module }}" "${{ matrix.language }}" <<'PYTHON'
+          import os
+          import sys
+
+          import yaml
+
+          frag, module, language = sys.argv[1:4]
+
+
+          def broken(message):
+              """Corpus defect: hard-error like a missing fragment, never fall through to started."""
+              print(f"::error file={frag}::{message}")
+              sys.exit(1)
+
+
+          if not os.path.exists(frag):
+              broken("maturity fragment missing - every client module carries one "
+                     "(astubbs#242); restore it rather than deleting it")
+          try:
+              with open(frag, encoding="utf-8") as handle:
+                  doc = yaml.safe_load(handle)
+          except Exception as exc:
+              broken("maturity fragment does not parse as YAML "
+                     f"({str(exc).splitlines()[0]}) - fix the fragment; this row will not guess")
+          entries = doc.get("modules") if isinstance(doc, dict) else None
+          entry = next((item for item in entries or []
+                        if isinstance(item, dict) and item.get("artifact") == module), None)
+          if entry is None:
+              broken(f"maturity fragment carries no modules entry for artifact '{module}' - "
+                     "the corpus is broken (bin/check-docs-data.sh pins its shape); restore "
+                     "the entry rather than letting this row guess")
+
+          deferred = "deferred" in entry  # the same structural test bin/check-docs-data.sh applies
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"deferred={str(deferred).lower()}\n")
+          if deferred:
+              block = entry["deferred"] if isinstance(entry["deferred"], dict) else {}
+              reason = block.get("reason") or "no reason recorded"
+              lifted_by = block.get("lifted_by") or "not recorded"
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(
+                      f"## clients: {language} - SKIPPED (module wave not started)\n"
+                      "\n"
+                      f"Derived from `{frag}` - its parsed `deferred:` entry is why.\n"
+                      "To start this row, that module's wave removes the block from that file;\n"
+                      "nobody edits clients.yml.\n"
+                      "\n"
+                      f"- **reason:** {reason}\n"
+                      f"- **lifted_by:** {lifted_by}\n"
+                  )
+              print(f"Row skipped: {module} is deferred in {frag} (reason in the job summary)")
+          PYTHON
+
+      # ── Shared JVM toolchain: every row drives its build through ./mvnw ──────
+      - uses: actions/setup-java@v5
+        if: steps.gate.outputs.deferred == 'false'
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see caching strategy note at top of file
+      - name: Restore Maven cache (restore-only; prepare-deps in maven.yml owns saving)
+        if: steps.gate.outputs.deferred == 'false'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # ── Per-language toolchain setup, exact-pinned via matrix.toolchain ──────
+      # `uses:` cannot be parameterised by the matrix, so each setup action gets a
+      # language-guarded step; everything after them is matrix-driven. Three rows
+      # have no step here, and their matrix entries say why: Kotlin and Scala use
+      # the shared JDK, C++ compiles with the runner image's compilers, and Swift
+      # builds and lints entirely inside its module's own container.
+      - uses: actions/setup-go@v7
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'go'
+        with:
+          go-version: ${{ matrix.toolchain }}
+          cache: false   # explicit per-language cache below - see header
+      - uses: actions/setup-python@v7
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'python'
+        with:
+          python-version: ${{ matrix.toolchain }}
+      - name: Set up Rust toolchain (rustup, preinstalled on the runner image)
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'rust'
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy
+          rustup default ${{ matrix.toolchain }}
+      - uses: actions/setup-dotnet@v6
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'dotnet'
+        with:
+          dotnet-version: ${{ matrix.toolchain }}
+      - uses: actions/setup-node@v7
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'typescript'
+        with:
+          node-version: ${{ matrix.toolchain }}
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'ruby'
+        with:
+          ruby-version: ${{ matrix.toolchain }}
+          bundler-cache: false   # explicit per-language cache below - see header
+      - name: Install cppcheck (compilers and cmake come with the runner image)
+        if: steps.gate.outputs.deferred == 'false' && matrix.language == 'cpp'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cppcheck
+
+      # ── protoc, for the rows that run it on the runner (matrix.protoc) ───────
+      # THE VERSION IS NOT PINNED HERE, AND THAT IS THE POINT: it is read out of the protocol
+      # module's own pom (<protobuf.version>), which is where the JVM side already pins the
+      # compiler that generates from the frozen schema. A version written here as well would be a
+      # second pin for one schema, free to drift from the first with nothing to notice - and the
+      # generated Rust would then come from a different protoc than the generated Java.
+      #
+      # BOTH ARTIFACTS COME FROM MAVEN CENTRAL, for the reason the detekt row states: a Central
+      # artifact is immutable once published, where a GitHub release asset can be replaced in
+      # place under the same URL. It also means this step downloads the exact bytes the protocol
+      # module's build already uses.
+      #
+      # THE WELL-KNOWN TYPES ARE A SEPARATE DOWNLOAD FROM THE BINARY. The Central protoc artifact
+      # is a bare executable with no include/ directory, and the frozen schema imports
+      # google/protobuf/duration.proto and timestamp.proto - which ship inside protobuf-java's jar.
+      # Unpacking them and pointing $PROTOC_INCLUDE at them is what the Rust build script's own
+      # resolution order asks for (see its well_known_types_include).
+      #
+      # `install -m 0755` is load-bearing rather than tidiness. Without $PROTOC set, the Rust build
+      # script falls back to the copy in ~/.m2, which Maven leaves NON-EXECUTABLE - so the clippy
+      # step failed with "Permission denied (os error 13)" even after a Maven build had downloaded
+      # protoc onto the runner. Owning an executable copy takes that fallback out of the picture.
+      - name: Provision protoc (${{ matrix.module }} generates from the frozen schema at build time)
+        if: steps.gate.outputs.deferred == 'false' && matrix.protoc == 'true'
+        run: |
+          version=$(python3 - <<'PYTHON'
+          import sys
+          import xml.etree.ElementTree as ElementTree
+
+          POM = "parallel-consumer-proxy-protocol/pom.xml"
+          NAMESPACE = {"m": "http://maven.apache.org/POM/4.0.0"}
+
+          version = ElementTree.parse(POM).getroot().findtext(
+              "m:properties/m:protobuf.version", namespaces=NAMESPACE)
+          if not version:
+              print(f"::error file={POM}::no <protobuf.version> property - this step reads the "
+                    "protoc version from there rather than pinning a second copy of it; restore "
+                    "the property or teach this step where the version moved to")
+              sys.exit(1)
+          print(version)
+          PYTHON
+          )
+          central=https://repo1.maven.org/maven2/com/google/protobuf
+          curl -sSL --fail -o "$RUNNER_TEMP/protoc.exe" \
+            "$central/protoc/$version/protoc-$version-linux-x86_64.exe"
+          curl -sSL --fail -o "$RUNNER_TEMP/protobuf-java.jar" \
+            "$central/protobuf-java/$version/protobuf-java-$version.jar"
+          install -D -m 0755 "$RUNNER_TEMP/protoc.exe" "$RUNNER_TEMP/protoc/bin/protoc"
+          unzip -q "$RUNNER_TEMP/protobuf-java.jar" 'google/protobuf/*.proto' \
+            -d "$RUNNER_TEMP/protoc/include"
+          test -f "$RUNNER_TEMP/protoc/include/google/protobuf/duration.proto"
+          "$RUNNER_TEMP/protoc/bin/protoc" --version
+          {
+            echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc"
+            echo "PROTOC_INCLUDE=$RUNNER_TEMP/protoc/include"
+          } >> "$GITHUB_ENV"
+
+      # ── Per-language dependency cache (explicit restore/save, rotating key) ──
+      - name: Restore ${{ matrix.language }} cache
+        if: steps.gate.outputs.deferred == 'false' && matrix.cache-path != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ matrix.cache-path }}
+          key: clients-${{ matrix.language }}-${{ hashFiles(matrix.lockfile) }}
+          restore-keys: |
+            clients-${{ matrix.language }}-
+
+      # ── Build and test ───────────────────────────────────────────────────────
+      # The Maven wrapper drives everything: -Dpc.foreignClients activates the
+      # foreign-clients profile in the clients aggregator, whose exec bindings run
+      # this module's native build (compile phase) and tests (test phase). This row
+      # is exactly the place that flag is safe - the toolchain above is guaranteed
+      # present here, which is what lets it default OFF everywhere else. A failing
+      # native build exits non-zero and fails the row; Kotlin builds as ordinary
+      # Maven and the flag is a no-op for it.
+      #
+      # --fail-at-end for the same reason the reactor lanes carry it (bin/ci-build.sh and friends):
+      # every independent branch of this row's slice reports in one run, rather than one problem
+      # per push. It preserves Maven's exit code, so a failure is still a red row.
+      #
+      # `package`, NOT `test`, AND THAT ONE WORD IS HALF A BUG FIX. Several clients' suites spawn
+      # the engine as a real sidecar and look for parallel-consumer-proxy's jar FILES to put on its
+      # classpath - and `test` stops one phase short of producing them, so those rows failed with
+      # "parallel-consumer-proxy/target is not built" no matter what their poms declared. The other
+      # half is the declaration itself: a module whose tests spawn the sidecar names the proxy as a
+      # test-scoped dependency inside its own foreign-clients profile, which is what puts it in
+      # front of us in the reactor at all. Neither half works alone.
+      - name: Build and test (${{ matrix.module }})
+        if: steps.gate.outputs.deferred == 'false'
+        run: ./mvnw --batch-mode -Pci --fail-at-end package -pl :${{ matrix.module }} -am -Dpc.foreignClients
+
+      # ── The shared conformance suite, this row's language only ───────────────
+      # One Java test module drives every language's client through the SAME scenarios and asserts
+      # the same things about each (its README.md is the runner contract). CI's parallelism is
+      # these rows, not threads inside one job: a single Java job would install six toolchains
+      # before it could start, and bury any one failure among the others. So each row runs the
+      # suite for itself.
+      #
+      # THE SELECTOR'S NAME IS A CONTRACT, fixed on the other side in ConformanceBindings
+      # (LANGUAGE_PROPERTY). Absent, the suite runs every binding - which in a row that installed
+      # one toolchain fails a long way from the cause - so the row always names its own language,
+      # and an unregistered name fails rather than selecting nothing. The core binding comes along
+      # regardless: it is the control arm that answers "is the scenario wrong?" in the same run
+      # that a client went red.
+      #
+      # THE ENGINE THE RUNNER TALKS TO IS BUILT BY `-am`. The suite hosts the engine in its own
+      # JVM and hands the runner a shim to spawn, so what a row must build first is the proxy and
+      # its test jar - which the conformance module declares, and `-am` therefore builds. Same
+      # lesson as the go-e2e-harness profile, from the other end: the Go row failed against an
+      # unbuilt parallel-consumer-proxy/target until the dependency was declared where `-am` could
+      # see it. The language's own runner binary is built by the suite, with the toolchain this
+      # row installed above.
+      - name: Does the conformance suite register this language?
+        id: conformance
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
+        run: |
+          python3 - "${{ matrix.language }}" <<'PYTHON'
+          import os
+          import re
+          import sys
+
+          # Derived from the registry itself, never a second list kept by hand here: a language
+          # gains a runner in ONE place, and this row starts driving it the same commit. A
+          # `conformance: yes/no` matrix field would be that second list, and the day it disagreed
+          # with the registry nothing would say so.
+          REGISTRY = ("parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/"
+                      "bz/stub/parallelconsumer/conformance/LanguageRunners.java")
+
+          language = sys.argv[1]
+
+
+          def broken(message):
+              print(f"::error file={REGISTRY}::{message}")
+              sys.exit(1)
+
+
+          if not os.path.exists(REGISTRY):
+              broken("the conformance registry is not where this row looks for it - a row that "
+                     "cannot read it must not conclude 'no runner' and skip the suite; fix the "
+                     "path here in the same commit that moved the file")
+          with open(REGISTRY, encoding="utf-8") as handle:
+              registered = set(re.findall(r'new LanguageRunner\("([a-z0-9-]+)"', handle.read()))
+          # The registry also constructs two deliberate non-languages for its negative controls
+          # (absent-language, deliberately-failing). They can never match a matrix language, but an
+          # empty or control-only read means the regex has stopped matching the file it is reading,
+          # and every row would then quietly stop running the suite.
+          if not registered - {"absent-language", "deliberately-failing"}:
+              broken("the conformance registry parsed to no languages at all - the shape this row "
+                     "reads it by has changed; every row would otherwise silently stop running the "
+                     "suite while reporting green")
+
+          runs = language in registered
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"registered={str(runs).lower()}\n")
+          if not runs:
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(
+                      f"## clients: {language} - conformance suite NOT RUN\n"
+                      "\n"
+                      f"`{REGISTRY}` registers no conformance runner for **{language}**, so there is "
+                      "nothing for this row to drive. This is a gap in that language's client, not a "
+                      "property of this workflow.\n"
+                      "\n"
+                      f"To close it: write `cmd/conformance-runner` (or its idiom) in the {language} "
+                      "module against the contract in the conformance module's README, add one entry "
+                      "to the registry, and this row starts driving it with no edit here.\n"
+                  )
+              print(f"No conformance runner registered for {language} - see the job summary")
+          PYTHON
+
+      - name: Conformance suite (${{ matrix.language }})
+        if: ${{ !cancelled() && steps.conformance.outputs.registered == 'true' }}
+        run: >-
+          ./mvnw --batch-mode -Pci --fail-at-end test
+          -pl :parallel-consumer-proxy-conformance -am
+          -Dpc.conformance.language=${{ matrix.language }}
+
+      # ── Language-native static analysis ──────────────────────────────────────
+      # `!cancelled()` rather than the default: a row that failed its tests should still report its
+      # lint findings in the same run. One problem learned per run is the thing this file is being
+      # steered away from - the same argument as --fail-at-end on the reactor lanes.
+      #
+      # An EMPTY scanner-cmd is a row whose analysis runs inside its own build rather than beside
+      # it (Swift's container lints on the way to the artifact stage) - the field's documentation
+      # in the matrix says which, and the row's `scanner` still names the tool so the summary does
+      # not read as "no analysis".
+      - name: Static analysis (${{ matrix.scanner }})
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' && matrix.scanner-cmd != '' }}
+        working-directory: parallel-consumer-proxy-clients/${{ matrix.module }}
+        run: ${{ matrix.scanner-cmd }}
+
+      # ── Dependency vulnerability audit, in each language's own ecosystem ─────
+      # WHAT THIS COVERS THAT NOTHING ELSE DOES. The Maven side has had a CVE scan for a while
+      # (dependency-audit.yml, OSS Index); Go, Rust, npm, Ruby, Python and .NET dependencies were
+      # scanned by nothing at all, which is how a stale gRPC pin with a published CVE shipped on
+      # this branch. Dependabot does not close that gap even now that .github/dependabot.yml
+      # declares those ecosystems: Dependabot reads the DEFAULT BRANCH, and a pin chosen at the
+      # start of a long-lived branch goes stale DURING the branch. Only a check that runs on the
+      # branch can see it, which is this one.
+      #
+      # ONE SCRIPT, NOT ONE `run:` PER ROW, and the reason is measured rather than stylistic:
+      # `govulncheck -format json` and `dotnet list package --vulnerable` both print findings and
+      # EXIT 0, while `npm audit` and `bundler-audit` use exit 1 for "found something" AND for
+      # "could not find a lockfile". Any of them wired in bare would have been instance ten of
+      # docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md.
+      # bin/client-audit.sh classifies each language structurally, from its report - see its header
+      # for the per-language evidence, and for the exit-code split it shares with
+      # bin/check-ossindex-audit.sh (1 = the lane is broken, 2 = the tree has a finding).
+      #
+      # NO MATRIX FIELD NAMING THE AUDITOR, deliberately: that would be a second list beside the
+      # script's own, free to disagree with it. The row passes its language and the script decides
+      # - including for Swift and C++, which have no auditor and say so on every run, and for a
+      # language nobody has decided about, which fails rather than skipping.
+      #
+      # The auditors are pinned where the module already pins its tools (go.mod's `tool` directive,
+      # the Gemfile, pyproject's dev extra) and npm and the .NET SDK ship theirs. Rust is the one
+      # exception - cargo-audit has no manifest home - so its row installs it explicitly, below.
+      - name: Install cargo-audit (Rust has no manifest slot for a dev tool)
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' && matrix.language == 'rust' }}
+        # Pinned, and --locked so cargo-audit's own dependency resolution cannot drift under us.
+        # `cargo install` compiles from source (~2-3 min); that cost buys a pinned auditor rather
+        # than a third-party action pinned by SHA, which is what the alternatives all reduce to.
+        #
+        # 0.22.2 DECLARES rust-version 1.88, exactly this row's toolchain pin - so lowering that pin
+        # breaks this install, and the break is loud (cargo refuses, the step goes red) rather than
+        # silent. 0.22.1 is the fallback if that pin ever has to come down: its MSRV is 1.85.
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      # Self-test before the guard, the sequencing this repo uses everywhere. It is hermetic -
+      # every auditor is replaced by a shim on PATH replaying REAL recorded output - so it costs
+      # seconds and needs no toolchain, and it is the only evidence that the two exit-0-with-
+      # findings cases actually go red.
+      - name: Self-test the dependency-audit guard
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
+        run: bash bin/test-client-audit.sh
+
+      # `!cancelled()` for the reason the static-analysis step above carries it. Note the one
+      # consequence: if the build step failed, this module's dependencies may not be installed, and
+      # the audit then exits 1 saying so - a second red pointing at the first, not a new problem.
+      - name: Dependency vulnerability audit (${{ matrix.language }})
+        if: ${{ !cancelled() && steps.gate.outputs.deferred == 'false' }}
+        run: |
+          set -o pipefail
+          bash bin/client-audit.sh ${{ matrix.language }} | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save ${{ matrix.language }} cache (rotating key)
+        if: success() && steps.gate.outputs.deferred == 'false' && matrix.cache-path != ''
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ matrix.cache-path }}
+          key: clients-${{ matrix.language }}-${{ hashFiles(matrix.lockfile) }}-${{ github.run_id }}
