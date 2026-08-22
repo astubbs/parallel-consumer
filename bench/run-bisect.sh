@@ -532,7 +532,21 @@ if [ -n "${BENCH_TIMER_CALLEE:-}" ]; then CALLEE_LABEL=timer
 elif [ -n "${BENCH_ASYNC_STUB:-}" ]; then CALLEE_LABEL=async
 else CALLEE_LABEL=blocking; fi
 MAX_POLL=${BENCH_MAX_POLL_RECORDS:-500}
-echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+
+# LOAD IS A COLUMN, because msg_per_sec is not load-robust and every reader of a results file has so
+# far had to take the load figure on trust from a sentence in a document.
+#
+# It is not a footnote on this machine. During the first share-arm sweep the 1-minute load moved
+# between 4 and 41 - several other sessions were running their own bench sweeps at the same time -
+# and two repeats of the IDENTICAL share row came back at 15,382 and 66,489 msg/s. Without this
+# column those two rows are indistinguishable from a real bimodality in the arm, and the committed
+# convention ("discard anything above ~20") cannot be applied to a file after the fact at all.
+#
+# Sampled immediately BEFORE each run rather than after: the 1-minute average trails, so the value
+# that best describes the machine a run is about to meet is the one measured going in.
+load_1m() { uptime | sed 's/.*load averages*: //' | awk '{print $1}'; }
+
+echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,load_1m" > "$RESULTS"
 # THE NON-BLOCKING ENGINES MUST NOT BE MEASURED WITH A BLOCKING CALLEE.
 #
 # vertx, reactor, mutiny and proxy exist to run a user function that does NOT hold a thread - that is
@@ -606,16 +620,17 @@ for mode in $MODES; do
         proj=$(serial_projection_seconds "$d")
         if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
           log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s,," >> "$RESULTS"
           continue
         fi
         for r in $(seq 1 "$REPEATS"); do
+          load=$(load_1m)
           out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
           read -r rate peak <<< "$out"
           if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
           elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak,$load" >> "$RESULTS"
         done
       done
     done
@@ -624,22 +639,23 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED," >> "$RESULTS"; continue; }
+      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED,," >> "$RESULTS"; continue; }
       for c in $CONCURRENCIES; do
         for d in $DELAYS; do
           proj=$(serial_projection_seconds "$d")
           if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
             log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s,," >> "$RESULTS"
             continue
           fi
           for r in $(seq 1 "$REPEATS"); do
+            load=$(load_1m)
             out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
             read -r rate peak <<< "$out"
             if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
             elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
             log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak,$load" >> "$RESULTS"
           done
         done
       done
