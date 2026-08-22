@@ -129,6 +129,14 @@ batched, where Share Groups acknowledge per message to the broker, so per-record
 lower - at the cost of a sidecar process where Share Groups need none, and with poison-record
 handling staying broker-side there.
 
+**And wrapping the client means DELIVERING Share Groups to non-JVM languages, not only competing
+with them.** The paragraph above positions Parallel Consumer against Share Groups on per-record
+overhead, and that comparison stands. But Share Groups land in the Java client first and librdkafka
+follows later - which is the currency argument applied to the newest thing in Kafka. A Go, Python or
+Rust team wanting Share Groups early would get them here before their own ecosystem has them, from
+the same wrapper that carries everything else. The segment named above as "who will want Share
+Groups first" is therefore a segment this fork can serve rather than argue with.
+
 **Wrapping the core client APIs is a staged possibility, and 2026-08-22 removed its main
 objection.** The sidecar already embeds a full Java Kafka client, so exposing consume, produce and
 admin over the same protocol would give every language the reference client rather than a
