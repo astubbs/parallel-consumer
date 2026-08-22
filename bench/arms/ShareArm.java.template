@@ -125,13 +125,23 @@ public class ShareArm implements BenchArm {
         int seen = 0;
         int maxBatch = 0;
         int polls = 0;
+        // THE LOOP IS DECOMPOSED because this arm turned out to be BIMODAL: five drift-controlled
+        // rounds at one operating point returned 15,446 / 15,518 / 68,400 / 66,007 / 66,934 msg/s,
+        // with peak_in_flight identical at 2,520 every time and the machine's load between 9 and 16
+        // throughout. A 4.4x spread that is not load and not concurrency has to be attributed, and
+        // "throughput" cannot do it - the three counters below can, because they say WHICH part of
+        // the cycle the missing time is in.
+        int emptyPolls = 0;
+        long pollNanos = 0, joinNanos = 0, ackNanos = 0;
         long start;
         try (KafkaShareConsumer<String, String> consumer = new KafkaShareConsumer<>(props)) {
             consumer.subscribe(Collections.singletonList(topic));
             start = System.currentTimeMillis();
             while (seen < expected) {
+                long t0 = System.nanoTime();
                 ConsumerRecords<String, String> polled = consumer.poll(Duration.ofSeconds(1));
-                if (polled.isEmpty()) continue;
+                pollNanos += System.nanoTime() - t0;
+                if (polled.isEmpty()) { emptyPolls++; continue; }
                 polls++;
                 maxBatch = Math.max(maxBatch, polled.count());
 
@@ -147,17 +157,21 @@ public class ShareArm implements BenchArm {
                     CompletionStage<Object> work = Bench.callCallee(delayMs);
                     batch.add(work.toCompletableFuture().thenAccept(ignored -> permits.release()));
                 }
+                long t1 = System.nanoTime();
                 CompletableFuture.allOf(batch.toArray(new CompletableFuture[0])).join();
+                joinNanos += System.nanoTime() - t1;
 
                 // AFTER the work, and on the poll thread. KafkaShareConsumer is not thread-safe, so an
                 // acknowledgement from a callee-completion thread would be a data race; and
                 // acknowledging BEFORE the work completes would be the at-most-once shortcut this arm
                 // exists to not take.
+                long t2 = System.nanoTime();
                 if (explicitAcks()) {
                     for (ConsumerRecord<String, String> record : acked) {
                         consumer.acknowledge(record, AcknowledgeType.ACCEPT);
                     }
                 }
+                ackNanos += System.nanoTime() - t2;
                 seen += batch.size();
             }
             long took = System.currentTimeMillis() - start;
@@ -168,8 +182,19 @@ public class ShareArm implements BenchArm {
             // much as the share session acquired, which is bounded by share.partition.max.record.locks
             // (group config, default 2000) per share-partition. A reader comparing this arm's
             // concurrency against PC's needs to know which of those two bound the run.
-            System.err.printf("SHARE_BATCH mode=%s polls=%d maxBatch=%d records=%d%n",
-                    explicitAcks() ? "explicit" : "implicit", polls, maxBatch, seen);
+            System.err.printf("SHARE_BATCH mode=%s polls=%d emptyPolls=%d maxBatch=%d records=%d "
+                            + "pollMs=%d joinMs=%d ackMs=%d totalMs=%d%n",
+                    explicitAcks() ? "explicit" : "implicit", polls, emptyPolls, maxBatch, seen,
+                    pollNanos / 1_000_000, joinNanos / 1_000_000, ackNanos / 1_000_000, took);
+            // A THROUGHPUT FIGURE IS COMPUTED FROM THE RECORD COUNT THE HARNESS WAS ASKED FOR, not
+            // from what the arm did - Bench prints `count * 1000.0 / ms` using its ARGUMENT. So an arm
+            // that returned early would publish a proportionally inflated rate and look like a
+            // finding. This makes that impossible: the bimodal result above is only worth reporting
+            // because every fast run is known to have processed the whole dataset.
+            if (seen != expected) {
+                throw new IllegalStateException("share arm processed " + seen + " records, expected "
+                        + expected + " - the throughput figure would have been fabricated");
+            }
             Bench.windowClosed();
             return took;
         }
