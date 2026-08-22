@@ -9,6 +9,30 @@ Opened 2026-08-21, from the owner's question: *what if core had a return that wa
 **It is not a new mechanism. It is a generalisation of one that already ships, works, and is locked
 inside the Vert.x module.**
 
+## 2026-08-22: the engine comparison is the evidence this was missing
+
+When this note was opened the case was architectural. It is now measured. From
+[`perf-engine-comparison-2026-08-22.md`](perf-engine-comparison-2026-08-22.md), 100,000 records,
+`UNORDERED`, concurrency 5,000, **non-blocking callee**:
+
+| Arm | 2ms | in flight | 100ms | in flight |
+|---|---:|---:|---:|---:|
+| `core` - blocking user function | 18,546 | **446** | 12,960 | **2,824** |
+| `vertx` / `reactor` / `mutiny` | 17,049-17,840 | 1,492-4,444 | **15,925-15,945** | **5000** |
+| `proxy` | **25,615** | 4,831 | 15,615 | **5000** |
+
+**Every async engine reaches its configured concurrency at 100ms; core reaches 2,824 of 5,000 and is
+23% slower.** That gap is not a property of Vert.x or Reactor - it is a property of *not holding a
+thread per record*, and core cannot express it because its user function returns `void`.
+
+**So the async engines' advantage is entirely reachable from core, and the modules are the only way to
+get it today.** That is the argument this note was making from first principles; it now has numbers.
+
+**It also bounds the alternative.** Virtual threads reach the same in-flight figures on a blocking
+function - `core-vt` holds 5,000 at both delays - so a user on JDK 21 already has a route. **A futures
+API is the route for everyone else**, which is most users: virtual threads are opt-in, JDK 21+, and
+this module still compiles to Java 8 bytecode. `CompletableFuture` is Java 8.
+
 ## The mechanism already exists
 
 `VertxParallelEoSStreamProcessor` already accepts exactly this shape:

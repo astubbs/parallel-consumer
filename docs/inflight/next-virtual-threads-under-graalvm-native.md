@@ -43,6 +43,32 @@ The failure mode is at least loud: the `ReflectiveOperationException` is caught 
 `IllegalStateException` saying validation passed but the JVM cannot create the executor. It fails at
 pool construction rather than silently falling back to platform threads.
 
+## 2026-08-22: the proxy measurement makes this considerably stronger
+
+`proxy` measured **25,615 msg/s at 2ms/5,000**, within **1%** of `core-vt`'s 25,934 - and it is the
+path **every non-JVM client takes**. That was not known when this note was written.
+
+**Antony's framing, and it is the right one:** Java becomes a *foreign language*. A shop that cannot
+run JDK 21 - or does not want a JVM at all - runs the engine as a GraalVM native binary with virtual
+threads inside it, and talks to it over the proxy. They get virtual-thread concurrency **without
+having virtual threads**, because the concurrency lives in the binary rather than in their runtime.
+
+That composes two results that were measured independently today:
+
+| | |
+|---|---|
+| Virtual threads are the only thing that reaches `maxConcurrency` on a blocking function | 5,000/5,000 against core's 2,824 |
+| The proxy path costs almost nothing next to the best in-process engine | within 1% at 2ms |
+
+**If both hold under native compilation, a Python or Ruby consumer gets the fastest configuration
+this project has**, which no client library in those languages can offer. That is the pitch, and it
+rests entirely on the untested question at the top of this note.
+
+**Bounded, and the bound matters**: the proxy arm drives the engine in-process across the
+`DispatchSink`/`report` seam. Production funnels every report through one serialised inbound callback
+per session, which this does not. The 25,615 is an upper bound and says nothing about the wire - so
+**the end-to-end gRPC arm has to exist before this pitch is made**, not after.
+
 ## The experiment
 
 1. Native-build the proxy sidecar, run it with `useVirtualThreads` on, and confirm the pool is created
