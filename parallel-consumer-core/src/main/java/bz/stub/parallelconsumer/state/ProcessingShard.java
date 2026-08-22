@@ -92,16 +92,20 @@ public class ProcessingShard<K, V> {
     private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
 
     /**
-     * How many of this shard's records are out at a worker right now.
+     * Which of this shard's records are out at a worker right now, and which are not.
      * <p>
-     * <b>What it buys.</b> Under an ordered mode a shard may have at most one record out at a time, so a shard
-     * with anything in flight can hand out nothing - and the only way to discover that used to be to enter the
-     * shard and walk to its head, paying an iterator, a set, a list and a scan to learn one bit. This answers the
-     * same question with one comparison, and lets {@link ShardManager#getUpperBoundOnSelectableWork()} count
+     * <b>What the count buys.</b> Under an ordered mode a shard may have at most one record out at a time, so a
+     * shard with anything in flight can hand out nothing - and the only way to discover that used to be to enter
+     * the shard and walk to its head, paying an iterator, a set, a list and a scan to learn one bit. This answers
+     * the same question with one comparison, and lets {@link ShardManager#getUpperBoundOnSelectableWork()} count
      * shards that can actually yield rather than estimating with the shard total.
      * <p>
-     * <b>It is an optimisation and never the guarantee.</b> The ordering invariant is still enforced where it
-     * always was: by the per-record claim in {@link WorkContainer#onQueueingForExecution()} and by the
+     * <b>What the offset index buys.</b> Under {@code UNORDERED} nothing blocks a shard, so the scan used to walk
+     * the whole in-flight prefix to reach a record it could claim. The index is what it walks instead - see
+     * {@link ShardOccupancy} for the measurement that made that worth doing and for why it cannot strand a record.
+     * <p>
+     * <b>Both are optimisations and neither is the guarantee.</b> The ordering invariant is still enforced where
+     * it always was: by the per-record claim in {@link WorkContainer#onQueueingForExecution()} and by the
      * {@code isOrderRestricted()} break below. So a reading that is transiently low costs a wasted scan, never a
      * second record out of an ordered shard.
      * <p>
@@ -110,20 +114,16 @@ public class ProcessingShard<K, V> {
      * removed from this shard while still out at a worker therefore still releases its charge when it lands, and
      * a record whose shard is discarded first releases into a meter nobody reads. There is no removal site whose
      * condition can be got wrong, which is the failure mode {@link #availableWorkContainerCnt} documents.
-     * <p>
-     * {@link LongAdder} for the same reasons as {@link RecordPopulation}: written twice per delivery from
-     * whichever worker took the record, read at most once per shard per dispatch pass, and never read at all
-     * under {@code UNORDERED}, where no shard is ever blocked.
      *
      * @see #getCountOfWorkInFlight()
      * @see #countWorkInFlightByScan()
      */
-    private final LongAdder inFlightWorkContainerCnt = new LongAdder();
+    private final ShardOccupancy occupancy = new ShardOccupancy();
 
     void addWorkContainer(WorkContainer<K, V> wc) {
         long key = wc.offset();
         // before any publication into entries, so every thread that can reach the container has seen it
-        wc.onAdmittedToShard(inFlightWorkContainerCnt);
+        wc.onAdmittedToShard(occupancy);
         WorkContainer<K, V> existing = entries.get(key);
         if (existing != null) {
             // Check if the existing entry is stale and should be replaced
@@ -131,6 +131,10 @@ public class ProcessingShard<K, V> {
                 log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
                         existing.getEpoch(), key, wc.getEpoch());
                 entries.put(key, wc);
+                // The replacement is claimable even if the container it displaced was out at a worker, so the
+                // offset has to be readmitted to the index - the displaced container's landing releases into the
+                // same index and would otherwise be the only thing that ever put it back.
+                occupancy.onAdmitted(key);
                 // availableWorkContainerCnt stays the same since we're replacing, not adding. Two paths
                 // reach here having already spent this offset's decrement, and neither re-increments:
                 // the stale entry had been taken as work (getWorkIfAvailable() decremented at take time),
@@ -149,6 +153,7 @@ public class ProcessingShard<K, V> {
         } else {
             entries.put(key, wc);
             population.onAdmitted();
+            occupancy.onAdmitted(key);
             availableWorkContainerCnt.incrementAndGet();
         }
     }
@@ -199,7 +204,16 @@ public class ProcessingShard<K, V> {
      * @see #inFlightWorkContainerCnt
      */
     public long getCountOfWorkInFlight() {
-        return inFlightWorkContainerCnt.sum();
+        return occupancy.inFlightCount();
+    }
+
+    /**
+     * How many offsets the unheld-offset index currently holds. O(n) and for tests only - it exists so a test can
+     * hold the index against the entries it indexes, the same arrangement as {@link #countWorkInFlightByScan()}.
+     */
+    // visible for testing
+    int countSelectableByIndex() {
+        return occupancy.countSelectable();
     }
 
     /**
@@ -271,8 +285,44 @@ public class ProcessingShard<K, V> {
         var slowWork = new HashSet<WorkContainer<?, ?>>();
         var workTaken = new ArrayList<WorkContainer<K, V>>();
 
+        if (isOrderRestricted()) {
+            takeFromEntries(workToGetDelta, slowWork, workTaken);
+        } else {
+            takeFromSelectableIndex(workToGetDelta, slowWork, workTaken);
+        }
+
+        if (workTaken.size() == workToGetDelta) {
+            log.trace("Work taken ({}) exceeds max ({})", workTaken.size(), workToGetDelta);
+        }
+
+        logSlowWork(slowWork);
+
+        // Remove from retry queue as picked for submission to work pool - filter to only remove work containers that have
+        // previously failed - as retry queue won't have any that didn't previously fail.
+        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasPreviouslyFailed).collect(Collectors.toList()));
+
+        dcrAvailableWorkContainerCntByDelta(workTaken.size());
+
+        return workTaken;
+    }
+
+    /**
+     * The ordered-mode walk, over the entry map from its lowest offset - unchanged, and deliberately so.
+     * <p>
+     * <b>In-flight records staying visible to this walk is part of how ordering is enforced.</b> A scanner that
+     * meets an occupied head falls into the skip branch and breaks without ever reaching the next offset, which is
+     * what makes an ordered shard self-excluding under concurrent selection. Removing them from its view is what
+     * broke ten tests on {@code perf/split-shard-inflight}
+     * ({@code docs/inflight/parked-resume-shard-dispatch-scan.md}), and is why the index below is read by the
+     * unordered path only.
+     * <p>
+     * It costs at most one examination per shard per pass anyway: the {@code break} fires whether the head was
+     * taken or skipped, so there is nothing here for an index to save.
+     */
+    private void takeFromEntries(int workToGetDelta,
+                                 Set<WorkContainer<?, ?>> slowWork,
+                                 List<WorkContainer<K, V>> workTaken) {
         var iterator = entries.entrySet().iterator();
-        boolean hasStaleWorkContainer = false;
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var workContainer = iterator.next().getValue();
             scanMeter.onEntryExamined();
@@ -292,12 +342,11 @@ public class ProcessingShard<K, V> {
                     addToSlowWorkMaybe(slowWork, workContainer);
                 }
 
-                if (isOrderRestricted()) {
-                    // can't take any more work from this shard, due to ordering restrictions
-                    // processing blocked on this shard, continue to next shard
-                    log.trace("Processing by {}, so have cannot get more messages on this ({}) shardEntry.", this.options.getOrdering(), getKey());
-                    break;
-                }
+                // can't take any more work from this shard, due to ordering restrictions - and the break is
+                // outside the take/skip branch on purpose: a scanner that found the head occupied must stop
+                // here rather than walk on to the next offset. That placement IS the ordered-mode guarantee.
+                log.trace("Processing by {}, so have cannot get more messages on this ({}) shardEntry.", this.options.getOrdering(), getKey());
+                break;
             } else {
                 // break, assuming all work in this shard, is for the same ShardKey, which is always on the same
                 //  partition (regardless of ordering mode - KEY, PARTITION or UNORDERED (which is parallel PARTITIONs)),
@@ -318,20 +367,64 @@ public class ProcessingShard<K, V> {
                 }
             }
         }
+    }
 
-        if (workTaken.size() == workToGetDelta) {
-            log.trace("Work taken ({}) exceeds max ({})", workTaken.size(), workToGetDelta);
+    /**
+     * The {@code UNORDERED} walk, over the offsets no worker is holding rather than over every entry.
+     * <p>
+     * <b>This is the whole fix for the direct-pull collapse.</b> Nothing blocks an unordered shard, so this walk
+     * has no break to stop it and used to cross the entire in-flight prefix - roughly {@code in-flight / shards}
+     * entries - to reach a claimable record, once per record on every worker. Walking the index instead makes that
+     * about one examination per record at any concurrency. The numbers, and the single-scanner control arm that
+     * rules out claim contention as the cause, are in {@link ShardOccupancy}.
+     * <p>
+     * <b>The claim is still the authority.</b> The index means "no worker is holding it", not "it can be taken" -
+     * a record waiting out a retry delay is in it, and so briefly is one that has just succeeded - so every
+     * candidate goes through {@link WorkContainer#onQueueingForExecution()} exactly as before, and a refusal is
+     * skipped rather than trusted.
+     */
+    private void takeFromSelectableIndex(int workToGetDelta,
+                                         Set<WorkContainer<?, ?>> slowWork,
+                                         List<WorkContainer<K, V>> workTaken) {
+        var iterator = occupancy.selectableOffsets();
+        while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
+            long offset = iterator.next();
+            WorkContainer<K, V> workContainer = entries.get(offset);
+            if (workContainer == null) {
+                // The index outlived its entry - a record revoked while in flight retires from the entries before
+                // its delivery lands, and the landing puts the offset back. Self-healing, and counted as nothing
+                // because there was no entry to examine.
+                occupancy.forget(offset);
+                continue;
+            }
+            scanMeter.onEntryExamined();
+
+            if (pm.couldBeTakenAsWork(workContainer)) {
+                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork() && onQueueingForExecution()`,
+                // and the gap between the two is what let a record be delivered twice: the check read three terms
+                // and the claim re-validated only one of them, so a decision made before another worker completed
+                // the record could still win. onQueueingForExecution() now evaluates the whole decision and claims
+                // from the state it evaluated. Do not reintroduce a guard in front of it.
+                if (workContainer.onQueueingForExecution()) {
+                    log.trace("Taking {} as work", workContainer);
+                    workTaken.add(workContainer);
+                } else {
+                    log.trace("Skipping {} as work, not available to take as work", workContainer);
+                    addToSlowWorkMaybe(slowWork, workContainer);
+                }
+            } else {
+                // Same reasoning as the ordered walk: everything in this shard is on one partition, so a partition
+                // that will not give up records will not give up any of them, and there is no point continuing.
+                if (isWorkContainerStale(workContainer)) {
+                    log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
+                    entries.remove(offset);
+                    retireAndDeductIfStillCounted(workContainer);
+                } else {
+                    log.trace("Partition for shard {} is blocked for work taking, stopping shard scan", this);
+                    break;
+                }
+            }
         }
-
-        logSlowWork(slowWork);
-
-        // Remove from retry queue as picked for submission to work pool - filter to only remove work containers that have
-        // previously failed - as retry queue won't have any that didn't previously fail.
-        retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasPreviouslyFailed).collect(Collectors.toList()));
-
-        dcrAvailableWorkContainerCntByDelta(workTaken.size());
-
-        return workTaken;
     }
 
     private void logSlowWork(Set<WorkContainer<?, ?>> slowWork) {
@@ -389,6 +482,7 @@ public class ProcessingShard<K, V> {
     private void retireAlreadyDeducted(WorkContainer<?, ?> removed) {
         if (removed != null) {
             population.onRetired();
+            occupancy.onRetired(removed.offset());
         }
     }
 
@@ -409,6 +503,7 @@ public class ProcessingShard<K, V> {
             return;
         }
         population.onRetired();
+        occupancy.onRetired(removed.offset());
         if (removed.isNotInFlight()) {
             dcrAvailableWorkContainerCntByDelta(1);
         }
