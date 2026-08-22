@@ -89,6 +89,42 @@ and it already tracks in-flight records independently of where they are sitting.
 worker is still incomplete; nothing about commit correctness depends on the selection structure
 holding it.
 
+### Near-partition-order is a real property, not just an aesthetic one
+
+**Antony, 2026-08-22: the order-preserving structure gives `UNORDERED` a near-partition-order result
+as a side effect - "a sort of best-efforts ordering" - and a different structure might make it random
+or much worse.**
+
+It is worth being precise about why that matters, because it is easy to file as a nicety and it is
+not one.
+
+**Dispatch order sets how fast the commit frontier advances.** PC commits the lowest incomplete
+offset and encodes the incomplete offsets above it. Process roughly in offset order and the frontier
+moves steadily behind the work, so the encoded set stays small. Process randomly and the frontier is
+pinned by whichever old record happens still to be outstanding, while newer ones complete far above
+it - so the encoded payload grows with the *spread* of in-flight offsets rather than with their
+count. That is the quantity `OffsetEncodingBackPressureTest` and the offset-encoding work
+(`perf-192-offset-encoding-density.md`) exist for, and it has a hard ceiling: the offset metadata
+limit.
+
+**A wider spread also means more replay after a crash**, because everything above the frontier is
+redelivered.
+
+So near-order buys smaller commit payloads and less duplicate work on failure, neither of which shows
+up in a throughput benchmark.
+
+**A FIFO queue mostly keeps it, and the exception is retries.** Records enter in poll order, which is
+offset order within a partition, so `poll()` hands them out in roughly that order too. What changes
+is a **failed record**: today it stays at its offset position in the sorted map and is re-selected
+*before* newer records; re-added to a queue's tail it goes *after* them - which widens exactly the
+spread described above, in the case that is already the unhappy path.
+
+**So the design constraint is: retried records must not simply go to the tail.** A priority queue on
+offset would preserve today's behaviour exactly, at O(log n) per operation instead of O(1) - which is
+still enormously better than 440 examinations, and is probably the right trade. A plain FIFO with a
+separate retry structure that re-inserts by offset is the other shape. **A stack or a work-stealing
+deque would be actively wrong here**, and this is the reason.
+
 ### The cost, stated plainly
 
 **Two selection paths instead of one.** Ordered modes genuinely need offset order - "the next record
