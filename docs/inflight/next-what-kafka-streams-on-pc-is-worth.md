@@ -43,6 +43,57 @@ That is narrow, and it is also **exactly where Streams users hit a wall and star
 a workaround with real costs in rebalance time, broker metadata and per-partition memory. The pitch
 that follows is a single sentence: **you do not need 500 partitions to get 500-way concurrency.**
 
+## CORRECTION: it is not only I/O-bound topologies. That claim was wrong.
+
+The section above said a CPU-bound or local-state-only topology is "already at the machine's limit"
+and gains nothing. **That assumed partition count is at least core count, and stated it as though it
+were general.** It is frequently false.
+
+**Streams' parallelism is partition count, and that has nothing to do with what the work is.** A
+CPU-bound topology on a 12-partition topic running on a 64-core machine uses **12 cores**. The other
+52 idle, and no tuning fixes it, because Streams cannot put two threads on one task. Partition counts
+are chosen for throughput planning, ordering granularity or history - routinely *below* the core count
+of modern hardware.
+
+So PC helps whenever **partition count is less than available parallelism**. That is a far larger set
+than "I/O-bound". Local-state topologies are the same argument: RocksDB access is CPU and disk work,
+and twelve partitions give twelve threads doing it.
+
+**The workload only decides the SIZE of the win:**
+
+| Workload | Bounded by | Win |
+|---|---|---|
+| CPU-bound / local state | cores / partitions | 64 cores over 12 partitions - **about 5x** |
+| I/O-bound | latency x target throughput | **150x and up** |
+
+Five times is not "nothing". It is the difference between one machine and five.
+
+## If the state store, stream time and EOS problems are solved
+
+**It stops being a PC feature and becomes a new execution model for Kafka Streams**, and the framing
+of this whole project changes with it.
+
+The pitch today is *leave Streams, use PC* - which asks a user to abandon a topology, an operational
+model and a body of institutional knowledge. If 1-3 are solved the pitch becomes **keep your topology,
+get concurrency decoupled from partitions**. PC stops competing with Streams and becomes the engine
+underneath it, which is a far easier sell and a much larger addressable set.
+
+**It also removes the most-cited operational constraint in Kafka Streams.** Over-partitioning to buy
+parallelism is the standard workaround, and it costs rebalance time, broker metadata, per-partition
+memory and file handles - continuously, and unfixably by tuning. **Removing the reason to
+over-partition is worth more than any throughput figure**, because it is a cost people pay forever
+rather than a number they compare once.
+
+**What would still be left, and it is engineering rather than conceptual**: standby replicas and
+restoration, interactive queries against a concurrently-written store, suppression and caching
+semantics, task assignment, and the packaging question already parked.
+
+**And #1 is doing most of the work in "assume I solve it".** `KEY` ordering serialises per key, which
+maps cleanly onto per-key state - but a Streams store is per-**task**, and a task spans many keys.
+Making that concurrent is either fine-grained locking inside the store access path or sharding the
+store by key. Whichever it is, **it decides whether the other three matter**, and it is answerable on
+paper before another engine number is taken.
+
 ## The four things that decide whether it can be built, none of which are throughput
 
 1. **State stores.** Streams state is per-task and single-threaded. Concurrent processing of one
