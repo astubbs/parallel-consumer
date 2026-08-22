@@ -1,0 +1,1050 @@
+{
+  "reflection": [
+    {
+      "type": "[B"
+    },
+    {
+      "type": "[C"
+    },
+    {
+      "type": "[D"
+    },
+    {
+      "type": "[F"
+    },
+    {
+      "type": "[I"
+    },
+    {
+      "type": "[J"
+    },
+    {
+      "type": "[Ljava.lang.String;"
+    },
+    {
+      "type": "[Ljavax.management.openmbean.CompositeData;"
+    },
+    {
+      "type": "[S"
+    },
+    {
+      "type": "[Z"
+    },
+    {
+      "type": "ch.qos.logback.classic.encoder.PatternLayoutEncoder",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "ch.qos.logback.classic.spi.LogbackServiceProvider"
+    },
+    {
+      "type": "ch.qos.logback.classic.util.DefaultJoranConfigurator",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "ch.qos.logback.core.ConsoleAppender",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "ch.qos.logback.core.OutputStreamAppender",
+      "methods": [
+        {
+          "name": "setEncoder",
+          "parameterTypes": [
+            "ch.qos.logback.core.encoder.Encoder"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ch.qos.logback.core.encoder.Encoder"
+    },
+    {
+      "type": "ch.qos.logback.core.encoder.LayoutWrappingEncoder",
+      "methods": [
+        {
+          "name": "setParent",
+          "parameterTypes": [
+            "ch.qos.logback.core.spi.ContextAware"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ch.qos.logback.core.pattern.PatternLayoutEncoderBase",
+      "methods": [
+        {
+          "name": "setPattern",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "ch.qos.logback.core.spi.ContextAware"
+    },
+    {
+      "type": "com.google.common.util.concurrent.AbstractFutureState",
+      "fields": [
+        {
+          "name": "listenersField"
+        },
+        {
+          "name": "valueField"
+        },
+        {
+          "name": "waitersField"
+        }
+      ]
+    },
+    {
+      "type": "com.google.common.util.concurrent.AbstractFutureState$Waiter",
+      "fields": [
+        {
+          "name": "next"
+        },
+        {
+          "name": "thread"
+        }
+      ]
+    },
+    {
+      "type": "com.google.protobuf.ExtensionRegistry",
+      "methods": [
+        {
+          "name": "getEmptyRegistry",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "com.sun.jndi.url.java.javaURLContextFactory"
+    },
+    {
+      "type": "com.sun.management.GarbageCollectorMXBean"
+    },
+    {
+      "type": "com.sun.management.GcInfo"
+    },
+    {
+      "type": "com.sun.management.HotSpotDiagnosticMXBean"
+    },
+    {
+      "type": "com.sun.management.ThreadMXBean"
+    },
+    {
+      "type": "com.sun.management.UnixOperatingSystemMXBean"
+    },
+    {
+      "type": "com.sun.management.VMOption"
+    },
+    {
+      "type": "com.sun.management.internal.GarbageCollectorExtImpl"
+    },
+    {
+      "type": "com.sun.management.internal.HotSpotDiagnostic"
+    },
+    {
+      "type": "com.sun.management.internal.HotSpotThreadImpl"
+    },
+    {
+      "type": "com.sun.management.internal.OperatingSystemImpl"
+    },
+    {
+      "type": "com.sun.org.apache.xerces.internal.jaxp.SAXParserFactoryImpl",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.census.InternalCensusStatsAccessor"
+    },
+    {
+      "type": "io.grpc.census.InternalCensusTracingAccessor"
+    },
+    {
+      "type": "io.grpc.internal.SerializingExecutor",
+      "fields": [
+        {
+          "name": "runState"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.grpc.netty.NettyServer$1"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.grpc.netty.NettyServerHandler"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.grpc.netty.ProtocolNegotiators$GrpcNegotiationHandler"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.grpc.netty.ProtocolNegotiators$PlaintextHandler"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.grpc.netty.ProtocolNegotiators$WaitUntilActiveHandler"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.grpc.netty.WriteBufferingAndExceptionHandler"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.bootstrap.ServerBootstrap$1"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.bootstrap.ServerBootstrap$ServerBootstrapAcceptor"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.buffer.AbstractByteBufAllocator"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.buffer.AbstractReferenceCountedByteBuf",
+      "fields": [
+        {
+          "name": "refCnt"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.AbstractChannelHandlerContext",
+      "fields": [
+        {
+          "name": "handlerState"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.ChannelOutboundBuffer",
+      "fields": [
+        {
+          "name": "totalPendingSize"
+        },
+        {
+          "name": "unwritable"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.DefaultChannelConfig",
+      "fields": [
+        {
+          "name": "autoRead"
+        },
+        {
+          "name": "writeBufferWaterMark"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.DefaultChannelPipeline",
+      "fields": [
+        {
+          "name": "estimatorHandle"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.DefaultChannelPipeline$HeadContext"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.DefaultChannelPipeline$TailContext"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.DefaultFileRegion"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.epoll.Epoll",
+      "methods": [
+        {
+          "name": "isAvailable",
+          "parameterTypes": []
+        },
+        {
+          "name": "unavailabilityCause",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.epoll.NativeDatagramPacketArray$NativeDatagramPacket"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.channel.unix.PeerCredentials"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.AbstractReferenceCounted",
+      "fields": [
+        {
+          "name": "refCnt"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.DefaultAttributeMap",
+      "fields": [
+        {
+          "name": "attributes"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.Recycler$DefaultHandle",
+      "fields": [
+        {
+          "name": "state"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.ReferenceCountUtil"
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.ResourceLeakDetector$DefaultResourceLeak",
+      "fields": [
+        {
+          "name": "droppedRecords"
+        },
+        {
+          "name": "head"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.concurrent.DefaultPromise",
+      "fields": [
+        {
+          "name": "result"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.concurrent.SingleThreadEventExecutor",
+      "fields": [
+        {
+          "name": "state"
+        },
+        {
+          "name": "threadProperties"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueColdProducerFields",
+      "fields": [
+        {
+          "name": "producerLimit"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueConsumerFields",
+      "fields": [
+        {
+          "name": "consumerIndex"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueProducerFields",
+      "fields": [
+        {
+          "name": "producerIndex"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.internal.shaded.org.jctools.queues.unpadded.MpscUnpaddedArrayQueueConsumerIndexField",
+      "fields": [
+        {
+          "name": "consumerIndex"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.internal.shaded.org.jctools.queues.unpadded.MpscUnpaddedArrayQueueProducerIndexField",
+      "fields": [
+        {
+          "name": "producerIndex"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.netty.shaded.io.netty.util.internal.shaded.org.jctools.queues.unpadded.MpscUnpaddedArrayQueueProducerLimitField",
+      "fields": [
+        {
+          "name": "producerLimit"
+        }
+      ]
+    },
+    {
+      "type": "io.grpc.override.ContextStorageOverride"
+    },
+    {
+      "type": "io.perfmark.impl.SecretPerfMarkImpl$PerfMarkImpl"
+    },
+    {
+      "type": "java.io.FileDescriptor"
+    },
+    {
+      "type": "java.lang.BaseVirtualThread"
+    },
+    {
+      "type": "java.lang.Boolean",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Byte",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Character",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Deprecated"
+    },
+    {
+      "type": "java.lang.Double",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Float",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Integer",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Long",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.ProcessHandle",
+      "methods": [
+        {
+          "name": "current",
+          "parameterTypes": []
+        },
+        {
+          "name": "pid",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Short",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.StackTraceElement"
+    },
+    {
+      "type": "java.lang.String",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Thread",
+      "fields": [
+        {
+          "name": "threadLocalRandomProbe"
+        }
+      ],
+      "methods": [
+        {
+          "name": "isVirtual",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Void",
+      "fields": [
+        {
+          "name": "TYPE"
+        }
+      ]
+    },
+    {
+      "type": "java.lang.invoke.VarHandle"
+    },
+    {
+      "type": "java.lang.management.BufferPoolMXBean"
+    },
+    {
+      "type": "java.lang.management.ClassLoadingMXBean"
+    },
+    {
+      "type": "java.lang.management.CompilationMXBean"
+    },
+    {
+      "type": "java.lang.management.LockInfo"
+    },
+    {
+      "type": "java.lang.management.ManagementPermission",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "java.lang.management.MemoryMXBean"
+    },
+    {
+      "type": "java.lang.management.MemoryManagerMXBean"
+    },
+    {
+      "type": "java.lang.management.MemoryPoolMXBean"
+    },
+    {
+      "type": "java.lang.management.MemoryUsage"
+    },
+    {
+      "type": "java.lang.management.MonitorInfo"
+    },
+    {
+      "type": "java.lang.management.PlatformLoggingMXBean"
+    },
+    {
+      "type": "java.lang.management.RuntimeMXBean"
+    },
+    {
+      "type": "java.lang.management.ThreadInfo"
+    },
+    {
+      "type": "java.math.BigDecimal"
+    },
+    {
+      "type": "java.math.BigInteger"
+    },
+    {
+      "type": "java.nio.Bits",
+      "fields": [
+        {
+          "name": "MAX_MEMORY"
+        },
+        {
+          "name": "UNALIGNED"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.Buffer",
+      "fields": [
+        {
+          "name": "address"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.ByteBuffer"
+    },
+    {
+      "type": "java.nio.DirectByteBuffer"
+    },
+    {
+      "type": "java.nio.channels.FileChannel"
+    },
+    {
+      "type": "java.nio.channels.spi.SelectorProvider"
+    },
+    {
+      "type": "java.time.Instant"
+    },
+    {
+      "type": "java.util.Date"
+    },
+    {
+      "type": "java.util.PropertyPermission",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String",
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "java.util.concurrent.ForkJoinTask",
+      "fields": [
+        {
+          "name": "aux"
+        },
+        {
+          "name": "status"
+        }
+      ]
+    },
+    {
+      "type": "java.util.concurrent.atomic.AtomicBoolean",
+      "fields": [
+        {
+          "name": "value"
+        }
+      ]
+    },
+    {
+      "type": "java.util.concurrent.atomic.LongAdder",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "add",
+          "parameterTypes": [
+            "long"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "java.util.concurrent.atomic.Striped64",
+      "fields": [
+        {
+          "name": "base"
+        },
+        {
+          "name": "cellsBusy"
+        }
+      ]
+    },
+    {
+      "type": "java.util.logging.LogManager",
+      "methods": [
+        {
+          "name": "getLoggingMXBean",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "java.util.logging.LoggingMXBean"
+    },
+    {
+      "type": "java.util.zip.CRC32C",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "java.util.zip.Checksum",
+      "methods": [
+        {
+          "name": "update",
+          "parameterTypes": [
+            "java.nio.ByteBuffer"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "javax.management.MBeanOperationInfo"
+    },
+    {
+      "type": "javax.management.MBeanServerBuilder",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "javax.management.ObjectName"
+    },
+    {
+      "type": "javax.management.StandardEmitterMBean"
+    },
+    {
+      "type": "javax.management.openmbean.CompositeData"
+    },
+    {
+      "type": "javax.management.openmbean.OpenMBeanOperationInfoSupport"
+    },
+    {
+      "type": "javax.management.openmbean.TabularData"
+    },
+    {
+      "type": "javax.net.ssl.X509ExtendedTrustManager"
+    },
+    {
+      "type": "jdk.internal.misc.Unsafe",
+      "methods": [
+        {
+          "name": "getUnsafe",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "jdk.management.jfr.ConfigurationInfo"
+    },
+    {
+      "type": "jdk.management.jfr.EventTypeInfo"
+    },
+    {
+      "type": "jdk.management.jfr.FlightRecorderMXBean"
+    },
+    {
+      "type": "jdk.management.jfr.FlightRecorderMXBeanImpl"
+    },
+    {
+      "type": "jdk.management.jfr.RecordingInfo"
+    },
+    {
+      "type": "jdk.management.jfr.SettingDescriptorInfo"
+    },
+    {
+      "type": "libcore.io.Memory"
+    },
+    {
+      "type": "org.apache.kafka.clients.consumer.CooperativeStickyAssignor",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.apache.kafka.clients.consumer.KafkaConsumer",
+      "fields": [
+        {
+          "name": "delegate"
+        }
+      ]
+    },
+    {
+      "type": "org.apache.kafka.clients.consumer.RangeAssignor",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.apache.kafka.clients.consumer.internals.ClassicKafkaConsumer",
+      "fields": [
+        {
+          "name": "coordinator"
+        }
+      ]
+    },
+    {
+      "type": "org.apache.kafka.clients.consumer.internals.ConsumerCoordinator",
+      "fields": [
+        {
+          "name": "autoCommitEnabled"
+        }
+      ]
+    },
+    {
+      "type": "org.apache.kafka.clients.producer.KafkaProducer",
+      "fields": [
+        {
+          "name": "transactionManager"
+        }
+      ]
+    },
+    {
+      "type": "org.apache.kafka.common.utils.AppInfoParser$AppInfo"
+    },
+    {
+      "type": "org.apache.kafka.common.utils.AppInfoParser$AppInfoMBean"
+    },
+    {
+      "type": "org.apache.kafka.shaded.com.google.protobuf.ExtensionRegistry",
+      "methods": [
+        {
+          "name": "getEmptyRegistry",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.robolectric.Robolectric"
+    },
+    {
+      "type": "pl.tlinkowski.unij.service.collect.jdk8.Jdk8UnmodifiableMapFactory"
+    },
+    {
+      "type": "sun.management.ClassLoadingImpl"
+    },
+    {
+      "type": "sun.management.CompilationImpl"
+    },
+    {
+      "type": "sun.management.ManagementFactoryHelper$1"
+    },
+    {
+      "type": "sun.management.ManagementFactoryHelper$PlatformLoggingImpl"
+    },
+    {
+      "type": "sun.management.MemoryImpl"
+    },
+    {
+      "type": "sun.management.MemoryManagerImpl"
+    },
+    {
+      "type": "sun.management.MemoryPoolImpl"
+    },
+    {
+      "type": "sun.management.RuntimeImpl"
+    },
+    {
+      "type": "sun.misc.Unsafe",
+      "allDeclaredFields": true,
+      "methods": [
+        {
+          "name": "invokeCleaner",
+          "parameterTypes": [
+            "java.nio.ByteBuffer"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sun.nio.ch.SelectorImpl",
+      "fields": [
+        {
+          "name": "publicSelectedKeys"
+        },
+        {
+          "name": "selectedKeys"
+        }
+      ]
+    },
+    {
+      "type": "sun.security.provider.NativePRNG",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.security.SecureRandomParameters"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sun.security.provider.SHA",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "glob": "META-INF/io.netty.versions.properties"
+    },
+    {
+      "glob": "META-INF/services/ch.qos.logback.classic.spi.Configurator"
+    },
+    {
+      "glob": "META-INF/services/java.lang.System$LoggerFinder"
+    },
+    {
+      "glob": "META-INF/services/java.nio.channels.spi.SelectorProvider"
+    },
+    {
+      "glob": "META-INF/services/java.time.zone.ZoneRulesProvider"
+    },
+    {
+      "glob": "META-INF/services/javax.xml.parsers.SAXParserFactory"
+    },
+    {
+      "glob": "META-INF/services/org.slf4j.spi.SLF4JServiceProvider"
+    },
+    {
+      "glob": "META-INF/services/pl.tlinkowski.unij.service.api.collect.UnmodifiableMapFactory"
+    },
+    {
+      "glob": "ch/qos/logback/classic/logback-classic-version.properties"
+    },
+    {
+      "glob": "ch/qos/logback/core/logback-core-version.properties"
+    },
+    {
+      "glob": "jndi.properties"
+    },
+    {
+      "glob": "kafka/kafka-version.properties"
+    },
+    {
+      "glob": "logback-test.xml"
+    },
+    {
+      "module": "java.xml",
+      "glob": "jdk/xml/internal/jdkcatalog/JDKCatalog.xml"
+    },
+    {
+      "module": "jdk.jfr",
+      "glob": "jdk/jfr/internal/query/view.ini"
+    }
+  ],
+  
+  "bundles": [],
+  "jni": [
+    {
+      "type": "[Lcom.sun.management.internal.DiagnosticCommandArgumentInfo;"
+    },
+    {
+      "type": "[Lcom.sun.management.internal.DiagnosticCommandInfo;"
+    },
+    {
+      "type": "com.sun.management.internal.DiagnosticCommandArgumentInfo",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String",
+            "java.lang.String",
+            "java.lang.String",
+            "java.lang.String",
+            "boolean",
+            "boolean",
+            "boolean",
+            "int"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "com.sun.management.internal.DiagnosticCommandInfo",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String",
+            "java.lang.String",
+            "java.lang.String",
+            "java.lang.String",
+            "java.lang.String",
+            "java.lang.String",
+            "boolean",
+            "java.util.List"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Boolean",
+      "methods": [
+        {
+          "name": "getBoolean",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "java.util.Arrays",
+      "methods": [
+        {
+          "name": "asList",
+          "parameterTypes": [
+            "java.lang.Object[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sun.management.VMManagementImpl",
+      "fields": [
+        {
+          "name": "compTimeMonitoringSupport"
+        },
+        {
+          "name": "currentThreadCpuTimeSupport"
+        },
+        {
+          "name": "objectMonitorUsageSupport"
+        },
+        {
+          "name": "otherThreadCpuTimeSupport"
+        },
+        {
+          "name": "remoteDiagnosticCommandsSupport"
+        },
+        {
+          "name": "synchronizerUsageSupport"
+        },
+        {
+          "name": "threadAllocatedMemorySupport"
+        },
+        {
+          "name": "threadContentionMonitoringSupport"
+        }
+      ]
+    }
+  ]
+}
