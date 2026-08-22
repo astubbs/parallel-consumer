@@ -93,9 +93,29 @@ Existing decisions to respect rather than rediscover:
   native sidecar is a different thing from embedding PC into a foreign process, and only the latter
   was rejected.
 
-**The open question for GraalVM specifically**: native image and virtual threads have to work
-*together*. That is a version-and-configuration question with a factual answer, and it should be
-established by building one, not by reasoning about it.
+**SETTLED 2026-08-22, by building one.** Oracle GraalVM 23 (`23-graal`, already installed), 20,000
+tasks each sleeping 100ms, counting how many ran on a virtual thread:
+
+| | tasks | peak in flight | ran on virtual |
+|---|---:|---:|---:|
+| GraalVM, JVM mode | 20,000 | 20,000 | 20,000 |
+| **GraalVM, native image** | 20,000 | **20,000** | **20,000** |
+
+A `Mach-O 64-bit arm64` executable, built in 28.3s with `--no-fallback`, holding twenty thousand
+virtual threads - identical to JVM mode, and the same shape as ThreadCeiling's virtual arm. **The
+language feature and the AOT compiler do not fight.** Native image support for virtual threads
+arrived in GraalVM for JDK 21 (23.1); the JDK 17-era builds do not have it, which is worth knowing
+because the repo's own toolchain pins are below that.
+
+**What this does NOT prove, and the gap is the whole job:** the test was forty lines with no
+dependencies. The sidecar carries gRPC/Netty and the Kafka client, both of which are hostile to
+native image's closed-world analysis - reflection, dynamic proxies and resource loading it cannot
+see. Expect a reachability-configuration exercise, not a recompile.
+
+**One collision to decide early, because the two choices are not independent:** the virtual-threads
+plan keeps core on Java 8 bytecode and reaches JDK 21 APIs *reflectively* (its requirement R4).
+Reflection is exactly what native image must be told about in advance. "Core is Java 8 plus
+reflection" and "the sidecar ships as a native image" therefore have to be decided together.
 
 ## What to prove, in order
 
