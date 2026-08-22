@@ -1,0 +1,26 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-streams
+    maturity: experimental
+    minimum_java: 17
+    reliability_confidence: >-
+      A proof of concept. It answers whether a non-JVM program can define and run a stateful Kafka
+      Streams topology through the language-proxy model; it has carried no production workload and
+      is not intended to.
+    api_expectation: >-
+      PROVISIONAL and unpublished. The experimental schema and every type in this module may change
+      or be deleted without ceremony. Do not build against it.
+    support_posture: >-
+      Not supported for any use. The module is never deployed or installed, so nothing downstream
+      inherits it.
+    evidence_id: proxy-streams-poc
+    tracking: astubbs#242
+    use_this_if: >-
+      You are working on the Kafka Streams feasibility proof itself. Everyone else should ignore
+      this module.

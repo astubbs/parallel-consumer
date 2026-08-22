@@ -41,6 +41,7 @@
         <module>parallel-consumer-proxy</module>
         <module>parallel-consumer-proxy-protocol</module>
         <module>parallel-consumer-proxy-clients</module>
+        <module>parallel-consumer-proxy-streams</module>
         <module>parallel-consumer-examples</module>
     </modules>
 

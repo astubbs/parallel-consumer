@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Kafka Streams for foreign languages (experimental)</name>
+    <artifactId>parallel-consumer-proxy-streams</artifactId>
+    <description>
+        A proof of concept: a non-JVM program describes a Kafka Streams topology by replaying builder
+        calls over an experimental protocol, and supplies the per-record function. Experimental and
+        unpublished - see docs/plans/2026-08-22-002-feat-kafka-streams-foreign-wrappers-plan.md.
+    </description>
+
+    <properties>
+        <!--
+            Kafka Streams requires Java 11 or newer, so this module cannot live at the project-wide
+            release.target of 8. The failure mode is not a compile error, which is why the override
+            has to be deliberate: the release level constrains the platform API rather than what
+            javac reads off the classpath, so a module set too low compiles happily and ships
+            bytecode claiming a JVM it does not run on. parallel-consumer-proxy and
+            parallel-consumer-mutiny record the same trap.
+        -->
+        <release.target>17</release.target>
+
+        <!--
+            This module owns its own protobuf pin because it owns its own schema. The protocol
+            module's pin is read out of that pom by path from a workflow, so the two must not be
+            collapsed into one shared property.
+        -->
+        <protobuf.version>3.25.5</protobuf.version>
+        <proxy.protoc>${protobuf.version}</proxy.protoc>
+
+        <!-- Experimental and never published: nothing downstream inherits this module's
+             dependencies, which is what makes the module-local Jackson pin below safe. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.install.skip>true</maven.install.skip>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!--
+                kafka-streams drags in a Jackson line with known vulnerabilities. 2.18.9 is past all
+                of them and is the minimum safe version in its line.
+
+                Module-local on purpose, exactly as parallel-consumer-example-streams does it:
+                jackson-databind is also transitive to WireMock in parallel-consumer-vertx, and
+                pinning it in root dependencyManagement forces WireMock onto an incompatible Jackson
+                and breaks VertxTest with HTTP 500. This module publishes nothing, so no consumer
+                inherits the pin.
+
+                The BOM rather than a bare jackson-databind pin, because databind needs jackson-core
+                and jackson-annotations on the same line - pinning databind alone leaves it running
+                against the old core.
+
+                Retire this when kafka-streams can be bumped to a release shipping 2.18.9 or newer.
+            -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.18.9</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!--
+            Stock Kafka Streams, through the public builder API only. This module ships no class in
+            an org.apache.kafka package and does not unpack, patch or shadow Kafka - so none of the
+            two-jars-on-one-classpath problem that the patched streams module carries applies here.
+        -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams</artifactId>
+            <version>${kafka.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>${protobuf.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <!-- The generated service base carries an annotation the JDK stopped shipping at Java 9.
+             grpc-java's own prescription: compile-time only, so provided scope. -->
+        <dependency>
+            <groupId>org.apache.tomcat</groupId>
+            <artifactId>annotations-api</artifactId>
+            <version>6.0.53</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Shared test conventions live in core's test-jar. Test scope only: nothing in this
+             module's production path depends on core. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!-- Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+             commons-lang3, and test scope is not transitive. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams-test-utils</artifactId>
+            <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <properties>
+                        <!--
+                            Pinned off, and not as a preference. parallel-consumer-core's tests jar
+                            places a junit-platform.properties enabling parallel execution at the
+                            classpath root of every module that consumes it, and Kafka Streams tests
+                            are written for a serial runner - it failed 159 of Kafka's own tests on
+                            state-directory lock contention. Surefire configuration parameters
+                            outrank the property file.
+                        -->
+                        <configurationParameters>
+                            junit.jupiter.execution.parallel.enabled = false
+                        </configurationParameters>
+                    </properties>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
