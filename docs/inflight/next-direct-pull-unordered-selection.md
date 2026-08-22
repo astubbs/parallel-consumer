@@ -80,6 +80,27 @@ that once per batch; direct pull pays it once per record, on every thread.**
 So with ten shards and 5,000 in flight, **every worker walks ~500 already-claimed entries to find one
 record, and most of that walking is workers rediscovering each other's claims.**
 
+## Answered, 2026-08-22: it is shape 2, and the reasoning above was right about the mechanism
+
+The framing in this note - that the waste is `in-flight / shards` skips paid once per record on every
+thread - is exactly what a controlled measurement found, and the number is larger than the note
+guesses. **With a single scanner, so that claim contention cannot exist at all**, examinations per
+record dispatched rise from 1.00 at ten in flight to **440.13 at five thousand**. Adding scanners at a
+fixed depth barely moves it (97.71 at one scanner, 106.56 at a hundred). So of the three shapes below:
+
+- **Shape 1, a shard lock for selection, would have serialised the wrong thing.** The objection this
+  note warns against dismissing - "a lock will be slower" - turns out not to be the point either way:
+  a lock removes contention, and contention is not the cost.
+- **Shape 2, O(1) selection, is what landed.** `ShardOccupancy` indexes the offsets no worker is
+  holding and the unordered path walks that. The same 5,000-in-flight arm now costs 1.00, and the
+  engine-shaped 5,000-workers-and-5,000-in-flight arm costs 1.60 against 1,621.89.
+- **Shape 3, per-worker shard affinity, is unnecessary** rather than merely insufficient - this note's
+  own reasoning about ten shards against thousands of workers stands.
+
+The sequencing at the bottom is otherwise unchanged, and its step 3 is now the open item: **the
+end-to-end runs at 10, 100, 1,000 and 5,000 have not been taken.** See
+[`perf-direct-pull-collapse-is-the-scan.md`](perf-direct-pull-collapse-is-the-scan.md).
+
 ## Three shapes to weigh, none yet measured
 
 1. **A shard lock for selection.** Turns N wasteful walks into one walk plus N-1 short waits.
