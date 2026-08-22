@@ -200,6 +200,61 @@ dispatch protocol, so `arms/ProxyArm.java.template` builds one, in the same two 
 same `BENCH_ASYNC_STUB`. It drives the engine directly across its `DispatchSink`/`report` seam: **no
 gRPC**, so its numbers are an upper bound on the deployed proxy and say nothing about the wire.
 
+## The share-groups arms - Kafka's own answer, and the only non-library arm here
+
+`share` and `share-explicit` are a bare `KafkaShareConsumer` loop with **no Parallel Consumer at
+all** - the same category as `vanilla` and `franz`. That is the point: every other arm in this
+harness is a library, and KIP-932 share groups are the **broker** changing the rules underneath the
+whole category, with per-record acknowledgement and concurrency that is not bounded by partition
+count.
+
+**It is not blocked on PC supporting Kafka 4.** The only Kafka-4 dependency is the broker;
+`CLIENT_PINS` already pins `kafka-clients` per sweep, independently of the PC version.
+
+```bash
+BENCH_BROKER=share BENCH_TIMER_CALLEE=1 MODES="core core-vt share share-explicit" \
+  PC_VERSIONS=LOCAL CLIENT_PINS=4.3.1 bench/run-bisect.sh 100000 2 5000 2
+```
+
+**`BENCH_BROKER=share` starts a SECOND broker** - Kafka 4.3.1, its own container name and port -
+rather than replacing the 3.9.0 one other sessions on this machine are using. Three settings make
+share groups work on a single node and all three are required; `lib/broker.sh#use_share_broker`
+carries them and says why each one fails if omitted.
+
+### Both acknowledgement modes, and why neither can poll ahead
+
+| Mode | `share.acknowledgement.mode` | What acknowledges |
+|---|---|---|
+| `share` | `implicit` (default) | the next `poll()` acknowledges everything the previous one delivered |
+| `share-explicit` | `explicit` | every record individually, before the next `poll()` |
+
+**Neither mode lets an honest processor poll while a batch is outstanding.** Explicit forbids it -
+the client throws `IllegalStateException`. Implicit permits it and *acknowledges records that have
+not been processed*, which is at-most-once delivery wearing an at-least-once label. So the arm is
+batch-synchronous by construction: poll, run the batch, finish it, poll again. **That is the
+structural difference from Parallel Consumer**, which keeps records from many polls outstanding at
+once - and it is what PC's offset encoding buys.
+
+### Three things about this arm that are not obvious
+
+- **`max.poll.records` does nothing.** Setting it to 100 left the batch at 2,606 records and the poll
+  count unchanged at 9 for a 20,000-record dataset. The batch is what the share session acquired,
+  bounded by the `share.partition.max.record.locks` **group** config (default 2,000) per
+  share-partition, not by the consumer's poll size. The `max_poll_records` column is therefore
+  meaningless for share rows.
+- **`auto.offset.reset` and `enable.auto.commit` are REFUSED**, not ignored - `ConfigException` at
+  construction. Neither concept survives the design: there is no consumer-side offset to commit, and
+  where to start is a property of the group. The arm removes both.
+- **Where to start is a group config the arm must set itself.** `share.auto.offset.reset` defaults to
+  `latest`, and every run joins a fresh group, so without an `Admin` call before subscribing the arm
+  reads nothing and hangs until the run deadline.
+
+### Reading its numbers
+
+`peak_in_flight` is the column to trust, as always here - and for these arms it is also the one that
+shows the ceiling, because the batch IS the concurrency. The `concurrency` argument is applied as a
+semaphore so the axis means something below the batch size; above it, it is inert.
+
 ## The `llingr` arm - private research only
 
 > **Read [`llingr/NOTICE.md`](llingr/NOTICE.md) before running this.** `llingr-demux` is AGPL-3.0
@@ -325,6 +380,18 @@ operating point that had produced 9,050 four minutes earlier**. That is not nois
   When the machine cannot be quietened, prefer the question that peak in-flight answers.
 - **Namespace your scratch directory.** Sessions share one scratchpad path, and two of them writing
   `results.csv` or `assemble.sh` is silent.
+
+## The Vert.x arm has NO timer-callee form, and scores well without one
+
+`vertx`/`pc` issue their HTTP request through the engine's own `vertxHttpReqInfo`, so the arm cannot
+be handed a callee that is not an HTTP server. Under `BENCH_TIMER_CALLEE` there is no server:
+`Bench#calleePort` returns 0, every request fails, and **the arm still prints a plausible figure** -
+17,221 msg/s, mid-table - because the engine's `onResponse` callback fires on failures too. The only
+tell is `peak_in_flight` = 0.
+
+It is expensive as well as wrong: the failing runs spun at 190% CPU and took the machine's load from
+12 to 44, contaminating every other arm measured in the same round. **`run-bisect.sh` now refuses the
+combination**; use `BENCH_ASYNC_STUB=1` for a non-blocking callee this arm can actually reach.
 
 ## Four traps this harness has paid for - it encodes the first three, not the fourth
 

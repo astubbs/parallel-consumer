@@ -79,8 +79,6 @@ PRODUCE_TIMEOUT=${BENCH_PRODUCE_TIMEOUT:-30}
 # complete the workload, a failure is a broken arm.
 RUN_TIMEOUT=${BENCH_RUN_TIMEOUT:-60}
 
-BROKER_NAME=pc-bench-broker
-BOOTSTRAP=localhost:19092
 WORK=${BENCH_WORK:-$(mktemp -d)}
 # mktemp -d creates its directory; a caller-supplied BENCH_WORK is just a path, and every write
 # below assumed otherwise - results.csv and the Go build log both failed on a first-run directory.
@@ -116,6 +114,11 @@ arm_class() {
     reactor)  echo ReactorArm ;;
     mutiny)   echo MutinyArm ;;
     proxy)    echo ProxyArm ;;
+    # KIP-932 share groups. NOT an engine and NOT Parallel Consumer - a bare KafkaShareConsumer, the
+    # same category as vanilla and franz - which is precisely why it needs no PC support for Kafka 4
+    # and no arm artifact. Both acknowledgement modes are ONE class selected by a system property;
+    # see run_one's share-explicit branch.
+    share|share-explicit) echo ShareArm ;;
   esac
 }
 # The base pom already carries parallel-consumer-vertx (it supplies both the Vert.x engine and the
@@ -138,6 +141,22 @@ arm_artifact() {
 # The broker lives in bench/lib/broker.sh, shared with run-divergence.sh: two harnesses quietly
 # agreeing on a DIFFERENT partition count would produce numbers that look comparable and are not.
 . "$HERE/lib/broker.sh"
+
+# WHICH BROKER, and why it is a variable now.
+#
+# BENCH_BROKER=share selects a Kafka 4.3.1 broker with KIP-932 enabled, on its own name and port, so
+# the share arm can be measured WITHOUT disturbing the 3.9.0 container other sessions on this machine
+# are using. Anything else - including unset - is the 3.9.0 broker on 19092 that every committed
+# results file was taken against, byte for byte the configuration it always had.
+#
+# BROKER_NAME/BROKER_PORT/BROKER_IMAGE may also be set directly, for a broker this table does not
+# know about. BOOTSTRAP is DERIVED rather than set, so it cannot disagree with the port - the two
+# were independent hardcoded constants before, which is one edit away from a sweep that starts one
+# broker and measures another.
+[ "${BENCH_BROKER:-}" = share ] && use_share_broker
+BROKER_NAME=${BROKER_NAME:-pc-bench-broker}
+BROKER_PORT=${BROKER_PORT:-19092}
+BOOTSTRAP=localhost:$BROKER_PORT
 
 # Resolves a classpath for one (pcVersion, clientPin) pair and compiles the harness against it.
 # Echoes "<classesDir>:<classpath>" on success, nothing on failure.
@@ -347,6 +366,16 @@ run_one() {
     shift
     set -- core "$@"
   fi
+  # share-explicit: the same mode-suffix trick, and here it is not about old versions - it is about
+  # keeping the two acknowledgement modes in ONE arm class so they cannot drift apart, while leaving
+  # them two distinct rows in the results file. Implicit acknowledges a whole poll at once; explicit
+  # acknowledges every record individually and refuses to poll while any is outstanding. That is a
+  # real difference in broker load and it may be the whole result, so it has to be a column value.
+  if [ "${1:-}" = "share-explicit" ]; then
+    engine=(-Dbench.shareAckMode=explicit)
+    shift
+    set -- share "$@"
+  fi
   local jfr=()
   if [ -n "${BENCH_JFR:-}" ]; then
     mkdir -p "$BENCH_JFR"
@@ -503,7 +532,21 @@ if [ -n "${BENCH_TIMER_CALLEE:-}" ]; then CALLEE_LABEL=timer
 elif [ -n "${BENCH_ASYNC_STUB:-}" ]; then CALLEE_LABEL=async
 else CALLEE_LABEL=blocking; fi
 MAX_POLL=${BENCH_MAX_POLL_RECORDS:-500}
-echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight" > "$RESULTS"
+
+# LOAD IS A COLUMN, because msg_per_sec is not load-robust and every reader of a results file has so
+# far had to take the load figure on trust from a sentence in a document.
+#
+# It is not a footnote on this machine. During the first share-arm sweep the 1-minute load moved
+# between 4 and 41 - several other sessions were running their own bench sweeps at the same time -
+# and two repeats of the IDENTICAL share row came back at 15,382 and 66,489 msg/s. Without this
+# column those two rows are indistinguishable from a real bimodality in the arm, and the committed
+# convention ("discard anything above ~20") cannot be applied to a file after the fact at all.
+#
+# Sampled immediately BEFORE each run rather than after: the 1-minute average trails, so the value
+# that best describes the machine a run is about to meet is the one measured going in.
+load_1m() { uptime | sed 's/.*load averages*: //' | awk '{print $1}'; }
+
+echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,load_1m" > "$RESULTS"
 # THE NON-BLOCKING ENGINES MUST NOT BE MEASURED WITH A BLOCKING CALLEE.
 #
 # vertx, reactor, mutiny and proxy exist to run a user function that does NOT hold a thread - that is
@@ -518,7 +561,66 @@ echo "pc_version,client_pin,mode,callee,ordering,records,partitions,max_poll_rec
 # BENCH_ALLOW_BLOCKING_ENGINE=1 overrides, for the one legitimate case: deliberately measuring what
 # an engine costs when a user gives it blocking work, which is a real question about a real mistake -
 # but it has to be asked on purpose.
-is_nonblocking_engine() { case $1 in vertx|pc|reactor|mutiny|proxy) return 0 ;; *) return 1 ;; esac; }
+#
+# THE SHARE ARMS ARE IN THIS SET TOO, though they are not engines. Their user function is a
+# CompletionStage that never blocks - Bench#callCallee, the same one every arm here uses - so handed
+# the thread-per-request WireMock callee they would measure its container-thread pool rather than
+# share groups, which is exactly the failure this guard exists for.
+is_nonblocking_engine() { case $1 in vertx|pc|reactor|mutiny|proxy|share|share-explicit) return 0 ;; *) return 1 ;; esac; }
+
+# A SHARE ARM AGAINST A BROKER WITHOUT SHARE GROUPS FAILS AS "RUN_FAILED", which is the same row a
+# broken arm produces - so the harness checks instead of leaving it to be diagnosed. This is not
+# hypothetical: the first share sweep run here said "reusing running broker pc-bench-broker" and
+# produced exactly that row, because BENCH_BROKER=share had been silently ignored (see lib/broker.sh).
+#
+# The check is on the FEATURE, not on the image tag, because the feature is what actually decides:
+# share.version must be finalized at level 1 AND the share rebalance protocol must be enabled, and a
+# 4.3 broker started without group.coordinator.rebalance.protocols=...,share has the first and not
+# the second.
+for m in $MODES; do
+  case $m in share|share-explicit)
+    # THE OUTPUT IS CAPTURED FIRST, then matched - it is not piped into `grep -q`. This script runs
+    # under `set -o pipefail`, and `grep -q` exits the instant it matches, which SIGPIPEs the
+    # producer: `docker exec ... | grep -q` therefore returns 141 ON SUCCESS. Written the obvious way
+    # this guard fired against a broker that had share groups perfectly well, and its error message
+    # told the reader to do the thing they had already done.
+    features=$(docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-features.sh --bootstrap-server "localhost:$BROKER_PORT" describe 2>/dev/null)
+    if ! printf '%s\n' "$features" | grep -Eq 'share\.version.*FinalizedVersionLevel: [1-9]'; then
+      log "FATAL: mode '$m' needs KIP-932 share groups, and broker '$BROKER_NAME' does not have them finalized."
+      log "       Share groups went GA in Kafka 4.2.0. Run with BENCH_BROKER=share to start a 4.3.1"
+      log "       broker on its own name and port, leaving the 3.9.0 one other sessions use untouched."
+      exit 1
+    fi
+    break ;;
+  esac
+done
+
+# THE VERT.X ARM HAS NO TIMER FORM, AND SILENTLY SCORES WELL WITHOUT ONE.
+#
+# bench/README.md has said this in prose since the timer callee was added - the Vert.x engine issues
+# the HTTP call itself, through `vertxHttpReqInfo`, so it cannot be handed a callee that is not an
+# HTTP server. Nothing enforced it, and on 2026-08-22 a sweep did exactly that.
+#
+# What it produces is not an error. `VertxArm` points the engine at `Bench#calleePort`, which returns
+# 0 when no stub is running; every request fails; the engine's `onResponse` callback still fires, so
+# the arm reaches its expected count and prints a NUMBER - 17,221 msg/s, comfortably mid-table,
+# sitting in a results file next to arms that did the work. The one visible tell is `peak_in_flight`
+# = 0, because nothing ever arrived at a callee, and no reader is required to notice that.
+#
+# It is also expensive: the failing runs spun at 190% CPU and drove the machine's load average from
+# 12 to 44, which then contaminated every OTHER arm measured in the same round.
+for m in $MODES; do
+  case $m in
+    vertx|pc)
+      if [ -n "${BENCH_TIMER_CALLEE:-}" ]; then
+        log "FATAL: mode '$m' issues its own HTTP request through the engine (vertxHttpReqInfo), so it"
+        log "       has no BENCH_TIMER_CALLEE form - there is no server to call, every request fails,"
+        log "       and the arm still prints a plausible throughput figure with peak_in_flight 0."
+        log "       Use BENCH_ASYNC_STUB=1 for a non-blocking callee this arm can actually reach."
+        exit 1
+      fi ;;
+  esac
+done
 
 if [ "$CALLEE_LABEL" = blocking ] && [ -z "${BENCH_ALLOW_BLOCKING_ENGINE:-}" ]; then
   for m in $MODES; do
@@ -545,16 +647,17 @@ for mode in $MODES; do
         proj=$(serial_projection_seconds "$d")
         if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
           log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s,," >> "$RESULTS"
           continue
         fi
         for r in $(seq 1 "$REPEATS"); do
+          load=$(load_1m)
           out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
           read -r rate peak <<< "$out"
           if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
           elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak,$load" >> "$RESULTS"
         done
       done
     done
@@ -563,22 +666,23 @@ for mode in $MODES; do
 
   for pin in $CLIENT_PINS; do
     for pcv in $PC_VERSIONS; do
-      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED," >> "$RESULTS"; continue; }
+      CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED,," >> "$RESULTS"; continue; }
       for c in $CONCURRENCIES; do
         for d in $DELAYS; do
           proj=$(serial_projection_seconds "$d")
           if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
             log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s,," >> "$RESULTS"
             continue
           fi
           for r in $(seq 1 "$REPEATS"); do
+            load=$(load_1m)
             out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
             read -r rate peak <<< "$out"
             if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
             elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
             log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
-            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak" >> "$RESULTS"
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak,$load" >> "$RESULTS"
           done
         done
       done

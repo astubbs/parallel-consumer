@@ -129,6 +129,19 @@ have those options and will silently ignore the property**, producing a row labe
 a plain `core` run. That is the same silent-duplicate failure the `prepare()` cache defect already
 produced once in this harness. **Sweep only `core` and `vertx` at released versions.**
 
+## Re-taken on a Kafka 4.3.1 broker - the figures hold
+
+The share-groups campaign re-took `core`, `core-vt`, `core-dpvt` and `pool` on **both** a 3.9.0 and a
+4.3.1 broker, each private to that campaign, with `kafka-clients` 4.3.1 for every arm. **Every arm
+came back within 2.4% between the two brokers, with the sign inconsistent** - so nothing in this
+document needs re-stating for the broker version, and a share-groups number taken on 4.2+ may be
+compared against these.
+
+**One correction it did produce**: the first attempt read `core-vt` 20% faster on 4.3.1, which was
+another session's sweep sharing the 3.9.0 container rather than a Kafka version effect. Details, and
+the 2.5x result the campaign was actually for:
+[`perf-share-groups-versus-pc-2026-08-22.md`](perf-share-groups-versus-pc-2026-08-22.md).
+
 ## Caveats that bound all of it
 
 - **One partition, all-distinct keys, one broker, one machine.** A best case for any key-sharded

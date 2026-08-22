@@ -165,10 +165,22 @@ client was years behind, or who will want Share Groups first. That segment skews
 sophisticated users are the ones most willing to run a sidecar, so the segment that needs the
 advantage is also the one that tolerates its cost.
 
-**Against Share Groups, narrowly:** acknowledgement here is local to the sidecar and commits are
-batched, where Share Groups acknowledge per message to the broker, so per-record overhead should be
-lower - at the cost of a sidecar process where Share Groups need none, and with poison-record
-handling staying broker-side there.
+**Against Share Groups, narrowly - and half of this has now been measured, with the throughput half
+going against us.** Acknowledgement here is local and commits are batched, where Share Groups
+acknowledge per message to the broker. That was written as "so per-record overhead should be lower",
+and a 2026-08-22 measurement splits the claim in two:
+
+- **Consumer-side throughput: false.** A bare `KafkaShareConsumer` with no Parallel Consumer in it at
+  all ran **2.5x faster than PC's best arm** and 3.8x the shipped default, at 100,000 records,
+  `UNORDERED`, one partition, 2ms of work per record.
+- **Broker-side cost: true, and by more than expected.** Share-group acknowledgement cost the broker
+  about **48x** what PC's batched encoded commit cost per record, and roughly 5x the total per-record
+  broker CPU. The saving is real; it accrues to the cluster, not to the application that pays for it.
+
+**So the throughput argument against Share Groups should not be made.** What survives is ordering -
+Share Groups have no per-key guarantee and no equivalent of one - plus retry semantics and the load
+placed on shared broker infrastructure. Numbers, method and bounds:
+[`docs/inflight/perf-share-groups-versus-pc-2026-08-22.md`](docs/inflight/perf-share-groups-versus-pc-2026-08-22.md).
 
 **Wrapping the core client APIs is a staged possibility, not a plan.** The sidecar already embeds a
 full Java Kafka client, so exposing consume, produce and admin over the same protocol would give every
