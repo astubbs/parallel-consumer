@@ -135,5 +135,5 @@ This is cheap and independent - the structure exists, the comparator is right, a
 the selection call site. **It does not depend on the `UNORDERED` queue, the shard queue, or the
 manager thread**, and it makes each of them a little simpler if they land later.
 
-See also: [`next-is-the-shard-required-under-unordered.md`](next-is-the-shard-required-under-unordered.md),
+See also: [`perf-unordered-departure-on-take-measured.md`](perf-unordered-departure-on-take-measured.md),
 [`next-selectable-shard-queue.md`](next-selectable-shard-queue.md).

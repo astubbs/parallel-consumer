@@ -93,6 +93,15 @@ does not matter.**
 Full measurement, the control arm that separates the walk from claim contention, and the open
 end-to-end question: [`perf-direct-pull-collapse-is-the-scan.md`](perf-direct-pull-collapse-is-the-scan.md).
 
+**And the index is gone again, without the number moving.** On `perf/unordered-available-queue` a
+record leaves the shard when it is TAKEN, so under `UNORDERED` there is no in-flight prefix for an
+index to route around and `ShardOccupancy` is deleted. Same one examination per record, same
+end-to-end throughput to within 0.4% on the only arm steady enough to read - which is the answer to
+"is indexing around it the wrong fix?": it was not *wrong*, it was replaceable, and the replacement
+is worth having only for the structure it removes. Measurements, and the offset-spread property that
+constrains the container:
+[`perf-unordered-departure-on-take-measured.md`](perf-unordered-departure-on-take-measured.md).
+
 ## Not a defect - and this is the part that gets forgotten
 
 In-flight records remaining in the shard is **how ordering is enforced**. The scan has to see them to

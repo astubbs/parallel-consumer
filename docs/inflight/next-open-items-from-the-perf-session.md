@@ -36,7 +36,7 @@ paired with virtual threads. **The performance problem these designs were reachi
 
 | Proposal | Throughput case | What it actually buys |
 |---|---|---|
-| `UNORDERED` available-work queue | **none** | Deletes `ShardOccupancy` and the prefix problem by construction. One structure fewer to keep in step |
+| `UNORDERED` available-work queue | **none - now measured, and it was none** | BUILT and measured on `perf/unordered-available-queue`: `ShardOccupancy` deleted, examinations per record unchanged, `core-dpvt` within 0.4% at both operating points. The cost it turned up is a revocation timing change - [`perf-unordered-departure-on-take-measured.md`](perf-unordered-departure-on-take-measured.md) |
 | Selectable-shard queue / merry-go-round | **none** - `KEY` already examines exactly 1 entry per record | Removes the scan from the ordered path; one rule, no mode branch |
 | Per-worker cursor, ring buffer | **refuted** - 100x the scanners moved cost under 10% | Nothing. Do not build |
 | Retry selection from `RetryQueue` | unmeasured, plausibly small | One home per record instead of two |
