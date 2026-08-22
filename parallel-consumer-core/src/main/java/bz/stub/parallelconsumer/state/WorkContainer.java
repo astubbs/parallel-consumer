@@ -26,6 +26,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
 
 import static bz.stub.parallelconsumer.internal.utils.KafkaUtils.toTopicPartition;
 import static java.util.Optional.of;
@@ -206,6 +207,19 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private final AtomicReference<ExecutionState> state = new AtomicReference<>(ExecutionState.AVAILABLE);
 
     /**
+     * The in-flight meter of the shard holding this record, charged when a delivery is claimed and released when
+     * that delivery lands - so the charge and its release are the two halves of one state transition and cannot
+     * drift apart. Null only for a container that never entered a shard, which in production cannot happen and in
+     * tests is common.
+     * <p>
+     * Written once, by {@link ProcessingShard#addWorkContainer}, before the container is published into the shard's
+     * entry map - so every thread that can reach this container through the map has already seen the write.
+     *
+     * @see ProcessingShard#getCountOfWorkInFlight()
+     */
+    private LongAdder shardInFlightMeter;
+
+    /**
      * Counts deliveries of this record. Incremented every time it is queued for execution, so each delivery has
      * an identity a return can be matched against.
      * <p>
@@ -270,6 +284,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             }
             if (state.compareAndSet(current, current.afterFlightEnds())) {
                 log.trace("Ending flight {}", this);
+                releaseShardInFlightCharge();
                 return;
             }
             // the worker's verdict landed between the read and the write - re-read and end the flight it left
@@ -394,6 +409,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         log.trace("Queueing for execution: {}", this);
         deliveryCount++;
         timeTakenAsWorkMs = of(System.currentTimeMillis());
+        chargeShardInFlight();
         return true;
     }
 
@@ -404,6 +420,28 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     private boolean isClaimableFrom(ExecutionState observed) {
         return observed.isClaimable() && isDelayPassed();
+    }
+
+    private void chargeShardInFlight() {
+        LongAdder meter = shardInFlightMeter;
+        if (meter != null) {
+            meter.increment();
+        }
+    }
+
+    private void releaseShardInFlightCharge() {
+        LongAdder meter = shardInFlightMeter;
+        if (meter != null) {
+            meter.decrement();
+        }
+    }
+
+    /**
+     * Called by the shard as it takes ownership of this record, before the container is published into the shard's
+     * entry map.
+     */
+    void onAdmittedToShard(LongAdder shardInFlightMeter) {
+        this.shardInFlightMeter = shardInFlightMeter;
     }
 
     /**

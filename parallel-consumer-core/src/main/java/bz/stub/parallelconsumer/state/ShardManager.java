@@ -222,6 +222,13 @@ public class ShardManager<K, V> {
      * point: under an ordered mode a shard hands out at most one record at a time, so a shard holding 25,000 queued
      * records still offers exactly one. Waking a worker per queued record there sends every thread in the pool to
      * contend over a handful of selectable records, which costs far more than the records are worth.
+     * <p>
+     * <b>Under an ordered mode this now counts the shards that can actually yield</b>, rather than estimating with
+     * the shard total. It used to be {@code min(awaitingSelection, shardCount)} only because the per-shard truth
+     * was unavailable: a shard already holding a record out at a worker offers <em>nothing</em>, not one, and
+     * before {@link ProcessingShard#getCountOfWorkInFlight()} there was no O(1) way to tell. In the steady state
+     * of an ordered workload most shards are occupied, so the old figure over-reported by roughly the worker
+     * count on every pass, and every one of those wake-ups found nothing.
      *
      * @return the number of records that could plausibly be taken now, at most
      */
@@ -231,7 +238,13 @@ public class ShardManager<K, V> {
             // Unordered shards will hand out as many as are asked for, so the queued count IS the bound.
             return awaitingSelection;
         }
-        return Math.min(awaitingSelection, processingShards.size());
+        long shardsThatCouldYield = processingShards.values().stream()
+                .filter(shard -> !shard.isBlockedByWorkInFlight())
+                .filter(shard -> shard.getCountOfWorkAwaitingSelection() > 0)
+                .count();
+        // still bounded by the queued count, which nets out records parked in retry back-off - a shard's own
+        // available counter deliberately does not
+        return Math.min(awaitingSelection, shardsThatCouldYield);
     }
 
     public boolean workIsWaitingToBeProcessed() {
@@ -396,7 +409,7 @@ public class ShardManager<K, V> {
             long tracked = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked).sum();
             if (tracked > 0) {
                 long awaitingSelection = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection).sum();
-                long inFlight = processingShards.values().stream().mapToLong(ProcessingShard::getCountWorkInFlight).sum();
+                long inFlight = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkInFlight).sum();
                 var retry = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
                 // Interpretation guide:
                 //  - returned 0 with awaitingSelection > 0  => STALL: selectable work exists but was not handed out (a real bug)

@@ -53,21 +53,18 @@ shape in `VertxParallelEoSStreamProcessor#close`, `BrokerPollSystem#doClose`, `d
 `finally` and `ProducerManager#close`. **Antony has PRs addressing this; do not open another.** The
 merge order is those first, then into this trunk.
 
-## 4. The busy-shard count - the design that may resolve 1
+## 4. SETTLED - the busy-shard count is in
 
-**Owner's proposal.** `ShardManager` currently enters **every** shard on every pass with no guard - not
-even `isEmpty()` - paying an iterator, a `HashSet`, an `ArrayList` and a walk-to-head **to discover that
-an ordered shard's head is in flight**, then breaking.
+Owner's design, implemented 2026-08-22 as `ProcessingShard#getCountOfWorkInFlight()`: an ordered
+shard is selectable iff the count is zero, and `getUpperBoundOnSelectableWork()` now counts the
+shards that can actually yield instead of `min(awaitingSelection, shardCount)`.
 
-**A per-shard count of in-flight records** makes that an O(1) check: an ordered shard is selectable iff
-the count is zero. One field on the object that already owns the fact, so nothing can disagree with
-anything - unlike a parallel collection of available shards, or a map of booleans, both of which are two
-structures to keep in step. **It also replaces an estimate**: `getUpperBoundOnSelectableWork()` computes
-`min(awaitingSelection, shardCount)` only because the per-shard truth is unavailable.
-
-**`UNORDERED` simply ignores it.** Shards there are never blocked, the map is a `ConcurrentSkipListMap`
-and the claim is a CAS, so two workers entering the same shard is already safe - they take what they can
-and a losing claim skips. The check costs one comparison that is never true.
+**Two things about it that were not obvious in advance and are worth carrying forward.** The charge
+is taken and released by the record's own claim/land transition rather than by the sites that add and
+remove shard entries - which is what makes the revoked-partition return path, the one path that tells
+no shard anything, need no special case. And it did **not** move
+`OrderingModeDispatchParityTest`'s KEY count: that workload never returns a record, and the shard
+iterator resumes rather than restarts, so no occupied shard is ever revisited for the guard to skip.
 
 **What it does not solve:** `UNORDERED`'s waste, where N workers walk the same in-flight prefix. That
 remains its own question - see
@@ -82,7 +79,6 @@ load themselves - so running them concurrently has been buying less than it appe
 | Item | Blocked on | Why it matters |
 |---|---|---|
 | **Cover the stale sweep under concurrent pull** | nothing - do this next | Retry and abandonment landed with item 2's fix; the stale sweep is the one redelivery path still uncovered, and it is the one that crosses partition revocation |
-| **Implement the busy-shard count** (item 4) | nothing | O(1) selectability for ordered shards, replacing a walk-to-head that exists only to discover the head is in flight |
 | **Measure Reactor / Mutiny / ProxyProcessor** | the arms being wired, then a quiet machine | **Every cross-engine claim currently rests on Vert.x plus an assumption that `ExternalEngine` makes the family behave alike** |
 | **Re-take the direct-pull crossover** | a quiet machine | The 3.2x at ten workers and the collapse at five thousand were measured at load 7-860 |
 | **Re-measure dispatch cost at 2ms/5000** | a quiet machine | Both attempts at removing the UNORDERED rescan measured 0% and +0.2%, at operating points that predate virtual threads putting the engine at near-zero handler delay |

@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
@@ -90,8 +91,39 @@ public class ProcessingShard<K, V> {
      */
     private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
 
+    /**
+     * How many of this shard's records are out at a worker right now.
+     * <p>
+     * <b>What it buys.</b> Under an ordered mode a shard may have at most one record out at a time, so a shard
+     * with anything in flight can hand out nothing - and the only way to discover that used to be to enter the
+     * shard and walk to its head, paying an iterator, a set, a list and a scan to learn one bit. This answers the
+     * same question with one comparison, and lets {@link ShardManager#getUpperBoundOnSelectableWork()} count
+     * shards that can actually yield rather than estimating with the shard total.
+     * <p>
+     * <b>It is an optimisation and never the guarantee.</b> The ordering invariant is still enforced where it
+     * always was: by the per-record claim in {@link WorkContainer#onQueueingForExecution()} and by the
+     * {@code isOrderRestricted()} break below. So a reading that is transiently low costs a wasted scan, never a
+     * second record out of an ordered shard.
+     * <p>
+     * <b>Why it cannot leak.</b> The charge is taken and released by the two halves of one state transition on
+     * the record itself - claimed, then landed - rather than by the paths that add and remove entries. A record
+     * removed from this shard while still out at a worker therefore still releases its charge when it lands, and
+     * a record whose shard is discarded first releases into a meter nobody reads. There is no removal site whose
+     * condition can be got wrong, which is the failure mode {@link #availableWorkContainerCnt} documents.
+     * <p>
+     * {@link LongAdder} for the same reasons as {@link RecordPopulation}: written twice per delivery from
+     * whichever worker took the record, read at most once per shard per dispatch pass, and never read at all
+     * under {@code UNORDERED}, where no shard is ever blocked.
+     *
+     * @see #getCountOfWorkInFlight()
+     * @see #countWorkInFlightByScan()
+     */
+    private final LongAdder inFlightWorkContainerCnt = new LongAdder();
+
     void addWorkContainer(WorkContainer<K, V> wc) {
         long key = wc.offset();
+        // before any publication into entries, so every thread that can reach the container has seen it
+        wc.onAdmittedToShard(inFlightWorkContainerCnt);
         WorkContainer<K, V> existing = entries.get(key);
         if (existing != null) {
             // Check if the existing entry is stale and should be replaced
@@ -161,10 +193,38 @@ public class ProcessingShard<K, V> {
         return entries.size();
     }
 
-    public long getCountWorkInFlight() {
+    /**
+     * How many of this shard's records are out at a worker, in O(1).
+     *
+     * @see #inFlightWorkContainerCnt
+     */
+    public long getCountOfWorkInFlight() {
+        return inFlightWorkContainerCnt.sum();
+    }
+
+    /**
+     * Ground truth for {@link #getCountOfWorkInFlight()}: counts in-flight records by scanning the entries.
+     * <p>
+     * O(n) and deliberately derived from the containers rather than the counter, so a test can hold the two
+     * against each other - the same arrangement as {@link ShardManager#countRecordsInShardsByScan()}. Not for
+     * production use.
+     */
+    // visible for testing
+    long countWorkInFlightByScan() {
         return entries.values().stream()
                 .filter(WorkContainer::isInFlight)
                 .count();
+    }
+
+    /**
+     * Whether an ordered shard is closed for business because it already has a record out at a worker.
+     * <p>
+     * Always false under {@code UNORDERED}, where shards are never blocked - the check costs one comparison that
+     * is never true, and making it help {@code UNORDERED} is a separate question
+     * ({@code docs/inflight/next-direct-pull-unordered-selection.md}).
+     */
+    boolean isBlockedByWorkInFlight() {
+        return isOrderRestricted() && getCountOfWorkInFlight() > 0;
     }
 
     /**
@@ -195,7 +255,17 @@ public class ProcessingShard<K, V> {
         return staleContainers;
     }
 
-    ArrayList<WorkContainer<K, V>> getWorkIfAvailable(int workToGetDelta, RetryQueue retryQueue) {
+    List<WorkContainer<K, V>> getWorkIfAvailable(int workToGetDelta, RetryQueue retryQueue) {
+        if (isBlockedByWorkInFlight()) {
+            // An ordered shard with a record out at a worker can hand out nothing, and this is the cheapest way
+            // to know it: one comparison, against an iterator, a set, a list and a walk to the head. The scan
+            // below still enforces the invariant for every shard it does enter - this only skips work that would
+            // certainly have found nothing. The stale-container sweep the scan also performs is skipped with it,
+            // and is picked up on the next pass once the shard is free (or by the poller's own sweep).
+            log.trace("Shard {} has work in flight and is order restricted, so cannot hand out more", getKey());
+            return Collections.emptyList();
+        }
+
         log.trace("Looking for work on shardQueueEntry: {}", getKey());
 
         var slowWork = new HashSet<WorkContainer<?, ?>>();
