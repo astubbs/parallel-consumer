@@ -67,6 +67,17 @@ DELAYS=${DELAYS:-$DELAY_MS}
 # value, and each row still records what was asked for.
 CONCURRENCIES=${CONCURRENCIES:-$CONCURRENCY}
 BUFFER=${BUFFER:-0}
+# Seconds the one-off produce stage may take before the sweep gives up. It talks to a broker that
+# may be wedged, and it prints nothing on success, so an unbounded produce is indistinguishable from
+# a finished one. Raise it for a dataset much larger than a few hundred thousand records.
+PRODUCE_TIMEOUT=${BENCH_PRODUCE_TIMEOUT:-30}
+# Seconds any single measured run may take. One minute is ample for every arm at every operating
+# point this harness sweeps - at 100,000 records the slowest legitimate combination is a couple of
+# seconds of work plus JVM start and a consumer-group join - so anything that reaches this limit is
+# not slow, it is not going to finish. A run that times out is recorded as RUN_TIMEOUT rather than
+# RUN_FAILED, because the two mean different things: a timeout at this cap is an arm that cannot
+# complete the workload, a failure is a broken arm.
+RUN_TIMEOUT=${BENCH_RUN_TIMEOUT:-60}
 
 BROKER_NAME=pc-bench-broker
 BOOTSTRAP=localhost:19092
@@ -238,6 +249,69 @@ parse_result() { grep '^RESULT' | awk '{p=$6; sub("peak=","",p); print $5, p}'; 
 # It stays a distinct MODE, rather than an environment variable set around the whole sweep, because
 # the results file has to be able to tell the two arms apart - and because it lets one invocation
 # alternate them, which is the only defence this harness has against machine drift between arms.
+# THE SERIAL ARMS, and why the sweep has to know which they are.
+#
+# `vanilla` (a plain KafkaConsumer) and `franz` (franz-go with no engine) process ONE record at a
+# time. They are floors, not engines, and that is the whole point of them - but it means their
+# runtime is `records x delay` and CONCURRENCY DOES NOTHING. At 100,000 records and a 100ms delay
+# that is 10,000 seconds, nearly three hours, for a single repeat.
+#
+# Left to itself the sweep simply sits there. Nothing is wrong, nothing is logged, and the last line
+# on screen is whatever the previous stage printed - which is exactly how two sweeps were abandoned
+# on the belief that the produce step had wedged, when the process actually running was `Bench
+# vanilla` doing precisely what it was asked to.
+#
+# So the arm is SKIPPED, with its projection recorded in the results file rather than merely logged,
+# because a reader comparing engines needs to see that the floor was not measured at this operating
+# point and why. Their result there is arithmetic anyway - a serial arm at delay d converges on
+# 1000/d msg/s and holds one record in flight.
+is_serial_arm() { case $1 in vanilla|franz) return 0 ;; *) return 1 ;; esac; }
+
+# Seconds a serial arm may be PROJECTED to take before it is skipped rather than run.
+#
+# Defaults to RUN_TIMEOUT so the two cannot disagree. They answer different questions - this one is a
+# decision not to spend the time, RUN_TIMEOUT is a backstop against a run that will never finish -
+# but a projection cap ABOVE the run cap would be incoherent: an arm projected at 100s would pass
+# this check and then be killed at 60s anyway, recorded as a timeout rather than as the deliberate
+# skip it should have been.
+SERIAL_ARM_MAX_SECONDS=${BENCH_SERIAL_ARM_MAX_SECONDS:-$RUN_TIMEOUT}
+
+serial_projection_seconds() { echo $(( RECORDS * $1 / 1000 )); }
+
+# BOUNDED EXECUTION, because a stock macOS has neither `timeout` nor `gtimeout` and this script has
+# to run on both platforms. Backgrounds the command, polls, and escalates TERM then KILL.
+#
+# WHY IT EXISTS. Two stages of this harness can run effectively forever and neither announces that it
+# is doing so:
+#
+#   * A SERIAL ARM AT A HIGH DELAY. `vanilla` and `franz` have no engine and process one record at a
+#     time, so their runtime is records x delay REGARDLESS of concurrency. 100,000 records at 100ms is
+#     10,000 seconds - nearly three hours, for one repeat, and the sweep just sits there. That is not
+#     a hang to be diagnosed, it is arithmetic, and it killed two sweep attempts before anyone worked
+#     out the process everyone was watching was a measurement rather than the produce step above it.
+#   * THE PRODUCE STAGE, which talks to a broker that may be wedged.
+#
+# Returns 124 on expiry, the same code GNU `timeout` uses, so a caller can tell a timeout from a
+# failure.
+run_with_deadline() {
+  local secs=$1; shift
+  "$@" &
+  local pid=$! waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$secs" ]; then
+      kill -TERM "$pid" 2>/dev/null
+      sleep 2
+      kill -KILL "$pid" 2>/dev/null
+      # the JVM is a grandchild of this shell, so killing the subshell is not enough
+      pkill -KILL -P "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
 run_one() {
   local cp=$1; shift
   local engine=()
@@ -383,7 +457,19 @@ if [ "${BENCH_SKIP_PRODUCE:-0}" = 1 ]; then
 else
   LOCAL_CP=$(prepare LOCAL NATIVE) || { log "FATAL: cannot build local arm"; exit 1; }
   log "producing $RECORDS records into $TOPIC (once)"
-  run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null
+  # Bounded: a wedged broker here silently costs the whole sweep, and there is no output to watch -
+  # nothing is logged when the produce SUCCEEDS either, so a stale "producing..." line is the last
+  # thing on screen whether it finished a second ago or never will.
+  if ! run_with_deadline "$PRODUCE_TIMEOUT" run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$TOPIC" "$RECORDS" >/dev/null; then
+    rc=$?
+    if [ "$rc" = 124 ]; then
+      log "FATAL: producing $RECORDS records exceeded ${PRODUCE_TIMEOUT}s. Is the broker healthy? Raise BENCH_PRODUCE_TIMEOUT for a larger dataset."
+    else
+      log "FATAL: producing $RECORDS records failed (exit $rc)"
+    fi
+    exit 1
+  fi
+  log "produced $RECORDS records into $TOPIC"
 fi
 
 # delay_ms and concurrency are columns because both are now swept axes; without them a multi-delay
@@ -415,9 +501,17 @@ for mode in $MODES; do
     ver=$(go_arm_version "$mode")
     for c in $CONCURRENCIES; do
       for d in $DELAYS; do
+        proj=$(serial_projection_seconds "$d")
+        if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
+          log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
+          echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+          continue
+        fi
         for r in $(seq 1 "$REPEATS"); do
-          read -r rate peak <<< "$(run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c")"
-          [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
+          out=$(run_with_deadline "$RUN_TIMEOUT" run_go_arm "$BIN" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c"); rc=$?
+          read -r rate peak <<< "$out"
+          if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
+          elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
           log "$ver $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
           echo "$ver,franz,$mode,n/a,$ORDERING,$RECORDS,$PARTITIONS,default,$d,$c,$r,$rate,$peak" >> "$RESULTS"
         done
@@ -431,9 +525,17 @@ for mode in $MODES; do
       CP=$(prepare "$pcv" "$pin" "$mode") || { log "SKIP $pcv/$pin $mode (resolve or compile failed)"; echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,,,,COMPILE_FAILED," >> "$RESULTS"; continue; }
       for c in $CONCURRENCIES; do
         for d in $DELAYS; do
+          proj=$(serial_projection_seconds "$d")
+          if is_serial_arm "$mode" && [ "$proj" -gt "$SERIAL_ARM_MAX_SECONDS" ]; then
+            log "SKIP $mode delay=${d}ms: serial arm, projected ${proj}s for $RECORDS records (cap ${SERIAL_ARM_MAX_SECONDS}s). Concurrency does not apply to it."
+            echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,,SKIPPED_SERIAL_${proj}s," >> "$RESULTS"
+            continue
+          fi
           for r in $(seq 1 "$REPEATS"); do
-            read -r rate peak <<< "$(run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER")"
-            [ -z "$rate" ] && { rate=RUN_FAILED; peak=; }
+            out=$(run_with_deadline "$RUN_TIMEOUT" run_one "$CP" "$mode" "$BOOTSTRAP" "$TOPIC" "$RECORDS" "$d" "$c" "$BUFFER"); rc=$?
+            read -r rate peak <<< "$out"
+            if [ "$rc" = 124 ]; then rate=RUN_TIMEOUT_${RUN_TIMEOUT}s; peak=
+            elif [ -z "$rate" ]; then rate=RUN_FAILED; peak=; fi
             log "$pcv/$pin $mode delay=${d}ms conc=$c run$r = $rate msg/s, peak in flight $peak"
             echo "$pcv,$pin,$mode,$CALLEE_LABEL,$ORDERING,$RECORDS,$PARTITIONS,$MAX_POLL,$d,$c,$r,$rate,$peak" >> "$RESULTS"
           done
