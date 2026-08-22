@@ -1,101 +1,118 @@
-# The uber demo: eleven language clients, one workload, one table
+# The uber demo: eleven language clients, one workload, one view
 
 Branch `feats/uber-demo-all-languages`, stacked on `feats/polyglot-demos`
-(astubbs/parallel-consumer#331). **Design only - no implementation yet.**
+(astubbs/parallel-consumer#331). **Design only - nothing implemented, and three decisions are open
+below. Do not start until they are settled; each one changes what gets built.**
 
-## This is idea 21, and it was already ranked first
+## Prior art, which reshaped this before any code
 
-Prior art, read before designing anything here, and it changes the shape:
 [`next-polyglot-demo-app.md`](next-polyglot-demo-app.md) points at ideas 21-27 in
 [`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html`](../ideation/2026-08-14-language-proxy-interaction-model-ideation.html)
 - seven ranked directions for "a demo that runs all eleven language bindings at once and proves in
-one view that they read the same records". That note also says the eleven-language grid belongs to
-whichever idea wins, and that the per-language demos on astubbs/parallel-consumer#331 are a
-deliberate narrow cut of idea 23 rather than the grid.
+one view that they read the same records". It says the eleven-language grid belongs to whichever
+idea wins, and that the per-language demos on astubbs/parallel-consumer#331 are a deliberate narrow
+cut of idea 23, not the grid. It also says to read the ideation before designing any demo,
+orchestration, aggregation or perf-display work, because it records what was rejected and why.
 
-**Idea 21 - "the skateboard stack"** is the one the owner's framing describes: run the consumption
-work and report one cohesive table, *not* eleven existing demos in sequence. Confidence 85%,
-complexity medium, and its four pillars are:
+**Idea 21, "the skateboard stack"** (ranked first, 85% confidence, medium complexity) is the shape
+the owner described: run the consumption work and report one cohesive view, *not* eleven existing
+demos in sequence. Its four pillars: each language's demo is its conformance runner in costume; each
+worker's Success report carries a receipt `{record_id, language, offset, attempt, payload_checksum}`
+onto a `demo-observations` topic; one TUI aggregator consumes that topic, renders eleven lanes and
+machine-asserts sameness, ending "11/11 languages converged at offset N"; CI records the run as an
+asciinema cast.
 
-1. **Each language's demo is its conformance runner in a costume.** The runner already speaks
-   production gRPC and already prints a frozen observation line per delivery. The demo is that same
-   binary with a real-sidecar flag and a stats printer.
-2. **Each worker's Success report carries a receipt** - `{record_id, language, offset, attempt,
-   payload_checksum}` - produced through the protocol's only sanctioned output route onto a
-   `demo-observations` topic. **Kafka is the aggregation bus**: no log-shipping fabric, and the
-   demo's own plumbing dogfoods terminal produce and the epoch fence.
-3. **One TUI aggregator container** consumes the receipts topic, renders eleven lanes, and
-   *machine-asserts sameness*: matching checksums per record, ending in one line -
-   **"11/11 languages converged at offset N"**.
-4. CI records the run as an asciinema cast.
+**Idea 22, "one consumer group across eleven runtimes"**, is a different demo that this design keeps
+confusing with 21 - see decision 2.
 
-The reason this beats orchestrating eleven demos is pillar 2: the languages do not each report a
-private table that something has to reconcile. They all write receipts to one topic, and sameness
-becomes a *computed* claim rather than a visual one.
+## Verified, not assumed
 
-## What exists now that did not when idea 21 was written
+**The receipts route exists.** `proxy.proto` carries `repeated ProduceRecord produce` in the worker's
+report, commented as "the sanctioned route for worker output", at-least-once. So receipts ride the
+protocol's own output path: Kafka becomes the aggregation bus, sameness is *computed* rather than
+eyeballed, and nothing parses eleven demos' stdout - which is the orchestration shape the owner
+ruled out.
 
-| pillar | state today |
+## What already exists, that did not when idea 21 was written
+
+| pillar | state |
 |---|---|
-| conformance runners, all eleven, over production gRPC | **exists** |
-| cpp and swift runnable off-Linux | **exists** - `bin/run-conformance-in-container.sh`, added on astubbs/parallel-consumer#331 |
-| a shared broker to point everything at | **exists** |
-| a fixed, parseable table shape (`arm │ records │ keys │ elapsed │ msg/s │ vs AK core`) | **exists**, and `records`/`keys` are deterministic across languages - which is what makes any cross-language claim checkable |
-| arms that name the product (`pc-<lang>-grpc`) | **exists**, so a row identifies itself |
-| receipts topic, TUI aggregator, asciinema cast | **the actual new work** |
+| conformance runners for all eleven, over production gRPC | exists |
+| **demo binaries that already spawn a real sidecar against a real broker** | exists, from astubbs/parallel-consumer#331 - see decision 1 |
+| cpp and swift runnable off-Linux | exists - `bin/run-conformance-in-container.sh` |
+| a shared broker | exists |
+| fixed, parseable table shape, with `records`/`keys` deterministic across languages | exists |
+| arms that name the product (`pc-<lang>-grpc`), so a row identifies itself | exists |
+| receipts, aggregator, cast | the new work |
 
-## The one real gap, and it is not the UI
+## Decision 1: which binary is the base
 
-**The conformance runners are driven with a SHIM, not a real sidecar.** `SidecarShim` writes a script
-that announces a bare `port:` and holds stdin, because the engine lives in the suite's own JVM where
-the harness can observe dispatch. That is deliberate and documented - it makes the client exercise its
-real spawn-and-reap path without adding a connect-to-an-existing-port option to an API that binds
-eleven languages.
+An earlier version of this note said the expensive gap was "give the eleven conformance runners a
+real-sidecar flag". **That is stale.** Idea 21 was written before astubbs/parallel-consumer#331, and
+every language now has a demo binary that already spawns a real sidecar against a real broker. The
+costume exists; it is just called a demo rather than a runner.
 
-For the demo, the runner must instead spawn a **real** sidecar against a **real** broker. That is
-idea 21's "real-sidecar flag", and it is the whole difference between a conformance runner and a demo
-runner. It is a per-language change to eleven runners, which makes it the expensive pillar - not the
-TUI.
+- **Demo binaries as the base.** The hard per-language part - real sidecar, real broker, container
+  that works - is done. The work is adding receipts. The baggage: they seed their own backlog and
+  print their own tables, neither of which a grid wants.
+- **Conformance runners as the base.** Frozen, observable, already machine-checked. The work is a
+  real-sidecar flag *and* receipts, in eleven languages.
 
-Worth knowing before starting: the demo containers already prove the shape works. Each one runs a
-language client *and* a JVM sidecar it spawns, co-located, because the client owns the sidecar's
-lifecycle (KTD41). The uber demo is eleven of those against one broker, plus a twelfth container that
-reads receipts.
+Leaning: **demos**, because the expensive half is already paid for.
 
-## The measurement trap, which must be decided before any number is shown
+## Decision 2: the consumer-group topology, which decides what the demo CLAIMS
+
+The two are not variants of one demo. Only the first supports the convergence line.
+
+- **One topic, eleven separate consumer groups (idea 21).** Every language reads *every* record, so
+  per-record checksums are comparable and "11/11 converged at offset N" is a real assertion. The
+  claim is **"eleven runtimes read the same records identically"**.
+- **One topic, one shared consumer group (idea 22).** The eleven *split* the records and rebalance
+  across languages. No per-record comparison exists. The claim is **"eleven runtimes cooperate in one
+  group"** - which is arguably the more surprising thing to show, and is a different demo.
+
+**Consequence either way:** the demos currently seed their own backlog, so eleven against one topic
+means eleven backlogs unless exactly one seeds. A "who seeds" role is needed. Small, but it is a
+contract question rather than wiring.
+
+## Decision 3: does the grid show a rate at all
 
 **Eleven runtimes on one host, at once, cannot produce quotable throughput.** This project has
-already discarded an entire fan-out's figures for exactly that reason - the box ran at load 20-113
-and every agent was told to refuse to report rates. A grid that runs all eleven simultaneously and
-prints msg/s is a grid that prints noise, attractively.
+already discarded an entire fan-out's figures for exactly that - the box ran at load 20-113 and every
+agent was instructed to refuse to report rates.
 
-Two honest shapes, and the choice is the owner's:
+- **Deterministic columns only** - records, keys, offsets, checksum agreement, convergence. Immune to
+  contention, and it is idea 21's actual claim.
+- **Rates too**, which forces sequential runs on a quiet host and stops it being one live view.
 
-- **Sameness grid (parallel).** All eleven at once. Show records, keys, offsets, checksum agreement,
-  convergence - the *deterministic* columns - and no rates at all. The claim is "they all read the
-  same records", which is idea 21's actual claim, and it is unaffected by contention.
-- **Speed table (sequential).** One language at a time on a quiet host, rates quotable, but it takes
-  eleven times as long and stops being one live view.
+[`next-perf-comparison-matrix.md`](next-perf-comparison-matrix.md) owns measurement semantics and the
+blessed-numbers pipeline by prior agreement recorded in both docs; this track owns app, UI and
+narrative. So the speed table is that track's artifact. Leaning: **no rates in the live grid.**
 
-Note that `next-perf-comparison-matrix.md` owns measurement semantics and the blessed-numbers
-pipeline by prior agreement; this track owns the app, the UI and the narrative. So the speed table is
-**that** track's artifact, and the uber demo should show sameness. Wanting both in one view is how
-the numbers get quoted out of a contended run.
+## Smallest first step, once the decisions land
 
-## Smallest first step, if picked up
-
-Not the TUI. Take **two** languages - one already native here and one that needs the container
-(so the awkward case is in from the start) - give their conformance runners the real-sidecar flag,
-point both at the shared broker, and have them write receipts to one topic. If two lanes converge
-and the aggregator can say "2/2 converged at offset N", the remaining nine are transcription. Doing
-the UI first produces a beautiful view of one language.
+Not the TUI. Take **two** languages - one that runs natively here and one that needs the container,
+so the awkward case is in from the start - have them emit receipts to one topic, and get an
+aggregator to say "2/2 converged at offset N". If two lanes converge, the remaining nine are
+transcription. Building the UI first produces a beautiful view of one language.
 
 ## What must not be done
 
-- **Do not build the grid by parsing eleven demos' stdout.** That is the orchestration shape the
-  owner ruled out, and it inherits every per-language rendering difference as a parsing problem.
-  Receipts on a topic make sameness computable instead.
-- **Do not print a rate from a parallel run**, however tempting the wide table looks.
-- **Do not take audience input as workload.** Idea 21's neighbours include a keynote mode that was
-  rejected for violating the recorded no-visitor-input security posture; the rejection is in the
-  ideation doc and stands.
+- **Do not build the grid by parsing eleven demos' stdout.** Ruled out by the owner, and it inherits
+  every per-language rendering difference as a parsing problem. Receipts make sameness computable.
+- **Do not print a rate from a parallel run**, however good the wide table looks.
+- **Do not take audience input as workload.** The ideation records a keynote mode rejected for
+  violating the no-visitor-input security posture; that rejection stands.
+
+## Cross-references
+
+- [`next-polyglot-demo-app.md`](next-polyglot-demo-app.md) - the ideation pointer, the
+  perf-track split, and the instruction to choose an idea and take it through brainstorm to a plan
+- [`parked-demo-gallery.md`](parked-demo-gallery.md) and
+  [`branch-polyglot-demo-ideation.md`](branch-polyglot-demo-ideation.md) - adjacent demo thinking
+- [`branch-polyglot-demos.md`](branch-polyglot-demos.md) - the eleven demos this stacks on, and what
+  the fan-out found
+- [`next-demo-testing-infrastructure.md`](next-demo-testing-infrastructure.md) - the ranked ambition
+  for the demo harnesses
+- `parallel-consumer-proxy/demo/README.md` - the contract the eleven demos keep
+- `proxy.proto`, `ProduceRecord` - the sanctioned worker-output route the receipts would ride
