@@ -324,6 +324,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Setter(PACKAGE)
     private boolean lastWorkRequestWasFulfilled = false;
 
+    /**
+     * Package-private read access for request-quantity tests, so they can see what a request reported without going
+     * through the load factor. Deliberately not a bean-style {@code is...} getter: the Truth subject generator wraps
+     * every inherited bean getter into subjects in other packages, where a package-private method is not callable,
+     * and the generated code then fails to compile.
+     */
+    boolean lastWorkRequestWasFulfilled() {
+        return lastWorkRequestWasFulfilled;
+    }
+
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
     private Gauge statusGauge;
@@ -1535,13 +1545,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         int current = wm.getNumberRecordsOutForProcessing();
         int delta = target - current;
 
-        // always round up to fill batches - get however extra are needed to fill a batch
+        // always round up to fill batches - get however many extra are needed to fill the last batch
+        // (astubbs#311: this added target - modulo, requesting almost a whole extra target of work on nearly every
+        // pass and settling in-flight at ~2x the configured target - see CalculateQuantityToRequestTest)
         if (options.isUsingBatching()) {
             //noinspection OptionalGetWithoutIsPresent
             int batchSize = options.getBatchSize();
             int modulo = delta % batchSize;
             if (modulo > 0) {
-                int extraToFillBatch = target - modulo;
+                int extraToFillBatch = batchSize - modulo;
                 delta = delta + extraToFillBatch;
             }
         }

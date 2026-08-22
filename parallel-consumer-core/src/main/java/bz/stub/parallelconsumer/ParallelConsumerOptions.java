@@ -518,8 +518,22 @@ public class ParallelConsumerOptions<K, V> {
     public void validate() {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
+        batchSizeValidation();
         transactionsValidation();
         virtualThreadsValidation();
+    }
+
+    /**
+     * A {@code batchSize} below 1 has no meaning, and without this bound the same misconfiguration fails three
+     * different ways depending on unrelated settings (astubbs#311): zero silently zeroes
+     * {@link #getTargetAmountOfRecordsInFlight()} so no work is ever requested; zero with a {@link #messageBufferSize}
+     * set throws {@link ArithmeticException} dividing by that target at construction; and {@code null} NPEs unboxing
+     * in {@link #isUsingBatching()}. One check here turns all three into the same clear error.
+     */
+    private void batchSizeValidation() {
+        if (batchSize == null || batchSize < 1) {
+            throw new IllegalArgumentException(msg("{} must be 1 or greater, but was: {}", Fields.batchSize, batchSize));
+        }
     }
 
     /**
