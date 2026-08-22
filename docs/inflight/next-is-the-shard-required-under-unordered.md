@@ -57,6 +57,50 @@ backwards - a compare-and-set to the minimum - or that record is stranded until 
 it. An index handles re-entry naturally; a cursor has to be told. That is the honest trade, and it is
 small.
 
+## The structure UNORDERED actually wants, agreed 2026-08-22
+
+**Antony: "in unordered we could use a totally different structure. No need to reuse the
+order-preserving ones."** Agreed, and once the constraint is dropped the structure is nearly trivial.
+
+`UNORDERED` needs exactly one thing: **give me any available record.** Not the lowest offset, not the
+next for a key - any. So the container is a **queue of AVAILABLE records, keyed by topic-partition**:
+
+| Event | Ordered modes today | `UNORDERED` with a queue |
+|---|---|---|
+| Take | walk the prefix to the first claimable entry | `poll()` - O(1) |
+| Succeed | `entries.remove(offset)` | **nothing** - it left when it was taken |
+| Fail / abandon | stays put, becomes selectable again | re-add, after its delay |
+| Partition revoked | epoch sweep over the shard | **drop that partition's queue** - O(1) |
+
+**The step that makes it work is that a record leaves when TAKEN, not when it succeeds.** That single
+change removes everything the current design has to do afterwards: no in-flight prefix to walk past,
+no `ShardOccupancy` index to maintain, no cursor to keep at a minimum, and no removal-by-offset on
+success - because on success there is nothing left to remove. The 440-examinations-per-record figure
+is entirely a consequence of records staying put, and it goes to 1 by construction rather than by
+indexing.
+
+**Still keyed by topic-partition**, though - the same key `ShardKey.of` already uses for `UNORDERED` -
+because revocation has to drop one partition's pending work without touching another's, and the
+broker poller throttles per partition. What changes is the *container*, from
+`ConcurrentSkipListMap<Long, WorkContainer>` to a queue, not the keying.
+
+**Offsets are unaffected.** `PartitionStateManager` owns `incompleteOffsets` and the commit frontier,
+and it already tracks in-flight records independently of where they are sitting. A record held by a
+worker is still incomplete; nothing about commit correctness depends on the selection structure
+holding it.
+
+### The cost, stated plainly
+
+**Two selection paths instead of one.** Ordered modes genuinely need offset order - "the next record
+for this key" is an ordered question - so they keep the skip-list shard. `UNORDERED` gets a queue.
+That is a real maintenance cost and should not be waved away.
+
+The argument for paying it: **forcing one structure to answer both questions is what produced the
+walk.** The ordered modes need a sorted map and get one; `UNORDERED` needs a bag and has been given a
+sorted map containing every record it must ignore. Two structures that each answer one question are
+usually easier to keep correct than one structure answering two, and this session has spent a day on
+bugs caused by the second shape.
+
 ## What to do with this
 
 **Do not undo the measured fix.** It is evidence-backed, it removes three quarters of the collapse,
