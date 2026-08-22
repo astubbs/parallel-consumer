@@ -208,11 +208,12 @@ public class ProcessingShard<K, V> {
             scanMeter.onEntryExamined();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
-                // The claim itself decides, not the availability check: under the direct-pull engine another worker
-                // may take this record between the check and the claim, and a lost claim must be skipped rather
-                // than double-delivered. Under the default engine the control loop is the only selector, so
-                // onQueueingForExecution() never loses.
-                if (workContainer.isAvailableToTakeAsWork() && workContainer.onQueueingForExecution()) {
+                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork() && onQueueingForExecution()`,
+                // and the gap between the two is what let a record be delivered twice: the check read three terms
+                // and the claim re-validated only one of them, so a decision made before another worker completed
+                // the record could still win. onQueueingForExecution() now evaluates the whole decision and claims
+                // from the state it evaluated. Do not reintroduce a guard in front of it.
+                if (workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 
                     workTaken.add(workContainer);

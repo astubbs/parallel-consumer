@@ -26,26 +26,25 @@ was changed four times to make a failing test pass - fastest-of-three, the ratio
 already shown the code was unchanged. **Changing a test's method repeatedly to make it agree is tuning
 until it agrees**, and it is written into two agent briefs from the same day as an anti-pattern.
 
-## 2. `1001 deliveries for 1000 records` - and no, the tests did not catch it
+## 2. SETTLED - `1001 deliveries for 1000 records` was selection after all
 
-Seen **once** in a full direct-pull run. **0 out of 11 reproduction attempts.** The signature of a
-double delivery, which the direct-pull write-up explicitly claims cannot happen.
+Diagnosed and fixed 2026-08-22. The claim was check-then-act: `isAvailableToTakeAsWork()` evaluated
+three terms and `onQueueingForExecution()`'s compare-and-set re-validated only the in-flight one, so
+a puller whose decision predated another puller's completion could claim an already-succeeded record.
+Both fields are now one atomic `WorkContainer.ExecutionState` and the claim is a single
+compare-and-set from the state it evaluated. Sighting record and the reproduction numbers are in
+[`test-untracked-ci-flakes.md`](test-untracked-ci-flakes.md).
 
-**It was caught by someone reading a number in a log, not by a test.** That is worth stating plainly
-because the coverage that exists is uneven in a way the headline "18 tests, all proven red" conceals:
+**Kept, because this entry was confidently wrong in a way worth remembering.** It read "selection is
+now covered ... and it **cannot** produce this. That much is genuinely settled", and directed the
+next person at the redelivery paths instead. The selection tests were real and were proven red under
+sabotage - they simply tested two workers claiming *simultaneously*, which the CAS did exclude, and
+not a claim whose decision predated a completion, which it did not. **Coverage of a mechanism is not
+coverage of the property**, and "proven red under sabotage" says only that the sabotage you chose was
+detectable.
 
-- **Selection is now covered** - concurrent claim, the ordered invariant, claim-loss - and it **cannot**
-  produce this. That much is genuinely settled.
-- **The redelivery paths are not covered at all**: retry after failure, abandonment without a verdict,
-  and the stale sweep. **That is where an extra delivery must come from**, and it is exactly the
-  territory nothing tests.
-
-**So the honest state is: the paths that were tested are clean, and the extra delivery came from the
-paths that were not.** `DirectPullEngineParityTest.pausingStopsDeliveryAndResumingDeliversTheRestExactlyOnce`
-now guards the shape with an exact count, but a guard is not a diagnosis.
-
-**What to do:** cover the three redelivery paths under concurrent pull before anything else on this
-engine. A record that fails, is retried, and is abandoned mid-flight crosses all three.
+The redelivery paths it pointed at were genuinely uncovered, and now are: retry, abandonment and the
+crossing of both are pinned by `WorkClaimStateMachineTest`.
 
 ## 3. NOT OURS - the close path is owned by a separate PR
 
@@ -82,8 +81,8 @@ load themselves - so running them concurrently has been buying less than it appe
 
 | Item | Blocked on | Why it matters |
 |---|---|---|
-| **Cover the three redelivery paths** (item 2) | nothing - do this next | Retry, abandonment, stale sweep. A record that fails, retries, then is abandoned mid-flight crosses all three |
-| **Implement the busy-shard count** (item 4) | item 2 landing first | O(1) selectability for ordered shards, replacing a walk-to-head that exists only to discover the head is in flight |
+| **Cover the stale sweep under concurrent pull** | nothing - do this next | Retry and abandonment landed with item 2's fix; the stale sweep is the one redelivery path still uncovered, and it is the one that crosses partition revocation |
+| **Implement the busy-shard count** (item 4) | nothing | O(1) selectability for ordered shards, replacing a walk-to-head that exists only to discover the head is in flight |
 | **Measure Reactor / Mutiny / ProxyProcessor** | the arms being wired, then a quiet machine | **Every cross-engine claim currently rests on Vert.x plus an assumption that `ExternalEngine` makes the family behave alike** |
 | **Re-take the direct-pull crossover** | a quiet machine | The 3.2x at ten workers and the collapse at five thousand were measured at load 7-860 |
 | **Re-measure dispatch cost at 2ms/5000** | a quiet machine | Both attempts at removing the UNORDERED rescan measured 0% and +0.2%, at operating points that predate virtual threads putting the engine at near-zero handler delay |

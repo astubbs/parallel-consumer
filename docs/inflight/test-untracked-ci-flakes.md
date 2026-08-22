@@ -76,16 +76,22 @@ property of the dispatch scan on a shared machine.
 
 ### An EXTRA delivery under the direct-pull engine, 2026-08-22 - DIAGNOSED, and neither sighting was a flake
 
-> **Both sightings below are now explained, reproduced, and owned by
-> [`bug-direct-pull-claim-is-check-then-act.md`](bug-direct-pull-claim-is-check-then-act.md).**
-> The claim in `ProcessingShard#getWorkIfAvailable` is check-then-act: `isAvailableToTakeAsWork()`
-> reads three terms and `onQueueingForExecution()`'s compare-and-set re-validates only the in-flight
-> one, which `onSuccessResult` resets - via `endFlight()` - *before* it removes the offset. A puller
-> whose availability check predates the record's completion therefore wins the CAS on an
-> already-completed record, and the claim clears the success verdict that would have refused it.
-> **It is a product bug, not a harness bug, and only the direct-pull engine can reach it.**
-> Reproduced at 4 occurrences in 14,400,000 record completions; the text below is kept as the
-> sighting record, and the one part of it that turned out to be wrong is marked at the end.
+> **Both sightings below are explained, reproduced, and FIXED.** The claim in
+> `ProcessingShard#getWorkIfAvailable` was check-then-act: `isAvailableToTakeAsWork()` read three
+> terms and `onQueueingForExecution()`'s compare-and-set re-validated only the in-flight one, which
+> `onSuccessResult` resets - via `endFlight()` - *before* it removes the offset. A puller whose
+> availability check predated the record's completion therefore won the CAS on an already-completed
+> record, and the claim cleared the success verdict that would have refused it. **A product bug, not
+> a harness bug, and only the direct-pull engine could reach it.** Reproduced at 4 occurrences in
+> 14,400,000 record completions.
+>
+> Fixed by collapsing the in-flight boolean and the verdict into one atomic
+> `WorkContainer.ExecutionState`, so the claim is a single compare-and-set from the state it
+> evaluated. `git log --grep='ExecutionState'` finds it. The deterministic proof of the interleaving
+> is in the suite as
+> `WorkClaimStateMachineTest.aClaimDecidedBeforeAnotherPullerCompletedTheRecordIsRefused`; the
+> concurrent reproduction is a soak, not a gate, and is not committed. **The text below is kept as
+> the sighting record**, and the one part of it that turned out to be wrong is marked at the end.
 
 **`ParallelEoSStreamProcessorPauseResumeTest.pausingAndResumingProcessingShouldWork(PERIODIC_CONSUMER_ASYNC)`**
 failed once in a full core unit run with `-Dpc.directPull=true`, on the branch that adds the
@@ -246,6 +252,36 @@ five-minute question and it may close both.
 **Do not let this block the conservation merge without checking it first.** The concern that prompted
 the entry was that the conservation change touches `drain()` - but the second sighting was on the
 *default engine* with none of that work present, which is evidence the family is flaky independently.
+
+### Two new names, 2026-08-22 - and a control arm that says they are not the change that found them
+
+Both surfaced in full **core** unit runs while verifying the claim-state change (the one that closed
+the double-delivery entry above), which is precisely the change you would suspect: it rewrites
+selection.
+
+- **`ParallelEoSStreamProcessorTest.processInKeyOrder`**, at `[sanity check input data]` - a point
+  check that all nine records have been polled, taken one loop cycle after start. New to this ledger.
+- **`CommitResponseTimeoutSymptomTest.aRebalanceStormUnderAHighFailureRateNeitherStallsNorKillsTheConsumer`**,
+  timing out awaiting at least 4 commit rejections. New to this ledger, and the file already carries
+  a solutions write-up about a *different* assertion in it.
+
+Also seen in the same window, and both already named above:
+`ParallelEoSStreamProcessorTest.executorThreadsInterruptedOnShutdownTimeout` and
+`inFlightMessagesCommittedIfProcessedDuringShutdown`.
+
+**The control arm, which is why this is a sighting record and not a bug.** The same core suite was
+run six times on the branch **without** the change, at the same load, and produced a failure of the
+same family (`executorThreadsInterruptedOnShutdownTimeout` +
+`inFlightMessagesCommittedIfProcessedDuringShutdown`) in 1 of 6; six runs **with** the change passed
+6 of 6. In isolation, `processInKeyOrder` passed 6/6 and the commit-storm test 8/8, both at
+one-minute load 7-12 on twelve cores. So the population that fails is the same on both sides of the
+change, and the machine's load is the moving part.
+
+**What this costs to leave alone:** every one of these is a *point check* taken after an await on
+something else - the shape [`vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`](../solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md)
+owns. `processInKeyOrder`'s own comments already record two sites in it converted from point checks
+to awaits after measuring 1-in-10 failures; line 783 is a third that was not. That is the fix to
+reach for if it recurs - not a quarantine, and not a deadline.
 
 ### Four more seen under concurrent agent load, 2026-08-15 - unclassified
 

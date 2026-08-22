@@ -17,7 +17,7 @@ nothing to lock out.**
 Two mechanisms hold the invariant, and both are already present:
 
 ```java
-if (workContainer.isAvailableToTakeAsWork() && workContainer.onQueueingForExecution()) {
+if (workContainer.onQueueingForExecution()) {
     workTaken.add(workContainer);
 } else {
     addToSlowWorkMaybe(slowWork, workContainer);
@@ -31,9 +31,11 @@ if (isOrderRestricted()) {
 1. **The `break` fires after examining the head record, taken or not.** A thread arriving at a busy
    `KEY` shard examines the head, finds it in flight, falls into the `else`, and **breaks without ever
    reaching the next offset.** The shard is self-excluding.
-2. **The claim decides, not the availability check.** Two threads that both find the head available both
-   attempt the CAS; the loser gets `false`, takes nothing, and breaks. The code says so in a comment
-   written for exactly this case.
+2. **The claim decides, and it is now the only thing that decides.** Two threads that both find the
+   head available both attempt the compare-and-set; the loser gets `false`, takes nothing, and breaks.
+   This read `isAvailableToTakeAsWork() && onQueueingForExecution()` when the above was written, and
+   the gap between the two halves turned out to be a real double-delivery defect - the availability
+   check has since been folded into the claim.
 
 **So the invariant is "at most one record examined per ordered shard per scan, and the claim decides".**
 Both halves are required and both are there.
