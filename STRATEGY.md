@@ -129,19 +129,81 @@ batched, where Share Groups acknowledge per message to the broker, so per-record
 lower - at the cost of a sidecar process where Share Groups need none, and with poison-record
 handling staying broker-side there.
 
-**Wrapping the core client APIs is a staged possibility, not a plan.** The sidecar already embeds a
-full Java Kafka client, so exposing consume, produce and admin over the same protocol would give every
-language the reference client rather than a reimplementation. It is not where to start: for a base
-client the per-record hop is proportionally large and C wins for embedded and edge, whereas for
-higher-level functionality the hop is noise against processing time. If it is ever picked up, admin
-goes first - pure request/response, low frequency, and where librdkafka wrappers are thinnest and
-currency bites hardest - then producer, and plain consumer last or never, being the API Parallel
+**Wrapping the core client APIs is a staged possibility, and 2026-08-22 removed its main
+objection.** The sidecar already embeds a full Java Kafka client, so exposing consume, produce and
+admin over the same protocol would give every language the reference client rather than a
+reimplementation.
+
+The reason not to start there was that *for a base client the per-record hop is proportionally
+large*. **In the embedded configuration there is no hop** - the engine is linked into the calling
+process and a frame crosses a function call. Proven in Go, Python, Node and C. So the ordering below
+survives, but it now stands on scope and currency rather than on the hop, and the "C wins for
+embedded and edge" line is no longer a reason to stay out of C: there is a C client, and it consumes
+records.
+
+Admin still goes first - pure request/response, low frequency, thinnest librdkafka wrappers, and
+where currency bites hardest - then producer, and plain consumer last, being the API Parallel
 Consumer exists to replace. Start with the simplest subset that works without much thinking, and
 extend on evidence.
 
-**Earmarked, not adopted:** whether this is "Parallel Consumer for other languages" or "the Kafka
-client for other languages" is a question worth returning to, and the admin wrapper is the cheapest
-probe of whether the one-stop-shop framing actually pulls users.
+**The earmarked question - "Parallel Consumer for other languages" or "the Kafka client for other
+languages" - is answered: the second.** The admin wrapper is still the cheapest first probe, but it
+is now the first step of a direction rather than a test of whether to have one.
+
+**Two configurations, one product, and they are not the same offer.**
+
+| | Sidecar | Embedded |
+|---|---|---|
+| Deployment | a second process | nothing to operate |
+| Per-record hop | a local socket | a function call |
+| Artifact | one, portable | one per platform |
+| Kafka bump | a version bump | a rebuild and re-release, automated |
+
+**Both ship.** The sidecar stays: it is the portable answer, it is what a JVM-free team already
+accepts, and it keeps a single artifact. Embedding is for the teams that will not run a second
+process and for targets that cannot.
+
+**On the rebuild-per-Kafka-bump cost:** an embedded engine has the Kafka client inside a
+platform-specific binary, so currency stops being a dependency change for that artifact. **Owner's
+call, and it is a build-pipeline problem rather than a strategic one** - a matrix build is
+automated once and then nobody thinks about it again, and the sidecar still offers the pure
+version-bump path for anyone who wants it. Recorded here because the objection is the obvious one to
+raise and it should be visibly answered rather than absent.
+
+### The whole client, including Kafka Streams
+
+**The direction, stated as a direction and not a plan:** native wrappers for the entire Kafka client
+surface - consumer, producer, admin, and **Kafka Streams** - delivered to every language through the
+model the language proxy already proves.
+
+**Streams is a better fit for this model than a plain consumer, which is counter-intuitive and is
+the whole reason to write it down.** A Streams application is mostly *declarative*: the topology, the
+joins, the aggregations, the windowing, the state stores and exactly-once are all engine-side and
+never need to cross a boundary. The only thing that must cross is the user's per-record function -
+and a per-record function crossing a boundary is precisely what the language proxy already does.
+
+So the hard part of Streams-in-another-language is not the streaming; it is that a topology has no
+portable description. That is an IDL to design, in the same class of work as the existing protocol,
+rather than an unsolved problem.
+
+**What would need real thought, listed so nobody rediscovers it as a surprise:** state stores the
+host wants to read (interactive queries need protocol surface of their own), punctuators (fine - a
+scheduled callback is just another kind of work frame in a pull model), and RocksDB under a native
+image, which is its own reachability adventure.
+
+**And the honest sequencing:** this is a long way past the current milestone. Admin first, on
+evidence, exactly as above.
+
+### Languages with no Kafka client at all
+
+The reach argument is not mainly about languages that have gRPC and would rather not use it. It is
+about the ones with **no usable Kafka client at any level**: R, Lua, Zig, Nim, Crystal, Julia, and
+the long enterprise tail. For those, wrapping the base client is worth more than Parallel Consumer
+is - they need `consume` before they need key-ordered concurrency - which is an argument for the
+admin-then-producer-then-consumer ordering rather than against it.
+
+C is the proof that this group is reachable: it consumes records today, and C is what every one of
+those runtimes binds through.
 
 _Why it serves the approach:_ The client-side bet is that the queue belongs in the client. Nothing in
 that argument is about the JVM - but every implementation of it has been, which is a limit of the
@@ -150,3 +212,18 @@ library rather than of the idea.
 ## Marketing
 
 **One-liner:** Like a client-side sub-broker that can do backflips.
+
+**Claim the feature set. Do not claim general speed.** The one performance claim worth making is
+**key-ordered concurrency** - processing a partition's records in parallel while preserving per-key
+order, beyond partition count. That capability does not exist in the librdkafka ecosystem in any
+language, so there is nothing to be faster *than*; the comparison is against a serial consumer loop
+or a hand-rolled worker pool.
+
+**A general speed claim against librdkafka would be a bad trade even if it were true.** It invites a
+benchmark on consumption throughput, memory and startup - our weakest axes, and none of them the
+reason anyone would adopt this. What we have instead is the reference Java client's feature set and
+currency, in a process with no JVM in it.
+
+**The incumbent is not librdkafka.** It is the hand-rolled worker pool with manual offset tracking
+that teams write *on top of* librdkafka - which is subtly wrong in most codebases and has no
+maintainer. librdkafka sits underneath this picture, not opposite it.

@@ -107,17 +107,24 @@ would multiply the release matrix by eleven, and CTD1 is already the hardest con
 
 ## Key technical decisions
 
-### CTD1 - GATE: this ships only if the release-matrix cost is answered first
+### CTD1 - ANSWERED 2026-08-22: the release matrix is a build pipeline, and the sidecar still ships
 
 **An embedded engine rebuilds and re-releases on every Kafka version bump, because the Kafka client
 is inside the binary.** The parked note calls this decisive and nothing in the Go proof makes it
 cheaper. It is also the exact opposite of this fork's currency argument, where a Kafka bump is a
 dependency change.
 
-**No language binding beyond the existing Go proof is built until this has a written answer.** The
-answer may be "automated per-platform release, and here is the pipeline", or "embedded is pinned to
-an LTS Kafka line and says so", or "we accept the cost for N languages and no more". It may not be
-silence.
+**Owner's answer: automate the matrix build and stop thinking about it.** A per-platform release is
+a pipeline written once, and the objection does not survive contact with the fact that every
+C-based channel needs per-platform binaries anyway.
+
+**And the sidecar is not replaced by this - both ship.** Anyone who wants currency to remain a pure
+version bump keeps that option, with one portable artifact and nothing to rebuild. Embedding is the
+answer for teams that will not run a second process and for targets that cannot.
+
+The concern was raised and is recorded rather than deleted, because it is the obvious objection and
+a reader should be able to see that it was answered rather than overlooked. **U1 is therefore build
+work, not a decision**, and no longer blocks the other units.
 
 ### CTD2 - The kill criterion, written before building
 
@@ -125,9 +132,10 @@ The parked note requires this and it is honoured here. **The embedded track is d
 if any of these holds:**
 
 - The controlled measurement (CTD3) shows the embedded transport is **not meaningfully faster** than
-  a native-image sidecar for fast-record workloads. Without a throughput win, everything CTD1 costs
-  buys only "no second process", which the parent plan's invisible-sidecar work (KTD41) already
-  delivers.
+  a native-image sidecar for fast-record workloads, **and** removing the second process turns out
+  not to matter to anyone. Both halves are now required, because CTD1's answer makes "no second
+  process" cheap enough to be worth having on its own - so a flat measurement alone no longer kills
+  the track, it only removes the performance argument for it.
 - GC coexistence under host allocation pressure produces failures that cannot be diagnosed from the
   host's own tooling. That was the "worst shape for agentic development" objection and it would be
   confirmed rather than refuted.
@@ -274,11 +282,11 @@ second language.
 
 ## Implementation Units
 
-### U1. Answer CTD1, or stop
+### U1. Automate the per-platform matrix build - DECIDED, now build work
 
-Not code. Produce a written answer to the release-matrix question and record it in this plan. **No
-other unit starts until this exists.** If the answer is that the cost is unacceptable, this plan is
-closed and the Go work stays as a measured feasibility result.
+CTD1 is answered. This is a release pipeline producing one shared library per platform per Kafka
+version, and it no longer gates the other units. The sidecar's single-artifact path continues
+alongside it.
 
 ### U2. Give the Go demo `PC_DEMO_SIDECAR`, on the demos branch
 
@@ -311,6 +319,22 @@ Test: the Go demo's embedded arm keeps reporting its deterministic records/keys 
 
 Four done: Go, Python, Node (probe only, and deliberately - see CTD8), C. Each has produced a
 constraint the others did not, which is the argument for continuing rather than stopping at three.
+
+**Next, chosen for what each would teach rather than for coverage:**
+
+- **Elixir/Erlang.** The only runtime that *actively polices* blocking foreign calls: a NIF that
+  holds a scheduler beyond about a millisecond is a documented violation, and BEAM ships dirty NIFs
+  as the designed answer. So the question is not "does blocking hurt" but "does the pull model land
+  on a runtime that already has a first-class concept for it".
+- **Haskell.** GHC's green threads make `foreign import ccall safe` versus `unsafe` the same
+  question as CDLL versus PyDLL, exposed as a keyword - a control arm the language hands us.
+- **LuaJIT.** Declares C signatures in Lua source with no compiler and no build step, and its
+  coroutines run on their own stacks - which is what killed koffi, so it re-tests CTD7 directly.
+
+**And the group the reach argument is actually about**, which is not "languages that have gRPC and
+would rather not": R, Zig, Nim, Crystal, Julia and the enterprise tail have **no usable Kafka client
+at any level**. For those the base-client wrapper matters more than Parallel Consumer does - they
+need `consume` before they need key-ordered concurrency. See STRATEGY.md.
 
 **Originally scoped as "bind a second language" - DONE, ahead of U4**
 
