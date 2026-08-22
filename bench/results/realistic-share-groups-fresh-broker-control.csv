@@ -1,0 +1,7 @@
+pc_version,pc_build,client_pin,mode,callee,ordering,key_dist,records,partitions,max_poll_records,buffer,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,inflight_p50,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms,e2e_p50_ms,e2e_p99_ms,e2e_p999_ms,e2e_max_ms,arrival_requested,arrival_achieved,feed_lag_p99_ms,backlog_p99,backlog_max,injected_failures
+LOCAL,2426224418,4.3.1,share-explicit,async,UNORDERED,distinct,100000,1,500,0,2,5000,1,11166.9,736,25,9.44,36,425,434,435,8508,9466,9489,9489,-,-,-,-,-,-,-,0,0,0
+LOCAL,2426224418,4.3.1,share-explicit,async,UNORDERED,distinct,100000,1,500,0,2,5000,2,11282.9,706,23,9.50,36,410,421,421,8433,9352,9377,9377,-,-,-,-,-,-,-,0,0,0
+LOCAL,2426224418,4.3.1,share,async,UNORDERED,distinct,100000,1,500,0,2,5000,1,29061.3,1155,49,9.92,30,405,416,416,3141,3930,3948,3948,-,-,-,-,-,-,-,0,0,0
+LOCAL,2426224418,4.3.1,share,async,UNORDERED,distinct,100000,1,500,0,2,5000,2,28686.2,849,46,9.60,30,417,427,428,3144,3957,3981,3981,-,-,-,-,-,-,-,0,0,0
+LOCAL,2426224418,4.3.1,core-vt,async,UNORDERED,distinct,100000,1,500,0,2,5000,1,25432.3,4771,766,9.63,197,298,315,308,3740,3896,3897,3897,-,-,-,-,-,-,-,0,0,0
+LOCAL,2426224418,4.3.1,core-vt,async,UNORDERED,distinct,100000,1,500,0,2,5000,2,25940.3,4286,768,8.94,172,298,315,305,3708,3853,3855,3855,-,-,-,-,-,-,-,0,0,0

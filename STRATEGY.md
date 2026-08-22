@@ -170,11 +170,23 @@ client was years behind, or who will want Share Groups first. That segment skews
 sophisticated users are the ones most willing to run a sidecar, so the segment that needs the
 advantage is also the one that tolerates its cost.
 
-**Against Share Groups - measured 2026-08-22, and the throughput half went against us.**
-Acknowledgement here is local and commits are batched, where Share Groups acknowledge per message to
-the broker. That was written as "so per-record overhead should be lower". It is not, in the consumer:
-a bare `KafkaShareConsumer` with no Parallel Consumer in it at all ran **2.5x faster than PC's best
-arm** at 2ms of work per record. **The throughput argument against Share Groups should not be made.**
+**Against Share Groups - the throughput comparison is WITHDRAWN, in both directions.** It was
+measured on 2026-08-22 and went against us: a bare `KafkaShareConsumer` with no Parallel Consumer in
+it at all ran **2.5x faster than PC's best arm** at 2ms of work per record. **Re-taken on 2026-08-23
+at the same operating point, it did not reproduce** - across three broker instances on one machine in
+one day the same share arm read **66,524 / 29,709 / 11,225 msg/s**, a 5.9x range, while every PC arm
+held within 3% of its published figure. The obvious explanation (accumulated share-coordinator state)
+was tested with a negative control and refuted.
+
+**So make no throughput claim about Share Groups, for or against, until that variance is understood.**
+Numbers, the control arm and what is still open:
+[`docs/inflight/perf-share-groups-versus-pc-2026-08-22.md`](docs/inflight/perf-share-groups-versus-pc-2026-08-22.md).
+
+**Every figure in that comparison was also taken on `UNORDERED`, all-distinct keys, a constant handler
+and no failures** - the workload in which Parallel Consumer's differentiator costs nothing, so Share
+Groups' best case and PC's worst; see
+[`docs/inflight/next-benchmark-a-model-of-work-not-work.md`](docs/inflight/next-benchmark-a-model-of-work-not-work.md).
+**The structural points below are what survive all of it, and they were always the real argument.**
 
 **What survives is structural, and it is stronger than the number that fell.**
 
@@ -183,7 +195,11 @@ arm** at 2ms of work per record. **The throughput argument against Share Groups 
   been processed, which is at-most-once delivery wearing an at-least-once label. So an honest share
   processor is **batch-synchronous**: poll, finish the batch, poll again. Parallel Consumer keeps
   records from many polls outstanding at once, which is what the offset encoding buys.
-- **So the result inverts as soon as work takes real time.** At 100ms per record PC wins by 14.5%,
+- ~~**So the result inverts as soon as work takes real time.** At 100ms per record PC wins by 14.5%~~
+  **- withdrawn with the 2.5x it was the counterweight to; it is the same arm and the same variance.**
+  The *mechanism* stands and is the point: PC holds records from many polls outstanding while a share
+  consumer cannot get ahead of its batch, so the two converge as the work grows. What is withdrawn is
+  the 14.5%, not the argument. Historically it read: PC wins by 14.5% at 100ms,
   holding 5,000 records in flight against the share arm's 2,606 - its batch. The 2.5x is a
   per-record-overhead result at a near-zero handler, not a general one, and neither figure may be
   quoted without the other.

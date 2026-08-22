@@ -214,6 +214,21 @@ peak was true and told you nothing.
 Read the two together: `peak == concurrency` with `inflight_p50` far below it is an arm that is
 *starved*, not one that is *slow*.
 
+**It samples from the first record into the user function, not from JVM start, and it did not until
+2026-08-22.** The sampler is started from `main` - it has to be, because each arm takes its own clock
+and there is no earlier common hook - so before the gate it recorded a zero every 20ms through
+consumer construction, subscribe and the consumer-group join. That is four to six seconds of zeros
+prepended to every run's samples: **invisible on a thirty-second run and decisive on a four-second
+one.** Measured while calibrating the realistic-workload campaign: `core`, `UNORDERED`,
+maxConcurrency 200, 12,000 records - **2,978 msg/s at a reported sustained in flight of ZERO**, where
+Little's law puts it near 30 and the fixed instrument reads 196. The same arm at maxConcurrency 24,
+whose run lasts 9.8s rather than 4.0s, reported 22 and looked perfectly healthy.
+
+**So a short run's `inflight_p50` taken before that fix is not merely noisy, it is wrong by the whole
+quantity being measured** - and it was wrong quietly, in a column beside rows where it was roughly
+right. Once armed it stays armed, so a genuine idle stretch mid-run - which is exactly what a hot key
+produces, and exactly what this column exists to show - is still recorded as the zero it is.
+
 ### `pc_build` - `LOCAL` names a coordinate, not a build
 
 `PC_VERSIONS=LOCAL` resolves to `bz.stub.parallelconsumer:*:0.6.0.0-SNAPSHOT` out of a `~/.m2` that
@@ -225,6 +240,28 @@ code their author had never seen; `pc_version` read `LOCAL` for every row and id
 `pc_build` carries the core jar's checksum, taken **before and after every run**, so a swap that
 happens mid-cell voids that cell as `BUILD_CHANGED_<before>_TO_<after>` rather than being averaged
 into it. Two rows that disagree are visibly two experiments instead of two repeats.
+
+**`pc_build` detects the swap; `LOCAL_VERSION` prevents it, and a sweep longer than a few minutes
+should use it.** `LOCAL_VERSION=<version>` changes the coordinate `LOCAL` resolves to, so a sweep can
+measure a version nobody else on the machine has heard of:
+
+```bash
+./mvnw -B versions:set -DnewVersion=0.6.0.0-myrun-SNAPSHOT -DgenerateBackupPoms=false
+JAVA_HOME=~/.sdkman/candidates/java/17.0.18-tem ./mvnw -B install -DskipTests -Dcopyright.skip=true
+git checkout -- '*/pom.xml' pom.xml          # put the poms back BEFORE committing anything
+LOCAL_VERSION=0.6.0.0-myrun-SNAPSHOT MODES=core bench/run-bisect.sh
+```
+
+It is additive - the ordinary `0.6.0.0-SNAPSHOT` coordinate is left exactly as another session left
+it, so there is nothing to restore afterwards and no window in which somebody else's sweep is
+measuring your build. **This is not hypothetical**: `0.6.0.0-SNAPSHOT` was overwritten by another
+session partway through the realistic-workload campaign's calibration, between one run and the next,
+and the only outward sign was the residence column going blank.
+
+**Two cautions.** `cksum` on a jar is not a code identity - two installs of the *same* source produce
+different checksums, because the archive carries timestamps - so `pc_build` answers "did this change
+under me", never "is this the code I think it is". And `versions:set` rewrites every pom in the tree:
+put them back before committing, or the version bump ships with your measurement.
 
 ### Results in this directory
 
@@ -240,6 +277,11 @@ into it. Two rows that disagree are visibly two experiments instead of two repea
 | `ordering-head-of-line-latency.csv` | `PARTITION` against `KEY` at three buffer depths, flat and tailed handler - the first latency comparison |
 | `saturated-skew-baseline.csv` | The saturated baseline on a Zipf key distribution: `KEY` / `PARTITION` / `UNORDERED` / `share-explicit` across three workloads, plus the distinct-key control. **`KEY` costs 0.13% on distinct keys and 3.1x on skewed ones** |
 | `arrival-tail-skew-matrix.csv` | The tail experiment: the same arms under **controlled arrival** at 50/70/90% of each arm's own capacity, skewed and distinct keys, flat / tailed / tailed-with-failures. The first file here with an end-to-end latency column |
+| `realistic-ordering-matrix.csv` | The realistic-workload re-take, ordering half: seven engines plus **0.5.3.3 from Maven Central**, `KEY` against `UNORDERED`, distinct keys against Zipf, 0% against 1% failures. 12,000 records, 24 partitions, 10ms, `maxConcurrency` 24, `messageBufferSize` 20,000 |
+| `realistic-throughput-matrix.csv` | The same re-take at the operating point the engine and share-group tables were published at - 100,000 records, 2ms, `maxConcurrency` 5,000, `UNORDERED` - with the key distribution and the failure rate added. Includes the **one-partition rows that reproduce the published tables**, so a figure that moved can be attributed |
+| `realistic-default-buffer-control.csv` | `realistic-ordering-matrix.csv`'s workload with one term changed: PC's **default** `messageBufferSize` instead of 20,000. The ordered arm loses another 2.3x; `UNORDERED` does not move |
+| `realistic-share-groups-matrix.csv` | The share-groups re-take, `kafka-clients` **pinned to 4.3.1 for every arm** - which is why it is a separate file from the throughput matrix, where the pin is `NATIVE`. **The 2.5x did not reproduce**: 29,709 msg/s against a published 66,524, while every PC arm in the same sweep held within 3% |
+| `realistic-share-groups-fresh-broker-control.csv` | The control that tested why, on a broker started fresh (176 records of share state against 87,106). **The accumulated-state hypothesis is refuted** - `share` does not recover, `share-explicit` falls further to 11,225, and the `core-vt` negative control is unchanged |
 
 **The two skew files are the only ones taken on anything but all-distinct keys**, and that is the
 single most important caveat on every other row in this table: with distinct keys `KEY` ordering

@@ -276,6 +276,75 @@ it is not.
 69ms; tail alone (tailed, distinct) costs 508ms. Additively that predicts about 560ms. Measured:
 **1,200ms.**
 
+## 2026-08-23: re-taken across every engine and against the last public release
+
+**The 3.1x reproduces, no engine escapes it, and PC's default buffer makes it 2.3x worse again.**
+Same broker, same two topics, same operating point - 12,000 records, 24 partitions, `maxConcurrency`
+24, 10ms flat handler, two repeats, `messageBufferSize` 20,000 - with the engine family and the
+released version added as arms. Full data:
+[`bench/results/realistic-ordering-matrix.csv`](../../bench/results/realistic-ordering-matrix.csv).
+
+| arm | `UNORDERED`, zipf | `KEY`, zipf | cost of `KEY` | `KEY` sustained in flight |
+|---|---:|---:|---:|---:|
+| `core` | 1,232.3 | **370.9** | **3.32x** | **2** of 24 |
+| `core` **@ 0.5.3.3** | 1,227.8 | **369.7** | **3.32x** | **2** of 24 |
+| `core-vt` | 1,160.7 | 362.6 | 3.20x | 2 |
+| `core-dpvt` | 1,155.3 | 361.6 | 3.19x | 2 |
+| `vertx` | 1,267.8 | 407.9 | 3.11x | 2 |
+| `reactor` | 1,272.7 | 409.0 | 3.11x | 2 |
+| `mutiny` | 1,291.6 | 410.0 | 3.15x | 2 |
+| **`proxy`** | 796.9 | **78.0** | **10.2x** | **0** |
+
+**Every PC-engine arm pays between 3.1x and 3.3x, and every one sustains 2 records in flight of a
+configured 24.** `proxy` is the exception and it is much worse - see
+[`perf-engine-comparison-2026-08-22.md`](perf-engine-comparison-2026-08-22.md), where it matters
+because that path is the ceiling for every non-JVM client. Virtual threads do not help, direct pull does not help, and neither does moving to an
+`ExternalEngine`. That settles the question
+[`bug-partition-ordering-starves-on-a-narrow-buffer.md`](bug-partition-ordering-starves-on-a-narrow-buffer.md)
+left open - *"the direct-pull engine takes work from the shards itself and may not share this;
+unmeasured"* - **it shares it exactly**, because the constraint is not how work is fetched or
+selected. The busiest shard may run one record at a time, and nothing above it can change that.
+
+**On distinct keys the same arms are indistinguishable from `UNORDERED`**, which is the control that
+ties this table to every published figure: `core` 1,217.2 `KEY` against 1,224.3 `UNORDERED`, 0.5.3.3
+1,210.8 against 1,223.4, and every engine within 1.5% of itself across the two modes.
+
+### The buffer makes it materially worse, and the default is what users get
+
+This note says above that the hot-key floor "is not the buffer", on the grounds that
+`messageBufferSize` was already 20,000. That is true and it is only half the picture. **One term
+changed, `core`, Zipf keys, flat handler:**
+
+| `messageBufferSize` | failures | `KEY` msg/s | `UNORDERED` msg/s | cost of `KEY` |
+|---|---|---:|---:|---:|
+| 20,000 | none | 370.9 | 1,232.3 | 3.3x |
+| **PC's default** | none | **161.8** | 1,218.9 | **7.5x** |
+| **PC's default** | **1%** | **95.7** | 1,093.6 | **11.4x** |
+
+`UNORDERED` does not move - 1% between the first two rows - which is what makes the ordered figure
+attributable, and **0.5.3.3 behaves identically** (168.3 and 95.0), so this is not something the fork
+introduced. **A user who configures nothing pays 7.5x for `KEY` ordering, and 11.4x once 1% of
+records fail** - the hot-key floor, the narrow-buffer starvation and the retry delay all compound.
+
+**Against the workload every published figure was taken on** - all-distinct keys, `UNORDERED`, no
+failures, buffer 20,000, 1,224.3 msg/s - **the realistic default configuration runs at 95.7, which is
+12.8x slower**, at a drain p99 of 123 seconds over 12,000 records. Data:
+[`bench/results/realistic-default-buffer-control.csv`](../../bench/results/realistic-default-buffer-control.csv).
+
+### Three instrument defects, all found by reading a column against its own configuration
+
+Continuing the count this note started at eight. All three produced plausible numbers.
+
+| Defect | What it looked like | Fixed |
+|---|---|---|
+| **`inflight_p50` sampled from JVM start** | four to six seconds of zeros prepended to every run, so the column read **0** at 2,978 msg/s on a four-second run and 22 on a nine-second one | sampler armed by the first record into the user function |
+| **The work model's RNG was per-thread** | virtual threads are one thread per task, so every record got a fresh `Random` and one draw from it. At a configured 1%, `core-vt` took **1.85%** and platform `core` took 1.07% - the virtual-thread arms were handed 85% more failures than the arms they were compared against | SplitMix64 over one atomic counter |
+| **The proxy arm had a sixth work-model call site** | `ProxyArm.Worker` has its own pool and timer, so it ran a flat never-failing handler however the model was configured: **zero** injected failures where every other arm reported 121-222 | `workDelayMs`/`workShouldFail` per record, failure reported as `Report.Failure` |
+
+**The virtual-thread one was confirmed off-broker in forty lines**: `new Random(42 + i).nextDouble()
+< 0.01` fires 222 times over 12,000 consecutive seeds and one shared `Random` fires 128 - the two
+numbers the two arms had just reported, exactly.
+
 ## What this changes
 
 - **`KEY` ordering has a price and it is now measured.** 3.1x throughput and 2.4x tail latency at
