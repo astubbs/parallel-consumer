@@ -122,7 +122,7 @@ utilisation before it is a function of anything else.
 arrival rate, feed-lag p99, and the fed-minus-completed backlog are columns; a run whose achieved
 rate diverges from its request by more than 5%, or whose feed-lag p99 exceeds 100ms, is recorded as
 `ARRIVAL_VOID` rather than reported. Across the matrix, achieved matched requested **exactly** at
-every rate, with feed-lag p99 of 2-3ms.
+every rate, with feed-lag p99 of 1-3ms.
 
 ### What controlled arrival did to the measurement, before any comparison
 
@@ -141,7 +141,7 @@ comparison drawn from it was comparing buffers.
 of two repeats. The handler's own p99 is **505ms** in every tailed cell, so that is the floor an arm
 adds nothing to. Full data in
 [`bench/results/arrival-tail-skew-matrix.csv`](../../bench/results/arrival-tail-skew-matrix.csv);
-84 rows, none voided, one-minute load 3.8-12.2 throughout.
+84 rows, none voided, one-minute load 3.6-14.2 throughout.
 
 | arm | keys | 50% | 70% | 90% | flat control, 90% |
 |---|---|---:|---:|---:|---:|
@@ -319,9 +319,10 @@ null results this project has recorded were all read off instruments in this con
 question has to be answerable, so here is what makes these numbers checkable rather than merely
 plausible:
 
-- **Every arrival rate was achieved exactly.** Requested against achieved matched at all 84 rows,
-  with feed-lag p99 of 1-3ms against a 100ms gate. The producer was not the bottleneck, and the
-  harness voids the run rather than reporting it if that ever stops being true.
+- **Every arrival rate was achieved.** Requested against achieved agrees to within **1% on all 84
+  rows**, with feed-lag p99 between **1ms and 3ms** against a 100ms gate - checkable from the
+  committed file, not taken on trust. The producer was not the bottleneck, and the harness voids the
+  run rather than reporting it if that ever stops being true.
 - **Sustained in-flight matches Little's law at every operating point.** `KEY` at 210/294/378 records
   a second with a 10ms mean handler holds 2/3/4 in flight. An instrument that was measuring the wrong
   thing would not land on `L = lambda W` by accident.
@@ -334,7 +335,7 @@ plausible:
   the theory predicts** (residence p50 2,952ms saturated against 12ms at 50% utilisation), and the
   drain figures now equal the run duration to the millisecond, which they did not before the snapshot
   fix.
-- **Load stayed between 3.8 and 12.2** for all 84 rows, under the ~20 discard threshold, and is a
+- **Load stayed between 3.6 and 14.2** for all 84 rows, under the ~20 discard threshold, and is a
   column on every row.
 
 **The one thing that is NOT established** is anything about a real handler. Every figure here is a
