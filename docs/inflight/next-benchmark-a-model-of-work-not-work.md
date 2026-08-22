@@ -86,3 +86,69 @@ arms pay the same simplification. **The moment a number is quoted as an absolute
 both of these bite.** The landing page's benchmark section is exactly that moment; see
 the landing-page work (dropped 2026-08-22; see git history for `next-landing-page.md`), where the rule is already written down as *never
 publish a figure without the conditions that produced it*.
+
+## 2026-08-22: the audit Antony asked for - every comparison models a workload nobody would use PC for
+
+**"Comparing key ordering to partition ordering when you have a zero-millisecond or ten-millisecond
+function that always succeeds, never fails, never retries, never gets stuck - it's not playing to the
+use case people would use Parallel Consumer for."**
+
+Correct, and the scale of it is worse than it reads. **Four choices are shared by every performance
+number this project has ever published, and each one removes a reason to adopt PC.**
+
+| Dimension | What every run used | What a real workload does | Knob |
+|---|---|---|---|
+| **Ordering mode** | `UNORDERED` | `KEY` - it is why people adopt PC | already there |
+| **Handler duration** | constant | long-tailed: GC, a slow dependency, an outsized payload | **built 2026-08-22, never used** |
+| **Failure rate** | zero | records fail and retry, and retries reorder work | **built 2026-08-22, never used** |
+| **Key distribution** | all keys distinct | skewed - a few hot keys carry most traffic | **does not exist** |
+
+### The ordering-mode count, which is the one that should be uncomfortable
+
+Across every results file from 2026-08-22:
+
+| ordering | rows |
+|---|---:|
+| `UNORDERED` | **369** |
+| `KEY` | **7** |
+| `PARTITION` | 4 |
+
+**`UNORDERED` is the mode in which Parallel Consumer has no differentiator.** It is where a bare
+`KafkaShareConsumer` beats PC's best arm 2.5x
+([`perf-share-groups-versus-pc-2026-08-22.md`](perf-share-groups-versus-pc-2026-08-22.md)), and where
+a plain thread pool is within 1% of it. **We measured the mode we lose in, fifty times more than the
+mode we exist for.**
+
+Not because anyone decided to. `UNORDERED` is the harness default, all-distinct keys make it
+maximally parallel, and a constant handler makes runs short and repeatable. **Every one of those is a
+choice that makes measurement easy and makes the result mean less.**
+
+### Key distribution is the gap with no knob at all
+
+All-distinct keys is the **best case for any key-sharded design**: every record is its own shard, so
+`KEY` ordering imposes no constraint whatsoever and behaves like `UNORDERED`. That is why the two
+modes have looked so similar in every number here - **we have never actually tested key ordering, we
+have tested `UNORDERED` wearing its name.**
+
+A realistic distribution - Zipf, or a handful of hot keys - is where `KEY` ordering costs something
+and where PC's shard machinery is doing real work. It is also where a competitor without per-key
+ordering cannot follow. **`BENCH_KEY_DISTRIBUTION` does not exist and is the single most valuable
+axis missing**, because it is the one that makes the differentiator visible instead of free.
+
+### What this means for the numbers already taken
+
+**They are not wrong; they are narrow, and they were read as general.** Every one is a valid
+measurement of: distinct keys, constant work, no failures, no ordering constraint. State that
+alongside them rather than retracting them.
+
+**But two conclusions drawn from them need re-testing before they are repeated:**
+
+- **"Share Groups beat PC 2.5x"** - measured in `UNORDERED`, at a 2ms constant handler, all keys
+  distinct. That is Share Groups' best case and PC's worst.
+- **"`core` is within 1% of a hand-rolled thread pool"** - same. A thread pool cannot do `KEY`
+  ordering at all, so at a realistic key distribution the comparison stops existing.
+
+**And it reframes the tail experiment** ([`next-the-tail-experiment.md`](next-the-tail-experiment.md)):
+its arms should be `KEY` against `PARTITION` and `share` **with a skewed key distribution and a
+failure rate**, not the flat all-distinct workload it currently specifies. Otherwise it measures the
+same narrow thing more precisely.
