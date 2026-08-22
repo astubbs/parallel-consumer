@@ -90,15 +90,18 @@ A row with in-flight far below the partition count is a starved run, whatever el
   changed, `core`, 12,000 records, 24 partitions, `maxConcurrency` 24, Zipf over 200 keys, flat
   handler, no failures:
 
-  | `messageBufferSize` | `KEY` msg/s | `UNORDERED` msg/s |
-  |---|---:|---:|
-  | 20,000 | **367.8** | 1,227.0 |
-  | PC's default | **162.2** | 1,221.2 |
+  | `messageBufferSize` | failures | `KEY` msg/s | `UNORDERED` msg/s | cost of `KEY` |
+  |---|---|---:|---:|---:|
+  | 20,000 | none | **370.9** | 1,232.3 | 3.3x |
+  | **PC's default** | none | **161.8** | 1,218.9 | **7.5x** |
+  | **PC's default** | **1%** | **95.7** | 1,093.6 | **11.4x** |
 
-  `UNORDERED` does not move - 1,227.0 against 1,221.2 - which is what makes the ordered figure
-  attributable. **So the starvation this note describes reaches `KEY` on a skewed distribution after
-  all**, and the note's own prescription is what the tail experiment had already applied. A user who
-  sets nothing gets the 162.2 row.
+  `UNORDERED` does not move - 1,232.3 against 1,218.9, 1% apart - which is what makes the ordered
+  figure attributable. The released **0.5.3.3** behaves identically (168.3 and 95.0), so this is not
+  something the fork introduced. **So the starvation this note describes reaches `KEY` on a skewed
+  distribution after all**, and the note's own prescription is what the tail experiment had already
+  applied without saying so. **A user who configures nothing gets the 161.8 row, or the 95.7 one if
+  their records ever fail** - at a drain p99 of 123 seconds over 12,000 records.
 - ~~The direct-pull engine takes work from the shards itself and may not share this; unmeasured.~~
   **MEASURED 2026-08-23: it shares it exactly.** On the same Zipf workload at `messageBufferSize`
   20,000, `core` reads 370.9 msg/s at 2 sustained in flight, `core-vt` 362.6 at 2, and `core-dpvt`

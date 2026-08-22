@@ -293,9 +293,12 @@ released version added as arms. Full data:
 | `vertx` | 1,267.8 | 407.9 | 3.11x | 2 |
 | `reactor` | 1,272.7 | 409.0 | 3.11x | 2 |
 | `mutiny` | 1,291.6 | 410.0 | 3.15x | 2 |
+| **`proxy`** | 796.9 | **78.0** | **10.2x** | **0** |
 
-**Every arm pays between 3.1x and 3.3x, and every arm sustains 2 records in flight of a configured
-24.** Virtual threads do not help, direct pull does not help, and neither does moving to an
+**Every PC-engine arm pays between 3.1x and 3.3x, and every one sustains 2 records in flight of a
+configured 24.** `proxy` is the exception and it is much worse - see
+[`perf-engine-comparison-2026-08-22.md`](perf-engine-comparison-2026-08-22.md), where it matters
+because that path is the ceiling for every non-JVM client. Virtual threads do not help, direct pull does not help, and neither does moving to an
 `ExternalEngine`. That settles the question
 [`bug-partition-ordering-starves-on-a-narrow-buffer.md`](bug-partition-ordering-starves-on-a-narrow-buffer.md)
 left open - *"the direct-pull engine takes work from the shards itself and may not share this;
@@ -312,13 +315,21 @@ This note says above that the hot-key floor "is not the buffer", on the grounds 
 `messageBufferSize` was already 20,000. That is true and it is only half the picture. **One term
 changed, `core`, Zipf keys, flat handler:**
 
-| `messageBufferSize` | `KEY` msg/s | `UNORDERED` msg/s |
-|---|---:|---:|
-| 20,000 | 367.8 | 1,227.0 |
-| **PC's default** | **162.2** | 1,221.2 |
+| `messageBufferSize` | failures | `KEY` msg/s | `UNORDERED` msg/s | cost of `KEY` |
+|---|---|---:|---:|---:|
+| 20,000 | none | 370.9 | 1,232.3 | 3.3x |
+| **PC's default** | none | **161.8** | 1,218.9 | **7.5x** |
+| **PC's default** | **1%** | **95.7** | 1,093.6 | **11.4x** |
 
-`UNORDERED` does not move. **So a user who configures nothing pays 7.5x for `KEY` ordering, not
-3.3x** - the hot-key floor and the narrow-buffer starvation compound.
+`UNORDERED` does not move - 1% between the first two rows - which is what makes the ordered figure
+attributable, and **0.5.3.3 behaves identically** (168.3 and 95.0), so this is not something the fork
+introduced. **A user who configures nothing pays 7.5x for `KEY` ordering, and 11.4x once 1% of
+records fail** - the hot-key floor, the narrow-buffer starvation and the retry delay all compound.
+
+**Against the workload every published figure was taken on** - all-distinct keys, `UNORDERED`, no
+failures, buffer 20,000, 1,224.3 msg/s - **the realistic default configuration runs at 95.7, which is
+12.8x slower**, at a drain p99 of 123 seconds over 12,000 records. Data:
+[`bench/results/realistic-default-buffer-control.csv`](../../bench/results/realistic-default-buffer-control.csv).
 
 ### Three instrument defects, all found by reading a column against its own configuration
 
