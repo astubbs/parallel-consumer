@@ -122,3 +122,117 @@ rather than the sweeping one, and let a survey back it.
   documents alone. See [`parked-testing-as-a-feature-for-the-clients.md`](parked-testing-as-a-feature-for-the-clients.md) —
   that note exists because "these are not generated slop" is a claim the announcement will have to
   make, and it is only worth making if it is backed.
+
+## The points inventory - what has to get across, and where
+
+**Built 2026-08-22, language deliberately not settled.** This is the checklist, not the copy. The
+owner reviews it for gaps first; wording comes after.
+
+**L = the LinkedIn reply. B = the blog post.** L is a strict subset of B - the reply's only job is the
+click through, so anything that needs a sentence of setup belongs in B.
+
+Ordered by how much a reader who already knows PC would care.
+
+### Performance
+
+| # | Point | L | B | Notes / evidence |
+|---|---|---|---|---|
+| P1 | **Nearly twice the throughput of the last public release** | **yes** | yes | ~1.75x vs 0.5.3.3, same hardware, same workload. **NOT YET PUBLISHABLE** - measured at 50,000 records on one partition, one repeat pair. Re-take at 100k across several partitions before this goes out |
+| P2 | The engine now reaches the concurrency you configure - 40,000 records in flight | yes | yes | Frame as virtual threads lifting a platform-thread ceiling. **Do not** frame as the old version being broken |
+| P3 | Virtual threads, opt-in, JDK 21+ | no | yes | Needs the Java-baseline caveat alongside it |
+| P4 | A direct-pull engine, opt-in - fastest configuration measured when paired with virtual threads | no | yes | Preview-grade. Say so |
+| P5 | PC now sits within ~13% of a bare Java consumer that does no ordering at all | no | yes | The honest framing of overhead, and it invites the "what does it cost me" question rather than dodging it |
+
+### Self-tuning - the strategy doc calls this the capability nothing else offers
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| S1 | **The engine discovers its own concurrency from runtime measurement** | **yes** | yes | Lead item |
+| S2 | **It recommends its own instance count to your infrastructure** | **yes** | yes | The part people will not expect |
+| S3 | Per-record ground truth no external autoscaler can see | yes | yes | Why it can do this and a sidecar HPA cannot |
+| S4 | The non-JVM clients inherit it | yes | yes | A Python consumer getting runtime-discovered concurrency is something no Python Kafka library can offer |
+| S5 | It needs the signal-integrity work underneath - accurate timing under every engine | no | yes | Answers "how do you know your own numbers" |
+
+### Kafka Streams (preview)
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| K1 | **A topology's parallelism has always been its partition count. Not on PC's engine** | **yes** | yes | The headline capability |
+| K2 | **12 partitions, 100ms of I/O per record: ~120 rec/s becomes thousands** | **yes** | yes | Arithmetic plus measurement. Under-claims deliberately |
+| K3 | Same topology - no rewrite, no new API | yes | yes | The reason it is adoptable |
+| K4 | **Head-of-line blocking goes away**: one slow record no longer delays every record behind it in its partition | no | yes | The deeper argument, and it needs a paragraph. **The latency measurement that proves it does not exist yet** |
+| K5 | It is a preview, and what that means | yes | yes | State the limits: state stores, stream time, EOS |
+
+### Kafka Connect (preview)
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| C1 | **A sink's throughput is bounded by task count, and tasks by partitions. Not here** | **yes** | yes | On L this is one clause riding on K1's setup |
+| C2 | Paired with self-tuning, a sink stops being a sizing exercise | no | yes | Needs S1-S2 established first. Vague if it comes early |
+
+### Other runtimes
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| R1 | **Eight new languages: Python, Go, Rust, Ruby, .NET, TypeScript, Swift, C++** | **yes** | yes | Java uses core directly - no binding, do not imply one |
+| R2 | Ordering, retries and offset encoding stay in the engine; clients receive records and return verdicts | yes | yes | The facade claim |
+| R3 | Nine facades, not nine reimplementations - one shared conformance suite proves identical behaviour at the boundary | no | yes | The answer to "how can these be trustworthy" |
+| R4 | Each client is a miniature of PC's own controller - the near-verbatim paragraph already chosen for the blog | no | yes | Already recorded above in this note |
+| R5 | Kotlin and Scala bindings exist, for people who want idiomatic surfaces | no | yes | Honest, and unimpressive on L where it reads as padding |
+
+### Reliability and correctness
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| X1 | **Exactly-once still holds across all of it** | **yes** | yes | The first question anyone asks about Streams-on-something-else |
+| X2 | **Every known defect cleared** | yes | yes | A roadmap gate for 0.6.0.0. Strong claim - make sure it is still true at ship |
+| X3 | The classes fixed: stalls, rebalance handling, offset tracking | no | yes | Name them. This is the account STRATEGY.md says every lost-record bug withdraws from |
+| X4 | Faults found and fixed during the work itself - a silent Reactor stall on an empty publisher, a check-then-act claim that could deliver a record twice | no | yes | Credibility through specificity, and it shows the testing found them rather than the users |
+
+### Observability
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| O1 | **A metrics dashboard showing offset encoding and in-flight state** | **yes** | yes | Not "a GUI". Name the quantities |
+| O2 | Because moving the queue into your client moves it out of the cluster's view | yes | yes | Straight from STRATEGY.md, and the strongest sentence available |
+| O3 | Record residence time - how long a record spends inside PC, end to end, including retries | no | yes | New. The only metric that says whether your configured concurrency is actually being used |
+| O4 | Metrics that exist end to end, under every engine | no | yes | |
+
+### Features
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| F1 | **Dead letter queues** | **yes** | yes | Most-asked. Its own line, and acknowledge the wait |
+| F2 | Richer batch modes / micro-batching | no | yes | |
+| F3 | Health check surface | no | yes | |
+| F4 | Bounded buffers | no | yes | |
+| F5 | Distributed throttling | no | yes | Genuinely unusual - may deserve promotion to L |
+| F6 | An HTTP endpoint server, as a candidate | no | maybe | Only if it actually ships |
+
+### The project itself
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| J1 | **Not dead - forked, and shipping** | **yes** | yes | The reply's opening line, because it answers the thread's premise directly |
+| J2 | **Apache 2.0** | **yes** | yes | |
+| J3 | **An apology for the delay** | **yes** | yes | The owner's own instruction, and it buys more goodwill than any feature |
+| J4 | New Maven coordinates | no | yes | The first thing an adopter needs |
+| J5 | The "Phoenix - Spreading the Love" theme | no | yes | The blog's frame. Too much for a reply |
+| J6 | How it is maintained, and the bet that every failure becomes a mechanism | no | yes | Answers "will this be abandoned too", which is the thread's actual anxiety |
+| J7 | Links: the blog, then the release notes | **yes** | n/a | The reply's whole purpose |
+
+### Caveats that belong in the blog, unburied
+
+| # | Point | L | B | Notes |
+|---|---|---|---|---|
+| Q1 | **PC is not current with Kafka today** | no | **yes** | STRATEGY.md states it plainly. Omitting it is the kind of thing that gets found and quoted back |
+| Q2 | The Java baseline - 0.6.x stays on Java 8; virtual threads need 21+ | no | yes | |
+| Q3 | Streams and Connect are previews, and what does not work yet | yes | yes | On L as the word "preview"; in B with the actual limits |
+
+## Known gaps in this list
+
+- **The head-of-line latency number does not exist** (K4). It is the strongest argument available and
+  is currently an argument rather than a measurement.
+- **P1's ~1.75x needs re-taking** at 100,000 records across several partitions before publication.
+- **Nothing here says what it is like to USE.** Every point is a capability or a number. A release post
+  with no code in it is a specification, not an announcement.
