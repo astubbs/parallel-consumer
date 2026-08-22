@@ -13,8 +13,8 @@ origin: docs/inflight/perf-embedding-the-engine-over-ffi.md
 
 Tracking issue: astubbs#242 (the language-proxy fan-out). Parent plan:
 [`2026-08-14-001-feat-language-proxy-plan.md`](2026-08-14-001-feat-language-proxy-plan.md).
-Proven in **three languages** on branch `feats/go-vendored-pc`: Go over cgo, Python over
-ctypes, Node over a hand-written N-API addon.
+Proven in **four languages** on branch `feats/go-vendored-pc`: Go over cgo, Python over ctypes,
+Node over a hand-written N-API addon, C over nanopb.
 
 **Identifiers in this document are prefixed `CT` (requirement) and `CTD` (key technical decision),
 never `R` or `KTD`.** The parent plan states that no ID may mean two things across documents, and it
@@ -217,7 +217,28 @@ serialises a stream's inbound callbacks**. Nothing serialises a foreign host's t
 surface re-establishes that guarantee with an explicit lock, and any future entry point MUST too.
 Getting this wrong corrupts the handshake state machine under concurrency rather than throwing.
 
-### CTD6 - Languages are ranked by value, not by ease
+### CTD6 - SUPERSEDED 2026-08-22: bind every language, measure, then choose
+
+**Owner's direction, and it replaces the tiering below rather than adjusting it.** Every language
+gets bound and moves forward together; the choice between embedded and sidecar is then made per
+language *on measurement* - throughput and stability - instead of on a table predicting which ones
+are worth it.
+
+That is a better method than what CTD6 originally did, and this work is why. The table below
+predicted Python "hard mechanically" and it was not; it ranked Go "medium" on a callback mechanism
+the design never uses; and it had nothing to say about Node's real obstacle, which turned out to be
+an FFI library's stack handling. **Three of its predictions were wrong in three different ways.** A
+prediction table was the right tool when binding a language was expensive; four bindings later it
+is cheaper to measure than to argue.
+
+What survives from below: the per-language mechanism notes, which are now evidence rather than
+guesses, and the observation that the difficulty and demand rankings happened to align. What does
+not survive: the "do not build" verdict, and any use of this table to decide what gets attempted.
+
+**The kill criterion is untouched.** CTD2 still applies, CTD1 still gates shipping, and binding a
+language remains a long way from defaulting it to embedded.
+
+### CTD6 (historical) - Languages ranked by value, not by ease
 
 The parked note's finding that difficulty and demand rank together survives, but the pull model
 changes the difficulty column, so the ranking is now driven by demand alone:
@@ -286,7 +307,12 @@ platform, with the Go binding as its first consumer and no Go-specific content r
 
 Test: the Go demo's embedded arm keeps reporting its deterministic records/keys pair after the move.
 
-### U5. Bind a second language - DONE, ahead of U4
+### U5. Bind every language, one step at a time - IN PROGRESS
+
+Four done: Go, Python, Node (probe only, and deliberately - see CTD8), C. Each has produced a
+constraint the others did not, which is the argument for continuing rather than stopping at three.
+
+**Originally scoped as "bind a second language" - DONE, ahead of U4**
 
 Python, 2026-08-22, before the library was extracted. **CTD2's third kill condition is not
 triggered.** Doing it before U4 was not the plan and it surfaced U4's cost immediately: the Python
