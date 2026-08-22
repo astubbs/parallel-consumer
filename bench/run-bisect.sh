@@ -646,6 +646,17 @@ arrival_mode() { [ -n "$ARRIVAL_RATES" ]; }
 # measured window.
 fresh_topic_name() { echo "bench-arr-$$-$1"; }
 
+# Creates the run's topic through the broker's own CLI rather than by starting a JVM to do it.
+#
+# `Bench produce <topic> 0` also creates it, and that was the first implementation - but it is a
+# whole JVM start per run, four seconds, for one Admin call. Across an arrival matrix that is minutes
+# of wall clock spent on topic creation.
+create_topic() {
+  docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server "localhost:$BROKER_PORT" --create --topic "$1" \
+    --partitions "$PARTITIONS" --replication-factor 1 >/dev/null 2>&1
+}
+
 # WAITS FOR THE DELETION, because `--delete` returns before the broker has finished.
 #
 # A topic recreated under a name the broker is still tearing down comes back
@@ -656,17 +667,23 @@ fresh_topic_name() { echo "bench-arr-$$-$1"; }
 #
 # The names this harness generates are unique per run, so the window is narrow - but a caller
 # re-running a sweep with the same BENCH_TOPIC hits it head on, which is exactly how it was found.
+#
+# WAITING IS OPT-IN, and that is a measured decision rather than a preference. The broker takes
+# fifteen to twenty-five seconds to stop listing a deleted topic, and the arrival sweep deletes one
+# after EVERY run - so waiting unconditionally doubled the wall clock of a 42-cell matrix, for a
+# guarantee that only matters when the same name is about to be reused. It never is: the sweep's
+# names carry the shell's PID and a cell counter.
 delete_topic() {
   docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server "localhost:$BROKER_PORT" --delete --topic "$1" >/dev/null 2>&1
-  local waited=0
-  while docker exec "$BROKER_NAME" /opt/kafka/bin/kafka-topics.sh \
-          --bootstrap-server "localhost:$BROKER_PORT" --list 2>/dev/null | grep -qx "$1"; do
-    sleep 1
-    waited=$((waited + 1))
-    [ "$waited" -ge 30 ] && { log "WARNING: $1 still present ${waited}s after delete"; return 1; }
-  done
 }
+
+# There is deliberately no wait-for-deletion helper. The window it guarded - producing into a name
+# the broker is still tearing down - was only dangerous because the producer was idempotent and
+# retried OUT_OF_ORDER_SEQUENCE_NUMBER two billion times. Bench#applyBoundedDelivery removed the
+# idempotence, so the window now costs a bounded retry rather than a hung sweep, and paying twenty
+# seconds per run to close it is not worth it. If you delete a bench topic BY HAND and immediately
+# re-produce into it, wait a few seconds.
 
 # THE LOCAL BUILD'S IDENTITY, as a column.
 #
@@ -699,9 +716,7 @@ topic_depth() {
 LOCAL_CP=""
 if arrival_mode; then
   # NOTHING IS PRE-PRODUCED under controlled arrival - the records are fed during each run, into a
-  # topic created for that run. The local classpath is still resolved here because every fresh topic
-  # is created through it.
-  LOCAL_CP=$(prepare LOCAL NATIVE) || { log "FATAL: cannot build local arm"; exit 1; }
+  # topic created for that run by the broker's own CLI. No classpath is needed here at all.
   log "controlled arrival: rates [$ARRIVAL_RATES]/s, fresh topic per run, nothing pre-produced"
 elif [ "${BENCH_SKIP_PRODUCE:-0}" = 1 ]; then
   log "BENCH_SKIP_PRODUCE=1: assuming $TOPIC already holds >= $RECORDS records"
@@ -987,7 +1002,7 @@ for mode in $MODES; do
                 if [ "$arrival" != 0 ]; then
                   CELL=$((${CELL:-0} + 1))
                   topic=$(fresh_topic_name "$CELL")
-                  run_with_deadline "$PRODUCE_TIMEOUT" run_one "$LOCAL_CP" produce "$BOOTSTRAP" "$topic" 0 >/dev/null \
+                  create_topic "$topic" \
                     || { log "SKIP $mode $ord arrival=$arrival: could not create $topic"; continue; }
                 fi
                 build_before=$(pc_build_id "$CP")
