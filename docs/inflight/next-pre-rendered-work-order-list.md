@@ -59,6 +59,47 @@ transitions:
   list holds a not-yet-eligible entry that takers must skip - which reintroduces scanning - or there
   is a second time-ordered structure feeding it. `RetryQueue` already exists and may be exactly that.
 
+## The simple implementation: re-render after every registration - and why the arithmetic may kill it
+
+**Antony's follow-up.** Rather than maintaining the list incrementally, reuse the existing selection
+flow: after every time new work is added to the shards, run a pre-drain that populates every eligible
+work container into the master order queue. Order is then correct **by construction**, because the
+existing scan already produces the correct order - it is the same code, run once per poll batch
+instead of once per dispatch pass. No incremental sync, so none of the incremental sync bugs.
+
+**The hole: completion and failure create newly-eligible work without any new work arriving.** A
+re-render triggered only by registration never fires when a record completes - and under an ordered
+mode, a completion is exactly what makes the next record for that key eligible. Same for a failure
+whose retry delay expires. So the trigger set has to be `{registration, completion, retry-expiry}`,
+not registration alone, and at that point the "simple" version is re-rendering on nearly every state
+change - which is the incremental version with a worse constant.
+
+**And the cost arithmetic does not obviously favour it.** Let `B` be the buffered set and `P` the
+records a poll brings.
+
+| Design | Work per record |
+|---|---|
+| Today's scan, UNORDERED | ~20 entry examinations (measured: 410,000 for 20,000 records at batch 500) |
+| Re-render per poll | `B / P` list appends - at `B` = 10,000 and `P` = 500, that is **20 per record** |
+| Incremental maintenance | **~2 writes** - one insertion when eligible, one removal when taken |
+
+**So a full re-render per poll is the same order as the scan it replaces**, and only wins on the
+constant: an append is cheaper than an examination, because there is no CAS and no predicate. That is
+a real but modest win, and not the one worth restructuring the engine for. **The incremental version
+is an order of magnitude better and is where the idea's value actually is.**
+
+Both numbers move with `B/P`, so the re-render version looks better the larger the poll batch and the
+smaller the buffer - which is worth checking against real settings before dismissing it, because
+`max.poll.records` is tunable and the buffer is what `DynamicLoadFactor` is guessing at anyway.
+
+**One thing that genuinely simplifies, though: the mode that most needs this is the mode where the
+simple version has no hole at all.** `UNORDERED` never blocks a shard, so nothing becomes newly
+eligible on completion - a taken record is simply removed. Registration really is the only trigger
+there. Since `UNORDERED` is also the mode carrying the quadratic rescan, **a re-render limited to
+`UNORDERED` is a small, self-contained change that addresses the measured problem**, and it can be
+built and measured without answering any of the ordering questions above. That is the first
+experiment, not the last.
+
 ## The risk that has to be stated
 
 **This is a third representation of the same data**: the shards map, the retry queue, and now the
