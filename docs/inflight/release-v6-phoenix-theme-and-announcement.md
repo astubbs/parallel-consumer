@@ -137,11 +137,52 @@ Ordered by how much a reader who already knows PC would care.
 
 | # | Point | L | B | Notes / evidence |
 |---|---|---|---|---|
-| P1 | **Nearly twice the throughput of the last public release** | **yes** | yes | ~1.75x vs 0.5.3.3, same hardware, same workload. **NOT YET PUBLISHABLE** - measured at 50,000 records on one partition, one repeat pair. Re-take at 100k across several partitions before this goes out |
+| P1 | ~~**Nearly twice the throughput of the last public release**~~ | **no** | no | **WITHDRAWN 2026-08-23. The claim is false as stated and the ~1.75x had no measurement behind it.** Measured against 0.5.3.3 from Maven Central: the shipped default is **1.00x** in all ten cells taken. The best opt-in arm reaches **1.5x**, and only on all-distinct keys, `UNORDERED`, a 2ms handler and `maxConcurrency` 5,000. See below |
 | P2 | The engine now reaches the concurrency you configure - 40,000 records in flight | yes | yes | Frame as virtual threads lifting a platform-thread ceiling. **Do not** frame as the old version being broken |
 | P3 | Virtual threads, opt-in, JDK 21+ | no | yes | Needs the Java-baseline caveat alongside it |
 | P4 | A direct-pull engine, opt-in - fastest configuration measured when paired with virtual threads | no | yes | Preview-grade. Say so |
 | P5 | PC now sits within ~13% of a bare Java consumer that does no ordering at all | no | yes | The honest framing of overhead, and it invites the "what does it cost me" question rather than dodging it |
+
+#### P1 was withdrawn on 2026-08-23, and why is worth reading before writing any other number here
+
+**The ~1.75x had no measurement behind it.** It appears twice, both times as prose in this file,
+introduced by `ef8b5515c`; there is no results file, no sweep command and no pair of msg/s figures
+anywhere in the tree or in git history. The nearest committed data - the version bisect in
+`bench/results/core-curve.csv` and `curve.csv` - already put LOCAL against **0.5.3.2** at
+**1.00-1.02x**, which is parity, on the same axis, and had been sitting there the whole time.
+
+**It has now been measured against 0.5.3.3**, which is genuinely on Maven Central (see
+[`release-0.6.0.0.md`](release-0.6.0.0.md), where this file's neighbour asserted the opposite until
+today). `core` against `core`, alternating within one sweep, two repeats each:
+
+| Workload | 0.5.3.3 | 0.6.0.0-SNAPSHOT | ratio |
+|---|---:|---:|---:|
+| 100,000 records, 1 partition, 2ms, `maxConcurrency` 5,000, distinct keys, `UNORDERED` - *the published operating point* | 17,442 | 17,372 | **1.00x** |
+| 12,000 records, 24 partitions, 10ms, `maxConcurrency` 24, distinct keys, `UNORDERED` | 1,223 | 1,224 | **1.00x** |
+| the same, `KEY` ordering | 1,211 | 1,217 | **1.01x** |
+| the same, **Zipf keys**, `KEY` ordering | 370 | 371 | **1.00x** |
+| the same, Zipf keys, `KEY`, **1% failure rate** | 242 | 236 | **0.97x** |
+
+**Ten cells, all parity.** Full data:
+[`bench/results/realistic-ordering-matrix.csv`](../../bench/results/realistic-ordering-matrix.csv)
+and `realistic-throughput-matrix.csv`.
+
+**What CAN be said, and it needs three qualifiers rather than none.** The gain is not in the engine a
+user gets by upgrading; it is in the opt-in engines this release adds, and only where a
+platform-thread ceiling is what binds:
+
+| Arm against 0.5.3.3 `core` | ratio | conditions |
+|---|---:|---|
+| `core-vt` (virtual threads, JDK 21+) | **1.51x** | 100,000 records, one partition, 2ms handler, `maxConcurrency` 5,000, all-distinct keys, `UNORDERED`, no failures, non-blocking callee |
+| `core-dpvt` (direct pull + virtual threads) | **1.50x** | same |
+| `core` shipped default | **1.00x** | same |
+| **any arm**, at `maxConcurrency` 24 over 24 partitions with a 10ms handler | **1.00x or below** | `core-vt` and `core-dpvt` are 5-6% *slower* than the shipped default there |
+
+**So the publishable sentence is something like "up to 1.5x on an opt-in virtual-thread engine, at
+high concurrency and a short handler" - and it must carry the operating point**, because at a
+realistic one the number is 1.0x and the arms that win at 5,000 lose at 24. Per
+[`docs/data/landing-page.yaml`](../data/landing-page.yaml)'s own rule, no throughput figure goes out
+without its key distribution, per-record delay and concurrency setting.
 
 ### Self-tuning - the strategy doc calls this the capability nothing else offers
 
@@ -233,6 +274,21 @@ Ordered by how much a reader who already knows PC would care.
 
 - **The head-of-line latency number does not exist** (K4). It is the strongest argument available and
   is currently an argument rather than a measurement.
-- **P1's ~1.75x needs re-taking** at 100,000 records across several partitions before publication.
+- ~~**P1's ~1.75x needs re-taking** at 100,000 records across several partitions before publication.~~
+  **Done 2026-08-23, and the claim is withdrawn** - see the note under the performance table. The
+  shipped default is at parity with 0.5.3.3 in all ten cells measured; the best opt-in arm reaches
+  1.5x on all-distinct keys at `maxConcurrency` 5,000 and 1.0x or below on a realistic one.
+- **Every remaining performance point in this list was measured on the same narrow workload P1 was**:
+  all-distinct keys, `UNORDERED`, a constant handler and no failures. P2's "40,000 records in flight"
+  and P4's "fastest configuration measured" are both high-concurrency `UNORDERED` results, and on a
+  Zipf key distribution under `KEY` ordering **every engine measured sustains 2 records in flight of
+  a configured 24** - see
+  [`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md). They
+  are not wrong; they need their conditions attached, and P2 in particular must not be read as "the
+  engine now reaches the concurrency you configure" without them.
+- **R1/R2's non-JVM clients have a ceiling nobody has quoted.** The `proxy` arm - the path every
+  language client takes - runs at **78 msg/s against `core`'s 371** on a Zipf keyed workload, a 4.8x
+  gap where on all-distinct keys it is 1.5x. Unattributed, and it should be understood before the
+  clients are announced on throughput grounds.
 - **Nothing here says what it is like to USE.** Every point is a capability or a number. A release post
   with no code in it is a specification, not an announcement.

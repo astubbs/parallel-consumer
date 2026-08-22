@@ -80,8 +80,27 @@ A row with in-flight far below the partition count is a starved run, whatever el
   [`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md). On a
   Zipf distribution over 200 keys, `KEY` ordering sustains **1 record in flight of a configured 24**
   and runs at a third of `UNORDERED` on the identical records, with a flat handler and no failures.
-  **It is not the buffer**: `messageBufferSize` was already 20,000, the fix this note prescribes.
   It is that a hot key is a serial queue whatever the buffer holds, so the ceiling is set by the
   busiest shard rather than by the fetch. `peak_in_flight` reads 24 throughout and cannot see it,
   which is why the harness gained an `inflight_p50` column.
-- The direct-pull engine takes work from the shards itself and may not share this; unmeasured.
+- ~~**It is not the buffer**: `messageBufferSize` was already 20,000, the fix this note
+  prescribes.~~ **Half right, and the half that was wrong is this note's own subject.** The tail
+  experiment was run at 20,000, so the hot-key floor it found is real and is not a buffer effect.
+  But **PC's DEFAULT buffer costs another 2.3x on top of it**, on the ordered arm only. One term
+  changed, `core`, 12,000 records, 24 partitions, `maxConcurrency` 24, Zipf over 200 keys, flat
+  handler, no failures:
+
+  | `messageBufferSize` | `KEY` msg/s | `UNORDERED` msg/s |
+  |---|---:|---:|
+  | 20,000 | **367.8** | 1,227.0 |
+  | PC's default | **162.2** | 1,221.2 |
+
+  `UNORDERED` does not move - 1,227.0 against 1,221.2 - which is what makes the ordered figure
+  attributable. **So the starvation this note describes reaches `KEY` on a skewed distribution after
+  all**, and the note's own prescription is what the tail experiment had already applied. A user who
+  sets nothing gets the 162.2 row.
+- ~~The direct-pull engine takes work from the shards itself and may not share this; unmeasured.~~
+  **MEASURED 2026-08-23: it shares it exactly.** On the same Zipf workload at `messageBufferSize`
+  20,000, `core` reads 370.9 msg/s at 2 sustained in flight, `core-vt` 362.6 at 2, and `core-dpvt`
+  **362.9 at 2**. Taking work from the shards directly does not help, because the constraint is not
+  how work is fetched or selected - it is that the busiest shard may only run one record at a time.

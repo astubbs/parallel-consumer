@@ -183,6 +183,51 @@ not a broker effect. **The 100ms campaign says the same**: `core-vt` 18,258 agai
 re-stating for who else was using the broker, which is a different and much older problem -
 `bench/README.md` already documents it and this is another instance.
 
+## Re-taken with a key distribution and a failure rate, 2026-08-23
+
+**The 2.5x was measured on `UNORDERED`, all-distinct keys, one partition, a 2ms constant handler and a
+zero failure rate - share groups' best case and Parallel Consumer's worst**, which is the audit in
+[`next-benchmark-a-model-of-work-not-work.md`](next-benchmark-a-model-of-work-not-work.md). This
+section re-takes it with the two axes it never had.
+
+**`UNORDERED` stays, and that is the fair reading rather than a convenience.** Share groups have no
+ordering guarantee at all, so a `KEY` row beside them would compare a system that orders against one
+that does not, and flatter share groups for doing strictly less work. What changes is the key
+distribution, the failure rate and the partition count - and all three apply to both sides.
+
+### One method note before any number, because it cost a whole pass
+
+**The share arms need `kafka-clients` 4.3.1 pinned explicitly, and under `CLIENT_PINS=NATIVE` they do
+not compile.** This fork's transitive client is 3.9.2, which has no `KafkaShareConsumer` at all, so a
+sweep that forgets the pin records `COMPILE_FAILED` for every share row - correctly, loudly, and only
+after the whole matrix has run. The published campaign pinned 4.3.1 for **every** arm precisely so
+that the client is not a free variable between the two sides, and the re-take does the same.
+
+**Its PC rows are therefore NOT comparable with the ones in
+[`perf-engine-comparison-2026-08-22.md`](perf-engine-comparison-2026-08-22.md)'s re-take**, which run
+at `NATIVE`. Two rows that disagree about the client are two experiments; they live in
+[`bench/results/realistic-share-groups-matrix.csv`](../../bench/results/realistic-share-groups-matrix.csv)
+rather than in the throughput matrix for that reason.
+
+### The structural finding, which is not a number and does not depend on one
+
+**In its default implicit acknowledgement mode a share consumer cannot model a failure at all.**
+`poll()` acknowledges the whole previous batch, so by the time processing has failed the record has
+already been acknowledged and can never be redelivered. An implicit-mode processor that wants
+at-least-once has to retry **in process**, holding the batch open - and a share consumer cannot poll
+while a batch is outstanding, so retrying holds the entire fetch pipeline.
+
+The harness refuses the combination rather than reporting a number for it, which is why the tables
+below carry `share-explicit` in every failure cell and `share` in none. **That refusal is the
+finding**: of the two acknowledgement modes, only one can be compared against PC on a workload where
+records fail, and it is not the default.
+
+**And the comparison that remains still runs in share groups' favour.** `share-explicit` answers a
+failure with `RELEASE`, and a released record is immediately re-acquirable, where PC waits out
+`defaultMessageRetryDelay` - one second - before re-offering it. So at the same configured failure
+rate the two arms are not paying the same retry cost, and **no row putting them side by side may be
+quoted without saying so.**
+
 ## What it does NOT show
 
 - **One partition, all-distinct keys, one broker, one machine, one delay.** The 2ms operating point

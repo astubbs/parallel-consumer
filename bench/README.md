@@ -277,6 +277,9 @@ put them back before committing, or the version bump ships with your measurement
 | `ordering-head-of-line-latency.csv` | `PARTITION` against `KEY` at three buffer depths, flat and tailed handler - the first latency comparison |
 | `saturated-skew-baseline.csv` | The saturated baseline on a Zipf key distribution: `KEY` / `PARTITION` / `UNORDERED` / `share-explicit` across three workloads, plus the distinct-key control. **`KEY` costs 0.13% on distinct keys and 3.1x on skewed ones** |
 | `arrival-tail-skew-matrix.csv` | The tail experiment: the same arms under **controlled arrival** at 50/70/90% of each arm's own capacity, skewed and distinct keys, flat / tailed / tailed-with-failures. The first file here with an end-to-end latency column |
+| `realistic-ordering-matrix.csv` | The realistic-workload re-take, ordering half: seven engines plus **0.5.3.3 from Maven Central**, `KEY` against `UNORDERED`, distinct keys against Zipf, 0% against 1% failures. 12,000 records, 24 partitions, 10ms, `maxConcurrency` 24, `messageBufferSize` 20,000 |
+| `realistic-throughput-matrix.csv` | The same re-take at the operating point the engine and share-group tables were published at - 100,000 records, 2ms, `maxConcurrency` 5,000, `UNORDERED` - with the key distribution and the failure rate added. Includes the **one-partition rows that reproduce the published tables**, so a figure that moved can be attributed |
+| `realistic-default-buffer-control.csv` | `realistic-ordering-matrix.csv`'s workload with one term changed: PC's **default** `messageBufferSize` instead of 20,000. The ordered arm loses another 2.3x; `UNORDERED` does not move |
 
 **The two skew files are the only ones taken on anything but all-distinct keys**, and that is the
 single most important caveat on every other row in this table: with distinct keys `KEY` ordering
