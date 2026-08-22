@@ -112,6 +112,45 @@ another session held ~1,000% CPU against the same broker, and the same operating
 9,050 msg/s and then 1,883 four minutes later. `bench/README.md` now records that `peak_in_flight` is
 the load-robust column and `msg_per_sec` is not. See `branch-parallel-measurement-contamination.md`.
 
+## Every branch from this session, pushed 2026-08-22 - and what each is FOR
+
+All on origin now. Divergence and merge state are `git` questions and are deliberately not recorded
+here; **what each branch means is not.**
+
+**Merged into `research/market-analysis-recut`** - kept as named refs so a bisect can reach them:
+
+| Branch | What it is |
+|---|---|
+| `fix/conservation-load-gate` | Replaced the drifting per-shard counter with an `admitted - retired` figure. Found the drift clamp's "race condition" comment was wrong - two deterministic conditional-decrement bugs |
+| `perf/direct-pull-measured` | Finished the blocking wait the 2022 branch left commented out. 3.2x at 10 workers, -95% at 5,000 |
+| `test/direct-pull-coverage` | The tests that should have preceded the merge above, not followed it |
+| `feats/virtual-threads` | `ExecutionMode`, and the pool-queue gate that blocked virtual threads |
+| `test/bench-all-engine-arms` | Reactor, Mutiny, Vert.x and proxy arms, plus three harness defects - one of which could silently run three "engines" as the Vert.x arm |
+| `fix/reactor-empty-publisher-stall` | astubbs#329. A user function returning an empty publisher stalled the consumer silently |
+| `perf/direct-pull-scan-collapse` | `ShardOccupancy`. 440 entries examined per record dispatched at 5,000 in flight, down to 1.00 |
+
+**Not merged, awaiting a decision:**
+
+| Branch | Why it is not merged |
+|---|---|
+| `perf/unordered-available-queue` | Deletes `ShardOccupancy`, -91 lines, **zero throughput change** - and adds a second retirement rule plus a revocation-timing change in `confluentinc#857` territory. Its own verdict: marginal, take it for the code not the numbers |
+| `fix/close-shuts-down-worker-pool` | Cut from `master`, correct, and **superseded** - Antony has his own close-path PRs. Do not open another |
+| `docs/release-note-trailer-convention` | astubbs#330, against `master`. Arrives here with the next master merge |
+| `docs/direct-pull-claim-check-then-act-diagnosis` | The diagnosis that preceded the atomic-claim fix. Its findings are already on the integration branch; the branch is the working record |
+
+**Experiments** - each a hypothesis, an implementation, a measurement, and a reason it did not ship.
+Pushed so the negative results survive the machine, not because any is a merge candidate:
+
+| Branch | What it measured |
+|---|---|
+| `perf/split-shard-inflight` | Split shard state into selectable and in-flight. **10x cheaper dispatch, 0% end to end** - and it found that in-flight records staying in the shard is *how ordering is enforced*, at the cost of ten failing tests |
+| `perf/lock-free-worker-queue` | `LinkedTransferQueue` for the pool queue, then a counted variant. **69% and 71% WORSE** - a lock can be the cheap way to park |
+| `perf/lock-free-mailbox` | Lock-free mailbox. **+3.3% at 100ms, -2.7% at 0ms.** A trade, and it is **merged into the integration branch** carrying an `EXPERIMENT:` comment - which needs a keep-or-revert decision, because 0ms is now the operating point that matters |
+| `perf/resume-shard-scan` | Resume the dispatch scan instead of restarting it. **+0.2%**, and cut from the wrong base |
+
+**Deliberately NOT pushed**: `research/market-analysis`. Superseded by the re-cut, and its history
+carries redacted material.
+
 ## The force-push, and what it does not fix
 
 `perf/throughput-regression-since-0-3` was rewritten on 2026-08-21 to remove a note that named an

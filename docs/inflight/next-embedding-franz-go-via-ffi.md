@@ -1,11 +1,52 @@
-# Embedding franz-go in a GraalVM-native PC, over FFI rather than gRPC
+# VERDICT 2026-08-22: not worth doing. The control was run and the prize is about 7%.
 
 <!-- inflight-type: next -->
 <!-- inflight-impact: architecture -->
+<!-- inflight-state: closed - measured, the premise did not survive -->
 
-**Antony's proposal, 2026-08-22:** rather than rewriting the engine in Go, keep Parallel Consumer and
-replace only its *client*. Compile PC to a GraalVM native image and call franz-go directly, in
-process. **Can GraalVM talk to Go without gRPC?**
+**Antony's call after seeing the control: "I agree it's not worth even considering rewriting
+anything."** This note is kept for the reasoning, not as open work.
+
+## What the control said
+
+The proposal rested on a measured gap: the bare Java client reaching **31-67%** of franz-go, no engine
+on either side. That figure was real, and it was taken **before virtual threads**.
+
+The control - the same Java floor with one term changed, workers as virtual threads rather than
+platform threads, 200,000 records over ten partitions, no HTTP stub in the path:
+
+| Arm | 0ms | as % of the Go floor |
+|---|---:|---:|
+| `franz` - the Go floor | 62,384 | - |
+| **`pool-vt`** - Java floor, virtual threads | **58,064** | **93%** |
+| `pool` - Java floor, platform threads | 42,803 | 69% |
+
+**The Java client reaches 93% of franz-go.** At 2ms the thread model alone is worth **2.15x** on the
+Java side - 55,890 against 25,957.
+
+**So most of the gap was never `kafka-clients`. It was platform threads, and Java has fixed that.**
+The remaining client difference is about 7%, against which the costs below were always going to be
+the deciding factor:
+
+- two runtimes installing signal handlers in one process
+- rebalance callbacks travelling Go to C to Java, on the path PC exists to get right
+- records crossing as bytes
+- a second toolchain on the critical path of the **core**
+
+**Seven percent does not buy that.** Closed.
+
+## What survives, and it is not performance
+
+The capability arguments in
+[`next-franz-go-as-a-client-option.md`](next-franz-go-as-a-client-option.md) are untouched by this
+measurement and should be judged on their own: **KIP-932 share groups**, which the Java client does not
+have and which no other Go client has either, and **`kfake`**, an in-process protocol-level fake broker
+with fault injection. Neither depends on a throughput gap.
+
+**If franz-go is ever embedded, it should be for share groups**, and the FFI mechanics recorded below
+are still the right mechanism for it - a C-shared library called from Native Image, no gRPC.
+
+## The mechanism, kept because it was researched and is correct
 
 ## Yes, and it is a plain C ABI call
 

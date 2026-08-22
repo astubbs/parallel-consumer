@@ -27,6 +27,44 @@ most points and beats it at two. See
 
 **The Go floor also reaches a concurrency of 5,000 exactly, where both Java arms plateau near 2,800.**
 
+## CORRECTION 2026-08-22: virtual threads close most of this gap. The measurement is done.
+
+**The table above is superseded.** It was taken on 2026-08-21, before virtual threads, and the note
+already suspected the in-flight column was the tell. It was. The control has now been run: **the same
+Java floor, one term changed - workers are virtual threads instead of platform threads.**
+
+200,000 records, ten partitions, `BENCH_TIMER_CALLEE=1` so no HTTP stub or socket is in the path,
+concurrency 5,000, two repeats, load 7-33:
+
+| Arm | 0ms | as % of the Go floor | 2ms |
+|---|---:|---:|---:|
+| **`franz`** - the Go floor | **62,384** | - | serial, skipped |
+| **`pool-vt`** - the Java floor, virtual threads | **58,064** | **93%** | **55,890** |
+| `llingr` | 56,681 | 91% | 56,698 |
+| `core-dpvt` | 50,768 | 81% | 49,653 |
+| `core-vt` | 49,365 | 79% | 50,283 |
+| **`pool`** - the Java floor, platform threads | 42,803 | **69%** | 25,957 |
+| `core` - shipped engine | 40,045 | 64% | 27,602 |
+
+**The Java client reaches 93% of franz-go once its workers are virtual threads, against 69% on
+platform threads.** At 2ms the same change is worth **2.15x** - 55,890 against 25,957, same client,
+same broker, same records, only the thread model different.
+
+**So the 31-67% figure was mostly measuring platform threads, not `kafka-clients`.** The
+remaining client gap is about **7%** at 0ms, and it is the honest size of what a Go client would buy.
+
+**Two further readings worth keeping:**
+
+- **`pool-vt` beats llingr at 0ms** - 58,064 against 56,681. A bare Java consumer with a
+  virtual-thread pool is faster than llingr's entire engine, on this workload.
+- **PC costs about 13% over the bare Java floor** - `core-dpvt` 50,768 against `pool-vt` 58,064, and
+  11% at 2ms. That is the per-record machinery, and it is the quantity
+  [`core-auto-scaling.md`](core-auto-scaling.md)'s inline-execution idea would attack.
+
+**The old table is left above deliberately, not deleted**, because the *reason* it was wrong is the
+reusable lesson: a client comparison that does not control for the thread model is measuring the
+thread model. The figure travelled for a day before anyone asked what the in-flight column meant.
+
 ## 2026-08-22: how much of this gap survives virtual threads? Nobody has checked, and it may be most of it
 
 **The floors above were measured on 2026-08-21, before virtual threads landed.** Re-reading them
