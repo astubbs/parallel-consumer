@@ -15,6 +15,39 @@ Its sibling `AdaptiveConcurrencyClosedLoopIT` closes the next gap - a handler wh
 function of the concurrency the controller chose, so the loop is actually closed - and that is where
 item 2 below came from.
 
+## 0. What is the controller actually optimising? (unanswered, and it is upstream of the ratchet)
+
+Raised by the owner, 2026-08-23, as the thing that was hardest to model when first thinking about
+this: **how do you define the target performance at all?** If service time rises from 20ms to 30ms,
+is that bad - or good, because throughput went up? Three defensible answers: optimise throughput,
+optimise latency, or find some worthwhile midpoint where latency may keep rising as long as
+throughput rises with it.
+
+**The plan never answered this, and the ratchet below is the consequence.** The ported law's
+objective is implicit and purely *relative*: keep short-term latency near its own long-run average.
+That target has no anchor, which is exactly why the baseline drifts upward and the target ratchets -
+the law cannot say *this latency increase was not worth it*, because **it never measures throughput
+at all**. It has no notion of worth, only of change.
+
+The three answers are real modes, not a false trichotomy, and each has an established shape:
+
+- **Throughput** - hill-climb until more concurrency stops producing more completions. Needs no
+  user-supplied number, but keeps pushing until something saturates, which is how you flood a
+  downstream that degrades gracefully.
+- **Latency** - hold a stated ceiling (p99 under N ms). The only mode with an absolute anchor, and
+  the only one that requires the operator to know a number they often do not have.
+- **The midpoint** - the classical answer is Kleinrock's *power*, throughput divided by response
+  time, which is maximised exactly at the knee where queueing begins. It needs no configured number,
+  it answers the 20ms-to-30ms question arithmetically (worth it only if throughput rose by more than
+  1.5x), and it is precisely the elbow the closed-loop test builds. It is also the mode that cannot
+  ratchet the way the current law does, because a rising latency unmatched by rising throughput
+  lowers power and is therefore *visible as loss* rather than absorbed as the new normal.
+
+Choosing one is a product decision, not an implementation detail. Note what it costs: power and
+throughput modes both need a completions-per-window measure the controller does not currently take -
+it samples service time, outcomes and in-flight, but never rate. That is a small addition to the
+window and a large addition to what the controller can reason about.
+
 ## 1. The probe-down cycles forever when it has already learned the answer
 
 At the cap with flat latency the probe-down fires on its cadence, steps the target down by its
