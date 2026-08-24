@@ -7,8 +7,8 @@
 **Release gate (owner, 2026-08-20):** the question to answer before v6 is whether this throughput can
 be recovered legitimately - without going back to ignoring the concurrency the user asked for.
 
-> **ANSWERED 2026-08-24 - recovered legitimately, and the fix is built.** Branch
-> `fix/external-engine-pipeline-buffer` (from master) deletes `ExternalEngine`'s shortfall-only
+> **ANSWERED 2026-08-24 - recovered legitimately, and the fix is astubbs#342.** The PR (branch
+> `fix/external-engine-pipeline-buffer`, from master) deletes `ExternalEngine`'s shortfall-only
 > `getTargetOutForProcessing()` override so external engines inherit core's pipelined target;
 > `checkPipelinePressure()` stays a no-op per this note's own second patch arm (the buffer, not the
 > stepping, is the recovery). `ExternalEnginePipelineBufferTest` pins the formula and was proven red

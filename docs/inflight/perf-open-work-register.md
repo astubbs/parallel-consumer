@@ -10,8 +10,8 @@ what prompted it).
 ## Open measurement and investigation
 
 1. **The ~30% throughput regression since 0.3.0.2 - A RELEASE GATE THE OWNER SET (2026-08-20).**
-   ANSWERED WITH THE GOOD ANSWER 2026-08-24: the fix is built on `fix/external-engine-pipeline-buffer`
-   (local, awaiting the owner's word to push/PR) - ExternalEngine's shortfall-only request target
+   ANSWERED WITH THE GOOD ANSWER 2026-08-24: the fix is **astubbs#342**
+   (`fix/external-engine-pipeline-buffer`, from master) - ExternalEngine's shortfall-only request target
    deleted so every async engine inherits core's pipelined target. Proven-red unit test, and a
    one-term controlled bench: +23% on the Vert.x arm at 100k records (the note's 350k experiment
    read +34%), peak in-flight exactly 100 in both arms. What remains is review and merge.
