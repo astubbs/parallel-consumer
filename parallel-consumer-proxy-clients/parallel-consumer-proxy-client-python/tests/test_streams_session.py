@@ -11,13 +11,15 @@ anything else, and that an invocation is answered on its own correlation.
 from __future__ import annotations
 
 import queue
+import struct
 import threading
 from collections.abc import Iterator
+from typing import cast
 
 import pytest
 
 from parallel_consumer._generated import streams_pb2 as pb
-from parallel_consumer.streams import StreamsError, StreamsSession
+from parallel_consumer.streams import DataType, HandleKind, StreamsError, StreamsSession
 
 
 class FakeEngine:
@@ -28,6 +30,7 @@ class FakeEngine:
         self._outbound: queue.Queue[pb.StreamsServerMessage | None] = queue.Queue()
         self._next_handle = 100
         self._fault_on_call = fault_on_call
+        self._forced_type: pb.HandleType | None = None
         self._lock = threading.Lock()
 
     # -- the transport surface the session uses --
@@ -52,9 +55,36 @@ class FakeEngine:
                     fault=pb.Fault(
                         reason=f"call {call_id} names handle 4242, which does not exist")))
                 return
+            method = message.builder_call.WhichOneof("call")
+            if method == "sink":
+                # A sink mints nothing: its answer carries neither handle nor type, like the
+                # engine's.
+                self._outbound.put(pb.StreamsServerMessage(
+                    handle_assigned=pb.HandleAssigned(call_id=call_id)))
+                return
             self._next_handle += 1
+            answered_type = self._forced_type
+            if answered_type is None:
+                answered_type = self._type_of(method)
+            self._forced_type = None
             self._outbound.put(pb.StreamsServerMessage(
-                handle_assigned=pb.HandleAssigned(call_id=call_id, handle=self._next_handle)))
+                handle_assigned=pb.HandleAssigned(
+                    call_id=call_id, handle=self._next_handle, type=answered_type)))
+
+    @staticmethod
+    def _type_of(method: str | None) -> pb.HandleType:
+        """The type the real engine records for each minting method."""
+        if method == "group_by_key":
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_GROUPED_STREAM,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES)
+        if method == "count":
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_TABLE,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_LONG)
+        return pb.HandleType(
+            kind=pb.HANDLE_KIND_STREAM,
+            key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES)
 
     def responses(self) -> Iterator[pb.StreamsServerMessage]:
         while True:
@@ -65,6 +95,10 @@ class FakeEngine:
 
     def close(self) -> None:
         self._outbound.put(None)
+
+    # -- test seam: answer the next builder call with a caller-chosen type --
+    def answer_next_call_with_type(self, handle_type: pb.HandleType) -> None:
+        self._forced_type = handle_type
 
     # -- test seam: make the engine ask for a record to be mapped --
     def invoke(self, correlation: int, token: int, key: bytes, value: bytes) -> None:
@@ -109,6 +143,92 @@ def test_the_builder_issues_the_five_calls_each_naming_the_prior_handle(engine: 
     assert calls[2].group_by_key.handle == mapped
     assert calls[3].count.handle == grouped
     assert calls[4].sink.handle == counted
+    session.close()
+
+
+def test_a_handle_knows_what_it_is_and_what_it_carries(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+
+    source = builder.source("in")
+    counted = builder.count(builder.group_by_key(source), "counts-store")
+
+    assert source.kind is HandleKind.STREAM
+    assert source.value_type is DataType.BYTES
+    # The mint whose value the host never supplied: the type field is the only way to know this.
+    assert counted.kind is HandleKind.TABLE
+    assert counted.key_type is DataType.BYTES
+    assert counted.value_type is DataType.LONG
+    session.close()
+
+
+def test_the_reported_type_decodes_a_sink_value_without_tribal_knowledge() -> None:
+    # Kafka's Serdes.Long() writes 8 bytes, big-endian, signed - and now nobody has to know that.
+    assert DataType.LONG.decode(struct.pack(">q", 1002)) == 1002
+    assert DataType.LONG.decode(struct.pack(">q", -7)) == -7
+    payload = b"as-supplied"
+    assert DataType.BYTES.decode(payload) is payload
+
+
+def test_decoding_a_type_this_client_does_not_know_is_refused_by_name() -> None:
+    with pytest.raises(StreamsError, match="UNKNOWN"):
+        DataType.UNKNOWN.decode(b"\x00")
+    with pytest.raises(StreamsError, match="UNSPECIFIED"):
+        DataType.UNSPECIFIED.decode(b"\x00")
+
+
+def test_a_wire_type_this_client_does_not_recognise_degrades_to_unknown(
+    engine: FakeEngine,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    # An engine newer than this client: enum values it has never heard of. proto3 enums are open,
+    # so the values travel; the client must degrade explicitly rather than crash or guess bytes.
+    # The casts exist because the generated stubs (rightly) type the fields to the KNOWN values -
+    # exactly the mismatch this test manufactures.
+    engine.answer_next_call_with_type(pb.HandleType(
+        kind=cast(pb.HandleKind, 99),
+        key_type=cast(pb.DataType, 98),
+        value_type=cast(pb.DataType, 97)))
+    handle = session.builder().source("in")
+
+    assert handle.kind is HandleKind.UNKNOWN
+    assert handle.key_type is DataType.UNKNOWN
+    assert handle.value_type is DataType.UNKNOWN
+    session.close()
+
+
+def test_the_python_enums_mirror_the_wire_constants_exactly() -> None:
+    """The hand-mirrored enums are the one place client and engine could drift.
+
+    Both directions: every client member (bar UNKNOWN, which is client-local) is a wire value
+    with the same number, and every wire value has a client member - so a DataType added to the
+    proto without a mirrored member fails here instead of at a host's runtime.
+    """
+    wire_kinds = {name.removeprefix("HANDLE_KIND_"): number
+                  for name, number in pb.HandleKind.items()}
+    assert {m.name: m.value for m in HandleKind if m is not HandleKind.UNKNOWN} == wire_kinds
+
+    wire_types = {name.removeprefix("DATA_TYPE_"): number
+                  for name, number in pb.DataType.items()}
+    assert {m.name: m.value for m in DataType if m is not DataType.UNKNOWN} == wire_types
+
+
+def test_a_sink_answer_without_handle_or_type_is_inert_rather_than_fatal(
+    engine: FakeEngine,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+
+    source = builder.source("in")
+    builder.sink(source, "out")
+
+    # The sink's answer carried neither handle nor type; the call completed and the session lives.
+    grouped = builder.group_by_key(source)
+    assert grouped.kind is HandleKind.GROUPED_STREAM
     session.close()
 
 
