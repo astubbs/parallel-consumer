@@ -40,6 +40,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# shellcheck source=bin/lib/node-gate.sh
+source "${BASH_SOURCE[0]%/*}/lib/node-gate.sh" 2>/dev/null || source bin/lib/node-gate.sh
+
+# NECESSARY BUT NOT SUFFICIENT, which is the whole reason bin/lib/node-gate.sh exists: this answers
+# "is node installed", and a node that is installed can still die at startup. That case is
+# classified after the run, below.
 if ! command -v node >/dev/null 2>&1; then
     echo "ERROR: node not found - needed to reuse .github/scripts/file-ref-gate.js." >&2
     echo "The authoritative gate is the 'PR Checklist' workflow; this is the local mirror of it." >&2
@@ -69,6 +75,9 @@ case "${1:-}" in
         ;;
 esac
 
+# `set +e` so a non-zero node status reaches node_gate_verdict instead of exiting here with it -
+# which is precisely how a node that never started got reported as "dangling references found".
+set +e
 node <<'NODE'
 const fs = require("fs");
 const { execFileSync } = require("child_process");
@@ -126,3 +135,8 @@ if (dangling.length === 0) {
 console.error(gate.formatFailure(dangling));
 process.exit(1);
 NODE
+node_status=$?
+set -e
+
+node_gate_verdict "$node_status" ".github/scripts/file-ref-gate.js" || exit $?
+exit 0
