@@ -41,15 +41,17 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
  * window between its own two reads.
  * <p>
  * <b>The forced race.</b> The shard map is replaced (production package setter, as
- * {@code ShardManagerTest.testAssignedQuickRevokeNPE} already does) with a double whose {@code containsKey} fires
- * the interfering mutation at the seam - and the mutation is the real production path, not a hand-rolled map
+ * {@code ShardManagerTest.testAssignedQuickRevokeNPE} already does) with a double that fires the interfering
+ * mutation from the sweep's first read of the armed key - and the mutation is the real production path, not a hand-rolled map
  * edit: {@link ShardManager#onSuccess} on the shard's last container, exactly what the control thread does when
  * that container's result arrives. One logical operation, two reads, the second contradicting the first.
  * <p>
- * <b>Expected state on master: {@link #revokeSweepMustSurviveAShardRemovedBetweenItsTwoReads} is RED</b> (the
- * NPE is the defect under test; this branch carries reproductions, not fixes). The control test - the identical
- * mutation fired <em>before</em> the sweep instead of between the reads - is green, so the failure is the
- * interleaving's, not the fixture's.
+ * <b>Before the fix, {@link #revokeSweepMustSurviveAShardRemovedBetweenItsTwoReads} was RED</b> - the NPE was the
+ * defect under test, reproduced deterministically on the hunt branch {@code test/torn-read-candidates-reproduction}
+ * before the fix existed. The control test - the identical mutation fired <em>before</em> the sweep instead of
+ * against its read - is green either way, so a failure is the interleaving's, not the fixture's. With
+ * {@code removeWorkFromShardFor} on the single-read idiom, both are green and this file is the fix's regression
+ * test.
  *
  * @author Antony Stubbs
  */
@@ -68,9 +70,14 @@ class ShardManagerRevokeSweepNpeTest {
     final ShardManager<String, String> sm = wm.getSm();
 
     /**
-     * A shard map that fires an interfering mutation from inside {@code containsKey} - the instant between the
-     * revoke sweep's two reads. Tracks firing in an explicit {@code raceFired} boolean: a cleared armed-flag
-     * cannot tell "armed, then fired" from "never armed", so the guard would pass on a test that forgot to arm.
+     * A shard map that fires an interfering mutation from inside the sweep's first read of the armed key -
+     * {@code containsKey} on the original check-then-get code (the instant between its two reads), or {@code get}
+     * on the fixed single-read code (the instant immediately after the one read, whose returned reference the
+     * sweep must then tolerate operating on). Firing on whichever read comes first keeps the seam live across the
+     * fix: the defective code still tears (containsKey true, then get null), while the fixed code must survive
+     * the same removal landing against its single read. Tracks firing in an explicit {@code raceFired} boolean: a
+     * cleared armed-flag cannot tell "armed, then fired" from "never armed", so the guard would pass on a test
+     * that forgot to arm.
      */
     static class RacingShardMap extends ConcurrentHashMap<ShardKey, ProcessingShard<String, String>> {
         private transient Runnable interference;
@@ -90,11 +97,26 @@ class ShardManagerRevokeSweepNpeTest {
         public boolean containsKey(Object key) {
             boolean present = super.containsKey(key);
             if (present && armedKey != null && armedKey.equals(key)) {
-                armedKey = null;
-                raceFired = true;
-                interference.run();
+                fire();
             }
             return present;
+        }
+
+        @Override
+        public ProcessingShard<String, String> get(Object key) {
+            // read first, then fire: the interference models a removal landing AFTER this read completes, so the
+            // caller is handed the pre-removal reference and must cope with the map having moved on
+            ProcessingShard<String, String> shard = super.get(key);
+            if (shard != null && armedKey != null && armedKey.equals(key)) {
+                fire();
+            }
+            return shard;
+        }
+
+        private void fire() {
+            armedKey = null;
+            raceFired = true;
+            interference.run();
         }
     }
 

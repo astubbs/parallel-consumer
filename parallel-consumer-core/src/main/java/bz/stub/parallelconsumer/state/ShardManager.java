@@ -158,10 +158,12 @@ public class ShardManager<K, V> {
     private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
         ShardKey shardKey = computeShardKey(consumerRecord);
 
-        if (processingShards.containsKey(shardKey)) {
+        // single read - a check-then-get pair here tears against removeShardIfEmpty racing on the control thread
+        // (KEY ordering removes empty shards), NPE-ing out of the rebalance listener into consumer.poll
+        Optional<ProcessingShard<K, V>> shardOpt = getShard(shardKey);
+        if (shardOpt.isPresent()) {
             // remove the work
-            ProcessingShard<K, V> shard = processingShards.get(shardKey);
-            WorkContainer<K, V> removedWC = shard.remove(consumerRecord.offset());
+            WorkContainer<K, V> removedWC = shardOpt.get().remove(consumerRecord.offset());
 
             // remove if in retry queue
             // check null to avoid race condition
@@ -172,6 +174,7 @@ public class ShardManager<K, V> {
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
         } else {
+            // covers both already-removed (confluentinc#757) and removed-while-sweeping
             log.trace("Shard referenced by WC: {} with shard key: {} already removed", consumerRecord, shardKey);
         }
 
