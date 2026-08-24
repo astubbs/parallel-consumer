@@ -47,7 +47,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # shellcheck source=bin/lib/node-gate.sh
-source "${BASH_SOURCE[0]%/*}/lib/node-gate.sh" 2>/dev/null || source bin/lib/node-gate.sh
+source "${BASH_SOURCE[0]%/*}/lib/node-gate.sh" 2>/dev/null \
+    || source bin/lib/node-gate.sh 2>/dev/null \
+    || { echo "ERROR: cannot load bin/lib/node-gate.sh - the helper that classifies node's exit." >&2
+         echo "       This is NOT a finding. Nothing was checked." >&2
+         exit 2; }
 
 # NECESSARY BUT NOT SUFFICIENT, which is the whole reason bin/lib/node-gate.sh exists: this answers
 # "is node installed", and a node that is installed can still die at startup. That case is

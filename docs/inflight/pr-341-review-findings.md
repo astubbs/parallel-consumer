@@ -55,19 +55,3 @@ GitHub artefact and was not edited here.
 `sed -i`, `date -d`, `awk -v`, `\b` in grep, plus this PR's six sites and the `xargs` one above. The
 identical "probe, never fall back" reasoning is now repeated near-verbatim in three files.
 `bin/AGENTS.md` has the precedent: the SIGPIPE class got a named write-up and a CI guard.
-
-## The node gates' `source` line reintroduces the class it fixes
-
-`bin/lib/node-gate.sh` is sourced as:
-
-    source "${BASH_SOURCE[0]%/*}/lib/node-gate.sh" 2>/dev/null || source bin/lib/node-gate.sh
-
-Under `set -e`, if both attempts fail the script exits with `source`'s status, **1** - which both
-gates reserve for "violations found". Measured by moving the lib aside: `bin/check-issue-refs.sh`
-and `bin/check-file-refs.sh` both exit 1, reporting a policy violation because a helper was
-missing. That is the same defect one level up, and it is the objection astubbs#341's body raises
-against `bin/lib/` in the first place.
-
-Low reachability - the lib is tracked, and both callers `cd` to the repo root before sourcing, so
-the fallback resolves in any normal checkout. The fix is one line, `|| { echo ...; exit 2; }`, and
-it wants a self-test case in the style of the existing `check_cannot_run` ones.

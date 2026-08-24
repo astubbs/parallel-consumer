@@ -179,6 +179,28 @@ echo "See #857 for details" > docs/note.md # issue-refs: exempt - fixture
 git add docs/note.md
 check_cannot_run "dirty tree: a gate that could not run is still 'cannot run', not a finding"
 
+
+# --- the verdict helper itself is unreadable -------------------------------------------------------
+# The same fault one level up. `source` returns 1 for a file it cannot read, and under `set -e` that
+# becomes THIS script's exit status - 1, its code for "unqualified refs found". So a missing helper
+# accused the tree of exactly the thing the helper exists to stop being misreported. Measured, not
+# reasoned: before the fix this exited 1 with no message of its own.
+mv bin/lib/node-gate.sh "$TMP/node-gate.sh.away"
+out="$(env -u NODE_OPTIONS bash bin/check-issue-refs.sh master 2>&1)"
+got=$?
+mv "$TMP/node-gate.sh.away" bin/lib/node-gate.sh
+helper_ok=1
+[ "$got" = 2 ] || helper_ok=0
+case "$out" in *"node-gate.sh"*) ;; *) helper_ok=0 ;; esac
+case "$out" in *"NOT a finding"*) ;; *) helper_ok=0 ;; esac
+if [ "$helper_ok" = 1 ]; then
+    echo "ok:   an unreadable verdict helper is 'cannot run', never a violation"
+else
+    echo "FAIL: unreadable verdict helper (expected exit 2 naming the helper, got $got)"
+    echo "$out" | sed 's/^/      /'
+    fails=$((fails + 1))
+fi
+
 if [ "$fails" -gt 0 ]; then
     echo "$fails case(s) failed"
     exit 1
