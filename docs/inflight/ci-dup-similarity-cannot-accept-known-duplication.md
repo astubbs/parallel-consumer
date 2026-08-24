@@ -10,11 +10,15 @@ baseline, no glob. `ignore_directories` is the only exclusion and it takes direc
 ## Why that is a defect rather than a missing nicety
 
 Its only baseline is **the base branch, computed live**. So identical files are accepted or rejected
-purely by which side of a merge they sit on. Concretely, on astubbs/parallel-consumer#326: the four
-existing `TestConventionsArchTest` wrappers (core, vertx, reactor, mutiny) are ~84% similar to each
-other on master and the check is green, because they are not an *increase*. The three identical
-wrappers that PR adds for the example modules fail at 84.3%. Same files, same similarity, opposite
-verdicts.
+purely by which side of a merge they sit on.
+
+<!-- post-merge: checked-begin -->
+The worked example: when astubbs/parallel-consumer#326 added `TestConventionsArchTest` wrappers to
+three example modules, they failed at 84.3% while the four already on master (core, vertx, reactor,
+mutiny) passed at ~84% - because those four were not an *increase*. Same files, same similarity,
+opposite verdicts. Once astubbs#326 landed, its three joined the baseline and stopped being flagged,
+which is the whole problem: nothing about the code changed, only which side of the merge it sat on.
+<!-- post-merge: checked-end -->
 
 ArchUnit opts a module in **only** through its own two-line wrapper pointing `@AnalyzeClasses` at
 that module's packages, so every wrapper in the repo is near-identical by construction. There is no
@@ -22,6 +26,7 @@ way to write one that is not. This recurs on **every new module**.
 
 ## Why the obvious workarounds are all wrong
 
+<!-- post-merge: checked -->
 - **Exclude the example modules** - tried on astubbs#326 and reverted. Each wrapper shares its
   directory with that module's real app test (`CoreAppTest`, `VertxAppTest`, `ReactorAppTest`), and
   those five example apps solve the same problem five ways, so they are the *most* likely place for
