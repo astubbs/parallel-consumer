@@ -21,8 +21,24 @@
 > relative with no anchor, so on any workload that degrades gracefully the target walks upward
 > indefinitely. That is the difficulty the owner reports having hit repeatedly when first attempting
 > this, years before this attempt - it is the hard part of the problem domain, not a defect
-> introduced here, and it is why measuring throughput (which the controller currently never does) is
-> the next move rather than a refinement.
+> introduced here.
+>
+> **Two plans now carry dimension one's remaining work, deliberately split** (2026-08-24). They were
+> drafted as one change and the shape did not survive review, because stopping the climb and knowing
+> where to stop are separable problems:
+>
+> - [`docs/plans/2026-08-24-001-feat-admission-ratchet-plan.md`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md)
+>   - **implementation-ready.** Kills the ratchet by excluding samples taken while the engine was
+>     starved rather than saturated, and by making the latency baseline falsifiable instead of
+>     self-referential. Reports ordering starvation on the way. Adds no operator-facing parameter.
+> - [`docs/plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md`](../plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md)
+>   - **requirements-only on purpose.** Answers *what is the controller optimising* - elasticity
+>     against a threshold, with a latency number as a ceiling and never a target - but carries
+>     seventeen unresolved questions and is gated on the measurement nobody has taken yet, whether
+>     the controller helps at all.
+>
+> The order matters and is the finding worth carrying: **an objective is what makes the controller
+> useful; it is not what stops it climbing.**
 
 
 The ask is astubbs#227 (mirror of confluentinc#21): stop making users pick `maxConcurrency` -
