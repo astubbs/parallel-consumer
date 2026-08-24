@@ -18,6 +18,11 @@ findings and its deferred-capability table; what is here is only the ranking of 
 EOS is deliberately absent: it is optional in Kafka Streams, and a release that never supports it is
 still a release.
 
+How each proved dimension gets tested in every binding rather than only in Python is a separate
+question with its own note -
+[`test-cross-binding-streams-conformance.md`](test-cross-binding-streams-conformance.md) **owns
+it**.
+
 ## Proved
 
 The host defines the topology; the engine calls the host per record (stateless); the engine calls

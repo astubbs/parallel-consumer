@@ -34,7 +34,7 @@ The instinct is right and the scaling problem is real. Four things break the lit
   re-entrancy problem in
   [`streams-coupling-dimensions.md`](streams-coupling-dimensions.md), generalised to every type.
 
-## What survives, and is worth building
+## The design that works: reflect the SCENARIO, not the API
 
 **Reflect the scenario, not the API.** A DSL test is almost always *given this topology and these
 inputs, assert these outputs* - which is data, not a call trace. Write the conformance case once,
@@ -55,6 +55,42 @@ fuzzer over the boundary, it needs no per-feature test authoring at all, and it 
 the class of bug that had to be hand-caught during the join work - two same-typed arguments
 transposed, which compiles, runs, and returns a plausible wrong answer. The generator is the cost,
 and the supported grammar is small enough to make it tractable.
+
+### The four parts, stated once
+
+1. **A conformance case is data, not code.** Topology description, input records, expected outputs,
+   and the expected foreign-call log - what crossed the boundary, in what order, with which
+   arguments. Nothing in it is language-specific.
+2. **`TopologyTestDriver` is the oracle.** The expected outputs are *recorded* by running the spec
+   through plain Java Kafka Streams, never hand-written. Kafka Streams stays the source of truth
+   about what a topology does; we only assert that a binding reproduces it.
+3. **Each language contributes a driver, not a suite.** One small program per binding that reads a
+   spec and issues the calls. Adding a language costs a driver; adding a feature costs one spec,
+   once, for every language at the same time.
+4. **Differential testing sits beside it, not instead of it.** Generate topologies from the
+   supported DSL grammar, run each natively and through the binding, assert identical output. It
+   needs no per-feature authoring at all.
+
+## Earmarked: this is a product feature, not only an engineering convenience
+
+**Owner's direction, 2026-08-25.** When the bindings ship, the first honest question a reader asks
+is whether they are generated slop, and
+[`parked-testing-as-a-feature-for-the-clients.md`](parked-testing-as-a-feature-for-the-clients.md)
+**owns that requirement** for the proxy clients - one suite, one set of scenarios, run identically
+against every language, stated in the documentation as a feature. The Streams binding inherits it,
+and the oracle above makes a *stronger* claim available than the proxy clients can make: the
+expected results are not ours at all, they are Apache Kafka's own engine's, recorded.
+
+Three extractions to make from this when it is built, and they are different audiences:
+
+- **Architecture documentation** - the conformance mechanism itself: spec-as-data, recorded oracle,
+  per-language driver. This is a reusable pattern, not a Streams detail.
+- **User-facing documentation** - the trust answer. "Every binding runs the same scenarios, and the
+  expected output was produced by Kafka Streams itself" is a checkable claim, and checkable claims
+  are what the docs corpus and its gate exist to hold.
+- **Promotional material** - the differential-testing arm is the vivid one: random topologies,
+  native versus binding, byte-identical output. It demonstrates the wrap-rather-than-reimplement
+  bet in one sentence and one picture.
 
 ## The reframe worth arguing about first
 
