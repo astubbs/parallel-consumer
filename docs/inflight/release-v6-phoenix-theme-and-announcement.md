@@ -292,3 +292,65 @@ without its key distribution, per-record delay and concurrency setting.
   clients are announced on throughput grounds.
 - **Nothing here says what it is like to USE.** Every point is a capability or a number. A release post
   with no code in it is a specification, not an announcement.
+
+## The claims decision - 2026-08-24, proposed for the owner to ratify
+
+The re-take is done, the withdrawals are recorded above, and the question left by the measurement
+work is what v6 actually says about performance. This section settles it, claim by claim. Nothing
+here is public until the owner ratifies it; the experimental-status rule above still governs.
+
+**1. No throughput headline. The shipped default did not get faster, and the announcement does not
+imply it did.** `core` against `core` on 0.5.3.3 is 0.96-1.04x across fourteen cells including the
+previously published operating point. The release leads with capability - concurrency beyond
+partition count, in nine languages, with self-tuning - not with speed. This is also what
+[`landing-page.yaml`](../data/landing-page.yaml) already decided for the website: no number in the
+hero.
+
+**2. The one throughput sentence that survives, with its conditions welded on:** *"an opt-in
+virtual-thread engine (JDK 21+) reaches up to 1.5x the default engine's throughput - at high
+configured concurrency (thousands in flight) with short handlers; at partition-count concurrency it
+is neutral or slightly slower."* Both halves are measured
+([`realistic-throughput-matrix.csv`](../../bench/results/realistic-throughput-matrix.csv)). The
+second half ships with the first or the first does not ship.
+
+**3. P2's "the engine reaches the concurrency you configure" is true only as a conditional.** It
+holds under `UNORDERED`, and under `KEY` when keys are well distributed. On a Zipf distribution the
+same engine sustains 1-2 records in flight of a configured 24 - because that is what ordering
+*means* under skew, not because the engine is broken. The claim is stated as: virtual threads
+removed the *engine's* ceiling (the platform-thread activation limit, `min(maxConcurrency, r x
+handler_latency)`); your key distribution sets the ceiling that remains. Stated that way it is both
+true and more credible than the unconditioned version.
+
+**4. The characterisation work is itself the claim.** No competing library publishes what ordering
+costs. v6 can: `KEY` under realistic skew costs 3.1x against `UNORDERED`; a 1% failure rate costs
+ordered arms 40-44% where a 101x latency tail costs 3-6%; `PARTITION` on a narrow buffer starves to
+2-6 in flight of 24. Publishing these against ourselves - with the harness that took them - is the
+positioning: our numbers carry their conditions, which is precisely what makes the rest of them
+believable. This gives the blog a performance *section* that needs no headline multiplier.
+
+**5. Latency is claimed as observability, not speed.** Residence time (O3) is the first latency
+measurement the project has had. The claim is "you can now see how long a record spends inside PC,
+retries included" - not any millisecond figure, since every figure taken so far is
+workload-specific.
+
+**6. No share-groups number, in either direction, while the 5.9x inter-broker variance stands.**
+The comparison appears only qualitatively, per the rewritten `STRATEGY.md`: what survives Share
+Groups is per-key ordering, getting ahead of your own batch, old brokers, and retry policy in your
+own code. If the variance is explained before ship, this decision can be revisited; it is not a
+blocker for the announcement because the announcement does not depend on it.
+
+**7. P5's "~13% of a bare consumer" does not ship as-is.** It is a narrow-workload figure
+(all-distinct keys, `UNORDERED`). Either it is re-taken on the realistic matrix before publication,
+or the overhead question is answered qualitatively. An overhead claim that collapses under someone
+else's re-measurement is worse than no overhead claim.
+
+**8. P4's "fastest configuration measured" keeps the preview label and gains its operating point.**
+`core-dpvt` wins only where `core-vt` wins, and it is the most failure-sensitive arm measured
+(loses 51% to a 1% failure rate - unattributed). "Fastest" without those qualifiers is the P1
+mistake again.
+
+What this leaves for the announcement's performance story, in one line each: the engine's own
+ceiling is gone (conditional, stated with its law); one conditioned 1.5x for the opt-in engine; a
+characterisation section that no rival can copy without doing the work; latency you can finally
+see. That is enough, and every sentence of it survives hostile re-measurement - which, per the
+rule at the top of this file, is the whole point.

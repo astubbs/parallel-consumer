@@ -91,3 +91,22 @@ is a narrower statement. See [`next-core-async-user-function.md`](next-core-asyn
 - **The `ExternalEngine` regression** ([`perf-throughput-regression-since-0-3.md`](perf-throughput-regression-since-0-3.md))
   becomes a release blocker under this framing rather than a curiosity: **it is a tax on the engines
   the documentation would now be steering people towards.**
+
+## 2026-08-24 addendum: two things happened since these figures were taken
+
+Written after the realistic-workload re-take; read before publishing anything above.
+
+1. **Virtual threads changed the comparison.** The table's core figure (19,577 at 2,751 of 5,000)
+   is the *platform-thread* core engine - the one the thread-ceiling law binds. `core-vt` reaches
+   configured concurrency without an async callee, so "use an async engine to escape the ceiling"
+   is no longer the only answer and the Vert.x ratio above overstates today's gap. Re-take the
+   table with `core-vt` as a third column before publishing. The law itself
+   (`min(maxConcurrency, r x handler_latency)`) is unchanged and is still the durable teaching
+   content; what changed is which engines it applies to.
+2. **The figures are all-distinct-key `UNORDERED` numbers and must say so.** Per the claims
+   decision in
+   [`release-v6-phoenix-theme-and-announcement.md`](release-v6-phoenix-theme-and-announcement.md)
+   and [`landing-page.yaml`](../data/landing-page.yaml)'s rule, no figure publishes without key
+   distribution, per-record delay and concurrency setting. Under Zipf keys with `KEY` ordering the
+   key distribution, not the engine, is the binding ceiling - the engine choice this note argues
+   for stops mattering long before 5,000 in flight.
