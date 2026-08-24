@@ -14,8 +14,9 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** State what the controller must do - what makes the target rise, what makes it fall,
-  what makes it hold, and how each of those decisions can be proven wrong - and derive the mechanism
-  from that, rather than patching the arm list inherited from the Gradient2 port.
+  what makes it hold, what forces it to re-measure from the floor - and how each of those decisions
+  can be proven wrong - and derive the mechanism from that, rather than patching the arm list
+  inherited from the Gradient2 port.
 - **Why this exists:** Three planning attempts failed review, and all of their fatal findings share a
   root. Each proposed removing a mechanism whose reason for existing was a property of *this engine*,
   and each was designing around code that was already committed. Nothing here is shipped; the
@@ -54,12 +55,17 @@ did.
 
 ### Finding 2: throughput is already measured. The objective's cost estimate was wrong.
 
-`ClosedAdmissionWindow#totalOutcomeCount()` returns `successCount + ignoreCount + overloadDropCount`,
-fed per record from `handleFutureResult` on the control thread. Over a bounded window that is a
-completion count, and completions over elapsed time is throughput. The objective plan asserted the
-controller "never measures throughput at all" and priced it as a new signal. It is one division away,
-and it needs the window's *actual* elapsed time rather than its nominal 1s, because windows drift
-(`windowOpenedAt = now` at tick time, so an idle consumer produces one 4-second window and restarts).
+`ClosedAdmissionWindow` already counts outcomes per window, fed per record from `handleFutureResult`
+on the control thread - and the objective's throughput is **useful completions per actual elapsed
+time: `successCount`, never `totalOutcomeCount()`**. The distinction is load-bearing for phase 4 of
+the comparison test: rate-limit rejections *are* completions (they land in the ignore or
+overload-drop counters), so a total-outcome rate stays high exactly when useful throughput collapses
+- the one thing a throughput objective exists to see. `IGNORE` and `OVERLOAD_DROP` outcomes are
+excluded from the numerator precisely so fast rejections read as a collapse rather than as sustained
+completion rate. The objective plan asserted the controller "never measures throughput at all" and
+priced it as a new signal. It is one division away, and it needs the window's *actual* elapsed time
+rather than its nominal 1s, because windows drift (`windowOpenedAt = now` at tick time, so an idle
+consumer produces one 4-second window and restarts).
 
 The objective was deferred largely on cost. That reason is gone.
 
@@ -87,7 +93,7 @@ pool of 16**. Above 16:
 3. measured latency therefore does not degrade as the target climbs;
 4. the gradient never sees degradation and the additive headroom wins another slot every window.
 
-That is a ratchet generator with no feedback at all, sitting in the shipped ceiling default. It is
+That is a ratchet generator with no feedback at all, sitting in the committed ceiling default. It is
 also the defect the very first review round flagged as *"the effective maximum collides with pool
 sizing"*; the plan carried a fix and the implementation took the ceiling substitution without the
 pool resize.
@@ -162,11 +168,12 @@ perturbation.
 
 What survives from that list and must still be answered: the elasticity denominator (blocker 2 -
 commanded target or achieved in-flight, and they diverge exactly when it matters), the window-series
-gaps (blocker 7), rebalance reseeding (blocker 8), and the whole product surface (15-17).
+gaps (blocker 7), rebalance reseeding (blocker 8), fleet behaviour (blocker 14), and the whole
+product surface (15-17).
 
 ---
 
-## Rise, fall, hold
+## Rise, fall, hold, escape
 
 ### RISE
 
@@ -210,6 +217,12 @@ three signals already exist and are unused by admission:
 Together these separate the three cases the current window aggregates cannot: the topic is empty; the
 shards are ordering-blocked; we throttled our own intake. The third is self-inflicted and must never
 be read as evidence of anything.
+
+**And the separation is reported, not only consumed.** Each of the three cases reaches the operator
+through the constraint gauge - including an ordering-starved value, which is the requirement
+`pr-333-adaptive-concurrency-outstanding.md` item 3 opened (*the single most valuable diagnosis
+available*) and which a law that only uses these signals internally would leave exactly as unmet as
+it is today.
 
 ### FALL
 
@@ -274,9 +287,18 @@ engine is auto-scaling, how a concurrency ceiling gets honoured - platform pool,
 pool at all - is the engine's business, not a number the user should be nominating.
 
 That reframe dissolves the open-loop defect instead of patching it. **The controller sizes the pool to
-its own target**: `ThreadPoolExecutor#setCorePoolSize` is documented as safe at runtime, and shrinking
-it lets surplus threads terminate as they next go idle - which is exactly the drain-down behaviour a
-contraction wants. Then:
+its own target, and the mechanism's full contract is:** construct the pool with `maximumPoolSize` at
+the resolved ceiling, and have the controller track its target with `corePoolSize` as the single live
+knob. Both halves are load-bearing. `setCorePoolSize` above `maximumPoolSize` throws
+`IllegalArgumentException` (JDK 9+), and today the pool is built `core == max == maxConcurrency` - so
+steering `corePoolSize` alone against the current construction throws at the first step above 16 in
+exactly the default configuration this section flags. And under the unbounded work queue,
+`maximumPoolSize` is inert for thread creation (workers beyond core are only added when the queue
+rejects an offer, which an unbounded queue never does), so setting it to the ceiling at construction
+reserves nothing - it does not reintroduce the rejected size-once-from-ceiling cost. The shrink half
+holds as stated: lowering `corePoolSize` interrupts idle workers, and with a zero keep-alive the
+surplus threads exit as the queue empties - exactly the drain-down behaviour a contraction wants.
+Then:
 
 - the target **is** concurrency rather than a feeding rate, so the loop is closed at every value
   instead of only below the pool size;
@@ -526,6 +548,12 @@ of the four phases.
 7. **The product surface** (blockers 15-17) - the parameter cannot honestly be documented as a
    promised utilisation fraction, and a new tunable with no symptom-keyed decision rule becomes
    folklore.
+8. **The tolerated steady-state cost that fixes `q` - a product decision, not a tuning constant.**
+   The RISE section derives that `q` sets the throughput a healthy workload permanently gives up for
+   adaptivity, and the phase-1 *match within tolerance* band is the same number seen from the test
+   side - the figure any published claim will be attacked on. Deriving them from one stated choice
+   keeps the law's constant and the claim's overhead figure from diverging; leaving it unowned means
+   whoever implements first defaults it silently.
 
 ## Sources
 
