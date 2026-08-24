@@ -178,7 +178,7 @@ it. None of the Python-native stream processors has a `describe()`, so none of t
 which makes it the clearest single artifact of the wrap-rather-than-reimplement argument.
 
 **Rendering it, and why we cannot simply embed one of those tools, is its own note:**
-[`next-topology-rendering-and-web-ui.md`](next-topology-rendering-and-web-ui.md). Short version -
+[`topology-rendering-and-web-ui.md`](topology-rendering-and-web-ui.md). Short version -
 two of them declare no licence at all and one is GPL-3.0, so pointing users at them is free and
 vendoring them is not.
 

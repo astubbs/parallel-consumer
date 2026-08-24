@@ -85,6 +85,22 @@ records cross per hop. Axis 5 is how many records the user's function is handed 
 differ: a wave already carries several records over the wire while each is processed and reported
 individually.
 
+**And there are two batch APIs, not one - they must not inherit each other's answer.** The two
+products this project puts across the boundary have different contracts, so "add batching" means
+something different in each:
+
+| | Parallel Consumer clients | The Kafka Streams wrapper |
+|---|---|---|
+| What core already does | **Core's API is batch-shaped already** - `poll` hands the user a context of records, and a batch size of one is the degenerate case | **Kafka Streams is record-at-a-time by contract.** An operator receives one record and returns one value |
+| So batching means | Widen the existing client surface to mirror the shape core already chose | **Buffering at the operator**, which changes what the operator means |
+| Difficulty | An API-shape correction, already understood | A semantic change, and not obviously legal for a stateful operator |
+| Owned by | [`inflight/next-batching-modes-for-clients.md`](inflight/next-batching-modes-for-clients.md) | Nobody yet |
+
+The PC side is the easier of the two and the one with a decision already written down. The Streams
+side has no owner and should not be assumed to follow: a stateless `mapValues` can buffer safely,
+while anything stateful cannot without redefining the operator. Whoever picks up batching must say
+which of the two they mean in the first sentence.
+
 ## The unresolved collision, and it is the important part of this document
 
 **Axis 3's cheapest win directly contradicts a guarantee this project has already committed to.**
