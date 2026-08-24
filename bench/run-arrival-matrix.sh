@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # The tail-experiment protocol, automated - because the 2026-08-22 matrix (84 rows in
 # arrival-tail-skew-matrix.csv) was driven by hand and the method existed only in the note that
 # described it. This script IS the method:
