@@ -18,6 +18,14 @@
 
 set -uo pipefail
 
+# EVERY case below controls NODE_OPTIONS explicitly - `env -u` where it wants a real verdict, `env
+# NODE_OPTIONS=...` where it is deliberately breaking node. Inheriting it makes this suite fail for
+# a reason that has nothing to do with the gate: on a machine whose ambient NODE_OPTIONS carries a
+# stale `--require`, every verdict case becomes "cannot run" and the suite reports failures that
+# read as a broken gate. That is not hypothetical - it happened while this fix was being reviewed,
+# 8 cases going red on an unrelated environment fault. Which is the same misreading the gate under
+# test exists to prevent, one level up: the harness has to be immune to the condition it asserts on.
+
 REPO_ROOT="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
 
 TMP="$(mktemp -d)"
@@ -50,7 +58,7 @@ mkdir -p docs
 fails=0
 check() { # <name> <expected-exit> <must-contain> [must-not-contain]
     local name=$1 want=$2 must=$3 mustnot=${4:-} out got
-    out="$(bash bin/check-issue-refs.sh master 2>&1)"
+    out="$(env -u NODE_OPTIONS bash bin/check-issue-refs.sh master 2>&1)"
     got=$?
     if [ "$got" != "$want" ]; then
         echo "FAIL: $name (expected exit $want, got $got)"
@@ -116,7 +124,7 @@ check "clean diff and clean body pass, and the success line says the body was ch
 # must cover all four, and the assertion must include the LEAD line: tail -3 passed for months
 # while provably cutting the very sentence the trailer exists to deliver.
 export GH_STUB_JSON='{"number":42,"body":"This fixes #858 for good."}' # issue-refs: exempt - fixture
-out="$(bash bin/check-issue-refs.sh master 2>&1 | tail -4)"
+out="$(env -u NODE_OPTIONS bash bin/check-issue-refs.sh master 2>&1 | tail -4)"
 tail_ok=1
 case "$out" in *"Fix: qualify each ref"*) ;; *) tail_ok=0 ;; esac
 case "$out" in *"issue-refs: N/A"*) ;; *) tail_ok=0 ;; esac
@@ -141,7 +149,7 @@ broken_preload="$TMP/nodepreflight-deleted-by-the-harness.cjs"   # deliberately 
 
 check_cannot_run() { # <name>
     local name=$1 out got
-    out="$(NODE_OPTIONS="--require=$broken_preload" bash bin/check-issue-refs.sh master 2>&1)"
+    out="$(env NODE_OPTIONS="--require=$broken_preload" bash bin/check-issue-refs.sh master 2>&1)"
     got=$?
     if [ "$got" != 2 ]; then
         echo "FAIL: $name (expected exit 2, got $got)"
