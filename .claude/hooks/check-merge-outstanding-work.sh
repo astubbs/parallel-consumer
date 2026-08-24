@@ -149,10 +149,16 @@ now="$(date +%s)"
 # still exiting 0, so every caller silently read "no mtime". Branch on the platform rather than
 # falling back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the filesystem,
 # so a blind `-c || -f` fallback would hand back a wrong answer instead of no answer.
+#
+# `|| true` IS LOAD-BEARING, not tidiness: this script runs under `set -e`, and `mtime="$(_mtime ...)"`
+# takes the substitution's status, so a failing stat killed the hook AT that line - never reaching the
+# fail-closed branch below, and exiting non-zero, which PreToolUse reads as a non-blocking error and
+# ALLOWS the merge. The fail-closed arm was unreachable until this was here. `_mtime` therefore never
+# fails: it prints the mtime, or nothing.
 if stat -c %Y . >/dev/null 2>&1; then
-    _mtime() { stat -c %Y "$1" 2>/dev/null; }      # GNU coreutils
+    _mtime() { stat -c %Y "$1" 2>/dev/null || true; }      # GNU coreutils
 else
-    _mtime() { stat -f %m "$1" 2>/dev/null; }      # BSD / macOS
+    _mtime() { stat -f %m "$1" 2>/dev/null || true; }      # BSD / macOS
 fi
 
 live_tasks=""

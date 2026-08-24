@@ -567,6 +567,44 @@ rm -f docs/inflight/pr-90001-selftest.md
 touch -t 200109090146 "$ow_tasks/agent-live.output"
 expect ALLOW "a task that stopped writing long ago does not block"         'gh pr merge 31 --rebase'
 
+# BOTH ARMS OF THE MTIME READ, plus the one that cannot be reached with a working stat.
+#
+# CI is Linux, so the BSD arm shipped unexecuted, and the fail-closed arm is unreachable on any
+# platform with a functioning stat - a file `find` has just listed can always be dated. A stub
+# `stat` earlier on PATH forces each in turn, which is the only way to assert here what the fix
+# claims: that the BSD arm reads the FILE's mtime and not the filesystem's, and that a file the
+# guard cannot date counts as live. Same file, same command throughout - only stat changes.
+real_stat="$(command -v stat)"
+stub_bin="$TMP/stub-stat"; mkdir -p "$stub_bin"
+saved_path="$PATH"
+
+# A BSD stat: rejects -c, answers `-f %m <file>`. If the hook fell back blindly from -c to -f
+# instead of probing, real Linux stat would ACCEPT -f as --file-system and answer about the mount,
+# so the stale file below would read as live and this case would go red.
+cat > "$stub_bin/stat" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+    -c) exit 1 ;;                        # BSD stat has no -c
+    -f) exec "$real_stat" -c %Y "\$3" ;; # -f %m <file>  ->  the file's mtime
+esac
+exit 1
+STUB
+chmod +x "$stub_bin/stat"
+PATH="$stub_bin:$PATH"
+expect ALLOW "BSD stat: a long-stale task still does not block"            'gh pr merge 31 --rebase'
+printf 'still writing\n' > "$ow_tasks/agent-live.output"
+expect DENY  "BSD stat: a task still writing is still caught"              'gh pr merge 31 --rebase'
+
+# A stat that answers nothing. The file matched the session's tasks glob, so something is there;
+# being unable to date it is not evidence that nothing is running. Red against the pre-fix code,
+# which skipped the file and allowed the merge - the macOS behaviour this branch exists to fix.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$stub_bin/stat"
+chmod +x "$stub_bin/stat"
+touch -t 200109090146 "$ow_tasks/agent-live.output"
+expect DENY  "an undateable task file is assumed LIVE, not stale"          'gh pr merge 31 --rebase'
+PATH="$saved_path"
+expect ALLOW "the same stale file, with stat working, does not block"      'gh pr merge 31 --rebase'
+
 # Fail-open paths. A guard that blocks on its own bug jams the tool call shut.
 printf 'still writing\n' > "$ow_tasks/agent-live.output"
 export CLAUDE_CODE_SESSION_ID=""
