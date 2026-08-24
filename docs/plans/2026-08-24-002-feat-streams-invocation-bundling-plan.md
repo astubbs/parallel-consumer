@@ -9,6 +9,13 @@ created: 2026-08-24
 
 # feat(streams): bundle foreign invocations without giving up per-record outcomes
 
+> **PARKED 2026-08-24. Do not execute this plan.** It optimises a proof of concept that has not yet
+> proved the concept, and its review left two P0s in it: `StateStore.flush()` runs *after* the
+> commit rather than before, and `forward()` is illegal from a flush hook - both verified against
+> Kafka 3.9.2 sources. See
+> [`../inflight/perf-streams-crossing-optimisation.md`](../inflight/perf-streams-crossing-optimisation.md)
+> for what is parked, what the review found, and what reopens it.
+
 **This plan covers the Kafka Streams wrapper only.** The Parallel Consumer clients are explicitly
 out of scope, and the reason is that they already solved this: KTD10 of
 [`2026-08-14-001-feat-language-proxy-plan.md`](2026-08-14-001-feat-language-proxy-plan.md) decided
