@@ -538,7 +538,7 @@ expect DENY  "the override token AFTER the command is not a prefix"        'gh p
 # THE PR'S OWN INFLIGHT NOTE, surfaced at merge. A note recording what is still open is written so
 # the items are not forgotten and is then read by nobody at the moment it could still change the
 # outcome. These cases prove the arm fires, quotes the right part, and stays out of the way otherwise.
-touch -d '@1000000000' "$ow_tasks/agent-live.output"   # nothing in flight, so only the note arm can fire
+touch -t 200109090146 "$ow_tasks/agent-live.output"   # nothing in flight, so only the note arm can fire
 mkdir -p docs/inflight
 cat > docs/inflight/pr-90001-selftest.md <<'NOTE'
 # astubbs#90001 - self-test fixture
@@ -564,7 +564,7 @@ assert "the Already-fixed section is NOT quoted" stopped "$got"
 rm -f docs/inflight/pr-90001-selftest.md
 
 # Stale task file == nothing in flight. Proves the window is load-bearing rather than "any file".
-touch -d '@1000000000' "$ow_tasks/agent-live.output"
+touch -t 200109090146 "$ow_tasks/agent-live.output"
 expect ALLOW "a task that stopped writing long ago does not block"         'gh pr merge 31 --rebase'
 
 # Fail-open paths. A guard that blocks on its own bug jams the tool call shut.
