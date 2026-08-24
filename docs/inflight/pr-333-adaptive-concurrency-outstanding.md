@@ -17,6 +17,30 @@ Its sibling `AdaptiveConcurrencyClosedLoopIT` closes the next gap - a handler wh
 function of the concurrency the controller chose, so the loop is actually closed - and that is where
 item 2 below came from.
 
+## Status, 2026-08-24: items 0 to 3 are now planned, and the plans own the detail
+
+Four of these have moved from *open question* to *planned work*, and the plans below are now the
+authority on how - what is kept here is why each item exists and what it costs, which the plans
+assume rather than restate.
+
+- **Items 1, 2 and 3** - the probe cycling, the ratchet, and the missing starvation report - are
+  [`docs/plans/2026-08-24-001-feat-admission-ratchet-plan.md`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md),
+  which is implementation-ready. It carries no new operator parameter.
+- **Item 0** - what the controller optimises - is
+  [`docs/plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md`](../plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md),
+  deliberately **requirements-only**. Its design is settled (elasticity against a threshold, `r=3`,
+  power from throughput and in-flight rather than latency, a latency number as a ceiling and never a
+  target); it carries seventeen questions that must be answered before it can be planned, and it is
+  gated on item 4.
+
+**The split is itself a finding worth keeping.** The two were planned as one change. A five-reviewer
+pass returned forty-seven findings, and the shape did not survive: the objective arm had nowhere to
+sit among the law's six existing arms, and its proof passed when the controller never acted. Four
+reviewers independently reached the same restructuring - which the draft had already conceded in its
+own problem frame, that the ratchet is killed by excluding starved samples and by making the baseline
+falsifiable, both orthogonal to the objective. **An objective is what makes the controller useful; it
+is not what stops it climbing.**
+
 ## 0. What is the controller actually optimising? (unanswered, and it is upstream of the ratchet)
 
 Raised by the owner, 2026-08-23, as the thing that was hardest to model when first thinking about
