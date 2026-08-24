@@ -9,9 +9,12 @@ what prompted it).
 
 ## Open measurement and investigation
 
-1. **The ~30% throughput regression since 0.3.0.2 - A RELEASE GATE THE OWNER SET (2026-08-20)** and
-   untouched since the bisect that found it. The question is whether it can be recovered before v6,
-   or explained as the price of correctness (the first cliff is a correctness fix).
+1. **The ~30% throughput regression since 0.3.0.2 - A RELEASE GATE THE OWNER SET (2026-08-20).**
+   ANSWERED WITH THE GOOD ANSWER 2026-08-24: the fix is built on `fix/external-engine-pipeline-buffer`
+   (local, awaiting the owner's word to push/PR) - ExternalEngine's shortfall-only request target
+   deleted so every async engine inherits core's pipelined target. Proven-red unit test, and a
+   one-term controlled bench: +23% on the Vert.x arm at 100k records (the note's 350k experiment
+   read +34%), peak in-flight exactly 100 in both arms. What remains is review and merge.
    [`perf-throughput-regression-since-0-3.md`](perf-throughput-regression-since-0-3.md).
 2. **Async-engine latency sweep** - harness fixed and smoke-verified on `perf/engine-concurrency`
    (the arms now feed the arrival barrier's counter); the full sweep was interrupted by the operator
