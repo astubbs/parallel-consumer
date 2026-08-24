@@ -342,9 +342,34 @@ emit_deferred
 emit "# Dated plans and investigations"
     emit ""
     emit "\`docs/plans/\` - the method that settled a question of this shape before:"
-plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
+# Both extensions: the unified plan contract allows an artifact to be .md OR .html, so a bare
+# -name '*.md' silently hides every HTML plan. Extension stripped then de-duplicated, because a plan
+# converted between formats can leave both files behind and listing it twice reads as two plans.
+plans=$(find docs/plans -type f \( -name '*.md' -o -name '*.html' \) 2>/dev/null \
+    | sed -E 's#^docs/plans/##; s#\.(md|html)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
 emit "${plans:-(none)}"
 emit ""
+
+# Ideation documents - the ranked directions, the REJECTION TABLE and the prior-art autopsies behind
+# a piece of work. They were invisible here until 2026-08-24 on two counts at once: this directory
+# was never scanned, and every artifact in it is .html while the scans above matched only .md. The
+# cost was not hypothetical - the adaptive-concurrency design was drafted, committed and offered for
+# review having cited this directory's throttling document without opening it, and the document
+# already held three API constraints that design violated and one decision it contradicted.
+#
+# The rejection table is the specific reason this block exists. Ideas rejected WITH REASONS are the
+# cheapest prior art in the repo and the least likely to be found, because nothing links to a
+# rejected idea and no symptom search returns one - you rediscover it by proposing it again.
+ideation=$(find docs/ideation -type f \( -name '*.html' -o -name '*.md' \) 2>/dev/null \
+    | sed -E 's#^docs/ideation/##; s#\.(html|md)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
+if [ -n "$ideation" ]; then
+    emit "# Ideation: ranked directions, and what was already REJECTED and why"
+    emit ""
+    emit "\`docs/ideation/\` - read the one covering your area BEFORE designing, not after. These are"
+    emit "\`.html\`; open the file, do not infer its contents from a note that summarises it:"
+    emit "${ideation}"
+    emit ""
+fi
 
 # Point-in-time audits of tests that do not run, do not assert, or were never written. Easy to miss
 # precisely because nothing goes red to tell you - which is why AGENTS.md says to read the newest
