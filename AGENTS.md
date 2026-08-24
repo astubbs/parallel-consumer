@@ -473,6 +473,16 @@ Nothing lints commit messages, so all of this is on you.
   the issue-reference gate reads the body too, and a bare number below the threshold fails it. Both
   forms are equally understood by `dependencies-action` (`partialLinkRegex`), so nothing is lost.
 
+- **A rung in a stack has to earn its PR.** A branch carrying only a document does not need one
+  unless somebody must review that document *separately from the work it describes* - and if the
+  answer is "whoever picks the work up will read it", that is not separately. astubbs#332 was a
+  branch and a draft PR for a single 118-line design note, and the cost was not cosmetic: two PRs
+  of shipped, tested code stacked above it and were gated by the dependency rule behind a draft
+  whose own first paragraph said three decisions were open and not to start. Neither of them
+  referenced its subject; the stacking was chronology, not dependency. Fold the document into the
+  PR whose work it belongs to, and keep the rung for work that a reviewer can actually accept or
+  reject on its own.
+
 ## Worktree ownership
 
 **Never do any work in the main checkout. Every task gets a worktree.** The main clone at the repo
