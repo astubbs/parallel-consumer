@@ -4,9 +4,9 @@ package bz.stub.parallelconsumer.streams;
  */
 
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
-import com.github.bsideup.jabel.Desugar;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
+import com.github.bsideup.jabel.Desugar;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
@@ -104,7 +104,7 @@ public class TopologyAssembler {
         requireNotBuilt("count");
         require(storeName != null && !storeName.isEmpty(), "count names no store");
         KGroupedStream<byte[], byte[]> upstream = resolve(
-                handle, HandleKind.HANDLE_KIND_GROUPED_STREAM, "count", "grouped stream");
+                handle, HandleKind.HANDLE_KIND_GROUPED_STREAM, "count");
         return mint(upstream.count(Materialized.<byte[], Long>as(Stores.inMemoryKeyValueStore(storeName))
                 .withKeySerde(Serdes.ByteArray())
                 .withValueSerde(Serdes.Long())), TABLE_OF_LONGS);
@@ -194,14 +194,14 @@ public class TopologyAssembler {
 
     /** The commonest resolution: an operator that consumes a stream of bytes. */
     private KStream<byte[], byte[]> resolveStream(long handle, String method) {
-        return resolve(handle, HandleKind.HANDLE_KIND_STREAM, method, "stream");
+        return resolve(handle, HandleKind.HANDLE_KIND_STREAM, method);
     }
 
     /**
      * Resolves a handle to its node, refusing by the RECORDED kind in protocol vocabulary. The kind is the single
      * source of truth here; the cast that follows is safe because every mint records the kind of the node it stored.
      */
-    private <T> T resolve(long handle, HandleKind expected, String method, String expectedName) {
+    private <T> T resolve(long handle, HandleKind expected, String method) {
         Minted minted = handles.get(handle);
         if (minted == null) {
             throw unknownHandle(handle, method);
@@ -209,7 +209,7 @@ public class TopologyAssembler {
         if (minted.type().getKind() != expected) {
             throw new TopologyDescriptionException(method + " cannot be applied to handle " + handle
                     + ": it names a " + kindName(minted.type().getKind())
-                    + ", and " + method + " needs a " + expectedName);
+                    + ", and " + method + " needs a " + kindName(expected));
         }
         @SuppressWarnings("unchecked")
         T node = (T) minted.node();
