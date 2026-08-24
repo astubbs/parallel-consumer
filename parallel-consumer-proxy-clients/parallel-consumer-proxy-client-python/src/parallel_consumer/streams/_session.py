@@ -24,6 +24,14 @@ log = logging.getLogger(__name__)
 #: A per-record function: (key, value) -> value. Bytes in, bytes out; this side owns serialization.
 RecordFunction = Callable[[bytes, bytes], bytes]
 
+#: A combining function: (aggregate, value) -> aggregate. Mirrors Kafka's ``Reducer<V>`` exactly -
+#: two
+#: values in, one out, and no key, because Kafka does not give a reducer one. Distinct from
+#: :data:`RecordFunction` despite the identical shape: its first argument is the STORED aggregate,
+#: not a
+#: key, and confusing the two silently produces a plausible wrong answer.
+ReducerFunction = Callable[[bytes, bytes], bytes]
+
 
 class HandleKind(enum.IntEnum):
     """What a handle names on the engine side. Mirrors the wire's ``HandleKind`` values exactly.
@@ -185,6 +193,20 @@ class TopologyBuilder:
         return self._session._call(
             pb.BuilderCall(count=pb.Count(handle=handle, store_name=store_name)))
 
+    def reduce(self, handle: int, function: ReducerFunction, store_name: str) -> Handle:
+        """Combine each key's values with a function that runs here, in this process.
+
+        The sibling of :meth:`count`, and the more interesting one. ``count`` is computed
+        entirely by the engine and this process never sees the state. ``reduce`` sends the
+        STORED aggregate out to this process on every value after a key's first, combines it
+        here, and stores what comes back - so engine state is computed by local code.
+
+        The returned handle carries bytes, not longs: a reduction preserves the value type.
+        """
+        token = self._session.register(function, reducer=True)
+        return self._session._call(pb.BuilderCall(
+            reduce=pb.Reduce(handle=handle, function_token=token, store_name=store_name)))
+
     def sink(self, handle: int, topic: str) -> None:
         self._session._call(pb.BuilderCall(sink=pb.Sink(handle=handle, topic=topic)))
 
@@ -199,7 +221,7 @@ class StreamsSession:
 
     def __init__(self, transport: StreamsTransport) -> None:
         self._transport = transport
-        self._functions: dict[int, RecordFunction] = {}
+        self._functions: dict[int, tuple[bool, RecordFunction]] = {}
         self._tokens = itertools.count(1)
         self._call_ids = itertools.count(1)
         self._pending: dict[int, threading.Event] = {}
@@ -266,10 +288,10 @@ class StreamsSession:
 
     # ---- function registry -------------------------------------------------------
 
-    def register(self, function: RecordFunction) -> int:
+    def register(self, function: RecordFunction, *, reducer: bool = False) -> int:
         """Registers a function under a token. The token crosses; the function never does."""
         token = next(self._tokens)
-        self._functions[token] = function
+        self._functions[token] = (reducer, function)
         self._transport.send(pb.StreamsClientMessage(
             register_function=pb.RegisterFunction(
                 token=token, description=getattr(function, "__name__", ""))))
@@ -324,14 +346,34 @@ class StreamsSession:
             waiting.set()
 
     def _on_invocation(self, invocation: pb.Invocation) -> None:
-        function = self._functions.get(invocation.function_token)
-        if function is None:
+        registered = self._functions.get(invocation.function_token)
+        if registered is None:
             self._answer(
                 invocation.correlation,
                 error=f"no function registered under token {invocation.function_token}")
             return
+        is_reducer, function = registered
+
+        # The engine says which shape this is by whether an aggregate is present, and this side says
+        # so
+        # by how the function was registered. Checking BOTH is deliberate: a mismatch means one side
+        # is
+        # confused about the topology, and calling anyway would hand a reducer a key - or a mapper
+        # an
+        # aggregate - and return a plausible wrong answer that nothing downstream could detect.
+        has_aggregate = invocation.HasField("aggregate")
+        if has_aggregate != is_reducer:
+            expected = "a reduction" if is_reducer else "a mapping"
+            arrived = "an aggregate" if has_aggregate else "no aggregate"
+            self._answer(
+                invocation.correlation,
+                error=f"token {invocation.function_token} was registered as {expected}, "
+                      f"but the invocation carried {arrived}")
+            return
+
         try:
-            value = function(invocation.key, invocation.value)
+            first = invocation.aggregate if is_reducer else invocation.key
+            value = function(first, invocation.value)
         except Exception as failed:
             self._answer(invocation.correlation, error=repr(failed))
             return

@@ -92,20 +92,22 @@ class Ready(_message.Message):
     def __init__(self, application_id: _Optional[str] = ...) -> None: ...
 
 class BuilderCall(_message.Message):
-    __slots__ = ("call_id", "source", "map_values", "group_by_key", "count", "sink")
+    __slots__ = ("call_id", "source", "map_values", "group_by_key", "count", "sink", "reduce")
     CALL_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     MAP_VALUES_FIELD_NUMBER: _ClassVar[int]
     GROUP_BY_KEY_FIELD_NUMBER: _ClassVar[int]
     COUNT_FIELD_NUMBER: _ClassVar[int]
     SINK_FIELD_NUMBER: _ClassVar[int]
+    REDUCE_FIELD_NUMBER: _ClassVar[int]
     call_id: int
     source: Source
     map_values: MapValues
     group_by_key: GroupByKey
     count: Count
     sink: Sink
-    def __init__(self, call_id: _Optional[int] = ..., source: _Optional[_Union[Source, _Mapping]] = ..., map_values: _Optional[_Union[MapValues, _Mapping]] = ..., group_by_key: _Optional[_Union[GroupByKey, _Mapping]] = ..., count: _Optional[_Union[Count, _Mapping]] = ..., sink: _Optional[_Union[Sink, _Mapping]] = ...) -> None: ...
+    reduce: Reduce
+    def __init__(self, call_id: _Optional[int] = ..., source: _Optional[_Union[Source, _Mapping]] = ..., map_values: _Optional[_Union[MapValues, _Mapping]] = ..., group_by_key: _Optional[_Union[GroupByKey, _Mapping]] = ..., count: _Optional[_Union[Count, _Mapping]] = ..., sink: _Optional[_Union[Sink, _Mapping]] = ..., reduce: _Optional[_Union[Reduce, _Mapping]] = ...) -> None: ...
 
 class Source(_message.Message):
     __slots__ = ("topic",)
@@ -134,6 +136,16 @@ class Count(_message.Message):
     handle: int
     store_name: str
     def __init__(self, handle: _Optional[int] = ..., store_name: _Optional[str] = ...) -> None: ...
+
+class Reduce(_message.Message):
+    __slots__ = ("handle", "function_token", "store_name")
+    HANDLE_FIELD_NUMBER: _ClassVar[int]
+    FUNCTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    STORE_NAME_FIELD_NUMBER: _ClassVar[int]
+    handle: int
+    function_token: int
+    store_name: str
+    def __init__(self, handle: _Optional[int] = ..., function_token: _Optional[int] = ..., store_name: _Optional[str] = ...) -> None: ...
 
 class Sink(_message.Message):
     __slots__ = ("handle", "topic")
@@ -216,16 +228,18 @@ class Node(_message.Message):
     def __init__(self, name: _Optional[str] = ..., predecessors: _Optional[_Iterable[str]] = ..., successors: _Optional[_Iterable[str]] = ..., kind: _Optional[_Union[NodeKind, str]] = ..., topics: _Optional[_Iterable[str]] = ..., stores: _Optional[_Iterable[str]] = ..., topic_pattern: _Optional[str] = ...) -> None: ...
 
 class Invocation(_message.Message):
-    __slots__ = ("correlation", "function_token", "key", "value")
+    __slots__ = ("correlation", "function_token", "key", "value", "aggregate")
     CORRELATION_FIELD_NUMBER: _ClassVar[int]
     FUNCTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
+    AGGREGATE_FIELD_NUMBER: _ClassVar[int]
     correlation: int
     function_token: int
     key: bytes
     value: bytes
-    def __init__(self, correlation: _Optional[int] = ..., function_token: _Optional[int] = ..., key: _Optional[bytes] = ..., value: _Optional[bytes] = ...) -> None: ...
+    aggregate: bytes
+    def __init__(self, correlation: _Optional[int] = ..., function_token: _Optional[int] = ..., key: _Optional[bytes] = ..., value: _Optional[bytes] = ..., aggregate: _Optional[bytes] = ...) -> None: ...
 
 class InvocationResult(_message.Message):
     __slots__ = ("correlation", "value", "error")

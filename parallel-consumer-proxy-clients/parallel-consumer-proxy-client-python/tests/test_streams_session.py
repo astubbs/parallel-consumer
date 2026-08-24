@@ -116,6 +116,12 @@ class FakeEngine:
         self._answer_bare = True
 
     # -- test seam: make the engine ask for a record to be mapped --
+    def reduce_invoke(self, correlation: int, token: int, aggregate: bytes, value: bytes) -> None:
+        """A reduction: an aggregate is present and no key travels, as the engine sends it."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, aggregate=aggregate, value=value)))
+
     def invoke(self, correlation: int, token: int, key: bytes, value: bytes) -> None:
         self._outbound.put(pb.StreamsServerMessage(
             invocation=pb.Invocation(
@@ -520,3 +526,77 @@ def test_a_fault_releases_a_describe_waiter_rather_than_letting_it_time_out() ->
     # as a failure here rather than as a slow suite.
     with pytest.raises(StreamsError, match="the engine gave up"):
         session.describe(timeout=3.0)
+
+
+def test_a_reducer_is_called_with_the_stored_aggregate(engine: FakeEngine) -> None:
+    """The aggregate is the reducer's first argument - not the key, which does not travel at all."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    seen: list[tuple[bytes, bytes]] = []
+
+    def combine(aggregate: bytes, value: bytes) -> bytes:
+        seen.append((aggregate, value))
+        return aggregate + value
+
+    token = session.register(combine, reducer=True)
+    engine.reduce_invoke(1, token, b"running", b"next")
+
+    result = engine.await_client_message("invocation_result")
+    assert seen == [(b"running", b"next")]
+    assert result.invocation_result.value == b"runningnext"
+
+
+def test_a_mapping_sent_to_a_reducer_is_refused_rather_than_guessed(engine: FakeEngine) -> None:
+    """A shape mismatch means one side is confused about the topology.
+
+    Calling anyway would hand the reducer a KEY where it expects an aggregate, and since both are
+    opaque bytes the answer would be plausible and wrong - the worst available outcome, because
+    nothing downstream could detect it.
+    """
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    called = False
+
+    def combine(aggregate: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return aggregate
+
+    token = session.register(combine, reducer=True)
+    engine.invoke(1, token, b"a-key", b"a-value")   # a MAPPING - no aggregate
+
+    result = engine.await_client_message("invocation_result")
+    assert not called, "the reducer must not be called with a key standing in for an aggregate"
+    assert "registered as a reduction" in result.invocation_result.error
+
+
+def test_a_reduction_sent_to_a_mapper_is_refused_too(engine: FakeEngine) -> None:
+    """The other direction, so the guard is not one-sided."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    called = False
+
+    def transform(key: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return value
+
+    token = session.register(transform)
+    engine.reduce_invoke(1, token, b"agg", b"val")
+
+    result = engine.await_client_message("invocation_result")
+    assert not called
+    assert "registered as a mapping" in result.invocation_result.error
+
+
+def test_the_builder_issues_a_reduce_naming_its_store(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+    grouped = builder.group_by_key(builder.source("in"))
+    builder.reduce(grouped, lambda a, v: a + v, "reduced-store")
+
+    call = engine.await_client_message("builder_call")
+    assert call.builder_call.WhichOneof("call") == "reduce"
+    assert call.builder_call.reduce.store_name == "reduced-store"
+    assert call.builder_call.reduce.handle == grouped
