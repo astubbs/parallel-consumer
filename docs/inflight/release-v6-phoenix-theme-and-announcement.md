@@ -272,8 +272,13 @@ without its key distribution, per-record delay and concurrency setting.
 
 ## Known gaps in this list
 
-- **The head-of-line latency number does not exist** (K4). It is the strongest argument available and
-  is currently an argument rather than a measurement.
+- ~~**The head-of-line latency number does not exist** (K4).~~ **Measured 2026-08-24** - see
+  [`bench/results/streams-model-head-of-line.csv`](../../bench/results/streams-model-head-of-line.csv):
+  on a tailed handler with distinct keys, the Kafka Streams threading model (partition-serial)
+  amplifies e2e p99 from ~630ms to ~940ms as utilisation rises (p999 ~1.3s), while PC's `KEY`
+  ordering holds at the handler's own 505ms tail at every load measured. Under Zipf skew both
+  degrade (PC ~1,200 vs partition-serial ~1,724 at 90%) - the K4 claim is strongest on
+  well-distributed keys, and should be stated with that condition.
 - ~~**P1's ~1.75x needs re-taking** at 100,000 records across several partitions before publication.~~
   **Done 2026-08-23, and the claim is withdrawn** - see the note under the performance table. The
   shipped default is at parity with 0.5.3.3 in all ten cells measured; the best opt-in arm reaches

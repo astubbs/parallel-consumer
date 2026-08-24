@@ -42,6 +42,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.*;
  *   Bench produce  <bootstrap> <topic> <count>
  *   Bench vanilla  <bootstrap> <topic> <count> <delayMs>
  *   Bench pool     <bootstrap> <topic> <count> <delayMs> <concurrency>
+ *   Bench streams  <bootstrap> <topic> <count> <delayMs>
  *   Bench core     <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
  *   Bench <engine> <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
  *
@@ -104,7 +105,7 @@ public class Bench {
         // expected count, and it would do so as a timeout, which reads as a slow arm. Said out loud
         // rather than silently skipped: a configured axis that does nothing is exactly what this
         // harness has already published once.
-        if (FAILURE_RATE > 0 && ("vanilla".equals(mode) || "pool".equals(mode))) {
+        if (FAILURE_RATE > 0 && ("vanilla".equals(mode) || "pool".equals(mode) || "streams".equals(mode))) {
             System.err.println("NOTE: BENCH_FAILURE_RATE is not applied to the '" + mode + "' arm - it has "
                     + "no retry mechanism, so a failed record would never complete and the run would "
                     + "time out rather than measure anything");
@@ -129,6 +130,8 @@ public class Bench {
             ms = runVanilla(bootstrap, topic, count);
         } else if ("pool".equals(mode)) {
             ms = runPool(bootstrap, topic, count, delayMs, concurrency);
+        } else if ("streams".equals(mode)) {
+            ms = runStreamsModel(bootstrap, topic, count, delayMs);
         } else if ("core".equals(mode)) {
             ms = runCore(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         } else {
@@ -619,6 +622,55 @@ public class Bench {
         long took = System.currentTimeMillis() - start;
         windowClosed();
         pool.shutdownNow();
+        return took;
+    }
+
+    /**
+     * THE KAFKA STREAMS THREADING MODEL, as a floor: a plain consumer with one single-thread executor per
+     * partition, so records within a partition run strictly serially and in order - which is what a Streams
+     * topology gives a stateless task, and exactly the head-of-line blocking Parallel Consumer's KEY ordering
+     * exists to escape. NO ENGINE: no retries, no offset tracking beyond the plain consumer's own, and the
+     * configured concurrency argument is ignored - this arm's concurrency IS the partition count.
+     * <p>
+     * Deliberately polls ahead without backpressure (Streams buffers per task too, {@code
+     * buffered.records.per.partition}); under controlled arrival the queue a lane accumulates IS the
+     * head-of-line cost being measured - a tailed record delays every record behind it in its partition, and
+     * the e2e columns price exactly that. {@code polledAt} is captured per poll batch, so residence for a
+     * lane-queued record includes its wait behind the slow one, matching what PC's residence would charge.
+     */
+    static long runStreamsModel(String bootstrap, String topic, int expected, int delayMs) throws Exception {
+        Map<Integer, ExecutorService> perPartition = new HashMap<>();
+        AtomicInteger done = new AtomicInteger();
+        int submitted = 0;
+        long start;
+        try (KafkaConsumer<String, String> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
+            c.subscribe(Collections.singletonList(topic));
+            start = System.currentTimeMillis();
+            runStartMs = start;
+            while (submitted < expected) {
+                ConsumerRecords<String, String> polled = c.poll(Duration.ofSeconds(1));
+                // See runVanilla: poll-return is this arm's arrival instant, matching PC's.
+                long polledAt = System.currentTimeMillis();
+                for (org.apache.kafka.clients.consumer.ConsumerRecord<String, String> record : polled) {
+                    if (submitted >= expected) break;
+                    submitted++;
+                    ExecutorService lane = perPartition.computeIfAbsent(record.partition(),
+                            p -> Executors.newSingleThreadExecutor());
+                    lane.submit(() -> {
+                        int now = inFlight.incrementAndGet();
+                        peakInFlight.accumulateAndGet(now, Math::max);
+                        sleep(workDelayMs(delayMs));
+                        inFlight.decrementAndGet();
+                        recordCompletion(polledAt, record.value());
+                        done.incrementAndGet();
+                    });
+                }
+            }
+            while (done.get() < expected) sleep(5);
+        }
+        long took = System.currentTimeMillis() - start;
+        windowClosed();
+        for (ExecutorService lane : perPartition.values()) lane.shutdownNow();
         return took;
     }
 
