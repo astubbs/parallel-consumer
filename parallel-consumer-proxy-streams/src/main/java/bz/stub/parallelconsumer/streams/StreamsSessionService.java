@@ -115,17 +115,22 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                     .build());
         }
 
+        /**
+         * Performs one builder call and answers it. A minting call's answer carries the handle AND what it is -
+         * the type recorded at the mint; a non-minting call (sink) is answered with neither field, so the wire has
+         * exactly one presence signal for "a handle was minted". gRPC serialises this stream's inbound callbacks,
+         * so the mint and the type lookup that follows are call-scoped - no other builder call can interleave.
+         */
         private void onBuilderCall(BuilderCall call) {
-            long handle = switch (call.getCallCase()) {
-                case SOURCE -> assembler.source(call.getSource().getTopic());
-                case MAP_VALUES -> assembler.mapValues(
-                        call.getMapValues().getHandle(), call.getMapValues().getFunctionToken());
-                case GROUP_BY_KEY -> assembler.groupByKey(call.getGroupByKey().getHandle());
-                case COUNT -> assembler.count(call.getCount().getHandle(), call.getCount().getStoreName());
-                case SINK -> {
-                    assembler.sink(call.getSink().getHandle(), call.getSink().getTopic());
-                    yield 0L;
-                }
+            HandleAssigned.Builder answer = HandleAssigned.newBuilder().setCallId(call.getCallId());
+            switch (call.getCallCase()) {
+                case SOURCE -> answerMint(answer, assembler.source(call.getSource().getTopic()));
+                case MAP_VALUES -> answerMint(answer, assembler.mapValues(
+                        call.getMapValues().getHandle(), call.getMapValues().getFunctionToken()));
+                case GROUP_BY_KEY -> answerMint(answer, assembler.groupByKey(call.getGroupByKey().getHandle()));
+                case COUNT -> answerMint(answer,
+                        assembler.count(call.getCount().getHandle(), call.getCount().getStoreName()));
+                case SINK -> assembler.sink(call.getSink().getHandle(), call.getSink().getTopic());
                 // The five-method set is the contract. A sixth is the increment that tests whether the wire
                 // generalises, and until it exists the refusal has to name what was asked for.
                 case CALL_NOT_SET -> throw new TopologyDescriptionException(
@@ -133,10 +138,12 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                 default -> throw new TopologyDescriptionException(
                         "builder call " + call.getCallId() + " names " + call.getCallCase()
                                 + ", which is outside this engine's five-method set");
-            };
-            send(StreamsServerMessage.newBuilder()
-                    .setHandleAssigned(HandleAssigned.newBuilder().setCallId(call.getCallId()).setHandle(handle))
-                    .build());
+            }
+            send(StreamsServerMessage.newBuilder().setHandleAssigned(answer).build());
+        }
+
+        private void answerMint(HandleAssigned.Builder answer, long handle) {
+            answer.setHandle(handle).setType(assembler.typeOf(handle));
         }
 
         /**
