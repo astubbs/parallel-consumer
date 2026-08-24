@@ -169,6 +169,13 @@ aggregations, reduces and joins all mint typed values, and either the wire says 
 carries or every one of them becomes another special case. **This is the next real design question**,
 and it is more pressing than any of the deferred operators.
 
+**Answered 2026-08-24: the wire now says what a handle carries.** Every mint records its kind and
+key/value types, `HandleAssigned` delivers them, the sink selects its serde from the record (the
+special case is gone, and a type with no serde is refused by name rather than written as bytes),
+and a Python handle decodes its own sink values - `handle.value_type.decode(raw)`. The design and
+its decisions, including why the type is an enum and what a parameterised type would take, are in
+`docs/plans/2026-08-24-001-feat-streams-typed-handles-plan.md`.
+
 ### Describing the topology turned out to be the cheapest real feature
 
 Added as U9 after the PoC. One request, one answer, and the answer carries the text
@@ -190,7 +197,7 @@ Each of these was deliberately out of scope. This is what the run says they woul
 |---|---|
 | **A sixth builder method (scalar args)** | Nothing structural - one more member of the `BuilderCall` `oneof`. |
 | **Operators taking behaviour** (serdes, comparators, joiners) | The function-token pattern again, generalised beyond `RecordFunction`. Proven mechanism, real design step. |
-| **Typed handles** | A type tag on `HandleAssigned`, so the host knows what a handle carries and the sink stops special-casing `Long`. Prerequisite for aggregations. Still open - U9's Describe reports the assembled graph, not the type a handle carries. |
+| **Typed handles** | **Landed 2026-08-24.** `HandleAssigned` carries a `HandleType` (kind + key/value `DataType`), the engine selects the sink serde from the recorded type (the `Long` special case is deleted), and the Python client's handles expose the type and decode by it. Describe still reports the assembled graph, deliberately - the type travels at mint time, which is when the host needs it. |
 | **Interactive queries** | New message types for get/range/scan over a named store. New surface, not a new mechanism - and unlike the rest it makes the host a *reader* of engine state, which nothing else here does. |
 | **Punctuators** | Cheap, as predicted. A scheduled callback is another work frame in the pull model; the invocation correlation already carries everything needed. |
 | **More than one foreign operator** | Nothing on the wire - tokens already distinguish functions. The open question is empirical, not structural: whether crossings multiply with operator count, which the 400us figure says would hurt. |
