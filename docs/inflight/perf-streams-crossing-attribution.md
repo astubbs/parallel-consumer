@@ -1,7 +1,7 @@
 # The Streams round trip attributed: the crossing is ~150us and essentially all of the marginal cost
 
-<!-- inflight-type: task -->
-<!-- inflight-impact: the C-transport-versus-batching decision was about to be costed against a number that is half warm-up; without this attribution, either lever could have been bought or dismissed against the wrong per-record prize -->
+<!-- inflight-type: register -->
+
 
 The Kafka Streams PoC on `research/kafka-streams-foreign-wrappers` (PR astubbs#334, umbrella
 astubbs#242) published a per-invocation round trip of roughly 400-450us and said, correctly, that

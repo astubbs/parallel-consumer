@@ -103,10 +103,26 @@ and a wake, plus a per-byte copy that bundling does not amortise at all. For the
 measured here the fixed part almost certainly dominates, but "almost certainly" is not a
 measurement.
 
-**So the next experiment for anyone taking this on is to split the 150us into its fixed and
-per-byte parts**, by sweeping payload size at a fixed record count. That single number decides
-whether bundling returns 50x or 5x, and it is cheap to get. Until then, claim an order of magnitude
-rather than two: even a conservative 10x turns the 15 cores above into 1.5.
+**MEASURED 2026-08-24, and the answer is "both, depending on payload":**
+[`perf-crossing-fixed-versus-per-byte.md`](perf-crossing-fixed-versus-per-byte.md). The crossing is
+**about 120us fixed plus ~6.5us per KB**. Below 1 KB there is no size dependence at all - the fitted
+slope is -0.09us/KB with an r2 of 0.00 - so a small record's crossing is entirely fixed cost, which
+is entirely what bundling amortises.
+
+| Record size | Crossing | Fixed share | Bundle of 100 | Gain |
+|---|---|---|---|---|
+| 16 B | 120us | 100% | 1.3us | 92x |
+| 1 KB | 126us | 95% | 7.7us | 16x |
+| 4 KB | 146us | 82% | 27.2us | 5x |
+| 16 KB | 224us | 54% | 105.2us | 2x |
+| 64 KB | 536us | 22% | 417.2us | 1x |
+
+So **bundling is transformative under a few KB and marginal above 16 KB**, where the per-byte copy
+dominates and only a zero-copy transport can remove it. A single headline figure would have been
+wrong for half the range, which is why the question was worth measuring rather than assuming.
+
+**The gains are upper bounds: bundle-assembly cost is not measured.** Grouping N records into one
+frame is not free, and whoever builds this should measure that before quoting these numbers.
 
 ## The cross-cutting view
 

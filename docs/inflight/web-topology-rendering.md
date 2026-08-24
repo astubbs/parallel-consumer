@@ -1,7 +1,7 @@
 # Next: render the topology, and where that view belongs
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: reach -->
+<!-- inflight-impact: blind-spot -->
 <!-- inflight-state: deferred - after the embedded dashboard lands -->
 
 The Kafka Streams PoC can already report a topology

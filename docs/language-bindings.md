@@ -68,6 +68,17 @@ both definitions.
 | Bundled / vectorized | **PySpark** (Arrow-batched UDFs), **Beam** (bundles) | Amortises the crossing over N records; coarsens failure granularity |
 | In-process, no IPC | **PyFlink thread mode** ([FLIP-206](https://cwiki.apache.org/confluence/display/FLINK/FLIP-206:+Support+PyFlink+Runtime+Execution+in+Thread+Mode), via PEMJA), **Bytewax** (Rust core + FFI) | Removes the IPC entirely; couples lifetimes and failure domains |
 
+**MEASURED 2026-08-24: the crossing is ~120us fixed plus ~6.5us/KB**
+([`inflight/perf-crossing-fixed-versus-per-byte.md`](inflight/perf-crossing-fixed-versus-per-byte.md)),
+so which lever wins is a property of the payload rather than of the design. Under a few KB the cost
+is essentially all fixed and bundling returns 16-92x. Above about 18 KB the per-byte copy overtakes
+it, and there only a zero-copy transport helps - bundling cannot touch that term at all.
+
+**A correction to what this document said earlier:** the two levers "compose". Arithmetically they
+do, but on small records whichever is built first eats most of the other's justification - once
+bundling has divided a 120us fixed cost by 100, a faster transport has almost nothing left to save.
+On large records they do not compete, because bundling never addresses the dominant term.
+
 **Both escape routes have been taken by someone larger, and neither of them picked one and
 stopped.** Flink kept process mode alongside thread mode, for isolation. That is the strongest hint
 available about the shape of the answer: **both, selectable**, rather than a choice.

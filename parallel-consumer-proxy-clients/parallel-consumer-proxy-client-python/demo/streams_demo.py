@@ -81,6 +81,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="max.poll.interval.ms for the engine's consumer; 0 leaves Kafka's "
                              "own default, and the failure arm lowers it so the failure it is "
                              "demonstrating fits inside a demo rather than five minutes")
+    parser.add_argument("--payload-bytes", type=int,
+                        default=int(os.environ.get("PC_DEMO_STREAMS_PAYLOAD_BYTES", "0")),
+                        help="pad each seeded record to this many bytes; 0 leaves the short "
+                             "default. Sweeping this separates the crossing's fixed cost from its "
+                             "per-byte cost, which decides whether bundling is worth building")
     parser.add_argument("--timeout", type=float,
                         default=float(os.environ.get("PC_DEMO_STREAMS_TIMEOUT", "120")),
                         help="seconds to wait for the counts to arrive (default 120)")
@@ -328,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     # window would measure when the backlog was produced, not when the engine processed it.
     ensure_topic(args.bootstrap, sink, args.partitions,
                  config={"message.timestamp.type": "LogAppendTime"})
-    seed(args.bootstrap, source, 0, args.records)
+    seed(args.bootstrap, source, 0, args.records, args.payload_bytes)
 
     delay = args.function_delay_ms / 1000.0
     invocations = 0
