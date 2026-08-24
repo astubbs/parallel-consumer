@@ -77,9 +77,14 @@ astubbs#335 was (the first became astubbs#336 on 2026-08-24):
 - **`bce044b3f` (astubbs#155) - the load-factor ceiling warning** shouts, and warns about a pinned
   buffer. CORRECTION 2026-08-24: astubbs#201 (`fix/155-load-factor-noise`) already fixes the same
   two defects - rate-limited warning plus the pinned/static-factor case - independently implemented.
-  Do NOT open a second PR; refresh astubbs#201 (rename sweep + master merge, its branch predates the
-  package rename) and graft this commit's additions onto it: the proven-red tests, the
-  demote-to-DEBUG-with-reasoning, and the @Isolated appender-interference lesson.
+  Do NOT open a second PR. DONE 2026-08-24: astubbs#201 was refreshed (it was already renamed by the
+  38-branch sweep; master merged in, 44 conflicts resolved, tests green). The graft turned out to be
+  EMPTY - astubbs#201 already had the rate limiter, the DEBUG demotion, @Isolated with the
+  appender-interference lesson, and a third fix bce044b3f lacks (reporting the threshold the check
+  actually compared). bce044b3f is a strict-subset reimplementation: when this branch merges master
+  after astubbs#201 lands, resolve DynamicLoadFactor / the pressure check toward astubbs#201's shape
+  (isStaticFactor/fixedAt) and drop this branch's PipelinePressureLoggingTest in favour of
+  LoadFactorCeilingReportingTest.
 
 Master-relevant records that should not wait for the stack: the PARTITION-starves-on-a-narrow-
 buffer bug note (a shipped-mode defect sighting), the shutdown-commit flake sighting astubbs#260
