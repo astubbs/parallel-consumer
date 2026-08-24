@@ -463,7 +463,9 @@ public class PartitionState<K, V> {
     /**
      * Next offset expected to be polled, upon freshly connecting to a broker.
      * <p>
-     * Defined as the offset, one below the highest sequentially succeeded offset.
+     * Defined as the offset one ABOVE the highest sequentially succeeded offset - Kafka commits the next
+     * offset to read, not the last one processed. This said "one below" until 2026-08-24, which is the
+     * opposite of what the return statement does.
      */
     // visible for testing
     protected long getOffsetToCommit() {
