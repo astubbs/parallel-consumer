@@ -40,6 +40,7 @@ None of these has an issue of its own - they were found by reading code to diagn
   that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
   `README.adoc` regenerated.
 
+<!-- post-merge: checked-begin -->
 - **astubbs#337** - fixes astubbs#121 (confluentinc#894), the offset-encode/commit dirty read.
   **Give this one a release note of its own, and say what it actually is.** The reported symptom is
   an `auto.offset.reset` under frequent rebalancing, and that is what the issue title says - but the
@@ -51,6 +52,7 @@ None of these has an issue of its own - they were found by reading code to diagn
   Mechanism, preconditions (it needs all four, so it is uncommon to trigger and persistent once
   triggered) and the evidence:
   [`docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md`](../solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md).
+<!-- post-merge: checked-end -->
 
 ## Breaking changes that have already landed
 
