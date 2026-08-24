@@ -145,11 +145,27 @@ print(verdict)
 [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || exit 0
 
 now="$(date +%s)"
+# PORTABLE MTIME. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and this returned nothing while
+# still exiting 0, so every caller silently read "no mtime". Branch on the platform rather than
+# falling back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the filesystem,
+# so a blind `-c || -f` fallback would hand back a wrong answer instead of no answer.
+if stat -c %Y . >/dev/null 2>&1; then
+    _mtime() { stat -c %Y "$1" 2>/dev/null; }      # GNU coreutils
+else
+    _mtime() { stat -f %m "$1" 2>/dev/null; }      # BSD / macOS
+fi
+
 live_tasks=""
 while IFS= read -r f; do
     [ -f "$f" ] || continue
-    mtime="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
-    [ "$mtime" -eq 0 ] && continue
+    mtime="$(_mtime "$f")"
+    # FAIL CLOSED. A file matched the session's tasks glob, so something is there; being unable to
+    # date it is not evidence that nothing is running. The old code skipped it, which is how this
+    # guard came to allow every merge on macOS.
+    if [ -z "$mtime" ]; then
+        live_tasks="${live_tasks}  - $(basename "$f" .output) (mtime unreadable - assuming live)"$'\n'
+        continue
+    fi
     age=$(( now - mtime ))
     if [ "$age" -lt "$WINDOW_SECONDS" ]; then
         live_tasks="${live_tasks}  - $(basename "$f" .output) (wrote ${age}s ago)"$'\n'

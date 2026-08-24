@@ -75,10 +75,20 @@ cd "$root" 2>/dev/null || exit 0
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || exit 0
 
+# PORTABLE MTIME. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and this returned nothing while
+# still exiting 0, so every caller silently read "no mtime". Branch on the platform rather than
+# falling back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the filesystem,
+# so a blind `-c || -f` fallback would hand back a wrong answer instead of no answer.
+if stat -c %Y . >/dev/null 2>&1; then
+    _mtime() { stat -c %Y "$1" 2>/dev/null; }      # GNU coreutils
+else
+    _mtime() { stat -f %m "$1" 2>/dev/null; }      # BSD / macOS
+fi
+
 # THROTTLE. Same branch, same hour, one reminder.
 stamp="${TMPDIR:-/tmp}/pc-push-reminder-$(printf '%s' "$branch" | tr '/' '_')"
 if [ -f "$stamp" ]; then
-    last="$(stat -c %Y "$stamp" 2>/dev/null || echo 0)"
+    last="$(_mtime "$stamp")"; last="${last:-0}"
     now="$(date +%s)"
     [ $(( now - last )) -lt "${INFLIGHT_PUSH_REMINDER_SECONDS:-3600}" ] && exit 0
 fi

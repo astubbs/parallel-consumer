@@ -76,11 +76,21 @@ fi
 
 # BACKGROUND WORK IN THIS SESSION, the same window check-merge-outstanding-work.sh uses.
 if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+# PORTABLE MTIME. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and this returned nothing while
+    # still exiting 0, so every caller silently read "no mtime". Branch on the platform rather than
+    # falling back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the filesystem,
+    # so a blind `-c || -f` fallback would hand back a wrong answer instead of no answer.
+    if stat -c %Y . >/dev/null 2>&1; then
+        _mtime() { stat -c %Y "$1" 2>/dev/null; }      # GNU coreutils
+    else
+        _mtime() { stat -f %m "$1" 2>/dev/null; }      # BSD / macOS
+    fi
     now=$(date +%s); live=0
     while IFS= read -r f; do
         [ -f "$f" ] || continue
-        m=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-        [ "$m" -eq 0 ] && continue
+        m=$(_mtime "$f")
+        # FAIL CLOSED - an undateable task file counts as live, same reasoning as the merge guard.
+        [ -z "$m" ] && { live=$((live + 1)); continue; }
         [ $(( now - m )) -lt 120 ] && live=$((live + 1))
     done < <(find "/tmp/claude-$(id -u)" -maxdepth 4 -path "*/${CLAUDE_CODE_SESSION_ID}/tasks/*.output" 2>/dev/null || true)
     [ "$live" -gt 0 ] && block "${live} background task(s) wrote in the last 2 minutes - work is still in flight"
