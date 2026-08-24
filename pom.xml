@@ -99,8 +99,9 @@
              NB overrides REPLACE the default list - include performance, chaos AND quarantined when
              excluding. `quarantined` = known-failing-on-master tests (see @Quarantined): out of the
              gating suites so green means mergeable, but still run by the non-gating CI lane
-             (bin/quarantined-test.sh). `lincheck` = scheduler-controlled concurrency tests: minutes per
-             class, and a model-checking run needs the -Plincheck JVM args, so it is opt-in like chaos. -->
+             (bin/quarantined-test.sh). `lincheck` = scheduler-controlled concurrency tests: seconds per
+             class at the committed bounds but superlinear in them, and a model-checking run needs the
+             -Plincheck JVM args, so it is opt-in like chaos. -->
         <included.groups></included.groups>
         <excluded.groups>performance,chaos,quarantined,lincheck</excluded.groups>
 

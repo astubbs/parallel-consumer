@@ -33,6 +33,13 @@ class QuarantinedAnnotationContractTest {
 
     private static final Path REPO_ROOT = RepoRoot.find();
 
+    /**
+     * The wrappers that GATE a merge. Each hardcodes its own group exclusions rather than inheriting the pom
+     * default, so each has to be read separately - see {@link #hardcodedExcludedGroups(String)}.
+     */
+    private static final List<String> GATING_SCRIPTS =
+            Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh");
+
     @Test
     void annotationIsMetaTaggedWithTheQuarantinedTag() {
         Tag tag = Quarantined.class.getAnnotation(Tag.class);
@@ -62,14 +69,10 @@ class QuarantinedAnnotationContractTest {
      */
     @Test
     void pomExcludesTheQuarantinedGroupFromDefaultSuites() throws IOException {
-        String pom = read(REPO_ROOT.resolve("pom.xml"));
-        String open = "<excluded.groups>";
-        int start = pom.indexOf(open);
-        assertWithMessage("root pom must declare a default excluded.groups").that(start).isAtLeast(0);
-        String excluded = pom.substring(start + open.length(), pom.indexOf("</excluded.groups>", start));
+        String excluded = pomDefaultExcludedGroups();
         assertWithMessage("root pom's default excluded.groups must contain the quarantine tag - " +
                 "otherwise quarantined tests run (and fail) in the gating suites. Found: " + excluded)
-                .that(Arrays.asList(excluded.split(","))).contains(Quarantined.TAG);
+                .that(groups(excluded)).contains(Quarantined.TAG);
     }
 
     /**
@@ -103,15 +106,11 @@ class QuarantinedAnnotationContractTest {
      */
     @Test
     void gatingCiScriptsExcludeTheQuarantinedGroup() throws IOException {
-        for (String script : Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh")) {
-            String body = read(REPO_ROOT.resolve(script));
-            String flag = "-Dexcluded.groups=";
-            int start = body.indexOf(flag);
-            assertWithMessage(script + " must pass an explicit -Dexcluded.groups").that(start).isAtLeast(0);
-            String value = body.substring(start + flag.length()).split("\\s")[0];
+        for (String script : GATING_SCRIPTS) {
+            String value = hardcodedExcludedGroups(script);
             assertWithMessage(script + " hardcodes its group exclusions (it does not inherit the pom " +
                     "default) and must exclude the quarantine tag. Found: " + value)
-                    .that(Arrays.asList(value.split(","))).contains(Quarantined.TAG);
+                    .that(groups(value)).contains(Quarantined.TAG);
         }
     }
 
@@ -123,20 +122,45 @@ class QuarantinedAnnotationContractTest {
      */
     @Test
     void gatingCiScriptsExcludeEveryGroupThePomDefaultExcludes() throws IOException {
-        String pom = read(REPO_ROOT.resolve("pom.xml"));
-        String open = "<excluded.groups>";
-        int pomStart = pom.indexOf(open);
-        List<String> pomGroups = Arrays.asList(
-                pom.substring(pomStart + open.length(), pom.indexOf("</excluded.groups>", pomStart)).split(","));
+        List<String> pomGroups = groups(pomDefaultExcludedGroups());
 
-        for (String script : Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh")) {
-            String body = read(REPO_ROOT.resolve(script));
-            String flag = "-Dexcluded.groups=";
-            String value = body.substring(body.indexOf(flag) + flag.length()).split("\\s")[0];
+        for (String script : GATING_SCRIPTS) {
+            String value = hardcodedExcludedGroups(script);
             assertWithMessage(script + " must exclude every group the pom default excludes, or that group " +
                     "runs in the GATING suite. Pom: " + pomGroups + " script: " + value)
-                    .that(Arrays.asList(value.split(","))).containsAtLeastElementsIn(pomGroups);
+                    .that(groups(value)).containsAtLeastElementsIn(pomGroups);
         }
+    }
+
+    /**
+     * The root pom's default {@code excluded.groups} value, verbatim.
+     * <p>
+     * Extracted rather than inlined at each of the two call sites because {@code indexOf} returns -1 on a
+     * miss and the slice arithmetic around it still lands in bounds: a copy that forgets the found-it
+     * assertion mis-parses silently instead of failing with a message. One copy, one guard.
+     */
+    private static String pomDefaultExcludedGroups() throws IOException {
+        String pom = read(REPO_ROOT.resolve("pom.xml"));
+        String open = "<excluded.groups>";
+        int start = pom.indexOf(open);
+        assertWithMessage("root pom must declare a default excluded.groups").that(start).isAtLeast(0);
+        return pom.substring(start + open.length(), pom.indexOf("</excluded.groups>", start));
+    }
+
+    /**
+     * The {@code -Dexcluded.groups=} value one gating wrapper passes on its own command line - see
+     * {@link #pomDefaultExcludedGroups()} for why this is a shared helper and not an inlined slice.
+     */
+    private static String hardcodedExcludedGroups(String script) throws IOException {
+        String body = read(REPO_ROOT.resolve(script));
+        String flag = "-Dexcluded.groups=";
+        int start = body.indexOf(flag);
+        assertWithMessage(script + " must pass an explicit -Dexcluded.groups").that(start).isAtLeast(0);
+        return body.substring(start + flag.length()).split("\\s")[0];
+    }
+
+    private static List<String> groups(String commaSeparated) {
+        return Arrays.asList(commaSeparated.split(","));
     }
 
     @Test

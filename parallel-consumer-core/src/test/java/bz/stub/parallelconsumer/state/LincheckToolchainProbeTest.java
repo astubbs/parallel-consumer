@@ -9,13 +9,13 @@ import org.jetbrains.lincheck.datastructures.StressOptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import static com.google.common.truth.Truth.assertThat;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static com.google.common.truth.Truth.assertThat;
 
 /**
  * RED CONTROL for the Lincheck evaluation: the smallest possible instance of the defect class, with a KNOWN
@@ -76,8 +76,7 @@ public class LincheckToolchainProbeTest {
                 .actorsPerThread(2)
                 .iterations(30)
                 .invocationsPerIteration(1_000);
-        String report = LincheckHarness.runExpectingViolation("control probe / model checking",
-                LincheckHarness.check(options, this.getClass()));
+        String report = LincheckHarness.runExpectingViolation("control probe / model checking", options, getClass());
         assertThat(report).contains("NullPointerException");
     }
 
@@ -88,8 +87,7 @@ public class LincheckToolchainProbeTest {
                 .actorsPerThread(2)
                 .iterations(30)
                 .invocationsPerIteration(10_000);
-        String report = LincheckHarness.runExpectingViolation("control probe / stress",
-                LincheckHarness.check(options, this.getClass()));
+        String report = LincheckHarness.runExpectingViolation("control probe / stress", options, getClass());
         assertThat(report).contains("NullPointerException");
     }
 }

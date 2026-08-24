@@ -130,8 +130,7 @@ public class WorkManagerLincheckTest {
                 .actorsAfter(0)
                 .iterations(200)
                 .invocationsPerIteration(5_000);
-        String report = LincheckHarness.runExpectingViolation("WorkManager / stress",
-                LincheckHarness.check(options, this.getClass()));
+        String report = LincheckHarness.runExpectingViolation("WorkManager / stress", options, getClass());
         assertThat(report).contains("completeWork");
     }
 

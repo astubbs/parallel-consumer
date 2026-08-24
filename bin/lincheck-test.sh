@@ -6,7 +6,8 @@
 # Run the Lincheck lane - scheduler-controlled concurrency testing over parallel-consumer-core's state
 # classes. Non-gating and opt-in, the same shape as bin/chaos-test.sh.
 #
-# THREE things have to line up, which is why this script exists rather than an mvnw line in a doc:
+# FIVE flags have to line up, which is why this script exists rather than an mvnw line in a doc - and
+# every one of them fails SILENTLY on its own:
 #
 #   1. -Dincluded.groups=lincheck AND -Dexcluded.groups= . The `lincheck` tag is in the pom's default
 #      excluded.groups, and in JUnit Platform exclusion beats inclusion - so the include ALONE selects
@@ -29,9 +30,10 @@
 # Env (data, not code - workflow inputs must pass through env, never ${{ }} into scripts):
 #   LINCHECK_TEST - optional -Dtest= filter (e.g. ShardManagerLincheckTest); empty = the whole lane
 #
-# Runtime is minutes, and grows superlinearly with threads/actorsPerThread - the bounds are stated in
-# each test method rather than here, and docs/plans/2026-08-25-001-test-lincheck-poc-plan.md records
-# what each one cost.
+# Runtime at the committed bounds is well under a minute for the whole lane (26-29s measured, build
+# included), but it grows superlinearly with threads/actorsPerThread - the bounds are stated in each
+# test method rather than here, and docs/plans/2026-08-25-001-test-lincheck-poc-plan.md records what
+# each one cost.
 
 set -euo pipefail
 
@@ -62,7 +64,7 @@ total=$(( $(date +%s) - start ))
 
 # A lane that selected nothing must say so rather than impersonating a green run - the same failure
 # mode the chaos lane guards against, and the one the mutation lane shipped with.
-selected=$(find parallel-consumer-core -path '*/surefire-reports/TEST-*Lincheck*.xml' -o -path '*/surefire-reports/TEST-*LincheckTest.xml' | wc -l | tr -d ' ')
+selected=$(find parallel-consumer-core -path '*/surefire-reports/TEST-*Lincheck*.xml' | wc -l | tr -d ' ')
 
 printf '\n## Lincheck lane\n\n'
 printf 'Wall-clock: **%dm %02ds** (build included)\n\n' $((total / 60)) $((total % 60))

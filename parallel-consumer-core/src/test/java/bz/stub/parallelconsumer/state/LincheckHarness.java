@@ -67,12 +67,13 @@ public class LincheckHarness {
      * Anything else - above all Lincheck's own internal crash, which is thrown as a
      * {@link LincheckAssertionError} too - must NOT count as a finding, because it means nothing was verified.
      *
-     * @param label what is being checked, for the log line that carries the interleaving
-     * @param check the configured {@code new ModelCheckingOptions()...check(TheTest.class)} call
+     * @param label     what is being checked, for the log line that carries the interleaving
+     * @param options   the configured {@code StressOptions}/{@code ModelCheckingOptions} to run
+     * @param testClass the harness declaring the {@code @Operation}s, i.e. {@code getClass()}
      * @return Lincheck's failure report, including the minimal reproducing interleaving
      */
-    public static String runExpectingViolation(String label, Runnable check) {
-        Throwable thrown = assertThrows(Throwable.class, check::run,
+    public static String runExpectingViolation(String label, Options<?, ?> options, Class<?> testClass) {
+        Throwable thrown = assertThrows(Throwable.class, () -> options.check(testClass),
                 label + ": Lincheck completed WITHOUT finding a violation. On this tree that means either the "
                         + "bug is gone (invert this test) or the harness is not exercising it.");
 
@@ -93,13 +94,5 @@ public class LincheckHarness {
         log.info("{} - Lincheck found a violation ({}):\n{}", label,
                 cleanVerdict ? "clean verdict" : "reported via the non-determinism abort path", report);
         return report;
-    }
-
-    /**
-     * Lincheck's own {@code Options.check} throws whatever the JUnit assertion mechanism is; wrapping it in a
-     * {@link Runnable} keeps the call sites reading as one expression.
-     */
-    public static Runnable check(Options<?, ?> options, Class<?> testClass) {
-        return () -> options.check(testClass);
     }
 }

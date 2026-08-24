@@ -204,17 +204,19 @@ ArchUnit cannot see the family at all.
 
 Harnesses live in core's `bz.stub.parallelconsumer.state` package next to the classes they model:
 `ShardManagerLincheckTest`, `PartitionStateLincheckTest`, `WorkManagerLincheckTest`, plus two
-controls. Excluded from every default and gating suite via the pom's `excluded.groups`.
+controls. The `lincheck` tag sits in the pom's default `excluded.groups`, and each gating wrapper
+repeats it in its own hardcoded list - `QuarantinedAnnotationContractTest` is what fails when the two
+disagree, because a tag the pom excludes and a wrapper does not runs in the GATING suite.
 
 - **Run it**: `bin/lincheck-test.sh` (whole lane, well under a minute), or
   `LINCHECK_TEST=ShardManagerLincheckTest bin/lincheck-test.sh` for one class. Do not hand-roll the
-  `./mvnw` line - **four flags have to line up and each fails silently on its own**: the group filters
+  `./mvnw` line - **five flags have to line up and each fails silently on its own**: the group filters
   (an include alone selects nothing, the same trap the performance lane documents), `-Plincheck` for
   the JDK module opens the model checker needs, `-Dparallel-tests=false` (Lincheck installs a
-  JVM-wide agent, so two of its classes in one fork share it), and `-Djacoco.skip=true` (coverage
-  probes are shared state and bury the trace).
-- **Read the trace**: the script passes `-Dpc.log.level=info`, which is what makes a found
-  interleaving printable at all.
+  JVM-wide agent, so two of its classes in one fork share it), `-Djacoco.skip=true` (coverage
+  probes are shared state and bury the trace), and `-Dpc.log.level=info`.
+- **Read the trace**: that last flag is what makes a found interleaving printable at all - the
+  harness logs it at INFO, and `logback-test.xml` defaults to warn.
 - **STRESS only, over the product classes, and that is a tool constraint rather than a preference.**
   Lincheck's model checker cannot run on any Lombok `@EqualsAndHashCode(callSuper = true)` value type
   - `ShardKey` is one - and the commit path is not deterministic enough for it to replay.

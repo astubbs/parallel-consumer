@@ -162,8 +162,7 @@ public class ShardManagerLincheckTest {
                 .actorsAfter(0)
                 .iterations(50)
                 .invocationsPerIteration(5_000);
-        String report = LincheckHarness.runExpectingViolation("ShardManager / stress",
-                LincheckHarness.check(options, this.getClass()));
+        String report = LincheckHarness.runExpectingViolation("ShardManager / stress", options, getClass());
         assertThat(report).contains("NullPointerException");
     }
 }

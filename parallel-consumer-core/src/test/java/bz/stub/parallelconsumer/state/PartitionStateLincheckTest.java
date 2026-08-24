@@ -156,8 +156,7 @@ public class PartitionStateLincheckTest {
                 .actorsAfter(0)
                 .iterations(300)
                 .invocationsPerIteration(5_000);
-        String report = LincheckHarness.runExpectingViolation("PartitionState / stress",
-                LincheckHarness.check(options, this.getClass()));
+        String report = LincheckHarness.runExpectingViolation("PartitionState / stress", options, getClass());
         assertThat(report).contains("commit()");
     }
 }
