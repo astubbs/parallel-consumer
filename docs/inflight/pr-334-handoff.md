@@ -42,11 +42,21 @@ the notes linked below and is deliberately not repeated here.
 is work:
 
 1. **Standing debt, pre-existing across at least three pushes.** `PR Checklist` fails on 76
-   unresolved citations; `inflight: tags` fails on 68 untagged notes; `quarantine: audit` fails on
-   `PCMetricsTest` registry drift (1 annotation, 2 entries). The citation failures split roughly:
-   ~26 are a **gate bug** - `bin/check-file-refs.sh` does not strip the leading `@` of a CLAUDE.md
-   import, so it reports live files as missing - ~50 are plan documents citing files that were
-   planned and never built, and ~13 are genuinely stale paths.
+   unresolved citations and `inflight: tags` on 68 untagged notes. The citation failures split
+   roughly: ~26 are a **gate bug** - `bin/check-file-refs.sh` does not strip the leading `@` of a
+   CLAUDE.md import, so it reports live files as missing - ~50 are plan documents citing files that
+   were planned and never built, and ~13 are genuinely stale paths.
+
+   **`quarantine: audit` was NOT in this group, and is now FIXED.** `PCMetricsTest` carried one
+   `@Quarantined` annotation and **two** entries in `docs/quarantined-tests.md`. `origin/master` had
+   one entry against the same single annotation, so the drift did not exist there - it arrived with
+   this stack via `f4a16a625 test(core) astubbs#242: cherry-pick the metricsRegisterBinding
+   re-quarantine from astubbs#116` (originally `eb602ae39`), which added a second entry for a test
+   that already had one because the branch it came from did not carry the first. The two were
+   describing the same failure from two directions - master's entry the diagnosed mechanism, the
+   cherry-pick's its sightings - so they are folded into one entry with **nothing dropped**, and
+   `bin/check-quarantine-registry.sh` now exits 0.
+
 2. **Expected state.** `claude-review` and `review: human LGTM` are red because nobody has reviewed
    the PR; `Check PR Dependencies` because the stack is unmerged. Never "fix" these by editing gates.
 3. **Not individually confirmed.** The remaining reds (`Unit Tests`, `tests`, `Chaos Pain Suite`,

@@ -88,7 +88,29 @@ were hidden by the surefire retry until astubbs#224 removed it.
   actually tracks - but the sibling assertions on `PARTITION_HIGHEST_COMPLETED_OFFSET` and
   `PARTITION_INCOMPLETE_OFFSETS` derive from the same counters and want reading as a set first, so it
   is not a one-line change. Diagnosis in
-  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`. No Owner yet.
+  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`. No owner yet.
+
+  **History, and why this entry says "re-quarantined".** astubbs#265 released it on a causal fix that
+  addressed the *opposite* direction: that diagnosis was that the metric could be *more* current than
+  the expectation testing it (`expected 203.0 but was 207.0`), so the `Thread.sleep(1000)` became an
+  `await().untilAsserted(...)` on the trailing meters. What fails now is the metric *behind* and never
+  converging - `PARTITION_LAST_COMMITTED_OFFSET` for partition 1 stays short of
+  `counterP1 + p1StartingOffset` for the whole 120s budget - which is the mechanism above, seen from
+  the outside. Sighted twice in a row on one head (astubbs#116, 2026-08-14) as
+  `expected 1213.0 but was 1209.0` then `expected 1207.0 but was 1195.0`: a shortfall that varies, so
+  no wait closes it. That is the shape
+  [`assert-the-commit-frontier-not-the-tick-path.md`](solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md)
+  warns against, and it rhymes with the `OffsetEncodingBackPressureTest` entry below, whose committed
+  high-water mark also never reaches its expectation with a different actual each run - **worth ruling
+  in or out as one phenomenon rather than two.** Whether the un-committed tail is a wrong test
+  assumption or real commit behaviour is undecided and is the open task; further diagnosis in
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+
+  *This was two separate entries until 2026-08-25.* `origin/master` carried the diagnosis; the
+  re-quarantine arrived independently by cherry-pick from astubbs#116 (`f4a16a625`, originally
+  `eb602ae39`) and did not know the first existed. Two entries for one `@Quarantined` annotation
+  fails `bin/check-quarantine-registry.sh`, and they were describing the same failure from two
+  directions - the mechanism and its sightings - so they are folded here with nothing dropped.
 
 - [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
   the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
@@ -112,17 +134,3 @@ were hidden by the surefire retry until astubbs#224 removed it.
   unverified hypothesis and its falsification path are in
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
 
-- [ ] `PCMetricsTest.metricsRegisterBinding` - **re-quarantined**, having been released by
-  astubbs#265 on a causal fix that addressed the opposite direction of the failure. That diagnosis was
-  that the metric could be *more* current than the expectation testing it (`expected 203.0 but was
-  207.0`), so the `Thread.sleep(1000)` became an `await().untilAsserted(...)` on the trailing meters.
-  What fails now is the metric *behind* and never converging: `PARTITION_LAST_COMMITTED_OFFSET` for
-  partition 1 stays short of `counterP1 + p1StartingOffset` for the whole 120s budget. Seen twice in a
-  row on one head (astubbs#116, 2026-08-14) as `expected 1213.0 but was 1209.0` then `expected 1207.0
-  but was 1195.0` - a shortfall that varies, so no wait closes it. That is the shape
-  [`assert-the-commit-frontier-not-the-tick-path.md`](solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md)
-  warns against, and it rhymes with the `OffsetEncodingBackPressureTest` entry below, whose committed
-  high-water mark also never reaches its expectation with a different actual each run - worth ruling
-  in or out as one phenomenon rather than two. Whether the un-committed tail is a wrong test
-  assumption or real commit behaviour is undecided and is the open task. No owner yet; diagnosis in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
