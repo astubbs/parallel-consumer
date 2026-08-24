@@ -9,8 +9,8 @@ package bz.stub.parallelconsumer.internal.admission;
  * last commanded and the {@link ClosedAdmissionWindow} the plant produced under it, return the next target in
  * slots.
  * <p>
- * Implementations are the real law behind an adapter ({@link OldLawAdmissionPolicy} today, the U5 rewrite
- * tomorrow) and the negative-control mutants ({@link MutantPolicies}) that every scenario must be able to fail.
+ * Implementations are the real law behind an adapter ({@link LawAdmissionPolicy}) and the negative-control
+ * mutants ({@link MutantPolicies}) that every scenario must be able to fail.
  * The {@link ScenarioRunner} owns the loop; a policy owns only the decision.
  */
 interface AdmissionPolicy {

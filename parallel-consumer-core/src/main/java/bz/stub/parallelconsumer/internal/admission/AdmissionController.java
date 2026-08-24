@@ -64,9 +64,9 @@ import java.util.function.Supplier;
  * target on TWO channels, so an operator running the feature with no Micrometer registry configured (the
  * ordinary case for someone trying it out) still gets its product:
  * <ul>
- * <li>every window that MOVES the target logs one line - old and new target, the deciding arm, the window
- * aggregates that drove it, and the law's own comparison: the long-run baseline, the short-term figure's ratio to
- * it, and the tolerance that ratio is tested against ({@link #reportMovement});</li>
+ * <li>every window that MOVES the target logs one line - old and new target, the deciding gate, the window
+ * aggregates that drove it, and the law's own reasoning: the elasticity verdict the band machine read
+ * ({@link #reportMovement});</li>
  * <li>every window that HOLDS it behind a constraint logs one RATE-LIMITED line naming that constraint
  * ({@link #NO_MOVEMENT_CONSTRAINTS}, {@link #maybeReportBindingConstraint}) - the condition is a steady state,
  * not an event, so it is not repeated once per second.</li>
@@ -119,7 +119,7 @@ public class AdmissionController {
     /**
      * The sample window's time bound: {@link #tick()} closes the window once this much injected-clock time has
      * elapsed since it opened (the plan's KTD3b/KTD7 - "at least 1s", and the law holds via
-     * {@code APP_LIMITED} when the closed window carries too few samples, so a short window never moves the
+     * {@code INSUFFICIENT_SIGNAL} when the closed window carries too few samples, so a short window never moves the
      * target). Package-visible so tests derive their clock steps from it.
      */
     static final Duration SAMPLE_WINDOW_DURATION = Duration.ofSeconds(1);
@@ -138,15 +138,21 @@ public class AdmissionController {
      * {@link #maybeReportBindingConstraint}), because each is a steady state an operator can act on - raise the cap,
      * fix the downstream, feed the consumer more work - and none of them will change on their own.
      * <p>
-     * {@code ADAPTING}, {@code BACKOFF} and {@code PROBING} are deliberately absent: those MOVED the target, which
+     * {@code ADAPTING}, {@code BACKOFF} and {@code WARMUP} are deliberately absent: those MOVED the target, which
      * the movement counter and the target gauges already report.
      */
     private static final Set<AdmissionDecisionReason> NO_MOVEMENT_CONSTRAINTS = EnumSet.of(
             AdmissionDecisionReason.AT_CAP,
             AdmissionDecisionReason.AT_FLOOR,
-            AdmissionDecisionReason.APP_LIMITED,
             AdmissionDecisionReason.FAILURE_LIMITED,
-            AdmissionDecisionReason.COOLDOWN);
+            AdmissionDecisionReason.COOLDOWN,
+            AdmissionDecisionReason.INSUFFICIENT_SIGNAL,
+            AdmissionDecisionReason.WARMUP_EXHAUSTED,
+            AdmissionDecisionReason.PLATEAU,
+            AdmissionDecisionReason.NO_WORK,
+            AdmissionDecisionReason.ORDERING_STARVED,
+            AdmissionDecisionReason.SELF_THROTTLED,
+            AdmissionDecisionReason.OFFSET_BACK_PRESSURE);
 
     /**
      * How often at most the binding-constraint line above may speak. The condition it describes is a steady state
@@ -602,50 +608,49 @@ public class AdmissionController {
      * window's own aggregates because the target alone is uninterpretable: the same {@code 8 -> 9} means
      * something different at 2ms service time with 200 samples than at 200ms with 11.
      * <p>
-     * <b>And it carries the law's REASONING, not only its inputs.</b> "service time mean 11.70ms ... decided by
-     * ADAPTING" does not say why 11.70ms means grow: the number that decided it is that figure's ratio to the
-     * long-run baseline, and the baseline is the law's own state, invisible from the window. So the comparison is
-     * logged whole - the baseline, the ratio, and the tolerance the ratio is tested against (see
-     * {@link AdmissionControlLaw#getServiceTimeTolerance()}). A baseline that inflates window after window while
-     * the ratio sits harmlessly below the tolerance IS the ratchet, and without these three figures it cannot be
-     * seen in the log at all.
+     * <b>And it carries the law's REASONING, not only its inputs.</b> "decided by ADAPTING" alone does not say
+     * WHY the law moved: the number that decides everything is the elasticity verdict - the estimator's
+     * band and slope - which is the law's own state, invisible from the window. So the verdict is logged whole
+     * (band, elasticity, and the warmup allowance left when no verdict is in force yet), alongside the window's
+     * useful throughput and binding classification, which are the estimator's actual inputs (R13: the movement
+     * log carries the estimator's inputs for each decision). Service time still appears - the window carries it
+     * for observability - but nothing in the law reads it (the design's R8).
      * <p>
      * Named for what actually moved: under {@code OBSERVE} the LIVE target never changes, so calling the moved
      * number "the admission target" there would report an enforcement that is not happening.
      */
     private void reportMovement(int previousTarget, int newTarget, AdmissionDecisionReason reason,
                                 ClosedAdmissionWindow closed) {
-        double baselineNanos = law.getLastWindowServiceTimeBaselineNanos();
-        log.info(LOG_PREFIX + " ({}): {} target {} -> {} slot(s), decided by {} - service time mean {} against " +
-                        "long-run baseline {}, ratio {} (contracts above {}), in-flight median {} (spread {}) " +
-                        "over {} snapshot(s), {} sample(s), effective maximum {}.{}",
+        log.info(LOG_PREFIX + " ({}): {} target {} -> {} slot(s), decided by {} - elasticity {}, useful " +
+                        "throughput {}/s over {} sample(s) ({}), service time mean {}, in-flight median {} " +
+                        "(spread {}) over {} snapshot(s), warmup allowance left {}, effective maximum {}.{}",
                 mode,
                 mode == AdaptiveConcurrencyMode.ENFORCE ? "live admission" : "would-be",
                 previousTarget,
                 newTarget,
                 reason,
+                formatVerdict(law.currentVerdict()),
+                String.format(Locale.ROOT, "%.1f", closed.successThroughputPerSecond()),
+                closed.getSampleCount(),
+                closed.bindingClassification(),
                 formatNanosAsMillis(closed.getMeanServiceTimeNanos()),
-                formatNanosAsMillis(baselineNanos),
-                formatRatio(closed.getMeanServiceTimeNanos(), baselineNanos),
-                String.format(Locale.ROOT, "%.2f", law.getServiceTimeTolerance()),
                 closed.getInFlightMedian(),
                 closed.getInFlightSpread(),
                 closed.getInFlightSampleCount(),
-                closed.getSampleCount(),
+                String.format(Locale.ROOT, "%.1f", law.warmupAllowanceRemaining()),
                 effectiveMaximum(),
                 nonSuccessNote(closed));
     }
 
     /**
-     * The short-term figure over the long-run baseline - the one number the law's gradient turns on. Rendered as
-     * {@code n/a} rather than an infinity when there is no baseline yet to divide by, which is every movement
-     * before the first window reaches the gradient (and every movement in a mode whose arms return early).
+     * The verdict as the log renders it: the band plus the raw slope for a live one, or the no-verdict marker -
+     * the one number the band machine turns on, made visible per movement.
      */
-    private static String formatRatio(double shortNanos, double baselineNanos) {
-        if (baselineNanos <= 0) {
-            return "n/a";
+    private static String formatVerdict(AdmissionElasticityEstimator.Verdict verdict) {
+        if (!verdict.isLive()) {
+            return "none yet";
         }
-        return String.format(Locale.ROOT, "%.2f", shortNanos / baselineNanos);
+        return String.format(Locale.ROOT, "%.3f (%s)", verdict.getElasticity(), verdict.getBand());
     }
 
     /**
@@ -691,9 +696,10 @@ public class AdmissionController {
     /**
      * The R13 rebalance reset, control-thread-side: the in-progress window is discarded (the old assignment's
      * samples describe partitions this instance may no longer own), the law is RECONSTRUCTED from
-     * {@link #lawBuilder} - identical calibration, fresh EWMAs/baseline/probe bookkeeping (see the {@link #law}
-     * field javadoc for why reconstruction beats a hand-written reset) - seeded with the current target as the
-     * best available prior, and the target freezes for {@link #REBALANCE_TARGET_FREEZE_COOLDOWN}.
+     * {@link #lawBuilder} - identical calibration, fresh elasticity history/verdict/warmup episode (see the
+     * {@link #law} field javadoc for why reconstruction beats a hand-written reset; the law owns its estimator,
+     * so reconstruction IS the rebalance invalidation until U6 refines it) - seeded with the current target as
+     * the best available prior, and the target freezes for {@link #REBALANCE_TARGET_FREEZE_COOLDOWN}.
      */
     private void resetForAssignmentDelta(Instant now) {
         synchronized (windowLock) {
@@ -709,8 +715,8 @@ public class AdmissionController {
     }
 
     /**
-     * Drops the in-progress window's samples and restarts the window from now - the law and its EWMAs survive
-     * untouched. The engine's pause-poison lever (R13): a {@code PAUSED} interval leaves the window holding
+     * Drops the in-progress window's samples and restarts the window from now - the law and its elasticity
+     * history survive untouched. The engine's pause-poison lever (R13): a {@code PAUSED} interval leaves the window holding
      * samples from before (and completions from during) the pause, and the first post-resume window must not
      * carry them; a pause says nothing about the downstream, so the law's history stays. No-op in DISABLED.
      */

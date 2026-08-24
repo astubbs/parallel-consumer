@@ -193,20 +193,22 @@ class AdmissionPoolActuatorTest {
         assertWithMessage("no window boundary elapsed - no steering may happen")
                 .that(recordingPool.coreSizeCalls).hasSize(1);
 
-        // Window 1: healthy and saturated, but smoothing keeps the published target at 8 - a hold, no call.
+        // Window 1: sample-rich but UNBOUND (no active tasks at the boundary) - the U5 binding gate preserves
+        // the target, so the pool must not be touched.
         feedHealthySamples();
         module.clock.add(WINDOW_STEP);
         pc.tickAdmissionController();
-        assertWithMessage("fixture: the first window must hold the published target")
+        assertWithMessage("fixture: an unbound window must hold the published target")
                 .that(controller().currentTarget()).isEqualTo(CONTRACTED_TARGET_SLOTS);
         assertWithMessage("a hold must not touch the pool").that(recordingPool.coreSizeCalls).hasSize(1);
 
-        // Window 2: the target grows - exactly one call, carrying the new target.
+        // Window 2: LIMIT-BOUND - the warmup band grows the target; exactly one call, carrying the new target.
         feedHealthySamples();
+        markPoolSaturatedAt(module.admissionTargetSlots());
         module.clock.add(WINDOW_STEP);
         pc.tickAdmissionController();
         int grownTarget = controller().currentTarget();
-        assertWithMessage("fixture: the second window must grow the published target")
+        assertWithMessage("fixture: the bound window must grow the published target")
                 .that(grownTarget).isGreaterThan(CONTRACTED_TARGET_SLOTS);
         assertWithMessage("one movement, one setCorePoolSize call, carrying the published target")
                 .that(recordingPool.coreSizeCalls)
@@ -279,6 +281,9 @@ class AdmissionPoolActuatorTest {
 
         for (int window = 0; window < 3; window++) {
             feedHealthySamples();
+            // OBSERVE's boundary target is the STATIC maxConcurrency (a non-acting mode resizes nothing), so
+            // that is the level the boundary sample must saturate for the window to read LIMIT-BOUND.
+            markPoolSaturatedAt(module.admissionTargetSlots());
             module.clock.add(WINDOW_STEP);
             pc.tickAdmissionController();
         }
@@ -519,15 +524,30 @@ class AdmissionPoolActuatorTest {
      * Grows the published target past {@code threshold} by feeding healthy, saturated windows through the
      * ENGINE's tick (so the actuator sees each movement). Bounded, and asserted to have got there - the law's
      * growth cadence is its own business, but it must grow under this signal or the fixture is broken.
+     * (Growth here is the U5 band machine's warmup band, which the binding gate licenses only on a LIMIT-BOUND
+     * boundary sample - hence the saturation marking, the {@link AdaptiveConcurrencyModeTest} fixture assist.)
      */
     private void growTargetAbove(int threshold) {
         for (int window = 0; window < 40 && controller().currentTarget() <= threshold; window++) {
             feedHealthySamples();
+            markPoolSaturatedAt(module.admissionTargetSlots());
             module.clock.add(WINDOW_STEP);
             pc.tickAdmissionController();
         }
-        assertWithMessage("fixture: healthy saturated windows must grow the target past %s", threshold)
+        assertWithMessage("fixture: healthy saturated bound windows must grow the target past %s", threshold)
                 .that(controller().currentTarget()).isGreaterThan(threshold);
+    }
+
+    /**
+     * Tops the task ACCOUNTING up to {@code slots} active, so the window's boundary sample classifies
+     * LIMIT-BOUND (the U5 binding gate) - the pool itself stays real and untouched.
+     */
+    private void markPoolSaturatedAt(int slots) {
+        int deficit = slots - pc.userFunctionTaskAccounting().getActive();
+        for (int task = 0; task < deficit; task++) {
+            pc.userFunctionTaskAccounting().onSubmitting();
+            pc.userFunctionTaskAccounting().onTaskStarted();
+        }
     }
 
     /**

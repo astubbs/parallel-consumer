@@ -5,18 +5,19 @@ package bz.stub.parallelconsumer.internal.admission;
  */
 
 /**
- * Adapter putting the CURRENT {@link AdmissionControlLaw} behind the {@link AdmissionPolicy} seam, so the
- * falsifier scenarios can drive the committed law as the ablation control before the U5 rewrite replaces it
- * (the plan's U8 execution note).
+ * Adapter putting the {@link AdmissionControlLaw band-machine law} behind the {@link AdmissionPolicy} seam, so
+ * the falsifier scenarios drive the REAL law at its production calibration - the U5 flip of the harness's
+ * control run (the deleted {@code OldLawAdmissionPolicy} drove the Gradient2 port through the same seam and
+ * FAILED the plateau; this adapter is asserted to pass it, in {@link AdmissionLawFalsifierTest}).
  * <p>
  * The law is stateful and holds its own limit; the adapter therefore ignores {@code previousTarget} and returns
  * whatever {@link AdmissionControlLaw#onWindowClosed} decides.
  */
-final class OldLawAdmissionPolicy implements AdmissionPolicy {
+final class LawAdmissionPolicy implements AdmissionPolicy {
 
     private final AdmissionControlLaw law;
 
-    OldLawAdmissionPolicy(int initialTarget, int ceiling) {
+    LawAdmissionPolicy(int initialTarget, int ceiling) {
         this.law = AdmissionControlLaw.newBuilder()
                 .initialLimit(initialTarget)
                 .ceiling(ceiling)

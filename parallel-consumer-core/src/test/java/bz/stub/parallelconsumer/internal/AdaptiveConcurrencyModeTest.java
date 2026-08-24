@@ -65,7 +65,9 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <li><b>The rip-out triad</b> - {@link #theTargetGrowsFromALowSeedWithinABoundedNumberOfWindows()},
  * {@link #theTargetNeverExceedsTheEffectiveMaximum()},
  * {@link #noWindowContractsTheTargetByMoreThanTheBoundedStep()}: the plan's stop conditions, asserted here against
- * the REAL engine rather than (as {@code AdmissionControlSimulationTest} does) against the pure math.</li>
+ * the REAL engine rather than (as {@code AdmissionLawFalsifierTest} does) against the deterministic plant.
+ * Migrated with the U5 band-machine rewrite: growth is now the KTD2 warmup allowance (bounded blind growth),
+ * not the old law's climb-to-the-ceiling - which was precisely the ratchet the rewrite deletes.</li>
  * </ul>
  * <p>
  * <b>HOW THE ENGINE IS DRIVEN, and what that does not cover.</b> The ENFORCE tests drive a real
@@ -115,27 +117,36 @@ class AdaptiveConcurrencyModeTest {
     static final int SAMPLES = 12;
 
     /**
-     * The steepest single-window contraction any arm of the law is allowed to produce, restated from
-     * {@code AdmissionControlLaw.AIMD_BACKOFF_RATIO} (package-private to the admission package). The AIMD cut and
-     * the probe-down step are both exactly this; the gradient arm's floor works out gentler still
-     * ({@code 0.9 x limit + queue headroom x smoothing}). A published target is the truncated estimate, and
-     * truncation is monotonic, so {@code floor(previous x ratio)} is a sound bound on the published series too.
+     * The steepest single-window contraction the law's per-window brakes may produce, restated from
+     * {@code AdmissionControlLaw.AIMD_BACKOFF_RATIO} (package-private to the admission package): the BACKOFF
+     * brake and the FALL band's contraction are both exactly this. The band machine's RETRACTION (taking back a
+     * provisional growth step the next verdict showed bought nothing) may land deeper in one window, but only
+     * ever on a previously-held recorded baseline - pinned in {@code AdmissionControlLawTest}, not here. A
+     * published target is the truncated estimate, and truncation is monotonic, so {@code floor(previous x
+     * ratio)} is a sound bound on the published series too.
      */
     static final double BOUNDED_CONTRACTION_RATIO = 0.9;
 
     /**
-     * How many windows the target is allowed to take to move off a low seed. The gradient's steady-state growth is
-     * a fraction of a slot per window, so "grew" cannot be asserted on window one; this is the bound the plan's
-     * stop condition actually claims - bounded, not immediate.
+     * The band machine's per-episode blind-growth allowance in slots, restated from
+     * {@code AdmissionControlLaw.DEFAULT_WARMUP_ALLOWANCE_SLOTS} (package-private to the admission package,
+     * as the other law constants here are restated). With no elasticity verdict computable in this drive (see
+     * {@link #driveSaturatedEnforceWindows}), the warmup band's allowance IS the whole growth budget.
+     */
+    static final int WARMUP_ALLOWANCE_SLOTS = 4;
+
+    /**
+     * How many windows the target is allowed to take to move off a low seed - the bound the plan's stop
+     * condition actually claims: bounded, not immediate. (The warmup band moves on the very first bound window,
+     * so this is generous by design.)
      */
     static final int GROWTH_DEADLINE_WINDOWS = 10;
 
-    /**
-     * Long enough for the target to climb from the seed all the way to the ceiling AND for the probe-down cadence
-     * to fire there - which is what supplies the real contractions the bounded-step test measures. A shorter run
-     * would leave that test with nothing to bound, which is why it asserts it saw at least one.
-     */
-    static final int LONG_RUN_WINDOWS = 60;
+    /** Long enough for the warmup allowance to be spent and the trajectory to settle. */
+    static final int LONG_RUN_WINDOWS = 20;
+
+    /** A seed one warmup grant below the ceiling, so the ceiling clamp genuinely binds in the cap test. */
+    static final int NEAR_CEILING_SEED_SLOTS = 30;
 
     final TopicPartition tp = new TopicPartition(TOPIC, 0);
 
@@ -392,14 +403,17 @@ class AdaptiveConcurrencyModeTest {
      * Stop condition one: a target seeded far below the ceiling must climb, and climb within a bounded number of
      * windows rather than eventually.
      * <p>
-     * That it climbs at all is the weaker half - the stronger is that it climbs all the way to the ceiling on a
-     * workload that keeps saying yes, which is what distinguishes real adaptation from a single probe step.
+     * EXPECTATION FLIPPED by the U5 rewrite, deliberately: the old law climbed all the way to the ceiling on
+     * this workload - additive headroom growth with no absolute objective, which is exactly the ratchet the
+     * band machine deletes. The new pin is just as exact: blind growth is the KTD2 warmup allowance and NOT ONE
+     * SLOT MORE, because this drive's window cadence (2s steps against the law's short elasticity horizon)
+     * never accumulates the estimator's minimum evidence, so no verdict ever licenses more.
      */
     @Test
     void theTargetGrowsFromALowSeedWithinABoundedNumberOfWindows() {
         requireAdaptiveConcurrencyWhenModeSelected();
 
-        List<Integer> trace = driveSaturatedEnforceWindows(LONG_RUN_WINDOWS);
+        List<Integer> trace = driveSaturatedEnforceWindows(LONG_RUN_WINDOWS, LOW_SEED_SLOTS);
 
         int firstGrowth = -1;
         for (int window = 0; window < trace.size(); window++) {
@@ -413,21 +427,24 @@ class AdaptiveConcurrencyModeTest {
         assertWithMessage("the target must leave the seed within %s windows, not eventually: trace was %s",
                 GROWTH_DEADLINE_WINDOWS, trace)
                 .that(firstGrowth).isAtMost(GROWTH_DEADLINE_WINDOWS);
-        assertWithMessage("...and a workload that keeps saying yes must take it all the way up, not one step: "
-                + "trace was %s", trace)
-                .that(Collections.max(trace)).isAtLeast(CEILING_SLOTS);
+        assertWithMessage("...and blind growth stops at EXACTLY the warmup allowance - growth past it needs "
+                + "elasticity evidence this drive never supplies (KTD2): trace was %s", trace)
+                .that(Collections.max(trace)).isEqualTo(LOW_SEED_SLOTS + WARMUP_ALLOWANCE_SLOTS);
+        assertWithMessage("...and holds there rather than oscillating: trace was %s", trace)
+                .that(trace.get(trace.size() - 1)).isEqualTo(LOW_SEED_SLOTS + WARMUP_ALLOWANCE_SLOTS);
     }
 
     /**
      * Stop condition two: nothing the law can do puts the target above the ceiling the user configured. Asserted
      * over the whole trace, not just its end - a single overshoot window would dispatch more work than the pool
-     * has threads for, and be gone by the time anything looked.
+     * has threads for, and be gone by the time anything looked. Seeded one warmup grant below the ceiling so
+     * the clamp genuinely binds (the low-seed drive can no longer reach it - see stop condition one).
      */
     @Test
     void theTargetNeverExceedsTheEffectiveMaximum() {
         requireAdaptiveConcurrencyWhenModeSelected();
 
-        List<Integer> trace = driveSaturatedEnforceWindows(LONG_RUN_WINDOWS);
+        List<Integer> trace = driveSaturatedEnforceWindows(LONG_RUN_WINDOWS, NEAR_CEILING_SEED_SLOTS);
 
         assertWithMessage("no window may put the target above the ceiling: trace was %s", trace)
                 .that(Collections.max(trace)).isAtMost(CEILING_SLOTS);
@@ -438,35 +455,28 @@ class AdaptiveConcurrencyModeTest {
     }
 
     /**
-     * Stop condition three: a window may re-measure or back off, but never collapse. Every downward step in the
-     * trace is checked against {@link #BOUNDED_CONTRACTION_RATIO}, so a future arm that cuts harder - or one that
-     * cuts to the floor on an outlier - fails here rather than in production.
-     * <p>
-     * The contractions this exercises are real ones the law chose for itself: at the ceiling on flat latency the
-     * probe-down arm fires on its cadence, so the settled tail of the run oscillates rather than sitting still.
+     * Stop condition three: a brake window may back off, but never collapse. The overload window's cut is
+     * checked against {@link #BOUNDED_CONTRACTION_RATIO}, so a future brake that cuts harder - or one that cuts
+     * to the floor on an outlier - fails here rather than in production. (The band machine's deeper RETRACTION
+     * movement lands only on a recorded previously-held baseline, and is pinned at law level.)
      */
     @Test
     void noWindowContractsTheTargetByMoreThanTheBoundedStep() {
         requireAdaptiveConcurrencyWhenModeSelected();
 
-        List<Integer> trace = driveSaturatedEnforceWindows(LONG_RUN_WINDOWS);
+        List<Integer> trace = driveSaturatedEnforceWindows(LONG_RUN_WINDOWS, LOW_SEED_SLOTS);
+        int settled = trace.get(trace.size() - 1);
 
-        int contractions = 0;
-        for (int window = 1; window < trace.size(); window++) {
-            int before = trace.get(window - 1);
-            int after = trace.get(window);
-            if (after >= before) {
-                continue;
-            }
-            contractions++;
-            int floorAllowed = (int) Math.floor(before * BOUNDED_CONTRACTION_RATIO);
-            assertWithMessage("window %s cut the target %s -> %s, past the bounded step (floor %s): trace was %s",
-                    window + 1, before, after, floorAllowed, trace)
-                    .that(after).isAtLeast(floorAllowed);
-        }
-        assertWithMessage("the run must actually have CONTRACTED somewhere, or this asserts nothing: trace was %s",
-                trace)
-                .that(contractions).isGreaterThan(0);
+        // A real contraction, chosen by the law itself: one overloaded window fires the BACKOFF brake.
+        feedOverloadedWindow(controller());
+        module.clock.add(WINDOW_STEP);
+        pc.tickAdmissionController();
+        int afterCut = controller().currentTarget();
+
+        assertWithMessage("the overloaded window must actually have CONTRACTED, or this asserts nothing")
+                .that(afterCut).isLessThan(settled);
+        assertWithMessage("the cut %s -> %s must be the bounded AIMD step, nothing steeper", settled, afterCut)
+                .that(afterCut).isAtLeast((int) Math.floor(settled * BOUNDED_CONTRACTION_RATIO));
     }
 
     // --- helpers ---
@@ -511,21 +521,26 @@ class AdaptiveConcurrencyModeTest {
      * <p>
      * Admission-bound means there is always more work registered than the target allows: every pass tops dispatch
      * up to the live target and nothing is ever completed back (the mailbox is never drained, because no control
-     * loop is running), so the engine's own in-flight reading sits exactly at the target - the saturation the
-     * gradient needs in order to be allowed to grow at all. Service times are flat and fed directly; see the
-     * class javadoc for why that half is not driven through the tap.
+     * loop is running), so the engine's own in-flight reading sits exactly at the target. Service times are flat
+     * and fed directly; see the class javadoc for why that half is not driven through the tap.
+     * <p>
+     * One fixture assist the U5 binding gate needs: the instant-return user function means the POOL's tasks
+     * finish long before the window boundary, so the boundary sample would read zero ACTIVE tasks and classify
+     * every window app-limited (which the band machine, correctly, never grows on). The task accounting is
+     * therefore topped up to the live target before each boundary - the boundary then reads what a genuinely
+     * saturated pool would report, while dispatch, the pool and the in-flight sampling stay fully real.
      */
-    private List<Integer> driveSaturatedEnforceWindows(int windows) {
+    private List<Integer> driveSaturatedEnforceWindows(int windows, int seedSlots) {
         buildHarness(optionsBuilder()
                 .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.ENFORCE)
-                .adaptiveConcurrencyInitialTarget(LOW_SEED_SLOTS)
+                .adaptiveConcurrencyInitialTarget(seedSlots)
                 .build());
         // more than the ceiling can ever hold out for processing, so the workload is never the constraint
         registerWork(CEILING_SLOTS * 2);
         pc.setState(State.RUNNING);
 
         assertWithMessage("fixture: ENFORCE must start at the seed, or growth has nowhere to come from")
-                .that(controller().currentTarget()).isEqualTo(LOW_SEED_SLOTS);
+                .that(controller().currentTarget()).isEqualTo(seedSlots);
 
         List<Integer> trace = new ArrayList<>(windows);
         for (int window = 0; window < windows; window++) {
@@ -535,11 +550,21 @@ class AdaptiveConcurrencyModeTest {
                 pc.sampleAdmissionInFlight(); // the in-flight signal, read off real engine state
                 controller().recordOutcome(Outcome.SUCCESS);
             }
+            markPoolSaturatedAtTheLiveTarget();
             module.clock.add(WINDOW_STEP);
             pc.tickAdmissionController();
             trace.add(controller().currentTarget());
         }
         return trace;
+    }
+
+    /** The binding-gate fixture assist described on {@link #driveSaturatedEnforceWindows(int, int)}. */
+    private void markPoolSaturatedAtTheLiveTarget() {
+        int deficit = controller().currentTarget() - pc.userFunctionTaskAccounting().getActive();
+        for (int task = 0; task < deficit; task++) {
+            pc.userFunctionTaskAccounting().onSubmitting();
+            pc.userFunctionTaskAccounting().onTaskStarted();
+        }
     }
 
     /**

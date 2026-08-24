@@ -76,7 +76,7 @@ class AdmissionMetricsTest {
         assertThat(gauge(PCMetricsDef.ADMISSION_WOULD_BE_TARGET)).isEqualTo((double) DEFAULT_MAX_CONCURRENCY);
 
         for (int window = 0; window < 5; window++) {
-            feedWindowAndTick(controller, 10 * MS, controller.wouldBeTarget());
+            feedBoundWindowAndTick(controller, 10 * MS, controller.wouldBeTarget());
         }
 
         // The finding: what ENFORCE would have published...
@@ -93,15 +93,15 @@ class AdmissionMetricsTest {
 
     @Test
     void theConstraintGaugeReadsTheReasonsHandAssignedValue() {
-        // User-set ceiling 4, healthy saturated windows: the gradient wants more than 4, so the cap binds.
+        // User-set ceiling 4, started at it: a bound window makes the warmup band want 4 + sqrt(4), so the
+        // cap binds (two clipped grants fit the 4-slot allowance - stay inside them so AT_CAP is the reason).
         var controller = instrumented(AdaptiveConcurrencyMode.ENFORCE, 4);
 
         // Nothing has been decided yet, and zero is reserved to say exactly that.
         assertThat(gauge(PCMetricsDef.ADMISSION_CONSTRAINT)).isEqualTo((double) NO_DECISION_YET_VALUE);
 
-        // Stay under the law's probe-down cadence, so this pins the cap rather than the re-measure probe.
-        for (int window = 0; window < 4; window++) {
-            feedWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        for (int window = 0; window < 2; window++) {
+            feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
         }
 
         assertThat(controller.lastDecisionReason()).hasValue(AT_CAP);
@@ -181,13 +181,13 @@ class AdmissionMetricsTest {
     @Test
     void aConstraintReachedThroughTheControlLawIsReportedToo() {
         // The other call site: the constraint the law itself named on a decided window, rather than the lifecycle
-        // freeze above. Ceiling 4 with healthy saturated windows, so the cap binds (see the gauge test).
+        // freeze above. Ceiling 4 with bound windows, so the cap binds (see the gauge test).
         var appender = attachAppender();
         try {
             var controller = instrumented(AdaptiveConcurrencyMode.ENFORCE, 4);
 
-            for (int window = 0; window < 4; window++) {
-                feedWindowAndTick(controller, 10 * MS, controller.currentTarget());
+            for (int window = 0; window < 2; window++) {
+                feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
             }
             assertThat(controller.lastDecisionReason()).hasValue(AT_CAP);
 
@@ -216,8 +216,9 @@ class AdmissionMetricsTest {
     }
 
     /**
-     * Feeds one healthy, saturated window (every outcome a success, in-flight pinned at {@code inFlightMedian}) and
-     * ticks past the time bound - {@link AdmissionControllerTest}'s pattern.
+     * Feeds one healthy window (every outcome a success, in-flight pinned at {@code inFlightMedian}) and ticks
+     * past the time bound - {@link AdmissionControllerTest}'s pattern. The no-arg tick closes an UNSAMPLED
+     * (never-bound) window - fine for the COOLDOWN scenario, where binding is irrelevant.
      */
     private void feedWindowAndTick(AdmissionController controller, long meanServiceTimeNanos, int inFlightMedian) {
         for (int i = 0; i < SAMPLES; i++) {
@@ -227,6 +228,20 @@ class AdmissionMetricsTest {
         }
         clock.add(SAMPLE_WINDOW_DURATION);
         controller.tick();
+    }
+
+    /**
+     * As above but the window closes LIMIT-BOUND at {@code boundSlots} - the shape the band machine may grow on
+     * (the U5 binding gate), which the growth-driving tests here need.
+     */
+    private void feedBoundWindowAndTick(AdmissionController controller, long meanServiceTimeNanos, int boundSlots) {
+        for (int i = 0; i < SAMPLES; i++) {
+            controller.recordServiceTime(meanServiceTimeNanos);
+            controller.recordInFlight(boundSlots);
+            controller.recordOutcome(Outcome.SUCCESS);
+        }
+        clock.add(SAMPLE_WINDOW_DURATION);
+        controller.tick(() -> TestWindows.boundAt(boundSlots));
     }
 
     private double gauge(PCMetricsDef def) {

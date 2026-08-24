@@ -1,59 +1,91 @@
 package bz.stub.parallelconsumer.internal.admission;
 
 /*-
- * Portions copyright 2018 Netflix, Inc. - from Netflix/concurrency-limits (Apache-2.0), class Gradient2Limit
+ * Portions copyright 2018 Netflix, Inc. - from Netflix/concurrency-limits (Apache-2.0): the AIMD backoff arm
+ * follows AIMDLimit's semantics and the minimum-samples window guard follows WindowedLimit's.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
- *
- * This file contains modified code derived from the Apache-2.0 licensed
- * Netflix/concurrency-limits project (https://github.com/Netflix/concurrency-limits).
  */
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.Duration;
+import java.time.Instant;
 
 /**
  * The decision layer of the adaptive admission (target concurrency) control law: given one closed sample window,
  * produce a new admission limit and the {@link AdmissionDecisionReason reason} for it.
  * <p>
- * The core adaptation is the Gradient2 algorithm ported from
- * {@code com.netflix.concurrency.limits.limit.Gradient2Limit} (including the Netflix PR-88 anti-drift fixes: the
- * short-term signal is the raw, unsmoothed window mean, and the long-term EWMA baseline is decayed by
- * {@link #LONG_BASELINE_DECAY} whenever it exceeds {@link #LONG_BASELINE_DRIFT_RATIO} times the short signal):
- *
- * <pre>
- *     gradient = clamp(tolerance * longServiceTime / shortServiceTime, 0.5, 1.0)
- *     target   = limit * gradient + queueHeadroom
- *     limit    = limit * (1 - smoothing) + target * smoothing     // then clamp to [floor, ceiling]
- * </pre>
- *
- * The multiplicative backoff arm follows {@code AIMDLimit} semantics (ratio {@link #AIMD_BACKOFF_RATIO}), and the
- * minimum-samples hold follows {@code WindowedLimit}'s window-size guard - both from the same Netflix project.
+ * <b>This is the band machine of the 2026-08-24-003 design</b> (R1, R3, R5, R7, R8, KTD2, KTD6), replacing the
+ * six-arm Gradient2 port in one move. One statistic - the {@link AdmissionElasticityEstimator elasticity} of
+ * useful throughput against concurrency - is read as three bands, and the law contains <b>no learned latency
+ * reference of any kind</b> (R8): the long-latency EWMA baseline, the anti-drift decay, the probe-down arm, the
+ * latency gradient, the starvation probe-up and the in-flight-median hold arm are all deleted with the port. The
+ * window still carries service time for observability; this class never reads it.
  * <p>
- * Deliberate deviations from upstream, in the precedence order the arms are evaluated (first match wins):
+ * Precedence per window close (first gate whose condition holds wins):
  * <ol>
- * <li><b>APP_LIMITED (starving for samples)</b> - too few service-time samples to judge; hold.</li>
- * <li><b>BACKOFF</b> - any overload drop fires one multiplicative cut for the whole window.</li>
- * <li><b>FAILURE_LIMITED</b> - non-success fraction above {@link #FAILURE_FRACTION_GROWTH_FREEZE_THRESHOLD}
- * freezes growth (gradient may still contract). A fast-rejecting overloaded downstream LOWERS measured service
- * time; without this arm the gradient reads overload as headroom and grows without bound.</li>
- * <li><b>PROBING (up)</b> - a starvation signature (in-flight median far below the limit, spread NOT bimodal,
- * latency flat) while below the ceiling takes one bounded step up. A contraction narrows the pipeline buffer and
- * manufactures its own starvation evidence; this keeps the ratchet from locking. A bimodal in-flight spread does
- * NOT classify as starved.</li>
- * <li><b>APP_LIMITED (idle)</b> - in-flight MEDIAN below half the limit holds the limit. Upstream's
- * {@code WindowedLimit} feeds max-in-flight here; the median is a deliberate deviation, because a max reads
- * healthy when the system is starved.</li>
- * <li><b>PROBING (down)</b> - a bounded periodic re-measure probe: while pinned at the ceiling with flat latency
- * (or while a previous probe proved the baseline contaminated), step down every
- * {@link #DEFAULT_PROBE_DOWN_CADENCE_WINDOWS} windows and compare. A law that starts already saturated has no
- * clean baseline - the long EWMA warms up on degraded latency, the gradient reads flat-degraded as healthy, and
- * the limit pins at the cap forever (proven by the contaminated-baseline gate test). When a probe improves
- * latency by at least the {@link #PROBE_DOWN_IMPROVEMENT_RATIO} factor, the baseline is snapped down to the
- * measured value and probing continues on cadence - no longer gated on flat latency, since the regrowth between
- * probes lifts latency out of the flat band - until a probe stops helping.</li>
- * <li><b>ADAPTING / AT_CAP / AT_FLOOR</b> - the Gradient2 update above.</li>
+ * <li><b>Adjudication gate</b> - fewer than {@link #DEFAULT_MIN_SAMPLES_PER_WINDOW} samples: hold, reason
+ * {@code INSUFFICIENT_SIGNAL}, ALL state untouched, window never offered to the estimator.</li>
+ * <li><b>Absolute brakes</b> - any overload drop: one multiplicative {@link #AIMD_BACKOFF_RATIO} cut, reason
+ * {@code BACKOFF}; non-success fraction above {@link #FAILURE_FRACTION_GROWTH_FREEZE_THRESHOLD}: growth frozen
+ * (the band machine takes no decision on a failure-poisoned window, so contract-only degenerates to hold), reason
+ * {@code FAILURE_LIMITED}; offset-encoding back-pressure at the boundary: hold, never grow, reason
+ * {@code OFFSET_BACK_PRESSURE} (R8 - a partition refusing records makes growth meaningless). Braked windows are
+ * not offered to the estimator: their evidence is polluted by the very condition that fired the brake.</li>
+ * <li><b>Binding gate</b> (R5) - the limit did not bind: PRESERVE, bit-identical, reason = the window's
+ * {@link ClosedAdmissionWindow.BindingClassification starvation cause} ({@code NO_WORK} /
+ * {@code ORDERING_STARVED} / {@code SELF_THROTTLED}). Never decayed (RFC 7661: absence of data yields no
+ * decision), and never offered - the estimator refuses unbound windows anyway (R2), but the law does not lean on
+ * that.</li>
+ * <li><b>Offer</b> - a bound, adjudicated, un-braked window enters the estimator's history.</li>
+ * <li><b>Bands</b> from the estimator's verdict - see below.</li>
  * </ol>
  * <p>
- * PURE MATH ONLY: no clock, no threads, no metrics - every update is an explicit {@link #onWindowClosed} call, and
- * all time values arrive as injected nanosecond quantities inside the window. Single-threaded by design.
+ * <b>The bands, and the two dynamics rules the falsifier suite forced</b> (both are the KTD6 re-derivation of the
+ * accelerator's dynamics that the design deferred - the plan's Open Question 4 - carried out far enough to make
+ * the R14 falsifiers green; the numbers cited are from the deterministic falsifier plant, knee at 20 slots):
+ * <ul>
+ * <li><b>WARMUP</b> (no verdict in force, R3/KTD2): binding alone licenses additive growth of
+ * {@code q = sqrt(limit)} per window, cumulatively capped at {@link #DEFAULT_WARMUP_ALLOWANCE_SLOTS} slots per
+ * episode; at the cap, {@code WARMUP_EXHAUSTED} preserves. The allowance is denominated in SLOTS, not q-steps
+ * (deviation from KTD2's "8 steps of q", documented in the U5 audit): eight sqrt-steps from the knee is a 3x
+ * blind overshoot that fails the graceful-saturation plateau falsifier outright, and the sparse-adjudication
+ * falsifier's allowance constant was always stated in slots. Acting on a live verdict resets the episode.</li>
+ * <li><b>RISE</b> (elasticity above the threshold): one accelerator step {@code +q}, but <b>only at the settle
+ * cadence</b> - at least {@link #DEFAULT_SETTLE_WINDOWS} offered windows since the last movement. Between steps
+ * the law holds (reason {@code PLATEAU}). Without the cadence, the whole-history regression is still dominated
+ * by the below-knee climb when the knee is crossed, and sqrt-steps compound to the ceiling before the slope can
+ * answer (measured: 9 -&gt; 100 in 14 windows against a knee of 20). The cadence, together with the law's
+ * {@link #DEFAULT_ESTIMATOR_HORIZON short estimator horizon}, makes each verdict a comparison of the current
+ * operating level against the previous one - marginal elasticity, which is the question RISE actually asks.</li>
+ * <li><b>Growth is provisional until the next verdict adjudicates it.</b> The law remembers the pre-growth
+ * baseline; when the first post-settle verdict says the step did not pay (HOLD band), the step is RETRACTED to
+ * that baseline rather than kept - so the law converges to the LAST LEVEL THAT PAID (the falsifier plant's exact
+ * knee) instead of parking one overshoot step above it. A RISE verdict confirms the growth and the baseline
+ * advances. Warmup growth is adjudicated the same way by the episode's first verdict.</li>
+ * <li><b>HOLD</b> (elasticity in [0, threshold]): hold, reason {@code PLATEAU}. This band is the plateau brake -
+ * flat throughput with climbing in-flight never licenses growth (the ratchet the old law shipped).</li>
+ * <li><b>FALL</b> (elasticity below zero): multiplicative contraction by {@link #AIMD_BACKOFF_RATIO}, floor
+ * clamped, applied to the retracted baseline when growth was pending - more concurrency bought less work, so the
+ * unconfirmed step is taken back before the cut.</li>
+ * </ul>
+ * <p>
+ * <b>Floor invariant (R7), asserted at construction:</b> the floor never sits below one accelerator step -
+ * {@code accelerator(floor) >= 1} slot - or the accelerator could not act at the floor and the floor would be
+ * absorbing.
+ * <p>
+ * <b>What this law cannot do yet, deliberately:</b> descend from a too-high start on a flat plateau (no signal in
+ * a throughput-steered law distinguishes 50 slots from 20 when both complete the same 400 records/s - the
+ * operator-facing symptom is queueing latency, which R8 forbids this law to read), and escape a floor pin. Both
+ * belong to U6's escape probe, which re-measures from a known-low operating point on a path no gated signal can
+ * suppress.
+ * <p>
+ * PURE MATH ONLY: no clock, no threads, no metrics - every update is an explicit {@link #onWindowClosed} call.
+ * The estimator's history horizon is driven by a synthetic instant cursor advanced by each window's own measured
+ * {@link ClosedAdmissionWindow#getElapsedNanos() elapsed time}, so identical window sequences produce identical
+ * trajectories. Single-threaded by design.
  */
+@Slf4j
 public final class AdmissionControlLaw {
 
     // ------------------------------------------------------------------
@@ -61,13 +93,14 @@ public final class AdmissionControlLaw {
     // ------------------------------------------------------------------
 
     /**
-     * Hard floor: the limit never drops below one slot, or progress stops entirely.
+     * Hard floor: the limit never drops below one slot, or progress stops entirely. R7 requires it to also be at
+     * least one accelerator step - asserted at construction, not left to coincidence.
      */
     static final int LIMIT_FLOOR_SLOTS = 1;
 
     /**
-     * Minimum service-time samples a window must carry before the law will act on it (from
-     * {@code WindowedLimit}'s default window size).
+     * Minimum samples a window must carry before the law will act on it (from {@code WindowedLimit}'s default
+     * window size). Below it the window is not adjudicated: held, and never offered to the estimator.
      */
     static final int DEFAULT_MIN_SAMPLES_PER_WINDOW = 10;
 
@@ -77,161 +110,83 @@ public final class AdmissionControlLaw {
     static final double FAILURE_FRACTION_GROWTH_FREEZE_THRESHOLD = 0.2;
 
     /**
-     * Multiplicative backoff applied when the window saw overload drops (from {@code AIMDLimit}'s default).
+     * Multiplicative backoff applied on overload drops (from {@code AIMDLimit}'s default) and on the FALL band's
+     * contraction - both are "more was destructive" verdicts, differing only in which signal said so.
      */
     static final double AIMD_BACKOFF_RATIO = 0.9;
 
     /**
-     * Size of the bounded starvation probe: one slot up per starved window.
+     * KTD2's per-episode warmup allowance, in SLOTS of cumulative blind growth (see the class javadoc for why
+     * slots, not q-steps). Working constant; U6's escape probe opens a fresh allowance when it concludes.
      */
-    static final int PROBE_UP_STEP_SLOTS = 1;
+    static final double DEFAULT_WARMUP_ALLOWANCE_SLOTS = 4.0;
 
     /**
-     * In-flight median below this fraction of the limit reads as "far below" for the starvation signature.
+     * How many offered (bound, adjudicated, un-braked) windows must pass after a movement before the law acts on
+     * a live verdict again - the settle cadence that makes the estimator's verdict marginal rather than
+     * whole-climb-averaged (class javadoc). Chosen equal to the estimator's minimum entry count so a post-settle
+     * verdict is computable from post-movement evidence.
      */
-    static final double STARVED_MEDIAN_FRACTION_OF_LIMIT = 0.25;
+    static final int DEFAULT_SETTLE_WINDOWS = 8;
 
     /**
-     * In-flight spread (p90 - p10) above this fraction of the limit is the bimodal signature and vetoes the
-     * starvation classification.
+     * The law's estimator horizon. Deliberately SHORTER than {@link AdmissionElasticityEstimator}'s own 60s
+     * default (a documented U5 deviation from KTD1's default): at the one-second window cadence this holds about
+     * twelve entries - the settle's eight post-movement windows plus a remnant of the previous operating level -
+     * which is exactly the two-level comparison the settle cadence needs. A 60s horizon retains the whole
+     * below-knee climb, whose averaged slope reads far above the RISE threshold long after growth has stopped
+     * paying (measured: slope still 0.47 at 5x the knee).
      */
-    static final double STARVED_SPREAD_MAX_FRACTION_OF_LIMIT = 0.25;
+    static final Duration DEFAULT_ESTIMATOR_HORIZON = Duration.ofSeconds(12);
 
-    /**
-     * Upstream Gradient2's app-limited guard threshold: in-flight below half the limit means the application, not
-     * the downstream, is the bottleneck - never grow on such a window.
-     */
-    static final double APP_LIMITED_MEDIAN_FRACTION_OF_LIMIT = 0.5;
+    /** KTD1: minimum adjudicated windows in the history before the estimator may act. */
+    static final int DEFAULT_ESTIMATOR_MIN_ENTRIES = 8;
 
-    /**
-     * The gradient is never allowed below this, to avoid aggressive shedding on outliers (upstream Gradient2).
-     */
-    static final double GRADIENT_FLOOR = 0.5;
-
-    /**
-     * The gradient is never allowed above this: growth comes only from the additive queue headroom (upstream
-     * Gradient2).
-     */
-    static final double GRADIENT_CEILING = 1.0;
-
-    /**
-     * Smoothing factor on the limit update (upstream Gradient2 default).
-     */
-    static final double DEFAULT_SMOOTHING = 0.2;
-
-    /**
-     * Constant additive queue headroom - the only growth term in steady state (upstream Gradient2 default).
-     */
-    static final int DEFAULT_QUEUE_HEADROOM_SLOTS = 4;
-
-    /**
-     * Tolerated ratio of short to long service time before the gradient contracts (upstream Gradient2's
-     * rttTolerance default).
-     */
-    static final double DEFAULT_SERVICE_TIME_TOLERANCE = 1.5;
-
-    /**
-     * Span of the long-term service-time EWMA, in windows (upstream Gradient2 default).
-     */
-    static final int DEFAULT_LONG_BASELINE_WINDOW = 600;
-
-    /**
-     * Arithmetic-mean warmup length of the long-term EWMA, in windows (upstream Gradient2 default).
-     */
-    static final int DEFAULT_LONG_BASELINE_WARMUP_WINDOW = 10;
-
-    /**
-     * PR-88 anti-drift: when the long baseline exceeds this multiple of the short signal, decay it.
-     */
-    static final double LONG_BASELINE_DRIFT_RATIO = 2.0;
-
-    /**
-     * PR-88 anti-drift: the per-window decay applied to a stale-high long baseline.
-     */
-    static final double LONG_BASELINE_DECAY = 0.95;
-
-    /**
-     * Latency counts as "flat" when the short signal is within this relative tolerance of the long baseline.
-     */
-    static final double LATENCY_FLAT_TOLERANCE = 0.1;
-
-    /**
-     * Size of the bounded probe-down step (multiplicative, like the AIMD arm but gentler in intent - it is a
-     * re-measure, not a punishment).
-     */
-    static final double DEFAULT_PROBE_DOWN_RATIO = 0.9;
-
-    /**
-     * Cadence of the probe-down re-measure, in windows.
-     */
-    static final int DEFAULT_PROBE_DOWN_CADENCE_WINDOWS = 5;
-
-    /**
-     * A probe-down "improved" latency when the following window's short signal is at most this fraction of the
-     * pre-probe short signal - evidence the baseline was contaminated by prior saturation.
-     */
-    static final double PROBE_DOWN_IMPROVEMENT_RATIO = 0.9;
-
-    /**
-     * Zero-latency guard: a window mean of zero (or negative, defensively) is clamped to this before entering the
-     * gradient, whose division would otherwise produce NaN/Infinity. Added for the "clamps" scenario of the test
-     * suite - upstream has no such guard because its RTTs come from a monotonic clock.
-     */
-    static final double MIN_SERVICE_TIME_NANOS = 1.0;
+    /** KTD1: minimum in-flight spread (slots) across the history for a computable slope. */
+    static final int DEFAULT_ESTIMATOR_MIN_SPREAD_SLOTS = 1;
 
     // ------------------------------------------------------------------
     // Configuration (immutable)
     // ------------------------------------------------------------------
 
     private final int ceiling;
-    private final double smoothing;
-    private final int queueHeadroomSlots;
-    private final double serviceTimeTolerance;
     private final int minSamplesPerWindow;
-    private final double probeDownRatio;
-    /** Zero disables the probe-down arm entirely (used by the gate test to demonstrate the ported law pins). */
-    private final int probeDownCadenceWindows;
+    private final double warmupAllowanceSlots;
+    private final int settleWindows;
 
     // ------------------------------------------------------------------
     // State
     // ------------------------------------------------------------------
 
     /**
-     * Estimated admission limit, kept fractional so sub-slot adjustments accumulate (as upstream does).
+     * Estimated admission limit, kept fractional so sub-slot adjustments accumulate; published truncated.
      */
     private double estimatedLimit;
 
     /**
-     * Long-term, less volatile service-time baseline. Under load it trends higher; the drift decay and the
-     * probe-down snap pull it back down.
+     * The law OWNS its estimator (the U5 wiring decision): {@link AdmissionController#resetForAssignmentDelta}
+     * reconstructs the law, which reconstructs the estimator - the rebalance invalidation, until U6 refines it.
      */
-    private final ServiceTimeExpAvg longServiceTime;
+    private final AdmissionElasticityEstimator estimator;
 
     /**
-     * The long-term baseline value that the LAST evaluated window's gradient was actually computed against, in
-     * nanoseconds - i.e. {@code longTime} as {@link #onWindowClosed} sampled it, before any anti-drift decay or
-     * probe-down snap applied to {@link #longServiceTime} for the NEXT window.
-     * <p>
-     * Purely observational: written and never read by the law itself, so it changes no computation. It exists
-     * because the comparison the law makes - short-term against long-run - is the number that decides everything
-     * and was invisible from outside, which made the baseline ratchet undiagnosable from the log alone.
-     * {@link #getServiceTimeBaselineNanos()} answers a different question (where the baseline is NOW), and reading
-     * it after the fact would misreport a window in which the decay fired.
-     * <p>
-     * Zero until a window has been evaluated far enough to compute it - a window held by the minimum-samples arm
-     * never reaches the gradient, and deliberately leaves this untouched along with the rest of the state.
+     * Synthetic clock cursor for the estimator's wall-clock horizon: advanced by every closed window's measured
+     * elapsed time, so the law stays clock-free and deterministic (class javadoc).
      */
-    private double lastWindowBaselineNanos = 0.0;
+    private Instant windowClockCursor = Instant.EPOCH;
 
-    private int windowsSinceProbeDown = 0;
-    private boolean awaitingProbeDownResult = false;
-    private double preProbeShortTimeNanos = 0.0;
+    /** Cumulative blind growth granted since the episode began (construction, or the last acted verdict). KTD2. */
+    private double warmupSlotsGranted = 0.0;
+
+    /** Offered windows since the last movement - the settle cadence's counter. Starts open so a law may act. */
+    private int offeredWindowsSinceMovement;
 
     /**
-     * True while the last probe-down improved latency - the baseline was contaminated, so probing continues on
-     * cadence even though the limit is no longer at the ceiling.
+     * The limit BEFORE the growth currently awaiting adjudication (a warmup episode's start, or the level a RISE
+     * step left). Null when no growth is pending. The first post-settle verdict resolves it: RISE confirms (the
+     * baseline advances), HOLD retracts to it, FALL retracts to it and cuts. A BACKOFF supersedes it.
      */
-    private boolean baselineRecoveryMode = false;
+    private Double pendingGrowthBaseline = null;
 
     private AdmissionControlLaw(Builder builder) {
         if (builder.ceiling < LIMIT_FLOOR_SLOTS) {
@@ -240,15 +195,20 @@ public final class AdmissionControlLaw {
         if (builder.initialLimit < LIMIT_FLOOR_SLOTS || builder.initialLimit > builder.ceiling) {
             throw new IllegalArgumentException("initialLimit must be within [floor, ceiling]");
         }
+        // R7, asserted rather than left to coincidence: at the floor the accelerator must still be able to act,
+        // or the floor is absorbing. sqrt(1) = 1 >= 1 slot holds today; this guards the constants' future.
+        if (acceleratorStep(LIMIT_FLOOR_SLOTS) < 1.0) {
+            throw new IllegalStateException("floor invariant violated (R7): one accelerator step at the floor is "
+                    + acceleratorStep(LIMIT_FLOOR_SLOTS) + " slot(s), below 1");
+        }
         this.ceiling = builder.ceiling;
-        this.smoothing = builder.smoothing;
-        this.queueHeadroomSlots = builder.queueHeadroomSlots;
-        this.serviceTimeTolerance = builder.serviceTimeTolerance;
         this.minSamplesPerWindow = builder.minSamplesPerWindow;
-        this.probeDownRatio = builder.probeDownRatio;
-        this.probeDownCadenceWindows = builder.probeDownCadenceWindows;
+        this.warmupAllowanceSlots = builder.warmupAllowanceSlots;
+        this.settleWindows = builder.settleWindows;
         this.estimatedLimit = builder.initialLimit;
-        this.longServiceTime = new ServiceTimeExpAvg(builder.longBaselineWindow, builder.longBaselineWarmupWindow);
+        this.estimator = new AdmissionElasticityEstimator(
+                builder.estimatorHorizon, builder.estimatorMinEntries, builder.estimatorMinSpreadSlots);
+        this.offeredWindowsSinceMovement = settleWindows; // the first live verdict may be acted on immediately
     }
 
     public static Builder newBuilder() {
@@ -256,126 +216,163 @@ public final class AdmissionControlLaw {
     }
 
     /**
-     * Evaluates one closed window and moves the limit. See the class javadoc for the arm precedence.
+     * The accelerator: {@code q = sqrt(limit)}, floored at one whole slot (KTD6's working constant; the floor is
+     * what makes the R7 invariant hold at limit 1).
      */
-    public AdmissionDecision onWindowClosed(ClosedAdmissionWindow window) {
-        final double limit = estimatedLimit;
-
-        // Arm 1: not enough samples to judge - hold, and leave ALL state (baseline, probe bookkeeping) untouched:
-        // a signal-free window must not advance the probe cadence nor contaminate the baseline.
-        if (window.getSampleCount() < minSamplesPerWindow) {
-            return decide(limit, AdmissionDecisionReason.APP_LIMITED);
-        }
-
-        // Unsmoothed short signal (PR-88): the window mean feeds the gradient directly.
-        // MIN_SERVICE_TIME_NANOS is the zero-latency guard (see its javadoc).
-        final double shortTime = Math.max(MIN_SERVICE_TIME_NANOS, window.getMeanServiceTimeNanos());
-        final double longTime = longServiceTime.add(shortTime);
-        this.lastWindowBaselineNanos = longTime; // observation only - see the field's javadoc
-
-        // PR-88 anti-drift: a long baseline left stale-high after a load episode is decayed toward reality.
-        // As upstream, the decayed value takes effect from the NEXT window; this window uses longTime as sampled.
-        if (longTime / shortTime > LONG_BASELINE_DRIFT_RATIO) {
-            longServiceTime.update(current -> current * LONG_BASELINE_DECAY);
-        }
-
-        final boolean latencyFlat = shortTime >= longTime * (1 - LATENCY_FLAT_TOLERANCE)
-                && shortTime <= longTime * (1 + LATENCY_FLAT_TOLERANCE);
-
-        windowsSinceProbeDown++;
-
-        // Evaluate the previous probe-down, if one is pending: did running lower actually run faster?
-        if (awaitingProbeDownResult) {
-            awaitingProbeDownResult = false;
-            boolean improved = shortTime <= preProbeShortTimeNanos * PROBE_DOWN_IMPROVEMENT_RATIO;
-            baselineRecoveryMode = improved;
-            if (improved) {
-                // The baseline was contaminated by saturation: snap it down to the measured value so the
-                // gradient can see queueing again (cited scenario: contaminated-baseline gate test).
-                final double measured = shortTime;
-                longServiceTime.update(current -> Math.min(current, measured));
-            }
-        }
-
-        // Arm 2: overload drops - one AIMD cut per window, however many drops it carried.
-        if (window.getOverloadDropCount() > 0) {
-            return decide(Math.max(LIMIT_FLOOR_SLOTS, limit * AIMD_BACKOFF_RATIO),
-                    AdmissionDecisionReason.BACKOFF);
-        }
-
-        final double gradientTarget = gradientUpdate(limit, shortTime, longTime);
-
-        // Arm 3: failure fraction freezes growth - contract-only gradient.
-        if (window.nonSuccessFraction() > FAILURE_FRACTION_GROWTH_FREEZE_THRESHOLD) {
-            double frozen = Math.min(limit, gradientTarget);
-            return decide(Math.max(LIMIT_FLOOR_SLOTS, frozen), AdmissionDecisionReason.FAILURE_LIMITED);
-        }
-
-        // Arm 4: starvation signature - bounded one-window probe UP. A bimodal spread vetoes.
-        boolean starved = window.getInFlightMedian() < limit * STARVED_MEDIAN_FRACTION_OF_LIMIT
-                && window.getInFlightSpread() <= limit * STARVED_SPREAD_MAX_FRACTION_OF_LIMIT
-                && latencyFlat
-                && limit < ceiling;
-        if (starved) {
-            return decide(Math.min(ceiling, limit + PROBE_UP_STEP_SLOTS), AdmissionDecisionReason.PROBING);
-        }
-
-        // Arm 5: app-limited - the application is not filling half the limit, so the window says nothing about
-        // the downstream's capacity. MEDIAN, not upstream's max: a max reads healthy when starved.
-        if (window.getInFlightMedian() < limit * APP_LIMITED_MEDIAN_FRACTION_OF_LIMIT) {
-            return decide(limit, AdmissionDecisionReason.APP_LIMITED);
-        }
-
-        // Arm 6: bounded periodic probe DOWN to re-measure a possibly contaminated baseline.
-        if (probeDownDue(latencyFlat, limit)) {
-            windowsSinceProbeDown = 0;
-            awaitingProbeDownResult = true;
-            preProbeShortTimeNanos = shortTime;
-            return decide(Math.max(LIMIT_FLOOR_SLOTS, limit * probeDownRatio), AdmissionDecisionReason.PROBING);
-        }
-
-        // Arm 7: the Gradient2 update itself.
-        double clamped = Math.max(LIMIT_FLOOR_SLOTS, Math.min(ceiling, gradientTarget));
-        AdmissionDecisionReason reason = AdmissionDecisionReason.ADAPTING;
-        if (gradientTarget > ceiling) {
-            reason = AdmissionDecisionReason.AT_CAP;
-        } else if (gradientTarget < LIMIT_FLOOR_SLOTS) {
-            reason = AdmissionDecisionReason.AT_FLOOR;
-        }
-        return decide(clamped, reason);
+    private static double acceleratorStep(double limit) {
+        return Math.max(1.0, Math.sqrt(limit));
     }
 
     /**
-     * The ported Gradient2 core: gradient clamped to [{@link #GRADIENT_FLOOR}, {@link #GRADIENT_CEILING}],
-     * additive queue headroom, then smoothing against the current limit. Unclamped to [floor, ceiling] - callers
-     * clamp (or freeze) per arm.
+     * Evaluates one closed window and moves the limit. See the class javadoc for the gate precedence.
      */
-    private double gradientUpdate(double limit, double shortTime, double longTime) {
-        double gradient = Math.max(GRADIENT_FLOOR,
-                Math.min(GRADIENT_CEILING, serviceTimeTolerance * longTime / shortTime));
-        double newLimit = limit * gradient + queueHeadroomSlots;
-        return limit * (1 - smoothing) + newLimit * smoothing;
+    public AdmissionDecision onWindowClosed(ClosedAdmissionWindow window) {
+        windowClockCursor = windowClockCursor.plusNanos(Math.max(0L, window.getElapsedNanos()));
+        final double limit = estimatedLimit;
+
+        // Gate 1: adjudication - too few samples to judge. Hold with ALL state untouched: a signal-free window
+        // must not advance the settle cadence, spend warmup allowance, nor teach the estimator (KTD3).
+        if (window.getSampleCount() < minSamplesPerWindow) {
+            return hold(AdmissionDecisionReason.INSUFFICIENT_SIGNAL);
+        }
+
+        // Gate 2a: overload drops - one AIMD cut per window, however many drops it carried. Supersedes any
+        // pending growth adjudication: the cut is the verdict on it. The reason stays BACKOFF even when the
+        // floor clamp bites - the gauge fact that matters is "overload was observed", and dashboards key on it.
+        if (window.getOverloadDropCount() > 0) {
+            pendingGrowthBaseline = null;
+            return move(limit * AIMD_BACKOFF_RATIO, AdmissionDecisionReason.BACKOFF, false);
+        }
+
+        // Gate 2b: failure fraction freezes growth. The band machine takes no decision on a failure-poisoned
+        // window (it is not offered), so "contract-only" degenerates to a hold - min(current, no decision).
+        if (window.nonSuccessFraction() > FAILURE_FRACTION_GROWTH_FREEZE_THRESHOLD) {
+            return hold(AdmissionDecisionReason.FAILURE_LIMITED);
+        }
+
+        // Gate 2c: offset-encoding back-pressure (R8) - a partition refusing records makes growth meaningless.
+        if (window.isOffsetBackPressure()) {
+            return hold(AdmissionDecisionReason.OFFSET_BACK_PRESSURE);
+        }
+
+        // Gate 3: binding (R5) - an unbound window says nothing about the limit. PRESERVE bit-identical, named
+        // for the separated starvation cause, and do not offer (the estimator would refuse it anyway - R2).
+        if (!window.isLimitBound()) {
+            return hold(reasonForUnbound(window.bindingClassification()));
+        }
+
+        // Step 4: bound + adjudicated + un-braked - the only windows the estimator may learn from.
+        estimator.offer(windowClockCursor, window, true);
+        offeredWindowsSinceMovement++;
+
+        // Step 5: the bands.
+        AdmissionElasticityEstimator.Verdict verdict = estimator.verdict();
+        if (!verdict.isLive()) {
+            return warmupBand(limit);
+        }
+        if (offeredWindowsSinceMovement < settleWindows) {
+            // Between movements: the history is still dominated by the pre-movement operating level, so the
+            // current verdict answers yesterday's question. Park until the settle completes (class javadoc).
+            return hold(AdmissionDecisionReason.PLATEAU);
+        }
+        switch (verdict.getBand()) {
+            case RISE:
+                return riseStep(limit);
+            case HOLD:
+                return holdBand(limit);
+            case FALL:
+                return fallContraction(limit);
+            default:
+                // INSUFFICIENT_SIGNAL is excluded by isLive() above; fail loudly rather than guess.
+                throw new IllegalStateException("unreachable band: " + verdict.getBand());
+        }
     }
 
-    private boolean probeDownDue(boolean latencyFlat, double limit) {
-        if (probeDownCadenceWindows <= 0) {
-            return false; // probe-down disabled
+    /**
+     * WARMUP band (R3/KTD2): no verdict in force - binding alone licenses one additive step per window, until the
+     * episode's allowance is spent. The episode's first grant records the pre-episode baseline, so the episode's
+     * eventual adjudicating verdict can retract blind growth that bought nothing.
+     */
+    private AdmissionDecision warmupBand(double limit) {
+        double remaining = warmupAllowanceSlots - warmupSlotsGranted;
+        if (remaining <= 0) {
+            return hold(AdmissionDecisionReason.WARMUP_EXHAUSTED);
         }
-        if (windowsSinceProbeDown < probeDownCadenceWindows) {
-            return false;
+        double grant = Math.min(acceleratorStep(limit), remaining);
+        if (pendingGrowthBaseline == null) {
+            pendingGrowthBaseline = limit;
         }
-        // Flat latency gates only the INITIAL at-cap trigger. Once a probe has proven the baseline contaminated
-        // (recovery mode), each probe SNAPS the baseline down and the regrowth between probes lifts latency back
-        // out of the flat band - gating recovery probes on flatness would end the descent after one step (this
-        // exact stall was observed in the contaminated-baseline gate scenario). Recovery mode is bounded by its
-        // own evidence instead: it ends the first time a probe fails to improve latency.
-        boolean atCap = limit >= ceiling;
-        return baselineRecoveryMode || (latencyFlat && atCap);
+        warmupSlotsGranted += grant;
+        return move(limit + grant, AdmissionDecisionReason.WARMUP);
     }
 
-    private AdmissionDecision decide(double newEstimatedLimit, AdmissionDecisionReason reason) {
-        this.estimatedLimit = newEstimatedLimit;
-        return new AdmissionDecision((int) newEstimatedLimit, reason);
+    /** RISE: the pending step (if any) is confirmed by this verdict; take the next one. Resets the episode. */
+    private AdmissionDecision riseStep(double limit) {
+        warmupSlotsGranted = 0.0; // acted verdict - fresh warmup episode (KTD2)
+        pendingGrowthBaseline = limit;
+        return move(limit + acceleratorStep(limit), AdmissionDecisionReason.ADAPTING);
+    }
+
+    /** HOLD: growth stopped paying. Retract a pending step that this verdict shows bought nothing; else park. */
+    private AdmissionDecision holdBand(double limit) {
+        warmupSlotsGranted = 0.0; // acted verdict - fresh warmup episode (KTD2)
+        if (pendingGrowthBaseline != null && pendingGrowthBaseline < limit) {
+            double baseline = pendingGrowthBaseline;
+            pendingGrowthBaseline = null;
+            return move(baseline, AdmissionDecisionReason.ADAPTING);
+        }
+        pendingGrowthBaseline = null;
+        return hold(AdmissionDecisionReason.PLATEAU);
+    }
+
+    /** FALL: more bought less. Retract any unconfirmed growth, then cut multiplicatively (floor clamped). */
+    private AdmissionDecision fallContraction(double limit) {
+        warmupSlotsGranted = 0.0; // acted verdict - fresh warmup episode (KTD2)
+        double base = pendingGrowthBaseline != null ? Math.min(limit, pendingGrowthBaseline) : limit;
+        pendingGrowthBaseline = null;
+        return move(base * AIMD_BACKOFF_RATIO, AdmissionDecisionReason.ADAPTING);
+    }
+
+    private static AdmissionDecisionReason reasonForUnbound(ClosedAdmissionWindow.BindingClassification cause) {
+        switch (cause) {
+            case NO_WORK:
+                return AdmissionDecisionReason.NO_WORK;
+            case ORDERING_STARVED:
+                return AdmissionDecisionReason.ORDERING_STARVED;
+            case SELF_THROTTLED:
+                return AdmissionDecisionReason.SELF_THROTTLED;
+            default:
+                throw new IllegalStateException("limit-bound window reached the binding gate: " + cause);
+        }
+    }
+
+    /**
+     * A hold: the estimate is untouched - bit-identical, not re-derived - which is what R5's preserve means.
+     */
+    private AdmissionDecision hold(AdmissionDecisionReason reason) {
+        return new AdmissionDecision((int) estimatedLimit, reason);
+    }
+
+    private AdmissionDecision move(double desired, AdmissionDecisionReason reason) {
+        return move(desired, reason, true);
+    }
+
+    /**
+     * A movement: clamp to [floor, ceiling] and, for band/warmup movements ({@code nameTheClamp}), name the
+     * clamp when it bound ({@code AT_CAP} / {@code AT_FLOOR} keep their old-gauge semantics: the law wanted to
+     * move further than the bounds allow). The BACKOFF brake keeps its own name at the clamps. Any movement
+     * restarts the settle cadence.
+     */
+    private AdmissionDecision move(double desired, AdmissionDecisionReason reason, boolean nameTheClamp) {
+        double clamped = Math.max(LIMIT_FLOOR_SLOTS, Math.min(ceiling, desired));
+        if (nameTheClamp && desired > ceiling) {
+            reason = AdmissionDecisionReason.AT_CAP;
+        } else if (nameTheClamp && desired < LIMIT_FLOOR_SLOTS) {
+            reason = AdmissionDecisionReason.AT_FLOOR;
+        }
+        this.estimatedLimit = clamped;
+        this.offeredWindowsSinceMovement = 0;
+        return new AdmissionDecision((int) clamped, reason);
     }
 
     /**
@@ -392,49 +389,39 @@ public final class AdmissionControlLaw {
         return estimatedLimit;
     }
 
-    /**
-     * The long-term service-time baseline in nanoseconds (upstream's "RTT no-load") - exposed for tests and
-     * future metrics.
-     */
-    public double getServiceTimeBaselineNanos() {
-        return longServiceTime.get();
+    // ------------------------------------------------------------------
+    // Reported state for the controller's movement log (U7) and the escape hatch (U6) - package-private.
+    // ------------------------------------------------------------------
+
+    /** The verdict currently in force - band, elasticity and freshness - for the movement log and U6. */
+    AdmissionElasticityEstimator.Verdict currentVerdict() {
+        return estimator.verdict();
+    }
+
+    /** Blind-growth allowance left in the current warmup episode, in slots (KTD2) - for tests and U6. */
+    double warmupAllowanceRemaining() {
+        return Math.max(0.0, warmupAllowanceSlots - warmupSlotsGranted);
+    }
+
+    /** Entries currently in the owned estimator's history - reconstruction is observable through this. */
+    int estimatorHistorySize() {
+        return estimator.historySize();
     }
 
     /**
-     * The long-run baseline the LAST evaluated window's short-term service time was compared against, in
-     * nanoseconds - see {@link #lastWindowBaselineNanos}. Read-only; zero before any window has reached the
-     * gradient.
-     */
-    public double getLastWindowServiceTimeBaselineNanos() {
-        return lastWindowBaselineNanos;
-    }
-
-    /**
-     * The tolerated short/long service-time ratio: the threshold the comparison is actually tested against.
-     * <p>
-     * The gradient is {@code clamp(tolerance * long / short, 0.5, 1.0)}, so it stops being 1.0 - and the limit
-     * therefore stops growing and starts contracting - exactly when {@code short / long} rises above this value.
-     * Reported alongside the ratio so a reader can see which side of the line a window fell on.
-     */
-    public double getServiceTimeTolerance() {
-        return serviceTimeTolerance;
-    }
-
-    /**
-     * Configuration for {@link AdmissionControlLaw}; defaults mirror upstream Gradient2Limit where a counterpart
-     * exists. Ported and adapted from {@code Gradient2Limit.Builder}.
+     * Configuration for {@link AdmissionControlLaw}. The latency knobs of the deleted Gradient2 port (tolerance,
+     * long-baseline, probe-down) are gone with it; what remains is the band machine's calibration plus the
+     * estimator wiring (KTD1's minimums, and the law's own horizon - see {@link #DEFAULT_ESTIMATOR_HORIZON}).
      */
     public static final class Builder {
         private int initialLimit = 20;
         private int ceiling = 100;
-        private double smoothing = DEFAULT_SMOOTHING;
-        private int queueHeadroomSlots = DEFAULT_QUEUE_HEADROOM_SLOTS;
-        private double serviceTimeTolerance = DEFAULT_SERVICE_TIME_TOLERANCE;
         private int minSamplesPerWindow = DEFAULT_MIN_SAMPLES_PER_WINDOW;
-        private int longBaselineWindow = DEFAULT_LONG_BASELINE_WINDOW;
-        private int longBaselineWarmupWindow = DEFAULT_LONG_BASELINE_WARMUP_WINDOW;
-        private double probeDownRatio = DEFAULT_PROBE_DOWN_RATIO;
-        private int probeDownCadenceWindows = DEFAULT_PROBE_DOWN_CADENCE_WINDOWS;
+        private double warmupAllowanceSlots = DEFAULT_WARMUP_ALLOWANCE_SLOTS;
+        private int settleWindows = DEFAULT_SETTLE_WINDOWS;
+        private Duration estimatorHorizon = DEFAULT_ESTIMATOR_HORIZON;
+        private int estimatorMinEntries = DEFAULT_ESTIMATOR_MIN_ENTRIES;
+        private int estimatorMinSpreadSlots = DEFAULT_ESTIMATOR_MIN_SPREAD_SLOTS;
 
         public Builder initialLimit(int initialLimit) {
             this.initialLimit = initialLimit;
@@ -449,58 +436,44 @@ public final class AdmissionControlLaw {
             return this;
         }
 
-        public Builder smoothing(double smoothing) {
-            this.smoothing = smoothing;
-            return this;
-        }
-
-        /**
-         * Fixed amount the limit can grow while service times remain low (upstream's queueSize).
-         */
-        public Builder queueHeadroomSlots(int queueHeadroomSlots) {
-            this.queueHeadroomSlots = queueHeadroomSlots;
-            return this;
-        }
-
-        /**
-         * Tolerated short/long service-time ratio before contraction (upstream's rttTolerance, must be >= 1.0).
-         */
-        public Builder serviceTimeTolerance(double serviceTimeTolerance) {
-            if (serviceTimeTolerance < 1.0) {
-                throw new IllegalArgumentException("serviceTimeTolerance must be >= 1.0");
-            }
-            this.serviceTimeTolerance = serviceTimeTolerance;
-            return this;
-        }
-
         public Builder minSamplesPerWindow(int minSamplesPerWindow) {
             this.minSamplesPerWindow = minSamplesPerWindow;
             return this;
         }
 
-        public Builder longBaselineWindow(int longBaselineWindow) {
-            this.longBaselineWindow = longBaselineWindow;
-            return this;
-        }
-
-        public Builder longBaselineWarmupWindow(int longBaselineWarmupWindow) {
-            this.longBaselineWarmupWindow = longBaselineWarmupWindow;
-            return this;
-        }
-
-        public Builder probeDownRatio(double probeDownRatio) {
-            if (probeDownRatio <= 0.0 || probeDownRatio >= 1.0) {
-                throw new IllegalArgumentException("probeDownRatio must be in (0, 1)");
+        /** KTD2's per-episode blind-growth cap, in slots. Test seam; production uses the working constant. */
+        public Builder warmupAllowanceSlots(double warmupAllowanceSlots) {
+            if (warmupAllowanceSlots < 0) {
+                throw new IllegalArgumentException("warmupAllowanceSlots must be >= 0");
             }
-            this.probeDownRatio = probeDownRatio;
+            this.warmupAllowanceSlots = warmupAllowanceSlots;
             return this;
         }
 
-        /**
-         * How often the re-measure probe-down may fire, in windows; zero disables the probe-down arm.
-         */
-        public Builder probeDownCadenceWindows(int probeDownCadenceWindows) {
-            this.probeDownCadenceWindows = probeDownCadenceWindows;
+        /** The settle cadence in offered windows. Test seam; production uses the working constant. */
+        public Builder settleWindows(int settleWindows) {
+            if (settleWindows < 1) {
+                throw new IllegalArgumentException("settleWindows must be >= 1");
+            }
+            this.settleWindows = settleWindows;
+            return this;
+        }
+
+        /** The owned estimator's wall-clock horizon (see {@link #DEFAULT_ESTIMATOR_HORIZON} for why not 60s). */
+        public Builder estimatorHorizon(Duration estimatorHorizon) {
+            this.estimatorHorizon = estimatorHorizon;
+            return this;
+        }
+
+        /** KTD1's minimum adjudicated windows before the estimator may act. */
+        public Builder estimatorMinEntries(int estimatorMinEntries) {
+            this.estimatorMinEntries = estimatorMinEntries;
+            return this;
+        }
+
+        /** KTD1's minimum in-flight spread for a computable slope. */
+        public Builder estimatorMinSpreadSlots(int estimatorMinSpreadSlots) {
+            this.estimatorMinSpreadSlots = estimatorMinSpreadSlots;
             return this;
         }
 

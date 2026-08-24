@@ -12,52 +12,48 @@ import java.util.stream.Collectors;
 /**
  * Why {@link AdmissionControlLaw} chose the target concurrency it did for a window.
  * <p>
- * The reasons are listed in the precedence order the law evaluates them - the first arm whose condition holds wins
- * the window.
+ * The reasons are listed in the precedence order the band machine evaluates them - the first gate whose condition
+ * holds wins the window (see {@link AdmissionControlLaw}'s class javadoc for the full precedence).
  * <p>
  * Each carries a hand-assigned {@link #getValue() metrics value} so the
  * {@code PCMetricsDef#ADMISSION_CONSTRAINT} gauge can publish "which constraint is binding" as a number - the same
  * device {@link bz.stub.parallelconsumer.internal.State} uses for {@code pc.status}. The values are deliberately NOT
  * ordinals: adding or removing a reason must never silently renumber the ones a dashboard is already keyed on.
+ * <p>
+ * <b>Retired values, never to be reused:</b> {@code 1} ({@code APP_LIMITED}) and {@code 4} ({@code PROBING})
+ * belonged to arms of the deleted Gradient2 port (the 2026-08-24-003 design's KTD8 deletions). A dashboard keyed
+ * on them must read those values as historical; a future reason - including U6's escape probe - takes a fresh
+ * number, so the old semantics can never be silently re-assigned.
  */
 public enum AdmissionDecisionReason {
 
     /**
-     * The window carried too few samples to judge, or in-flight concurrency shows the application (not the
-     * downstream) is the bottleneck - the limit is held, neither growing nor shrinking.
-     */
-    APP_LIMITED(1),
-
-    /**
-     * At least one admission was dropped for overload this window - multiplicative AIMD backoff was applied.
+     * At least one admission was dropped for overload this window - multiplicative AIMD backoff was applied
+     * (an absolute brake; fires whatever the elasticity verdict says).
      */
     BACKOFF(2),
 
     /**
-     * The non-success fraction of outcomes exceeded the threshold - growth is frozen for the window (the gradient
-     * may still contract the limit). A fast-failing overloaded downstream LOWERS measured service time; without
-     * this arm the gradient would read overload as headroom and grow without bound.
+     * The non-success fraction of outcomes exceeded the threshold - growth is frozen for the window (an absolute
+     * brake). A fast-failing overloaded downstream produces high useful-looking completion rates and low latency;
+     * without this brake the law could read overload as headroom.
      */
     FAILURE_LIMITED(3),
 
     /**
-     * A bounded probe was taken: one small step up out of a starvation signature, or one small step down to
-     * re-measure a possibly contaminated baseline while pinned at the ceiling.
-     */
-    PROBING(4),
-
-    /**
-     * Normal Gradient2 adaptation - the gradient of short-term vs long-term service time set the new limit.
+     * The law moved the target on elasticity evidence: a RISE-band accelerator step, a retraction of growth the
+     * following verdict showed had not paid, or a FALL-band multiplicative contraction. The movement log carries
+     * the direction and the verdict that drove it.
      */
     ADAPTING(5),
 
     /**
-     * The gradient update wanted to go higher but the ceiling clamp bound.
+     * The law wanted to grow but the ceiling clamp bound.
      */
     AT_CAP(6),
 
     /**
-     * The gradient update wanted to go lower but the one-slot floor clamp bound.
+     * The law wanted to contract but the one-slot floor clamp bound.
      */
     AT_FLOOR(7),
 
@@ -68,10 +64,63 @@ public enum AdmissionDecisionReason {
      * move the target on evidence about a system that no longer exists. Set by
      * {@link AdmissionController}, not the law - the law never sees a rebalance.
      */
-    COOLDOWN(8);
+    COOLDOWN(8),
 
     /**
-     * What the constraint gauge publishes before the first window has closed - no arm has decided anything yet, so
+     * The window carried too few samples to adjudicate - held, with ALL law state untouched: a signal-free window
+     * must neither move the target nor teach the elasticity estimator (the design's adjudication gate).
+     */
+    INSUFFICIENT_SIGNAL(9),
+
+    /**
+     * No elasticity verdict is in force (cold start, post-rebalance reconstruction) and the limit is binding, so
+     * the warmup band granted one additive accelerator step on binding alone (the design's R3/KTD2).
+     */
+    WARMUP(10),
+
+    /**
+     * No elasticity verdict is in force and the warmup band's per-episode allowance is spent - held. The named
+     * steady state for a plant that cannot adjudicate enough windows per horizon is preserve (plus, from U6, the
+     * escape cadence), never unbounded blind growth (KTD2's cap).
+     */
+    WARMUP_EXHAUSTED(11),
+
+    /**
+     * A live elasticity verdict is in force and the law is not moving this window: either the verdict is the HOLD
+     * band (growth has stopped paying - the knee), or the law is between accelerator steps waiting for
+     * post-movement evidence to accumulate (the settle cadence). Either way the target is deliberately parked on
+     * elasticity evidence.
+     */
+    PLATEAU(12),
+
+    /**
+     * The limit did not bind this window because the application ran out of work - preserved bit-identical, never
+     * decayed (the design's R5: absence of data yields no decision). One of the three separated starvation causes
+     * (the R13 reporting requirement).
+     */
+    NO_WORK(13),
+
+    /**
+     * The limit did not bind this window because buffered work existed that the shards could not yield - ordering,
+     * not the limit or absence of work, held the slots empty. Preserved bit-identical (R5). The single most
+     * valuable diagnosis available to an operator of this library, per the design.
+     */
+    ORDERING_STARVED(14),
+
+    /**
+     * The limit did not bind this window because the poller had paused itself for throttling - self-inflicted
+     * emptiness, which must never be read as evidence of anything. Preserved bit-identical (R5).
+     */
+    SELF_THROTTLED(15),
+
+    /**
+     * At least one assigned partition was refusing records under offset-encoding back-pressure at the boundary
+     * (the design's R8 absolute brake): held, never grown - a partition refusing records makes growth meaningless.
+     */
+    OFFSET_BACK_PRESSURE(16);
+
+    /**
+     * What the constraint gauge publishes before the first window has closed - no gate has decided anything yet, so
      * no reason is binding. Zero is reserved for it, which is why the reasons themselves start at one.
      */
     public static final int NO_DECISION_YET_VALUE = 0;

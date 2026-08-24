@@ -65,9 +65,9 @@ import static org.awaitility.Awaitility.await;
  * Two shapes appear - the target MOVING, and (rate-limited) the target being HELD by a named constraint:
  * <pre>
  * 49:14.248 5f3ed23e [pc-control-5f3ed23e] Adaptive concurrency (ENFORCE): live admission target 2 -&gt; 3
- *     slot(s), decided by ADAPTING - service time mean 12.12ms against long-run baseline 12.28ms, ratio 0.99
- *     (contracts above 1.50), in-flight median 2 (spread 0) over 154 snapshot(s), 162 sample(s), effective
- *     maximum 32.
+ *     slot(s), decided by WARMUP - elasticity none yet, useful throughput 158.0/s over 162 sample(s)
+ *     (LIMIT_BOUND), service time mean 12.12ms, in-flight median 2 (spread 0) over 154 snapshot(s), warmup
+ *     allowance left 2.6, effective maximum 32.
  * 49:22.827 5f3ed23e [pc-control-5f3ed23e] Adaptive concurrency (ENFORCE): the admission target is being held
  *     by COOLDOWN - live target 9 slot(s), would-be target 9 slot(s), effective maximum 32.
  * </pre>

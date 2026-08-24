@@ -221,7 +221,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/admission/FalsifierScenarios.java`**
 
-- TODO(refactor): wire pauseCycling into the falsifier suite in U5/U6 (plan 2026-08-24-003, R14) - it
+- TODO(refactor): wire pauseCycling into the falsifier suite in U6 (plan 2026-08-24-003, R14) - it
 - TODO(refactor): wire rebalanceShrink into the falsifier suite in U6 (plan 2026-08-24-003, KTD4) - it
 - TODO(refactor): wire floorPin into the falsifier suite in U6 (plan 2026-08-24-003, the escape's
 

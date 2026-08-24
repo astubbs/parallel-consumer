@@ -163,11 +163,11 @@ final class FalsifierScenarios {
     }
 
     // ------------------------------------------------------------------
-    // Scenarios built now, asserted from U5/U6 - they exercise controller machinery
+    // Scenarios built now, asserted from U6 - they exercise controller machinery
     // (pause invalidation boundaries, the escape hatch, rebalance restore) that the
-    // committed law does not have, so no test drives them against the old law.
-    // TODO(refactor): wire pauseCycling into the falsifier suite in U5/U6 (plan 2026-08-24-003, R14) - it
-    //  needs the controller's pause invalidation boundaries; not asserted against the old law by design.
+    // U5 law does not carry, so AdmissionLawFalsifierTest does not drive them yet.
+    // TODO(refactor): wire pauseCycling into the falsifier suite in U6 (plan 2026-08-24-003, R14) - it
+    //  needs the controller's pause invalidation boundaries, which U6 builds.
     // TODO(refactor): wire rebalanceShrink into the falsifier suite in U6 (plan 2026-08-24-003, KTD4) - it
     //  needs the controller's rebalance restore path; not asserted against the old law by design.
     // TODO(refactor): wire floorPin into the falsifier suite in U6 (plan 2026-08-24-003, the escape's

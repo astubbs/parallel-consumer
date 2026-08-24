@@ -8,9 +8,10 @@ package bz.stub.parallelconsumer.internal.admission;
  * Fabricates {@link ClosedAdmissionWindow}s for control-law tests - the decision layer only ever sees closed
  * aggregates, so tests drive it with exact values instead of running the accumulator.
  * <p>
- * Every factory closes at the NOMINAL one-second elapsed time with boundary signals bound at the in-flight
- * median - the committed law reads neither, so tests that care about elapsed time or classification construct
- * their windows directly ({@code AdmissionSampleWindowTest}).
+ * Every factory closes at the NOMINAL one-second elapsed time, so a window's success count IS its success
+ * throughput per second - which is what makes elasticity series readable in the tests: {@code boundAt} windows
+ * carry the boundary signals the band machine's binding gate and the estimator actually read (active slots =
+ * the commanded target), and the unbound trio fabricate each of the three separated starvation causes.
  */
 class TestWindows {
 
@@ -18,14 +19,6 @@ class TestWindows {
     static final long NOMINAL_ELAPSED_NANOS = 1_000_000_000L;
 
     private TestWindows() {
-    }
-
-    /**
-     * A healthy saturated window: in-flight median pinned at the current limit (spread zero), every outcome a
-     * success - the shape that lets the gradient arm act.
-     */
-    static ClosedAdmissionWindow saturated(int samples, double meanServiceTimeNanos, int inFlightMedian) {
-        return window(samples, meanServiceTimeNanos, samples, inFlightMedian, 0, samples, 0, 0);
     }
 
     /**
@@ -42,14 +35,6 @@ class TestWindows {
     static ClosedAdmissionWindow withIgnores(int samples, double meanServiceTimeNanos, int inFlightMedian,
                                              long successes, long ignores) {
         return window(samples, meanServiceTimeNanos, samples, inFlightMedian, 0, successes, ignores, 0);
-    }
-
-    /**
-     * A window with full control of the in-flight distribution (median and spread), all successes.
-     */
-    static ClosedAdmissionWindow withInFlight(int samples, double meanServiceTimeNanos, int inFlightMedian,
-                                              int inFlightSpread) {
-        return window(samples, meanServiceTimeNanos, samples, inFlightMedian, inFlightSpread, samples, 0, 0);
     }
 
     /**
@@ -71,5 +56,47 @@ class TestWindows {
      */
     static AdmissionBoundarySignals boundAt(int slots) {
         return new AdmissionBoundarySignals(slots, Math.max(1, slots), false, 0, 0, false, false);
+    }
+
+    // ------------------------------------------------------------------
+    // Band-machine factories (the U5 law): explicit throughput and binding classification.
+    // ------------------------------------------------------------------
+
+    /**
+     * A limit-bound, all-success window: {@code successes} completions over the nominal second (so the success
+     * throughput IS {@code successes}/s) with active slots at the commanded target {@code activeSlots} - the
+     * shape the estimator learns from (R2).
+     */
+    static ClosedAdmissionWindow bound(int successes, int activeSlots) {
+        return new ClosedAdmissionWindow(successes, 10_000_000.0, successes, activeSlots, 0,
+                successes, 0, 0, NOMINAL_ELAPSED_NANOS, boundAt(activeSlots));
+    }
+
+    /** An UNBOUND window whose cause is the app running out of work - {@code NO_WORK}. */
+    static ClosedAdmissionWindow unboundNoWork(int samples) {
+        return new ClosedAdmissionWindow(samples, 10_000_000.0, samples, 0, 0,
+                samples, 0, 0, NOMINAL_ELAPSED_NANOS,
+                new AdmissionBoundarySignals(0, 8, false, 0, 0, false, false));
+    }
+
+    /** An UNBOUND window with buffered work the shards could not yield - {@code ORDERING_STARVED}. */
+    static ClosedAdmissionWindow unboundOrderingStarved(int samples) {
+        return new ClosedAdmissionWindow(samples, 10_000_000.0, samples, 0, 0,
+                samples, 0, 0, NOMINAL_ELAPSED_NANOS,
+                new AdmissionBoundarySignals(0, 8, true, 0, 50, false, false));
+    }
+
+    /** An UNBOUND window closed under a self-throttled poller - {@code SELF_THROTTLED}. */
+    static ClosedAdmissionWindow unboundSelfThrottled(int samples) {
+        return new ClosedAdmissionWindow(samples, 10_000_000.0, samples, 0, 0,
+                samples, 0, 0, NOMINAL_ELAPSED_NANOS,
+                new AdmissionBoundarySignals(0, 8, false, 0, 50, true, false));
+    }
+
+    /** A limit-bound window flagged with offset-encoding back-pressure at the boundary (the R8 brake). */
+    static ClosedAdmissionWindow boundWithOffsetBackPressure(int successes, int activeSlots) {
+        return new ClosedAdmissionWindow(successes, 10_000_000.0, successes, activeSlots, 0,
+                successes, 0, 0, NOMINAL_ELAPSED_NANOS,
+                new AdmissionBoundarySignals(activeSlots, Math.max(1, activeSlots), false, 0, 0, false, true));
     }
 }

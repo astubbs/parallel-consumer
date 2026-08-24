@@ -2443,7 +2443,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * ({@link WorkContainer#hasPreviouslyFailed()}), the whole invocation yields NO sample. A retry attempt's
      * execution must never enter the latency window - fast-failing retries read as improvement - and a mixed
      * batch's duration cannot be attributed record-by-record, so excluding the contaminated whole is the simple,
-     * conservative rule: it under-samples (the law holds via {@code APP_LIMITED} on thin windows) rather than
+     * conservative rule: it under-samples (the law holds via {@code INSUFFICIENT_SIGNAL} on thin windows) rather than
      * ever polluting the signal.
      * <p>
      * Static and pure, so the arithmetic is testable without threads or clocks.

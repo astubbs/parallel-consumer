@@ -146,8 +146,11 @@ class AdmissionLifecycleTest {
 
         module.clock.add(WINDOW_STEP);
         pc.tickAdmissionController();
+        // U5 migration: the window is sample-rich but the REAL boundary signals read no active tasks, so the
+        // band machine's binding gate preserves under NO_WORK - what matters here is that the boundary pass
+        // DECIDED, where the sub-boundary passes could not.
         assertWithMessage("the first pass across the boundary must close the window and decide")
-                .that(controller().lastDecisionReason()).hasValue(AdmissionDecisionReason.ADAPTING);
+                .that(controller().lastDecisionReason()).hasValue(AdmissionDecisionReason.NO_WORK);
     }
 
     /**
@@ -195,8 +198,9 @@ class AdmissionLifecycleTest {
     /**
      * Samples recorded before a pause must not appear in the first post-resume window: the first post-resume tick
      * consumes the poison and discards the window, so the next boundary closes an EMPTY window (a hold,
-     * APP_LIMITED) rather than deciding on stale samples (which would be ADAPTING - the sabotage signature: with
-     * the poison consumption removed from tickAdmissionController, this fails exactly there).
+     * INSUFFICIENT_SIGNAL - the band machine's adjudication gate) rather than deciding on stale samples (which
+     * would be NO_WORK, the sample-rich unbound decision - the sabotage signature: with the poison consumption
+     * removed from tickAdmissionController, this fails exactly there).
      */
     @Test
     void pauseResumeCycleDiscardsPrePauseSamples() {
@@ -214,7 +218,7 @@ class AdmissionLifecycleTest {
         module.clock.add(WINDOW_STEP);
         pc.tickAdmissionController();
         assertWithMessage("the first post-resume window must close empty - pre-pause samples discarded")
-                .that(controller().lastDecisionReason()).hasValue(AdmissionDecisionReason.APP_LIMITED);
+                .that(controller().lastDecisionReason()).hasValue(AdmissionDecisionReason.INSUFFICIENT_SIGNAL);
         assertWithMessage("an empty hold must not move the target")
                 .that(controller().currentTarget()).isEqualTo(targetBefore);
     }
@@ -309,19 +313,25 @@ class AdmissionLifecycleTest {
         pc.setWm(mockedWm);
         pc.setState(State.RUNNING);
 
-        // Window 1: healthy and saturated, but smoothing keeps the published target at 8 (8 -> est. 8.8) - a hold.
+        // Window 1: sample-rich but UNBOUND (no active tasks at the boundary) - the band machine's binding
+        // gate preserves, so the target holds and the wakeup path must not be re-checked.
         feedHealthySamples();
         module.clock.add(WINDOW_STEP);
         pc.tickAdmissionController();
-        assertWithMessage("fixture: the first window must not move the published target")
+        assertWithMessage("fixture: an unbound window must not move the published target")
                 .that(controller().currentTarget()).isEqualTo(CONTRACTED_TARGET_SLOTS);
         Mockito.verify(mockedWm, Mockito.never()).isSufficientlyLoaded();
 
-        // Window 2: the estimate crosses a whole slot (8.8 -> 9.6, published 9) - growth, so the check runs.
+        // Window 2: mark the target's worth of tasks active, so the boundary sample reads LIMIT-BOUND and the
+        // warmup band grows the target (8 + floor(sqrt(8)) whole slots published) - growth, so the check runs.
+        for (int task = 0; task < CONTRACTED_TARGET_SLOTS; task++) {
+            pc.userFunctionTaskAccounting().onSubmitting();
+            pc.userFunctionTaskAccounting().onTaskStarted();
+        }
         feedHealthySamples();
         module.clock.add(WINDOW_STEP);
         pc.tickAdmissionController();
-        assertWithMessage("fixture: the second window must grow the published target")
+        assertWithMessage("fixture: the bound window must grow the published target")
                 .that(controller().currentTarget()).isGreaterThan(CONTRACTED_TARGET_SLOTS);
         Mockito.verify(mockedWm, Mockito.times(1)).isSufficientlyLoaded();
     }
