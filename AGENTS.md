@@ -210,16 +210,26 @@ and the traps that voided earlier experiments.
 Once you have a hypothesis, [`docs/investigating.md`](docs/investigating.md) carries the method for
 settling it: **a fix that works is not evidence of the cause.**
 
-## Read the commits you inherit
+## Read the record you inherit - the commits, and the branch's own PR
 
-The same rule one step earlier: read the record before you build on it, not before you ship.
+The same rule one step earlier: read the record before you build on it, not before you ship. It has
+**two triggers**, and the second one is the one that gets missed.
 
-Whenever your base moves under you - cutting a worktree from a master that advanced, merging master
-in mid-flight, rebasing, replaying, or picking a branch back up - run
+**Your base moved under you** - cutting a worktree from a master that advanced, merging master in
+mid-flight, rebasing, replaying, or picking a branch back up. Run
 `git log --oneline <old-base>..<new-base>` and read the **bodies** of anything touching your area.
 You inherit decisions, constraints, and sometimes instructions addressed to your branch. A green
 build proves the code still compiles; it proves nothing about whether the ground under your design
 moved.
+
+**You were handed a branch** - a worktree, a PR to review, a simplify or dedupe pass. Read its own
+commits, its `docs/inflight/` handoff note if it has one, **and its PR body *and* its PR comments**
+before you change anything. A PR body here routinely defends, by name, the decision a simplify pass
+would reverse on sight, and the comments carry scope added after the body was written.
+`.claude/hooks/inject-branch-context.sh` puts all of that in front of Claude Code at session start,
+at every subagent dispatch, and inside the subagent itself - so the failure it leaves is the one
+nothing can catch: **dispatching an agent without that context in its prompt**, which is how five
+agents at once were sent to reverse five deliberate decisions on 2026-08-24.
 
 Three things hide there, and none announce themselves: an instruction to your branch; a decision
 that reshapes your work (a renamed module, a new document naming the project's approach); and an
