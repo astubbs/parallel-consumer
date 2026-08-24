@@ -42,7 +42,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * new owner completes the phantom incomplete, {@code offsetHighestSucceeded} is already above the real log end, and
  * the next commit lands past it. The following poll asks the broker for an offset that does not exist.
  * <p>
- * <b>The forced race.</b> {@link RacingPartitionState} fires one completion from inside
+ * <b>The forced race.</b> {@link RacingCommitCycleState} fires one completion from inside
  * {@link PartitionState#getIncompleteOffsetsBelowHighestSucceeded()}, which the encoder calls exactly once (see
  * {@code OffsetMapCodecManager.encodeOffsetsCompressed}) to snapshot its input. The snapshot has already been taken
  * by the time the completion lands, so the payload content is identical with or without the race - only the second
@@ -81,9 +81,15 @@ class PartitionStateCommitEncodeShift894Test {
      */
     @Test
     void committedOffsetMustEqualTheBaseThePayloadWasEncodedAgainst() throws OffsetDecodingError {
-        RacingPartitionState state = newStateWithRacingCompletion();
+        RacingCommitCycleState state = newStateWithRacingCompletion();
 
         OffsetAndMetadata committed = state.createOffsetAndMetadata();
+
+        assertWithMessage("precondition: the injected race must actually have fired - without this the test "
+                + "passes on the fixed code for the trivial reason that both numbers come from one sample, and "
+                + "would keep passing if the seam silently stopped being called")
+                .that(state.raceHasFired())
+                .isTrue();
 
         assertWithMessage("precondition: this commit cycle must take the encoding path, not the empty early-return")
                 .that(committed.metadata())
@@ -112,7 +118,7 @@ class PartitionStateCommitEncodeShift894Test {
      */
     @Test
     void restoringFromTheCommittedDataMustNotInventOffsetsThatWereNeverProduced() throws OffsetDecodingError {
-        RacingPartitionState state = newStateWithRacingCompletion();
+        RacingCommitCycleState state = newStateWithRacingCompletion();
 
         OffsetAndMetadata committed = state.createOffsetAndMetadata();
         HighestOffsetAndIncompletes restored = decode(committed);
@@ -138,7 +144,7 @@ class PartitionStateCommitEncodeShift894Test {
      */
     @Test
     void theShiftedCommitDrivesTheNextCommitPastTheEndOfThePartition() throws OffsetDecodingError {
-        RacingPartitionState state = newStateWithRacingCompletion();
+        RacingCommitCycleState state = newStateWithRacingCompletion();
         OffsetAndMetadata committed = state.createOffsetAndMetadata();
 
         // the rebalance: a new owner rebuilds partition state from what was committed
@@ -167,8 +173,8 @@ class PartitionStateCommitEncodeShift894Test {
      * running system would never produce. Offsets 0, 1 and 2 are polled; 0 and 2 complete and 1 does not, which is
      * ordinary out-of-order completion and the whole point of this library.
      */
-    private RacingPartitionState newStateWithRacingCompletion() {
-        RacingPartitionState state = new RacingPartitionState(mu.getModule(), tp, HighestOffsetAndIncompletes.of());
+    private RacingCommitCycleState newStateWithRacingCompletion() {
+        RacingCommitCycleState state = new RacingCommitCycleState(mu.getModule(), tp, HighestOffsetAndIncompletes.of());
         for (long offset = 0; offset <= HIGHEST_OFFSET_SEEN_AT_COMMIT; offset++) {
             state.addNewIncompleteRecord(new ConsumerRecord<>(tp.topic(), tp.partition(), offset, "key", "value"));
         }
@@ -177,6 +183,8 @@ class PartitionStateCommitEncodeShift894Test {
                 state.onSuccess(offset);
             }
         }
+        // Arm it last, so the fixture's own completions above do not consume the one shot.
+        state.armRaceOn(RACING_OFFSET);
         return state;
     }
 
@@ -187,56 +195,4 @@ class PartitionStateCommitEncodeShift894Test {
         return restored;
     }
 
-    /**
-     * A {@link PartitionState} that lands exactly one work completion inside a single commit cycle, at the moment
-     * the encoder has finished reading the state it encodes.
-     * <p>
-     * The seam is {@link #getIncompleteOffsetsBelowHighestSucceeded()}: {@code encodeOffsetsCompressed} calls it
-     * once, to take the snapshot it encodes, and the returned set is a fresh copy - so completing the offset
-     * immediately afterwards cannot alter the payload. It also cannot alter {@code offsetHighestSucceeded}, which
-     * already sits at {@value #HIGHEST_OFFSET_SEEN_AT_COMMIT}. The only value the completion can move is a
-     * <em>subsequent</em> read of the offset to commit, which is the whole of the defect under test.
-     */
-    private class RacingPartitionState extends PartitionState<String, String> {
-
-        private final List<Long> offsetToCommitReads = new ArrayList<>();
-
-        private final AtomicBoolean completionFired = new AtomicBoolean(false);
-
-        RacingPartitionState(bz.stub.parallelconsumer.internal.PCModule<String, String> module,
-                             TopicPartition topicPartition,
-                             HighestOffsetAndIncompletes offsetData) {
-            super(0, module, topicPartition, offsetData);
-        }
-
-        @Override
-        protected long getOffsetToCommit() {
-            long read = super.getOffsetToCommit();
-            offsetToCommitReads.add(read);
-            return read;
-        }
-
-        @Override
-        public SortedSet<Long> getIncompleteOffsetsBelowHighestSucceeded() {
-            SortedSet<Long> snapshotTheEncoderWillUse = super.getIncompleteOffsetsBelowHighestSucceeded();
-            if (completionFired.compareAndSet(false, true)) {
-                log.debug("Racing completion of offset {} lands after the encoder snapshot {}",
-                        RACING_OFFSET, snapshotTheEncoderWillUse);
-                onSuccess(RACING_OFFSET);
-            }
-            return snapshotTheEncoderWillUse;
-        }
-
-        /**
-         * @return the value of the read that {@code tryToEncodeOffsets} used as the payload's base - the first read
-         *         on both the unfixed code (which reads twice) and the fixed code (which reads once and threads it
-         *         through a tuple)
-         */
-        long firstOffsetToCommitRead() {
-            assertWithMessage("the encode path must have read the offset to commit at least once")
-                    .that(offsetToCommitReads)
-                    .isNotEmpty();
-            return offsetToCommitReads.get(0);
-        }
-    }
 }
