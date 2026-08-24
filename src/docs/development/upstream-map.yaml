@@ -213,20 +213,29 @@ entries:
     group: rebalance-stability
     summary: Accurate committed offset on partition assignment (carried upstream PR)
     fork:
-      branches: [cherry-pick/893-offset-reset, upstream-pr-893]
-      prs: [57]
+      branches: [fix/121-offset-accuracy-on-assignment, cherry-pick/893-offset-reset, upstream-pr-893]
+      prs: [337]
+      fork_issue: 121
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [893]
       status: open
-      last_checked: 2026-07-28
+      last_checked: 2026-08-24
     adoc_anchor: part1-group-a-correctness
     notes: >
-      Cherry-pick of upstream contributor PR #893 (Martyn Ye) -- fixes offset
-      reset / data-loss risk on rebalance. Approved upstream, still OPEN
-      (unmerged). Carried downstream, bundled into fork PR #57.
-      Applied-Upstream: no (this IS the upstream PR, just not merged there).
+      Cherry-pick of upstream contributor PR #893 (sangreal) -- fixes an offset
+      reset on rebalance AND a silent record-loss mode sharing its root cause,
+      the second of which no bug report describes. Approved upstream by
+      rkolesnev 2025-11-17, still OPEN (unmerged there).
+      Applied-Upstream: no (this IS the upstream PR).
+      Carried in fork PR #337. It was in #57 until 2026-08-24, when it was split
+      out so the fix and its reproduction get their own review rather than
+      riding inside a metrics PR.
+      Issue #894 ("Offset reset when frequent rebalancing") is named in #893's
+      own body; this entry recorded issues: [] until 2026-08-04.
+      Reproduction and diagnosis:
+      docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md
 
   - id: cherry-pick-905-max-shard-metric
     group: metrics-observability
