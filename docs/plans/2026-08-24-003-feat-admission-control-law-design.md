@@ -179,9 +179,9 @@ modulating the measurement interval at the dither frequency.
 **Uber's covariance test needs no dither.** It correlates in-flight against throughput over the
 controller's *natural* movement history. A controller that already rises and falls under an
 accelerator and a brake is generating its own excitation; the estimator reads the resulting
-trajectory rather than injecting one. Blockers 3, 4, 5, 6, 9 and 10 evaporate, and R5 - bounding the
-perturbation's cost to a healthy workload - stops being a requirement because there is no
-perturbation.
+trajectory rather than injecting one. Blockers 3, 4, 5, 6, 9 and 10 evaporate, and the objective
+plan's R5 - bounding the perturbation's cost to a healthy workload - stops being a requirement
+because there is no perturbation.
 
 What survives from that list and must still be answered: the elasticity denominator (blocker 2 -
 commanded target or achieved in-flight, and they diverge exactly when it matters), the window-series
@@ -279,16 +279,22 @@ it is today.
   that later licenses growth the plant never earned. The three binding signals already gate growth;
   the same exclusion must gate the estimator's *input*, or the brake's evidence stays contaminated
   by exactly the app-limited windows the growth gate rejects.
-- **Absolute:** the failure fraction (exists); the optional latency ceiling (KD4); and
-  **offset-encoding back-pressure**, `PartitionState#isBlocked()` / `isAllowedMoreRecords()`, which
-  is a real admission constraint the controller currently cannot see at all - a partition refusing
-  more records because the commit metadata would not fit.
+- **Absolute:** the failure fraction (exists), and **offset-encoding back-pressure** -
+  `PartitionState#isBlocked()` / `isAllowedMoreRecords()`, a real admission constraint the controller
+  currently cannot see at all: a partition refusing more records because the commit metadata would
+  not fit (R8). The operator-facing latency ceiling is deferred out of this plan entirely - KTD7
+  owns that call; the objective plan's KD4 settled its signal as residence time for whenever it
+  ships.
 
 Note that the AIMD `BACKOFF` arm is currently **unreachable in production**:
 `AdmissionOutcomeClassifier.classifyFailure` returns `IGNORE` for every cause, so `OVERLOAD_DROP` is
 never produced. One of the two brakes in the committed law is dead code.
 
 ### HOLD
+
+Two behaviours share this name, and the band diagram keeps them as separate nodes: **PRESERVE**
+when the limit is not binding (this section, R5 - falsified by the app-limited lull) and the **HOLD
+band** at the knee (R1's middle band, the plateau brake - falsified by comparison phase 5).
 
 **When the limit is not binding: preserve, never decay.**
 
@@ -320,6 +326,14 @@ Envoy's four safeguards for the probe window all transfer and all matter:
 2. **clear the sample history on entry** so pre-probe samples cannot contaminate the measurement;
 3. **suspend normal limit updates** for the duration;
 4. **jitter** the start (15%) so a fleet does not probe in lockstep.
+
+What the probe measures, and what its conclusion does: the probe's product is a **fresh limit-bound
+history at a known-low operating point** - its windows are limit-bound by construction, so they are
+valid estimator input. On conclusion, updates resume from the restored target, the probe's entries
+are retained, and the bands govern; the first post-probe decisions extrapolate across the
+operating-point jump, which is accepted because discarding would land in warmup - and a concluded
+probe opens a fresh warmup allowance (KTD2), which is what makes the escape's liveness survive the
+warmup cap.
 
 And the floor itself must never sit below one accelerator step, or the accelerator cannot act at the
 floor and the floor becomes absorbing. `GradientLimit` clamps to `[queueSize, maxLimit]`; CoDel
@@ -439,8 +453,7 @@ region** (its delta-fair convergence time starts two flows at 100/101 and 1/101 
   assert the controller stays near `L*` rather than chasing the load. Every phase above holds
   arrival constant, so the confound that most threatens the estimator on a Kafka topic - in-flight
   and throughput moving together under load swings, the normal case, not an edge - is otherwise
-  structurally invisible to the suite. The controlled-arrival harness already does this; it is one
-  more scenario, not new infrastructure.
+  structurally invisible to the suite. It is one more simulator scenario, not new infrastructure.
 - **The app-limited lull - HOLD's falsifier.** Drop arrival well below capacity mid-run, then
   restore it; assert the target was preserved through the lull and throughput recovers within a
   deadline after it. This is the direct RFC 7661 regression test - the decay-on-idle failure Plan A
@@ -530,10 +543,13 @@ the weight they do.
    fallback is stated rather than improvised: if the signal is not ready, the benchmark runs its
    other phases and **no rate-limit claim is published** - phase 4's assertion waits for the real
    signal rather than being approximated around a classifier that scores every rejection `IGNORE`.
-4. **Then the benchmark.** The published claim is **per-instance in scope**; any fleet-scoped claim
-   gates on the fleet question (Open Question 2) being settled first. A fleet that oscillates in
-   production earns the *tried it, turned it off* reputation that costs a trust-rebuilding fork
-   most, so the claim's scope is stated rather than left for a reader to assume.
+4. **Then the benchmark - post-plan work with a named owner.** The outstanding-items note's item 4
+   (`docs/inflight/pr-333-adaptive-concurrency-outstanding.md`) owns running it, setting the phase-1
+   tolerance (Open Question 1), and promoting U9's recorded phase 1 to asserted. The published claim
+   is **per-instance in scope**; any fleet-scoped claim gates on the fleet question (Open Question 2)
+   being settled first. A fleet that oscillates in production earns the *tried it, turned it off*
+   reputation that costs a trust-rebuilding fork most, so the claim's scope is stated rather than
+   left for a reader to assume.
 
 **The benchmark no longer gates the objective, and the earlier gate was wrong once the objective
 became the ratchet fix.** The prior plan held that nothing should be built while it is unknown
@@ -552,11 +568,14 @@ your config*. The claim worth having is that adaptive **matches a carefully hand
 without the hand-tuning, then beats it once conditions move away from what that tuning assumed** -
 which needs the third hand-tuned arm and a workload that changes partway through the run.
 
-**The arrival-controlled harness this needs is already on this PR's base**, `perf/engine-concurrency`,
-pushed - the commit that added controlled arrival and skewed keys is `perf(bench): controlled arrival,
-skewed keys, and the two work-model no-ops that would have voided the run`. What is missing is that
-this branch has not merged that base since it arrived. So the harness is a merge away, not a piece of
-work waiting to be done.
+**The controlled-arrival pattern this needs is on this PR's base**, `perf/engine-concurrency` -
+the commit is `perf(bench): controlled arrival, skewed keys, and the two work-model no-ops that
+would have voided the run`. Two caveats the first draft missed: the base has not been merged into
+this branch since it arrived, and the harness is **bench-lane infrastructure** - shell-rendered
+templates outside any module's test classpath, running arms as separate processes with no mid-run
+phase support. The comparison IT therefore ports the constant-rate feeder *pattern* into a
+test-integration utility (U9 owns that as a named subtask); what the merge supplies is the proven
+pattern and the load-generation lane, not an importable class.
 
 The first reading of this was wrong - the branch's missing remote was read as unpushed work when
 every commit was already contained in the pushed base. The method lesson lives in
@@ -580,7 +599,7 @@ number on the workload that number was chosen for, which is the weak form nobody
 
 ### The workload has to move under all three
 
-Four phases, one run, arrival rate held by the controlled-arrival harness so the comparison is made
+Five phases, one run, arrival rate held at a fixed offered rate so the comparison is made
 below saturation. The downstream is simulated inside the user function - which is the honest place
 for it, since the user function *is* the abstraction over whatever the real downstream is.
 
@@ -592,10 +611,11 @@ for it, since the user function *is* the abstraction over whatever the real down
 | 4. Rate limiting | Downstream stops slowing and starts **rejecting** above a token-bucket rate | Static keeps hammering the limiter. Adaptive settles under the rate. |
 | 5. Graceful saturation | Throughput **plateaus flat** at the downstream's capacity while latency climbs - no fall, no rejection | Static queues blindly. Adaptive must **stop growing and hold near the knee** - the HOLD band's own falsifier, and the phase neither 2 (falls) nor 4 (rejects) exercises. |
 
-**Phase 1 is the phase that protects honesty.** The assertion there is *match within tolerance*,
-never *beat* - a controller that pays a small exploration cost on a steady workload is behaving
-correctly, and asserting that it wins would force a design that games steady state. Phases 2 to 4
-carry the strict inequalities.
+**Phase 1 is the phase that protects honesty.** Its measure is *match within tolerance*, never
+*beat* - a controller that pays a small exploration cost on a steady workload is behaving correctly,
+and asserting that it wins would force a design that games steady state. Until the tolerance is set
+at benchmark time, phase 1 is recorded, not asserted (R15). Phases 2 to 5 carry the strict
+inequalities.
 
 ### Phase 4 is not a harder version of phase 2, and it is the interesting one
 
@@ -627,7 +647,7 @@ The oracle is absolute and per phase, not a fitted band: the simulated downstrea
 uncongested service time are *set* by the test, so Little's Law gives the correct admission target
 for each phase directly, and it moves when the phase moves. That is what makes the assertions
 falsifiable rather than merely descriptive - a frozen controller is provably wrong in at least three
-of the four phases.
+of the five phases.
 
 ## Product Contract
 
@@ -649,8 +669,9 @@ under load that moves.
   AND elasticity above `1/(r+1)` (r=3); HOLD between the threshold and zero; FALL below zero.
 - R2. Only limit-bound windows enter the estimator's history, where binding is established by the
   three engine signals (dispatch under-served, selectable work present, poller not self-throttled).
-- R3. With history below minimum signal - cold start, post-rebalance, post-escape-clear - a warmup
-  band licenses additive growth on limit-binding alone. Elasticity-undefined never maps to HOLD.
+- R3. While no elasticity verdict is in force - cold start, post-rebalance, post-escape-clear - a
+  warmup band licenses additive growth on limit-binding alone, **capped per episode** (KTD2).
+  Elasticity-undefined never maps to HOLD, and horizon eviction alone never revokes a verdict.
 - R4. Throughput is `successCount` per measured window elapsed time; IGNORE and OVERLOAD_DROP
   outcomes are excluded from the numerator.
 - R5. When the limit is not binding: preserve, never decay. Absence of data yields no decision.
@@ -683,8 +704,12 @@ under load that moves.
 
 - R14. The simulator falsifier suite: initial-condition sweep against the slots oracle
   (`L*_slots = mu_max * W0 / batchSize`, at least one arm with batchSize > 1), the arrival-burst
-  dual, the app-limited lull, the floor pin, the graceful-saturation plateau - with FrozenLimit,
-  AlwaysMaxLimit and AlwaysMinLimit each asserted to fail, and growth assertions strict.
+  dual, the app-limited lull, the floor pin, the graceful-saturation plateau, **pause-cycling**
+  (periodic pause/resume against a saturated plant - the target does not walk across cycles),
+  **sparse adjudication** (qualifying windows below minimum signal per horizon - warmup growth stays
+  within its allowance), and **rebalance-shrink** (the restored trajectory respects the new
+  assignment's `L*`) - with FrozenLimit, AlwaysMaxLimit and AlwaysMinLimit each asserted to fail,
+  and growth assertions strict.
 - R15. The comparison IT: three arms, five phases, below saturation on the arrival-controlled
   harness. Phases 2-5 carry strict assertions; phase 1 is recorded, not asserted, until the
   tolerance is set at benchmark time. The rate-limit phase is blocked on the 004 signal.
@@ -695,24 +720,46 @@ under load that moves.
 
 ### Key Technical Decisions
 
-- KTD1. **The estimator is a normalised regression slope, denominated in achieved in-flight.**
-  Elasticity = slope of log(success throughput) on log(in-flight window median) over limit-bound
-  windows within a wall-clock horizon (default 60s, minimum 8 adjudicated windows to act).
-  Achieved in-flight, not commanded target: the target lies exactly when the shards cannot fill it,
-  and the limit-bound input filter (R2) already excludes the near-zero-denominator windows.
-- KTD2. **Warmup band** (from flow analysis): while history is below minimum signal, limit-binding
-  alone licenses additive growth of `q` per window. This is what keeps HOLD from being absorbing at
-  cold start, after every rebalance reconstruction, and after every escape-probe clear.
+- KTD1. **The estimator is a normalised regression slope, denominated in slots.**
+  Elasticity = slope of log(success throughput, records/s) on log(active-task window median, slots -
+  `UserFunctionTaskAccounting#getActive`) over limit-bound windows within a wall-clock horizon
+  (default 60s, minimum 8 adjudicated windows to act). Slots, not records: under task-denominated
+  dispatch (R12), batch-fill variation moves record counts the actuator never commanded, and the
+  batchSize conversion lives only in the oracle and the seam, never inside the estimator. Achieved
+  slots, not the commanded target: the target lies exactly when the shards cannot fill it. **The
+  binding verdict is slot saturation**: a window is limit-bound iff active tasks reached the target
+  at the boundary; the three engine signals classify the *unbound* causes (no work /
+  ordering-blocked / self-throttled) - so a thin-batch workload that fills every slot reads as
+  bound, never app-limited. A computed elasticity verdict **remains in force until replaced by a
+  new qualifying verdict or killed by an invalidation boundary** - horizon eviction alone never
+  demotes an acting law back to warmup, so a controller holding correctly still at the knee is not
+  self-evicted into growth.
+- KTD2. **Warmup band, with a per-episode allowance** (from flow analysis, bounded per review):
+  while no elasticity verdict is in force, limit-binding alone licenses additive growth of `q` per
+  window - this is what keeps the law from being absorbed at cold start, after rebalance
+  reconstruction, and after an escape-probe clear. **The allowance is capped**: cumulative warmup
+  growth since the last *acted* elasticity verdict is bounded (working constant: 8 steps of `q`),
+  and the episode spans invalidation boundaries - N pause/resume cycles share one allowance, so
+  pause-cycling (PC's public throttling idiom) cannot refill blind growth. At the cap, warmup
+  degrades to preserve; the named steady state for a plant whose windows cannot adjudicate 8 per
+  horizon is preserve-plus-escape-cadence, never unbounded growth. A **concluded escape probe opens
+  a fresh allowance** - the cap guards evidence-free episodes, and a probe is evidence-gathering -
+  which is what keeps the floor-pin falsifier passable.
 - KTD3. **History integrity is event-stamped.** Cooldown-discarded, pause-poisoned and
   sample-starved windows never enter the history. A pause stamps an invalidation boundary - entries
   predating it are dead, because a wall-clock-bounded covariance history that survives a pause
   describes a plant an unknown span in the past. The escape counter and probe duration are
   denominated in adjudicated windows, never wall-clock.
-- KTD4. **Rebalance restores before it reconstructs.** `resetForAssignmentDelta` consults probe
-  state first: seed = the deferred restore value when a probe is in flight, then reconstruct; the
-  probe is aborted (a rebalance invalidates its measurement anyway). Without this, the reset launders
-  the probe's reduced value into the 30s-frozen post-rebalance prior, and group churn ratchets the
-  target down.
+- KTD4. **Rebalance restores before it reconstructs - clamped to the new assignment.**
+  `resetForAssignmentDelta` consults probe state first: seed = the deferred restore value when a
+  probe is in flight, then reconstruct; the probe is aborted (a rebalance invalidates its
+  measurement anyway). Without this, the reset launders the probe's reduced value into the
+  30s-frozen post-rebalance prior, and group churn ratchets the target down. The restore is
+  one-directional protection only: when the assignment **shrank**, the restored value is scaled by
+  the partition ratio (floor 1) before seeding, so a stale-high pre-rebalance target is not held
+  open-loop through the cooldown against a plant whose per-instance share just fell. Probe state is
+  **controller-owned**, not law-owned - reconstruction destroys the law's fields, so the deferred
+  value must live where the reset can read it.
 - KTD5. **The actuator contract** (session-settled: user-directed - `maxConcurrency` is a maximum
   concurrency, not a thread count; chosen over sizing the pool once from the ceiling): construct
   with `maximumPoolSize` = resolved ceiling (inert under the unbounded queue), steer `corePoolSize`
@@ -745,7 +792,7 @@ flowchart TB
   A -->|yes| B{Limit bound?<br/>3 engine signals}
   B -->|no| P[PRESERVE - never decay<br/>window excluded from history]
   B -->|yes| E{History >= min signal?}
-  E -->|no| WU[WARMUP band<br/>+q growth on binding alone]
+  E -->|no| WU[WARMUP band<br/>+q on binding alone, capped per episode]
   E -->|yes| S{Elasticity e}
   S -->|"e > 1/(r+1)"| R[RISE: +q]
   S -->|"0 <= e <= 1/(r+1)"| H[HOLD at knee<br/>plateau brake]
@@ -755,7 +802,8 @@ flowchart TB
   FL -->|yes| ESC[ESCAPE probe<br/>restore/clear/suspend/jitter]
 ```
 
-Lifecycle edges the loop must survive (each is a falsifier scenario):
+Lifecycle edges the loop must survive (each has an owning falsifier scenario in R14 or a named U6
+unit test):
 
 ```mermaid
 flowchart TB
@@ -769,8 +817,9 @@ flowchart TB
 
 - The phase-1 match tolerance is set at benchmark time (user-directed, 2026-08-24); until then the
   comparison IT records phase 1 and asserts phases 2-5 only.
-- `q = sqrt(L)` and horizon/minimum-signal defaults (60s, 8 windows, N=5 floor windows) are working
-  constants; the falsifier suite, not opinion, moves them.
+- `q = sqrt(L)`, the horizon/minimum-signal defaults (60s, 8 windows, N=5 floor windows), the
+  warmup allowance (8 steps of `q` per episode) and the minimum in-flight spread for a qualifying
+  verdict are working constants; the falsifier suite, not opinion, moves them.
 
 ---
 
@@ -779,20 +828,20 @@ flowchart TB
 | U-ID | Title | Key files | Depends on |
 |---|---|---|---|
 | U1 | Merge the base branch | (merge) | - |
-| U2 | Actuator: pool follows target | AbstractParallelEoSStreamProcessor, PCModule | - |
+| U2 | Actuator: pool follows target | AbstractParallelEoSStreamProcessor, PCModule, AdmissionController | - |
 | U3 | Window: throughput + binding classification | AdmissionSampleWindow, ClosedAdmissionWindow | - |
 | U4 | The elasticity estimator | admission/ (new class) | U3 |
-| U5 | The law rewrite | AdmissionControlLaw | U4 |
-| U6 | The escape hatch and lifecycle edges | AdmissionController | U5 |
+| U5 | The law rewrite | AdmissionControlLaw | U4, U8 |
+| U6 | The escape hatch and lifecycle edges | AdmissionController, AbstractParallelEoSStreamProcessor | U5 |
 | U7 | Reporting: gauge + movement log | AdmissionController, PCMetricsDef | U5 |
-| U8 | The simulator falsifier suite | admission test harness (new) | U5 |
-| U9 | The comparison IT, phases 1-3 and 5 | test-integration (new IT) | U1, U6, U8 |
+| U8 | The simulator falsifier suite | admission test harness (new) | U4 |
+| U9 | The comparison IT, phases 1-3 and 5 | test-integration (new IT) | U1, U2, U6, U8 |
 | U10 | Phase 4: rate limiting | comparison IT | U9, **the 004 signal** |
 | U11 | Records: inflight, roadmap, tag note | docs/ | U9 |
 
 ### U1. Merge the base branch
 
-- **Goal:** bring `origin/perf/engine-concurrency` (the arrival-controlled harness and 26 newer commits) into this branch.
+- **Goal:** bring `origin/perf/engine-concurrency` (the controlled-arrival bench lane and everything newer on the base) into this branch.
 - **Requirements:** R15 (the harness is its prerequisite).
 - **Files:** merge commit; conflicts resolved by hand per repo rules.
 - **Approach:** merge, never rebase (PR open). Read the inherited commit bodies - the base carries bench-harness decisions this plan's U9 builds on.
@@ -807,7 +856,7 @@ flowchart TB
 - **Approach:**
   1. Construct the pool with `maximumPoolSize` = resolved ceiling under active ENFORCE + `instanceof ThreadPoolExecutor`; core starts at the seeded target.
   2. On each published target change, set `corePoolSize` (control thread; safe at runtime).
-  3. Edge action on `transitionToDraining` raising core to ceiling; backstop in `doClose` before `shutdown()`.
+  3. Edge action on `transitionToDraining` raising core to ceiling - it runs on the caller's or broker-poll thread (`setCorePoolSize` is internally locked, cross-thread safe), and a concurrent control-thread tick can transiently re-narrow the pool, which is exactly why the `doClose` backstop is mandatory rather than belt-and-braces.
   4. Dispatch gate becomes task-denominated (free slots) with the record seam as cap (R12).
   5. Ceiling is read behind `adaptiveConcurrencyActive` only (KTD5's two-ceilings exclusion).
 - **Patterns to follow:** the `ExecutorServiceMetrics` `instanceof` gate in `initMetrics`; the existing `requireRejectionIsVisible` precondition style.
@@ -819,6 +868,7 @@ flowchart TB
   - virtual-thread pool and a subclass-overridden pool -> actuator inert, dispatch gating unchanged
   - drain entered with target at floor -> pool widens to ceiling before in-flight work is awaited
   - under-filled batches at batchSize 4 -> tasks in flight never exceed free slots (R12)
+  - full batches with the record seam below freeSlots*batchSize -> admitted records never exceed the seam even with pool slots idle (R12's cap side)
 - **Verification:** `AdmissionPoolActuatorTest` green; existing seam/lifecycle suites updated and green.
 
 ### U3. Window: throughput and binding classification
@@ -852,11 +902,11 @@ flowchart TB
 
 - **Goal:** the band machine replaces the six arms, in one move (R1, R3, R5, R7, R8, KTD2, KTD6, KTD8).
 - **Requirements:** R1, R3, R5, R7, R8.
-- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/admission/AdmissionControlLaw.java` (rewrite), `AdmissionDecisionReason.java` (new values: `STARVED`, `WARMUP`, `INSUFFICIENT_SIGNAL`, `PLATEAU`; hand-assigned gauge values, never ordinals), deletions per KTD8 (`ServiceTimeExpAvg` as baseline, probe-down state); tests `AdmissionControlLawTest.java` rewritten deliberately.
+- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/admission/AdmissionControlLaw.java` (rewrite), `AdmissionDecisionReason.java` (new values: the starvation triple `ORDERING_STARVED` / `NO_WORK` / `SELF_THROTTLED`, plus `WARMUP`, `INSUFFICIENT_SIGNAL`, `PLATEAU`, and a fresh hand-assigned value for the escape probe - never reusing `PROBING`'s value, whose probe-down semantics dashboards may already key on; hand-assigned gauge values, never ordinals), deletions per KTD8 (`ServiceTimeExpAvg` and its `ServiceTimeExpAvgTest`, probe-down state, `ContaminatedBaselineGateTest`'s gradient premise); tests `AdmissionControlLawTest.java` rewritten deliberately, and the old-law reason/trajectory assertions in `AdmissionLifecycleTest`, `AdmissionMetricsTest`, `AdmissionControllerTest` and `AdaptiveConcurrencyModeTest` migrated in the same commit - the full-suite-before-commit rule means U5 cannot land green without them. A dated `docs/test-hardening/` audit entry maps each deleted test case to its successor falsifier. <!-- file-refs: N/A - the audit entry is created by this unit -->
 - **Approach:** precedence: adjudication gate -> absolute brakes (failure fraction; offset back-pressure read at the boundary) -> binding gate (preserve on unbound) -> warmup band -> elasticity bands; `+q = sqrt(L)` on RISE and WARMUP; floor invariant `floor >= one accelerator step` asserted in construction.
 - **Execution note:** port the falsifier assertions first (strict, liveness-shaped) so the rewrite is driven by tests a frozen law fails.
 - **Test scenarios:**
-  - plateau window series (flat throughput, climbing in-flight) -> HOLD at the knee; the committed law's ratchet series (17->27) -> target does not walk
+  - plateau window series (flat throughput, climbing in-flight) -> HOLD at the knee; replaying the committed law's 400-window simulation series (17->27, recorded in the outstanding-items note item 2; the broker IT observed the same walk as 17/18->20 over 100s) -> the new law's target does not walk
   - negative elasticity -> contraction; below threshold and above zero -> hold; above threshold + binding -> rise
   - unbound windows -> target bit-identical (preserve), and the burst-then-idle cycle ends where it began
   - overload drops (once the classifier feeds them) brake regardless of elasticity
@@ -875,6 +925,8 @@ flowchart TB
   - cooldown/pause/starved windows do not advance the floor counter or the probe duration
   - rebalance mid-probe -> post-reset target equals the deferred restore value, not the probe value
   - pause mid-probe -> probe aborted, target restored on resume, history boundary stamped
+  - pause with NO probe in flight -> boundary stamped, pre-pause entries dead; resume with binding work -> warmup band (+q within its allowance), never an absorbing hold
+  - rebalance while the assignment shrank -> restored seed scaled by the partition ratio (KTD4)
   - probe concluding measures from a cleared history only
 - **Verification:** lifecycle suite green including the three new edge tests.
 
@@ -896,7 +948,7 @@ flowchart TB
 - **Requirements:** R14.
 - **Files:** new harness under `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/admission/` (plant, scenarios, mutants), replacing `AdmissionControlSimulationTest.java`'s placeholder model.
 - **Approach:** deterministic plant with set `mu_max`, `W0`, batchSize; scenarios: initial-condition sweep {1, 2, 5, 20, 50, ceiling} (one arm batchSize > 1, slots oracle), arrival-burst dual (L* fixed, load swings, assert no chasing), app-limited lull (RFC 7661 regression), floor pin (escape liveness), plateau (HOLD band); mutants FrozenLimit / AlwaysMaxLimit / AlwaysMinLimit parameterised over every scenario and asserted to FAIL; strict metamorphic check (doubled capacity -> strictly higher settled target).
-- **Execution note:** run the mutant matrix against the OLD law first - it must also fail at least the sweep - to prove the harness can fail before trusting its greens.
+- **Execution note:** the harness lands BEFORE the U5 rewrite (the index encodes it: U8 depends on U4; U5 depends on U8) so the old law can be run as the control. The control criterion is defect-shaped: the old law must fail the **graceful-saturation plateau** (the target walks while throughput is flat - the ratchet made visible); its sweep result is recorded but not required, because the additive headroom can legitimately pass a fixed-`L*` sweep and a passing sweep must not read as a broken harness. The floor-pin scenario ships with the harness but its green is owned by U6's verification, since it exercises the escape U6 builds.
 - **Test scenarios:** the scenarios ARE the tests; the meta-scenario is each mutant failing every applicable scenario.
 - **Verification:** suite green for the new law, red for all three mutants, and the old-law control run recorded in the commit body.
 
@@ -905,7 +957,10 @@ flowchart TB
 - **Goal:** the end-to-end claim under load that moves (R15 minus the blocked phase).
 - **Requirements:** R15.
 - **Files:** new `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AdaptiveConcurrencyComparisonIT.java` on the arrival harness; updates to `AdaptiveConcurrencyClosedLoopIT.java` expectations for the new law. <!-- file-refs: N/A - the IT is created by this unit -->
-- **Approach:** three arms (low static floor, hand-tuned static from a phase-1 sweep, adaptive); phases steady / degrade / recover-beyond / plateau; measure end-to-end residence at fixed arrival plus useful completion rate, never the target; per-phase Little's-Law oracle in slots.
+- **Approach:**
+  1. Port the bench lane's constant-rate feeder pattern into a test-integration utility: rate-holding producer, per-phase downstream capacity switching inside the user function (the bench templates are shell-rendered and not on the IT classpath - this is real work, named here so it is not discovered mid-unit).
+  2. Three arms (low static floor, hand-tuned static from a phase-1 sweep, adaptive); phases steady / degrade / recover-beyond / plateau.
+  3. Measure end-to-end residence at fixed arrival plus useful completion rate, never the target; per-phase Little's-Law oracle in slots.
 - **Test scenarios:**
   - phase 2: adaptive residence strictly below hand-tuned once capacity falls
   - phase 3: adaptive throughput strictly above hand-tuned once capacity exceeds phase 1
@@ -925,9 +980,9 @@ flowchart TB
 
 ### U11. Records
 
-- **Goal:** the ledgers say what this landed.
-- **Requirements:** traceability.
-- **Files:** `docs/inflight/pr-333-adaptive-concurrency-outstanding.md` (items -1, 1, 2, 3 close; item 0 resolves to this law), `docs/inflight/core-auto-scaling.md`, `docs/data/roadmap.yaml` stage, the `admission-gradient2-port` tag note referenced from the law-rewrite commit.
+- **Goal:** the ledgers say what this landed, and the one operator-facing consequence is written where an operator reads.
+- **Requirements:** traceability; the KTD7 consequence surfaced.
+- **Files:** `docs/inflight/pr-333-adaptive-concurrency-outstanding.md` (verify every earlier unit closed its items in-commit; item 0 resolves to this law; fix stragglers), `docs/inflight/core-auto-scaling.md`, `docs/data/roadmap.yaml` stage, the `admission-gradient2-port` tag note referenced from the law-rewrite commit, and one operator-visible statement in the feature documentation (`src/docs/README_TEMPLATE.adoc` regenerated, or the `docs/features/` record): under the default configuration the brake is the throughput plateau band, not any latency bound, and what symptom that trades away.
 - **Test scenarios:** Test expectation: none - records; the citation and inflight gates are the check.
 - **Verification:** gates green; no stale "unanswered" claims survive in the inflight notes.
 
