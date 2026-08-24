@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.internal;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.AdaptiveConcurrencyMode;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.admission.AdmissionBoundarySignals;
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
 import bz.stub.parallelconsumer.internal.admission.AdmissionController.Outcome;
 import bz.stub.parallelconsumer.state.WorkContainer;
@@ -19,6 +20,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.threeten.extra.MutableClock;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
@@ -26,8 +28,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -294,6 +298,96 @@ class AdmissionSignalPlumbingTest {
         assertThat(controller().serviceTimeSamplesRecorded()).isEqualTo(1);
         assertThat(controller().inFlightSamplesRecorded()).isEqualTo(1);
         assertThat(controller().outcomesRecorded(Outcome.SUCCESS)).isEqualTo(1);
+    }
+
+    // --- boundary signals (the U3 plumbing): sampled once per WINDOW CLOSE, never per pass ---
+
+    /**
+     * The once-per-boundary discipline, the window-close analogue of
+     * {@link #eachControlLoopPassRecordsExactlyOneInFlightSample()}: the controller pulls the boundary sampler
+     * only when its injected-clock deadline says a window is due - N ticks inside one window sample NOTHING, the
+     * tick that crosses the boundary samples exactly once.
+     */
+    @Test
+    void boundarySignalsAreSampledExactlyOncePerWindowClose() {
+        var clock = MutableClock.epochUTC();
+        var controller = new AdmissionController(observeOptions(1).build(), clock);
+        AtomicInteger boundarySamples = new AtomicInteger();
+        Supplier<AdmissionBoundarySignals> countingSampler = () -> {
+            boundarySamples.incrementAndGet();
+            return AdmissionBoundarySignals.UNSAMPLED;
+        };
+
+        for (int pass = 0; pass < 5; pass++) {
+            controller.tick(countingSampler);
+        }
+        assertWithMessage("no window closed, so no boundary may have been sampled")
+                .that(boundarySamples.get()).isEqualTo(0);
+
+        clock.add(Duration.ofSeconds(1));
+        for (int pass = 0; pass < 5; pass++) {
+            controller.tick(countingSampler);
+        }
+        assertWithMessage("one boundary crossed must mean exactly one sample, however many passes ran")
+                .that(boundarySamples.get()).isEqualTo(1);
+
+        clock.add(Duration.ofSeconds(1));
+        controller.tick(countingSampler);
+        assertThat(boundarySamples.get()).isEqualTo(2);
+    }
+
+    /** DISABLED constructs the controller inert: the boundary sampler is never consulted, however due a window. */
+    @Test
+    void disabledNeverInvokesTheBoundarySampler() {
+        var clock = MutableClock.epochUTC();
+        // adaptiveConcurrencyMode defaults to DISABLED
+        var controller = new AdmissionController(optionsBuilder(1).build(), clock);
+        AtomicInteger boundarySamples = new AtomicInteger();
+
+        clock.add(Duration.ofSeconds(5));
+        controller.tick(() -> {
+            boundarySamples.incrementAndGet();
+            return AdmissionBoundarySignals.UNSAMPLED;
+        });
+
+        assertThat(boundarySamples.get()).isEqualTo(0);
+    }
+
+    /**
+     * The processor's boundary sample maps each engine surface onto its signal field - including the R8
+     * offset-encoding back-pressure read, sampled TRUE here because a partition reports blocked.
+     */
+    @Test
+    void theProcessorSamplesEverySignalFromItsOwningEngineSurface() {
+        var options = observeOptions(1).build();
+        module = new PCModule<>(options);
+        pc = new TestParallelEoSStreamProcessor<>(options, module);
+        WorkManager<String, String> mockedWm = Mockito.mock(WorkManager.class);
+        Mockito.when(mockedWm.getUpperBoundOnSelectableWork()).thenReturn(42L);
+        Mockito.when(mockedWm.getNumberOfWorkQueuedInShardsAwaitingSelection()).thenReturn(7L);
+        Mockito.when(mockedWm.isAnyPartitionBlocked()).thenReturn(true);
+        pc.setWm(mockedWm);
+
+        AdmissionBoundarySignals signals = pc.sampleAdmissionBoundarySignals();
+
+        assertThat(signals.getActiveTasks()).isEqualTo(0);
+        assertWithMessage("OBSERVE never enforces, so the commanded target is the static maxConcurrency")
+                .that(signals.getTargetSlots()).isEqualTo(8);
+        assertWithMessage("no work request has been fulfilled yet, so dispatch reads under-served")
+                .that(signals.isDispatchUnderServed()).isTrue();
+        assertThat(signals.getSelectableWorkUpperBound()).isEqualTo(42);
+        assertThat(signals.getBufferedShardWork()).isEqualTo(7);
+        assertThat(signals.isPollerSelfThrottled()).isFalse();
+        assertWithMessage("a blocked partition must sample as offset back-pressure")
+                .that(signals.isOffsetBackPressure()).isTrue();
+    }
+
+    /** The real (unmocked) back-pressure surface: a fresh assignment with no offset pressure reads unblocked. */
+    @Test
+    void aFreshAssignmentReportsNoOffsetBackPressure() {
+        buildHarness(observeOptions(1).build());
+
+        assertThat(wm.isAnyPartitionBlocked()).isFalse();
     }
 
     // --- helpers ---

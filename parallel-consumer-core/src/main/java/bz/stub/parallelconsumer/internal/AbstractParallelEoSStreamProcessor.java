@@ -11,6 +11,7 @@ import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.internal.admission.AdmissionBoundarySignals;
 import bz.stub.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
@@ -1531,7 +1532,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             return;
         }
         int targetBefore = controller.currentTarget();
-        controller.tick();
+        // The supplier form keeps the boundary sampling ONCE PER WINDOW: the controller invokes it only when its
+        // injected-clock deadline says a window is actually due, never on the passes in between.
+        controller.tick(this::sampleAdmissionBoundarySignals);
         int targetAfter = controller.currentTarget();
         if (targetAfter != targetBefore) {
             // The actuator half of the tick (R9/KTD5): the pool follows the published target, applied on CHANGE
@@ -1541,6 +1544,33 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (targetAfter > targetBefore) {
             maybeWakeupPoller();
         }
+    }
+
+    /**
+     * Samples the engine signals a closing admission window is classified from (the design's R2/KTD1/R8), ONCE
+     * per window boundary - {@code AdmissionController#tick(Supplier)} invokes this only when a window is
+     * actually due, so the costlier reads here are paid about once a second, never per control-loop pass:
+     * <ul>
+     * <li>active tasks (slots) and the commanded target - the KTD1 binding verdict's two halves;</li>
+     * <li>dispatch under-served - the inverse of {@link #lastWorkRequestWasFulfilled};</li>
+     * <li>the ordering-aware selectable-work upper bound and the buffered shard work -
+     * {@link WorkManager#getUpperBoundOnSelectableWork()} is O(shards) (O(keys) under KEY ordering), acceptable
+     * at window cadence, which is exactly why this sits behind the once-per-boundary supplier;</li>
+     * <li>the poller's self-throttle flag, and the R8 offset-encoding back-pressure read
+     * ({@link WorkManager#isAnyPartitionBlocked()}, O(partitions)).</li>
+     * </ul>
+     * Package-private (non-{@code get}-prefixed, see {@link #userFunctionTaskAccounting()}) so the signal mapping
+     * is testable without driving a real control loop - the {@link #sampleAdmissionInFlight()} pattern.
+     */
+    AdmissionBoundarySignals sampleAdmissionBoundarySignals() {
+        return new AdmissionBoundarySignals(
+                userFunctionTaskAccounting.getActive(),
+                module.admissionTargetSlots(),
+                !lastWorkRequestWasFulfilled,
+                wm.getUpperBoundOnSelectableWork(),
+                wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                brokerPollSubsystem.isPausedForThrottling(),
+                wm.isAnyPartitionBlocked());
     }
 
     /**

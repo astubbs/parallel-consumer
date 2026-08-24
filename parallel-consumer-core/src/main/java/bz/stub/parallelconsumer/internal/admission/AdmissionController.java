@@ -24,6 +24,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
  * Owns the LIVE admission target (in slots), its effective-maximum resolution, its mode, and its reported state -
@@ -526,8 +527,26 @@ public class AdmissionController {
      * {@link AdmissionDecisionReason#COOLDOWN}: settle-time samples describe a workload still rearranging itself,
      * and feeding them to a freshly-reset law would warm its baseline on noise.</li>
      * </ul>
+     * <p>
+     * This no-argument form closes windows with {@link AdmissionBoundarySignals#UNSAMPLED} - for callers with no
+     * engine to sample (tests driving the law directly). The engine calls
+     * {@link #tick(Supplier)} so every closed window carries real boundary signals.
      */
     public void tick() {
+        tick(() -> AdmissionBoundarySignals.UNSAMPLED);
+    }
+
+    /**
+     * As {@link #tick()}, sampling the engine's boundary signals through {@code boundarySampler} - invoked ONLY
+     * when a window is actually due (never on the passes between boundaries, so the sampler's O(shards)
+     * selectable-work read is paid about once a second), and exactly once per closed window. In DISABLED, and
+     * while the window's time bound has not elapsed, the sampler is never called.
+     * <p>
+     * The closed window carries the MEASURED elapsed time since the window opened on the injected clock - never
+     * the nominal {@link #SAMPLE_WINDOW_DURATION}, because windows drift (this method only runs when the control
+     * loop passes, so an idle consumer produces one long window rather than several nominal ones).
+     */
+    public void tick(Supplier<AdmissionBoundarySignals> boundarySampler) {
         if (mode == AdaptiveConcurrencyMode.DISABLED) {
             return;
         }
@@ -539,9 +558,11 @@ public class AdmissionController {
         if (Duration.between(windowOpenedAt, now).compareTo(SAMPLE_WINDOW_DURATION) < 0) {
             return;
         }
+        long elapsedNanos = Duration.between(windowOpenedAt, now).toNanos();
+        AdmissionBoundarySignals boundarySignals = boundarySampler.get();
         ClosedAdmissionWindow closed;
         synchronized (windowLock) {
-            closed = window.close();
+            closed = window.close(elapsedNanos, boundarySignals);
         }
         windowOpenedAt = now;
         if (cooldownUntil != null) {
@@ -676,7 +697,7 @@ public class AdmissionController {
      */
     private void resetForAssignmentDelta(Instant now) {
         synchronized (windowLock) {
-            window.close(); // close-and-drop IS the discard: close() resets the instance for the next window
+            window.discard();
         }
         law = lawBuilder
                 .initialLimit(clamp(adaptiveTarget, AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling))
@@ -698,7 +719,7 @@ public class AdmissionController {
             return;
         }
         synchronized (windowLock) {
-            window.close(); // close-and-drop IS the discard
+            window.discard();
         }
         windowOpenedAt = clock.instant();
     }

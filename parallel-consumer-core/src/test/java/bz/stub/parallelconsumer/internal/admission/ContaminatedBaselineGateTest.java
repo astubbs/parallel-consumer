@@ -51,7 +51,7 @@ class ContaminatedBaselineGateTest {
      */
     private static AdmissionDecision runWindow(AdmissionControlLaw law) {
         int limit = law.getLimit();
-        return law.onWindowClosed(new ClosedAdmissionWindow(
+        return law.onWindowClosed(TestWindows.window(
                 SAMPLES, modeledLatency(limit), SAMPLES, limit, 2, SAMPLES, 0, 0));
     }
 

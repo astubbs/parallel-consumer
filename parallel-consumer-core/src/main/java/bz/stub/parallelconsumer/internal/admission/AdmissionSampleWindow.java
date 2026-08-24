@@ -21,8 +21,9 @@ import java.util.List;
  * near-limit shows a p90 - p10 close to the full range, which the decision layer must not read as starvation);</li>
  * <li>outcome counts - success / ignore / overloadDrop.</li>
  * </ul>
- * {@link #close()} returns the immutable aggregates with whatever has accumulated - possibly nothing - and resets
- * this instance for the next window, so the engine can keep one long-lived instance.
+ * {@link #close(long, AdmissionBoundarySignals)} returns the immutable aggregates with whatever has accumulated -
+ * possibly nothing - and resets this instance for the next window, so the engine can keep one long-lived instance;
+ * {@link #discard()} resets without producing aggregates.
  * <p>
  * Percentile convention: nearest-rank on the sorted snapshots, index {@code round(q * (n - 1))}.
  * <p>
@@ -91,8 +92,12 @@ public class AdmissionSampleWindow {
 
     /**
      * Closes the window on its time bound with whatever it has, and resets this instance for the next window.
+     *
+     * @param elapsedNanos    the window's MEASURED length on the caller's clock - never the nominal duration,
+     *                        because windows drift (the design's R4: throughput needs the actual denominator)
+     * @param boundarySignals the engine signals the caller sampled ONCE at this boundary
      */
-    public ClosedAdmissionWindow close() {
+    public ClosedAdmissionWindow close(long elapsedNanos, AdmissionBoundarySignals boundarySignals) {
         double mean = serviceTimeSampleCount == 0 ? 0.0 : serviceTimeSumNanos / serviceTimeSampleCount;
 
         int median = 0;
@@ -106,9 +111,19 @@ public class AdmissionSampleWindow {
 
         ClosedAdmissionWindow closed = new ClosedAdmissionWindow(serviceTimeSampleCount, mean,
                 inFlightCount, median, spread,
-                successCount, ignoreCount, overloadDropCount);
+                successCount, ignoreCount, overloadDropCount,
+                elapsedNanos, boundarySignals);
         reset();
         return closed;
+    }
+
+    /**
+     * Drops everything accumulated and resets for the next window WITHOUT producing aggregates - the discard the
+     * engine's pause-poison and rebalance paths need, where the samples describe a window that must not be read.
+     * Discarding produces no {@link ClosedAdmissionWindow}, so it needs no elapsed time and no boundary sample.
+     */
+    public void discard() {
+        reset();
     }
 
     /**

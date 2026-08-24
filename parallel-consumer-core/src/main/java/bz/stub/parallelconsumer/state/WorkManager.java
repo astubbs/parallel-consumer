@@ -381,6 +381,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return pm.hasIncompleteOffsets();
     }
 
+    /**
+     * @see PartitionStateManager#isAnyPartitionBlocked()
+     */
+    public boolean isAnyPartitionBlocked() {
+        return pm.isAnyPartitionBlocked();
+    }
+
     public boolean isRecordsAwaitingProcessing() {
         return sm.getNumberOfWorkQueuedInShardsAwaitingSelection() > 0;
     }

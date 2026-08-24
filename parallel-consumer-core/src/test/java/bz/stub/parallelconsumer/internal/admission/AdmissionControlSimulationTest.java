@@ -76,7 +76,7 @@ class AdmissionControlSimulationTest {
             // Little's law over the simulated one-second window
             int completions = (int) (limit * (WINDOW_DURATION_NANOS / latency));
 
-            law.onWindowClosed(new ClosedAdmissionWindow(
+            law.onWindowClosed(TestWindows.window(
                     completions, latency, completions, limit, 2, completions, 0, 0));
 
             if (window >= TOTAL_WINDOWS - SETTLED_WINDOWS) {

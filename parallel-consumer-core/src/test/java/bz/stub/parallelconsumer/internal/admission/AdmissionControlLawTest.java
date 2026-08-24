@@ -343,7 +343,7 @@ class AdmissionControlLawTest {
         // the caller closes on the time bound with only 1-2 samples; latency in them is wild
         for (int i = 0; i < 5; i++) {
             AdmissionDecision decision = law.onWindowClosed(
-                    new ClosedAdmissionWindow(2, 500 * MS, 2, 2, 0, 2, 0, 0));
+                    TestWindows.window(2, 500 * MS, 2, 2, 0, 2, 0, 0));
             assertThat(decision.getReason()).isEqualTo(APP_LIMITED);
             assertThat(law.getEstimatedLimit()).isEqualTo(held);
         }
