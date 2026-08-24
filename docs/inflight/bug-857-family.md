@@ -739,7 +739,7 @@ worth having on record if a mechanism is ever proposed that predicts one from th
 
 **The prose-only control repeats, and this time it stayed red.** `909b865ab` differs from its parent
 `3110d0fef` by one markdown file - astubbs#57's own inflight note, since shrunk and renamed to
-[`core-121-offset-accuracy-carry-is-unreproduced.md`](core-121-offset-accuracy-carry-is-unreproduced.md)
+[`core-894-shift-on-a-growing-partition-is-untested.md`](core-894-shift-on-a-growing-partition-is-untested.md)
 (`git show 909b865ab` for the diff, under the name it carried then) - 8 lines added, 9 removed,
 no code - and [run 32352122268](https://github.com/astubbs/parallel-consumer/actions/runs/32352122268)
 on that parent was also red. The pair recorded against seed `4044221734199516240` measured a
