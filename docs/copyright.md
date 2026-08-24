@@ -14,9 +14,13 @@ workflow. Skip it with `-Dcopyright.skip=true`.
 one of three sets. `ENFORCED_TYPES` names the filename globs that must carry a header and the
 comment syntax each uses; `EXEMPT_PATHS` names what carries none, each entry with its reason; and a
 file matching neither is reported as a violation telling you which table to add it to. That third
-set is the point of the design - an extension list on its own goes stale the moment an eighth client
-language arrives, silently, whereas an unclassified file fails the build. `--report` prints the
+set is the point of the design - an extension list on its own goes stale the moment a language
+nobody listed arrives, silently, whereas an unclassified file fails the build. `--report` prints the
 classification of every file, which is how to see what the tables actually cover rather than assume.
+
+`ENFORCED_TYPES` deliberately names languages this tree does not have yet - the table was written
+against the language-proxy client stack - because the cost of an unused entry is nothing and the
+alternative is a red build on a correct file.
 
 `bin/test-check-copyright-headers.sh` generates a red-and-green case for **every** entry in
 `ENFORCED_TYPES`, reading the table out of the scanner, so a language cannot be added there without
@@ -48,6 +52,13 @@ worktrees.
   `RENAMED_FROM_UPSTREAM` (`newpath|oldpath` lines) and extractions in `EXTRACTED_FROM_UPSTREAM`,
   both inside `bin/check-copyright-headers.sh`. Renames with content changes, and all extractions,
   also require the modifications line.
+- **Upstream code RECOVERED from a branch that never reached the fork point is a third case**, and
+  gets its own table, `RECOVERED_FROM_UPSTREAM_BRANCH` (`path|origin-commit`), in the same script.
+  The header it needs is an extraction's - Confluent plus the modifications line - so the reason for
+  a separate table is not the header but the **check**: a recovery names one origin commit, so the
+  scanner *verifies* the claim rather than trusting it, and an entry whose commit does not hold the
+  file fails the build. That only works while the commit stays reachable, so **archive such a branch
+  as a tag before deleting it** - otherwise the check degrades to a warning.
 - **An upstream file that carried NO notice at the fork point is not required to grow one.**
   Upstream marked its `.java`, its poms, its shell scripts and some resources - but not its
   workflows, its IDE run configurations, its Maven wrapper or its prose. Apache 2.0 4(b) says to
@@ -78,6 +89,6 @@ to it" is not one of them - that makes the file a violation, which is the point.
 | Kind | What it covers |
 |---|---|
 | **Generated** | protoc and ts-proto output (`_generated/`, `generated/`, `*_pb.rb`), lockfiles, `go.sum`. Regeneration overwrites the whole file, so a header cannot survive there. |
-| **No comment syntax** | `*.json`, `*.sln`, binary fixtures, `py.typed`, the ServiceLoader registry. Strict JSON has no comments at all; where a notice fits in-band the TypeScript client shows both conventions - a `"//"` key (`tsconfig.json`) and the `description` string (`package.json`) - but a scanner cannot demand either in general. |
+| **No comment syntax** | `*.json`, `*.sln`, binary fixtures, `py.typed`, the ServiceLoader registry. Strict JSON has no comments at all; where a notice has to sit in-band the conventions are a `"//"` key (`tsconfig.json`) or the `description` string (`package.json`) - but a scanner cannot demand either in general. |
 | **Vendored** | the Maven wrapper (`mvnw`, `mvnw.cmd`, `.mvn/`). The header is its author's business, and `mvn wrapper:wrapper` rewrites it. |
 | **Not authored source** | prose (`*.md`, `*.adoc`, `*.html`), where the notice would render into the document a reader sees, and IDE/VCS/tool configuration (`.idea/`, `.gitignore`, `.editorconfig`, `.gitmessage`, `CODEOWNERS`, `.claude/`). `LICENSE` and `NOTICE` are the licence texts themselves. |

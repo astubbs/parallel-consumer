@@ -14,6 +14,9 @@
 #    4. upstream-derived file MODIFIED, no modifications line      -> FAIL
 #    5. upstream-derived file MODIFIED, holder named only in an
 #       @author byline, no "Modifications Copyright" line          -> FAIL
+#   5b. upstream-derived file MODIFIED, both the phrase and the
+#       holder on one line but in the WRONG ORDER, so the
+#       modifications are credited to somebody else                -> FAIL
 #    6. upstream-derived file MODIFIED, dual header                -> pass
 #    7. renamed upstream file, content unchanged, Confluent-only   -> pass
 #    8. renamed upstream file, content changed, no mods line       -> FAIL
@@ -112,6 +115,15 @@ confluent_author_file() { # <path> [body] - holder named only in an @author byli
     printf '/*-\n * Copyright (C) 2020-2022 Confluent, Inc.\n *\n * @author Antony Stubbs and contributors\n */\nclass X { %s }\n' "${2:-}" > "$1"
 }
 
+# <path> [body] - the fork holder and the phrase on ONE line, but in the WRONG ORDER, with the
+# modifications ATTRIBUTED TO SOMEBODY ELSE. Both substrings are present, so a check that tests for
+# them independently accepts this; the phrase has to be followed by the holder for it to be a claim
+# by the fork. The `grep "Modifications Copyright (C).*${FORK_HOLDER}"` the scanner used to run said
+# exactly that, and the nested-`case` rewrite that replaced it silently dropped the ordering.
+misattributed_mods_file() {
+    printf '/*-\n * Copyright (C) 2020-2022 Confluent, Inc.\n * @author Antony Stubbs and contributors - Modifications Copyright (C) 2026 SomeOtherCorp\n */\nclass X { %s }\n' "${2:-}" > "$1"
+}
+
 fork_file() { # <path>
     printf '/*-\n * Copyright (C) 2026 Antony Stubbs and contributors\n */\nclass X {}\n' > "$1"
 }
@@ -128,6 +140,7 @@ confluent_file "$repoA/LosesHeader.java"                    # 2: header removed 
 confluent_file "$repoA/HeaderSwapped.java"                  # 3: header swapped for fork's post-fork
 confluent_file "$repoA/ModifiedNoLine.java"                 # 4: modified post-fork, line forgotten
 confluent_file "$repoA/ModifiedAuthorByline.java"           # 5: modified post-fork, @author only
+confluent_file "$repoA/ModifiedMisattributed.java"          # 5b: modified post-fork, mods line credits another holder
 confluent_file "$repoA/ModifiedDual.java"                   # 6: modified post-fork, line added
 confluent_file "$repoA/RenamedSameOld.java"                 # 7: renamed verbatim post-fork
 confluent_file "$repoA/RenamedChangedOld.java"              # 8: renamed WITH changes post-fork
@@ -140,6 +153,7 @@ headerless_file "$repoA/LosesHeader.java"                   # rule 2 violation
 fork_file "$repoA/HeaderSwapped.java"                       # rule 3 violation (mislabelled as fork-original)
 confluent_file "$repoA/ModifiedNoLine.java" "int changed;"  # rule 4 violation
 confluent_author_file "$repoA/ModifiedAuthorByline.java" "int changed;" # rule 5 violation (byline is no notice)
+misattributed_mods_file "$repoA/ModifiedMisattributed.java" "int changed;" # rule 5b violation (mods line credits another holder)
 dual_file "$repoA/ModifiedDual.java" "int changed;"         # rule 6 conformant
 git -C "$repoA" mv RenamedSameOld.java RenamedSame.java     # rule 7 conformant (verbatim)
 git -C "$repoA" mv RenamedChangedOld.java RenamedChanged.java
@@ -166,11 +180,12 @@ assert_contains "detects upstream file losing its header"       "upstream-derive
 assert_contains "detects upstream file with header swapped"     "upstream-derived file lost its Confluent header): HeaderSwapped.java" "$out"
 assert_contains "detects modified upstream file w/o mods line"  "upstream-derived file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): ModifiedNoLine.java" "$out"
 assert_contains "detects @author byline passed off as mods line" "upstream-derived file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): ModifiedAuthorByline.java" "$out"
+assert_contains "detects a mods line crediting another holder (right words, wrong order)" "upstream-derived file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): ModifiedMisattributed.java" "$out"
 assert_contains "detects changed rename w/o mods line"          "renamed upstream file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): RenamedChanged.java" "$out"
 assert_contains "detects extraction w/o mods line"              "extraction of upstream-derived code but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): Extraction.java" "$out"
 assert_contains "detects fork file claiming Confluent"          "fork-original file claims Confluent copyright): ForkClaimsConfluent.java" "$out"
 assert_contains "detects fork file with no header"              "missing 'Antony Stubbs and contributors' header): ForkNoHeader.java" "$out"
-assert_contains "reports exactly 8 violations"                  "8 violation(s)" "$out"
+assert_contains "reports exactly 9 violations"                  "9 violation(s)" "$out"
 case "$out" in
     *"ForkGood.java"*|*"Upstream.java"*|*"ModifiedDual.java"*|*"RenamedSame.java"*)
         echo "FAIL: conformant files were flagged"; failures=$((failures + 1)) ;;
