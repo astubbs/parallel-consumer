@@ -207,6 +207,35 @@ and reads `STABLE` again. Sampling only at the finish would pronounce a run reba
 exactly the same thing about a run that had rebalanced twice in the middle. Samples taken while the
 engine is still joining are excluded - that is the engine arriving, not a rebalance.
 
+### It prints the topology, and that hands Python the JVM's tooling
+
+Before starting, the demo asks the engine what it assembled and prints it:
+
+```
+Topologies:
+   Sub-topology: 0
+    Source: KSTREAM-SOURCE-0000000000 (topics: [pc-streams-demo-...])
+      --> KSTREAM-MAPVALUES-0000000001
+    Processor: KSTREAM-AGGREGATE-0000000002 (stores: [counts-store])
+      --> KTABLE-TOSTREAM-0000000003
+    ...
+```
+
+**The host does not already know this.** It issued five builder calls and holds opaque handles; the
+engine is the only side that has seen the assembled graph. `KTABLE-TOSTREAM-0000000003` is a node
+Kafka Streams generated on its own - nobody in Python asked for it.
+
+That text is the exact format `Topology.describe()` produces, which matters because **every Kafka
+Streams topology visualiser parses it**. Paste it into one and you get a rendered diagram of a
+topology that was defined in Python. Free ones that take it directly:
+[kafka-streams-viz](https://zz85.github.io/kafka-streams-viz/),
+[kafka-streams-visualization](https://gaetancollaud.github.io/kafka-streams-visualization/),
+[KSTD](https://kstd.thriving.dev/), and the KCM Hub topology explorer.
+
+This is the argument for wrapping the real engine rather than reimplementing it, in one artifact:
+none of the Python-native stream processors has a `describe()`, so none of them has any of this
+tooling, and none of them can grow it without also growing an ecosystem. We inherited it.
+
 ### The failure arm
 
 ```bash

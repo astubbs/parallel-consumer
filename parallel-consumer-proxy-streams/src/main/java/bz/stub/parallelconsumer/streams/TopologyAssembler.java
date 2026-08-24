@@ -45,6 +45,7 @@ public class TopologyAssembler {
     private final AtomicLong nextHandle = new AtomicLong(1);
     private final MapperFactory mappers;
     private boolean built;
+    private Topology topology;
 
     public TopologyAssembler(MapperFactory mappers) {
         this.mappers = mappers;
@@ -105,11 +106,19 @@ public class TopologyAssembler {
         throw unknownHandle(handle, "sink");
     }
 
-    /** Builds the topology. The host's description ends here; a session describes once. */
+    /**
+     * Materialises the topology, once. The host's description ends here; a session describes once.
+     *
+     * <p>Memoised rather than one-shot so that describing a topology does not consume the right to
+     * start it. A host that asks what it just built, and is then refused permission to run it,
+     * has been punished for looking.
+     */
     public Topology build() {
-        requireNotBuilt("build");
-        built = true;
-        return builder.build();
+        if (topology == null) {
+            built = true;
+            topology = builder.build();
+        }
+        return topology;
     }
 
     private long mint(Object node) {

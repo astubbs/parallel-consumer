@@ -41,6 +41,7 @@ message StreamsClientMessage {
     RegisterFunction register_function = 3;
     DescribeComplete describe_complete = 4;
     InvocationResult invocation_result = 5;
+    Describe describe = 6;
   }
 }
 
@@ -50,6 +51,7 @@ message StreamsServerMessage {
     HandleAssigned handle_assigned = 2;
     Invocation invocation = 3;
     Fault fault = 4;
+    TopologyDescription topology_description = 5;
   }
 }
 
@@ -117,6 +119,61 @@ message RegisterFunction {
 
 // The topology is built and started on this message, and not before.
 message DescribeComplete {
+}
+
+// Asks what the topology currently looks like. Answered with exactly one TopologyDescription.
+//
+// The host built this topology, so it might seem to know already - but it does not. It issued
+// builder calls and holds opaque handles; the engine is the only side that has ever seen the
+// assembled graph, including the nodes Kafka Streams generated rather than the host naming them,
+// the sub-topology split, and the repartition topics an aggregation implies.
+message Describe {
+}
+
+// One answer to Describe. Carries the SAME information twice, deliberately, because the two forms
+// have different consumers.
+message TopologyDescription {
+  // Exactly what Topology.describe().toString() produces.
+  //
+  // This is a compatibility surface, not a convenience: every Kafka Streams topology visualiser in
+  // existence parses this text, so a host that can print it can use all of them. That is a real
+  // capability handed to a language whose ecosystem has no such tooling and no way to grow any.
+  optional string text = 1;
+
+  // The same graph already parsed. Present so this side's own tooling never has to re-parse the
+  // text above - it is a human-readable rendering with no stability guarantee, and every tool that
+  // consumes it has had to reverse-engineer its format.
+  repeated Subtopology subtopologies = 2;
+
+  // Global stores cannot arise from the builder methods this protocol exposes, so this is expected
+  // to be empty. It exists so that if one ever does, it is visibly reported rather than silently
+  // dropped from the structured form while remaining in the text.
+  repeated string global_store_names = 3;
+}
+
+message Subtopology {
+  optional int32 id = 1;
+  repeated Node nodes = 2;
+}
+
+message Node {
+  optional string name = 1;
+  repeated string predecessors = 2;
+  repeated string successors = 3;
+  optional NodeKind kind = 4;
+  // Source nodes carry the topics they read; a sink carries the one it writes.
+  repeated string topics = 5;
+  // State stores a processor node is connected to.
+  repeated string stores = 6;
+  // Set instead of topics when a source subscribes by pattern.
+  optional string topic_pattern = 7;
+}
+
+enum NodeKind {
+  NODE_KIND_UNSPECIFIED = 0;
+  NODE_KIND_SOURCE = 1;
+  NODE_KIND_PROCESSOR = 2;
+  NODE_KIND_SINK = 3;
 }
 
 // Sent when an operator reaches a client-supplied function. The stream thread that emitted it is

@@ -77,6 +77,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def show_topology(text: str) -> None:
+    """Prints what the engine assembled, which this process described but has never seen.
+
+    Worth printing rather than merely fetching: this is the exact format every Kafka Streams
+    topology visualiser parses, so a reader can paste it into one and get a rendered diagram of a
+    topology that was defined in Python. That tooling exists only for the JVM, and this is how a
+    non-JVM host reaches it.
+    """
+    print()
+    print("The topology the engine assembled, as Kafka Streams describes it:")
+    print()
+    for line in text.rstrip().split("\n"):
+        print(f"    {line}")
+    print()
+    print("    Paste that into any Kafka Streams topology visualiser to see it drawn.")
+
+
 def poll_interval_property(args: argparse.Namespace) -> dict[str, str]:
     """The failure arm's one lever, kept out of the happy path.
 
@@ -294,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
         grouped = builder.group_by_key(transformed)
         counts = builder.count(grouped, "counts-store")
         builder.sink(counts, sink)
+
+        show_topology(session.describe().text)
 
         log.info("Topology described from Python; starting it...")
         started = time.monotonic()

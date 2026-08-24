@@ -94,6 +94,7 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                 case REGISTER_FUNCTION -> log.debug("host registered function token {}",
                         message.getRegisterFunction().getToken());
                 case DESCRIBE_COMPLETE -> onDescribeComplete();
+                case DESCRIBE -> onDescribe();
                 case INVOCATION_RESULT -> onResult(message.getInvocationResult());
                 // Named rather than ignored: a foreign caller that sends something this engine does not implement
                 // needs to be told which message was refused, not left waiting.
@@ -135,6 +136,19 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
             };
             send(StreamsServerMessage.newBuilder()
                     .setHandleAssigned(HandleAssigned.newBuilder().setCallId(call.getCallId()).setHandle(handle))
+                    .build());
+        }
+
+        /**
+          * Answers what the topology looks like, without consuming the right to start it.
+          *
+          * <p>Materialising the topology closes the description - no further builder call is
+          * accepted afterwards - which is why this is worth saying out loud: asking is not free of
+          * consequence, it just is not fatal.
+          */
+        private void onDescribe() {
+            send(StreamsServerMessage.newBuilder()
+                    .setTopologyDescription(TopologyDescriber.describe(assembler.build()))
                     .build());
         }
 

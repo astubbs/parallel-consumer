@@ -38,6 +38,13 @@ class FakeEngine:
         if kind == "open":
             self._outbound.put(pb.StreamsServerMessage(
                 ready=pb.Ready(application_id=message.open.application_id)))
+        elif kind == "describe":
+            self._outbound.put(pb.StreamsServerMessage(
+                topology_description=pb.TopologyDescription(
+                    text="Topologies:\n   Sub-topology: 0\n    Source: KSTREAM-SOURCE-0000000000",
+                    subtopologies=[pb.Subtopology(id=0, nodes=[
+                        pb.Node(name="KSTREAM-SOURCE-0000000000",
+                                kind=pb.NODE_KIND_SOURCE, topics=["input"])])])))
         elif kind == "builder_call":
             call_id = message.builder_call.call_id
             if self._fault_on_call == call_id:
@@ -250,3 +257,89 @@ def test_a_stream_that_breaks_on_its_own_is_still_reported_as_a_fault() -> None:
 
     assert session._fault is not None
     assert "Channel closed" in session._fault
+
+
+def test_describe_returns_the_graph_the_engine_assembled(engine: FakeEngine) -> None:
+    """The host asks because it does not know: it holds handles, not a graph."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    description = session.describe()
+
+    assert description.subtopologies[0].nodes[0].topics == ["input"]
+    assert description.subtopologies[0].nodes[0].kind == pb.NODE_KIND_SOURCE
+    # The text matters as much as the structure: it is what every existing Kafka Streams
+    # visualiser parses, and it is the whole reason a language with no such tooling gets any.
+    assert description.text.startswith("Topologies:")
+
+
+class SlowDescribeEngine(FakeEngine):
+    """Answers a describe LATE, and differently each time.
+
+    Both properties are load-bearing, and the first version of these tests had neither - it used
+    the base fake, which answers inside ``send`` before ``describe`` even begins waiting. That
+    hides the two defects these tests exist for: an answer already sitting there satisfies a stale
+    event just as well as a fresh one, and a waiter that never actually waits cannot be woken by
+    anything. Both tests passed against deliberately broken code until this class existed.
+    """
+
+    def __init__(self, *, delay: float = 0.05, answer: bool = True) -> None:
+        super().__init__()
+        self._delay = delay
+        self._answer = answer
+        self.describes = 0
+
+    def send(self, message: pb.StreamsClientMessage) -> None:
+        if message.WhichOneof("message") == "describe":
+            with self._lock:
+                self.sent.append(message)
+                self.describes += 1
+                nth = self.describes
+            if self._answer:
+                threading.Timer(self._delay, self._deliver, args=(nth,)).start()
+            return
+        super().send(message)
+
+    def _deliver(self, nth: int) -> None:
+        self._outbound.put(pb.StreamsServerMessage(
+            topology_description=pb.TopologyDescription(text=f"description {nth}")))
+
+    def fault_later(self, reason: str) -> None:
+        threading.Timer(self._delay, self._outbound.put, args=(
+            pb.StreamsServerMessage(fault=pb.Fault(reason=reason)),)).start()
+
+
+def test_a_second_describe_waits_for_its_own_answer() -> None:
+    """The event from the previous answer must not satisfy the next request.
+
+    Without the reset, the second call returns instantly holding the FIRST description - the host
+    asks a changed topology what it looks like and is told what it used to look like.
+    """
+    engine = SlowDescribeEngine()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    first = session.describe()
+    second = session.describe()
+
+    assert first.text == "description 1"
+    assert second.text == "description 2"
+
+
+def test_a_fault_releases_a_describe_waiter_rather_than_letting_it_time_out() -> None:
+    """A session that fails WHILE a describe is waiting must report that, not hang to the timeout.
+
+    The fault has to arrive after the wait begins and the engine must never answer - which is the
+    real shape of the bug. At the call site a missed wakeup is indistinguishable from a hang, and a
+    hang gets diagnosed as a network problem rather than as the error the engine actually sent.
+    """
+    engine = SlowDescribeEngine(answer=False)
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    engine.fault_later("the engine gave up")
+
+    # Generous enough that a real answer would arrive, short enough that a missed wakeup shows up
+    # as a failure here rather than as a slow suite.
+    with pytest.raises(StreamsError, match="the engine gave up"):
+        session.describe(timeout=3.0)

@@ -82,6 +82,8 @@ class StreamsSession:
         self._pending: dict[int, threading.Event] = {}
         self._handles: dict[int, int] = {}
         self._ready = threading.Event()
+        self._described = threading.Event()
+        self._description: pb.TopologyDescription | None = None
         self._fault: str | None = None
         self._closing = False
         self._lock = threading.Lock()
@@ -102,6 +104,29 @@ class StreamsSession:
 
     def builder(self) -> TopologyBuilder:
         return TopologyBuilder(self)
+
+    def describe(self, timeout: float = 30.0) -> pb.TopologyDescription:
+        """Asks the engine what the topology it assembled actually looks like.
+
+        This side does not already know. It issued builder calls and holds opaque handles; the
+        engine is the only one that has seen the assembled graph - the nodes Kafka Streams generated
+        itself, the sub-topology split it chose, and whether an aggregation needed a repartition.
+
+        The ``text`` field is what every existing Kafka Streams visualiser parses, so a language
+        with no Streams tooling of its own gets all of it by printing this string.
+        """
+        self._described.clear()
+        self._transport.send(pb.StreamsClientMessage(describe=pb.Describe()))
+        if not self._described.wait(timeout):
+            raise StreamsError("the engine did not answer the describe request")
+        self._raise_if_faulted()
+        description = self._description
+        if description is None:
+            # The event fired without a description attached. Raised rather than asserted: an
+            # assert is stripped under -O, and this would then return None from a method whose
+            # signature promises otherwise.
+            raise StreamsError("the engine signalled a description but sent none")
+        return description
 
     def start(self) -> None:
         """Ends the description. The engine builds the topology and starts it on this message."""
@@ -152,6 +177,11 @@ class StreamsSession:
                     self._on_handle(message.handle_assigned)
                 elif kind == "invocation":
                     self._on_invocation(message.invocation)
+                elif kind == "topology_description":
+                    # Assigned before the event is set: a waiter that woke first and read None
+                    # would report "no description" for a description that had in fact arrived.
+                    self._description = message.topology_description
+                    self._described.set()
                 elif kind == "fault":
                     self._on_fault(message.fault.reason)
                 else:
@@ -196,7 +226,10 @@ class StreamsSession:
     def _on_fault(self, reason: str) -> None:
         log.error("streams session faulted: %s", reason)
         self._fault = reason
+        # Every waiter is released, not just the handshake. A waiter left blocked on a session that
+        # has already failed turns a reported error into a timeout, which reads as a hang.
         self._ready.set()
+        self._described.set()
         with self._lock:
             waiting = list(self._pending.values())
             self._pending.clear()
