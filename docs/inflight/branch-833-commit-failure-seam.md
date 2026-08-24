@@ -33,6 +33,27 @@ plan's post-edit numbering.
 | AE2 claimed to cover the processing-mode configurability while only exercising the default (coherence) | Applied: AE2 trimmed to R9; new AE8 exercises pause-intake |
 | Success criterion was broader than the seam: the confluentinc#833 workaround swallowed every control-loop exception, not just commit-budget exhaustion (product-lens + adversarial, converged) | Applied: success criterion scoped to the retriable commit-failure portion; planning verifies the reporter's actual exception class |
 
+## Requirements review, round 2 (2026-08-24) - implementation-ready plan
+
+Same five personas over the enriched plan; two mechanical fixes auto-applied (U4's missing U3
+dependency; AE4's Covers label), then six proposed fixes walked through and **all six applied**:
+
+| Finding (reviewer) | Decision |
+|---|---|
+| The waiter's `offsetCommitTimeout` deadline expires before the poll-side budget can exhaust, so the handler never fires under defaults (feasibility + adversarial, converged) | Applied: KTD2/U2 bring the `commitAndWait` redesign in scope - wait on affirmative signals, not a deadline; the waiter half of `bug-offset-commit-timeout-does-two-jobs.md` gets updated by U2 |
+| Handler configured under the async default commit mode is silently inert (product-lens) | Applied: new R19 - options validation rejects the combination, naming supported modes and the follow-up issue |
+| CONTINUE under EOS goes fatal on cycle two - stale committing transaction (feasibility + adversarial, converged) | Applied: KTD8 gains complete-else-abort recovery; U4 asserts multi-cycle survival |
+| Revocation-time (owner-thread) exhaustion was an unrouted fourth exit (adversarial) | Applied: KTD7/KTD9 route it as a deferral - poller alive, handler not consulted; U5 scenario added |
+| A slow handler inside the commit monitor stalls rebalance callbacks (adversarial) | Applied: KTD3 requires monitor-free invocation; U2 non-blocking test added |
+| U6's GUI-register obligation was invisible (coherence) | Applied: U6 notes the register entry exists and it keeps it accurate |
+
+Round-2 FYI/residuals for the implementer: `commitMode` field on the context object needs a named
+consumer or removal; handler-executor lifecycle at close; run-length encoding may keep payload
+back-pressure from engaging ("bounded" vs "nothing grew"); cooperative partial reassignments vs the
+rolling-window bound; the U3 heal test should accept the eviction outcome; the coerced EOS mode
+field needs the `commitInterval` mutable-option precedent; what replaces the wedged-but-alive-poller
+diagnostic; a distinct seam-state gauge value for the deferral-escalation lane.
+
 ## Carried forward for planning (not plan edits)
 
 FYI observations and residual concerns from the same review, recorded so planning inherits them:
