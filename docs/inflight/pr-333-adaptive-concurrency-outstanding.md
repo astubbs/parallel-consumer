@@ -155,6 +155,51 @@ scrutiny: adaptive matches a hand-tuned configuration without the hand-tuning, a
 moment conditions move away from whatever that tuning assumed. The second half is the real product
 argument, and it needs the workload to change partway through the run to show it.
 
+## 5. The log cannot be read when two instances share a JVM, and does not show its reasoning
+
+Three separate defects, all found by the owner reading the integration test's own output, 2026-08-24.
+
+**It looks like the target jumps from 9 to 2 with no explanation. It does not - those are two
+different instances.** The integration test runs a second instance in the same JVM, and neither the
+movement line nor the held line carries any instance identifier, so the two trajectories interleave
+into one stream that reads as a single controller behaving impossibly. `%X{pcId}` is empty on
+`pc-control` lines, so the mapped diagnostic context does not save us. **Put an instance identifier
+in both lines.** Until then every multi-instance log - which is every real deployment reading a
+shared aggregator - is unreadable in exactly this way.
+
+**The line reports its inputs but never its reasoning.** *service time mean 11.70ms ... decided by
+ADAPTING* does not tell the reader why 11.70ms means grow. The number that decided it is the ratio
+of that figure to the long-run baseline, and the baseline is invisible. Log the comparison, not just
+one side of it: the baseline, the ratio, and the threshold it was tested against. Item 2's ratchet
+is precisely a drifting baseline, and it is currently undiagnosable from the log alone.
+
+**`This Gauge has been already registered` fires for `pc.admission.target`,** with an identical
+`pcinstance` tag - so it is not two instances colliding, it is the same instance registering twice.
+That is corroborating evidence for the lazy-init race in
+[`bug-pcmodule-admission-controller-lazy-init-race.md`](bug-pcmodule-admission-controller-lazy-init-race.md):
+two controller objects for one processor, each running its own `initMetrics`. Fixing the race should
+make the warning disappear, and if it does not, the two are separate problems.
+
+## 6. Two configuration surfaces that ask the user to guess, or fail quietly
+
+**Refusing the mode with a warning is the wrong severity.** Enabling adaptive concurrency on a
+Vert.x or Reactor engine is not a degraded configuration, it is an invalid one: the user asked for
+something that will not happen. A log line they do not read gets them to *this feature is broken*
+rather than *I configured it wrong*. **Fail construction loudly instead** - which is what virtual
+threads already do on an unsupported JVM, so the inconsistency is ours, not the user's. Note the
+constraint that shaped it: `validate()` cannot see the engine subclass, so the throw has to happen
+where capability is resolved rather than in options validation.
+
+**`maxConcurrency` under virtual threads asks for a number that may not exist.** The README calls it
+the upper limit, and under a platform pool it genuinely is one. Under virtual threads there may be
+no meaningful technical maximum at all - nobody is going to nominate 10,000 as their concurrency
+even though the runtime would carry it, and far more. So the option quietly reverts to the thing
+this whole feature exists to remove: a guess at a runtime quantity. Options include treating it as
+purely a safety ceiling that defaults far higher under virtual threads, deriving it from a
+downstream signal rather than a thread count, or accepting *unset* as a first-class value meaning
+*discover it*. Unresolved, and it interacts with item 0 - a controller with a real objective needs a
+cap far less than one without.
+
 ## One correction worth carrying
 
 The in-flight ceiling the controller will discover is **not** unexplained. It is platform threads,
