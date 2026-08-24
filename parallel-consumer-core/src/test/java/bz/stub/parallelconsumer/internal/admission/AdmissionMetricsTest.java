@@ -110,6 +110,38 @@ class AdmissionMetricsTest {
         assertThat(AT_CAP.getValue()).isNotEqualTo(AT_CAP.ordinal());
     }
 
+    /**
+     * R13, the reporting half: the three separated starvation causes each reach the operator through the
+     * constraint gauge with their own hand-assigned value. The separation is the single most valuable diagnosis
+     * the controller can make (the outstanding-items note's item 3 opened this gap) - a law that only consumed
+     * the classification internally would leave the gauge as blind as the old aggregates were.
+     */
+    @Test
+    void eachStarvationCauseReachesTheGaugeAsItself() {
+        var controller = instrumented(AdaptiveConcurrencyMode.ENFORCE, DEFAULT_MAX_CONCURRENCY);
+
+        feedUnboundWindowAndTick(controller, new AdmissionBoundarySignals(0, 8, false, 0, 0, false, false));
+        assertThat(controller.lastDecisionReason()).hasValue(AdmissionDecisionReason.NO_WORK);
+        assertThat(gauge(PCMetricsDef.ADMISSION_CONSTRAINT))
+                .isEqualTo((double) AdmissionDecisionReason.NO_WORK.getValue());
+
+        feedUnboundWindowAndTick(controller, new AdmissionBoundarySignals(0, 8, true, 0, 50, false, false));
+        assertThat(controller.lastDecisionReason()).hasValue(AdmissionDecisionReason.ORDERING_STARVED);
+        assertThat(gauge(PCMetricsDef.ADMISSION_CONSTRAINT))
+                .isEqualTo((double) AdmissionDecisionReason.ORDERING_STARVED.getValue());
+
+        feedUnboundWindowAndTick(controller, new AdmissionBoundarySignals(0, 8, false, 0, 50, true, false));
+        assertThat(controller.lastDecisionReason()).hasValue(AdmissionDecisionReason.SELF_THROTTLED);
+        assertThat(gauge(PCMetricsDef.ADMISSION_CONSTRAINT))
+                .isEqualTo((double) AdmissionDecisionReason.SELF_THROTTLED.getValue());
+
+        // Three distinct values - the gauge can tell an operator WHICH starvation, which is the whole point.
+        assertThat(AdmissionDecisionReason.NO_WORK.getValue())
+                .isNotEqualTo(AdmissionDecisionReason.ORDERING_STARVED.getValue());
+        assertThat(AdmissionDecisionReason.ORDERING_STARVED.getValue())
+                .isNotEqualTo(AdmissionDecisionReason.SELF_THROTTLED.getValue());
+    }
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -242,6 +274,17 @@ class AdmissionMetricsTest {
         }
         clock.add(SAMPLE_WINDOW_DURATION);
         controller.tick(() -> TestWindows.boundAt(boundSlots));
+    }
+
+    /** As above but the boundary reads UNBOUND with the supplied signal shape - the R13 gauge tests' driver. */
+    private void feedUnboundWindowAndTick(AdmissionController controller, AdmissionBoundarySignals signals) {
+        for (int i = 0; i < SAMPLES; i++) {
+            controller.recordServiceTime(10 * MS);
+            controller.recordInFlight(0);
+            controller.recordOutcome(Outcome.SUCCESS);
+        }
+        clock.add(SAMPLE_WINDOW_DURATION);
+        controller.tick(() -> signals);
     }
 
     private double gauge(PCMetricsDef def) {
