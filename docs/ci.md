@@ -107,6 +107,34 @@ document. This section is the detail behind it.
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
     when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
     status check** - adding it to the master ruleset is a separate, deliberate act.
+
+### `CodeQL` is a required check that no workflow file produces
+
+**Every required status check in the master ruleset is produced by a workflow YAML in
+`.github/workflows/` - except one.** `CodeQL` is required and no workflow file produces it, because
+the scan is GitHub's **code-scanning default setup** - configured in repository settings, stored
+outside the tree, and therefore invisible to every check-by-name convention the rest of this document
+relies on. (Grepping the directory for `CodeQL` does now hit something: the note in its `README.md`,
+which exists to catch exactly that search.) Two API calls are the only way to see what it is doing:
+
+```bash
+gh api repos/astubbs/parallel-consumer/code-scanning/default-setup
+gh api "repos/astubbs/parallel-consumer/code-scanning/analyses?per_page=5"
+```
+
+It was enabled on 2026-07-24 over `actions`, `java-kotlin` and `python`, on the `default` query suite
+and the `remote` threat model, weekly plus every push and PR. The analyses list is the half worth
+reading: it shows one analysis **per language per PR head**, so a green `CodeQL` is an aggregate of
+three, and it runs `build-mode: none` - no Maven build, so the scan costs nothing in `maven.yml`'s
+lane and cannot be broken by a build failure there.
+
+**Do not add an advanced CodeQL workflow to bring this back into the tree.** The two setups are
+mutually exclusive: GitHub's own switch procedure is to disable default setup *first*, so a workflow
+file added alongside it does not become a second opinion. Trading down is the real cost - a
+hand-written matrix has to re-declare `actions` and `python`, which default setup covers for free,
+and then be maintained. astubbs#1 was exactly that proposal, opened in 2021 against
+`github/codeql-action@v1`; it was overtaken by default setup and closed by becoming this section.
+
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
