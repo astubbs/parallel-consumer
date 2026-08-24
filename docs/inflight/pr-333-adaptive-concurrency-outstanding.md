@@ -192,6 +192,15 @@ harness. The adaptive arm lands on its own branch cut from that harness rather t
 can merge independently. Until it produces a result, the roadmap entry stays at `in-progress`: that
 ladder reserves `implemented` for work proven in use.
 
+**This no longer gates the law work, and the change of gate is deliberate** (2026-08-24). The
+objective plan held that nothing should be built until it was known whether the controller helps at
+all. That was right while the objective was an enhancement and is wrong now the objective *is* the
+ratchet fix: the ratchet is a correctness defect, and a correctness fix is not held hostage to a
+value measurement. If this measurement came back negative the answer would be to not ship the
+feature, never to ship it with the climb still in it. What it still gates is any **published
+claim** - the design's sequencing section owns that, including why the weak form of the claim (*beats
+a badly chosen static number*) is not worth publishing.
+
 Two things shape what that measurement should expect. Every calibration constant is a placeholder -
 the default ceiling, the window length, the failure threshold, the probe steps - and the simulation
 they were chosen against uses an invented latency curve that needs re-fitting to measured data.

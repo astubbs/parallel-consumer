@@ -365,6 +365,41 @@ Stated as obligations rather than as code, because this is where the previous pl
 
 ---
 
+## Sequencing, and what the benchmark actually gates
+
+**Order: fix the actuator, rewrite the law, measure, then claim.**
+
+1. **The actuator fix comes first** - `maxConcurrency` must bound the pool and the ceiling together.
+   Tuning a control law whose actuator is disconnected above its own default measures nothing. This
+   is an edit to the branch the admission package lives on; the package is not on master or on the
+   PR base, so nothing needs unwinding and nothing sequences around a merge.
+2. **The law rewrite lands in one move**, not as a migration. A half-migration leaves a throughput
+   term and a latency ratio in the same law disagreeing, with arm order deciding which wins - which
+   is how the present six-arm pile-up happened. `admission-gradient2-port` tags the Gradient2 port
+   complete and green, as the point to return to if steering on throughput proves worse.
+3. **Then the benchmark.**
+
+**The benchmark no longer gates the objective, and the earlier gate was wrong once the objective
+became the ratchet fix.** The prior plan held that nothing should be built while it is unknown
+whether the controller helps at all. That reasoning was sound when the objective was an enhancement,
+and it fails now: the ratchet is a *correctness* defect - the target climbs without bound on any
+workload that degrades gracefully - and a correctness fix is not held hostage to a value
+measurement. If the benchmark returned "adaptive does not help", the response would be to not ship
+the feature, never to ship it with the climb still in it.
+
+**What the benchmark does still gate is any published claim**, and the claim must be stated
+precisely because its weak form is not worth publishing. At a *given arrival rate*, adaptive delivers
+lower end-to-end latency than a static `maxConcurrency`, or sustains a higher arrival rate before
+falling behind - measurable only below saturation, which is why arrival control is required rather
+than running both arms flat-out. Beating a badly chosen static number is trivial and invites *so tune
+your config*. The claim worth having is that adaptive **matches a carefully hand-tuned static config
+without the hand-tuning, then beats it once conditions move away from what that tuning assumed** -
+which needs the third hand-tuned arm and a workload that changes partway through the run.
+
+The arrival-controlled harness this needs is on `perf/bench-arrival-and-key-skew`, which at the time
+of writing has no remote branch and no PR - it exists in one local worktree. That is a
+stranded-work risk independent of this design.
+
 ## Resolve Before Planning
 
 1. **The elasticity denominator** - commanded target or achieved in-flight. They diverge exactly when
