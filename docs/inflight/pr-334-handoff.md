@@ -3,8 +3,10 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 
-Written 2026-08-25 at head `3f9191c75`. **Delete this file when astubbs#334 merges**; it exists only
-to hand the branch between sessions, and a stale handoff reads as live.
+Written 2026-08-25, covering the branch up to and including its own commit. The last piece of work
+it describes is the `PCMetricsTest` registry fold; anything in `git log` after that arrived later
+than this file and is not accounted for here. **Delete this file when astubbs#334 merges** - it
+exists only to hand the branch between sessions, and a stale handoff reads as live.
 
 This file carries **only what is not written down elsewhere**: the branch and stack state, what was
 actually verified versus assumed, and the open decision. Everything about the work itself lives in
