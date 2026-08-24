@@ -200,7 +200,7 @@ Prose remains authoritative: KTD2 owns the channel, KTD3 the invocation bound, K
 - **Test scenarios:**
   - Defaults: handler is `shutDown()`, mode is `KEEP_PROCESSING`.
   - Covers AE3 (validation half): transactional commit mode coerces `KEEP_PROCESSING` to `PAUSE_INTAKE`.
-  - Bounded policy graduates on N consecutive exhaustions; on 5 minutes since last success; on rolling-window trigger with a flapping pattern (one success per twenty exhaustions still graduates).
+  - Covers AE4. Bounded policy graduates on N consecutive exhaustions; on 5 minutes since last success; on rolling-window trigger with a flapping pattern (one success per twenty exhaustions still graduates).
   - History epoch: no successful commit ever - time counts from assignment start, bounds fire.
   - Unbounded policy never graduates; context exposes every R3 field.
 - **Verification:** `bin/ci-unit-test.sh` green; new assertions mutation-checked.
@@ -253,8 +253,8 @@ Prose remains authoritative: KTD2 owns the channel, KTD3 the invocation bound, K
 ### U4. Transactional budget and EOS forced pause
 
 - **Goal:** the transactional path exhausts into the same handler, and CONTINUE under EOS always pauses intake.
-- **Requirements:** R1, R11 (KTD4, KTD8).
-- **Dependencies:** U1, U2.
+- **Requirements:** R1, R11 (KTD4, KTD5, KTD8).
+- **Dependencies:** U1, U2, U3.
 - **Files:** modify `internal/ProducerManager.java`; extend options validation if needed; new unit test beside `internal/ConsumerManagerCommitRetryBudgetTest.java`; extend `parallel-consumer-core/src/test-integration/java/.../TransactionTimeoutsTest.java` area.
 - **Approach:**
   1. Characterize the current 200-attempt loop's behaviour first (legacy, weakly tested).
