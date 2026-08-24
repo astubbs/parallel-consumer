@@ -1066,7 +1066,22 @@ In-repo prior art, which predates this design and should be read before re-openi
 
 ## Deferred / Open Questions
 
-### From 2026-08-24 review
+### From the 2026-08-24 implementation-ready review (round 2)
+
+- The additive step's relative excitation shrinks as `1/sqrt(L)`, so the estimator's signal-to-noise
+  degrades at high targets - exactly where plateau detection matters most. Sharpens the
+  minimum-signal constants; owned by them.
+- Rebalance-heavy fleets (rolling deploys, flapping members) necessarily spend most wall-clock time
+  in the warmup band - the de facto production controller may be the band with the least analysis
+  behind it. The pause-cycling and sparse-adjudication falsifiers are the guard.
+- R7's floor invariant is a construction-time assert with no falsifier; if `q` ever becomes
+  configurable or the floor derived, nothing tests the invariant.
+- `getUpperBoundOnSelectableWork` at the window boundary is O(keys) under KEY ordering with high
+  cardinality - bounded, comparable to the direct-pull path's per-pass cost, worth a note in U3.
+- The IT's arm-interleaving mechanism ("interleaved, same seeds") is specified for the simulator;
+  the broker IT's mechanism is U9's to define.
+
+### From 2026-08-24 review (round 1)
 
 Residuals and reviewer questions that survived the round without becoming findings or rulings -
 kept so planning inherits them rather than rediscovering them.
