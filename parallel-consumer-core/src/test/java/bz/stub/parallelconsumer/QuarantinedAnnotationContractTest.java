@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.List;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -96,13 +97,45 @@ class QuarantinedAnnotationContractTest {
         return count;
     }
 
+    /**
+     * Membership again, for the same reason as the pom check above: these lists grow as lanes are added,
+     * and pinning the whole literal makes an unrelated lane fail a quarantine test.
+     */
     @Test
     void gatingCiScriptsExcludeTheQuarantinedGroup() throws IOException {
         for (String script : Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh")) {
+            String body = read(REPO_ROOT.resolve(script));
+            String flag = "-Dexcluded.groups=";
+            int start = body.indexOf(flag);
+            assertWithMessage(script + " must pass an explicit -Dexcluded.groups").that(start).isAtLeast(0);
+            String value = body.substring(start + flag.length()).split("\\s")[0];
             assertWithMessage(script + " hardcodes its group exclusions (it does not inherit the pom " +
-                    "default) and must exclude the quarantine tag")
-                    .that(read(REPO_ROOT.resolve(script)))
-                    .contains("-Dexcluded.groups=performance,chaos," + Quarantined.TAG);
+                    "default) and must exclude the quarantine tag. Found: " + value)
+                    .that(Arrays.asList(value.split(","))).contains(Quarantined.TAG);
+        }
+    }
+
+    /**
+     * The two lists are maintained by hand in two places, and drift is silent in the direction that
+     * matters: a tag the pom excludes but a gating wrapper does not RUNS in the gating suite. Nothing else
+     * checks this - the wrappers deliberately do not inherit the pom default, precisely so that a pom edit
+     * cannot quietly change what gates.
+     */
+    @Test
+    void gatingCiScriptsExcludeEveryGroupThePomDefaultExcludes() throws IOException {
+        String pom = read(REPO_ROOT.resolve("pom.xml"));
+        String open = "<excluded.groups>";
+        int pomStart = pom.indexOf(open);
+        List<String> pomGroups = Arrays.asList(
+                pom.substring(pomStart + open.length(), pom.indexOf("</excluded.groups>", pomStart)).split(","));
+
+        for (String script : Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh")) {
+            String body = read(REPO_ROOT.resolve(script));
+            String flag = "-Dexcluded.groups=";
+            String value = body.substring(body.indexOf(flag) + flag.length()).split("\\s")[0];
+            assertWithMessage(script + " must exclude every group the pom default excludes, or that group " +
+                    "runs in the GATING suite. Pom: " + pomGroups + " script: " + value)
+                    .that(Arrays.asList(value.split(","))).containsAtLeastElementsIn(pomGroups);
         }
     }
 

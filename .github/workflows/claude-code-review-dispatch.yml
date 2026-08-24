@@ -378,7 +378,7 @@ jobs:
           #
           # The earlier objection stands as GUIDANCE, not a ban: a hand-rolled `-pl
           # parallel-consumer-core test` line skips the
-          # -Dexcluded.groups=performance,chaos,quarantined the wrappers hardcode (a past P1 -
+          # -Dexcluded.groups=... exclusion list the wrappers hardcode (a past P1 -
           # that exclusion was once a silent no-op, now pinned by
           # QuarantinedAnnotationContractTest, which covers the wrappers but NOT a
           # workflow-embedded command) and drops clean/rerunFailingTestsCount. So: whole suite

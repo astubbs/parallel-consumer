@@ -336,11 +336,22 @@ window is a small fraction of each invocation. Anyone adding a harness here must
 across several runs before believing it: the failure mode of an under-budgeted stress arm is a flake,
 and a flake fails this build with no retry, by design.
 
-The default unit suite is unaffected: the `lincheck` tag sits in the pom's default `excluded.groups`,
-and the full core unit suite passes with the ASM pin and the `argLine` change in place. One existing
-test needed a repair on the way - `QuarantinedAnnotationContractTest` pinned the *entire*
-`excluded.groups` literal, so adding any lane failed it with a message about quarantined tests gating.
-It now asserts membership of the quarantine tag, which is the contract it describes.
+The default unit suite is unaffected: `bin/ci-unit-test.sh` runs green across every module with the
+ASM pin and the `argLine` change in place, and selects no Lincheck class.
+
+**Adding a lane touches four places, and only one of them is checked.** The pom's default
+`excluded.groups` is the obvious one - but `bin/ci-unit-test.sh`, `bin/ci-integration-test.sh` and
+`bin/ci-build.sh` deliberately do NOT inherit it (a pom edit must not be able to change what gates),
+so a tag excluded by the pom and not by them runs **in the gating suite**. That is where this lane
+was heading, silently, and nothing would have said so. `QuarantinedAnnotationContractTest` now carries
+a check that every group the pom default excludes is also excluded by all three wrappers, so the next
+lane cannot make the same mistake. Two of its existing assertions pinned the whole
+`excluded.groups` literal and had to become membership checks first - a whole-list assertion fails
+on any unrelated addition, with a message about quarantined tests gating, and the obvious repair is
+to paste the new literal in and be pinning a list nobody reasoned about. The mutation lane is a fifth
+place, excluded by name rather than by tag because pitest's handling of `excludedGroups` is
+explicitly unverified in that script's own header, and being wrong there costs a re-run of a
+scheduler search per mutant.
 
 ### 3.2 Model checking, and why none of it is in the lane
 
