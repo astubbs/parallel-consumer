@@ -300,94 +300,21 @@ experiences. `WorkContainer#getResidenceTime()` and the existing `RECORD_RESIDEN
 already capture end-to-end time including queueing and retries. If a latency signal is kept as a
 ceiling, that is the one to use.
 
-## The overload signal: how a user says "the downstream is pushing back"
+## The overload signal: owned elsewhere
 
-**Still open.** The mechanism is not chosen; what follows is the argument and the options, because
-this is the input that makes the dead `OVERLOAD_DROP` socket real.
+How a user reports downstream pressure is a **public API** decision, and it now has its own artifact:
+[`2026-08-24-004-feat-downstream-pressure-signal-plan.md`](2026-08-24-004-feat-downstream-pressure-signal-plan.md)
+**owns that topic** - the context-method decision (an owner's ruling: *exceptions are for aborting,
+not for messaging*, overriding the ideation's exception design), the constraints inherited from the
+throttling ideation, the never-store-a-discovered-limit rule and its falsifiability argument, and the
+per-service scope boundary. What binds *this* design from that one:
 
-### Reporting pressure and failing a record are orthogonal, and that is what rules out an exception
-
-| | Record failed | Record succeeded |
-|---|---|---|
-| **Pressure reported** | Rejected with a 429, not processed, retry it | **The SDK retried internally and eventually won** |
-| **Nothing reported** | A bug, or a bad record | Normal |
-
-The top-right cell is the common case and is invisible today: most HTTP SDKs retry 429 internally, so
-the user's function returns success and the engine learns nothing. An exception cannot express that
-row at all - there is no exception. It also welds the two facts together, cannot name *which* of
-several downstreams pushed back, and unwinds the stack before the user's cleanup.
-
-**So overload is a reportable condition, not an error** - which is the owner's framing: throws stay
-for bugs and genuine failures.
-
-### Options
-
-1. **A method on the context the function already receives.** Works for every poll variant including
-   the void one; the rate figure is optional, so implicit overload with no published limit is
-   expressible; it can be called once per downstream; and a decorator around an HTTP client or a
-   bulkhead can report without the user's function knowing it exists.
-2. **A richer return object.** Reads most naturally as "a valid return state" - but `poll()` returns
-   `void` and has no return channel at all, so it needs new overloads for every variant, doubling the
-   API surface for a signal that must also work where there is nothing to return.
-3. **A classifier SPI at construction**, mapping the user's existing exception types to overload.
-   Zero edits to existing function bodies, so it is the cheapest adoption path - but it inherits every
-   limit of the exception design for anyone starting fresh.
-
-Options 1 and 3 are complements rather than rivals: 3 makes existing code work untouched, 1 lets new
-code report richly. Option 2's discoverability advantage is real and is the strongest argument
-against 1; the counter is that the context is an object the user already holds, so the method is
-reachable by autocomplete rather than needing to be known in advance.
-
-### Two flavours, feeding two layers
-
-A **hard** signal carries a number (a 429 with `Retry-After`, a published quota) and belongs to the
-fixed layer. A **soft** signal carries none (a timeout, a 503, a circuit breaker opening) and belongs
-to the adaptive layer. This is why the two layers compose by `min()` rather than competing: capacity
-is discoverable, a contractual quota is not. [`docs/inflight/core-distributed-throttling.md`](../inflight/core-distributed-throttling.md)
-owns the strategy-menu shape this plugs into.
-
-### What we do with a hard limit: nothing is stored, and that is the point
-
-The obvious question is where a discovered limit is kept, how long it is believed, what happens when
-there are several, and whether an operator can pin one forever. Most of it dissolves once a category
-error is removed.
-
-**`Retry-After` is a deferral, not a rate.** It says *do not call me for two seconds*. It never says
-*your quota is 100/s*. Treating it as a learned rate is the error; it is an actuator input with its
-own expiry built in. Three sources, three different lifetimes:
-
-| Source | What it actually is | Lifetime |
-|---|---|---|
-| Operator configuration | A genuine rate the operator holds by contract | Lives in config. No expiry, no discovery, nothing to store |
-| `Retry-After` / an explicit 429 | A **timed deferral** | Self-expiring. Applied, then gone |
-| Timeouts, 503s, a breaker opening, latency | Evidence feeding an estimate | Continuously re-derived, never persisted |
-
-**So no discovered limit is saved, and "save it forever" is refused rather than made configurable.**
-A remembered discovered limit is unfalsifiable - the ratchet in different clothes. Pin *payments =
-100/s* and the tier upgrade is never found, the quota raise is never found, and nothing in the system
-can report that the number is now wrong. The falsifiability rule that governs the latency baseline
-governs this identically: **any reference the controller's own behaviour cannot correct will
-eventually be wrong and will never say so.** An operator who genuinely holds a contractual number
-states it as configuration, where it is a declared input rather than an unfalsifiable memory.
-
-**Several at once** is the `min()` composition already chosen: configured limits, live deferrals and
-the adaptive estimate are all constraints, and the binding one wins. Which one binds is precisely
-what the constraint gauge exists to report - an operator seeing throughput capped should be able to
-read whether it is their own configured ceiling, a downstream's deferral, or discovered capacity.
-
-**Nothing survives a restart**, for the same reason, and re-discovery is cheap.
-
-**Keying, and the scope boundary it exposes.** The key is the **downstream name the user supplies** -
-not the topic, not the user function. That is forward-compatible with many-functions-to-many-topics
-for free, because two functions hitting one payments API *should* contend: they share one real
-downstream. But the engine today has **one admission target for the whole instance**, so genuine
-per-downstream limits need per-downstream admission - which is the sharding problem again, and a far
-larger change than this design. **v1 captures the name and keeps the target global**: the name costs
-nothing, makes the log and the constraint gauge legible, and does not commit the engine to per-key
-admission before anyone has asked for it.
-
-Fleet-wide quotas ("100/s across all instances") are a further step again - a global number divided
-by group membership - and belong to astubbs#228, not here.
+- the signal is what makes the dead `OVERLOAD_DROP` socket real, and the comparison test's rate-limit
+  phase cannot be written until it exists;
+- a pressure signal is retried like a failure but **never counted as one**;
+- hard signals feed the fixed layer, soft signals feed the adaptive layer, layers compose by `min()`;
+- the adaptive estimate is necessarily **aggregate** - the engine cannot see inside the user function,
+  so per-service ceilings only ever come from declared or reported limits, never from discovery.
 
 ---
 
