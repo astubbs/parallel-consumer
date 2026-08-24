@@ -32,22 +32,54 @@ functions of three different shapes run in one topology at once.
 
 ## Ranked, most likely to falsify first
 
-### 1. Re-entrancy - the host calling the engine while an invocation is open
+Dimension 1 has now run and did **not** falsify; it is kept in place, with its result, rather than
+moved, because the register's value is partly the record of what was predicted and how it came
+out.
 
-**Predicted to fail, from reading the code, and not yet run.** The Python reader thread executes the
-user's function inline in `_on_invocation`; `StreamsSession.get` then blocks on an event only that
-same thread sets. So a function that queries a store from inside a mapper should deadlock until its
-timeout, with the engine's stream thread blocked behind it the whole time.
+### 1. Re-entrancy - RUN 2026-08-25: the hang is real, and it does NOT falsify the approach
 
-It is not really about queries. The entire Processor API is re-entrant - `context.forward()`,
-`context.commit()`, `context.schedule()`, any store read inside a processor - so if host-to-engine
-calls cannot happen during an invocation, the wrapper is confined permanently to pure
-value-transforming functions. The answer decides whether the wire stays request/response or has to
-become properly multiplexed, and that is much cheaper to learn before a second binding exists than
-after.
+**The prediction was confirmed exactly, and the conclusion drawn from it was wrong.** Recorded here
+in full because the register said the opposite, and a reader who found only the corrected text would
+have no way to tell that the reasoning had been overturned rather than never written.
 
-Costs nothing to build: everything needed already ships. **State the prediction before running it,
-and report it whichever way it lands** - `docs/investigating.md` owns why.
+**What the prediction said:** a host function calling the engine mid-invocation deadlocks, because
+the Python reader thread runs the user's function inline and then waits on an event only that same
+thread sets.
+
+**What ran:** `get(timeout=1.5)` from inside a mapper blocked 1.505s and raised; the invocation was
+answered at 1.507s. The query *was sent* and the engine answered it instantly - the answer was
+structurally undeliverable. A control arm changing exactly one term (dispatch the user function to
+a worker thread, source untouched) flips the outcome to a correct answer in 0.0s, so inline
+execution on the reader thread is the cause and not a correlate. It is the whole class, not a `get`
+quirk: `describe` and builder calls hang identically. Only the non-waiting crossings - `register`,
+`start`, `close` - are safe from inside a function.
+
+**Why the falsification inference was wrong.** The register argued that if host-to-engine calls
+cannot happen during an invocation, the wrapper is confined permanently to pure value-transforming
+functions. The premise turns out to be false: **the wire is already multiplexed and needs no
+change.** On the Java side `transmitLock` guards only outbound sends and is released before
+blocking, and `onGet` runs on the gRPC transport thread - so the engine genuinely serves a query
+while every stream thread is blocked, which is why the answer existed to be abandoned. The
+deadlock is purely client-local, in one design decision in one Python file.
+
+**So this is a defect, not a limit of the approach**, and the Processor API is not ruled out. The
+fix has an order that matters: **correlate `Get`/`Describe` first** - see
+[`bug-streams-queries-share-one-answer-slot.md`](bug-streams-queries-share-one-answer-slot.md),
+which is needed regardless of re-entrancy - and only then move user functions off the reader
+thread. Doing them the other way round makes things worse, because more concurrent queries hitting
+one answer slot is exactly the failure the correlation fixes.
+
+Characterisation tests are in the tree pinning current behaviour
+(`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_streams_reentrancy.py`);
+they are to be **inverted, not deleted**, when the fix lands.
+
+**Two JVM-side hazards the run turned up, neither a deadlock.** gRPC serialises a single stream's
+inbound callbacks, so `onGet` performing a live store read delays `InvocationResult` delivery for
+every in-flight invocation - a head-of-line coupling that will present as random latency. And there
+is no flow control: no `isReady` or `setOnReadyHandler` anywhere in the module, so a host that
+stops reading lets the engine's outbound buffer grow while stream threads keep emitting. One thing
+the run could not settle by reading, and which needs a JVM experiment: whether a Kafka Streams
+store lock can be held across a blocked stream thread.
 
 ### 2. One record in, many out - and the missing answer states
 
