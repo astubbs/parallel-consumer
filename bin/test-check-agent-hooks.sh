@@ -809,6 +809,340 @@ assert "a PR with nothing outstanding still states the risk" states_the_risk "$g
 hist_out="$(hist 'git push --force origin main')"
 case "$hist_out" in *"LAST step before a merge"*) got=explains ;; *) got=bare_refusal ;; esac
 assert "the refusal says when a rewrite IS allowed" explains "$got"
+
+echo
+echo "--- inject-branch-context.sh ---"
+
+# WHY THESE CASES LOOK THE WAY THEY DO. An injection hook's CORRECT output on a boring branch is
+# silence, and silence is byte-identical to being broken, unregistered or absent - so most cases
+# below force the hook to speak, and every asserted-silent case is paired with a forced one proving
+# the same call path can still talk. The lesson is astubbs/parallel-consumer#339's, applied here.
+#
+# EVERY CASE PINS ITS OWN FIXTURE. A self-test for a branch-context hook must not be a function of
+# which branch it happens to be run on: the CI checkout is detached (which this hook deliberately
+# stays silent for), and a developer's worktree has whatever commits it has. Each case builds a
+# scratch repository with the commits, notes, marker and `gh` answers it wants to assert about.
+BCTX_HOOK="$HOOKS/inject-branch-context.sh"
+
+bctx_payload() { # <cwd> <event> [tool_name] [prompt] [agent_type] [agent_id] -> hook payload JSON
+    # BUILT IN PYTHON, NOT BY printf. `%r` is a Python conversion and shell printf rejects it, which
+    # produced an empty payload and turned every case here into a silent-looking pass-through -
+    # exactly the "silence is indistinguishable from broken" failure these cases exist to catch,
+    # committed inside the cases themselves.
+    python3 -c '
+import json, sys
+cwd, event = sys.argv[1], sys.argv[2]
+d = {"cwd": cwd, "hook_event_name": event}
+if event == "SessionStart":
+    d["source"] = "startup"
+argv = sys.argv + [""] * 8
+if argv[3]:
+    d["tool_name"] = argv[3]
+if argv[4]:
+    d["tool_input"] = {"prompt": argv[4]}
+if argv[5]:
+    d["agent_type"] = argv[5]
+if argv[6]:
+    d["agent_id"] = argv[6]
+print(json.dumps(d))
+' "$@"
+}
+
+bctx_fire() { # <payload-json> [PATH-override] -> the hook's stdout
+    local payload="$1" pathover="${2:-$PATH}" tmp out
+    tmp=$(mktemp)
+    printf '%s' "$payload" > "$tmp"
+    out=$(PATH="$pathover" bash "$BCTX_HOOK" < "$tmp" 2>/dev/null)
+    rm -f "$tmp"
+    printf '%s' "$out"
+}
+
+bctx_context() { # <hook stdout> -> the additionalContext string, or the raw text for SessionStart
+    printf '%s' "$1" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+try:
+    print(json.loads(raw)["hookSpecificOutput"]["additionalContext"])
+except Exception:
+    print(raw)
+'
+}
+
+bctx_clean_stamps() { rm -f "${TMPDIR:-/tmp}"/pc-branch-context-* 2>/dev/null; return 0; }
+
+bctx_repo() { # <dir> - master, then a feature branch with a bodied commit, a bodyless one, a note
+    local d="$1"
+    mkdir -p "$d/docs/inflight" "$d/docs/plans"
+    (
+      cd "$d" || exit 1
+      git init -q .
+      git checkout -q -b master 2>/dev/null || git branch -q -m master
+      echo base > base.txt
+      git add base.txt
+      git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "base"
+      git checkout -q -b feats/bctx-fixture
+      echo one > one.txt
+      git add one.txt
+      git -c user.email=selftest@example.invalid -c user.name=selftest commit -qF - <<'MSG'
+feat(fixture) astubbs#999: the decision this branch made on purpose
+
+BCTX_BODY_ONLY_STRING. Three non-empty body lines, so the hook must report 3.
+
+It argues by name against the most extractable thing in the diff.
+
+Third line.
+MSG
+      printf '# handoff\nBCTX_NOTE_INNARDS\n' > docs/inflight/pr-999-handoff.md
+      git add docs/inflight/pr-999-handoff.md
+      git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "docs(inflight): the handoff note"
+      printf 'owner: selftest\nstatus: BCTX_MARKER_LINE\n' > .worktree-owner
+    )
+}
+
+bctx_gh_stub() { # <dir> <mode> - a `gh` first on PATH answering in one of five shapes
+    cat > "$1/gh" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+  *"pr view"*)
+    case "$2" in
+      pr)      cat <<'JSON'
+{"number":9412,"title":"BCTX_PR_TITLE","body":"line1\nline2\nline3","url":"https://example.invalid/9412","state":"OPEN","isDraft":false,
+ "comments":[{"author":{"login":"github-actions"}},{"author":{"login":"github-actions"}},{"author":{"login":"a-real-human"}}],
+ "reviews":[{"author":{"login":"claude"},"state":"COMMENTED"},{"author":{"login":"claude"},"state":"COMMENTED"}]}
+JSON
+               ;;
+      nopr)    echo "no pull requests found for branch \"whatever\"" >&2; exit 1 ;;
+      broken)  echo "error connecting to github.com" >&2; exit 1 ;;
+      slow)    sleep 30 ;;
+      garbage) echo "not json at all" ;;
+    esac
+    ;;
+esac
+exit 0
+STUB
+    chmod +x "$1/gh"
+}
+
+bctx_tmp="$(mktemp -d)"
+bctx_repo "$bctx_tmp/wt"
+# `origin` exists so the repo slug resolves; nothing ever contacts it, because `gh` is stubbed.
+git -C "$bctx_tmp/wt" remote add origin https://github.com/selftest-owner/selftest-repo.git
+# The DISPATCHER sits in its own working tree on master - the coordinator's real position, and
+# the one that makes "describe the tree you dispatched TO, not the one you are in" a real assertion.
+bctx_dispatcher="$bctx_tmp/dispatcher"
+bctx_repo "$bctx_dispatcher"
+git -C "$bctx_dispatcher" checkout -q master
+stub_pr="$(mktemp -d)";      bctx_gh_stub "$stub_pr" pr
+stub_nopr="$(mktemp -d)";    bctx_gh_stub "$stub_nopr" nopr
+stub_broken="$(mktemp -d)";  bctx_gh_stub "$stub_broken" broken
+stub_slow="$(mktemp -d)";    bctx_gh_stub "$stub_slow" slow
+
+sess_payload="$(bctx_payload "$bctx_tmp/wt" SessionStart)"
+
+# --- SessionStart, the forced-to-speak baseline every silent case below is measured against ------
+bctx_clean_stamps
+out="$(bctx_fire "$sess_payload" "$stub_pr:$PATH")"
+ctx="$(bctx_context "$out")"
+case "$ctx" in *'Branch context: `feats/bctx-fixture`'*) got=named ;; *) got=silent_or_wrong ;; esac
+assert "SessionStart on a feature branch names the branch" named "$got"
+# SessionStart injects RAW STDOUT; only PreToolUse discards it and needs the JSON envelope. Emitting
+# the envelope here would put a wall of JSON in front of the agent instead of the report.
+case "$out" in *'hookSpecificOutput'*) got=envelope ;; *) got=plain ;; esac
+assert "SessionStart emits plain text, not the PreToolUse envelope" plain "$got"
+
+# --- the commits, which are the point of the hook ------------------------------------------------
+case "$ctx" in *'the decision this branch made on purpose'*) got=listed ;; *) got=missing ;; esac
+assert "the branch's commit subjects are listed" listed "$got"
+case "$ctx" in *'[  3]'*) got=counted ;; *) got=uncounted ;; esac
+assert "a commit body is reported by its non-empty line count" counted "$got"
+case "$ctx" in *'[  -]'*) got=marked ;; *) got=unmarked ;; esac
+assert "a bodyless commit is marked as having none" marked "$got"
+# CHEAP: NAMES AND POINTERS, NEVER BODIES. The contract inject-recorded-knowledge.sh's header states
+# and this hook inherits - the failure being fixed is not knowing the record EXISTS. If body text
+# ever starts being inlined, this block's size stops being bounded by the number of commits.
+case "$ctx" in *BCTX_BODY_ONLY_STRING*) got=inlined ;; *) got=pointer_only ;; esac
+assert "commit BODIES are not inlined, only counted" pointer_only "$got"
+case "$ctx" in *BCTX_NOTE_INNARDS*) got=inlined ;; *) got=pointer_only ;; esac
+assert "note CONTENTS are not inlined, only named" pointer_only "$got"
+
+# --- the handoff note and the marker --------------------------------------------------------------
+case "$ctx" in *'docs/inflight/pr-999-handoff.md'*) got=listed ;; *) got=missing ;; esac
+assert "a branch-only docs/inflight note is listed" listed "$got"
+case "$ctx" in *BCTX_MARKER_LINE*) got=quoted ;; *) got=missing ;; esac
+assert "the .worktree-owner marker is quoted" quoted "$got"
+
+# --- the PR, including the comment authors that were the 2026-08-24 miss ---------------------------
+case "$ctx" in *'selftest-owner/selftest-repo#9412'*) got=named ;; *) got=missing ;; esac
+assert "the PR is named with the slug derived from origin" named "$got"
+case "$ctx" in *'BCTX_PR_TITLE'*) got=titled ;; *) got=missing ;; esac
+assert "the PR title is reported" titled "$got"
+case "$ctx" in *'body: 3 lines'*) got=measured ;; *) got=missing ;; esac
+assert "the PR body is measured, not fetched into context" measured "$got"
+# The miss this hook was written for was a PR COMMENT, not the body - so a count that buries the one
+# human comment under five bot ones is the same miss with extra steps.
+case "$ctx" in *'a-real-human x1'*) got=attributed ;; *) got=anonymous ;; esac
+assert "PR comments are counted per author" attributed "$got"
+case "$ctx" in *'Read the ones from a-real-human'*) got=singled_out ;; *) got=buried ;; esac
+assert "the non-bot commenter is singled out from the bots" singled_out "$got"
+case "$ctx" in *'claude COMMENTED x2'*) got=aggregated ;; *) got=repeated ;; esac
+assert "repeat reviews by one author are aggregated, not repeated" aggregated "$got"
+
+# --- DEGRADED READS ARE LOUD, NEVER SHORT ---------------------------------------------------------
+# Measured incident, not a hypothesis: inject-recorded-knowledge.sh's GNU-only `xargs -r` silently
+# shortens its own index under a BSD xargs, and a truncated-but-plausible block is worse than none.
+bctx_clean_stamps
+ctx="$(bctx_context "$(bctx_fire "$sess_payload" "$stub_broken:$PATH")")"
+case "$ctx" in *'Open PR - UNKNOWN'*) got=loud ;; *) got=quiet ;; esac
+assert "a failing gh makes the PR section LOUDLY unknown" loud "$got"
+case "$ctx" in *'Not "no PR", UNKNOWN'*) got=says_so ;; *) got=ambiguous ;; esac
+assert "the unknown PR section refuses to be read as 'no PR'" says_so "$got"
+# ...and the branch half must survive the PR half failing, or one dead network call costs the commits.
+case "$ctx" in *'the decision this branch made on purpose'*) got=kept ;; *) got=lost ;; esac
+assert "the commits still appear when gh fails" kept "$got"
+
+# A CONFIRMED absence is a different answer from a failure, and must not read as an alarm - every
+# fresh branch would otherwise print one, and an alarm that is always on gets scrolled past.
+bctx_clean_stamps
+ctx="$(bctx_context "$(bctx_fire "$sess_payload" "$stub_nopr:$PATH")")"
+case "$ctx" in *'PR: none open for this branch'*) got=measured ;; *) got=alarmed ;; esac
+assert "a confirmed absent PR is reported as a fact, not an alarm" measured "$got"
+case "$ctx" in *'UNKNOWN'*) got=alarmed ;; *) got=measured ;; esac
+assert "a confirmed absent PR does not also raise UNKNOWN" measured "$got"
+
+# THE NETWORK CALL IS BOUNDED. `gh` sits on a path that fires per dispatch and per subagent, so a
+# hung link must cost the timeout and not the session. GNU `timeout(1)` is deliberately NOT used -
+# macOS does not ship it - so this case is what proves the python-side bound actually bounds.
+bctx_clean_stamps
+bctx_start=$(date +%s)
+ctx="$(bctx_context "$(bctx_fire "$sess_payload" "$stub_slow:$PATH")")"
+bctx_elapsed=$(( $(date +%s) - bctx_start ))
+[ "$bctx_elapsed" -lt 20 ] && got=bounded || got=hung
+assert "a hanging gh is bounded well under its 30s sleep (took ${bctx_elapsed}s)" bounded "$got"
+case "$ctx" in *'UNKNOWN'*) got=loud ;; *) got=quiet ;; esac
+assert "a timed-out gh is reported, not silently dropped" loud "$got"
+
+# --- SILENCE, each paired with the forced case above proving the path can still talk ---------------
+bctx_clean_stamps
+mp="$sess_payload"
+git -C "$bctx_tmp/wt" checkout -q master
+out="$(bctx_fire "$mp" "$stub_pr:$PATH")"
+[ -z "$out" ] && got=silent || got=spoke
+assert "on master there is no inherited branch to describe, so it is silent" silent "$got"
+git -C "$bctx_tmp/wt" checkout -q feats/bctx-fixture
+bctx_clean_stamps
+out="$(bctx_fire "$mp" "$stub_pr:$PATH")"
+[ -n "$out" ] && got=spoke || got=silent
+assert "...and the same payload speaks again once off master (the pairing)" spoke "$got"
+
+# DETACHED HEAD. GitHub Actions checks PRs out detached, so a case that only passes on a developer
+# machine is how remind-inflight-on-push.sh's fixtures went red in CI and nowhere else.
+bctx_clean_stamps
+git -C "$bctx_tmp/wt" checkout -q --detach HEAD
+out="$(bctx_fire "$mp" "$stub_pr:$PATH")"
+[ -z "$out" ] && got=silent || got=spoke
+assert "a detached checkout has no branch to describe, so it is silent" silent "$got"
+git -C "$bctx_tmp/wt" checkout -q feats/bctx-fixture
+
+bctx_clean_stamps
+nogit="$(mktemp -d)"
+np="$(bctx_payload "$nogit" SessionStart)"
+out="$(bctx_fire "$np" "$stub_pr:$PATH")"
+[ -z "$out" ] && got=silent || got=spoke
+assert "a directory outside any git repo is silent" silent "$got"
+rmdir "$nogit" 2>/dev/null
+
+# FAILING OPEN. Every error path prints nothing and exits 0 - a broken reminder must not be a broken
+# session, which is the contract every hook in this directory shares.
+bctx_clean_stamps
+out="$(bctx_fire 'not json at all' "$stub_pr:$PATH")"
+[ -z "$out" ] && got=silent || got=spoke
+assert "an unparseable payload fails OPEN" silent "$got"
+printf '{"tool_name":"Read","tool_input":{"file_path":"/etc/hosts"}}' > "$bctx_tmp/read.json"
+out=$(PATH="$stub_pr:$PATH" bash "$BCTX_HOOK" < "$bctx_tmp/read.json" 2>/dev/null); rc=$?
+assert "an ordinary tool call the hook has no business with exits 0" 0 "$rc"
+[ -z "$out" ] && got=silent || got=spoke
+assert "...and says nothing" silent "$got"
+
+# --- DISPATCH MODE: the shape of the 2026-08-24 incident -------------------------------------------
+# The dispatcher's own cwd is the WRONG branch to describe when it is handing work to another
+# worktree, and describing it would be noise - which is how a reminder gets scrolled past.
+bctx_clean_stamps
+dp="$(bctx_payload "$bctx_dispatcher" PreToolUse Agent "Run a simplify-then-review pass in $bctx_tmp/wt. Changed files: one.txt")"
+out="$(bctx_fire "$dp" "$stub_pr:$PATH")"
+ctx="$(bctx_context "$out")"
+case "$ctx" in *'feats/bctx-fixture'*) got=dispatched_to ;; *) got=wrong_target ;; esac
+assert "a dispatch describes the worktree named in its PROMPT" dispatched_to "$got"
+case "$ctx" in *'named in the dispatch prompt'*) got=says_which ;; *) got=ambiguous ;; esac
+assert "...and says which directory it is describing, so the two cannot be confused" says_which "$got"
+# PreToolUse discards raw stdout; only the JSON envelope reaches the model.
+case "$out" in *'"additionalContext"'*) got=enveloped ;; *) got=raw ;; esac
+assert "a PreToolUse emission is wrapped in the JSON envelope" enveloped "$got"
+case "$out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "the branch-context hook never denies a tool call" advisory "$got"
+# A PreToolUse hook cannot alter the call it fires on - the tool_use block was composed before the
+# hook ran (measured against 2.1.231). Saying so is the difference between a useful late signal and
+# a false promise that the dispatch was vetted.
+case "$ctx" in *'not before it'*) got=honest ;; *) got=overclaims ;; esac
+assert "the dispatch block states that it arrived AFTER the dispatch" honest "$got"
+
+# A PATH AT THE END OF A SENTENCE. A worktree name may contain `.` and `-`, so the match swallows the
+# full stop and the directory test then fails - which is the shape a dispatch prompt actually takes,
+# and the first thing this resolver got wrong.
+bctx_clean_stamps
+dp2="$(bctx_payload "$bctx_dispatcher" PreToolUse Agent "Simplify pass in $bctx_tmp/wt.")"
+ctx="$(bctx_context "$(bctx_fire "$dp2" "$stub_pr:$PATH")")"
+case "$ctx" in *'feats/bctx-fixture'*) got=resolved ;; *) got=lost ;; esac
+assert "a worktree path ending a sentence still resolves" resolved "$got"
+
+# The real tool_name is `Agent`; `Task` is the name the documentation and every dispatcher uses.
+# Both were measured to reach a matcher, and both must reach this hook.
+bctx_clean_stamps
+dp3="$(bctx_payload "$bctx_dispatcher" PreToolUse Task "Simplify pass in $bctx_tmp/wt.")"
+ctx="$(bctx_context "$(bctx_fire "$dp3" "$stub_pr:$PATH")")"
+case "$ctx" in *'feats/bctx-fixture'*) got=handled ;; *) got=missed ;; esac
+assert "tool_name 'Task' is handled as well as 'Agent'" handled "$got"
+
+# --- SUBAGENT MODE: the registration that actually closes the incident ------------------------------
+# SessionStart does NOT fire for an agent spawned via the Task tool (measured against 2.1.231: the
+# subagent shares the dispatcher's session_id and gets no session of its own), so without this the
+# subagent could never receive branch context by any route.
+bctx_clean_stamps
+sub="$(bctx_payload "$bctx_tmp/wt" PreToolUse Bash "" general-purpose bctxfixture01)"
+ctx="$(bctx_context "$(bctx_fire "$sub" "$stub_pr:$PATH")")"
+case "$ctx" in *'feats/bctx-fixture'*) got=reached ;; *) got=missed ;; esac
+assert "a subagent's own tool call carries it the branch context" reached "$got"
+# THROTTLED PER agent_id, or it repeats on every Read the subagent makes for the rest of its life.
+out="$(bctx_fire "$sub" "$stub_pr:$PATH")"
+[ -z "$out" ] && got=throttled || got=repeated
+assert "a second tool call from the same agent is throttled" throttled "$got"
+# ...and a DIFFERENT agent is not - the pairing that stops the throttle from silently swallowing
+# every subagent after the first.
+sub2="$(bctx_payload "$bctx_tmp/wt" PreToolUse Bash "" general-purpose bctxfixture02)"
+out="$(bctx_fire "$sub2" "$stub_pr:$PATH")"
+[ -n "$out" ] && got=spoke || got=swallowed
+assert "...but a different agent_id still gets told" spoke "$got"
+
+# --- NO SILENT CAPS. A list that quietly stops is the same failure as a section that quietly vanishes.
+bctx_clean_stamps
+(
+  cd "$bctx_tmp/wt" || exit 1
+  i=0
+  while [ "$i" -lt 45 ]; do
+      echo "$i" > "bulk$i.txt"
+      git add "bulk$i.txt"
+      git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "chore(fixture): bulk commit $i"
+      i=$((i + 1))
+  done
+)
+ctx="$(bctx_context "$(bctx_fire "$sess_payload" "$stub_pr:$PATH")")"
+case "$ctx" in *'NOT LISTED (capped at'*) got=announced ;; *) got=silent_cap ;; esac
+assert "a capped commit list announces what it left out" announced "$got"
+case "$ctx" in *'Commits on this branch (47)'*) got=true_total ;; *) got=cap_as_total ;; esac
+assert "...and the heading counts every commit, not just the listed ones" true_total "$got"
+
+bctx_clean_stamps
+rm -rf "$bctx_tmp" "$stub_pr" "$stub_nopr" "$stub_broken" "$stub_slow"
+
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
     exit 0

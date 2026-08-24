@@ -53,6 +53,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-history-rewrite.sh\""
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/inject-branch-context.sh\""
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -71,6 +80,14 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/inject-recorded-knowledge.sh\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/inject-branch-context.sh\""
           }
         ]
       }
