@@ -539,6 +539,25 @@ expect DENY  "the override token AFTER the command is not a prefix"        'gh p
 # the items are not forgotten and is then read by nobody at the moment it could still change the
 # outcome. These cases prove the arm fires, quotes the right part, and stays out of the way otherwise.
 touch -d '@1000000000' "$ow_tasks/agent-live.output"   # nothing in flight, so only the note arm can fire
+
+# IN A SCRATCH REPOSITORY, NOT THE REAL WORKING TREE. The guard resolves the note from
+# `git rev-parse --show-toplevel`, so this arm used to write `docs/inflight/pr-90001-selftest.md`
+# into whatever checkout the suite was run from and delete it afterwards. Two things were wrong with
+# that, and the second is why it is fixed here rather than noted: it MUTATES a tree the suite does
+# not own, and the fixed path is shared, so two concurrent runs - ordinary on a box running several
+# agent sessions - race between one run's write and the other's cleanup. Measured: five concurrent
+# runs, two of them red on this arm, deterministically green once isolated.
+ow_repo="$(mktemp -d)"
+(
+  cd "$ow_repo" || exit 1
+  git init -q .
+  git checkout -q -b selftest/outstanding-fixture 2>/dev/null || git branch -q -m selftest/outstanding-fixture
+  : > .keep
+  git add .keep
+  git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "fixture"
+)
+ow_return="$PWD"
+cd "$ow_repo" || exit 1
 mkdir -p docs/inflight
 cat > docs/inflight/pr-90001-selftest.md <<'NOTE'
 # astubbs#90001 - self-test fixture
@@ -562,6 +581,8 @@ assert "the open item is quoted into the deny reason" quoted "$got"
 case "$note_out" in *SELFTEST_RESOLVED_ITEM*) got=leaked ;; *) got=stopped ;; esac
 assert "the Already-fixed section is NOT quoted" stopped "$got"
 rm -f docs/inflight/pr-90001-selftest.md
+cd "$ow_return" || exit 1
+rm -rf "$ow_repo"
 
 # Stale task file == nothing in flight. Proves the window is load-bearing rather than "any file".
 touch -d '@1000000000' "$ow_tasks/agent-live.output"
@@ -673,10 +694,18 @@ cat > docs/inflight/pr-90003-selftest.md <<'NOTE'
 - PUSH_RESOLVED_ITEM
 NOTE
 
+# PRIVATE TMPDIR, for the reason the branch-context section states at length: the reminder's throttle
+# stamp is named after the BRANCH, this fixture always uses the same branch name, and the stamp lives
+# in shared /tmp - so a second concurrent run of this suite clears and rewrites the stamp between this
+# function's `rm` and its fire, and the reminder that should have appeared is throttled away. Measured
+# on a pristine master worktree: one run in three failed, on a different case each time, which is
+# exactly how a shared-state flake presents.
+PUSH_TMPDIR="$(mktemp -d)"
+
 push_fire() { # <command> -> stdout of the hook
-    rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+    rm -f "$PUSH_TMPDIR"/pc-push-reminder-* 2>/dev/null
     printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
-        | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null
+        | PATH="$push_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" 2>/dev/null
 }
 
 out="$(push_fire 'git push')"
@@ -713,14 +742,13 @@ out="$(push_fire 'npm push')"
 assert "a non-git binary does not fire" silent "$got"
 
 # THROTTLED, or a push loop repeats the whole note and teaches the reader to skip it.
-printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" >/dev/null 2>&1
-out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null)"
+printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" >/dev/null 2>&1
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" 2>/dev/null)"
 [ -z "$out" ] && got=throttled || got=repeated
 assert "an immediate second push is throttled" throttled "$got"
 
 rm -f docs/inflight/pr-90003-selftest.md
-rm -rf "$push_stub"
-rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+rm -rf "$push_stub" "$PUSH_TMPDIR"
 
 echo
 echo "--- check-history-rewrite.sh ---"
@@ -848,11 +876,18 @@ print(json.dumps(d))
 ' "$@"
 }
 
+# A PRIVATE TMPDIR PER SUITE RUN, and it is not tidiness. The hook keys its throttle stamps and its
+# PR cache off ${TMPDIR:-/tmp}, and these fixtures use FIXED names (`bctxfixture01`) - so two
+# concurrent runs of this suite, which is ordinary on a box with several agent sessions, clear and
+# recreate each other's stamps and the throttle assertions fail at random. Diagnosed from exactly
+# that failure in the push-reminder cases below, which shared /tmp the same way.
+BCTX_TMPDIR="$(mktemp -d)"
+
 bctx_fire() { # <payload-json> [PATH-override] -> the hook's stdout
     local payload="$1" pathover="${2:-$PATH}" tmp out
     tmp=$(mktemp)
     printf '%s' "$payload" > "$tmp"
-    out=$(PATH="$pathover" bash "$BCTX_HOOK" < "$tmp" 2>/dev/null)
+    out=$(PATH="$pathover" TMPDIR="$BCTX_TMPDIR" bash "$BCTX_HOOK" < "$tmp" 2>/dev/null)
     rm -f "$tmp"
     printf '%s' "$out"
 }
@@ -868,7 +903,7 @@ except Exception:
 '
 }
 
-bctx_clean_stamps() { rm -f "${TMPDIR:-/tmp}"/pc-branch-context-* 2>/dev/null; return 0; }
+bctx_clean_stamps() { rm -f "$BCTX_TMPDIR"/pc-branch-context-* 2>/dev/null; return 0; }
 
 bctx_repo() { # <dir> - master, then a feature branch with a bodied commit, a bodyless one, a note
     local d="$1"
@@ -1063,6 +1098,22 @@ assert "an ordinary tool call the hook has no business with exits 0" 0 "$rc"
 [ -z "$out" ] && got=silent || got=spoke
 assert "...and says nothing" silent "$got"
 
+# A LOCAL-PATH ORIGIN IS NOT A REPOSITORY. `git clone /path/to/repo` - how a scratch or baseline
+# checkout is made - would otherwise yield a slug from the last two path segments and send `gh` after
+# a repo that does not exist, naming a plausible wrong one while failing. Paired with the PR case
+# above, which proves the same path does resolve a real slug.
+bctx_clean_stamps
+local_origin="$(mktemp -d)"
+bctx_repo "$local_origin/wt"
+git -C "$local_origin/wt" remote add origin "$local_origin/some/local/path"
+lp="$(bctx_payload "$local_origin/wt" SessionStart)"
+ctx="$(bctx_context "$(bctx_fire "$lp" "$stub_pr:$PATH")")"
+case "$ctx" in *'is not a remote URL'*) got=accurate ;; *) got=plausible_wrong_repo ;; esac
+assert "a local-path origin is reported as having no repository to ask" accurate "$got"
+case "$ctx" in *'/some/local/path'*|*'#9412'*) got=invented ;; *) got=clean ;; esac
+assert "...and no slug is invented from the path segments" clean "$got"
+rm -rf "$local_origin"
+
 # --- DISPATCH MODE: the shape of the 2026-08-24 incident -------------------------------------------
 # The dispatcher's own cwd is the WRONG branch to describe when it is handing work to another
 # worktree, and describing it would be noise - which is how a reminder gets scrolled past.
@@ -1141,7 +1192,7 @@ case "$ctx" in *'Commits on this branch (47)'*) got=true_total ;; *) got=cap_as_
 assert "...and the heading counts every commit, not just the listed ones" true_total "$got"
 
 bctx_clean_stamps
-rm -rf "$bctx_tmp" "$stub_pr" "$stub_nopr" "$stub_broken" "$stub_slow"
+rm -rf "$bctx_tmp" "$stub_pr" "$stub_nopr" "$stub_broken" "$stub_slow" "$BCTX_TMPDIR"
 
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"

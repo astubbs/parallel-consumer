@@ -393,6 +393,14 @@ def origin_slug(target):
     if not ok:
         return None
     url = url.strip()
+    # A REMOTE, NOT ANY PATH. A clone whose origin is a local directory - `git clone /path/to/repo`,
+    # which is how a scratch or baseline checkout is usually made - otherwise yields a slug built
+    # from the last two path segments (`git/parallel-consumer`), and `gh` is then asked about a
+    # repository that does not exist. It fails, so the block stays honest, but it names a plausible
+    # wrong repo while doing it. Requiring a scheme or an scp-style `host:owner/repo` turns that into
+    # the accurate answer: there is no remote to ask about.
+    if "://" not in url and not re.match(r"^[^/]+@[^/:]+:", url):
+        return None
     m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
     if not m:
         return None
@@ -481,7 +489,8 @@ for d in (os.environ.get("PATH") or "").split(os.pathsep):
 slug = origin_slug(target)
 if slug is None:
     pr, pr_problem, pr_absent = (
-        None, "no `origin` remote to derive the repository from, so `gh` was not called", False)
+        None, "`origin` is absent or is not a remote URL (a local-path clone has no repository to "
+              "ask about), so `gh` was not called", False)
 else:
     pr, pr_problem, pr_absent = pr_facts(slug, branch)
 
