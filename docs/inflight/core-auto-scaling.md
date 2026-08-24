@@ -92,6 +92,19 @@ fleet converges without oscillation, AIMD-style (+1 "plateaued at my sustainable
 concurrency and still behind" / -1 "underutilized" / 0 otherwise). Infrastructure sums the
 votes (or HPA averages an equivalent headroom gauge - `desired = ceil(current x metric/target)`
 - convergence for free, no leader, no new channel).
+
+**Addition from the Codex strategy review, 2026-08-22/23
+([`core-engine-thesis.md`](core-engine-thesis.md)): the vote must encode WHY the instance
+plateaued, because "at my ceiling and still behind" is three different situations with three
+different right answers.** Local capacity exhausted while independent keys go unexploited: another
+instance genuinely helps, vote +1. Downstream saturated: another instance makes it worse, vote 0
+(or -1) despite the lag. No exploitable key parallelism left in the assigned data: more instances
+cannot expose more useful work, vote 0 - this is the per-key generalisation of the existing
+partition-count cap. The client-side vantage is exactly what makes the distinction observable
+(admission saturation vs downstream latency vs blocked ordering domains), and it is what makes the
+recommendation stronger than "tell infrastructure when more would help" - the signal no external
+autoscaler can construct.
+
 Lifecycle rules:
 
 - **Post-rebalance cooldown, per instance.** Any membership or assignment change invalidates
