@@ -114,9 +114,11 @@ public class TopologyAssembler {
     /**
      * The aggregation, over an IN-MEMORY store.
      *
-     * <p>Not RocksDB, and not as a convenience: RocksDB is a JNI-backed native library whose per-platform problems
-     * under a native image are documented and land on this project's own platform. An in-memory store exercises
-     * state, the changelog and commits while keeping the native-image question independent of this proof.
+     * <p>Not RocksDB, and not as a convenience: an in-memory store exercises state, the changelog and commits
+     * while keeping the native-image question independent of this proof. Note the reason has narrowed - RocksDB
+     * was measured working on the JVM sidecar first try, including macOS arm64, so the remaining question is
+     * specifically RocksDB *under a native image*, not RocksDB. See
+     * docs/inflight/core-rocksdb-works-on-the-jvm-sidecar.md.
      *
      * <p>This is the operator that makes handle types necessary at all: it mints a table of longs the host never
      * supplied, and the recorded {@link #TABLE_OF_LONGS} is how the sink and the host both learn that.
