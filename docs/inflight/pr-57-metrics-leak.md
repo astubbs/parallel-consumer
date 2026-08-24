@@ -74,6 +74,16 @@ merged, so the dependency is discharged.
 saying that required status check "is expected". It is required and absent, which is a different
 state from red, and it will block the merge.
 
+**The "No human LGTM" bullet above is wrong on its stated reason, and its warning is worth keeping
+for a different one.** `bin/check-human-lgtm.sh` passes on an owner review whose body contains
+"lgtm" in any case; it never inspects `APPROVED`, so "every review is COMMENTED" was never the
+criterion. The owner has in fact said `lgtm` twice - 2026-08-19, and again 2026-08-23 conditional on
+this file being synced. **But the gate is documented as not head-sensitive and permanent**, and this
+PR contains the proof: the 2026-08-19 `lgtm` latched it green, and the owner's 2026-08-20 review
+body - `nearly` - could not turn it red again. So the gate answers "has the owner ever said lgtm",
+never "does the owner approve of this head", and a retraction is invisible to it. Read the reviews,
+not the tick.
+
 ### confluentinc#893 / astubbs#121 - what the carried fix is actually evidenced by
 
 Reviewed 2026-08-24 because the upstream issue body is three bullets and explains nothing. The
