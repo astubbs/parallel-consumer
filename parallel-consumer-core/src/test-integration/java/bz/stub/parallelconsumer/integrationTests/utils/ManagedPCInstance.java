@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.integrationTests.utils;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -31,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
@@ -102,11 +104,59 @@ public class ManagedPCInstance implements Runnable {
     @ToString.Exclude
     private final Queue<String> consumedKeys = new ConcurrentLinkedQueue<>();
 
+    /**
+     * Work results this instance's PCs have returned, counted by PC's OWN bookkeeping: a
+     * {@code WorkManager.successfulWorkListeners} listener registered on every incarnation (the same
+     * public testing hook {@code AbstractParallelEoSStreamProcessorTestBase} uses). Monotone across
+     * restarts - never reset, so an observer needs only "did it advance", not incarnation arithmetic.
+     * <p>
+     * Deliberately NOT another count of the test's user-function exits: the listener fires in
+     * {@code WorkManager#onSuccessResult}, which runs on PC's control thread as it processes returned
+     * futures - so a wedged control thread (the confluentinc#857 deadlock family) freezes this counter
+     * even while worker threads keep finishing records. That is the signal
+     * {@code ProgressProbe}'s instance-progress detector samples; a harness-side counter would keep
+     * advancing straight through the exact wedge being hunted.
+     */
+    @Getter(AccessLevel.NONE) // mutable guard - callers get the count via getWorkResultsReturnedCount()
+    @ToString.Exclude
+    private final AtomicLong workResultsReturned = new AtomicLong();
+
+    /** Snapshot of {@link #workResultsReturned} - see its javadoc for what a "work result" is here. */
+    public long getWorkResultsReturnedCount() {
+        return workResultsReturned.get();
+    }
+
+    /**
+     * The test's user function. Receives the full {@link PollContext} plus the id of the PC
+     * <em>incarnation</em> running it - see {@link #incarnations} for why the instance id alone is not
+     * enough for anything that must not span two PC lifetimes.
+     */
+    @FunctionalInterface
+    public interface RecordListener {
+        void onRecord(String incarnationId, PollContext<String, String> context);
+    }
+
     /** Callback invoked for each consumed record — lets the test track overall progress */
     @ToString.Exclude
-    private final Consumer<String> onConsumed;
+    private final RecordListener onConsumed;
 
+    /**
+     * Counts the PCs this instance has brought up. A restart builds a <em>new</em>
+     * {@link ParallelEoSStreamProcessor} with a new consumer and, critically, a new partition-assignment
+     * epoch counter starting again at zero - so any test state keyed on "which PC produced this
+     * observation" must key on the incarnation, not on {@link #instanceId}, or two unrelated lifetimes
+     * collide. {@code KeyOrderLedger} is the caller that depends on this.
+     */
+    @ToString.Exclude
+    @Getter(AccessLevel.NONE)
+    private final AtomicInteger incarnations = new AtomicInteger();
+
+    /** Convenience for the common case: a listener that only wants the record's key. */
     public ManagedPCInstance(Config config, KafkaClientUtils kcu, Consumer<String> onConsumed) {
+        this(config, kcu, (incarnationId, context) -> onConsumed.accept(context.key()));
+    }
+
+    public ManagedPCInstance(Config config, KafkaClientUtils kcu, RecordListener onConsumed) {
         this.config = config;
         this.kcu = kcu;
         this.onConsumed = onConsumed;
@@ -171,6 +221,11 @@ public class ManagedPCInstance implements Runnable {
                     .maxConcurrency(config.maxConcurrency)
                     .build());
 
+            // every incarnation gets its own fresh WorkManager, so this never double-registers; the
+            // instance-level counter deliberately spans incarnations (see workResultsReturned)
+            this.parallelConsumer.getWm().getSuccessfulWorkListeners()
+                    .add(wc -> workResultsReturned.incrementAndGet());
+
             this.parallelConsumer.setTimeBetweenCommits(Duration.ofSeconds(1));
             this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));
             this.parallelConsumer.subscribe(of(config.inputTopic));
@@ -188,6 +243,7 @@ public class ManagedPCInstance implements Runnable {
                 return;
             }
 
+            String incarnationId = "PC-" + instanceId + "#" + incarnations.incrementAndGet();
             parallelConsumer.poll(record -> {
                 if (config.pollDelayMs > 0) {
                     try {
@@ -197,7 +253,7 @@ public class ManagedPCInstance implements Runnable {
                     }
                 }
                 consumedKeys.add(record.key());
-                onConsumed.accept(record.key());
+                onConsumed.onRecord(incarnationId, record);
             });
         } finally {
             // release the start window - a further start() may now submit (see startInFlight)
@@ -357,8 +413,14 @@ public class ManagedPCInstance implements Runnable {
     /**
      * Test hook: seed the PC without bringing one up, so the close-path guards can be exercised
      * without a broker. Production callers get their PC from {@link #run()}.
+     * <p>
+     * Public rather than package-private only so its test can live with the other integration tests
+     * instead of in this helpers package. Package-private was keeping
+     * {@code ManagedPCInstanceLifecycleIT} here - the sole test among six helpers with no test
+     * methods - which is a filing decision made by a modifier rather than by where the test belongs.
+     * This whole source root is test-only, so nothing is published by widening it.
      */
-    void setParallelConsumerForTest(ParallelEoSStreamProcessor<String, String> pc) {
+    public void setParallelConsumerForTest(ParallelEoSStreamProcessor<String, String> pc) {
         this.parallelConsumer = pc;
     }
 

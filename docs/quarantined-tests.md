@@ -35,10 +35,24 @@ reporter).
 
 Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@Quarantined` javadoc):
 
-1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose. The
-   repository owner can grant an explicit exception when the blocking cost outweighs the pressure;
-   the entry must say so ("rule-1 exception"), keep the failure signature as its reason, and carry
-   the diagnosis as its open task.
+1. **No quarantine without evidence** - and *evidence* is not the same as a root cause. Either will
+   do: a diagnosed mechanism, **or** a recorded sighting ledger (dates, runs, the failure signature,
+   and what shows it is master-state rather than PR-state). What stays banned is quarantining on a
+   hunch - "it's red sometimes" is not evidence, and a single failure is a sighting, not a ledger.
+
+   The rule used to demand a diagnosis outright. That was wrong in a way worth recording: it
+   conflated *"we don't know the mechanism"* with *"we don't know whether it's ours"*, and only the
+   second justifies blocking. A test with a sighting ledger **is** a finding - it is known
+   master-state flaky - it simply has no root cause yet. Demanding one before quarantine leaves an
+   undiagnosed red blocking every unrelated PR, which trains everyone to read red as normal; this
+   repo already deleted surefire retries for hiding flakes, and a permanently-red gate destroys the
+   same signal more thoroughly. The tell that the old default was miscalibrated: its escape hatch was
+   an owner-granted exception, and the exception had become the routine path.
+
+   The bar it does NOT lower: quarantine still defers rather than forgives. The lane keeps running
+   the test, the registry keeps it loud, and rule 5 still blocks a release while the list is
+   non-empty. And it is never a licence to label something "just a flaky test" - that is the label
+   the drain-zombie carried right up until it turned out to be a real product bug.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **Re-enable = the owning fix PR deletes the annotation AND this entry in the same commit**, after
    merging master - atomically restoring the test to the gating lane.
@@ -63,6 +77,19 @@ Every entry below is a timing flake rather than a deterministic failure, so all 
 `flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
 were hidden by the surefire retry until astubbs#224 removed it.
 
+- [ ] `PCMetricsTest.metricsRegisterBinding` - asserts `PARTITION_LAST_COMMITTED_OFFSET` equals a
+  **completion counter** while the suite runs `UNORDERED`. Commits are contiguous and bounded by the
+  lowest incomplete offset; completions are not ordered, and workers call `latch.await()` *before*
+  `counter.incrementAndGet()`, so a latched worker's offset never completes and the gap is
+  **permanent**. The 120s `atMost` cannot close it - it only makes the failure cost 140s of every CI
+  run. Quarantined on a **diagnosed mechanism**, which is the stronger half of rule 1, not on a
+  sighting ledger. The fix is one comparand -
+  `PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED_OFFSET` is the contiguous high-water mark the commit metric
+  actually tracks - but the sibling assertions on `PARTITION_HIGHEST_COMPLETED_OFFSET` and
+  `PARTITION_INCOMPLETE_OFFSETS` derive from the same counters and want reading as a set first, so it
+  is not a one-line change. Diagnosis in
+  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`. No Owner yet.
+
 - [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
   the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
   assertions, so the same signature can surface from any test that uses it. The unblocker is
@@ -76,7 +103,7 @@ were hidden by the surefire retry until astubbs#224 removed it.
   `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
 
 - [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  **UNDIAGNOSED, quarantined as an explicit rule-1 exception by owner decision**: at 4/45 it is the
+  **UNDIAGNOSED, quarantined on its sighting ledger (rule 1)**: at 4/45 it is the
   most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
   `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
   `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier

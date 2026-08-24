@@ -1,5 +1,9 @@
 # Disabled tests, and the v6 release gate on them
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+
+
 **0.6.0.0 does not ship while any test is disabled.** Handled by astubbs#263, which audits every test
 that does not run, assert, or exist. Do not start separate work on these; track the PR.
 
