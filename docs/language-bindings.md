@@ -5,7 +5,7 @@ lived in whichever document happened to need it first. This is the map: the axes
 on each, and where the decision actually lives.
 
 **This document owns nothing.** It is an index plus the cross-cutting analysis that has no other
-home. Where it names a decision, the owning document is cited and **wins** — if the two disagree,
+home. Where it names a decision, the owning document is cited and **wins** - if the two disagree,
 this one is stale and should be corrected here rather than argued from. Do not restate a decision's
 reasoning here; link to it. A second copy of a rationale is a rationale that will drift.
 
@@ -15,16 +15,16 @@ question is open. Several are already closed.
 ## The five axes
 
 A boundary crossing is not one decision, it is five, and they are much more independent than they
-look. Systems that solved this before mixed and matched freely — Beam, PyFlink and PySpark each
+look. Systems that solved this before mixed and matched freely - Beam, PyFlink and PySpark each
 answer these differently, and PyFlink answers the data plane two ways at once.
 
-### 1. Control plane — how the host says what it wants
+### 1. Control plane - how the host says what it wants
 
 | Option | Who does it | Consequence |
 |---|---|---|
-| Reflective object proxy | **Py4J** (PySpark, PyFlink) — Python holds proxies and calls arbitrary Java methods | Maximum generality; permanently tied to a JVM at the far end |
-| Language-neutral IDL | **Beam** Runner API — a versioned protobuf model of a pipeline | Inspectable and portable across engines; a model both sides must implement and keep in step |
-| Explicit typed messages | **Ours** — one protobuf message per operation | Narrow; transport-shaped rather than JVM-shaped |
+| Reflective object proxy | **Py4J** (PySpark, PyFlink) - Python holds proxies and calls arbitrary Java methods | Maximum generality; permanently tied to a JVM at the far end |
+| Language-neutral IDL | **Beam** Runner API - a versioned protobuf model of a pipeline | Inspectable and portable across engines; a model both sides must implement and keep in step |
+| Explicit typed messages | **Ours** - one protobuf message per operation | Narrow; transport-shaped rather than JVM-shaped |
 
 **Decided: explicit typed messages.** The consequence that matters and is easy to miss: Py4J is
 Java-reflection-shaped, so it **can never become a C ABI**. Our messages carry no assumption about
@@ -34,29 +34,38 @@ traded for portability, and that trade is the foundation of the shared C transpo
 Owned by [`plans/2026-08-22-001-feat-shared-c-transport-plan.md`](plans/2026-08-22-001-feat-shared-c-transport-plan.md)
 (CT2: the frames are the same frames).
 
-### 2. Function delivery — how the host's code gets reached
+### 2. Function delivery - how the host's code gets reached
 
 | Option | Who does it | Consequence |
 |---|---|---|
-| Serialize the function | **Beam** — a pickled DoFn travels inside the pipeline proto | Required if the harness may run on another machine; imposes serializability on user code |
-| Token and local lookup | **Ours** — an integer crosses, the callable stays put | Only works co-located; **no serializability constraint whatsoever** |
+| Serialize the function | **Beam** - a pickled DoFn travels inside the pipeline proto | Required if the harness may run on another machine; imposes serializability on user code |
+| Token and local lookup | **Ours** - an integer crosses, the callable stays put | Only works co-located; **no serializability constraint whatsoever** |
 
 **Decided: tokens.** The gain is larger than it sounds and is worth selling rather than merely
-recording: because nothing is serialized, a user function can capture **anything** — an open
+recording: because nothing is serialized, a user function can capture **anything** - an open
 database handle, a socket, a loaded ML model. Beam users cannot, and "cannot pickle this object" is
 a well-known tax on that model. For the machine-learning audience in
 [`../STRATEGY.md`](../STRATEGY.md), a loaded model is precisely the object that will not pickle.
 
 The cost, stated plainly: we cannot distribute the harness away from the engine. Beam can.
 
-### 3. Data plane — how per-record work crosses, and how often
+### 3. Data plane - how per-record work crosses, and how often
 
 This is **the open one**, and the most consequential.
+
+**Call it BUNDLING, not batching.** These are different axes and the shared word was already causing
+them to be treated as one decision. *Bundling* is how many records cross per hop - axis 3, a
+transport concern, invisible in the user's signature. *Batching* is how many records the user's
+function is handed per call - axis 5, a signature concern that says nothing about hops. A client can
+bundle a hundred per hop and still hand the user one at a time. "Bundle" is Apache Beam's own word
+for exactly this unit, so it arrives with provenance.
+[`inflight/next-batching-modes-for-clients.md`](inflight/next-batching-modes-for-clients.md) owns
+both definitions.
 
 | Option | Who does it | Consequence |
 |---|---|---|
 | One crossing per record | **Ours today** | Simplest; per-record outcomes are natural; the crossing cost is paid every record |
-| Batched / vectorized | **PySpark** (Arrow-batched UDFs), **Beam** (bundles) | Amortises the crossing over N records; coarsens failure granularity |
+| Bundled / vectorized | **PySpark** (Arrow-batched UDFs), **Beam** (bundles) | Amortises the crossing over N records; coarsens failure granularity |
 | In-process, no IPC | **PyFlink thread mode** ([FLIP-206](https://cwiki.apache.org/confluence/display/FLINK/FLIP-206:+Support+PyFlink+Runtime+Execution+in+Thread+Mode), via PEMJA), **Bytewax** (Rust core + FFI) | Removes the IPC entirely; couples lifetimes and failure domains |
 
 **Both escape routes have been taken by someone larger, and neither of them picked one and
@@ -65,7 +74,7 @@ available about the shape of the answer: **both, selectable**, rather than a cho
 
 Nothing is decided here yet. See the unresolved collision below, which is the reason.
 
-### 4. Transport — what the frames travel over
+### 4. Transport - what the frames travel over
 
 Socket (gRPC) today; a C ABI via GraalVM `--shared` proven in Go, Python and C.
 
@@ -74,7 +83,7 @@ and [`inflight/perf-embedding-the-engine-over-ffi.md`](inflight/perf-embedding-t
 including the per-language hazards, the kill criterion, and why Node stays on the sidecar. Do not
 re-derive any of it.
 
-### 5. API shape — what the user's function signature looks like
+### 5. API shape - what the user's function signature looks like
 
 Owned by [`inflight/next-batching-modes-for-clients.md`](inflight/next-batching-modes-for-clients.md).
 Core's API is already batch-shaped and the clients modelled the degenerate single-record case as
@@ -117,18 +126,18 @@ which of the two they mean in the first sentence.
   in [`../STRATEGY.md`](../STRATEGY.md).
 
 So the throughput fix that the two nearest comparable systems both adopted would, taken as they took
-it, dissolve one of this project's stated advantages. That does not make it wrong — it makes it a
+it, dissolve one of this project's stated advantages. That does not make it wrong - it makes it a
 decision to take deliberately and in the open, with the options being roughly:
 
 1. **Batch the transport, keep outcomes per-record.** N records in one hop, N outcomes back. Beam's
    coupling of the two was a simplification, not a necessity. This looks correct and should be
    costed first.
-2. **Batch only where semantics permit it** — a stateless mapper can buffer, a stateful operator
+2. **Batch only where semantics permit it** - a stateless mapper can buffer, a stateful operator
    cannot without changing what the operator means.
 3. **Do not batch; remove the hop instead** (axis 4, the C ABI). Attacks the per-crossing cost rather
    than the count.
 
-Option 1 and option 3 are not alternatives — they compose, and they attack different terms.
+Option 1 and option 3 are not alternatives - they compose, and they attack different terms.
 
 ## What has actually been measured
 
@@ -162,7 +171,7 @@ meaningful as a slope across run lengths.
 | **Apache Beam** (Fn API / Runner API) | The closest analogue overall. Bundles, the deliberate rejection of per-item outcomes, and the IDL-versus-handles trade |
 | **PyFlink** | The same shape as us. Py4J control plane, and process-versus-thread mode as an explicit, retained choice |
 | **PySpark** | Arrow batching as the answer to exactly the cost we measured |
-| **Temporal** | Shared core plus thin bindings — and the limit, since its Go and Java SDKs are independent implementations |
+| **Temporal** | Shared core plus thin bindings - and the limit, since its Go and Java SDKs are independent implementations |
 | **Bytewax** | In-process FFI with no IPC at all, and a cautionary maintenance record |
 
 Fuller notes, including Ray, Envoy `ext_proc`, Dask and the competitive landscape, live in

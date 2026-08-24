@@ -14,9 +14,9 @@ exists, not in a new UI.**
 
 A `Describe` request is answered with the same graph in two forms, deliberately:
 
-- **`text`** — exactly what `Topology.describe()` prints. A compatibility surface: every Kafka
+- **`text`** - exactly what `Topology.describe()` prints. A compatibility surface: every Kafka
   Streams visualiser in existence parses this format.
-- **`subtopologies`** — the graph already parsed into nodes, edges, kinds, topics and stores.
+- **`subtopologies`** - the graph already parsed into nodes, edges, kinds, topics and stores.
 
 The demo prints the text today. That alone is a real capability for a language whose ecosystem has
 no Streams tooling and no way to grow any: paste it into any of the tools below and get a diagram of
@@ -29,19 +29,19 @@ repositories:
 
 | Tool | Licence | Embeddable? |
 |---|---|---|
-| [`zz85/kafka-streams-viz`](https://github.com/zz85/kafka-streams-viz) | **none declared** | No — no licence means all rights reserved, regardless of how public the repo is |
-| [`gaetancollaud/kafka-streams-visualization`](https://github.com/gaetancollaud/kafka-streams-visualization) | **none declared** | No — same |
-| [KSTD](https://github.com/thriving-dev/kafka-streams-topology-design) | **GPL-3.0** | No — copying it into this Apache-2.0 project would force the combined work to GPL-3 |
+| [`zz85/kafka-streams-viz`](https://github.com/zz85/kafka-streams-viz) | **none declared** | No - no licence means all rights reserved, regardless of how public the repo is |
+| [`gaetancollaud/kafka-streams-visualization`](https://github.com/gaetancollaud/kafka-streams-visualization) | **none declared** | No - same |
+| [KSTD](https://github.com/thriving-dev/kafka-streams-topology-design) | **GPL-3.0** | No - copying it into this Apache-2.0 project would force the combined work to GPL-3 |
 | [KCM Hub topology explorer](https://kcmhub.io/tools.html) | hosted tool | Not distributed as embeddable source |
 
-**Pointing a user at them is fine and costs nothing** — that is using a website, not distributing
+**Pointing a user at them is fine and costs nothing** - that is using a website, not distributing
 code, and the docs already do it. Vendoring any of them is not available to us.
 
 A missing licence is the sharper trap of the two, because a popular repository with no `LICENSE`
 file reads as permissive and is the opposite. Do not let "it is on GitHub with hundreds of stars"
 substitute for checking.
 
-## So we write the renderer — and we are better placed than any of them
+## So we write the renderer - and we are better placed than any of them
 
 Every tool above parses the ASCII, because the ASCII is all they can get. It is a human-readable
 rendering with no stability guarantee, and each of them has had to reverse-engineer its shape and
@@ -56,7 +56,7 @@ the real engine rather than reimplementing it, and it is worth citing as one.
 
 **Do not build a new web UI for this.** There is already an embedded web dashboard
 (astubbs/parallel-consumer#268, tracking astubbs/parallel-consumer#215, on `feats/web-gui`), and a
-standing intent for the sidecar to embed it —
+standing intent for the sidecar to embed it -
 [`parked-sidecar-embeds-web-gui.md`](parked-sidecar-embeds-web-gui.md). A topology view is a panel
 in that, not a second front end.
 
@@ -73,13 +73,13 @@ is showing it something it genuinely cannot obtain any other way.
 
 ## Open questions, none of which block a start
 
-- **Static or live?** A rendered topology is static — it is fixed once the description closes. The
+- **Static or live?** A rendered topology is static - it is fixed once the description closes. The
   interesting version is coloured by runtime state: which nodes are active, per-node throughput,
   which task owns which partition. **That needs the engine-state gap closed first**; the protocol
   currently carries no state or assignment signal at all, which is recorded as a gap in the Streams
   note. Static first, and do not design the live version until the state signal exists.
 - **Is this Streams-only?** The Describe mechanism is, but a Parallel Consumer session has a shape
-  worth drawing too — shards, in-flight records, the concurrency the engine settled on. Whether one
+  worth drawing too - shards, in-flight records, the concurrency the engine settled on. Whether one
   panel serves both, or they are separate views, is a design question for whoever owns the
   dashboard rather than for this note.
 - **Which layout engine, and its licence.** The obvious candidates are Graphviz-in-JS builds. Check
@@ -96,11 +96,11 @@ text, so nobody is blocked from seeing their topology today.
 
 ## Prior art
 
-- [`next-kafka-streams-foreign-wrappers.md`](next-kafka-streams-foreign-wrappers.md) — the Describe
+- [`next-kafka-streams-foreign-wrappers.md`](next-kafka-streams-foreign-wrappers.md) - the Describe
   message, what the PoC found, and the deferred capabilities including the engine-state gap.
-- [`parked-sidecar-embeds-web-gui.md`](parked-sidecar-embeds-web-gui.md) — **read before starting**;
+- [`parked-sidecar-embeds-web-gui.md`](parked-sidecar-embeds-web-gui.md) - **read before starting**;
   owns the constraints on embedding the dashboard in the sidecar.
-- [`next-polyglot-demo-app.md`](next-polyglot-demo-app.md) — owns the demo app's UI and live loop,
+- [`next-polyglot-demo-app.md`](next-polyglot-demo-app.md) - owns the demo app's UI and live loop,
   and is the other place a topology view might reasonably surface.
-- [`../language-bindings.md`](../language-bindings.md) — how the boundary is crossed, and why the
+- [`../language-bindings.md`](../language-bindings.md) - how the boundary is crossed, and why the
   structured form exists on the wire at all.

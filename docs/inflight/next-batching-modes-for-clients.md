@@ -38,6 +38,76 @@ Note the distinction that matters, because the words collide: the wire already c
 reported *individually*. **Batching** in core's sense is different: the user's function receives N
 records in one call. The wire form may already suffice; the API shape does not.
 
+## Two words, because one of them is doing two jobs
+
+**"Batching" in this note means the PC client API shape and nothing else** - how many records the
+user's function is handed per call. That is the meaning the rest of this file uses, it is core's
+existing meaning, and it should not drift.
+
+**The other thing is BUNDLING: how many records cross the language boundary per hop.** Borrowed
+deliberately from Apache Beam, which calls exactly this unit a bundle, so the word arrives with
+provenance and cannot be confused with the API question. Bundling is a transport concern and is
+invisible in the user's signature; batching is a signature concern and says nothing about hops. A
+client could bundle a hundred records per hop and still hand the user one at a time, or the reverse.
+
+Whoever picks up either must say which word they mean in the first sentence. The two have different
+owners, different difficulty, and - as below - different answers for Parallel Consumer and for
+Kafka Streams.
+
+## What a crossing actually costs, at sizes worth caring about
+
+Measured 2026-08-24:
+[`perf-streams-crossing-attribution.md`](perf-streams-crossing-attribution.md). **A boundary
+crossing costs about 150us per record at steady state**, and Kafka's and Kafka Streams' own marginal
+per-record work measured at statistically zero beside it. One stream thread therefore tops out
+around 6,700 records/sec.
+
+150us is easy to wave away. Scaled up it is not:
+
+| Sustained rate | Stream threads consumed by the crossing ALONE | Continuous CPU |
+|---|---|---|
+| 1,000 rec/s | 0.15 | 15% of one core |
+| 10,000 rec/s | 1.5 | ~1.5 cores, or **36 core-hours a day** |
+| 100,000 rec/s | 15 | ~15 cores, or **360 core-hours a day** |
+| 1,000,000 rec/s | 150 | ~150 cores |
+
+Two consequences that are easy to miss from the per-record figure:
+
+- **It sets a partition floor.** Kafka Streams cannot run more stream threads than partitions, so
+  100,000 rec/s needs at least fifteen partitions purely to have somewhere to put the boundary work
+  - before a single partition is allocated to the actual business logic.
+- **The cost is per record, so it is invisible until it is dominant.** Below about 1,000 rec/s
+  nobody will notice. Between 10,000 and 100,000 it becomes a line item you provision cores for.
+  Above that the boundary IS the architecture, and bundling stops being an optimisation and becomes
+  a precondition.
+
+**Read the comparison honestly in both directions.** Against native JVM Kafka Streams this is
+enormous: the operator call it replaces is a Java lambda invocation costing nanoseconds. Against
+what the target user actually has, it is not - a non-JVM team has no Kafka Streams at all, and the
+JVM team's status quo for reaching a Python library is an HTTP call to a service from inside the
+topology, which blocks the same stream thread for a typical local round trip of roughly 0.5-2ms.
+150us is several times better than that AND removes a deployment. Neither framing is the whole
+truth and the note should keep both.
+
+**Caveats, because the number was measured on a deliberately thin workload.** The engine arm ran an
+in-memory store and a trivial transform, so real workloads doing RocksDB writes, joins or larger
+payloads pay more per record on the engine side - the crossing's absolute cost stays put while its
+*share* falls. Records were small, so 150us is a floor for payload size, not a ceiling. One machine,
+loopback gRPC, one thread.
+
+## What bundling would actually recover, and the number nobody has yet
+
+The obvious arithmetic - a hundred records per hop turns 150us into 1.5us - **assumes the crossing
+is all fixed cost, and that is unmeasured.** A crossing is a serialise, a syscall, a thread handoff
+and a wake, plus a per-byte copy that bundling does not amortise at all. For the small records
+measured here the fixed part almost certainly dominates, but "almost certainly" is not a
+measurement.
+
+**So the next experiment for anyone taking this on is to split the 150us into its fixed and
+per-byte parts**, by sweeping payload size at a fixed record count. That single number decides
+whether bundling returns 50x or 5x, and it is cheap to get. Until then, claim an order of magnitude
+rather than two: even a conservative 10x turns the 15 cores above into 1.5.
+
 ## The cross-cutting view
 
 [`../language-bindings.md`](../language-bindings.md) places this decision among the other four a
