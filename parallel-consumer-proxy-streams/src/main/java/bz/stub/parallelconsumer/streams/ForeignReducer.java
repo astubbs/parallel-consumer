@@ -38,6 +38,6 @@ public class ForeignReducer implements Reducer<byte[]> {
     public byte[] apply(byte[] aggregate, byte[] value) {
         // No key: Kafka's Reducer does not receive one, and sending a richer signature than the framework's would
         // put the host's function out of step with the operator it is standing in for.
-        return registry.awaitResult(functionToken, null, value, aggregate, sink, timeout);
+        return registry.awaitResult(functionToken, ForeignCall.reduce(aggregate, value), sink, timeout);
     }
 }

@@ -32,6 +32,25 @@ RecordFunction = Callable[[bytes, bytes], bytes]
 #: key, and confusing the two silently produces a plausible wrong answer.
 ReducerFunction = Callable[[bytes, bytes], bytes]
 
+#: A joining function: (stream_value, table_value) -> value. The stream's record comes first, the
+#: table's current value for that key second. Identical in shape to :data:`ReducerFunction`, which
+#: is exactly why the wire names the kind rather than leaving it to be inferred.
+JoinerFunction = Callable[[bytes, bytes], bytes]
+
+
+class FunctionKind(enum.IntEnum):
+    """Which foreign shape a registered function is. Mirrors the wire's ``InvocationKind``.
+
+    Three shapes now arrive as two byte strings each, so what a function IS can no longer be
+    inferred from what the invocation carries. A reducer's ``(aggregate, value)`` and a joiner's
+    ``(stream_value, table_value)`` are indistinguishable on the wire without this.
+    """
+
+    UNSPECIFIED = 0
+    MAP = 1
+    REDUCE = 2
+    JOIN = 3
+
 
 class HandleKind(enum.IntEnum):
     """What a handle names on the engine side. Mirrors the wire's ``HandleKind`` values exactly.
@@ -203,12 +222,44 @@ class TopologyBuilder:
 
         The returned handle carries bytes, not longs: a reduction preserves the value type.
         """
-        token = self._session.register(function, reducer=True)
+        token = self._session.register(function, kind=FunctionKind.REDUCE)
         return self._session._call(pb.BuilderCall(
             reduce=pb.Reduce(handle=handle, function_token=token, store_name=store_name)))
 
+    def join(self, stream_handle: int, table_handle: int, function: JoinerFunction) -> Handle:
+        """Join a stream to a table, calling ``function`` for each record that finds a match.
+
+        The first call here that takes two handles, and so the first that makes the described
+        topology a graph rather than a chain. The stream side leads: each of its records looks up
+        the table's current value for the same key, and both are handed to ``function`` in that
+        order.
+
+        A record whose key is absent from the table produces no call and no output - that is
+        Kafka's inner-join semantics, not something this client decides.
+
+        The table must hold bytes. Joining against a :meth:`count` is refused by the engine at
+        this call rather than one record into the run, because a count's table holds longs and
+        ``function`` is handed bytes.
+        """
+        token = self._session.register(function, kind=FunctionKind.JOIN)
+        return self._session._call(pb.BuilderCall(join=pb.Join(
+            stream_handle=stream_handle, table_handle=table_handle, function_token=token)))
+
     def sink(self, handle: int, topic: str) -> None:
         self._session._call(pb.BuilderCall(sink=pb.Sink(handle=handle, topic=topic)))
+
+
+def _leading_argument(kind: FunctionKind, invocation: pb.Invocation) -> bytes:
+    """What goes first when calling a function of this kind.
+
+    One table rather than three call sites, because the whole risk in this area is that every
+    shape is ``(bytes, bytes)`` and any pairing type-checks.
+    """
+    if kind is FunctionKind.REDUCE:
+        return invocation.aggregate
+    if kind is FunctionKind.JOIN:
+        return invocation.value
+    return invocation.key
 
 
 class StreamsSession:
@@ -221,7 +272,7 @@ class StreamsSession:
 
     def __init__(self, transport: StreamsTransport) -> None:
         self._transport = transport
-        self._functions: dict[int, tuple[bool, RecordFunction]] = {}
+        self._functions: dict[int, tuple[FunctionKind, RecordFunction]] = {}
         self._tokens = itertools.count(1)
         self._call_ids = itertools.count(1)
         self._pending: dict[int, threading.Event] = {}
@@ -322,10 +373,16 @@ class StreamsSession:
 
     # ---- function registry -------------------------------------------------------
 
-    def register(self, function: RecordFunction, *, reducer: bool = False) -> int:
-        """Registers a function under a token. The token crosses; the function never does."""
+    def register(
+        self, function: RecordFunction, *, kind: FunctionKind = FunctionKind.MAP,
+    ) -> int:
+        """Registers a function under a token. The token crosses; the function never does.
+
+        ``kind`` is what this side believes the function is for. The engine states the same thing
+        on every invocation, and :meth:`_on_invocation` refuses when the two disagree.
+        """
         token = next(self._tokens)
-        self._functions[token] = (reducer, function)
+        self._functions[token] = (kind, function)
         self._transport.send(pb.StreamsClientMessage(
             register_function=pb.RegisterFunction(
                 token=token, description=getattr(function, "__name__", ""))))
@@ -392,28 +449,33 @@ class StreamsSession:
                 invocation.correlation,
                 error=f"no function registered under token {invocation.function_token}")
             return
-        is_reducer, function = registered
+        registered_kind, function = registered
 
-        # The engine says which shape this is by whether an aggregate is present, and this side says
-        # so
-        # by how the function was registered. Checking BOTH is deliberate: a mismatch means one side
-        # is
-        # confused about the topology, and calling anyway would hand a reducer a key - or a mapper
-        # an
-        # aggregate - and return a plausible wrong answer that nothing downstream could detect.
-        has_aggregate = invocation.HasField("aggregate")
-        if has_aggregate != is_reducer:
-            expected = "a reduction" if is_reducer else "a mapping"
-            arrived = "an aggregate" if has_aggregate else "no aggregate"
+        # The engine states the shape and this side states it too, and both are checked. A mismatch
+        # means one side is confused about the topology; calling anyway would hand a reducer a key,
+        # or a joiner an aggregate, and return a plausible wrong answer nothing downstream could
+        # detect. All three shapes take two byte strings, so nothing else would catch it.
+        arrived = FunctionKind(invocation.kind)
+        if arrived is FunctionKind.UNSPECIFIED:
+            # Refused rather than inferred from which fields are present. Presence was enough when
+            # there were two shapes; with a reduction and a join both carrying two values it would
+            # now be a guess, and a wrong guess here is silent.
             self._answer(
                 invocation.correlation,
-                error=f"token {invocation.function_token} was registered as {expected}, "
-                      f"but the invocation carried {arrived}")
+                error=f"the invocation for token {invocation.function_token} named no kind; "
+                      f"this client cannot tell a reduction from a join without one")
+            return
+        if arrived is not registered_kind:
+            self._answer(
+                invocation.correlation,
+                error=f"token {invocation.function_token} was registered as "
+                      f"{registered_kind.name}, but the invocation arrived as {arrived.name}")
             return
 
         try:
-            first = invocation.aggregate if is_reducer else invocation.key
-            value = function(first, invocation.value)
+            first = _leading_argument(arrived, invocation)
+            second = invocation.right if arrived is FunctionKind.JOIN else invocation.value
+            value = function(first, second)
         except Exception as failed:
             self._answer(invocation.correlation, error=repr(failed))
             return

@@ -18,6 +18,7 @@ import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Reducer;
+import org.apache.kafka.streams.kstream.ValueJoiner;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.kstream.ValueMapperWithKey;
 import org.apache.kafka.streams.state.Stores;
@@ -46,6 +47,12 @@ public class TopologyAssembler {
     @FunctionalInterface
     public interface MapperFactory {
         ValueMapperWithKey<byte[], byte[], byte[]> forToken(long functionToken);
+    }
+
+    /** The joining third of the same seam: resolves a token to a joiner whose step runs in the host's language. */
+    @FunctionalInterface
+    public interface JoinerFactory {
+        ValueJoiner<byte[], byte[], byte[]> forToken(long functionToken);
     }
 
     /**
@@ -100,12 +107,14 @@ public class TopologyAssembler {
     private final AtomicLong nextHandle = new AtomicLong(1);
     private final MapperFactory mappers;
     private final ReducerFactory reducers;
+    private final JoinerFactory joiners;
     private boolean built;
     private Topology topology;
 
-    public TopologyAssembler(MapperFactory mappers, ReducerFactory reducers) {
+    public TopologyAssembler(MapperFactory mappers, ReducerFactory reducers, JoinerFactory joiners) {
         this.mappers = mappers;
         this.reducers = java.util.Objects.requireNonNull(reducers, "reducers");
+        this.joiners = java.util.Objects.requireNonNull(joiners, "joiners");
     }
 
     public long source(String topic) {
@@ -177,6 +186,34 @@ public class TopologyAssembler {
                 Materialized.<byte[], byte[]>as(Stores.inMemoryKeyValueStore(storeName))
                         .withKeySerde(operatorSerde(resultType.getKeyType()))
                         .withValueSerde(operatorSerde(resultType.getValueType()))), resultType);
+    }
+
+    /**
+     * Join a stream against a table, combining each record with the table's current value for its key.
+     *
+     * <p>The first operator taking TWO handles, so the topology stops being a chain. Both are resolved by their
+     * recorded kind, which means naming them the wrong way round is refused at the call that made the mistake
+     * rather than surfacing as a class-cast somewhere inside Kafka Streams.
+     *
+     * <p>Records whose key is absent from the table are dropped, which is Kafka's inner-join semantics and not
+     * something this wire chooses.
+     */
+    /**
+     * Joins a stream to a table, calling the host once per stream record that finds a match.
+     *
+     * <p>The table's value type is checked, not just its kind, because a count's table holds longs and the host's
+     * joiner is handed bytes. Erasure lets that pair compile, so without this the mismatch would surface deep inside
+     * Kafka Streams as a {@code ClassCastException} naming a class the host has never heard of - one record into a
+     * run, not at the call that described the wrong thing.
+     */
+    public long join(long streamHandle, long tableHandle, long functionToken) {
+        requireNotBuilt("join");
+        KStream<byte[], byte[]> stream = resolve(streamHandle, HandleKind.HANDLE_KIND_STREAM, "join");
+        KTable<byte[], byte[]> table = resolve(tableHandle, HandleKind.HANDLE_KIND_TABLE, "join");
+        DataType tableValues = handles.get(tableHandle).type().getValueType();
+        require(tableValues == DataType.DATA_TYPE_BYTES, "join cannot be applied to handle " + tableHandle
+                + ": its table holds " + typeName(tableValues) + " values, and a host joiner is handed bytes");
+        return mint(stream.join(table, joiners.forToken(functionToken)), STREAM_OF_BYTES);
     }
 
     public void sink(long handle, String topic) {

@@ -79,6 +79,7 @@ message BuilderCall {
     Count count = 5;
     Sink sink = 6;
     Reduce reduce = 7;
+    Join join = 8;
   }
 }
 
@@ -172,6 +173,18 @@ message RegisterFunction {
 message DescribeComplete {
 }
 
+// Join each record of a stream against the current value for its key in a table, combining the two
+// with a function the HOST supplies. The table is one this topology already built, so no new source
+// kind and no join window are needed - this is the smallest join Kafka Streams offers.
+//
+// It is also the first NON-LINEAR topology: two handles go in and one comes out, so the graph stops
+// being a chain. That is what makes it worth building beyond the extra operator.
+message Join {
+  optional int64 stream_handle = 1;
+  optional int64 table_handle = 2;
+  optional int64 function_token = 3;
+}
+
 // Reads one key from a running store - an interactive query.
 //
 // The host built the table but has no other way to see inside it: without this it can only observe
@@ -261,6 +274,17 @@ message Invocation {
   optional bytes key = 3;
   optional bytes value = 4;
 
+  // What kind of function the host should call, and therefore which fields below are meaningful.
+  //
+  // Explicit rather than inferred from which fields are set. With two shapes, presence was enough: an
+  // aggregate meant "combine". With three it is not, because a reducer and a joiner BOTH take two
+  // values - so a wire that made the host guess would have it call the wrong one with arguments that
+  // are the right type and the wrong meaning, and produce a plausible wrong answer.
+  optional InvocationKind kind = 6;
+
+  // The table-side value, for a joiner. The stream-side value is `value`.
+  optional bytes right = 7;
+
   // The current stored aggregate, for a reducer. PRESENT distinguishes a reduction from a mapping -
   // absent means the host should call a one-record function, present means it should combine. It is
   // absent rather than empty on the first value for a key, because Kafka's Reducer is not called at
@@ -270,6 +294,17 @@ message Invocation {
   // No key travels with a reduction, because Kafka's Reducer does not receive one and inventing a
   // richer signature here would put the host's function out of step with the framework it wraps.
   optional bytes aggregate = 5;
+}
+
+// Which foreign function shape an invocation is asking for, and hence what it carries:
+//   MAP    - key and value
+//   REDUCE - aggregate and value
+//   JOIN   - value (the stream side) and right (the table side)
+enum InvocationKind {
+  INVOCATION_KIND_UNSPECIFIED = 0;
+  INVOCATION_KIND_MAP = 1;
+  INVOCATION_KIND_REDUCE = 2;
+  INVOCATION_KIND_JOIN = 3;
 }
 
 message InvocationResult {

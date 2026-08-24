@@ -29,8 +29,7 @@ public class InvocationRegistry {
      * Registers an invocation, hands it to the host, and blocks the calling stream thread until its result arrives
      * or the timeout elapses.
      */
-    public byte[] awaitResult(long functionToken, byte[] key, byte[] value, byte[] aggregate,
-                              InvocationSink sink, Duration timeout) {
+    public byte[] awaitResult(long functionToken, ForeignCall call, InvocationSink sink, Duration timeout) {
         long correlation = nextCorrelation.getAndIncrement();
         CompletableFuture<byte[]> answer = new CompletableFuture<>();
 
@@ -38,7 +37,7 @@ public class InvocationRegistry {
         // during emit would otherwise find no waiter and have its result discarded as unknown.
         pending.put(correlation, answer);
         try {
-            sink.emit(correlation, functionToken, key, value, aggregate);
+            sink.emit(correlation, functionToken, call);
             return answer.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException notAnswered) {
             throw new InvocationFailedException(

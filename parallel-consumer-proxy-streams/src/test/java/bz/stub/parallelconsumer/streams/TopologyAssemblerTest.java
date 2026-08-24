@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.stream.Stream;
@@ -51,9 +52,14 @@ class TopologyAssemblerTest {
         return joined;
     };
 
+    /** Joins stream value to table value with a separator, so a transposed pair is visible rather than plausible. */
+    private final TopologyAssembler.JoinerFactory joining =
+            token -> (streamValue, tableValue) -> bytes(new String(streamValue, StandardCharsets.UTF_8) + ">"
+                    + new String(tableValue, StandardCharsets.UTF_8));
+
     @Test
     void eachCallReturnsAHandleTheNextCallCanName() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
 
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
@@ -66,7 +72,7 @@ class TopologyAssemblerTest {
 
     @Test
     void aCallNamingAnUnknownHandleIsRefusedAndTheErrorNamesIt() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         assembler.source("in");
 
         TopologyDescriptionException thrown =
@@ -78,7 +84,7 @@ class TopologyAssemblerTest {
 
     @Test
     void aCallAppliedToTheWrongKindOfHandleIsRefusedInProtocolVocabulary() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long source = assembler.source("in");
 
         // count needs a grouped stream; a source is not one. The refusal speaks the protocol's vocabulary -
@@ -95,7 +101,7 @@ class TopologyAssemblerTest {
 
     @Test
     void eachMintRecordsItsKindAndItsKeyAndValueTypes() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
 
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
@@ -120,7 +126,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void everyMethodRefusesEveryWrongKindByItsRecordedName() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long stream = assembler.source("in");
         long grouped = assembler.groupByKey(stream);
         long table = assembler.count(grouped, "counts");
@@ -141,7 +147,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void sinkingAGroupedStreamIsRefusedByItsKindNotAsUnknown() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long grouped = assembler.groupByKey(assembler.source("in"));
 
         TopologyDescriptionException thrown =
@@ -199,7 +205,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void aByteStreamSinksItsBytesUnchanged(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long source = assembler.source("in");
         assembler.sink(assembler.mapValues(source, 42), "out");
 
@@ -234,7 +240,7 @@ class TopologyAssemblerTest {
 
     @Test
     void describingAfterTheTopologyIsBuiltIsRefused() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long source = assembler.source("in");
         assembler.sink(source, "out");
         assembler.build();
@@ -247,7 +253,7 @@ class TopologyAssemblerTest {
 
     @Test
     void theDescribedTopologyCountsPerKeyAndTheSinkCarriesTheCounts(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
         long grouped = assembler.groupByKey(mapped);
@@ -277,7 +283,7 @@ class TopologyAssemblerTest {
 
     @Test
     void theAggregationUsesNoRocksDb(@TempDir Path stateDir) throws IOException {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long grouped = assembler.groupByKey(assembler.source("in"));
         assembler.sink(assembler.count(grouped, "counts"), "out");
 
@@ -314,7 +320,7 @@ class TopologyAssemblerTest {
 
     @Test
     void reduceCombinesEachKeysValuesThroughTheForeignFunction(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long grouped = assembler.groupByKey(assembler.source("in"));
         assembler.sink(assembler.reduce(grouped, 7, "reduced"), "out");
 
@@ -352,7 +358,7 @@ class TopologyAssemblerTest {
             aggregatesSeen.add(new String(aggregate, StandardCharsets.UTF_8));
             return value;
         };
-        TopologyAssembler assembler = new TopologyAssembler(echo, recording);
+        TopologyAssembler assembler = new TopologyAssembler(echo, recording, joining);
         long grouped = assembler.groupByKey(assembler.source("in"));
         assembler.sink(assembler.reduce(grouped, 7, "reduced"), "out");
 
@@ -368,7 +374,7 @@ class TopologyAssemblerTest {
 
     @Test
     void reduceMintsATableOfBytesWhereCountMintsLongs() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long grouped = assembler.groupByKey(assembler.source("in"));
         long counted = assembler.count(grouped, "counted");
         long reduced = assembler.reduce(grouped, 7, "reduced");
@@ -378,6 +384,126 @@ class TopologyAssemblerTest {
         assertThat(assembler.typeOf(counted).getValueType()).isEqualTo(DataType.DATA_TYPE_LONG);
         assertThat(assembler.typeOf(reduced).getValueType()).isEqualTo(DataType.DATA_TYPE_BYTES);
         assertThat(assembler.typeOf(reduced).getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
+    }
+
+    @Test
+    void aMapAndAReduceCoexistAndEachGetsItsOwnFunction(@TempDir Path stateDir) {
+        // Two foreign operators of DIFFERENT kinds in one topology - the first time the engine holds more than
+        // one, and the first time it must route two token shapes at once. Two mappers would not test this: the
+        // interesting failure is a reducer being handed what a mapper expects, or one factory serving both.
+        List<String> mapped = new ArrayList<>();
+        List<String> combined = new ArrayList<>();
+        TopologyAssembler.MapperFactory upper = token -> (key, value) -> {
+            mapped.add(new String(value, StandardCharsets.UTF_8));
+            return new String(value, StandardCharsets.UTF_8).toUpperCase(Locale.ROOT)
+                    .getBytes(StandardCharsets.UTF_8);
+        };
+        TopologyAssembler.ReducerFactory join = token -> (aggregate, value) -> {
+            combined.add(new String(aggregate, StandardCharsets.UTF_8) + "+"
+                    + new String(value, StandardCharsets.UTF_8));
+            byte[] joined = new byte[aggregate.length + value.length];
+            System.arraycopy(aggregate, 0, joined, 0, aggregate.length);
+            System.arraycopy(value, 0, joined, aggregate.length, value.length);
+            return joined;
+        };
+
+        TopologyAssembler assembler = new TopologyAssembler(upper, join, joining);
+        long source = assembler.source("in");
+        long transformed = assembler.mapValues(source, 1);
+        long grouped = assembler.groupByKey(transformed);
+        assembler.sink(assembler.reduce(grouped, 2, "reduced"), "out");
+
+        Map<String, String> lastPerKey = new LinkedHashMap<>();
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer());
+            TestOutputTopic<byte[], byte[]> out = driver.createOutputTopic(
+                    "out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+
+            in.pipeInput(bytes("a"), bytes("x"));
+            in.pipeInput(bytes("a"), bytes("y"));
+            in.pipeInput(bytes("b"), bytes("z"));
+
+            out.readKeyValuesToList().forEach(kv -> lastPerKey.put(
+                    new String(kv.key, StandardCharsets.UTF_8), new String(kv.value, StandardCharsets.UTF_8)));
+        }
+
+        // Every record crossed for the map; only the second value for "a" crossed for the reduce. That the
+        // reducer saw "X+Y" and not "x+y" proves the two ran in order rather than racing or bypassing.
+        assertThat(mapped).containsExactly("x", "y", "z").inOrder();
+        assertThat(combined).containsExactly("X+Y");
+        assertThat(lastPerKey).containsExactly("a", "XY", "b", "Z");
+    }
+
+    /**
+     * The first topology here that is not a straight line: two sources converge on one host function.
+     *
+     * <p>A join is the case that would let a transposed pair pass unnoticed - both sides are bytes, so swapping
+     * them still compiles and still produces output. The separator in the joined value is what makes the order
+     * observable, and the two sides carry deliberately different alphabets so a transposition cannot read as a pass.
+     */
+    @Test
+    void aStreamJoinedToATableCallsTheHostWithTheStreamValueFirst(@TempDir Path stateDir) {
+        List<String> pairs = new ArrayList<>();
+        TopologyAssembler.JoinerFactory recording =
+                token -> (streamValue, tableValue) -> {
+                    pairs.add(new String(streamValue, StandardCharsets.UTF_8) + ">"
+                            + new String(tableValue, StandardCharsets.UTF_8));
+                    return bytes(new String(streamValue, StandardCharsets.UTF_8) + ">"
+                            + new String(tableValue, StandardCharsets.UTF_8));
+                };
+
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, recording);
+        long facts = assembler.source("facts");
+        long table = assembler.reduce(assembler.groupByKey(facts), 1, "facts-store");
+        long events = assembler.source("events");
+        assembler.sink(assembler.join(events, table, 2), "out");
+
+        List<String> emitted = new ArrayList<>();
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> factsIn = driver.createInputTopic(
+                    "facts", new ByteArraySerializer(), new ByteArraySerializer());
+            TestInputTopic<byte[], byte[]> eventsIn = driver.createInputTopic(
+                    "events", new ByteArraySerializer(), new ByteArraySerializer());
+            TestOutputTopic<byte[], byte[]> out = driver.createOutputTopic(
+                    "out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+
+            factsIn.pipeInput(bytes("k"), bytes("LEFT"));
+            eventsIn.pipeInput(bytes("k"), bytes("one"));
+            eventsIn.pipeInput(bytes("k"), bytes("two"));
+            // No fact for this key, so the join finds no match and the host is never called for it.
+            eventsIn.pipeInput(bytes("absent"), bytes("three"));
+
+            out.readValuesToList().forEach(v -> emitted.add(new String(v, StandardCharsets.UTF_8)));
+        }
+
+        assertThat(pairs).containsExactly("one>LEFT", "two>LEFT").inOrder();
+        assertThat(emitted).containsExactly("one>LEFT", "two>LEFT").inOrder();
+    }
+
+    @Test
+    void aJoinAgainstACountsTableIsRefusedAtTheCallThatDescribedIt() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        long facts = assembler.source("facts");
+        long counts = assembler.count(assembler.groupByKey(facts), "counts-store");
+        long events = assembler.source("events");
+
+        // Longs on one side, a host joiner handed bytes on the other: erasure would let this reach a running
+        // topology and fail one record in.
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.join(events, counts, 1));
+        assertThat(refused).hasMessageThat().contains("long");
+    }
+
+    @Test
+    void aJoinNamingAGroupedStreamAsItsTableIsRefused() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        long events = assembler.source("events");
+        long grouped = assembler.groupByKey(assembler.source("facts"));
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.join(events, grouped, 1));
+        assertThat(refused).hasMessageThat().contains("needs a table");
     }
 
     private static byte[] bytes(String s) {

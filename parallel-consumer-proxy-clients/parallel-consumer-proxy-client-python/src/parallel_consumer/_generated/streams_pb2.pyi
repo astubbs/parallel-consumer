@@ -28,6 +28,13 @@ class NodeKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     NODE_KIND_SOURCE: _ClassVar[NodeKind]
     NODE_KIND_PROCESSOR: _ClassVar[NodeKind]
     NODE_KIND_SINK: _ClassVar[NodeKind]
+
+class InvocationKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    INVOCATION_KIND_UNSPECIFIED: _ClassVar[InvocationKind]
+    INVOCATION_KIND_MAP: _ClassVar[InvocationKind]
+    INVOCATION_KIND_REDUCE: _ClassVar[InvocationKind]
+    INVOCATION_KIND_JOIN: _ClassVar[InvocationKind]
 HANDLE_KIND_UNSPECIFIED: HandleKind
 HANDLE_KIND_STREAM: HandleKind
 HANDLE_KIND_GROUPED_STREAM: HandleKind
@@ -39,6 +46,10 @@ NODE_KIND_UNSPECIFIED: NodeKind
 NODE_KIND_SOURCE: NodeKind
 NODE_KIND_PROCESSOR: NodeKind
 NODE_KIND_SINK: NodeKind
+INVOCATION_KIND_UNSPECIFIED: InvocationKind
+INVOCATION_KIND_MAP: InvocationKind
+INVOCATION_KIND_REDUCE: InvocationKind
+INVOCATION_KIND_JOIN: InvocationKind
 
 class StreamsClientMessage(_message.Message):
     __slots__ = ("open", "builder_call", "register_function", "describe_complete", "invocation_result", "describe", "get")
@@ -96,7 +107,7 @@ class Ready(_message.Message):
     def __init__(self, application_id: _Optional[str] = ...) -> None: ...
 
 class BuilderCall(_message.Message):
-    __slots__ = ("call_id", "source", "map_values", "group_by_key", "count", "sink", "reduce")
+    __slots__ = ("call_id", "source", "map_values", "group_by_key", "count", "sink", "reduce", "join")
     CALL_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     MAP_VALUES_FIELD_NUMBER: _ClassVar[int]
@@ -104,6 +115,7 @@ class BuilderCall(_message.Message):
     COUNT_FIELD_NUMBER: _ClassVar[int]
     SINK_FIELD_NUMBER: _ClassVar[int]
     REDUCE_FIELD_NUMBER: _ClassVar[int]
+    JOIN_FIELD_NUMBER: _ClassVar[int]
     call_id: int
     source: Source
     map_values: MapValues
@@ -111,7 +123,8 @@ class BuilderCall(_message.Message):
     count: Count
     sink: Sink
     reduce: Reduce
-    def __init__(self, call_id: _Optional[int] = ..., source: _Optional[_Union[Source, _Mapping]] = ..., map_values: _Optional[_Union[MapValues, _Mapping]] = ..., group_by_key: _Optional[_Union[GroupByKey, _Mapping]] = ..., count: _Optional[_Union[Count, _Mapping]] = ..., sink: _Optional[_Union[Sink, _Mapping]] = ..., reduce: _Optional[_Union[Reduce, _Mapping]] = ...) -> None: ...
+    join: Join
+    def __init__(self, call_id: _Optional[int] = ..., source: _Optional[_Union[Source, _Mapping]] = ..., map_values: _Optional[_Union[MapValues, _Mapping]] = ..., group_by_key: _Optional[_Union[GroupByKey, _Mapping]] = ..., count: _Optional[_Union[Count, _Mapping]] = ..., sink: _Optional[_Union[Sink, _Mapping]] = ..., reduce: _Optional[_Union[Reduce, _Mapping]] = ..., join: _Optional[_Union[Join, _Mapping]] = ...) -> None: ...
 
 class Source(_message.Message):
     __slots__ = ("topic",)
@@ -191,6 +204,16 @@ class DescribeComplete(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class Join(_message.Message):
+    __slots__ = ("stream_handle", "table_handle", "function_token")
+    STREAM_HANDLE_FIELD_NUMBER: _ClassVar[int]
+    TABLE_HANDLE_FIELD_NUMBER: _ClassVar[int]
+    FUNCTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    stream_handle: int
+    table_handle: int
+    function_token: int
+    def __init__(self, stream_handle: _Optional[int] = ..., table_handle: _Optional[int] = ..., function_token: _Optional[int] = ...) -> None: ...
+
 class Get(_message.Message):
     __slots__ = ("store_name", "key")
     STORE_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -252,18 +275,22 @@ class Node(_message.Message):
     def __init__(self, name: _Optional[str] = ..., predecessors: _Optional[_Iterable[str]] = ..., successors: _Optional[_Iterable[str]] = ..., kind: _Optional[_Union[NodeKind, str]] = ..., topics: _Optional[_Iterable[str]] = ..., stores: _Optional[_Iterable[str]] = ..., topic_pattern: _Optional[str] = ...) -> None: ...
 
 class Invocation(_message.Message):
-    __slots__ = ("correlation", "function_token", "key", "value", "aggregate")
+    __slots__ = ("correlation", "function_token", "key", "value", "kind", "right", "aggregate")
     CORRELATION_FIELD_NUMBER: _ClassVar[int]
     FUNCTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    RIGHT_FIELD_NUMBER: _ClassVar[int]
     AGGREGATE_FIELD_NUMBER: _ClassVar[int]
     correlation: int
     function_token: int
     key: bytes
     value: bytes
+    kind: InvocationKind
+    right: bytes
     aggregate: bytes
-    def __init__(self, correlation: _Optional[int] = ..., function_token: _Optional[int] = ..., key: _Optional[bytes] = ..., value: _Optional[bytes] = ..., aggregate: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, correlation: _Optional[int] = ..., function_token: _Optional[int] = ..., key: _Optional[bytes] = ..., value: _Optional[bytes] = ..., kind: _Optional[_Union[InvocationKind, str]] = ..., right: _Optional[bytes] = ..., aggregate: _Optional[bytes] = ...) -> None: ...
 
 class InvocationResult(_message.Message):
     __slots__ = ("correlation", "value", "error")

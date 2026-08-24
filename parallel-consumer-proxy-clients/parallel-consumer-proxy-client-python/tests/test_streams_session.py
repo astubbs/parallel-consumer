@@ -22,7 +22,13 @@ from typing import cast
 import pytest
 
 from parallel_consumer._generated import streams_pb2 as pb
-from parallel_consumer.streams import DataType, HandleKind, StreamsError, StreamsSession
+from parallel_consumer.streams import (
+    DataType,
+    FunctionKind,
+    HandleKind,
+    StreamsError,
+    StreamsSession,
+)
 
 
 class FakeEngine:
@@ -125,12 +131,29 @@ class FakeEngine:
         """A reduction: an aggregate is present and no key travels, as the engine sends it."""
         self._outbound.put(pb.StreamsServerMessage(
             invocation=pb.Invocation(
-                correlation=correlation, function_token=token, aggregate=aggregate, value=value)))
+                correlation=correlation, function_token=token, aggregate=aggregate, value=value,
+                kind=pb.INVOCATION_KIND_REDUCE)))
+
+    def join_invoke(
+        self, correlation: int, token: int, stream_value: bytes, table_value: bytes,
+    ) -> None:
+        """A join: two values and no key, the same fields a reduction fills but a different kind."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, value=stream_value,
+                right=table_value, kind=pb.INVOCATION_KIND_JOIN)))
 
     def invoke(self, correlation: int, token: int, key: bytes, value: bytes) -> None:
         self._outbound.put(pb.StreamsServerMessage(
             invocation=pb.Invocation(
-                correlation=correlation, function_token=token, key=key, value=value)))
+                correlation=correlation, function_token=token, key=key, value=value,
+                kind=pb.INVOCATION_KIND_MAP)))
+
+    def kindless_invoke(self, correlation: int, token: int, value: bytes) -> None:
+        """An invocation from an engine that named no kind - version skew, or an engine bug."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, value=value)))
 
     def await_client_message(self, kind: str, timeout: float = 5.0) -> pb.StreamsClientMessage:
         deadline = threading.Event()
@@ -550,7 +573,7 @@ def test_a_reducer_is_called_with_the_stored_aggregate(engine: FakeEngine) -> No
         seen.append((aggregate, value))
         return aggregate + value
 
-    token = session.register(combine, reducer=True)
+    token = session.register(combine, kind=FunctionKind.REDUCE)
     engine.reduce_invoke(1, token, b"running", b"next")
 
     result = engine.await_client_message("invocation_result")
@@ -574,12 +597,12 @@ def test_a_mapping_sent_to_a_reducer_is_refused_rather_than_guessed(engine: Fake
         called = True
         return aggregate
 
-    token = session.register(combine, reducer=True)
+    token = session.register(combine, kind=FunctionKind.REDUCE)
     engine.invoke(1, token, b"a-key", b"a-value")   # a MAPPING - no aggregate
 
     result = engine.await_client_message("invocation_result")
     assert not called, "the reducer must not be called with a key standing in for an aggregate"
-    assert "registered as a reduction" in result.invocation_result.error
+    assert "registered as REDUCE" in result.invocation_result.error
 
 
 def test_a_reduction_sent_to_a_mapper_is_refused_too(engine: FakeEngine) -> None:
@@ -598,7 +621,7 @@ def test_a_reduction_sent_to_a_mapper_is_refused_too(engine: FakeEngine) -> None
 
     result = engine.await_client_message("invocation_result")
     assert not called
-    assert "registered as a mapping" in result.invocation_result.error
+    assert "registered as MAP" in result.invocation_result.error
 
 
 def test_the_builder_issues_a_reduce_naming_its_store(engine: FakeEngine) -> None:
@@ -663,3 +686,67 @@ def test_a_second_query_waits_for_its_own_answer() -> None:
 
     with pytest.raises(StreamsError, match="the engine gave up"):
         session.get("reduced", b"a", timeout=3.0)
+
+
+def test_a_joiner_is_called_with_the_stream_value_before_the_table_value(
+        engine: FakeEngine) -> None:
+    """Both sides are bytes, so only an assertion on order can tell a transposition from a pass."""
+    session = StreamsSession(engine)
+    session.open("joins", {})
+    seen: list[tuple[bytes, bytes]] = []
+
+    def combine(stream_value: bytes, table_value: bytes) -> bytes:
+        seen.append((stream_value, table_value))
+        return stream_value + b">" + table_value
+
+    token = session.register(combine, kind=FunctionKind.JOIN)
+    engine.join_invoke(1, token, b"event", b"fact")
+
+    result = engine.await_client_message("invocation_result")
+    assert seen == [(b"event", b"fact")]
+    assert result.invocation_result.value == b"event>fact"
+
+
+def test_a_join_sent_to_a_reducer_is_refused_although_both_carry_two_values(
+        engine: FakeEngine) -> None:
+    """The case that made an explicit kind necessary.
+
+    A reduction and a join both arrive as two byte strings, so nothing about the payload
+    distinguishes them. Before the kind was on the wire this call would have gone straight through
+    to the reducer with a table value standing in for its aggregate.
+    """
+    session = StreamsSession(engine)
+    session.open("joins", {})
+    called = False
+
+    def combine(aggregate: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return aggregate
+
+    token = session.register(combine, kind=FunctionKind.REDUCE)
+    engine.join_invoke(1, token, b"event", b"fact")
+
+    result = engine.await_client_message("invocation_result")
+    assert not called, "the reducer must not be called with a table value as its aggregate"
+    assert "registered as REDUCE" in result.invocation_result.error
+    assert "arrived as JOIN" in result.invocation_result.error
+
+
+def test_an_invocation_naming_no_kind_is_refused_rather_than_inferred(engine: FakeEngine) -> None:
+    """Field presence used to be enough to infer the shape. With three shapes it is a guess."""
+    session = StreamsSession(engine)
+    session.open("joins", {})
+    called = False
+
+    def transform(key: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return value
+
+    token = session.register(transform)
+    engine.kindless_invoke(1, token, b"v")
+
+    result = engine.await_client_message("invocation_result")
+    assert not called
+    assert "named no kind" in result.invocation_result.error

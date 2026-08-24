@@ -204,9 +204,11 @@ just work, and testing it proves something about Kafka rather than about this pr
 
 **What is worth proving instead is each dimension of the COUPLING**, because that is the part
 nobody has built before. So far: the host defines the topology, the engine calls the host per record
-(stateless), the engine calls the host *with state* (a reducer), and the host reads engine state
-(interactive queries). Unproven dimensions - more than one foreign operator in a topology, and the
-host learning the engine's own lifecycle state - are worth more than durability right now.
+(stateless), the engine calls the host *with state* (a reducer), the host reads engine state
+(interactive queries), the host joins two handles into one node (a joiner - the first non-linear
+topology), and three foreign functions of three different shapes run in a single topology at once.
+The remaining unproven dimension - the host learning the engine's own lifecycle state - is worth
+more than durability right now.
 
 Pick durability up when the coupling surface is broad enough that a restart test would exercise
 something other than Kafka.
@@ -218,10 +220,10 @@ Each of these was deliberately out of scope. This is what the run says they woul
 | Capability | What it needs |
 |---|---|
 | **A sixth builder method (scalar args)** | Nothing structural - one more member of the `BuilderCall` `oneof`. |
-| **Operators taking behaviour** (serdes, comparators, joiners) | The function-token pattern again, generalised beyond `RecordFunction`. Proven mechanism, real design step. |
+| **Operators taking behaviour** (serdes, comparators, joiners) | The function-token pattern again, generalised beyond `RecordFunction`. **Joiners done 2026-08-25**, and the design step turned out to be on the wire rather than in the token: with three shapes all arriving as two byte strings, which function to call could no longer be inferred from which fields were present, so `Invocation` now names its `kind` explicitly. Serdes and comparators remain. |
 | **Interactive queries** | New message types for get/range/scan over a named store. New surface, not a new mechanism - and unlike the rest it makes the host a *reader* of engine state, which nothing else here does. |
 | **Punctuators** | Cheap, as predicted. A scheduled callback is another work frame in the pull model; the invocation correlation already carries everything needed. |
-| **More than one foreign operator** | Nothing on the wire - tokens already distinguish functions. The open question is empirical, not structural: whether crossings multiply with operator count, which the 400us figure says would hurt. |
+| **More than one foreign operator** | **Done 2026-08-25.** Nothing on the wire was needed - tokens already distinguished functions, as predicted. A map, a join and a reduce now run in one topology, each calling a different Python function. The empirical question the prediction raised is still open: crossings *do* multiply with operator count (each record on the joined path crosses twice), and nothing has measured what that costs. |
 | **Engine state and rebalance signals** | An `EngineState` server message. See above, including the transient trap. |
 | **Invocation timeout and failure semantics** | Partly built: the registry times out and the mapper throws, and a Python exception reports back as an error rather than a substituted value. Undesigned is what Streams should *do* with it - fail the thread, skip the record, or route to a dead letter. That is a product decision, not a protocol one. |
 | **Exactly-once** | Untouched. The invocation is a blocking call out of a transactional stream thread, and what a foreign function's side effects mean inside a transaction is a genuine open question rather than a plumbing task. |

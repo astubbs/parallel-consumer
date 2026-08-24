@@ -26,6 +26,8 @@ class TopologyDescriberTest {
     private final TopologyAssembler.MapperFactory echo = token -> (key, value) -> value;
 
     /** Concatenates aggregate and value, so a reduction's result depends on BOTH arguments crossing correctly. */
+    private final TopologyAssembler.JoinerFactory joining = token -> (streamValue, tableValue) -> streamValue;
+
     private final TopologyAssembler.ReducerFactory concat = token -> (aggregate, value) -> {
         byte[] joined = new byte[aggregate.length + value.length];
         System.arraycopy(aggregate, 0, joined, 0, aggregate.length);
@@ -35,7 +37,7 @@ class TopologyDescriberTest {
 
     /** The five-call chain the demo runs, which is also the widest topology this protocol can currently express. */
     private Topology countingTopology() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long source = assembler.source("input");
         long mapped = assembler.mapValues(source, 1L);
         long grouped = assembler.groupByKey(mapped);
@@ -134,7 +136,7 @@ class TopologyDescriberTest {
 
     @Test
     void describingATopologyDoesNotConsumeTheRightToStartIt() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
         long source = assembler.source("input");
         assembler.sink(source, "output");
 

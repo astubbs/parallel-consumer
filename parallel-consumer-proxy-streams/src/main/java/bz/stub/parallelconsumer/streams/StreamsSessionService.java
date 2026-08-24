@@ -81,7 +81,8 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
             InvocationSink sink = this::emitInvocation;
             this.assembler = new TopologyAssembler(
                     token -> new ForeignValueMapper(registry, sink, token, INVOCATION_TIMEOUT),
-                    token -> new ForeignReducer(registry, sink, token, INVOCATION_TIMEOUT));
+                    token -> new ForeignReducer(registry, sink, token, INVOCATION_TIMEOUT),
+                    token -> new ForeignJoiner(registry, sink, token, INVOCATION_TIMEOUT));
         }
 
         @Override
@@ -146,6 +147,9 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                 case MAP_VALUES -> minted(callId, assembler.mapValues(
                         call.getMapValues().getHandle(), call.getMapValues().getFunctionToken()));
                 case GROUP_BY_KEY -> minted(callId, assembler.groupByKey(call.getGroupByKey().getHandle()));
+                case JOIN -> minted(callId, assembler.join(
+                        call.getJoin().getStreamHandle(), call.getJoin().getTableHandle(),
+                        call.getJoin().getFunctionToken()));
                 case REDUCE -> minted(callId, assembler.reduce(
                         call.getReduce().getHandle(), call.getReduce().getFunctionToken(),
                         call.getReduce().getStoreName()));
@@ -243,21 +247,25 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
         }
 
         /** Called from Kafka Streams threads, which is why the send is locked. */
-        private void emitInvocation(long correlation, long functionToken, byte[] key, byte[] value,
-                                    byte[] aggregate) {
+        private void emitInvocation(long correlation, long functionToken, ForeignCall call) {
             Invocation.Builder invocation = Invocation.newBuilder()
                     .setCorrelation(correlation)
-                    .setFunctionToken(functionToken);
-            if (key != null) {
-                invocation.setKey(ByteString.copyFrom(key));
+                    .setFunctionToken(functionToken)
+                    // The kind is always set. It is what the host dispatches on, and inferring it from which
+                    // fields happen to be present stopped being possible once a joiner and a reducer both carried
+                    // two values.
+                    .setKind(call.kind());
+            if (call.key() != null) {
+                invocation.setKey(ByteString.copyFrom(call.key()));
             }
-            if (value != null) {
-                invocation.setValue(ByteString.copyFrom(value));
+            if (call.value() != null) {
+                invocation.setValue(ByteString.copyFrom(call.value()));
             }
-            if (aggregate != null) {
-                // Set only when there IS one. Its presence is what tells the host to combine rather than map, so
-                // an unconditional set would turn every mapping into a reduction against empty bytes.
-                invocation.setAggregate(ByteString.copyFrom(aggregate));
+            if (call.aggregate() != null) {
+                invocation.setAggregate(ByteString.copyFrom(call.aggregate()));
+            }
+            if (call.right() != null) {
+                invocation.setRight(ByteString.copyFrom(call.right()));
             }
             send(StreamsServerMessage.newBuilder().setInvocation(invocation).build());
         }

@@ -33,12 +33,12 @@ class InvocationRegistryTest {
     @Test
     void aResultCompletesTheInvocationThatMintedItsCorrelation() throws Exception {
         AtomicReference<Long> correlation = new AtomicReference<>();
-        InvocationSink sink = (c, token, k, v, agg) -> correlation.set(c);
+        InvocationSink sink = (c, token, call) -> correlation.set(c);
 
         ExecutorService caller = Executors.newSingleThreadExecutor();
         try {
             var result = caller.submit(() ->
-                    registry.awaitResult(42, bytes("k"), bytes("v"), null, sink, GENEROUS));
+                    registry.awaitResult(42, ForeignCall.map(bytes("k"), bytes("v")), sink, GENEROUS));
 
             awaitOutstanding(1);
             registry.complete(correlation.get(), bytes("mapped"));
@@ -53,8 +53,8 @@ class InvocationRegistryTest {
     void concurrentInvocationsEachReceiveTheirOwnResult() throws Exception {
         int callers = 8;
         Map<Long, String> correlationToPayload = new ConcurrentHashMap<>();
-        InvocationSink sink = (c, token, k, v, agg) ->
-                correlationToPayload.put(c, new String(v, StandardCharsets.UTF_8));
+        InvocationSink sink = (c, token, call) ->
+                correlationToPayload.put(c, new String(call.value(), StandardCharsets.UTF_8));
 
         ExecutorService pool = Executors.newFixedThreadPool(callers);
         List<String> received = new CopyOnWriteArrayList<>();
@@ -64,7 +64,7 @@ class InvocationRegistryTest {
                 String payload = "payload-" + i;
                 pool.submit(() -> {
                     try {
-                        byte[] answer = registry.awaitResult(1, bytes("k"), bytes(payload), null, sink, GENEROUS);
+                        byte[] answer = registry.awaitResult(1, ForeignCall.map(bytes("k"), bytes(payload)), sink, GENEROUS);
                         received.add(new String(answer, StandardCharsets.UTF_8));
                     } finally {
                         done.countDown();
@@ -90,12 +90,12 @@ class InvocationRegistryTest {
     @Test
     void aResultForAnUnknownCorrelationIsDiscardedRatherThanAppliedElsewhere() throws Exception {
         AtomicReference<Long> correlation = new AtomicReference<>();
-        InvocationSink sink = (c, token, k, v, agg) -> correlation.set(c);
+        InvocationSink sink = (c, token, call) -> correlation.set(c);
 
         ExecutorService caller = Executors.newSingleThreadExecutor();
         try {
             var result = caller.submit(() ->
-                    registry.awaitResult(1, bytes("k"), bytes("v"), null, sink, GENEROUS));
+                    registry.awaitResult(1, ForeignCall.map(bytes("k"), bytes("v")), sink, GENEROUS));
             awaitOutstanding(1);
 
             registry.complete(correlation.get() + 9999, bytes("stray"));
@@ -110,10 +110,10 @@ class InvocationRegistryTest {
 
     @Test
     void anInvocationThatIsNeverAnsweredFailsWithTheTimeoutNamed() {
-        InvocationSink silent = (c, token, k, v, agg) -> { };
+        InvocationSink silent = (c, token, call) -> { };
 
         InvocationFailedException thrown = assertThrows(InvocationFailedException.class, () ->
-                registry.awaitResult(1, bytes("k"), bytes("v"), null, silent, Duration.ofMillis(50)));
+                registry.awaitResult(1, ForeignCall.map(bytes("k"), bytes("v")), silent, Duration.ofMillis(50)));
 
         assertThat(thrown).hasMessageThat().ignoringCase().contains("timed out");
         assertThat(registry.outstanding()).isEqualTo(0);
@@ -122,12 +122,12 @@ class InvocationRegistryTest {
     @Test
     void anErrorFromTheHostFailsTheRecordRatherThanSubstitutingAValue() throws Exception {
         AtomicReference<Long> correlation = new AtomicReference<>();
-        InvocationSink sink = (c, token, k, v, agg) -> correlation.set(c);
+        InvocationSink sink = (c, token, call) -> correlation.set(c);
 
         ExecutorService caller = Executors.newSingleThreadExecutor();
         try {
             var result = caller.submit(() ->
-                    registry.awaitResult(1, bytes("k"), bytes("v"), null, sink, GENEROUS));
+                    registry.awaitResult(1, ForeignCall.map(bytes("k"), bytes("v")), sink, GENEROUS));
             awaitOutstanding(1);
 
             registry.fail(correlation.get(), "the host's function raised");

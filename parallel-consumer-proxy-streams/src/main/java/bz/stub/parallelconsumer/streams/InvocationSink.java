@@ -15,9 +15,8 @@ public interface InvocationSink {
      * Hand one invocation to the host. Must not block on the host's answer; the answer arrives separately as a
      * result frame.
      *
-     * <p>{@code aggregate} is null for a mapping and non-null for a reduction, which is the same distinction the
-     * wire's optional field carries. Null rather than an empty array on a key's first value: Kafka does not call
-     * the reducer at all for that record, so an empty aggregate would be a different and wrong thing to send.
+     * <p>What the call carries, and which function shape it is asking for, both live on the {@link ForeignCall}
+     * so they cannot disagree.
      */
-    void emit(long correlation, long functionToken, byte[] key, byte[] value, byte[] aggregate);
+    void emit(long correlation, long functionToken, ForeignCall call);
 }
