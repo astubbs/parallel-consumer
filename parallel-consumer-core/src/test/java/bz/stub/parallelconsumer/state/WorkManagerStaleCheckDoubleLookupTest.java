@@ -32,13 +32,18 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
  * the swapped state. This contradicts checkpoint 3's documented guarantee ("work that went stale mid-flight
  * never reaches onSuccessResult/onFailureResult").
  * <p>
- * <b>The forced race.</b> {@code RacingStaleCheckWorkManager} overrides {@link WorkManager#checkIfWorkIsStale},
- * computes the real answer first, then fires the full production rebalance
+ * <b>The forced race.</b> {@code RacingStaleCheckWorkManager} overrides checkpoint 3's staleness seam
+ * ({@code WorkManager.checkIfWorkIsStale(PartitionState, WorkContainer)} - the checkpoint's ONE state lookup
+ * since the fix), computes the real answer first, then fires the full production rebalance
  * ({@code onPartitionsRevoked}, optionally followed by {@code onPartitionsAssigned}) before returning it - the
- * torn read, deterministic.
+ * rebalance landing in the widest gap the interleaving offers, deterministically. On the fixed code the arms
+ * are green because the actions no longer re-resolve the swapped map entry: the success path mutates the state
+ * object the checkpoint validated, and the failure path re-validates against the live map before re-queueing.
  * <p>
- * Two traced harms, one test each; <b>both tests are EXPECTED RED on master</b> (this branch carries
- * reproductions, not fixes):
+ * Two traced harms, one race arm each (plus the candidate-1 commit-gate probe); <b>the race arms are RED on
+ * the unfixed code</b> - they were committed expected-red on the reproduction branch
+ * ({@code test/torn-read-candidates-reproduction}) and hold this branch's fix in place as its regression
+ * tests:
  * <ul>
  * <li><b>Failure path</b>: {@code onFailureResult -> sm.onFailure} re-adds the stale container to the retry
  * queue. Under PARTITION/UNORDERED ordering the revoked partition's shard object survives its own sweep (only
@@ -86,8 +91,8 @@ class WorkManagerStaleCheckDoubleLookupTest {
         }
 
         @Override
-        public boolean checkIfWorkIsStale(WorkContainer<String, String> workContainer) {
-            boolean staleAnswerFromFirstLookup = super.checkIfWorkIsStale(workContainer);
+        protected boolean checkIfWorkIsStale(PartitionState<String, String> partitionState, WorkContainer<String, String> workContainer) {
+            boolean staleAnswerFromFirstLookup = super.checkIfWorkIsStale(partitionState, workContainer);
             if (interference != null) {
                 Runnable oneShot = interference;
                 interference = null;
@@ -190,6 +195,39 @@ class WorkManagerStaleCheckDoubleLookupTest {
                 + "tear's commit window (candidate 1)")
                 .that(wm.getPm().getPartitionState(tp).isDirty())
                 .isFalse();
+    }
+
+    /**
+     * The un-forced candidate-1 probe: the bootstrap-reset commit tear
+     * ({@code PartitionStateBootstrapResetTearTest} on the hunt branch) is only reachable through a dirty
+     * bootstrap-phase state, and this candidate's success-path tear is the one production route that can dirty
+     * one. Same interleaving as the success-path arm, probed at the commit gate itself: with the fix, the
+     * committer collects NOTHING from the freshly assigned state, so candidate 1's only door stays shut. On the
+     * torn code this route detonates instead (the {@code onSuccess} assert under {@code -ea}; silently dirty
+     * without it) - red either way.
+     */
+    @Test
+    void staleSuccessResultMustNotOpenTheBootstrapResetCommitGate() {
+        WorkContainer<String, String> wc = registerOneRecordAndTakeIt();
+        wc.onUserFunctionSuccess();
+
+        wm.arm(() -> {
+            wm.onPartitionsRevoked(UniLists.of(tp));
+            wm.onPartitionsAssigned(UniLists.of(tp));
+        });
+
+        assertDoesNotThrow(() -> wm.handleFutureResult(wc),
+                "the stale success must be dropped, not applied to the freshly assigned state");
+
+        assertWithMessage("the armed rebalance must actually have fired inside the gap")
+                .that(wm.raceHasFired())
+                .isTrue();
+
+        assertWithMessage("the commit path is gated on dirty, and a bootstrap-phase state can only be dirtied "
+                + "by this tear - with the tear closed, the committer must collect nothing, which is what keeps "
+                + "the bootstrap-reset commit tear (candidate 1) unreachable in production")
+                .that(wm.collectCommitDataForDirtyPartitions())
+                .isEmpty();
     }
 
     /**

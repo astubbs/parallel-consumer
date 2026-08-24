@@ -291,8 +291,13 @@ public class PartitionState<K, V> {
      *       the identical answer.</li>
      *   <li><b>On take</b> - {@link #couldBeTakenAsWork}, per container against LIVE state. This is the
      *       authoritative one: nothing stale is ever executed, however it got into a shard.</li>
-     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against live
-     *       state, so a result returning from work that went stale mid-flight is dropped.</li>
+     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against state
+     *       resolved ONCE: the staleness answer and the acting reads share a single lookup, and the
+     *       success action mutates exactly the state object that was validated (two lookups were a torn
+     *       read - a rebalance in the gap meant validating the old state and acting on its replacement).
+     *       The failure path additionally re-validates against the live map immediately before its retry
+     *       re-queue, whose target structures the revoke sweep cleans. A result returning from work that
+     *       went stale mid-flight is dropped.</li>
      * </ol>
      *
      * <b>This checkpoint is knowingly racy, and that is not a defect.</b> The caller

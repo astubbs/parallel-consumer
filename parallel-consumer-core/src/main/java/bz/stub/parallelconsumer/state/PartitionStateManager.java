@@ -310,13 +310,20 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         return getPartitionState(tp).getOffsetHighestSeen();
     }
 
-    public void onSuccess(WorkContainer<K, V> wc) {
-        PartitionState<K, V> partitionState = getPartitionState(wc.getTopicPartition());
+    /**
+     * Applies the completion to the given, ALREADY-RESOLVED state - the caller resolves the state once, checks
+     * staleness against it, and passes the same reference here, so the state a staleness check validated can
+     * never diverge from the state the completion then mutates. Resolving again here was half of the
+     * checkpoint-3 torn read (see {@code WorkManager#handleFutureResult}).
+     */
+    public void onSuccess(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         partitionState.onSuccess(wc.offset());
     }
 
-    public void onFailure(WorkContainer<K, V> wc) {
-        PartitionState<K, V> partitionState = getPartitionState(wc.getTopicPartition());
+    /**
+     * Same single-resolution contract as {@link #onSuccess(WorkContainer, PartitionState)}.
+     */
+    public void onFailure(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         partitionState.onFailure(wc);
     }
 

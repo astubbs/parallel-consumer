@@ -160,14 +160,24 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public void onSuccessResult(WorkContainer<K, V> wc) {
+        onSuccessResult(wc, pm.getPartitionState(wc.getTopicPartition()));
+    }
+
+    private void onSuccessResult(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         log.trace("Work success ({}), removing from processing shard queue", wc);
 
         incrementCounterIfPresent(succeededRecordsCounters, wc.getTopicPartition());
 
         wc.endFlight();
 
-        // update as we go
-        pm.onSuccess(wc);
+        // update as we go - against the SAME state object the staleness checkpoint validated, never a second
+        // lookup. If a rebalance revoked the partition since that validation, this mutates an object already
+        // unlinked from the live map: invisible to the commit path, and the record is redelivered to the
+        // partition's next owner (at-least-once). A second lookup here instead dirties the freshly assigned
+        // state with a dead epoch's completion - which is the one production route into the bootstrap-reset
+        // commit tear (the torn-read family's candidates 3 and 1; both interleavings are pinned in
+        // WorkManagerStaleCheckDoubleLookupTest).
+        pm.onSuccess(wc, partitionState);
         sm.onSuccess(wc);
 
         // notify listeners
@@ -186,11 +196,26 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public void onFailureResult(WorkContainer<K, V> wc) {
+        onFailureResult(wc, pm.getPartitionState(wc.getTopicPartition()));
+    }
+
+    private void onFailureResult(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         // error occurred, put it back in the queue if it can be retried
         incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
         wc.endFlight();
-        pm.onFailure(wc);
-        sm.onFailure(wc);
+        pm.onFailure(wc, partitionState);
+        // Re-validate against the LIVE map immediately before the retry re-queue - the staleness checkpoint's
+        // answer cannot carry this decision, because a rebalance can complete between there and here. The
+        // revoke sweep cleans the retry queue only through shard contents, so a stale add landing after the
+        // sweep is permanent: nothing can ever remove the entry, and once its retry delay elapses it reads as
+        // ready-to-retry forever - phantom waiting work that gates the broker poller (a confluentinc#857-family
+        // stall; the count mechanism is traced in docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md).
+        // Skipping the re-queue is the safe direction: the partition's next owner redelivers the record.
+        if (checkIfWorkIsStale(wc)) {
+            log.debug("Not re-queueing failed work for retry - its partition was revoked mid-flight, so the retry belongs to the partition's next owner. {}", wc);
+        } else {
+            sm.onFailure(wc);
+        }
         numberRecordsOutForProcessing--;
     }
 
@@ -222,6 +247,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     public boolean checkIfWorkIsStale(WorkContainer<K, V> workContainer) {
         return pm.getPartitionState(workContainer).checkIfWorkIsStale(workContainer);
+    }
+
+    /**
+     * As {@link #checkIfWorkIsStale(WorkContainer)}, but against a state the caller has ALREADY resolved - so
+     * the caller can go on to act against the exact state object the answer was computed from. Checkpoint 3
+     * ({@link #handleFutureResult}) depends on that: an answer computed on one lookup with actions running on
+     * another is a torn read whenever a rebalance swaps the map entry in between.
+     */
+    protected boolean checkIfWorkIsStale(PartitionState<K, V> partitionState, WorkContainer<K, V> workContainer) {
+        return partitionState.checkIfWorkIsStale(workContainer);
     }
 
     public boolean shouldThrottle() {
@@ -281,7 +316,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // Third of the three staleness checkpoints - see PartitionState#epochIsStale for the scheme.
         // Work that went stale mid-flight never reaches onSuccessResult/onFailureResult, which is what
         // stops a returning stale result removing a FRESH container that replaced it at the same offset.
-        if (checkIfWorkIsStale(wc)) {
+        //
+        // The partition state is resolved ONCE, and the check and the actions share that reference. Two
+        // separate lookups here used to be a torn read: a rebalance (broker-poll thread - nothing
+        // serialises it against this one, the lock went in confluentinc#219) completing in the gap meant
+        // the check validated the OLD state while the actions ran against its replacement. Since no epoch
+        // check here can ever be atomic with the actions, the actions are instead made safe by
+        // construction: the success path mutates only the validated state object, and the failure path
+        // re-validates against the live map at its re-queue decision (see onFailureResult).
+        var partitionState = pm.getPartitionState(wc.getTopicPartition());
+        if (checkIfWorkIsStale(partitionState, wc)) {
             // no op, partition has been revoked
             log.debug("Work result received, but from an old generation. Dropping work from revoked partition {}", wc);
             wc.endFlight();
@@ -290,9 +334,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             Optional<Boolean> userFunctionSucceeded = wc.getMaybeUserFunctionSucceeded();
             if (userFunctionSucceeded.isPresent()) {
                 if (TRUE.equals(userFunctionSucceeded.get())) {
-                    onSuccessResult(wc);
+                    onSuccessResult(wc, partitionState);
                 } else {
-                    onFailureResult(wc);
+                    onFailureResult(wc, partitionState);
                 }
             } else {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");
