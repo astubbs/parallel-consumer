@@ -1,7 +1,28 @@
 # Auto-scaling - self-discovered concurrency, and instance-count recommendation
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: deferred - after v6, direction not yet chosen -->
+<!-- inflight-impact: throughput -->
+
+> **Status, 2026-08-24: dimension one is no longer deferred and its direction is chosen.** The
+> per-instance controller is built and landed opt-in and off by default on astubbs#333 - admission
+> is the control variable rather than the pool, the control-law math is a native port of Gradient2
+> with attribution, and it runs against a real broker across a rebalance. The state tag that used to
+> sit here said *deferred - after v6, direction not yet chosen*, and both halves of that had become
+> false.
+>
+> **Dimension two remains deferred and genuinely direction-unchosen** - see the staging below, which
+> still stands as written for the instance-count half.
+>
+> What dimension one still owes is tracked, item by item, in
+> [`pr-333-adaptive-concurrency-outstanding.md`](pr-333-adaptive-concurrency-outstanding.md); the
+> capabilities it should grow next are in
+> [`core-adaptive-concurrency-future-modes.md`](core-adaptive-concurrency-future-modes.md). The
+> headline debt is that the control law has **no fixed point below the ceiling**: its reference is
+> relative with no anchor, so on any workload that degrades gracefully the target walks upward
+> indefinitely. That is the difficulty the owner reports having hit repeatedly when first attempting
+> this, years before this attempt - it is the hard part of the problem domain, not a defect
+> introduced here, and it is why measuring throughput (which the controller currently never does) is
+> the next move rather than a refinement.
 
 
 The ask is astubbs#227 (mirror of confluentinc#21): stop making users pick `maxConcurrency` -
