@@ -61,3 +61,32 @@ PR. Each stacked PR body carries `depends on astubbs/parallel-consumer#N`, one l
 The residue after the astubbs#293 chain lands is still tens of thousands of lines spanning engine
 correctness, engine features, and measurement - one review could not hold it, and the claim fix in
 particular needed a review where the reviewer looks at nothing else.
+
+## Extractions beyond the stack - surveyed 2026-08-24
+
+Independent fixes of SHIPPED defects, buried in this branch and cuttable from master the way
+astubbs#335 was:
+
+- **`fa4d1cf25` - the broker-poller load gate drifts.** `availableWorkContainerCnt` has two
+  conditional decrements whose conditions do not match the increment's, both single-threaded:
+  revoking a record parked in retry back-off leaves its increment behind permanently (the
+  clamp-to-zero only catches the low side), and the stale sweeps deduct already-deducted records.
+  It feeds `isSufficientlyLoaded()`, so it mis-gates intake rather than misreporting. The fix
+  derives the gate by conservation (`RecordPopulation`, admitted - retired) and carries a test that
+  fails on the old code. Predates dp/vt, so it cuts clean.
+- **`bce044b3f` (astubbs#155) - the load-factor ceiling warning** shouts, and warns about a pinned
+  buffer. Small and fully independent.
+
+Master-relevant records that should not wait for the stack: the PARTITION-starves-on-a-narrow-
+buffer bug note (a shipped-mode defect sighting), the shutdown-commit flake sighting astubbs#260
+did not cover (`0211c81a5`), and the `docs/inflight/AGENTS.md` relocate-before-delete rule.
+
+Ruled out after checking: astubbs#329 already carries its solutions doc; the
+`treeMapOrderingCorrect` clock fix is caused by the residence commit and stays with the engine PR;
+master's STRATEGY.md carries no falsified Share Groups claim, so the rewrite rides with the bench
+PR; the JDK-21 flake record rides with virtual threads (astubbs#190).
+
+Debt the residue owes before merging, found by the pre-commit gate on this branch: copyright
+headers (including the restored 2021 `Demo.java` still claiming Confluent copyright), unqualified
+issue refs, dead file citations in dated plans (repair per `docs/citations.md`, not rewrites),
+legacy inflight tags, one quarantine-registry drift. Each stack PR pays its own share.
