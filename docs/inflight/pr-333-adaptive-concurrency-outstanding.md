@@ -17,29 +17,58 @@ Its sibling `AdaptiveConcurrencyClosedLoopIT` closes the next gap - a handler wh
 function of the concurrency the controller chose, so the loop is actually closed - and that is where
 item 2 below came from.
 
-## Status, 2026-08-24: items 0 to 3 are now planned, and the plans own the detail
+## Status, 2026-08-24: items 0 to 3 are answered by one design, and the split that preceded it was wrong
 
-Four of these have moved from *open question* to *planned work*, and the plans below are now the
-authority on how - what is kept here is why each item exists and what it costs, which the plans
-assume rather than restate.
+[`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md)
+is the authority on how. What is kept here is why each item exists and what it costs, which that
+design assumes rather than restates. The two plans it replaces are left in place as the record of
+how the argument got here:
+[`...-001-feat-admission-ratchet-plan.md`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md)
+(superseded - its premise is contradicted) and
+[`...-002-feat-admission-optimisation-objective-plan.md`](../plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md)
+(absorbed - its settled design survives, its cost estimate did not).
 
-- **Items 1, 2 and 3** - the probe cycling, the ratchet, and the missing starvation report - are
-  [`docs/plans/2026-08-24-001-feat-admission-ratchet-plan.md`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md),
-  which is implementation-ready. It carries no new operator parameter.
-- **Item 0** - what the controller optimises - is
-  [`docs/plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md`](../plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md),
-  deliberately **requirements-only**. Its design is settled (elasticity against a threshold, `r=3`,
-  power from throughput and in-flight rather than latency, a latency number as a ceiling and never a
-  target); it carries seventeen questions that must be answered before it can be planned, and it is
-  gated on item 4.
+**The split was the finding, and then it was the mistake.** The ratchet fix and the objective were
+planned as one change; a five-reviewer pass returned forty-seven findings and four reviewers
+independently reached the same restructuring, so they were split on the argument that *an objective
+is what makes the controller useful; it is not what stops it climbing*. External prior art
+contradicts that directly. **Uber Cinnamon hit this exact bug in production and fixed it by adding a
+throughput-covariance veto - an absolute objective - not by patching the baseline.**
+Netflix/concurrency-limits#137 and envoyproxy/envoy#38338 are the same failure, both still open,
+because a ratio cannot detect a steadily-bad absolute level. The ratchet is not a defect in how the
+baseline is maintained; it is the defining behaviour of a purely relative objective.
 
-**The split is itself a finding worth keeping.** The two were planned as one change. A five-reviewer
-pass returned forty-seven findings, and the shape did not survive: the objective arm had nowhere to
-sit among the law's six existing arms, and its proof passed when the controller never acted. Four
-reviewers independently reached the same restructuring - which the draft had already conceded in its
-own problem frame, that the ratchet is killed by excluding starved samples and by making the baseline
-falsifiable, both orthogonal to the objective. **An objective is what makes the controller useful; it
-is not what stops it climbing.**
+The ratchet-only plan then collected four P0s of its own, all of the same shape: it kept the relative
+objective and tried to fix the ratchet by deleting arms, which removed the accelerator and the
+anti-strand probe without naming what would do their jobs.
+
+**One correction to item 0 below, found while re-grounding the design:** throughput is *already*
+measured. `ClosedAdmissionWindow#totalOutcomeCount()` counts completions per window, so the
+objective's headline cost is one division, not the new signal item 0 prices it as. It needs the
+window's *actual* elapsed time rather than its nominal one second, because windows drift.
+
+## -1. The default ceiling exceeds the worker pool, so the loop is open above sixteen slots
+
+Found while mapping the plant, and it is the most concrete defect here. The worker pool is built once
+at construction from `maxConcurrency` - `core == max`, unbounded queue - and nothing ever resizes it.
+So the admission target does not control concurrency; it controls *feeding*. Above the pool size,
+extra admitted records sit in the executor queue.
+
+`AdmissionController` then resolves `enforceCeiling` to `ADAPTIVE_DEFAULT_CEILING` (64) when
+`maxConcurrency` is left at its library default (16) under `ENFORCE`. **The ceiling is four times the
+pool.** Above sixteen slots: raising the target adds queue depth, not concurrency; the service-time
+tap brackets only the user function so queue wait is excluded; measured latency therefore does not
+degrade; and the additive headroom wins another slot every window, forever. An open loop and a second
+ratchet generator, independent of the baseline contamination in item 2.
+
+`AdaptiveConcurrencyClosedLoopIT` cannot see it - it sets `maxConcurrency` to 32, keeping the target
+under the pool size, where the loop genuinely is closed.
+
+The first review round flagged this as *the effective maximum collides with pool sizing*; the plan
+carried a fix and the implementation took the ceiling substitution without the pool resize. It is
+prerequisite to any law work - tuning a controller whose actuator is disconnected above its own
+default measures nothing. Options are in the design's plant section; it interacts with item 5, since
+under virtual threads the pool is unbounded and the target is already the only bound.
 
 ## 0. What is the controller actually optimising? (unanswered, and it is upstream of the ratchet)
 

@@ -11,6 +11,16 @@ execution: code
 
 # Kill the Admission Ratchet - Plan
 
+> **SUPERSEDED, 2026-08-24, by
+> [`2026-08-24-003-feat-admission-control-law-design.md`](2026-08-24-003-feat-admission-control-law-design.md).
+> Do not implement this.** Its premise - that the ratchet can be killed while keeping a relative
+> objective - is contradicted by prior art: Uber Cinnamon fixed this exact drift with a
+> throughput-covariance veto rather than a baseline patch, and Netflix/concurrency-limits#137 and
+> envoyproxy/envoy#38338 are the same failure, both still open, because a ratio cannot detect a steadily-bad
+> absolute level. Its own review returned four P0s of the same shape, deleting the accelerator and the
+> anti-strand probe without naming what would do their jobs. Kept as the record of how the argument
+> got to the design that replaced it.
+
 ## Goal Capsule
 
 - **Objective:** Stop the admission target climbing forever on workloads that degrade gracefully. Two mechanisms do that: exclude samples taken while the engine was starved of work, and make the latency baseline falsifiable instead of self-referential. Report ordering starvation while we are in that machinery.

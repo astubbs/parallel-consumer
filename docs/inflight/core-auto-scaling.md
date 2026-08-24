@@ -23,22 +23,22 @@
 > this, years before this attempt - it is the hard part of the problem domain, not a defect
 > introduced here.
 >
-> **Two plans now carry dimension one's remaining work, deliberately split** (2026-08-24). They were
-> drafted as one change and the shape did not survive review, because stopping the climb and knowing
-> where to stop are separable problems:
+> **Dimension one's remaining work is one design** (2026-08-24):
+> [`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md),
+> requirements-only. It states what makes the target rise, fall and hold, and derives the mechanism
+> from that rather than patching the arms inherited from the Gradient2 port. It steers on throughput
+> and deletes the learned latency baseline outright.
 >
-> - [`docs/plans/2026-08-24-001-feat-admission-ratchet-plan.md`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md)
->   - **implementation-ready.** Kills the ratchet by excluding samples taken while the engine was
->     starved rather than saturated, and by making the latency baseline falsifiable instead of
->     self-referential. Reports ordering starvation on the way. Adds no operator-facing parameter.
-> - [`docs/plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md`](../plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md)
->   - **requirements-only on purpose.** Answers *what is the controller optimising* - elasticity
->     against a threshold, with a latency number as a ceiling and never a target - but carries
->     seventeen unresolved questions and is gated on the measurement nobody has taken yet, whether
->     the controller helps at all.
->
-> The order matters and is the finding worth carrying: **an objective is what makes the controller
-> useful; it is not what stops it climbing.**
+> It replaces a two-plan split
+> ([`...-001`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md) superseded,
+> [`...-002`](../plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md) absorbed) made on
+> the argument that *an objective is what makes the controller useful; it is not what stops it
+> climbing*. **That argument is contradicted by prior art, and the correction is the finding worth
+> carrying:** Uber Cinnamon hit this exact drift in production and fixed it with a throughput-covariance
+> veto - an absolute objective - not a baseline patch; Netflix/concurrency-limits#137 and envoyproxy/envoy#38338
+> are the same failure and both remain open. A ratio cannot detect a steadily-bad absolute level, so
+> the ratchet is not a defect in how the baseline is maintained. It is what a purely relative objective
+> does.
 
 
 The ask is astubbs#227 (mirror of confluentinc#21): stop making users pick `maxConcurrency` -

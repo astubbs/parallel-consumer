@@ -11,6 +11,17 @@ execution: code
 
 # An Optimisation Objective for Admission - Plan
 
+> **ABSORBED, 2026-08-24, into
+> [`2026-08-24-003-feat-admission-control-law-design.md`](2026-08-24-003-feat-admission-control-law-design.md).**
+> Its settled design survives whole - elasticity against a threshold, `r=3`, power from throughput and
+> in-flight rather than latency, a latency number as a ceiling and never a target. Two things did not.
+> **The gating was wrong**: the objective is not a later refinement on top of a ratchet fix, it is what
+> makes the ratchet fixable at all. **The cost was wrong**: `ClosedAdmissionWindow#totalOutcomeCount()`
+> already counts completions per window, so throughput is one division away, not a new signal. Ten of
+> the seventeen blockers below are properties of the dither estimator, which the replacement does not
+> use - Uber's covariance test reads the controller's natural movement history instead. Blockers 2, 7,
+> 8 and 15-17 survive and are carried forward.
+
 ## Goal Capsule
 
 - **Objective:** Give the admission controller something to optimise *for*, so it settles at a defensible operating point rather than merely stopping somewhere. Today its objective is relative - keep latency near its own average - which means it can never say *that latency increase was not worth it*, because it never measures throughput at all.
