@@ -92,14 +92,17 @@
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
              -Dincluded.groups=performance    (run only performance tests)
              -Dincluded.groups=chaos          (run only the Chaos Pain Suite - see integrationTests.chaostests)
+             -Dincluded.groups=lincheck       (run only the Lincheck lane - use bin/lincheck-test.sh, which
+                                               also activates -Plincheck for the JVM args it needs)
              -Dexcluded.groups=               (run everything incl. performance, chaos + quarantined)
              -Dexcluded.groups=transactions,performance,chaos  (skip multiple groups)
              NB overrides REPLACE the default list - include performance, chaos AND quarantined when
              excluding. `quarantined` = known-failing-on-master tests (see @Quarantined): out of the
              gating suites so green means mergeable, but still run by the non-gating CI lane
-             (bin/quarantined-test.sh). -->
+             (bin/quarantined-test.sh). `lincheck` = scheduler-controlled concurrency tests: minutes per
+             class, and a model-checking run needs the -Plincheck JVM args, so it is opt-in like chaos. -->
         <included.groups></included.groups>
-        <excluded.groups>performance,chaos,quarantined</excluded.groups>
+        <excluded.groups>performance,chaos,quarantined,lincheck</excluded.groups>
 
         <!-- version numbers -->
         <!-- plugins -->
@@ -125,6 +128,21 @@
              them) and single-threaded, unlike JUnit thread parallelism (`parallel-tests`) which contends on
              static state. Forks are reused to amortise JVM startup. -->
         <surefire.forkCount>1</surefire.forkCount>
+
+        <!-- Fallback so core's surefire <argLine>@{argLine} ...</argLine> still resolves when JaCoCo has not
+             set it (-Djacoco.skip=true, or any profile that drops prepare-agent). Late-replacement of an
+             undefined property is passed to the JVM verbatim and the fork dies before running a test. -->
+        <argLine></argLine>
+
+        <!-- JDK internals Lincheck's model-checking strategy must reach to snapshot and restore object graphs
+             between invocations. Empty by default and switched on per-run, because these are a blunt
+             instrument: applied to the whole module they weaken the isolation for EVERY test in it, not just
+             the Lincheck ones. Blank here, filled by the `lincheck` profile.
+             Without them the model checker dies on the first object it cannot read -
+             InaccessibleObjectException: module java.base does not "opens java.util" - while the STRESS
+             strategy needs none of it. Measured on JDK 17.0.18-tem;
+             docs/plans/2026-08-25-001-test-lincheck-poc-plan.md carries the reasoning and the CI cost. -->
+        <lincheck.jvm.args></lincheck.jvm.args>
 
         <!-- tests deps-->
         <junit.version>5.14.4</junit.version>
@@ -291,6 +309,24 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+
+        <!-- Lincheck lane: scheduler-controlled concurrency testing over the state classes. Non-gating and
+             opt-in, the same shape as the chaos suite - the `lincheck` tag sits in ${excluded.groups} by
+             default, so `-Plincheck` alone selects nothing and `bin/lincheck-test.sh` is the supported entry
+             point (it sets the group filters too).
+
+             All this profile does is fill ${lincheck.jvm.args}. They stay OUT of the default build because
+             an add-opens grant weakens module isolation for every test in the fork, not only the Lincheck
+             ones, and a permanent blanket grant is how a real encapsulation failure elsewhere stops being
+             visible.
+             The STRESS strategy needs none of these; the model checker needs all of them, because it walks
+             and restores the object graph of the class under test between invocations. -->
+        <profile>
+            <id>lincheck</id>
+            <properties>
+                <lincheck.jvm.args>--add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.invoke=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.util.concurrent=ALL-UNNAMED --add-opens java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens java.base/java.util.concurrent.locks=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/java.time=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-exports java.base/jdk.internal.util=ALL-UNNAMED --add-exports java.base/sun.security.action=ALL-UNNAMED</lincheck.jvm.args>
+            </properties>
         </profile>
     </profiles>
 
