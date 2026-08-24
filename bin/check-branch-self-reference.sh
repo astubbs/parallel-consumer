@@ -120,12 +120,15 @@ strip_spans() { sed 's/`[^`]*`/ /g' "$1"; }
 # UNTRACKED FILES COUNT. `git ls-files` alone reads the index, so a note you just wrote about your own
 # branch - the single commonest way to trip this gate - was invisible until you staged it, and the
 # local run this header advertises reported green on the exact case it exists for.
-# `mapfile` is bash 4; macOS ships bash 3.2, where this line died with "mapfile: command not found"
-# and the script still exited 0 - a local run that reported success having checked nothing, which is
-# the exact failure this gate exists to prevent, one level up. Read the lines portably instead.
+#
+# NO `mapfile`. It is bash 4; macOS ships bash 3.2, where the line died with "mapfile: command not
+# found" and the script still exited 0 - a local run reporting success having checked nothing, which
+# is the exact failure this gate exists to prevent, one level up. The read loop below is the same
+# portable idiom bin/check-inflight-tags.sh and bin/check-copyright-headers.sh already use.
 candidates=()
-while IFS= read -r _line; do
-    [ -n "$_line" ] && candidates+=("$_line")
+while IFS= read -r doc; do
+    [ -n "$doc" ] || continue
+    candidates+=("$doc")
 done < <(
     {
         git ls-files -- 'docs/inflight/*.md' || true

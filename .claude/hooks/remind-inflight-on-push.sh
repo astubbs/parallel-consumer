@@ -75,22 +75,24 @@ cd "$root" 2>/dev/null || exit 0
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || exit 0
 
-# PORTABLE MTIME. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and this returned nothing while
-# still exiting 0, so every caller silently read "no mtime". Branch on the platform rather than
-# falling back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the filesystem,
-# so a blind `-c || -f` fallback would hand back a wrong answer instead of no answer.
-if stat -c %Y . >/dev/null 2>&1; then
-    _mtime() { stat -c %Y "$1" 2>/dev/null; }      # GNU coreutils
-else
-    _mtime() { stat -f %m "$1" 2>/dev/null; }      # BSD / macOS
-fi
-
 # THROTTLE. Same branch, same hour, one reminder.
 stamp="${TMPDIR:-/tmp}/pc-push-reminder-$(printf '%s' "$branch" | tr '/' '_')"
 if [ -f "$stamp" ]; then
-    last="$(_mtime "$stamp")"; last="${last:-0}"
+    # PORTABLE MTIME, read where it is used - on a branch's first push there is no stamp and this
+    # never runs. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and returned nothing while still
+    # exiting 0, so the throttle silently read "no mtime". Probe the platform rather than falling
+    # back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the FILESYSTEM, so a
+    # blind `-c || -f` would hand back a wrong answer instead of no answer.
+    if stat -c %Y . >/dev/null 2>&1; then
+        last="$(stat -c %Y "$stamp" 2>/dev/null)"   # GNU coreutils
+    else
+        last="$(stat -f %m "$stamp" 2>/dev/null)"   # BSD / macOS
+    fi
+    # An unreadable stamp reminds rather than staying silent - the safe direction for a reminder,
+    # where the guards in check-merge-outstanding-work.sh and bin/check-pr-ready.sh must instead
+    # assume live work. Reminding twice costs a paragraph; skipping loses the only prompt there is.
     now="$(date +%s)"
-    [ $(( now - last )) -lt "${INFLIGHT_PUSH_REMINDER_SECONDS:-3600}" ] && exit 0
+    [ $(( now - ${last:-0} )) -lt "${INFLIGHT_PUSH_REMINDER_SECONDS:-3600}" ] && exit 0
 fi
 
 pr_num="$(gh pr list --head "$branch" --json number --jq '.[0].number' 2>/dev/null || true)"

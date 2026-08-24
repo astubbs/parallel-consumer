@@ -76,7 +76,7 @@ fi
 
 # BACKGROUND WORK IN THIS SESSION, the same window check-merge-outstanding-work.sh uses.
 if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
-# PORTABLE MTIME. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and this returned nothing while
+    # PORTABLE MTIME. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and this returned nothing while
     # still exiting 0, so every caller silently read "no mtime". Branch on the platform rather than
     # falling back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the filesystem,
     # so a blind `-c || -f` fallback would hand back a wrong answer instead of no answer.
