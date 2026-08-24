@@ -422,7 +422,13 @@ Stated as obligations rather than as code, because this is where the previous pl
 
 ## Sequencing, and what the benchmark actually gates
 
-**Order: fix the actuator, rewrite the law, measure, then claim.**
+**Order: fix the actuator, rewrite the law, measure, then claim - and the road ends at on-by-default.**
+
+The adoption path is decided (owner, 2026-08-24): **the feature graduates to on-by-default when it
+has proven itself** - proof meaning the benchmark result plus real use, the same ladder that reserves
+the roadmap's `implemented` for work proven in use. Opt-in is a stage, not the destination; every
+step below exists to earn that graduation, which is why the falsifiers and the comparison test carry
+the weight they do.
 
 1. **The actuator fix comes first** - `maxConcurrency` must bound the pool and the ceiling together.
    Tuning a control law whose actuator is disconnected above its own default measures nothing. This

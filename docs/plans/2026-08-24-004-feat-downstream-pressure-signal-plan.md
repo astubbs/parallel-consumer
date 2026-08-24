@@ -91,7 +91,7 @@ the classifier SPI below gives existing code the behaviour with no discovery req
   downstream call must not cost 100 tokens: reserve on dispatch, settle actual cost on completion.
 - **One SPI, three number-owners.** Partition-share, downstream-reported and configured limits are
   implementations of a single interface (idea 5), not competing features. A `Supplier<Rate>` style
-  live limit was folded into the same interface (rejection #4).
+  live limit was folded into the same interface (rejection 4 of its table).
 
 ### A pressure signal is retried like a failure but never counted as one
 
@@ -204,7 +204,7 @@ backends (idea 1 and idea 5's extension artifacts).
 ## Sources
 
 - [`docs/ideation/2026-08-17-distributed-throttling-ideation.html`](../ideation/2026-08-17-distributed-throttling-ideation.html) -
-  ideas 4, 5 and 8, and rejections #3 and #4. **Read before re-opening anything here.**
+  ideas 4, 5 and 8, and rejections 3 and 4 of its table. **Read before re-opening anything here.**
 - [`docs/inflight/core-distributed-throttling.md`](../inflight/core-distributed-throttling.md) - owns
   the strategy-menu shape. astubbs#228 (mirror of confluentinc#24), confluentinc#766 as demand evidence.
 - [`docs/inflight/core-auto-scaling.md`](../inflight/core-auto-scaling.md) - the umbrella note, and the
