@@ -522,7 +522,10 @@ public class PartitionState<K, V> {
      * encodings are possible ({@link NoEncodingPossibleException}. Encoding may not be possible of - see
      * {@link OffsetMapCodecManager#makeOffsetMetadataPayload}.
      *
-     * @return if possible, the String encoded offset map
+     * @return the encoded offset map if one was possible, paired with the offset it was encoded
+     *         against. The two travel together deliberately: committing the payload against a
+     *         later offset than the one it describes is the confluentinc#893 defect, so the caller
+     *         must never re-derive the offset.
      */
     private ParallelConsumer.Tuple<Optional<String>, Long> tryToEncodeOffsets() {
         long offsetOfNextExpectedMessage = getOffsetToCommit();
