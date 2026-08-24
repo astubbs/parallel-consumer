@@ -80,19 +80,22 @@ stamp="${TMPDIR:-/tmp}/pc-push-reminder-$(printf '%s' "$branch" | tr '/' '_')"
 if [ -f "$stamp" ]; then
     # PORTABLE MTIME, read where it is used - on a branch's first push there is no stamp and this
     # never runs. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and returned nothing while still
-    # exiting 0, so the throttle silently read "no mtime". Probe the platform rather than falling
-    # back: on Linux `stat -f` is --file-system and SUCCEEDS with a number about the FILESYSTEM, so a
-    # blind `-c || -f` would hand back a wrong answer instead of no answer.
+    # exiting 0, so the throttle silently read "no mtime". PROBE the platform once rather than
+    # falling back arm to arm: on GNU, `stat -f %m FILE` exits 1 while PRINTING filesystem prose to
+    # stdout, so a blind `-c || -f` returns a string, not a number.
     if stat -c %Y . >/dev/null 2>&1; then
         last="$(stat -c %Y "$stamp" 2>/dev/null)"   # GNU coreutils
     else
         last="$(stat -f %m "$stamp" 2>/dev/null)"   # BSD / macOS
     fi
-    # An unreadable stamp reminds rather than staying silent - the safe direction for a reminder,
-    # where the guards in check-merge-outstanding-work.sh and bin/check-pr-ready.sh must instead
-    # assume live work. Reminding twice costs a paragraph; skipping loses the only prompt there is.
+    # ANYTHING THAT IS NOT A TIMESTAMP MEANS REMIND, not stay silent - the safe direction for a
+    # reminder, where the guards in check-merge-outstanding-work.sh and bin/check-pr-ready.sh must
+    # instead assume live work. Reminding twice costs a paragraph; skipping loses the only prompt
+    # there is. Testing the shape and not just emptiness matters for the same reason it does there:
+    # `$(( now - last ))` on prose evaluates it as an expression and `set -u` would abort the hook.
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
     now="$(date +%s)"
-    [ $(( now - ${last:-0} )) -lt "${INFLIGHT_PUSH_REMINDER_SECONDS:-3600}" ] && exit 0
+    [ $(( now - last )) -lt "${INFLIGHT_PUSH_REMINDER_SECONDS:-3600}" ] && exit 0
 fi
 
 pr_num="$(gh pr list --head "$branch" --json number --jq '.[0].number' 2>/dev/null || true)"
