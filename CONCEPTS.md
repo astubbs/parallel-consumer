@@ -39,6 +39,13 @@ opt-in adaptive mode hands it to a controller that moves it from measurement ins
 thread count: threads are capacity, admission is the throttle, so the same mechanism governs the
 thread-pool and async engines alike.
 
+**Control law**
+The decision function of the adaptive controller: the rule that maps one measurement window's
+readings to the next admission target — grow, hold, or shrink, and by how much. Borrowed from
+control theory. Everything else in the adaptive machinery — windows, estimators, probes, gauges —
+either feeds the law or obeys its decision; the law is the part that decides. Swapping the law
+changes the controller's behaviour without changing what is measured or how the target is enforced.
+
 **Binding constraint**
 Which of the several things that could limit the admission target actually did, for the most recent
 measurement window — the cap, the floor, an overload signal, a failure rate, or the application
