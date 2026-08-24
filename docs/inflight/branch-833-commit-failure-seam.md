@@ -3,10 +3,14 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 
-Requirements-only plan for the commit-failure seam -
-`docs/plans/2026-08-24-001-feat-commit-failure-seam-plan.md`. The feature: a commit-failure handler
+Implementation-ready plan for the commit-failure seam -
+`docs/plans/2026-08-24-001-feat-commit-failure-seam-plan.md` (enriched in place from the
+requirements-only version by the planning pass on 2026-08-24). The feature: a commit-failure handler
 returning SHUT_DOWN (default) or CONTINUE when a retriable commit failure exhausts its budget
-(astubbs#317; the request is embedded in upstream confluentinc#833). No PR yet. The feature's
+(astubbs#317; the request is embedded in upstream confluentinc#833). No PR yet. Planning's one
+user-directed scope change: the async consumer commit mode (the shipped default) is excluded this
+delivery with a named follow-up owed at landing - it has no budget, no exhaustion event, and marks
+offsets clean before the broker answers. The feature's
 rationale and research record is `docs/inflight/core-commit-failure-seam.md`; the adjacent open
 budget-default question is `docs/inflight/bug-offset-commit-timeout-does-two-jobs.md`.
 
