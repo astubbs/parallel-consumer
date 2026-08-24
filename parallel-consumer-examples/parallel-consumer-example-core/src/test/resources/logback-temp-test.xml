@@ -18,7 +18,6 @@
 
     <logger name="bz.stub.parallelconsumer" level="debug"/>
 
-
     <!-- containers -->
     <logger name="bz.stub.parallelconsumer.integrationTests.DbTest" level="debug"/>
     <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="debug"/>

@@ -5,8 +5,8 @@
 
 ## Context
 
-The W4 revoke-under-work scenario (PR #85) is calibrated artifact-free but its target - a true,
-unbounded **Class 2 protocol-invisible stall** (the "#857 locks forever" family) - did not reproduce
+The W4 revoke-under-work scenario (PR astubbs#85) is calibrated artifact-free but its target - a true,
+unbounded **Class 2 protocol-invisible stall** (the "confluentinc#857 locks forever" family) - did not reproduce
 on master under the EAGER assignor: 9 seeds, 0 hits. The rostered next lever is the
 **cooperative-sticky variant**, which changes the physics twice over:
 
@@ -15,7 +15,7 @@ on master under the EAGER assignor: 9 seeds, 0 hits. The rostered next lever is 
    produced the false-positive class we root-caused. Under cooperative-sticky, unaffected partitions
    keep processing through rebalances; the legit lag-stagnation window shrinks to a single dwell +
    slack, giving the Class 2 probe far more headroom.
-2. **It raises exposure to the actual quarry.** Exploration confirmed the #857 commit-during-revoke
+2. **It raises exposure to the actual quarry.** Exploration confirmed the confluentinc#857 commit-during-revoke
    deadlock (`synchronized(commitCommand)` between `onPartitionsRevoked` and
    `commitOffsetsThatAreReady`) fires per-revoke - and cooperative mode produces *more frequent,
    smaller* revokes. More revokes under in-flight work = more draws at the probabilistic stall.
@@ -30,7 +30,7 @@ scaffolding with zero users, and no docs claim cooperative support. This variant
 Class 2 trigger attempt AND the codebase's first-ever cooperative-mode end-to-end exercise.
 
 **Branch:** new `feats/chaos-w4-cooperative` off `feats/chaos-w4-revoke-under-work` (stacked on
-PR #85 → #83; PR body carries `depends on #85`). New worktree `.claude/worktrees/chaos-w4-coop`.
+PR astubbs#85 → astubbs#83; PR body carries `depends on #85`). New worktree `.claude/worktrees/chaos-w4-coop`.
 
 ## Requirements Trace
 
@@ -46,7 +46,7 @@ PR #85 → #83; PR body carries `depends on #85`). New worktree `.claude/worktre
 ## Scope Boundaries
 
 - NOT fixing any cooperative-mode product bug found - document + roster (the suite is a detector;
-  fixes belong to the #857/#29 stream). Main-source changes are out of scope entirely.
+  fixes belong to the confluentinc#857/#29 stream). Main-source changes are out of scope entirely.
 - NOT re-tuning the eager W4 constants or any ProgressProbe bound in this pass (unless a measured
   false positive forces it, with the arithmetic documented as before).
 - NOT adding cooperative variants of W1 (rosterable later if this one earns it).
@@ -54,9 +54,13 @@ PR #85 → #83; PR body carries `depends on #85`). New worktree `.claude/worktre
 
 ## Context & Research (session-verified)
 
-- `ManagedPCInstance.java:112-115,248` - `useCooperativeAssignor` wires `CooperativeStickyAssignor`
-  into consumer props; zero current users.
-- `ChaosRevokeUnderWorkIT` (PR #85) - the two-phase driver to extract: storm (60s, no-drain weights
+- `ManagedPCInstance.java` (grep `useCooperativeAssignor`) - it wires `CooperativeStickyAssignor`
+  into consumer props; zero current users. (Point-in-time, and this plan is what changed it: the
+  variant proposed below landed in `192d32bc`, so a grep at HEAD now returns its callers in
+  `AbstractRevokeUnderWorkScenario`, `ChaosRevokeUnderWorkIT` and `ChaosRevokeUnderWorkCooperativeIT`.
+  For the tree this claim describes, search before that commit - `git grep useCooperativeAssignor
+  192d32bc^` - which finds only the flag's declaration and wiring, and no callers.)
+- `ChaosRevokeUnderWorkIT` (PR astubbs#85) - the two-phase driver to extract: storm (60s, no-drain weights
   `ChaosConductor.defaultW4Weights()`, sync commits, heavy 1-in-2000 @ 20s non-interruptible, ticks
   300-1000ms, fleet 10-14, 250k backlog, `max.poll.interval.ms=30s` via `extraConsumerProps`) then
   quiet observation (probe `disableRebalanceDwellViolation()` + `withNoProgressWindow(60s)`,
@@ -114,7 +118,7 @@ PR #85 → #83; PR body carries `depends on #85`). New worktree `.claude/worktre
 - [x] **Unit 1: extract the shared driver (no behavior change)** - DONE; same-seed eager re-run in family (dwell 28.1s, stag 101s)
 
 **Files:**
-- Create: `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/AbstractRevokeUnderWorkScenario.java`
+- Create: `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/AbstractRevokeUnderWorkScenario.java`
 - Modify: `.../chaostests/ChaosRevokeUnderWorkIT.java` (becomes thin eager subclass; javadoc + calibration record stay here)
 
 **Approach:** mechanical extraction of the two-phase driver; knobs = `useCooperativeAssignor()`
@@ -131,7 +135,7 @@ peak ~30s band, stagnation under 150s).
 - Create: `.../chaostests/ChaosRevokeUnderWorkCooperativeIT.java`
 
 **Approach:** subclass setting `useCooperativeAssignor=true`; javadoc states the two physics changes
-(artifact class removed; #857 exposure raised), the never-exercised-before status, and the
+(artifact class removed; confluentinc#857 exposure raised), the never-exercised-before status, and the
 calibration-pending banner. Same constants as eager (decision above).
 
 **Test scenarios (the IT is the scenario):** two-phase storm+quiet run; probe SLOs + ledger as in W4.
@@ -155,7 +159,12 @@ evidence; no bound changed without documented arithmetic.
 **Files:**
 - Modify: `ChaosRevokeUnderWorkCooperativeIT` javadoc (calibration record), `ChaosRevokeUnderWorkIT`
   javadoc (pointer to sibling), `docs/inflight.md` (Class 2 hunt status update; any new findings
-  rostered), `docs/plans/2026-07-31-001-...-plan.md` (this plan, durable copy, status annotations).
+  rostered), `docs/plans/2026-07-31-001-feat-chaos-w4-cooperative-variant-plan.md` (this plan, durable
+  copy, status annotations).
+  (Pointer repair: the single file `docs/inflight.md` became the directory
+  [`docs/inflight/`](../inflight/) on 2026-08-04, deleted in `0de96fc` - `git show
+  0de96fc^:docs/inflight.md` for the version this unit edited. The Class 2 hunt status now lives in
+  [`docs/inflight/test-chaos-phase2.md`](../inflight/test-chaos-phase2.md).)
 
 **Verification:** docs match the measured record; commits on `feats/chaos-w4-cooperative`; push +
 propose the stacked PR (`depends on #85`) - ask before opening, per convention.

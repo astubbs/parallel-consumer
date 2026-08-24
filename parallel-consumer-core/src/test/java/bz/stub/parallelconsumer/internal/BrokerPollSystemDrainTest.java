@@ -34,7 +34,7 @@ import static org.mockito.Mockito.mockingDetails;
  *     {@code consumer.poll()}; a draining consumer that never polls cannot respond to rebalances while its
  *     background heartbeat thread keeps it a live member — it holds its full partition assignment (for up to
  *     {@code max.poll.interval.ms}) while consuming nothing, starving same-group siblings. Maps onto
- *     upstream issue #857 "paused consumption after rebalance".</li>
+ *     confluentinc issue #857 "paused consumption after rebalance".</li>
  * </ol>
  * <b>Desired behaviour</b> (the fix): during {@code DRAINING} the poller keeps invoking
  * {@code consumer.poll()} — the paused long poll is the loop's sleep AND keeps the member

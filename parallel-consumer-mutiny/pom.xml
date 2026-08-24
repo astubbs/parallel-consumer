@@ -12,12 +12,29 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <name>Kafka Parallel Consumer SmallRye Mutiny</name>
+    <name>Parallel Consumer - SmallRye Mutiny</name>
     <artifactId>parallel-consumer-mutiny</artifactId>
 
     <properties>
-        <!-- Mutiny's Multi implements java.util.concurrent.Flow.Publisher which requires Java 9+ -->
-        <release.target>9</release.target>
+        <!--
+            This module's real runtime floor is Java 17, and it must say so.
+
+            Two separate constraints push it above the project-wide release.target of 8:
+
+            1. Mutiny's Multi implements java.util.concurrent.Flow.Publisher, which a release level of 8
+               hides, so the module cannot even compile at 8. That alone only needs 9.
+            2. SmallRye Mutiny 2.8.0 and later are themselves compiled for Java 17 (class-file major 61;
+               their parent pom sets maven-compiler-plugin.release to 17). No Mutiny 2.x targets 8 or 9.
+
+            The release level only constrains the platform API, not what javac will read off the classpath,
+            so constraint 2 is invisible to the build: at release.target=9 this module compiled happily and
+            shipped bytecode claiming Java 9 while depending on Java 17 classes. Downstream users on
+            Java 8 or 11 then got a clean Maven build followed by an UnsupportedClassVersionError on
+            first touch of Multi. Declaring 17 makes the artefact honest about the JVM it needs.
+
+            Only this module is affected - core, vertx and reactor remain Java 8 (major 52).
+        -->
+        <release.target>17</release.target>
     </properties>
 
     <dependencies>

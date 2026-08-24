@@ -177,7 +177,7 @@ public class ShardManager<K, V> {
 
     }
 
-    public void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
+    void addWorkContainer(long epochOfInboundRecords, ConsumerRecord<K, V> aRecord) {
         var wc = new WorkContainer<>(epochOfInboundRecords, aRecord, module);
         ShardKey shardKey = computeShardKey(wc);
 
@@ -276,7 +276,7 @@ public class ShardManager<K, V> {
             log.debug("Work taken is now over max (iteration resume point is {})", iterationResumePoint);
         }
 
-        // Silent-stall diagnostic (#857): the control loop asked for work but we handed back less than
+        // Silent-stall diagnostic (confluentinc#857): the control loop asked for work but we handed back less than
         // requested even though work is still tracked in the shards. Break down WHY so a stall can be told
         // apart from normal back-pressure. See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled() && workFromAllShards.size() < requestedMaxWorkToRetrieve) {

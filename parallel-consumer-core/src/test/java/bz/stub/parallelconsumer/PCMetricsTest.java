@@ -38,6 +38,15 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
 
     @Test
     @SneakyThrows
+    @Quarantined(
+            reason = "Asserts PARTITION_LAST_COMMITTED_OFFSET equals a COMPLETION counter while the suite runs "
+                    + "UNORDERED. Commits are contiguous and bounded by the lowest incomplete offset; completions "
+                    + "are not ordered. Workers call latch.await() BEFORE counter.incrementAndGet(), so a latched "
+                    + "worker's offset never completes and the gap is PERMANENT - the 120s atMost cannot close it, "
+                    + "it only makes the failure expensive (140s burnt per CI run). It passes only when the latched "
+                    + "workers happen to hold the highest offsets, so a pass proves nothing: flapping = true.",
+            tracking = "docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md",
+            flapping = true)
     void metricsRegisterBinding() {
         final int quantityP0 = 1000;
         final int quantityP1 = 500;
@@ -100,8 +109,23 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
             assertThat(registeredGaugeValueFor(PCMetricsDef.NUM_PAUSED_PARTITIONS)).isEqualTo(2);
         });
 
-        //Need to give a little bit of time as racing between scraping metrics and asserts below
-        Thread.sleep(1000);
+        // The processed counters are frozen now (every worker past the block point is latched), but the
+        // metrics below trail them: the commit that publishes LAST_COMMITTED_OFFSET only lands on the next
+        // commit cycle. Wait for those trailing meters to agree with the counters, rather than sleeping and
+        // hoping - every other expectation below is derived from the same (frozen) counters, so once these
+        // agree the whole snapshot is consistent.
+        await().atMost(Duration.ofSeconds(120)).untilAsserted(() -> {
+            assertThat(registeredGaugeValueFor(PCMetricsDef.PARTITION_LAST_COMMITTED_OFFSET, 0))
+                    .isEqualTo(counterP0.get());
+            assertThat(registeredGaugeValueFor(PCMetricsDef.PARTITION_LAST_COMMITTED_OFFSET, 1))
+                    .isEqualTo(counterP1.get() + p1StartingOffset);
+            assertThat(registeredCounterValueFor(PCMetricsDef.PROCESSED_RECORDS,
+                    "topic", topicPartition.topic(), "partition", String.valueOf(0)))
+                    .isEqualTo(counterP0.get());
+            assertThat(registeredCounterValueFor(PCMetricsDef.PROCESSED_RECORDS,
+                    "topic", topicPartition.topic(), "partition", String.valueOf(1)))
+                    .isEqualTo(counterP1.get());
+        });
         log.info(registry.getMetersAsString());
 
         int remainingP0 = quantityP0 - counterP0.get();

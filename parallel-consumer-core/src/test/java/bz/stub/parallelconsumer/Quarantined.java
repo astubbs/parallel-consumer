@@ -17,17 +17,18 @@ import java.lang.annotation.Target;
  * but it keeps RUNNING on every PR in the non-gating "Quarantined Tests" CI job - so we still see when
  * it starts passing (its fix landed), when it gets worse, and it can still surprise us. This is a
  * quarantine, not a kill switch: {@code @Disabled} loses the signal entirely and, as the drain-zombie
- * investigation proved, a "known flake" can be a real product bug (write-up lands with PR #80 in
+ * investigation proved, a "known flake" can be a real product bug (write-up lands with PR astubbs#80 in
  * {@code docs/solutions/test-flakiness/}).
  * <p>
  * Discipline (enforced by the required fields + reviewed via the CI job's audit summary):
  * <ol>
  *     <li><b>No quarantine without diagnosis.</b> A test is only tagged after its failure signature is
  *     understood and rostered ({@link #reason()}, {@link #tracking()}). Undiagnosed red stays red and
- *     blocks, on purpose.</li>
+ *     blocks, on purpose - unless the repository owner grants an explicit exception, which the
+ *     {@link #reason()} must declare as such while still carrying the failure signature.</li>
  *     <li><b>Quarantine is master-state, not PR-state.</b> Only tests failing on master (or on every PR
  *     regardless of content) qualify. A test red on only one PR is that PR's problem.</li>
- *     <li><b>Re-enabling = deleting this annotation AND its entry in {@code docs/QUARANTINED_TESTS.md}</b>
+ *     <li><b>Re-enabling = deleting this annotation AND its entry in {@code docs/quarantined-tests.md}</b>
  *     (the CI-enforced live registry - {@code bin/check-quarantine-registry.sh} fails on drift), done by
  *     the owning fix PR ({@link #fixedBy()}) after it merges master - which atomically moves the test
  *     back into the gating lane.</li>
@@ -46,7 +47,7 @@ public @interface Quarantined {
     String reason();
 
     /**
-     * Where the diagnosis is rostered - typically a {@code docs/inflight.md} entry or a
+     * Where the diagnosis is rostered - typically a note under {@code docs/inflight/} or a
      * {@code docs/solutions/} write-up.
      */
     String tracking();

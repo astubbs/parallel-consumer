@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Enforce that docs/QUARANTINED_TESTS.md (the live registry / task list) matches the @Quarantined
+# Enforce that docs/quarantined-tests.md (the live registry / task list) matches the @Quarantined
 # annotations in the code, at METHOD granularity, in BOTH directions:
 #   - every annotated class must have registry entries matching its annotation COUNT (a second
 #     undiagnosed quarantine cannot ride along on the first entry)
@@ -28,7 +28,7 @@ for f in $(quarantined_files); do
     count=$(quarantined_occurrences "$f")
     entries=$(registry_entries | awk -F. -v c="$cls" '$1 == c' | wc -l | tr -d ' ')
     if [ "$entries" -eq 0 ]; then
-        echo "DRIFT: $cls carries @Quarantined but has NO entry in $REGISTRY - add one (rule 1: no quarantine without diagnosis)."
+        echo "DRIFT: $cls carries @Quarantined but has NO entry in $REGISTRY - add one (rule 1: no quarantine without evidence)."
         drift=1
     elif [ "$entries" -ne "$count" ]; then
         echo "DRIFT: $cls has $count @Quarantined annotation(s) but $entries registry entr(ies) - every quarantined test needs its own diagnosed entry."

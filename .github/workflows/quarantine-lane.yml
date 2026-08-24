@@ -41,9 +41,15 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+      # The scan the two checks below read their file list from, before the checks themselves -
+      # bin/AGENTS.md: a self-test runs ahead of the gate it protects, and carries its own negative
+      # control. It pins the .claude/.git exclusions that keep a sibling worktree's annotations out
+      # of this branch's registry check, which shipped once without a test to hold them.
+      - name: Self-test the quarantine scan
+        run: bash bin/test-check-quarantine-registry.sh
       # Fail fast on rule violations BEFORE spending a test run - same checks as quarantine-audit,
       # here validating master's state.
-      - name: Enforce registry (docs/QUARANTINED_TESTS.md matches @Quarantined annotations)
+      - name: Enforce registry (docs/quarantined-tests.md matches @Quarantined annotations)
         run: bin/check-quarantine-registry.sh
       - name: Verify owner claims
         env:

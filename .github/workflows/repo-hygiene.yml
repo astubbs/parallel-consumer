@@ -47,6 +47,81 @@ jobs:
       - name: No SIGPIPE-prone pipes in bin/
         run: bash bin/check-shell-sigpipe.sh
 
+  agent-hooks:
+    name: "agents: hook self-tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Reads .claude/hooks/* and docs/merge-checklist.md from the working tree; no history needed.
+      - uses: actions/checkout@v6
+
+      # The hooks in .claude/hooks/ enforce repo conventions on every agent session, and they are
+      # the one layer with no CI behind it - a broken hook either blocks work or silently stops
+      # checking, and both look like nothing happening. docs/agent-harness.md rule 3 ("give it a
+      # negative control") applies to the harness itself; this is that control.
+      - name: Self-test the agent hooks
+        run: bash bin/test-check-agent-hooks.sh
+
+  inflight-tags:
+    name: "inflight: tags"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same self-test-then-gate sequencing as the sigpipe job: prove the tag checker can fail, then
+      # run it. The session-start index already LISTS a note no group claimed, but only to whoever
+      # starts the next session - which may not be whoever mistyped the tag, and may be days later.
+      # This fails the commit that made the mistake.
+      - name: Self-test the inflight tag checker
+        run: bash bin/test-check-inflight-tags.sh
+
+      - name: Inflight notes carry valid tags
+        run: bash bin/check-inflight-tags.sh
+
+      # Self-test only. check-pr-ready.sh reads a live PR, so running the gate itself in CI would be
+      # a network call with an answer that changes by the minute; what must not rot is its refusal to
+      # ever conclude "ready".
+      - name: Self-test the PR-readiness reporter
+        run: bash bin/test-check-pr-ready.sh
+
+  test-log-config:
+    name: "tests: log config"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same sequencing again. This one guards a default that fails SILENTLY: a logback-test.xml
+      # committed at debug does not go red, it floods the log and slows the run - and the volume alone
+      # broke three tests when measured (see the script header). Nobody attributes a latch timeout to a
+      # logging default, which is why it is a gate and not a note.
+      - name: Self-test the test log config checker
+        run: bash bin/test-check-test-log-config.sh
+
+      - name: Test log config is flag-driven, not edited
+        run: bash bin/check-test-log-config.sh
+
+  rename:
+    name: "tooling: package rename"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Needs to build fixture git repositories and make commits in them, but only in a temp dir -
+      # it never touches this checkout, so shallow is fine.
+      - uses: actions/checkout@v6
+
+      # bin/rename-packages.sh is run by hand, once per branch, on master and on ~29 open PRs. That
+      # is exactly the shape of tool that rots unnoticed: nobody exercises it between the day it is
+      # written and the day the whole rename depends on it, and by then a regression costs a
+      # conflict storm across every open PR. Seconds to run, so it runs on every PR.
+      #
+      # The self-test includes three NEGATIVE CONTROLS (a stale reference, a misspelt one, and the
+      # escaped-regex form the habitual `grep -rn "io\.confluent"` cannot see) plus the paired
+      # commit-shape experiment whose result set the script's default. See its header.
+      - name: Self-test the package-rename tool
+        run: bash bin/test-rename-packages.sh
+
   actions:
     name: "workflows: action versions"
     runs-on: ubuntu-latest
@@ -61,3 +136,31 @@ jobs:
       # an action in one grouped PR.
       - name: One version per action
         run: bash bin/check-action-versions.sh
+
+  cve-exclusions:
+    name: "deps: CVE exclusion expiry"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # Self-test first, as everywhere else here. This one has a control arm: two fixtures that
+      # differ only by a single day either side of the limit, so a pass on one and a fail on the
+      # other shows the expiry rule is what decides, and not something incidental.
+      - name: Self-test the exclusion-expiry guard
+        run: bash bin/test-check-cve-exclusions.sh
+
+      # The root pom's `excludeVulnerabilityIds` is what keeps the whole-tree CVE scan from going
+      # permanently red on a finding nobody can act on, and some of those entries are TEMPORARY -
+      # parked only until an upstream release carries a fix that is already merged. Nothing was
+      # going to tell us when it landed: the two ids this was written for are in no advisory
+      # database, so no Dependabot alert can fire, and the retirement condition lived in a pom
+      # comment addressed to whoever happened to read it. After 90 days the entry stops being a note
+      # and becomes a red check that names itself.
+      #
+      # HERE rather than in dependency-audit.yml, which is where the exclusion list is otherwise
+      # read: that job is skipped for fork PRs and dies early on a token expiry or a Sonatype
+      # outage, so the list would rot unwatched for exactly as long as the lane was broken. This
+      # check needs no JDK, no secrets and no network - the charter of this workflow.
+      - name: Temporary CVE exclusions must expire
+        run: bash bin/check-cve-exclusions.sh

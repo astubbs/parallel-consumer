@@ -119,7 +119,7 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
             }
         }
 
-        // wait for all acks to complete, see PR #356 for a fully async version which doesn't need to block here
+        // wait for all acks to complete, see PR confluentinc#356 for a fully async version which doesn't need to block here
         try {
             var futures = pm.produceMessages(recordListToProduce);
 

@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.integrationTests;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosSeed;
 import bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -17,7 +18,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+import static java.util.stream.Collectors.toMap;
 
 /**
  * Ambient "flight recorder" for every broker integration test: runs {@link ProgressProbe} in
@@ -66,6 +73,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
     private static final ExtensionContext.Namespace NAMESPACE =
             ExtensionContext.Namespace.create(AmbientProbeExtension.class);
     private static final String PROBE_KEY = "ambientProbe";
+    private static final String CHAOS_SEED_KEY = "chaosSeed";
 
     @Override
     public void beforeEach(ExtensionContext context) {
@@ -98,7 +106,33 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
      */
     @Override
     public void afterTestExecution(ExtensionContext context) {
+        captureChaosSeed(context);
         stopProbe(context);
+    }
+
+    /**
+     * Copy a chaos run's seed into the per-test store, so {@link #buildAutopsy} can print it.
+     * <p>
+     * The seed is the only handle that replays a chaos failure, and the scenario otherwise announces it
+     * on a single console line at run start - which is exactly what a truncated CI log costs you
+     * ({@code docs/solutions/workflow-issues/gh-run-view-log-truncation.md}, whose retrieval note
+     * records the autopsy surviving in the uploaded failsafe XML after the console stream was cut).
+     * The autopsy is captured as {@code system-out} inside that XML, so the seed rides out with it.
+     * <p>
+     * Captured HERE rather than in {@link #testFailed}: an {@code AfterTestExecutionCallback} still has
+     * the live test instance, and the store is the same channel the probe already survives teardown on.
+     * The seed is read off per-test instance state, so nothing is shared between the chaos classes
+     * JUnit may be running concurrently.
+     */
+    private static void captureChaosSeed(ExtensionContext context) {
+        try {
+            context.getTestInstance()
+                    .filter(ChaosSeed.Holder.class::isInstance)
+                    .map(instance -> ((ChaosSeed.Holder) instance).getChaosSeed()) // null before the test resolved one
+                    .ifPresent(seed -> context.getStore(NAMESPACE).put(CHAOS_SEED_KEY, seed));
+        } catch (Exception e) {
+            log.debug("[ambient-probe] could not capture the chaos seed: {}", e.getMessage());
+        }
     }
 
     /**
@@ -166,6 +200,11 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         return context.getStore(NAMESPACE).get(PROBE_KEY, ProgressProbe.class);
     }
 
+    /** {@code null} for every test that is not a seeded chaos scenario - see {@link #captureChaosSeed}. */
+    private static ChaosSeed chaosSeedOf(ExtensionContext context) {
+        return context.getStore(NAMESPACE).get(CHAOS_SEED_KEY, ChaosSeed.class);
+    }
+
     /** Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. */
     public static String buildAutopsy(ExtensionContext context, ProgressProbe probe, Throwable cause) {
         List<String> violations = new ArrayList<>(probe.getViolations());
@@ -174,6 +213,13 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         var sb = new StringBuilder(512);
         sb.append("\n=== AMBIENT PROBE AUTOPSY (test failed): ").append(context.getDisplayName()).append(" ===\n");
         sb.append("failure: ").append(describe(cause)).append('\n');
+        // ready to paste: a truncated console log takes the run-start seed line with it, so the only
+        // surviving copy has to be self-sufficient - see captureChaosSeed()
+        ChaosSeed chaosSeed = chaosSeedOf(context);
+        if (chaosSeed != null) {
+            sb.append("chaos seed: ").append(chaosSeed.getValue()).append('\n');
+            sb.append("chaos replay: ").append(chaosSeed.replayCommand()).append('\n');
+        }
         boolean nothingObserved = violations.isEmpty() && frozen.isEmpty()
                 && probe.getPeakRebalanceDwellMs() == 0 && probe.getPeakLagStagnationMs() == 0;
         if (nothingObserved) {
@@ -198,9 +244,90 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 sb.append("  - ").append(line).append('\n');
             }
         }
+        appendEnvironment(sb);
         sb.append("=== END AMBIENT PROBE AUTOPSY ===");
         return sb.toString();
     }
+
+    /**
+     * Emitted on the first autopsy in each JVM, and pointed at thereafter rather than repeating a few
+     * hundred lines per failing test. Note "each JVM", not each CI run: the integration lane forks
+     * several JVMs, so a run can carry one dump per fork, each attached to whichever test failed
+     * first there. That is the cost of not repeating it; the alternative buries the probe findings
+     * the autopsy exists for.
+     * <p>
+     * This is what {@code JavaEnvTest} was doing by hand. Its javadoc said so - <em>"used to
+     * manually inspect the java environment at runtime, particularly useful for CI
+     * environments"</em> - and it was deleted in {@code cadf4c95} for asserting nothing, which was
+     * true and beside the point: it was a diagnostic, not a test, and deleting it removed the tool
+     * without automating what the tool was for. The autopsy is where a reader already looks when a
+     * broker integration test fails, per {@code AGENTS.md}, so the information now arrives there
+     * without anyone remembering to go and get it.
+     */
+    private static void appendEnvironment(StringBuilder sb) {
+        if (!ENVIRONMENT_DUMPED.compareAndSet(false, true)) {
+            sb.append("environment: dumped in this JVM's first autopsy\n");
+            return;
+        }
+        sb.append("environment (once per JVM):\n");
+        new TreeMap<>(System.getProperties().entrySet().stream()
+                .collect(toMap(e -> String.valueOf(e.getKey()), e -> String.valueOf(e.getValue()), (a, b) -> a)))
+                .forEach((key, value) -> sb.append("  ").append(key).append('=')
+                        .append(redact(key, value)).append('\n'));
+    }
+
+    /**
+     * The autopsy prints straight to CI logs, which anyone with access to the Actions run can read, so a property
+     * whose NAME reads like a credential has its value masked. Nothing in this repo passes a secret as {@code -D}
+     * today - this stops a future one from being dumped rather than fixing a present leak.
+     * <p>
+     * Masking by name rather than filtering to an allowlist of known-interesting prefixes is deliberate: an
+     * allowlist silently drops the next knob somebody adds, which is precisely when the dump is wanted, and it
+     * would need hand-maintaining against a set the code cannot derive. The key is always printed, so the reader
+     * still sees the property was set - only the value is withheld.
+     */
+    private static String redact(String key, String value) {
+        String lower = key.toLowerCase(Locale.ROOT);
+        for (String marker : SECRET_KEY_MARKERS) {
+            if (lower.contains(marker)) {
+                return "***";
+            }
+        }
+        if (value != null && SECRET_IN_VALUE.matcher(value).find()) {
+            return "*** (value matched a credential pattern)";
+        }
+        return value == null ? "null" : value.replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    private static final String[] SECRET_KEY_MARKERS =
+            {"password", "passwd", "pwd", "passphrase", "secret", "token", "credential",
+                    "apikey", "api.key", "accesskey", "access.key", "privatekey", "private.key"};
+
+    /**
+     * Matching the key name alone leaves the more likely leak wide open: people name a property for what it
+     * configures, not for the fact that a credential happens to be inside it. A JDBC URL
+     * ({@code ...?user=svc&password=hunter2}) or a URL with userinfo ({@code https://user:tok3n@host/x}) sails
+     * past every marker above, because {@code test.db.url} contains none of them.
+     * <p>
+     * So the value is scanned too, for embedded {@code key=value} credential pairs and for URL userinfo. This
+     * is a denylist and denylists fail open, which is the wrong direction for a masking control - but the
+     * alternative here is an allowlist of interesting properties, which fails the diagnostic instead, and the
+     * dump exists to be complete. Two overlapping checks narrow the gap without capping what can be reported.
+     */
+    private static final Pattern SECRET_IN_VALUE = Pattern.compile(
+            "(?i)(password|passwd|passphrase|secret|token|credential|api[._-]?key)\\s*[=:]\\s*\\S"
+                    + "|://[^/@\\s]+:[^/@\\s]+@");
+
+    /**
+     * Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. Resets the
+     * once-per-run guard between tests of {@link #buildAutopsy}; production code never calls it,
+     * because the guard is the point.
+     */
+    public static void resetEnvironmentDumpForTest() {
+        ENVIRONMENT_DUMPED.set(false);
+    }
+
+    private static final AtomicBoolean ENVIRONMENT_DUMPED = new AtomicBoolean();
 
     private static String describe(Throwable cause) {
         if (cause == null) {

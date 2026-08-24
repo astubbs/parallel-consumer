@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.SneakyThrows;
@@ -35,17 +36,46 @@ import java.util.stream.Collectors;
 import static bz.stub.parallelconsumer.ManagedTruth.assertTruth;
 import static bz.stub.parallelconsumer.offsets.OffsetEncoding.*;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.in;
-import static org.hamcrest.Matchers.not;
-import static org.junit.Assume.assumeThat;
+import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.junit.jupiter.api.parallel.ResourceAccessMode.READ;
 import static org.junit.jupiter.api.parallel.ResourceAccessMode.READ_WRITE;
-import static pl.tlinkowski.unij.api.UniLists.of;
 
 @Slf4j
 public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
 
     PCModuleTestEnv module = new PCModuleTestEnv();
+
+    /**
+     * The {@link OffsetEncoding}s that cannot represent the scenario built by
+     * {@link #ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential} - a highest succeeded offset of
+     * 72,770 with a long unbroken run of incompletes underneath it - and so fall back instead of round tripping. Two
+     * distinct mechanisms put codecs in this list:
+     * <ul>
+     *     <li><b>v1 short overflow</b> - {@link OffsetEncoding#BitSet}, {@link OffsetEncoding#BitSetCompressed},
+     *     {@link OffsetEncoding#RunLength} and {@link OffsetEncoding#RunLengthCompressed} encode their length (bitset
+     *     bit count / run length) as a {@code short}, so they cannot express anything past {@link Short#MAX_VALUE}
+     *     (32,767). The encoders detect the overflow while encoding and drop themselves from the candidate set: the
+     *     bitset limit is the {@code Short.MAX_VALUE} guard in {@link BitSetEncoder}'s {@code initV1}, and the
+     *     run-length limit is {@code MathUtils.toShortExact} throwing {@code RunLengthV1EncodingNotSupported} out of
+     *     {@link RunLengthEncoder#serialise()}. Note it is neither {@link BitSetEncoder#MAX_LENGTH_ENCODABLE}, which
+     *     is {@code Integer.MAX_VALUE} and is consulted only on the v2 path, nor {@link OffsetRunLength}, which is
+     *     the decode side and carries no overflow detection at all - raising either would leave these codecs
+     *     overflowing at 32,767 exactly as before.</li>
+     *     <li><b>metadata size</b> - {@link OffsetEncoding#BitSetV2} encodes the length as an int, so it does not
+     *     overflow, but uncompressed it needs one bit per offset in the range and the resulting payload exceeds
+     *     {@link OffsetMapCodecManager#DefaultMaxMetadataSize} (4096 bytes), so it is rejected when the payload is
+     *     written.</li>
+     * </ul>
+     * In both cases the forced codec produces nothing, no offset map is committed, and the reloaded partition state
+     * falls back to what the bare committed offset alone can tell it.
+     * <p>
+     * This is the single source of truth for that set - {@link #isWorkingCodec(OffsetEncoding)} and the degraded
+     * branches of the test both read it, rather than each restating the list.
+     */
+    private static final List<OffsetEncoding> CODECS_THAT_DEGRADE = UniLists.of(
+            BitSet, BitSetCompressed, RunLength, RunLengthCompressed, // v1 short overflow
+            BitSetV2 // too large for the metadata payload uncompressed
+    );
 
     @Test
     void runLengthDeserialise() {
@@ -68,10 +98,10 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
      * before accepting?)
      * <p>
      * https://github.com/confluentinc/parallel-consumer/issues/37 Support BitSet encoding lengths longer than
-     * Short.MAX_VALUE #37
+     * Short.MAX_VALUE confluentinc#37
      * <p>
      * https://github.com/confluentinc/parallel-consumer/issues/35 RuntimeException when running with very high options
-     * in 0.2.0.0 (Bitset too long to encode) #35
+     * in 0.2.0.0 (Bitset too long to encode) confluentinc#35
      * <p>
      */
     @SneakyThrows
@@ -179,9 +209,9 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
     // depends on OffsetMapCodecManager#DefaultMaxMetadataSize
     @ResourceLock(value = OffsetSimultaneousEncoder.COMPRESSION_FORCED_RESOURCE_LOCK, mode = READ_WRITE)
     void ensureEncodingGracefullyWorksWhenOffsetsAreVeryLargeAndNotSequential(OffsetEncoding encoding) {
-        assumeThat("Codec skipped, not applicable", encoding,
-                not(in(of(ByteArray, ByteArrayCompressed, KafkaStreams, KafkaStreamsV2)))); // byte array not currently used
-        var encodingsThatFail = UniLists.of(BitSet, BitSetCompressed, BitSetV2, RunLength, RunLengthCompressed);
+        assumeThat(encoding)
+                .as("Codec skipped, not applicable") // byte array not currently used
+                .isNotIn(ByteArray, ByteArrayCompressed, KafkaStreams, KafkaStreamsV2);
 
         // todo don't use static public accessors to change things - makes parallel testing harder and is smelly
         OffsetMapCodecManager.forcedCodec = Optional.of(encoding);
@@ -269,8 +299,14 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             var committed = consumerSpy.committed(UniSets.of(tp)).get(tp);
             assertThat(committed.offset()).isEqualTo(FIRST_COMMITTED_OFFSET);
 
-            if (assumeWorkingCodec(encoding, encodingsThatFail)) {
+            if (isWorkingCodec(encoding)) {
                 assertThat(committed.metadata()).isNotBlank();
+            } else {
+                // Degraded: the forced codec produced no encoding at all, so there is no offset map to attach -
+                // the commit carries the bare offset and an empty metadata string. See CODECS_THAT_DEGRADE.
+                assertThat(committed.metadata())
+                        .as("a degraded codec commits the bare offset with no offset map")
+                        .isEmpty();
             }
         }
 
@@ -286,9 +322,13 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             var pm = newWm.getPm();
             var partitionState = pm.getPartitionState(tp);
 
-            if (assumeWorkingCodec(encoding, encodingsThatFail)) {
+            if (isWorkingCodec(encoding)) {
                 // check state reloaded ok from consumer
                 assertTruth(partitionState).getOffsetHighestSucceeded().isEqualTo(highestSucceeded);
+            } else {
+                // Degraded: with no offset map in the metadata there is nothing to reload, so the fresh state knows
+                // only what the bare committed offset implies, and has not yet seen any record.
+                assertDegradedReloadedState(partitionState, FIRST_COMMITTED_OFFSET, FIRST_COMMITTED_OFFSET - 1);
             }
 
             //
@@ -301,13 +341,10 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
             EpochAndRecordsMap<String, String> epochAndRecordsMap = new EpochAndRecordsMap<>(testRecordsWithBaseCommittedRecordRemoved, newWm.getPm());
             newWm.registerWork(epochAndRecordsMap);
 
-            if (assumeWorkingCodec(encoding, encodingsThatFail)) {
+            // Asserted once: nothing between here and the work retrieval below mutates partitionState, so a second
+            // and third copy of these same checks would re-verify state that cannot have changed.
+            if (isWorkingCodec(encoding)) {
                 // check state reloaded ok from consumer
-                assertTruth(partitionState).getOffsetHighestSucceeded().isEqualTo(highestSucceeded);
-            }
-
-            //
-            if (assumeWorkingCodec(encoding, encodingsThatFail)) {
                 assertTruth(partitionState).getOffsetHighestSequentialSucceeded().isEqualTo(FIRST_SUCCEEDED_OFFSET);
 
                 assertTruth(partitionState).getOffsetHighestSucceeded().isEqualTo(highestSucceeded);
@@ -317,50 +354,40 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
 
                 var incompletes = partitionState.getIncompleteOffsetsBelowHighestSucceeded();
                 Truth.assertThat(incompletes).containsExactlyElementsIn(expected);
+            } else {
+                // Degraded: re-polling the records lifts the highest *seen* offset back to the true high water mark,
+                // but which of them had succeeded lived only in the offset map that was never committed, so the
+                // highest *succeeded* offset stays where the bare committed offset left it.
+                assertDegradedReloadedState(partitionState, FIRST_COMMITTED_OFFSET, highestSucceeded);
             }
 
             // check record is marked as incomplete
             var anIncompleteRecord = records.get(3);
             assertThat(partitionState.isRecordPreviouslyCompleted(anIncompleteRecord)).isFalse();
 
-            // check state
-            {
-                if (assumeWorkingCodec(encoding, encodingsThatFail)) {
-                    long offsetHighestSequentialSucceeded = partitionState.getOffsetHighestSequentialSucceeded();
-                    assertThat(offsetHighestSequentialSucceeded).isEqualTo(0);
-
-                    long offsetHighestSucceeded = partitionState.getOffsetHighestSucceeded();
-                    assertThat(offsetHighestSucceeded).isEqualTo(highestSucceeded);
-
-                    long offsetHighestSeen = partitionState.getOffsetHighestSeen();
-                    assertThat(offsetHighestSeen).isEqualTo(highestSucceeded);
-
-                    var incompletes = partitionState.getIncompleteOffsetsBelowHighestSucceeded();
-                    Truth.assertThat(incompletes).containsExactlyElementsIn(expected);
-
-                    assertThat(partitionState.isRecordPreviouslyCompleted(anIncompleteRecord)).isFalse();
-                }
-            }
-
 
             var workRetrieved = newWm.getWorkIfAvailable();
             var workRetrievedOffsets = workRetrieved.stream().map(WorkContainer::offset).collect(Collectors.toList());
             assertTruth(workRetrieved).isNotEmpty();
 
-            switch (encoding) {
-                case BitSet, BitSetCompressed, // BitSetV1 both get a short overflow due to the length being too long
-                        BitSetV2, // BitSetv2 uncompressed is too large to fit in metadata payload
-                        RunLength, RunLengthCompressed // RunLength V1 max runlength is Short.MAX_VALUE
-                        -> {
-                    assertThat(workRetrievedOffsets).doesNotContain(2500L);
-                    assertThat(workRetrievedOffsets).doesNotContainSequence(expected);
-                }
-                default -> {
-                    Truth.assertWithMessage("Contains only incomplete records")
-                            .that(workRetrievedOffsets)
-                            .containsExactlyElementsIn(expected)
-                            .inOrder();
-                }
+            if (isWorkingCodec(encoding)) {
+                Truth.assertWithMessage("Contains only incomplete records")
+                        .that(workRetrievedOffsets)
+                        .containsExactlyElementsIn(expected)
+                        .inOrder();
+            } else {
+                // Degraded: no offset map survived, so the records that had already succeeded above the committed
+                // offset (69, 25,000 and the highest succeeded) come back as work. Nothing is lost - work is repeated.
+                var everyRecordFromTheCommittedOffsetUp = records.stream()
+                        .map(ConsumerRecord::offset)
+                        .filter(offset -> offset >= FIRST_COMMITTED_OFFSET)
+                        .collect(Collectors.toList());
+                // Pinning the exact ordered contents already determines everything else about this list - a further
+                // doesNotContainSequence(expected) could not fail unless the assertion above had already failed.
+                Truth.assertWithMessage("Degraded codec redelivers every record from the committed offset up, including the ones that had succeeded")
+                        .that(workRetrievedOffsets)
+                        .containsExactlyElementsIn(everyRecordFromTheCommittedOffsetUp)
+                        .inOrder();
             }
         }
 
@@ -368,10 +395,35 @@ public class OffsetEncodingTests extends ParallelEoSStreamProcessorTestBase {
     }
 
     /**
-     * A {@link OffsetEncoding} that works in this test scenario
+     * Whether the given {@link OffsetEncoding} can fully represent this test's scenario, i.e. is not one of
+     * {@link #CODECS_THAT_DEGRADE}. This is a plain predicate, not a JUnit assumption - both branches are asserted.
      */
-    private boolean assumeWorkingCodec(OffsetEncoding encoding, List<OffsetEncoding> encodingsThatFail) {
-        return !encodingsThatFail.contains(encoding);
+    private boolean isWorkingCodec(OffsetEncoding encoding) {
+        return !CODECS_THAT_DEGRADE.contains(encoding);
+    }
+
+    /**
+     * The state one of {@link #CODECS_THAT_DEGRADE} leaves behind after a rebalance: because no offset map was
+     * committed, everything above the committed offset was forgotten. The highest succeeded (and so also the highest
+     * *sequentially* succeeded) offset can only be one below the committed offset, and no incompletes are known. The
+     * highest *seen* offset is the one thing that recovers, and only once the records have been polled again.
+     *
+     * @param committedOffset      the bare offset that was committed - all the reloaded state has to go on
+     * @param expectedHighestSeen  {@code committedOffset - 1} before the records are re-registered, the true high water
+     *                             mark afterwards
+     */
+    private void assertDegradedReloadedState(PartitionState<String, String> partitionState,
+                                             long committedOffset,
+                                             long expectedHighestSeen) {
+        long lastKnownSucceeded = committedOffset - 1;
+        assertTruth(partitionState).getOffsetHighestSucceeded().isEqualTo(lastKnownSucceeded);
+        assertTruth(partitionState).getOffsetHighestSequentialSucceeded().isEqualTo(lastKnownSucceeded);
+        assertThat(partitionState.getOffsetHighestSeen())
+                .as("highest seen offset")
+                .isEqualTo(expectedHighestSeen);
+        Truth.assertWithMessage("no incompletes are known - the offset map that recorded them was never committed")
+                .that(partitionState.getIncompleteOffsetsBelowHighestSucceeded())
+                .isEmpty();
     }
 
     /**

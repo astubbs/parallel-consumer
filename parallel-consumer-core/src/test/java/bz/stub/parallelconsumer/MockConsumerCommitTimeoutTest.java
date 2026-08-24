@@ -6,25 +6,18 @@ package bz.stub.parallelconsumer;
  */
 
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.TimeoutException;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.truth.Truth.assertThat;
-import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
  * Tests that PC works fine with a consumer where the commitSync fails with TimeoutException after 5 seconds.
@@ -33,102 +26,64 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *
  * In this test, we want to make sure the PC still resumes normal operation after several TimeoutException on commitSync timeout.
  * @author Shilin Wu
+ * @see MockConsumerTestBase
  */
 @Slf4j
-@Timeout(60000L)
-class MockConsumerCommitTimeoutTest {
+class MockConsumerCommitTimeoutTest extends MockConsumerTestBase {
 
-    private final String topic = MockConsumerCommitTimeoutTest.class.getSimpleName();
+    private static final int RECORDS = 10;
 
-    /**
-     * Test that the PC can resume operation after several failures
-     */
-    @Test
-    void mockConsumer() {
-        final AtomicLong failUntil = new AtomicLong(System.currentTimeMillis() + 20000L);
-        var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
-            @Override
-            public synchronized ConsumerRecords<String, String> poll(Duration timeout) {
-                // polls are normal
-                return super.poll(timeout);
-            }
+    /** How long commitSync keeps timing out before it starts succeeding. */
+    private static final Duration OUTAGE = Duration.ofSeconds(20);
 
+    /** How long each failing commitSync blocks before throwing - i.e. the simulated broker timeout. */
+    private static final Duration COMMIT_HANG = Duration.ofSeconds(5);
+
+    @Override
+    protected MockConsumer<String, String> createMockConsumer() {
+        // captured, not a field: final-field semantics publish it safely to PC's threads, which are
+        // started after this returns
+        final long failUntil = System.currentTimeMillis() + OUTAGE.toMillis();
+        return new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
             @Override
             public synchronized void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
-                // fail with timeout after 5 seconds for the first 20 seconds
-                if(System.currentTimeMillis() < failUntil.get()) {
+                // polls stay normal throughout - only committing is affected
+                if (System.currentTimeMillis() < failUntil) {
                     try {
-                        Thread.sleep(5000L);
+                        Thread.sleep(COMMIT_HANG.toMillis());
                     } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
                         throw new RuntimeException(e);
                     }
-                    throw new TimeoutException("Timeout after 5 seconds (mocking)");
+                    throw new TimeoutException("Timeout after " + COMMIT_HANG.getSeconds() + " seconds (mocking)");
                 }
                 super.commitSync(offsets);
             }
         };
-        HashMap<TopicPartition, Long> startOffsets = new HashMap<>();
-        TopicPartition tp = new TopicPartition(topic, 0);
-        startOffsets.put(tp, 0L);
-
-        //
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)
-                .offsetCommitTimeout(Duration.ofSeconds(25L)) // commit timeout set to 25 seconds
-                .commitInterval(Duration.ofSeconds(1L)) // commit interval set to 1 second
-                .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC) // use sync commit
-                .build();
-        var parallelConsumer = new ParallelEoSStreamProcessor<String, String>(options);
-        parallelConsumer.subscribe(of(topic));
-
-        // MockConsumer is not a correct implementation of the Consumer contract - must manually rebalance++ - or use LongPollingMockConsumer
-        mockConsumer.rebalance(Collections.singletonList(tp));
-        parallelConsumer.onPartitionsAssigned(of(tp));
-        mockConsumer.updateBeginningOffsets(startOffsets);
-
-        // Daemon thread: must NOT survive past this test method, or when it wakes
-        // from sleep it'll addRecord() on a closed mockConsumer and throw an
-        // uncaught exception that PIT attributes to whatever test is running next
-        // in the same minion JVM. We also interrupt it and close PC in the finally
-        // block.
-        Thread recordAdder = new Thread(() -> addRecords(mockConsumer), "commit-timeout-record-adder");
-        recordAdder.setDaemon(true);
-        recordAdder.start();
-
-        try {
-            //
-            ConcurrentLinkedQueue<RecordContext<String, String>> records = new ConcurrentLinkedQueue<>();
-            parallelConsumer.poll(recordContexts -> {
-                recordContexts.forEach(recordContext -> {
-                    log.warn("Processing: {}", recordContext);
-                    records.add(recordContext);
-                });
-            });
-
-            // Scope the timeout locally (don't mutate Awaitility's global default —
-            // that was leaking across tests if the assertion below throws before reset()).
-            Awaitility.await().atMost(Duration.ofSeconds(50)).untilAsserted(() -> {
-                assertThat(records).hasSize(10);
-            });
-        } finally {
-            recordAdder.interrupt();
-            parallelConsumer.close();
-        }
     }
 
-    private void addRecords(MockConsumer<String, String> mockConsumer) {
-        for (int i = 0; i < 10; i++) {
-            try {
-                mockConsumer.addRecord(new org.apache.kafka.clients.consumer.ConsumerRecord<>(topic, 0, i, "key", "value"));
-                Thread.sleep(1000L);
-            } catch (IllegalStateException e) {
-                // mockConsumer was closed - test has ended, stop quietly
-                return;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
+    @Override
+    protected void customiseOptions(ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> builder) {
+        builder.offsetCommitTimeout(Duration.ofSeconds(25L)) // commit timeout set to 25 seconds
+                .commitInterval(Duration.ofSeconds(1L)) // commit interval set to 1 second
+                .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC); // use sync commit
+    }
+
+    /**
+     * PC resumes normal operation after several {@code commitSync} timeouts, so the whole backlog still
+     * drains once the outage window closes.
+     */
+    @Test
+    void backlogStillDrainsAfterRepeatedCommitTimeouts() {
+        // the backlog keeps arriving during the outage, so commits are still being attempted while they fail
+        addRecordsInBackground(RECORDS, Duration.ofSeconds(1));
+
+        startProcessing();
+
+        // Scope the timeout locally (don't mutate Awaitility's global default - that was leaking
+        // across tests if the assertion below throws before reset()).
+        Awaitility.await().atMost(Duration.ofSeconds(50)).untilAsserted(() ->
+                assertThat(processedRecords).hasSize(RECORDS));
     }
 
 }

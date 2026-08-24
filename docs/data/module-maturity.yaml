@@ -1,0 +1,84 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: module-maturity
+release: 0.6.0.0
+reader_contract:
+  question: Can I rely on this module in production, and can I safely compile against it long term?
+  answer_shape: Reliability confidence and API stability are independent fields; project version alone answers neither.
+axes:
+  reliability:
+    claim: >-
+      A release does not ship until every known CRITICAL defect in its scope is resolved and
+      evidenced. Critical is the line. Non-critical defects are not claimed to be fixed, and "all
+      known defects" would be a claim this project cannot support.
+    scope: >-
+      One claim, uniform across the published modules. All of them depend on parallel-consumer-core
+      and run the same engine, so a reliability statement about core is a statement about all of
+      them and there is no per-module gradient to publish. An experimental module never borrows it.
+    evidence: testing-evidence.yaml
+    does_not_claim: >-
+      That no unknown defect exists, that every non-critical defect is fixed, or that a future
+      feature is needed before the published modules can be relied on.
+  api_stability:
+    claim: Stable-module APIs remain pre-1.0 and can change before 1.0.
+    does_not_mean: The stable modules are unreliable or experimental.
+release_validation:
+  known_defect_gate:
+    condition: >-
+      Reconcile the release ledger, solution corpus and v6 stability queue; every known CRITICAL defect must have a
+      merged resolution and its named recurrence guard must pass before 0.6.0.0 is cut.
+    evidence: testing-evidence.yaml#v6_stability_exception
+    explicit_non_defect_deferrals:
+      - Virtual threads
+      - Micro-batching
+      - Dead-letter queue
+  automated:
+    - Release workflow verifies the current master CI run succeeded.
+    - Release workflow blocks when any @Quarantined annotation is present in the source; a dry run warns instead.
+  manual:
+    - Confirm that no known critical defect remains in the v6 release scope; amend the release claim rather than waive an open item.
+    - Verify the confluentinc#857 deadlock resolution with RebalanceEoSDeadlockTest and the post-fix parallel-integration proof.
+    - Verify each alpha module's artifact boundary and user-facing setup against the built release artifact.
+  on_failure: Do not cut the release; amend this data and the README to match the actual release posture.
+modules:
+  - artifact: parallel-consumer-core
+    maturity: production-use
+    minimum_java: 8
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    evidence_id: core
+    use_this_if: You need ordered concurrent Kafka consumption in a standard Java application.
+  - artifact: parallel-consumer-vertx
+    maturity: production-use
+    minimum_java: 8
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    evidence_id: vertx
+    use_this_if: Your processing uses Vert.x asynchronous APIs.
+  - artifact: parallel-consumer-reactor
+    maturity: production-use
+    minimum_java: 8
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    evidence_id: reactor
+    use_this_if: Your processing uses Project Reactor.
+  - artifact: parallel-consumer-mutiny
+    maturity: production-use
+    minimum_java: 17
+    reliability_confidence: Covered by the release gate on known critical defects; same engine as core.
+    api_expectation: Pre-1.0 API; compatible change is preferred but not guaranteed.
+    support_posture: Maintained for production use when the release validation passes.
+    evidence_id: mutiny
+    feature: ../features/mutiny-integration.yaml
+    use_this_if: Your processing uses SmallRye Mutiny.
+  - artifact: parallel-consumer-examples
+    maturity: reference-example
+    reliability_confidence: Exercises supported module use cases; it is not a runtime library dependency.
+    api_expectation: Examples change with the APIs they demonstrate.
+    support_posture: Use as starting points, not as a compatibility surface.
+    evidence_id: examples
+    use_this_if: You want runnable examples before choosing a stable integration module.

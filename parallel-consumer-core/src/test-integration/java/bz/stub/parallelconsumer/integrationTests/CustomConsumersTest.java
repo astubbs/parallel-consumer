@@ -20,7 +20,7 @@ class CustomConsumersTest extends BrokerIntegrationTest {
     /**
      * Tests that extended consumer can be used with a custom consumer with PC.
      * <p>
-     * Test for issue #195 - https://github.com/confluentinc/parallel-consumer/issues/195
+     * Test for issue confluentinc#195 - https://github.com/confluentinc/parallel-consumer/issues/195
      *
      * @see bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor#checkAutoCommitIsDisabled
      */

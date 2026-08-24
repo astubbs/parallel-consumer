@@ -1,6 +1,6 @@
 # Copyright header conformance - fast, GitHub-hosted, gate-friendly.
 #
-# Enforces the fork's two-header policy (AGENTS.md "Copyright rules for this fork"):
+# Enforces the fork's two-header policy (docs/copyright.md):
 # upstream-derived files keep the Confluent header; fork-original files (added after
 # the pinned fork point) must carry the fork header and must not claim Confluent
 # copyright. The mycila license plugin could not express this (single header template,

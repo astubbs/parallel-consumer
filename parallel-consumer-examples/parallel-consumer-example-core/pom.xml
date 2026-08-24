@@ -14,7 +14,7 @@
     </parent>
 
     <artifactId>parallel-consumer-example-core</artifactId>
-    <name>Kafka Parallel Consumer Example - Core</name>
+    <name>Parallel Consumer - Examples - Core</name>
 
     <dependencies>
         <!-- tag::exampleDep[] -->
@@ -36,14 +36,4 @@
             <artifactId>commons-lang3</artifactId>
         </dependency>
     </dependencies>
-
-    <repositories>
-        <!-- tag::exampleRepo[] -->
-        <repository>
-            <name>Confluent</name>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
-        </repository>
-        <!-- end::exampleRepo[] -->
-    </repositories>
 </project>

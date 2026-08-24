@@ -11,12 +11,12 @@
 #
 # QUARANTINE interaction: bin/chaos-test.sh EXCLUDES @Quarantined chaos scenarios - the Quarantine
 # Lane owns them, and a known-RED scenario must not drown the tripwire signal. While W1
-# (ChaosChurnStormIT) is quarantined under PR #80 and no other chaos scenario exists, runs select
+# (ChaosChurnStormIT) is quarantined under PR astubbs#80 and no other chaos scenario exists, runs select
 # ZERO tests - the summary says so loudly instead of impersonating a real GREEN run.
 #
 # SECURITY (public repo + self-hosted runner): workflow_dispatch only - write-access-gated by
 # construction, so no untrusted fork code can reach the self-hosted machine through this workflow.
-# Inputs pass through env (data), never ${{ }} inside run blocks (code). See docs/SELF_HOSTED_RUNNER.md.
+# Inputs pass through env (data), never ${{ }} inside run blocks (code). See docs/self-hosted-runner.md.
 
 name: chaos-pain
 

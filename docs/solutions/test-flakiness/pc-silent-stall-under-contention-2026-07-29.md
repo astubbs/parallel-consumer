@@ -1,5 +1,5 @@
 ---
-title: "Drain-path zombie/busy-spin under contention (#857 family): a real product bug found while chasing the PartitionStateCommittedOffsetIT flake - the flake itself turned out to be a separate test-harness nudge race"
+title: "Drain-path zombie/busy-spin under contention (confluentinc#857 family): a real product bug found while chasing the PartitionStateCommittedOffsetIT flake - the flake itself turned out to be a separate test-harness nudge race"
 date: 2026-07-29
 category: test-flakiness
 module: parallel-consumer-core
@@ -14,11 +14,11 @@ symptoms:
 root_cause: drain_path_shutdownRequested_short_circuit_plus_contention
 resolution_type: research_report_plus_diagnostics_committed
 severity: medium
-status: "drain-path zombie/busy-spin FIXED in PR #80 (guarded by BrokerPollSystemDrainTest); the committedOffsetRemoved flake that led here was a SEPARATE test-harness nudge race, SOLVED in latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md"
+status: "drain-path zombie/busy-spin FIXED in PR astubbs#80 (guarded by BrokerPollSystemDrainTest); the committedOffsetRemoved flake that led here was a SEPARATE test-harness nudge race, SOLVED in latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md"
 related_prs:
-  - "PR #75 (ci/grumpy-runner-workflow) - where the red surfaced (this report stacks on it)"
-  - "PR #29 / bugs/857-paused-consumption-multi-consumers-bug - silent stall after rebalance (#857), root cause OPEN"
-  - "PR #31 / fix/909-stale-container-replacement - stale container at same offset after rebalance (#909)"
+  - "PR astubbs#75 (ci/grumpy-runner-workflow) - where the red surfaced (this report stacks on it)"
+  - "PR astubbs#29 / bugs/857-paused-consumption-multi-consumers-bug - silent stall after rebalance (confluentinc#857), root cause OPEN"
+  - "PR astubbs#31 / fix/909-stale-container-replacement - stale container at same offset after rebalance (confluentinc#909)"
 upstream:
   - "confluentinc/parallel-consumer#857 (paused consumption after rebalance)"
   - "confluentinc/parallel-consumer#548 (same deadlock family)"
@@ -42,10 +42,10 @@ tags:
 > `docs/solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`.
 
 > **Research report, not a fix.** This documents what the diagnosis found so the finding is not lost, and
-> ties it into the open #857 silent-stall investigation. **No test was masked and no timeout was bumped** -
+> ties it into the open confluentinc#857 silent-stall investigation. **No test was masked and no timeout was bumped** -
 > doing so would hide a real stall (see AGENTS.md "be EXTREMELY careful modifying tests under stress").
-> This PR is stacked on **PR #75** (which merges first); it deliberately references the **unmerged**
-> #857 / #909 branches.
+> This PR is stacked on **PR astubbs#75** (which merges first); it deliberately references the **unmerged**
+> confluentinc#857 / confluentinc#909 branches.
 
 ## TL;DR
 
@@ -68,7 +68,7 @@ tags:
   background heartbeat keeps it a **live group member zombie-holding its partitions** - for up to
   `max.poll.interval.ms` (5 min default) if the drain sticks. A stuck drainer therefore starves same-group
   siblings (partition hold) *and* the whole box (a core per zombie) - a strong candidate contributor to
-  **#857's production symptom** (hypothesis credit: Antony).
+  **confluentinc#857's production symptom** (hypothesis credit: Antony).
 - `committedOffsetRemoved` itself stalls as a fresh **RUNNING** PC on its first poll (so it is *not*
   throttle-paused; its group is fresh so the partition-hold channel is indirect) - the leading explanation
   is broker/CPU starvation amplified by zombie drainers from other tests in the same fork; its own trace
@@ -76,12 +76,12 @@ tags:
 - **Action: do not bump the await to go green.** The drain-path fix has **landed on this PR** (state
   collapse: the duplicated shutdown flag is deleted, abort derives from the poll system's `runState`;
   guarded by `BrokerPollSystemDrainTest`, characterisation-first → RED → GREEN). The broker-side
-  fail-safe release and the single-thread end-state remain with the #857 investigation, along with
+  fail-safe release and the single-thread end-state remain with the confluentinc#857 investigation, along with
   `committedOffsetRemoved` + the reproduction recipe + the diagnostics.
 
 ## Background
 
-PR #75 adds an optional, non-gating high-CPU self-hosted ("highcpu runner", 24c/48t) fast-feedback workflow. Its
+PR astubbs#75 adds an optional, non-gating high-CPU self-hosted ("highcpu runner", 24c/48t) fast-feedback workflow. Its
 **Integration** matrix job (`bin/ci-integration-test.sh -DforkCount=16 -DreuseForks=true`) went red. The
 sole failure was:
 
@@ -181,7 +181,7 @@ PC couples to the rest of the system through two channels:
   test, or a sibling instance in production - cannot take the zombie's partitions. A joiner's rebalance
   stalls waiting on the zombie for up to the rebalance timeout (= `max.poll.interval.ms`, 5 min default),
   which dwarfs every await in the test suite (10 s / 30 s / even the 120 s diagnostic bound). This maps
-  *directly* onto **#857's production symptom**: chaos-stop / restart an instance → close drains slowly →
+  *directly* onto **confluentinc#857's production symptom**: chaos-stop / restart an instance → close drains slowly →
   zombie member holds partitions → "paused consumption after rebalance, lag accumulates, only restart
   fixes".
 - **Channel 2 - CPU/broker parasitism (any group).** Each draining PC burns a core at ~10 k iterations/s.
@@ -198,8 +198,8 @@ and counter-drift mechanisms and **towards the broker side**: the freshly-starte
 broker (`setupCompactingKafkaBroker()`, 2 extra brokers, `max.compaction.lag.ms=1`,
 `min.cleanable.dirty.ratio=0`) not serving the first fetch within the window under 1.33-forks/core
 starvation. This remains a hypothesis - the test passes every time under DEBUG, so its own internal trace
-was not captured. Whether that is truly distinct from #857, or a third facet of the same fragility, is the
-open question for the #857 harness (which reproduces a running stall deterministically). Channel 2 above
+was not captured. Whether that is truly distinct from confluentinc#857, or a third facet of the same fragility, is the
+open question for the confluentinc#857 harness (which reproduces a running stall deterministically). Channel 2 above
 (zombie drainers from *other* tests in the same fork starving CPU + the fork's shared broker) is the
 leading amplifier candidate.
 
@@ -249,13 +249,13 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 4. **Spin watchdog.** The poll loop has no self-observation; a 9-second 10 kHz spin was invisible until
    this capture. A cheap rate check (iterations/sec, rate-limited WARN) in `BrokerPollSystem`'s control
    loop would have flagged this class of bug years ago, and would catch regressions.
-5. **End-state: single-thread consumer ownership (defer to the #857 stream).** Merge the broker-poll
+5. **End-state: single-thread consumer ownership (defer to the confluentinc#857 stream).** Merge the broker-poll
    thread into the control thread so ONE thread owns the consumer (the KafkaConsumer reference pattern -
    `wakeup()` is its only sanctioned cross-thread call). Close then becomes a linear function on that
    thread - pause → bounded wait for workers → commit → `consumer.close()` (LeaveGroup) - and DRAINING is
    just a loop mode: the CME class, the `commitCommand` locking, the wakeup choreography, and *all*
    cross-thread lifecycle flags evaporate. This "merge poll + control threads" refactor is already being
-   weighed in the #857 investigation; the uber-branch experiment's results should inform whether it is
+   weighed in the confluentinc#857 investigation; the uber-branch experiment's results should inform whether it is
    justified.
 
 ## Honest caveats / what is NOT yet proven
@@ -267,18 +267,18 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
   failure is not.** The drain being *slow* in the captured run was partly by-design of
   `TransactionTimeoutsTest` (deliberately slow in-flight work). What generalises is the window's behaviour:
   every closing PC spins a core and holds its partitions until the drain completes. How often that window
-  is long enough to matter in production (#857) vs in the suite is unmeasured.
+  is long enough to matter in production (confluentinc#857) vs in the suite is unmeasured.
 - **Channel 2 (zombie amplification) as `committedOffsetRemoved`'s cause is inference**, consistent with
   the data (fresh group, counters at 0, non-linear onset at forks>cores) but not directly traced.
 - The under-served detector only observed **normal in-flight back-pressure**, not stuck-selectable or
   missing work - so the queue/shard layer is exonerated *for the scenarios captured*, which does not prove
   it is healthy in the (uncaptured) `committedOffsetRemoved` stall.
 - What **is** firmly established: it is a real stall (0 polls / 120s), not runner-specific, not a benign
-  timeout, and in the #857 silent-stall family. The exact per-scenario mechanism is **open**.
+  timeout, and in the confluentinc#857 silent-stall family. The exact per-scenario mechanism is **open**.
 
 ## Relationship to the in-flight lock-up work
 
-- **#857 / PR #29** (`bugs/857-paused-consumption-multi-consumers-bug`) - "Paused consumption after
+- **confluentinc#857 / PR astubbs#29** (`bugs/857-paused-consumption-multi-consumers-bug`) - "Paused consumption after
   rebalance". Two documented mechanisms (see `docs/BUG_857_INVESTIGATION.md` on that branch): (1) a
   `ConcurrentModificationException` when `close()` races the poll thread; (2) the **silent stall** from
   `numberRecordsOutForProcessing` counter drift. Commit message: provisional fixes **do not eliminate the
@@ -286,31 +286,42 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
   hold** root-caused here is a *third* mechanism in the same family - and note it composes with (1): a
   rebalance touching a draining member runs revoke on the spinning poll thread, right where the CME/commit-
   lock races live.
-  - **VERIFIED (2026-07-29): PR #29 does NOT fix the drain defect.** On its branch, `drain()` still calls
-    `consumerManager.signalStop()` first (`BrokerPollSystem` L235) and `ConsumerManager.poll()` still has
-    the `while (!shutdownRequested.get())` short-circuit (L92) - the ~10 kHz spin and zombie hold survive
-    unchanged. What it *does* fix is a **sibling** mechanism: `onPartitionsAssigned()` now resets
+  - **VERIFIED (2026-07-29): PR astubbs#29 does NOT fix the drain defect.** On its branch, `drain()` still calls
+    `consumerManager.signalStop()` first (in `BrokerPollSystem.drain()`) and `ConsumerManager.poll()`
+    still has the `while (!shutdownRequested.get())` short-circuit - the ~10 kHz spin and zombie hold
+    survive unchanged. What it *does* fix is a **sibling** mechanism: `onPartitionsAssigned()` now resets
     `pausedForThrottling` (a RUNNING-state throttle-pause stall on re-assignment - same "poller paused when
     it shouldn't be" family, different state). It even **adds trace logging inside the very loop that
     spins** (`handlePoll`: "Poll returned 0 records. assignment=..., paused=...") - instrumentation that
     would log through the 10 kHz spin without recognising it.
-  - **Residual-stall link:** #29 reports 10-20% of aggressive-chaos runs *still* stalling with its fixes
+    - (Citation repair: the two findings above each carried a line number, one into `BrokerPollSystem`
+      and one into `ConsumerManager`, both read against the
+      `bugs/857-paused-consumption-multi-consumers-bug` branch on 2026-07-29. That branch has since
+      merged master, which carries the fix this write-up called for (`bd7172418`, PR astubbs#80), so
+      `signalStop` and `shutdownRequested` no longer appear on it at all and both cited lines are now
+      blank. The method names are the durable anchors; for the code as verified, `git show
+      bd7172418^:parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
+      and the sibling `ConsumerManager.java`, grep `signalStop` and `shutdownRequested`. Re-running the
+      check on the branch today would find nothing - because the branch moved, not because the
+      2026-07-29 finding was wrong. The repair establishes where to look; it does not re-verify.)
+  - **Residual-stall link:** astubbs#29 reports 10-20% of aggressive-chaos runs *still* stalling with its fixes
     applied. The chaos monkey's stop/start cycling is a drain-window factory, and the unfixed zombie-drain
     path is a prime candidate for exactly that residue - a testable prediction for the uber-branch
     experiment below.
-- **#909 / PR #31** (`fix/909-stale-container-replacement`) - **VERIFIED: no overlap.** Its main-code diff
+- **confluentinc#909 / PR astubbs#31** (`fix/909-stale-container-replacement`) - **VERIFIED: no overlap.** Its main-code diff
   is only `ProcessingShard.java` (11 lines, stale-container replacement); it touches nothing in the
   drain/poll/shutdown paths. Adjacent rebalance-correctness work on a fourth, independent mechanism (stale
   container at the same offset blocking that shard's progress).
 - **Complementary, not competing.** All three efforts chase the same *symptom* - "PC alive but not
-  progressing" - via **different, non-conflicting mechanisms**: #29 = close-race CME + counter drift +
-  assign-time throttle-pause; #31 = per-shard stale-container block; this report = drain-time zombie
+  progressing" - via **different, non-conflicting mechanisms**: astubbs#29 = close-race CME + counter drift +
+  assign-time throttle-pause; astubbs#31 = per-shard stale-container block; this report = drain-time zombie
   spin/hold. The minimal drain fix (defer `signalStop()` to `CLOSING`) conflicts with **neither** branch.
-- Base master (and therefore PR #75) contains **none** of these fixes, so the sharpened stress suite
-  (forked-per-broker integration, PR #68; unit forking, PR #69) is now surfacing the unsolved stall.
+- Base master (and therefore PR astubbs#75) contains **none** of these fixes, so the sharpened stress suite
+  (forked-per-broker integration, PR astubbs#68; unit forking, PR astubbs#69) is now surfacing the unsolved stall.
 - Prior art: `docs/solutions/test-flakiness/parallel-integration-tests-flaky-under-concurrency-2026-07-28.md`
-  (the RebalanceEoSDeadlockTest contention → real #857 deadlock finding, and the "diagnose before masking"
+  (the RebalanceEoSDeadlockTest contention → real confluentinc#857 deadlock finding, and the "diagnose before masking"
   rule it produced).
+  <!-- file-refs: N/A - the sentence says the document is on another branch, not on master -->
 
 ## Recommendations
 
@@ -319,8 +330,8 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
 2. **Keep the highcpu runner Integration job non-gating** (it already is). The runner is fine; the red is a real
    product stall that also affects GitHub-hosted runs intermittently (via sibling flakes like
    `MultiInstanceMetricsTest`).
-3. **Route to #857.** Add `committedOffsetRemoved` and `KafkaSanityTests` as additional reproductions under
-   the #857 investigation. To finally capture `committedOffsetRemoved`'s own trace, run it on a box that
+3. **Route to confluentinc#857.** Add `committedOffsetRemoved` and `KafkaSanityTests` as additional reproductions under
+   the confluentinc#857 investigation. To finally capture `committedOffsetRemoved`'s own trace, run it on a box that
    stalls it *without* DEBUG first, then attach the (now committed) `ShardManager` / `WorkManager` /
    `BrokerPollSystem` loggers - the `isSufficientlyLoaded=...` line will show whether the poller is
    throttle-paused (counter/`numberRecordsOutForProcessing` drift) or the broker is simply not serving.
@@ -328,13 +339,13 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
    form: the duplicated `shutdownRequested` flag is deleted; `ConsumerManager` derives abort from the
    poll system's `runState` via an injected signal). Guarded by `BrokerPollSystemDrainTest`
    (characterisation-first, then flipped RED→GREEN by the fix). The fail-safe release guarantee (options
-   2-3) and the single-thread end-state (option 5) remain deeper design work, best coordinated with #857
+   2-3) and the single-thread end-state (option 5) remain deeper design work, best coordinated with confluentinc#857
    since they touch the same close/rebalance paths.
 5. **Uber-branch experiment: merge all the partial fixes and measure.** The three efforts fix
    non-conflicting mechanisms of the same symptom, so combine them on one integration branch -
-   **#29 (857) + #31 (909) + this PR (diagnostics + drain fix)** - and run both reproductions: (a) this
+   **astubbs#29 (857) + astubbs#31 (909) + this PR (diagnostics + drain fix)** - and run both reproductions: (a) this
    report's `forkCount=16` stress recipe, and (b)
-   #29's `MultiInstanceRebalanceTest` chaos run, which currently still stalls 10-20% of the time. That
+   astubbs#29's `MultiInstanceRebalanceTest` chaos run, which currently still stalls 10-20% of the time. That
    turns three partial theories into one measurable experiment: if the residual chaos-stall rate drops to
    ~0 with the drain fix added, the zombie-drainer mechanism explains the residue; whatever remains is a
    fifth mechanism, now observable via the committed diagnostics.
@@ -366,24 +377,34 @@ masking):
   from normal in-flight back-pressure.
 - **`WorkManager.isSufficientlyLoaded`** - logs the throttle decision inputs
   (`awaitingSelection + outForProcessing vs target*loadingFactor`). This gates the broker-poller
-  pause/resume, so an inflated `numberRecordsOutForProcessing` (the #857 counter-drift) shows up here as
+  pause/resume, so an inflated `numberRecordsOutForProcessing` (the confluentinc#857 counter-drift) shows up here as
   "loaded" with no real work.
 - **`KafkaClientUtils.buildPc`** - gives every test PC a unique `myId`, so `pc-control-PCn` /
   `pc-broker-poll-PCn` thread names and the `%X{pcId}` MDC make concurrent instances distinguishable in the
   logs (the `myId` hook was otherwise never wired). Safe: `RebalanceEoSDeadlockTest` matches thread names
   with `.contains(...)`.
 - **`logback-test.xml`** - commented-out `ShardManager` / `WorkManager` / `BrokerPollSystem` DEBUG loggers,
-  grouped and labelled for the #857 stall hunt; uncomment to reproduce the captures above.
+  grouped and labelled for the confluentinc#857 stall hunt; uncomment to reproduce the captures above.
 
 ## Sources
 
-- highcpu runner failure: PR #75 run `30434423800` (failsafe report: `committedOffsetRemoved[1]` ConditionTimeout).
+- highcpu runner failure: PR astubbs#75 run `30434423800` (failsafe report: `committedOffsetRemoved[1]` ConditionTimeout).
 - GitHub-hosted Integration red on the same PR: run `30424305954` - the sibling flake
   `MultiInstanceMetricsTest.sameRegistryCanBeReusedAfterPcInstanceClosed`, not this test.
 - `docs/inflight.md` - existing `committedOffsetRemoved` and `MultiInstanceMetricsTest` flake entries.
+  (Pointer repair: that single file became the directory [`docs/inflight/`](../../inflight/) on
+  2026-08-04, deleted in `0de96fc` - `git show 0de96fc^:docs/inflight.md` for the entries as this
+  report read them. Of the two, only `MultiInstanceMetricsTest` is still a row in
+  [`docs/inflight/test-load-tightness-flakes.md`](../../inflight/test-load-tightness-flakes.md). The
+  `committedOffsetRemoved` entry read here is the `[latest]` nudge race, since solved and written up
+  in
+  [`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`](latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md);
+  the `committedOffsetRemoved[3] none` row in that live file is a different and later
+  `RebalanceInProgressException` sighting, not a successor to this one.)
 - `docs/BUG_857_INVESTIGATION.md` (on `bugs/857-paused-consumption-multi-consumers-bug`).
 - Code: `parallel-consumer-core/.../integrationTests/state/PartitionStateCommittedOffsetIT.java`;
   `.../internal/AbstractParallelEoSStreamProcessor.java` (`innerDoClose` - drain-then-await sequencing;
   `calculateQuantityToRequest`); `.../internal/BrokerPollSystem.java` (`drain()`, `handlePoll()` and its
   "use this to just sleep" comment, `doPause`/`resumeIfPaused`); `.../internal/ConsumerManager.java`
   (`poll()`'s `while (!shutdownRequested.get())` short-circuit, `signalStop()`).
+<!-- file-refs: N/A - the bullet names the branch the document lives on -->

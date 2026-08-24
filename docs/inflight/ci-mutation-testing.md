@@ -1,6 +1,11 @@
 # Mutation testing is deliberately narrow - re-widening is tracked here
 
-Shipped in #111. Recorded because it is a deliberate *reduction* in coverage, which is the kind of
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, tooling investment -->
+
+
+Shipped in astubbs#111. Recorded because it is a deliberate *reduction* in coverage, which is the kind of
 thing a future session otherwise rediscovers as a bug.
 
 **What runs automatically:** one per-PR job (`maven.yml`) that mutates *only changed classes*, and
@@ -24,7 +29,7 @@ the statistics live only in a job log, which ages out and which a re-run silentl
 | Line coverage (mutated classes) | 481/597 (81%) |
 | Tests run | 1392 (7.52 per mutation) |
 | **Wall clock** | **21m55s** - of which **311s** is the instrumented coverage pass |
-| Run | `mutation-full-sweep` #1, against master at `58991506` |
+| Run | `mutation-full-sweep`, first run, against master at `58991506` |
 
 Two things follow from the runtime. It is schedulable, so the `push: branches: [master]` decision below
 is now a cost question with a real number rather than a guess. And **narrowing `target-tests` is not

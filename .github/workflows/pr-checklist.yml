@@ -8,8 +8,10 @@
 # Real bot PRs (Dependabot/Renovate etc., GitHub user type "Bot") don't use the template and are
 # exempt entirely. Re-runs on body edits.
 #
-# It then enforces the changelog issue-reference convention on top. That gate's logic lives in
-# .github/scripts/changelog-ref-gate.js so it can be unit tested; this job runs those tests first.
+# It then enforces three citation conventions on top - the changelog's issue references, issue
+# references anywhere in the diff or the PR body, and the existence of cited file paths. Each one's
+# logic lives in its own .github/scripts/*-ref-gate.js module so it can be unit tested; this job runs
+# every one of those test suites before the gates themselves.
 
 name: PR Checklist
 
@@ -45,7 +47,29 @@ jobs:
       - name: Self-test the issue-reference gate logic
         run: node .github/scripts/issue-ref-gate.test.js
 
-      # docs/TODO_INDEX.md is generated from the markers in the tree, so it can silently stop
+      - name: Self-test the file-reference gate logic
+        run: node .github/scripts/file-ref-gate.test.js
+
+      - name: Self-test the roadmap stage gate logic
+        run: node .github/scripts/roadmap-stage-gate.test.js
+
+      # The local mirror (bin/check-issue-refs.sh) fetches the PR body via gh to honour the
+      # `issue-refs: N/A` opt-out the way this workflow does; that plumbing is shell, not gate
+      # logic, so it has its own self-test.
+      - name: Self-test the local issue-reference checker's body plumbing
+        run: bash bin/test-check-issue-refs.sh
+
+      # Runs BEFORE the gate below, per bin/AGENTS.md. It tests the script's ARGUMENT PARSING, which
+      # is a permission boundary rather than a formatting concern: the reviewer is granted
+      # `bin/todo-index.sh --check` exactly so it can ask whether the index is stale without being
+      # able to rewrite the tree it is inspecting, and the grant is only worth its wording while the
+      # script refuses everything else. It also asserts both allowlists still grant the exact command
+      # rather than a `:*` prefix - the form that let `--check=false` through
+      # (astubbs/parallel-consumer#286).
+      - name: Self-test the marker index argument parsing
+        run: bash bin/test-todo-index.sh
+
+      # docs/todo-index.md is generated from the markers in the tree, so it can silently stop
       # matching them. Entries are keyed by marker TEXT, not line number, so this only fires when a
       # marker is actually added, removed or reworded - editing above one no longer churns the file.
       - name: Verify the marker index matches the tree
@@ -115,7 +139,14 @@ jobs:
       # Deliberately narrow: added lines only, and the files in EXEMPT_PATHS are skipped because a
       # bare number legitimately means confluentinc there. A naive sweep rewrote three of them
       # wrongly, which is why they are named in the gate module rather than left to judgement.
-      - name: Verify issue references name their repo
+      #
+      # THE PR BODY IS CHECKED TOO. It is the surface humans actually read, and a bare `#200` renders
+      # there as a working link to the wrong issue - the failure mode this gate exists for, on its
+      # most visible page. `gate.prBodyEntry` presents the body to the SAME suspectRefs call as a
+      # synthetic file, so there is no second copy of the matching rule; it only drops fenced code
+      # blocks, which GitHub does not autolink. The `edited` trigger above already re-runs this job
+      # when a body changes, so a body-only fix does not need a push.
+      - name: Verify issue references name their repo (diff and PR body)
         uses: actions/github-script@v7
         with:
           script: |
@@ -135,22 +166,105 @@ jobs:
               ...context.repo, pull_number: pr.number, per_page: 100,
             });
 
-            const hits = gate.suspectRefs(files);
+            let hits = gate.suspectRefs([...files, gate.prBodyEntry(pr.body)]);
+
+            // File-scoped opt-out (`issue-refs: exempt-file`) is judged against file CONTENT, not
+            // the patch, so it holds however small the diff. Fetched only for files that actually
+            // have hits - usually none. The control flow lives in the gate module (NO SECOND COPY
+            // OF THE RULE); this caller supplies the contents-API reader and the logging.
+            hits = await gate.dropFileOptedOutHits(hits, async (path) => {
+              const res = await github.rest.repos.getContent({
+                ...context.repo, path, ref: pr.head.sha, mediaType: { format: "raw" },
+              });
+              return String(res.data);
+            }, {
+              onDrop: (path) => core.info(`${path}: issue-refs: exempt-file present - its hits dropped.`),
+              onError: (path, e) => core.info(`${path}: file opt-out check unavailable (${e.message}) - hits kept.`),
+            });
+
             if (hits.length === 0) {
-              core.info(`No unqualified references below #${gate.QUALIFY_BELOW} on added lines.`);
+              core.info(
+                `No unqualified references below #${gate.QUALIFY_BELOW} on added lines or in the PR body.`);
               return;
             }
 
-            core.setFailed(
-              `${hits.length} reference(s) below #${gate.QUALIFY_BELOW} do not say which repo they mean.\n` +
-              `The fork's numbers sit inside upstream's range, so a bare number there is a coin flip.\n` +
-              `Write \`astubbs#NN\` for this repo or \`upstream #NN\` for confluentinc - or link it.\n` +
-              `Every upstream issue has a mirror here, which is usually the better number to cite:\n` +
-              `  gh issue list -R ${context.repo.owner}/${context.repo.repo} --label upstream-mirror --search "upstream #NN"\n` +
-              `If a flagged reference genuinely needs no qualifier, put "issue-refs: N/A - <reason>" ` +
-              `on its own line in the PR body.\n\n` +
-              hits.map(h => `  ${h.file}: ${h.ref}  ${h.text}`).join("\n")
-            );
+            core.setFailed(gate.formatFailure(hits, {
+              repo: `${context.repo.owner}/${context.repo.repo}`,
+            }));
+
+      # AGENTS.md -> "Cite by anchor, never by line number" tells authors to cite a path plus a
+      # greppable string, and to run the grep first. Nothing ran it, and docs/citations.md said so:
+      # "nothing in CI checks any of this". The bill came in as bin/check-review-gate-contract.sh -
+      # cited by docs/ci.md as the check to run, never written, and unnoticed through every review
+      # since. A path that looks right reads as right, which is why review does not catch this class.
+      #
+      # WHOLE TREE, RATCHETED AGAINST THE BASE. Deleting a file does not change one line in the documents
+      # that cite it, so a diff-scoped gate is blind to the commonest way a citation breaks - and
+      # that is not a corner case: two moves account for 59 of the 87 references this repo had to
+      # repair. So this reads every citing file in the checkout, not `pulls.listFiles`, which also
+      # removes the "GitHub omits `patch` on a very large diff" hole its sibling gate has to live
+      # with. It is affordable only because the tree is clean and this gate keeps it clean: a red
+      # result means THIS branch broke something, not that it inherited something.
+      #
+      # The matching lives in the gate module and is unit tested above; what is here is the plumbing
+      # that hands it this tree.
+      - name: Verify cited file paths exist
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const { execFileSync } = require("child_process");
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/file-ref-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - file reference gate skipped.`);
+              return;
+            }
+            if (gate.findOptOut(pr.body || "")) {
+              core.info("file-refs: N/A opt-out present - skipping.");
+              return;
+            }
+
+            const ws = process.env.GITHUB_WORKSPACE;
+            const tracked = execFileSync("git", ["ls-files"], { encoding: "utf8", cwd: ws })
+              .split("\n").filter(Boolean);
+
+            const docs = tracked.filter((f) => gate.CITING_FILE.test(f)).map((filename) => ({
+              filename,
+              lines: fs.readFileSync(`${ws}/${filename}`, "utf8").split("\n"),
+            }));
+
+            // The BASE tree, so this PR is answerable only for what it added. The checkout is
+            // shallow, so fetch the base ref first - one commit is enough, we only read its tree.
+            const base = pr.base.ref;
+            execFileSync("git", ["fetch", "--no-tags", "--depth=1", "origin", base],
+                         { cwd: ws, stdio: "ignore" });
+
+            // Same reader as bin/check-file-refs.sh, from the gate module - the byte-exact
+            // `cat-file --batch` slicing is not something to keep two copies of.
+            const baseTree = gate.readTreeDocs("FETCH_HEAD", (args, opts = {}) =>
+              execFileSync("git", args, {
+                encoding: opts.encoding || "utf8", input: opts.input,
+                cwd: ws, maxBuffer: 512 * 1024 * 1024,
+              }));
+            if (!baseTree) {
+              core.setFailed(`Could not read the base tree (${base}) - cannot tell new findings ` +
+                             "from inherited ones, so this gate is not making a judgement.");
+              return;
+            }
+
+            const inherited = gate.danglingRefs(baseTree.docs, gate.treeFrom(baseTree.names));
+            const dangling = gate.newFindings(gate.danglingRefs(docs, gate.treeFrom(tracked)), inherited);
+
+            if (dangling.length === 0) {
+              core.info(
+                `No new dangling file references (${docs.length} citing file(s), whole tree, ` +
+                `${inherited.length} inherited from ${base} ignored).`);
+              return;
+            }
+
+            core.setFailed(gate.formatFailure(dangling));
 
       - name: Verify new changelog entries cite an issue
         uses: actions/github-script@v7
@@ -210,3 +324,68 @@ jobs:
               `Entr${missing.length === 1 ? "y" : "ies"} missing one:\n` +
               missing.map(l => `  ${l.trim().slice(0, 160)}`).join("\n")
             );
+
+      # The roadmap's stage ladder says how real each entry is, and its own rule is that the PR
+      # advancing a track moves the stage in the same change (docs/data/roadmap.yaml, `stages`
+      # block). This step is what catches a miss: when the BASE branch's roadmap names this PR as
+      # an entry's carrier (`pull_request: astubbs#NNN`), that ENTRY's stage block must differ
+      # between base and head - touching the file elsewhere does not count - or the PR opts out
+      # with `roadmap-stage: N/A - <reason>` in its body. Base is read deliberately: master is the
+      # authority on which entries currently claim this PR.
+      - name: Verify a roadmap-carrying PR moves its entry's stage
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/roadmap-stage-gate.js`);
+            const pr = context.payload.pull_request;
+
+            if (pr.user && pr.user.type === "Bot") {
+              core.info(`Author ${pr.user.login} is a Bot - roadmap stage gate skipped.`);
+              return;
+            }
+            const optOut = gate.findOptOut(pr.body || "");
+            if (optOut) {
+              core.info(`Opted out via PR body: "${optOut}"`);
+              return;
+            }
+
+            const fetchRoadmap = async (ref) => {
+              const res = await github.rest.repos.getContent({
+                ...context.repo, path: gate.ROADMAP_PATH, ref,
+                mediaType: { format: "raw" },
+              });
+              return String(res.data);
+            };
+
+            let baseText = "";
+            try {
+              baseText = await fetchRoadmap(pr.base.sha);
+            } catch (e) {
+              core.info(`No ${gate.ROADMAP_PATH} on the base ref (${e.message}) - nothing to check.`);
+              return;
+            }
+
+            const claims = gate.entriesClaimingPr(baseText, pr.number);
+            if (claims.length === 0) {
+              core.info("No roadmap entry names this PR as its carrier - nothing to check.");
+              return;
+            }
+
+            // A missing head file means the roadmap was deleted or moved - every claiming entry's
+            // snapshot then differs from base, which is the accountable-change signal we want.
+            let headText = "";
+            try {
+              headText = await fetchRoadmap(pr.head.sha);
+            } catch (e) {
+              core.info(`${gate.ROADMAP_PATH} unreadable at head (${e.message}) - treating as changed.`);
+            }
+
+            const unmoved = claims.filter((c) => !gate.stageMoved(baseText, headText, c.id));
+            if (unmoved.length === 0) {
+              core.info(
+                `Roadmap entr${claims.length === 1 ? "y" : "ies"} ` +
+                `${claims.map(c => c.id).join(", ")} name this PR and the stage block moved - OK.`);
+              return;
+            }
+
+            core.setFailed(gate.formatFailure(unmoved, pr.number));
