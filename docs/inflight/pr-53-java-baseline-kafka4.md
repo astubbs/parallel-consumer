@@ -1,5 +1,10 @@
 # astubbs#53 - 0.7.x: Java baseline + Kafka 4
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+<!-- inflight-state: deferred - 0.7.x by its own scope -->
+
+
 **The only reason to move off Java 8 is Kafka 4.** kafka-clients 4.x needs **Java 11**, so that is the
 target baseline ("don't be stricter than Kafka"). Jabel is what lets `javac` accept Java 17 syntax
 while emitting Java 8 bytecode; the branch holds a provisional state (Jabel removed, `release=17`)
@@ -18,3 +23,4 @@ bump `kafka.version` 3.9.1 → 4.2.x plus the TestContainers CP image; migrate r
 (`sendOffsetsToTransaction(Map,String)`, `MockConsumer(OffsetResetStrategy)`,
 `new ConsumerGroupMetadata(String)`); downstream module audit; flip `test-kafka-compat` to a blocking
 3.9.1 regression check; docs. Deferred further: `parallel-consumer-share` (KIP-932).
+<!-- file-refs: N/A - the sentence says the plan is on the branch, not on master -->

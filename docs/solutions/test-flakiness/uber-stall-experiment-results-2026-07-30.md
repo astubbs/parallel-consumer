@@ -138,6 +138,8 @@ drain.
 - fork16 binary verdicts were unusable; the per-test decomposition above is the salvage.
 - `ManagedPCInstanceLifecycleTest` flakiness under fork16 is astubbs#29's own test under load - not triaged here.
 
+  > **Citation repair, 2026-08-20:** `ManagedPCInstanceLifecycleTest` was DELETED in astubbs/parallel-consumer#325. A mutation matrix over the four `ManagedPCInstance` guards showed it killed none of them, while `ManagedPCInstanceLifecycleIT` - which now lives at `integrationTests/ManagedPCInstanceLifecycleIT.java` - killed both real mutants deterministically, without a broker, in a tenth of the time. The claim above is left unchanged: the flakiness it records was real when measured.
+
 ## Addendum (2026-07-30, post nudge-race fix): full-stack composition check
 
 After the nudge-race harness fix landed on PR astubbs#80, its full tip (drain fix + nudge fix + all guards and

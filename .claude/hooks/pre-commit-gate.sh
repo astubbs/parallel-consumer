@@ -138,8 +138,13 @@ try:
     # `--no-verify` in the MESSAGE TEXT - which meant `git commit -m "...\n--no-verify\n..."`
     # skipped the gate entirely. shlex handles the newlines; the line split never needed to.
     commits, bypassing = commit_bypass_counts(cmd)
-    # EVERY commit in the payload must ask for it. One that did not is gated, so the gate runs.
-    bypass = commits > 0 and commits == bypassing
+    # NO COMMIT AT ALL: skip. The registration's `if: Bash(git commit *)` is supposed to scope
+    # this hook, but the script must not lean on it - observed live (astubbs#324 babysit): with
+    # the gate red, a plain `ls` and a read-only `cat` of the gate itself were blocked with the
+    # gate's own error, because "no commit found" fell into "run the gate". Every other hook in
+    # this directory self-filters; this one does too.
+    # OTHERWISE every commit in the payload must ask for the bypass. One that did not is gated.
+    bypass = commits == 0 or commits == bypassing
 except ValueError:
     # Genuinely unbalanced quoting. Fail OPEN so a hook bug cannot jam the tool call shut, but do
     # not try to read the flag out of text we could not lex.

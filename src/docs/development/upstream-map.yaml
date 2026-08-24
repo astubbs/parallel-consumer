@@ -130,6 +130,39 @@ entries:
       (unmerged); related issue #541 now CLOSED. User still weighing a larger
       poll+control single-thread refactor to kill the whole bug class.
 
+  - id: bug-833-commit-response-timeout
+    group: rebalance-stability
+    summary: "\"Timeout waiting for commit response\" is a symptom of a dead broker-poll thread -- report the real cause"
+    fork:
+      branches: [test/177-commit-response-timeout]
+      prs: [204]
+      fork_issue: 177
+      status: pr-open
+    upstream:
+      repo: confluentinc/parallel-consumer
+      issues: [833]
+      prs: []
+      related: [857, 803, 809]
+      status: open
+      last_checked: 2026-08-05
+    adoc_anchor: part3-cat1-stability
+    notes: >
+      ON RELEASE, say on the mirror that the reported message itself CHANGES: anyone
+      searching for the old "Timeout waiting for commit response PT30S" string will not
+      match what the fixed version emits, and PT30S was never real anyway (see below).
+      Verified 2026-08-05 that #100/#108 do fix the reported
+      TRIGGER (a rebalance-time commit rejection killing the poll thread), and that
+      the fix is unreleased. But the misleading SYMPTOM was never addressed: every
+      other way of killing that thread still produced the same message, which names
+      neither the failing subsystem nor the failure. This work reports the poller's
+      real exception on the commit-failure path, corrects the timeout the message
+      quotes (it interpolated a hard-coded 30s constant regardless of configuration,
+      so the reporter's "PT30S" was meaningless), and makes
+      ConsumerManager.commitSync's retry budget cumulative rather than per-attempt --
+      it reset every attempt, so a permanently-failing commit retried forever instead
+      of surfacing, stranding the poll thread and producing the same symptom from the
+      broker-down direction.
+
   - id: bug-859-pcmetrics-leak
     group: metrics-observability
     summary: PCMetrics memory leak -- registeredMeters (List) accumulated duplicate Meter.Id (fix - List to Set)
@@ -219,21 +252,27 @@ entries:
     group: rebalance-stability
     summary: Replace stale work container on rebalance (regression test + carry)
     fork:
-      branches: [fix/909-stale-container-replacement, pr-909-temp]
+      branches: [fix/909-stale-container-replacement]
       prs: [31]
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [909]
       status: open
-      last_checked: 2026-07-28
+      last_checked: 2026-08-19
     adoc_anchor: part1-group-a-correctness
     notes: >
       confluentinc PR #909 (cserspring) replaces stale containers rather than
-      rejecting new ones, preventing record drops on rebalance. Upstream PR had
-      no tests; fork work adds a regression test for stale container at the same
-      offset. High priority but wants tests before merge. Fork PR #31 is open
-      (draft) but targets master-confluent, which is why it read as "no PR".
+      rejecting new ones, preventing record drops on rebalance. Upstream PR had no
+      tests; the fork carry adds four, every one proven RED against the pre-fix
+      behaviour, one of them driving the defect through the real registration path
+      rather than around it. Fork PR #31 merged 2026-08-19, with cserspring's
+      authorship preserved on the fix commit; it also narrows both addWorkContainer
+      overloads to package-private and documents the three staleness checkpoints in
+      PartitionState#epochIsStale. A deterministic broker-level reproduction
+      (RegistrationRaceStaleResidentIT) followed in a separate PR; why chance-based
+      chaos load could never find the race is recorded in
+      docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4
@@ -658,7 +697,7 @@ entries:
       (draft PR #22 @ba6b71f10 -- NB that SHA is the UPSTREAM branch tip; the fork's
       same-named branch features/dynamic-concurrency-control @6f85eac41 has DIVERGED
       from it and the upstream side is not preserved on origin -- see
-      docs/inflight/next-branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
+      docs/inflight/branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
       is unrelated (throttles status logging in tests). #119 Connect: reporter offered
       to do the work and was told there was no demand; maintainer later had working
       hacks both directions and judged "Connect sinks inside PC" publishable -- that
