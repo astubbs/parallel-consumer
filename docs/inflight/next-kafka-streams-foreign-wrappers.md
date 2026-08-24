@@ -177,23 +177,10 @@ a language with no Streams tooling and no way to grow any can now print that str
 it. None of the Python-native stream processors has a `describe()`, so none of them has any of this,
 which makes it the clearest single artifact of the wrap-rather-than-reimplement argument.
 
-**Embedding one of those visualisers in a web UI is blocked, and it is a licensing problem rather
-than a technical one.** Checked directly on the repositories:
-
-| Tool | Licence | Can we embed it? |
-|---|---|---|
-| [`zz85/kafka-streams-viz`](https://github.com/zz85/kafka-streams-viz) | **none declared** | No - no licence means all rights reserved |
-| [`gaetancollaud/kafka-streams-visualization`](https://github.com/gaetancollaud/kafka-streams-visualization) | **none declared** | No - same |
-| [KSTD](https://github.com/thriving-dev/kafka-streams-topology-design) | **GPL-3.0** | No - would force this Apache-2.0 project to GPL-3 |
-| KCM Hub topology explorer | hosted tool | Not distributed as embeddable source |
-
-*Linking* to them or telling a user to paste into them is fine and costs nothing - that is using a
-website, not distributing code. Vendoring any of them is not.
-
-If a rendered diagram is ever wanted in our own UI, **write the renderer**: the structured form the
-Describe answer already carries makes it a graph-layout exercise with no parsing at all, whereas
-every one of the tools above has had to reverse-engineer the ASCII. Being able to skip the parsing
-is a direct benefit of owning both ends of the protocol.
+**Rendering it, and why we cannot simply embed one of those tools, is its own note:**
+[`next-topology-rendering-and-web-ui.md`](next-topology-rendering-and-web-ui.md). Short version -
+two of them declare no licence at all and one is GPL-3.0, so pointing users at them is free and
+vendoring them is not.
 
 ### Deferred capabilities, and what each would actually need
 

@@ -198,6 +198,45 @@ See below.
 evidence, exactly as above. Tracked in
 [`docs/inflight/next-kafka-streams-foreign-wrappers.md`](docs/inflight/next-kafka-streams-foreign-wrappers.md).
 
+### One dependency, five capabilities, ten languages
+
+**The packaging is the product, and it is a stronger claim than any single capability in it.**
+
+A user installs one thing and imports one name:
+
+```python
+import parallel_consumer   # admin, consumer, producer, parallel consumer, streams
+```
+
+Each of those competes with something established. `confluent-kafka` already does admin, consumer
+and producer well, and does not need replacing. **The bundle competes with nothing**, because the
+last two entries do not exist for that user at any price. A Python team that wants topic
+administration, key-ordered concurrency beyond partition count, and a stream topology cannot
+assemble that today from anything - not because the pieces are expensive, but because two of them
+are absent from the ecosystem.
+
+**And the same surface, in every language.** The value compounds across the fan-out rather than
+per-language: one mental model for a polyglot organisation, one set of documentation, one set of
+examples that translate. That is an argument no single-language library can make, and it is
+available to us only because every binding is a transport swap over identical frames
+([`docs/language-bindings.md`](docs/language-bindings.md)).
+
+**What this changes about how the work is described.** The transport is an implementation detail the
+user should never have to know about - whether a call goes over a socket or a C ABI is our decision
+to revisit, not their dependency. It follows that the unified surface should be designed before the
+individual pieces are published, because a facade retrofitted over five separately-shipped libraries
+is a different and worse thing than one designed as a whole. This is a reason to sequence the
+packaging decision early even though the capabilities land over time.
+
+**The honest counterweight, and it is real.** A single dependency that carries a JVM sidecar is a
+heavier install than a library that does one thing, and a user who wants only a producer is being
+handed an engine they will not run. The answer is probably that the pieces stay separately usable
+underneath the unified surface rather than that the surface is abandoned - but that is a design
+question, and "one import" must not become "one enormous artifact you cannot opt out of".
+
+**For Java, this argument does not apply** and should not be made - a Java team already has all five
+natively. See the version-decoupling case below for the one that does.
+
 ### What the Kafka Streams proof of concept settled
 
 Run 2026-08-23. A Python program described a five-operator topology, supplied the per-record

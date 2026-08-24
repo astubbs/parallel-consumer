@@ -83,6 +83,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
 | [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
+| [`docs/language-bindings.md`](docs/language-bindings.md) | Designing anything that touches more than one language binding - the five axes a boundary crossing decides, which are already settled, and where each decision lives |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing **any shell script** - `bin/`, `.githooks/`, `.claude/hooks/` - the shell conventions, including the cross-platform rule and the others no check enforces |
 | [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
 | [`parallel-consumer-proxy-clients/AGENTS.md`](parallel-consumer-proxy-clients/AGENTS.md) | Changing a client or its demo - the two test suites over them, which one your feature needs, and why neither substitutes for the other |

@@ -67,6 +67,12 @@ branch are all solved problems elsewhere, with published rationale:
   PC's "no processing clock" property matters: Share Groups' acquisition-lock timeout genuinely is a
   redelivery clock, and PC's absence of one is a stated differentiator.
 
+## Where the decisions live
+
+The comparison below is research. The **decisions** it informs are indexed in
+[`../language-bindings.md`](../language-bindings.md), which maps the five axes a binding must answer
+and cites the owning document for each. Add findings here; record what they settle there.
+
 ## What the document should answer, per system
 
 Who owns scheduling; what crosses the language boundary and what never does; the unit of work;

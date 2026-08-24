@@ -38,6 +38,13 @@ Note the distinction that matters, because the words collide: the wire already c
 reported *individually*. **Batching** in core's sense is different: the user's function receives N
 records in one call. The wire form may already suffice; the API shape does not.
 
+## The cross-cutting view
+
+[`../language-bindings.md`](../language-bindings.md) places this decision among the other four a
+binding has to make, and records a collision worth reading before designing anything here: the
+per-record-outcome requirement below is exactly what Beam gave up to get its batching, deliberately.
+The options for keeping both are set out there.
+
 ## What it costs, honestly
 
 - **Every client's user-facing surface changes**, in all the languages. That is the horizontal cost
