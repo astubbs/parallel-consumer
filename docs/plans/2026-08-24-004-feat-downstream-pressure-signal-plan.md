@@ -104,6 +104,16 @@ increment failure history.* Both halves bind, and only the second is subtle:
   being poisoned: backoff climbs, the count rises, and the record is eventually dropped or sent to a
   DLQ for the offence of having been rate limited.
 
+Neither half is a flag on existing machinery: retry scheduling currently flows only through failure
+bookkeeping (`WorkContainer#updateFailureHistory` sets `retryDueAt` and increments the failure count
+in the same write), so satisfying both halves requires a **new deferral write path** in the engine's
+core state class, not reuse of the existing one.
+
+And the reported `retryAfter` is the second owner of a record's retry deadline: the existing
+`retryDelayProvider` option already computes one on every failure. When both apply to one record,
+**the reported deferral wins** - it carries what the downstream actually said, where the provider is
+the operator's guess - and the precedence is stated here so two number-owners never race unrecorded.
+
 ### Nothing discovered is ever stored
 
 `Retry-After` is a **deferral, not a rate**. It says *do not call me for two seconds*; it never says
