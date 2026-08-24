@@ -92,23 +92,28 @@ The first two are settled and sequential; the third has an open decision on it.
    hang into more concurrent callers contending for one answer slot.
 3. **Attack the next dimension.** Which one is the open question below.
 
-## Open decision, asked and not yet answered
+## The dimension decision, settled 2026-08-25
 
-The register is ordered by "most likely to falsify", but dimensions 2 and 3 were placed by
-*urgency* instead - they are cheap, additive, and will almost certainly work, which makes them
-release blockers rather than research risks. Proposed re-cut, awaiting the owner:
+This section recorded an open question. It has been answered, and the answer reversed one of its own
+proposals - so both halves are kept, because a reader who found only the conclusion could not tell
+that the reasoning had been overturned rather than never written.
 
-- Promote **windowing** to rank 2 (composite windowed keys against a flat `DataType`; `fetch(key,
-  from, to)` is a range query where `Get` is point-only).
-- Demote many-out and record metadata into a clearly separate "release blockers, not research
-  risks" section.
-- Add **host-supplied Serdes** as a new candidate, which is not on the register and may be the
-  strongest remaining falsifier: a foreign deserializer is called outside processing entirely -
-  repartition reads, changelog restore, standby replication - so it does not fit the
-  "engine asks, host answers, stream thread waits" shape that every proved dimension shares.
+**Next is windowing.** It needs new surface rather than a new field: `fetch(key, from, to)` is a
+range query where `Get` is point-only, a windowed key is composite against a flat `DataType`, and
+stream time is an engine notion the host cannot see.
 
-Worth weighing against one caveat: dimension 1 was predicted to be fatal and was not, so
-predictions about which dimension has teeth have a demonstrated error rate here.
+**Host-supplied serdes was proposed as the strongest remaining falsifier and withdrawn the same
+day.** The engine uses `Serdes.ByteArray()` everywhere except where an operator mints a value it
+created itself; the host serialises in its own language and hands over bytes, so nothing ever gives
+the engine a host serde to call and the restore-path concern behind the proposal evaporates.
+`next-kafka-streams-foreign-wrappers.md` had already settled it.
+
+**Punctuators were rejected for this slot**, despite the deferred table calling them cheap: a
+punctuator that cannot `forward()` is close to useless, and `forward()` needs one-in-many-out, which
+is still open.
+
+Full reasoning, including the caveat that dimension 1 was predicted to be fatal and was not:
+[`streams-coupling-dimensions.md`](streams-coupling-dimensions.md), which **owns this decision**.
 
 ## Machine-local, not in the repo
 

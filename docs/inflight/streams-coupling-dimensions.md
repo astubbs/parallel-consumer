@@ -33,8 +33,35 @@ functions of three different shapes run in one topology at once.
 ## Ranked, most likely to falsify first
 
 Dimension 1 has now run and did **not** falsify; it is kept in place, with its result, rather than
-moved, because the register's value is partly the record of what was predicted and how it came
-out.
+moved, because the register's value is partly the record of what was predicted and how it came out.
+
+**Re-cut 2026-08-25, after dimension 1's result.** The ranking is by likelihood of falsifying, but
+2 and 3 had been placed by *urgency* - both are cheap, additive, and will almost certainly work,
+which makes them release blockers rather than research risks. They keep their numbers so the
+record of what was predicted stays readable, but read the section below first for what is actually
+next.
+
+**Host-supplied serdes was proposed as a new candidate and then withdrawn, same day.** The argument
+was that a foreign deserializer is called outside processing entirely - changelog restore, standby
+replication, repartition reads - so it would not fit the shape every proved dimension shares. The
+argument is sound about Kafka Streams in general and **wrong about this design**: the engine uses
+`Serdes.ByteArray()` everywhere except where an operator mints a value it created itself, because
+the host serialises in its own language and hands over bytes. Nothing ever gives the engine a host
+serde to call, so the restore cliff does not exist.
+[`next-kafka-streams-foreign-wrappers.md`](next-kafka-streams-foreign-wrappers.md) had already
+settled this - "Serdes are a non-issue except at the sink, where they are not" - and the sink
+exception was closed by typed handles. Recorded rather than deleted so the next person to have the
+idea finds the refutation instead of re-running it.
+
+**Next is windowing**, ahead of its rank-4 position. It needs genuinely new surface rather than a
+new field: `fetch(key, from, to)` is a range query where `Get` is point-only, a windowed key is
+composite against a flat `DataType`, and stream time is an engine notion the host cannot see.
+Dimension 1's result suggests the remaining risk is exactly that shape - surface, not structure.
+
+**Punctuators were considered for this slot and rejected as not-cheap.** The deferred table calls
+them "cheap, as predicted", assessed before this session. A punctuator that cannot `forward()` is
+close to useless, and `forward()` needs one-in-many-out - dimension 2, still open - so punctuators
+are blocked behind it rather than being the quick check they look like.
 
 ### 1. Re-entrancy - RUN 2026-08-25: the hang is real, and it does NOT falsify the approach
 
