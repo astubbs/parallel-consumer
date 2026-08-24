@@ -143,18 +143,45 @@ class TopologyAssemblerTest {
     }
 
     /**
-     * A value type with no serde branch is refused by name, naming the handle - never silently written as bytes.
-     * Driven through the selector directly because no current operator can mint an unspecified-typed handle; the
-     * pipeline tests prove the sink writes through this same selector.
+     * A type with no serde branch is refused by name, naming the handle and the axis - never silently written as
+     * bytes. Driven through the selector directly because no current operator can mint an unspecified-typed
+     * handle; the pipeline tests prove the sink writes through this same selector. Both axes, because the sink
+     * selects a serde for each.
      */
     @Test
-    void aValueTypeWithNoSerdeIsRefusedNamingTheHandleAndTheType() {
-        TopologyDescriptionException thrown = assertThrows(TopologyDescriptionException.class,
-                () -> TopologyAssembler.serdeFor(DataType.DATA_TYPE_UNSPECIFIED, 7));
+    void aTypeWithNoSerdeIsRefusedNamingTheHandleTheAxisAndTheType() {
+        TopologyDescriptionException value = assertThrows(TopologyDescriptionException.class,
+                () -> TopologyAssembler.serdeFor(DataType.DATA_TYPE_UNSPECIFIED, "value type", 7));
+        TopologyDescriptionException key = assertThrows(TopologyDescriptionException.class,
+                () -> TopologyAssembler.serdeFor(DataType.DATA_TYPE_UNSPECIFIED, "key type", 9));
 
-        assertThat(thrown).hasMessageThat().contains("7");
-        assertThat(thrown).hasMessageThat().contains("unspecified");
-        assertThat(thrown).hasMessageThat().contains("no serde");
+        assertThat(value).hasMessageThat().contains("7");
+        assertThat(value).hasMessageThat().contains("value type unspecified");
+        assertThat(value).hasMessageThat().contains("no serde");
+        assertThat(key).hasMessageThat().contains("9");
+        assertThat(key).hasMessageThat().contains("key type unspecified");
+    }
+
+    /**
+     * A mint that pairs a node with the wrong recorded kind is an engine bug, and it fails at the mint that made
+     * it - not one call later as a ClassCastException naming a Kafka Streams implementation class to the host.
+     * This validation is what makes the assembler's erased casts safe against future operators.
+     */
+    @Test
+    void aMintPairingANodeWithTheWrongKindFailsAtTheMint() {
+        var builder = new org.apache.kafka.streams.StreamsBuilder();
+        var stream = builder.stream("in");
+
+        IllegalArgumentException mismatched = assertThrows(IllegalArgumentException.class,
+                () -> new TopologyAssembler.Minted(stream, type(
+                        HandleKind.HANDLE_KIND_TABLE, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_LONG)));
+        IllegalArgumentException unspecified = assertThrows(IllegalArgumentException.class,
+                () -> new TopologyAssembler.Minted(stream, type(
+                        HandleKind.HANDLE_KIND_UNSPECIFIED, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES)));
+
+        assertThat(mismatched).hasMessageThat().contains("engine bug");
+        assertThat(mismatched).hasMessageThat().contains("table");
+        assertThat(unspecified).hasMessageThat().contains("known kind");
     }
 
     /**
@@ -186,7 +213,10 @@ class TopologyAssemblerTest {
         TopologyDescriptionException thrown = assertThrows(TopologyDescriptionException.class, call);
         assertThat(thrown).hasMessageThat().contains(method);
         assertThat(thrown).hasMessageThat().contains("it names a " + actualKind);
-        assertThat(thrown).hasMessageThat().contains(neededKind);
+        // The full phrase, not a bare contains(neededKind): for the "stream" rows a bare contains is already
+        // satisfied by the "grouped stream" in the actual-kind clause, which would let the needed-kind half of
+        // the message regress unnoticed.
+        assertThat(thrown).hasMessageThat().contains("needs a " + neededKind);
     }
 
     private static HandleType type(HandleKind kind, DataType keyType, DataType valueType) {

@@ -10,6 +10,9 @@ anything else, and that an invocation is answered on its own correlation.
 
 from __future__ import annotations
 
+import copy
+import logging
+import pickle
 import queue
 import struct
 import threading
@@ -31,6 +34,7 @@ class FakeEngine:
         self._next_handle = 100
         self._fault_on_call = fault_on_call
         self._forced_type: pb.HandleType | None = None
+        self._answer_bare = False
         self._lock = threading.Lock()
 
     # -- the transport surface the session uses --
@@ -58,11 +62,18 @@ class FakeEngine:
             method = message.builder_call.WhichOneof("call")
             if method == "sink":
                 # A sink mints nothing: its answer carries neither handle nor type, like the
-                # engine's.
+                # engine's. A forced type is still consumed - the seam is single-shot, and
+                # leaking it onto the NEXT call would type a neighbouring handle wrongly.
+                self._forced_type = None
                 self._outbound.put(pb.StreamsServerMessage(
                     handle_assigned=pb.HandleAssigned(call_id=call_id)))
                 return
             self._next_handle += 1
+            if self._answer_bare:
+                self._answer_bare = False
+                self._outbound.put(pb.StreamsServerMessage(
+                    handle_assigned=pb.HandleAssigned(call_id=call_id, handle=self._next_handle)))
+                return
             answered_type = self._forced_type
             if answered_type is None:
                 answered_type = self._type_of(method)
@@ -99,6 +110,10 @@ class FakeEngine:
     # -- test seam: answer the next builder call with a caller-chosen type --
     def answer_next_call_with_type(self, handle_type: pb.HandleType) -> None:
         self._forced_type = handle_type
+
+    # -- test seam: answer the next minting call with a handle but NO type --
+    def answer_next_call_bare(self) -> None:
+        self._answer_bare = True
 
     # -- test seam: make the engine ask for a record to be mapped --
     def invoke(self, correlation: int, token: int, key: bytes, value: bytes) -> None:
@@ -229,6 +244,48 @@ def test_a_sink_answer_without_handle_or_type_is_inert_rather_than_fatal(
     # The sink's answer carried neither handle nor type; the call completed and the session lives.
     grouped = builder.group_by_key(source)
     assert grouped.kind is HandleKind.GROUPED_STREAM
+    session.close()
+
+
+def test_decoding_malformed_long_bytes_is_a_streams_error_not_a_crash() -> None:
+    # A foreign or truncated record, and a tombstone a caller forgot to filter: both are
+    # StreamsError, so a host's except-StreamsError handling holds and no reader thread dies
+    # on a raw struct.error or TypeError.
+    with pytest.raises(StreamsError, match="8 bytes"):
+        DataType.LONG.decode(b"short")
+    with pytest.raises(StreamsError, match="8 bytes"):
+        DataType.LONG.decode(cast(bytes, None))
+
+
+def test_a_handle_survives_deepcopy_and_pickle_with_its_types(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    counted = session.builder().count(session.builder().group_by_key(
+        session.builder().source("in")), "counts-store")
+
+    copied = copy.deepcopy(counted)
+    pickled = pickle.loads(pickle.dumps(counted))  # noqa: S301 - round-tripping our own value
+
+    assert copied == counted and copied.value_type is DataType.LONG
+    assert pickled == counted and pickled.kind is HandleKind.TABLE
+    assert pickled.key_type is DataType.BYTES
+    session.close()
+
+
+def test_a_handle_without_a_type_warns_of_version_skew(
+    engine: FakeEngine, caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    # An engine that mints a handle but says nothing about it - the invariant the proto states
+    # is broken, and the client says so at the mint rather than at a much later failed decode.
+    engine.answer_next_call_bare()
+    with caplog.at_level(logging.WARNING):
+        handle = session.builder().source("in")
+
+    assert handle.kind is HandleKind.UNKNOWN
+    assert any("without a type" in record.message for record in caplog.records)
     session.close()
 
 

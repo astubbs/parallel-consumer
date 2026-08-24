@@ -67,11 +67,20 @@ class DataType(enum.IntEnum):
         Bytes pass through; a long is Kafka's ``Serdes.Long()`` - 8 bytes, big-endian, signed.
         A type this client cannot decode is refused by name rather than guessed at: returning
         the raw bytes for an unknown type would silently hand the caller the wrong thing.
+
+        Every refusal is a :class:`StreamsError`, including malformed input - a short or foreign
+        record, or ``None``. A changelog tombstone has no value at all; callers filter those
+        before decoding, and one that does not gets the error, not a dead reader thread.
         """
         if self is DataType.BYTES:
             return data
         if self is DataType.LONG:
-            value: int = struct.unpack(">q", data)[0]
+            try:
+                value: int = struct.unpack(">q", data)[0]
+            except (struct.error, TypeError) as malformed:
+                raise StreamsError(
+                    f"cannot decode {data!r} as a long: Serdes.Long() is exactly 8 bytes"
+                ) from malformed
             return value
         raise StreamsError(
             f"cannot decode a value of type {self.name}: this client has no decoder for it")
@@ -98,12 +107,30 @@ class Handle(int):
         handle.value_type = value_type
         return handle
 
+    # The override "narrows" int's declared tuple[int] shape, which mypy flags as an LSP breach -
+    # but pickle and copy read this hook dynamically from the concrete class, never through an
+    # int-typed reference, so the wider tuple is exactly what makes reconstruction correct here.
+    def __getnewargs__(self) -> tuple[int, HandleKind, DataType, DataType]:  # type: ignore[override]
+        """What copy and pickle rebuild this handle from.
+
+        An int subclass with required constructor arguments breaks the default int
+        reconstruction protocol: deepcopy raises, and pickle silently rebuilds a Handle with no
+        type attributes at all. This closes both, so a handle survives a host's cache or worker
+        boundary intact.
+        """
+        return (int(self), self.kind, self.key_type, self.value_type)
+
     @classmethod
     def from_assigned(cls, assigned: pb.HandleAssigned) -> Handle:
         """Builds the typed handle a ``HandleAssigned`` describes.
 
         A non-minting answer (sink) carries neither handle nor type and yields the zero handle
         with UNKNOWN types; nothing may be named back with it, so its only job is to be inert.
+
+        The wire contract says handle and type are present exactly together. A handle WITHOUT a
+        type is therefore version skew (an engine predating typed handles) or an engine bug, and
+        it is warned about here, at the mint - otherwise the first symptom is an undecodable
+        UNKNOWN much later, with nothing pointing at the cause.
         """
         if assigned.HasField("type"):
             return cls(
@@ -112,6 +139,10 @@ class Handle(int):
                 DataType(assigned.type.key_type),
                 DataType(assigned.type.value_type),
             )
+        if assigned.HasField("handle"):
+            log.warning(
+                "handle %d arrived without a type; the engine may predate typed handles, and "
+                "this handle's kind and types are UNKNOWN", assigned.handle)
         return cls(assigned.handle, HandleKind.UNKNOWN, DataType.UNKNOWN, DataType.UNKNOWN)
 
 

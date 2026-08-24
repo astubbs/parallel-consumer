@@ -47,9 +47,30 @@ public class TopologyAssembler {
         ValueMapperWithKey<byte[], byte[], byte[]> forToken(long functionToken);
     }
 
-    /** A minted handle: the builder node and the recorded type it carries on the wire. */
+    /**
+     * A minted handle: the builder node and the recorded type it carries on the wire.
+     *
+     * <p>The constructor validates that the recorded kind matches what the node actually is, so a future operator
+     * that pairs a node with the wrong constant fails loudly at the mint that made the mistake - not one call later
+     * as a bare {@code ClassCastException} leaking a Kafka Streams implementation class name to the host. That
+     * validation is what makes the erased casts in {@link #resolve} and {@link #sink} safe. Package-visible so the
+     * mismatch refusal is testable.
+     */
     @Desugar // Jabel requires the annotation on every record
-    private record Minted(Object node, HandleType type) {
+    record Minted(Object node, HandleType type) {
+        Minted {
+            Class<?> required = switch (type.getKind()) {
+                case HANDLE_KIND_STREAM -> KStream.class;
+                case HANDLE_KIND_GROUPED_STREAM -> KGroupedStream.class;
+                case HANDLE_KIND_TABLE -> KTable.class;
+                default -> throw new IllegalArgumentException(
+                        "engine bug: a mint must record a known kind, got " + type.getKind());
+            };
+            if (!required.isInstance(node)) {
+                throw new IllegalArgumentException("engine bug: a mint paired a "
+                        + node.getClass().getSimpleName() + " with recorded kind " + kindName(type.getKind()));
+            }
+        }
     }
 
     private static final HandleType STREAM_OF_BYTES = handleType(
@@ -105,9 +126,12 @@ public class TopologyAssembler {
         require(storeName != null && !storeName.isEmpty(), "count names no store");
         KGroupedStream<byte[], byte[]> upstream = resolve(
                 handle, HandleKind.HANDLE_KIND_GROUPED_STREAM, "count");
+        // The store serdes derive from the SAME recorded type the sink will later select by, so the two cannot
+        // drift apart when the next typed operator is copied from this one.
+        HandleType resultType = TABLE_OF_LONGS;
         return mint(upstream.count(Materialized.<byte[], Long>as(Stores.inMemoryKeyValueStore(storeName))
-                .withKeySerde(Serdes.ByteArray())
-                .withValueSerde(Serdes.Long())), TABLE_OF_LONGS);
+                .withKeySerde(operatorSerde(resultType.getKeyType()))
+                .withValueSerde(operatorSerde(resultType.getValueType()))), resultType);
     }
 
     /**
@@ -121,24 +145,32 @@ public class TopologyAssembler {
         if (minted == null) {
             throw unknownHandle(handle, "sink");
         }
-        Serde<Object> valueSerde = serdeFor(minted.type().getValueType(), handle);
+        // The kind is checked before any serde is selected: a host that sinks the wrong kind of handle is told
+        // about the kind, not about a serde it would never have reached - the actionable refusal comes first.
         switch (minted.type().getKind()) {
             case HANDLE_KIND_TABLE -> {
                 // A count is a KTable, and a changelog: the sink carries every intermediate value per key, so a
                 // reader of that topic must take the last value per key rather than summing what it sees.
                 @SuppressWarnings("unchecked")
                 KTable<byte[], Object> table = (KTable<byte[], Object>) minted.node();
-                table.toStream().to(topic, Produced.with(Serdes.ByteArray(), valueSerde));
+                table.toStream().to(topic, produced(minted.type(), handle));
             }
             case HANDLE_KIND_STREAM -> {
                 @SuppressWarnings("unchecked")
                 KStream<byte[], Object> stream = (KStream<byte[], Object>) minted.node();
-                stream.to(topic, Produced.with(Serdes.ByteArray(), valueSerde));
+                stream.to(topic, produced(minted.type(), handle));
             }
             default -> throw new TopologyDescriptionException("sink cannot be applied to handle " + handle
                     + ": it names a " + kindName(minted.type().getKind())
                     + ", and sink needs a stream or a table");
         }
+    }
+
+    /** Both serdes the sink writes with, each selected from the handle's recorded type - key and value alike. */
+    private static Produced<byte[], Object> produced(HandleType type, long handle) {
+        return Produced.with(
+                serdeFor(type.getKeyType(), "key type", handle),
+                serdeFor(type.getValueType(), "value type", handle));
     }
 
     /**
@@ -169,20 +201,47 @@ public class TopologyAssembler {
     }
 
     /**
-     * The serde a recorded value type writes with. Exhaustive with a refusing default: a type this engine has no
-     * serde for is refused by name, never silently written as bytes - a wrong value entering a topic is worse than
-     * a refused call. Package-visible so the refusal is testable without forging a mint path for a type no current
-     * operator produces.
+     * The one mapping from a recorded type to the serde that writes it. Everything that serialises - the sink's
+     * key and value, and an operator's store - selects through here, so a new mintable type is one new branch.
+     * Null for a type with no serde; the two callers below refuse it in their own vocabulary.
      */
-    static Serde<Object> serdeFor(DataType valueType, long handle) {
-        Serde<?> serde = switch (valueType) {
+    private static Serde<?> serdeMapping(DataType type) {
+        return switch (type) {
             case DATA_TYPE_BYTES -> Serdes.ByteArray();
             case DATA_TYPE_LONG -> Serdes.Long();
-            default -> throw new TopologyDescriptionException("sink cannot write handle " + handle
-                    + ": its value type " + typeName(valueType) + " has no serde in this engine");
+            default -> null;
         };
+    }
+
+    /**
+     * The serde a sink writes one axis of a handle with. Exhaustive with a refusing default: a type this engine
+     * has no serde for is refused naming the handle, the axis and the type - never silently written as bytes,
+     * because a wrong value entering a topic is worse than a refused call. Package-visible so the refusal is
+     * testable without forging a mint path for a type no current operator produces.
+     */
+    static <T> Serde<T> serdeFor(DataType type, String axis, long handle) {
+        Serde<?> serde = serdeMapping(type);
+        if (serde == null) {
+            throw new TopologyDescriptionException("sink cannot write handle " + handle
+                    + ": its " + axis + " " + typeName(type) + " has no serde in this engine");
+        }
         @SuppressWarnings("unchecked")
-        Serde<Object> cast = (Serde<Object>) serde;
+        Serde<T> cast = (Serde<T>) serde;
+        return cast;
+    }
+
+    /**
+     * The serde an operator's own store uses for a type it is about to record. A miss here is an engine bug (an
+     * operator recording a type the engine cannot write), not a host mistake, so it refuses as one.
+     */
+    private static <T> Serde<T> operatorSerde(DataType type) {
+        Serde<?> serde = serdeMapping(type);
+        if (serde == null) {
+            throw new IllegalStateException("engine bug: an operator records type " + typeName(type)
+                    + ", which has no serde");
+        }
+        @SuppressWarnings("unchecked")
+        Serde<T> cast = (Serde<T>) serde;
         return cast;
     }
 
