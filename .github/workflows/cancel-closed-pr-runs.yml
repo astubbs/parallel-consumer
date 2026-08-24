@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # Cancel a PR's still-running CI when the PR closes.
 #
 # Merging or closing a PR does NOT stop its in-flight runs - GitHub leaves them to finish. That is

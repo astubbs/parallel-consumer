@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # MANUAL-ONLY full mutation sweep (PIT). Deliberately has no `pull_request` and no `schedule` trigger.
 #
 # WHY STILL MANUAL: not because it cannot finish - it does, see MEASURED below - but because nobody has

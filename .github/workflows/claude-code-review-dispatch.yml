@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 name: review (on demand)
 
 # THE REVIEWER. Dispatched by hand, never on push.

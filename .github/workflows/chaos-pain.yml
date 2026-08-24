@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # Chaos Pain Suite - ON-DEMAND seeded stall hunting on the self-hosted high-CPU runner.
 #
 # Runs the @Tag("chaos") suite (see integrationTests.chaostests + the design doc under docs/plans/):

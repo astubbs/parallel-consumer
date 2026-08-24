@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright (C) 2026 Antony Stubbs and contributors -->
+
 <!-- Risk-averse patch-release ruleset for versions-maven-plugin.
      ignoreVersion type="regex" is FULL-MATCH (Pattern.matches), so each regex
      must match the entire version string. We exclude:

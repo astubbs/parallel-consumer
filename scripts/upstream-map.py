@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 """Validate and render the fork<->upstream tracking cache.
 
 Usage:
