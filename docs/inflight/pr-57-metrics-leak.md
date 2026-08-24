@@ -54,3 +54,54 @@ merged, so the dependency is discharged.
 - `core-pcmetrics-lock-held-across-registry-calls.md` and `core-pcmodule-injection-seam.md` - both
   deferred tasks this PR raised and deliberately did not fix.
 - Chaos Pain Suite reds are confluentinc#857, advisory, not in the required checks - not this PR's.
+
+## Update - 2026-08-24
+
+**Two claims in the 2026-08-20 handoff above are no longer safe to read as written.**
+
+- **"all gates green"** - `Chaos Pain Suite` is red, on every head. It is advisory by design (its
+  workflow header says "NEVER PR-gating"), but a failing check still keeps `mergeStateStatus` out of
+  `CLEAN`, so **this PR cannot reach a green merge state while confluentinc#857 is open**. Two
+  consecutive heads have now demonstrated it. That is a decision - exclude the check from this PR's
+  merge state, or merge with it knowingly red - and it wants settling *before* the recut, which is
+  the moment a clean signal is most useful.
+- **"hook self-tests green"** - true on Linux, false on macOS, where 10 cases fail `expected DENY,
+  got ALLOW`. The cause is master state, not this branch:
+  [`ci-merge-guard-fails-open-on-bsd-stat.md`](ci-merge-guard-fails-open-on-bsd-stat.md). Read the
+  original claim as platform-specific rather than as a property of the branch.
+
+**`Check PR Dependencies` has never run.** Three pushes have each reported a bypassed rule violation
+saying that required status check "is expected". It is required and absent, which is a different
+state from red, and it will block the merge.
+
+### confluentinc#893 / astubbs#121 - what the carried fix is actually evidenced by
+
+Reviewed 2026-08-24 because the upstream issue body is three bullets and explains nothing. The
+evidence is real but it is **not in the issue**, and the upstream PR's own body is misleading:
+
+- **The PR body describes an abandoned fix.** `sangreal` first proposed changing
+  `offsetHighestSucceeded` seeding; `rkolesnev` rejected that reading, and the author replaced it
+  with the dirty-read fix on 2025-10-29. The body was never updated, so it argues a root cause the
+  diff does not implement. The diff touches `PartitionState.java` only and never touches
+  `offsetHighestSucceeded`.
+- **The real walkthrough is a PR comment** (2025-11-05), with concrete offsets, and it matches the
+  shipped code: the payload is encoded against one base, a completion lands between the two
+  `getOffsetToCommit()` reads, the higher offset is committed, and the decode shift compounds across
+  rebalances until a poll goes out of range.
+- **Field evidence is one datapoint**: the reporter ran it privately for "more than a week" against
+  a fault that recurred "once every several days".
+- **The approving reviewer approved with a live suspicion** - "i still think there might be another
+  edge case here but i havent fleshed it out yet" - and separately believed there is a distinct
+  offset-advance-by-one bug. Neither was ever resolved.
+- **No behavioural reproduction exists anywhere.** `rkolesnev` asked for one; none was produced.
+  Upstream ships no test at all. The test this fork adds asserts `getOffsetToCommit()` is called
+  once - it pins the fix's shape and fails against the old code, but it is single-threaded and
+  cannot fail for the reason the bug occurs.
+
+So: high confidence the change is a faithful carry that closes a real window in the safe direction;
+**low confidence that it is the whole of confluentinc#894**. Two consequences worth honouring at
+merge - word the changelog as closing the dirty-read window rather than as fixing offset-reset, and
+do not let the merge auto-close astubbs#121.
+
+Unread: `Parallel Consumer Offset reset Issue flow.pdf`, attached to confluentinc#893 on 2025-10-31,
+which may hold the reproduction nobody wrote down.
