@@ -354,3 +354,44 @@ ceiling is gone (conditional, stated with its law); one conditioned 1.5x for the
 characterisation section that no rival can copy without doing the work; latency you can finally
 see. That is enough, and every sentence of it survives hostile re-measurement - which, per the
 rule at the top of this file, is the whole point.
+
+### Amendment, 2026-08-24, after owner review of the decision
+
+The owner pushed back on two points and asked where the latency work stands. Both pushbacks are
+accepted.
+
+**Point 7 is reversed: the overhead numbers publish, framed as overhead.** 0ms is not a workload
+anyone runs, and that is exactly why it is the right operating point for measuring pure engine
+overhead. The post-virtual-threads control
+([`next-franz-go-as-a-client-option.md`](next-franz-go-as-a-client-option.md), 2026-08-22 - 200,000
+records, 10 partitions, timer callee, concurrency 5,000): franz-go 62,384 msg/s; a bare Java
+consumer with virtual-thread workers 58,064 (**93% of the Go client**); PC's full engine
+(`core-dpvt`) 50,768 (**81% of the Go client, ~13% over the bare Java floor**, 11% at 2ms). The
+publishable sentence: *"a virtual-thread Java consumer sits within 7% of the fastest Go client, and
+Parallel Consumer's entire engine - ordering, retries, offset tracking - costs about 13% over that
+floor."* The nearly-match belongs to the JVM client, the 13% to PC; do not blur them into "PC
+nearly matches Go". **Cite franz-go by name only** - llingr rows sit in the same result files and
+remain private under the standing constraint.
+
+**A ninth claim: the bottleneck-removal story, told on synthetic benchmarks and labelled as such.**
+"No headline multiplier" (point 1) does not mean no performance story. The engine ceilings found
+and removed are real engineering even where realistic workloads never hit them: the platform-thread
+activation ceiling (`min(maxConcurrency, r x handler_latency)` - removing it is worth 2.15x at 2ms
+on the same client, and is the difference between 64% and 81% of the Go floor); the dispatch scan
+(440 entries examined per record dispatched down to 1.00 at 5,000 in flight); the in-flight ceiling
+above 2,000. The frame: *we hunted the engine's own limits with synthetic benchmarks and removed
+them - here are the numbers, and here is why most workloads never hit them.* Saying the second half
+out loud is what makes point 4's characterisation section credible.
+
+**Where latency stands, for the record.** The mechanics are built and merged: residence, drain and
+end-to-end percentile families, controlled arrival rate, snapshots taken at window close. Two
+committed result sets:
+[`arrival-tail-skew-matrix.csv`](../../bench/results/arrival-tail-skew-matrix.csv) (85 rows -
+flat/tail/failure workloads x distinct/Zipf keys x 50/70/90% utilisation) and
+[`ordering-head-of-line-latency.csv`](../../bench/results/ordering-head-of-line-latency.csv).
+Headline findings: on distinct keys `KEY` ordering adds nothing to the handler's own p99 (510/509/
+508ms against a 505ms injected handler tail, at every load measured); on Zipf it holds at 50%
+utilisation and amplifies from 70% up (512 / 750 / 1,200ms). Still missing: latency rows for
+`core-vt`, the async engines and `proxy` (only `core` and `share-explicit` were measured), and
+K4's head-of-line number against a *plain consumer* - the Kafka Streams argument - which the
+committed head-of-line file does not provide because it compares PC's own modes against each other.
