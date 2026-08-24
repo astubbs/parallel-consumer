@@ -541,11 +541,10 @@ skewed keys, and the two work-model no-ops that would have voided the run`. What
 this branch has not merged that base since it arrived. So the harness is a merge away, not a piece of
 work waiting to be done.
 
-Recorded because the first reading of this was wrong in a way worth not repeating: the local branch
-`perf/bench-arrival-and-key-skew` has no remote of its own, which was read as the work being unpushed.
-A branch name without a remote says nothing about whether its **commits** are on one - here every one
-of them is already contained in the pushed base. Ask `git merge-base --is-ancestor <branch>
-<pushed-ref>`, never `git branch -a`.
+The first reading of this was wrong - the branch's missing remote was read as unpushed work when
+every commit was already contained in the pushed base. The method lesson lives in
+[`docs/solutions/workflow-issues/a-branch-without-a-remote-is-not-unpushed-work-2026-08-24.md`](../solutions/workflow-issues/a-branch-without-a-remote-is-not-unpushed-work-2026-08-24.md),
+which owns it.
 
 ## The comparison integration test
 

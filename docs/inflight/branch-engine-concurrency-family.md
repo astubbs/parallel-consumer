@@ -15,11 +15,11 @@ next session re-runs.
 
 ## The thing to check before believing a branch is stranded
 
-A local branch with no remote of its own says **nothing** about whether its commits are pushed.
-`perf/bench-arrival-and-key-skew` has no `origin/` counterpart and every one of its commits is
-already contained in the pushed base, because it was merged there under a different branch name.
-Asking `git branch -a` produced a confident "this work is unpushed and at risk" that was simply
-false. Ask `git merge-base --is-ancestor <branch> <pushed-ref>`.
+Ask `git merge-base --is-ancestor <branch> <pushed-ref>`, never `git branch -a` - a name's missing
+remote says nothing about its commits, and the wrong reading of exactly these branches produced a
+confident false stranded-work warning.
+[`docs/solutions/workflow-issues/a-branch-without-a-remote-is-not-unpushed-work-2026-08-24.md`](../solutions/workflow-issues/a-branch-without-a-remote-is-not-unpushed-work-2026-08-24.md)
+owns the lesson.
 
 ## The measurement branches
 
