@@ -21,6 +21,7 @@ An answer produced instantly is still an answer nobody can collect.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -35,6 +36,12 @@ from test_streams_session import FakeEngine
 #: Long enough that an answer which CAN be delivered arrives with room to spare - the fake answers
 #: inside ``send`` - and short enough that a hang costs the suite under a second per case.
 BLOCKED_FOR = 0.75
+
+#: How many host threads query at once in the concurrency test. Well above the two the defect was
+#: first seen with: one pair crossing its answers is a coin flip that a lucky schedule hides, and
+#: the defect DID hide that way on some runs. Every asker uses a distinct key, so a crossed answer
+#: is named rather than merely counted.
+CONCURRENT_ASKERS = 16
 
 
 @pytest.fixture()
@@ -177,17 +184,19 @@ class ReleasesAnswersOneAtATime(FakeEngine):
         super().close()
 
 
-def test_the_answer_a_timed_out_reentrant_query_abandoned_is_collected_by_the_next_caller() -> None:
-    """The hang is not the whole cost: it leaves an unclaimed answer on the wire.
+def test_an_abandoned_answer_is_dropped_rather_than_collected_by_the_next_caller(
+        caplog: pytest.LogCaptureFixture) -> None:
+    """The inverted half of the single-slot defect: a late answer now reaches nobody.
 
-    A query carries no correlation - unlike a builder call, which has ``call_id`` - so the session
-    holds exactly one ``_get_result`` slot and one ``_got`` event for all queries. When a reentrant
-    query gives up, its answer is still coming, and the next caller to wait on that one event
-    collects it. Different store, different key, and no error anywhere: the host is handed a
-    confident wrong value.
+    A query carries its own ``call_id`` and the engine echoes it, so a caller that timed out and
+    withdrew leaves no slot for its answer to land in. When that answer finally arrives it names a
+    call nobody is waiting for and is dropped with a warning - where it used to be handed to the
+    next thread to wait, which then held a confident value for a key it never asked about, from a
+    store it may never have named.
 
-    This is why "document the reentrancy limitation and move on" does not close the issue. The
-    hang is visible and survivable; this is silent.
+    Written as a re-entrant query because that is the shape the defect was found in, but the
+    mechanism has nothing to do with re-entrancy: any query that gives up before its answer lands
+    used to leak it onto the next caller.
     """
     engine = ReleasesAnswersOneAtATime()
     engine._get_answer = pb.GetResult(
@@ -214,64 +223,99 @@ def test_the_answer_a_timed_out_reentrant_query_abandoned_is_collected_by_the_ne
     asker = threading.Thread(target=ask, name="asker")
     asker.start()
     _await_nth(engine, "get", 2)
-    # The fresh query is now sent and waiting; let the abandoned answer through ahead of it, and
-    # ONLY that one - the fresh answer stays held, so what the asker collects cannot be an accident
-    # of which thread the interpreter happened to run next.
+
+    # The fresh query is now sent and waiting. Let the ABANDONED answer through, and only that one
+    # - so if it were still being mis-delivered, the asker would return holding it.
+    with caplog.at_level(logging.WARNING, logger="parallel_consumer.streams._session"):
+        caplog.clear()
+        engine.release_one_answer()
+        asker.join(1.0)
+        assert not collected, "the abandoned answer was delivered to a caller that never asked it"
+        # A positive assertion, not just the absence of a delivery: it pins that the answer was
+        # SEEN and refused, so a session that silently stopped reading would fail here too.
+        assert "nobody is waiting for" in caplog.text, (
+            "the abandoned answer was neither delivered nor dropped - it went somewhere unrecorded")
+
+    # And the asker's own answer, once released, is the one it gets.
     engine.release_one_answer()
     asker.join(15.0)
-
-    assert collected, "the second query never returned"
-    assert collected[0] == b"ABANDONED", (
-        "the stale answer was no longer mis-delivered - if queries gained a correlation, invert "
-        "this test to assert b'FRESH' rather than relaxing it")
+    assert collected == [b"FRESH"]
     session.close()
 
 
-@pytest.mark.xfail(strict=True, reason="single-slot query state: Get carries no correlation, so "
-                                       "two concurrent callers share one answer. Remove this "
-                                       "marker when Get/GetResult gain a correlation.")
 def test_two_concurrent_queries_each_receive_their_own_answer() -> None:
     """Two ordinary host threads querying at once. No invocation, no mapper, no re-entrancy.
 
-    Marked ``xfail(strict=True)`` rather than written as a characterisation test, and the
-    difference is deliberate. The tests above pin an accepted PoC limitation, so they assert what
-    the code DOES. This one pins a defect, so it asserts what the code SHOULD do and records that
-    it does not yet - and ``strict`` means that the moment somebody adds the correlation, this
-    turns into an XPASS failure telling them to delete the marker. Pinning a defect as passing
-    behaviour would instead make the eventual fix look like a regression.
+    This was the silent member of the family, and it carried an ``xfail(strict=True)`` marker
+    until ``Get``/``GetResult`` gained a ``call_id``: the session held one answer slot for every
+    query in it, so the second answer to arrive overwrote the first and both callers read
+    whichever landed last. No exception, no fault, no log line - just a confident value for a key
+    nobody asked about. The marker turned the fix into an XPASS failure rather than letting it
+    look like a regression, which is how it came to be deleted here.
 
-    The session holds one ``_got`` event and one ``_get_result`` slot for every query, so the
-    second answer to arrive overwrites the first and both callers read whichever landed last.
-    ``describe()`` has the identical shape (one ``_described``, one ``_description``).
-
-    The existing ``test_a_second_query_waits_for_its_own_answer`` does not cover this: two
-    SEQUENTIAL queries are handled correctly by the ``_got.clear()`` in ``get``.
+    ``test_a_second_query_waits_for_its_own_answer`` does not cover this and never did: two
+    SEQUENTIAL queries were always handled correctly.
     """
-    class AnswersWithTheKeyItWasAsked(FakeEngine):
-        """Echoes the key back as the value, so a mis-delivery names the query it belongs to."""
+    class AnswersEveryQueryAtOnceInReverse(FakeEngine):
+        """Holds every query until all of them are in, then answers them BACKWARDS.
+
+        Three properties, each of which a weaker fake cost this test:
+
+        * It echoes the key as the value, so a mis-delivery names the query it belongs to.
+        * It answers the query itself rather than delegating to the base fake, which answers every
+          ``get`` with the arranged ``_get_answer`` - two answers per query, and the first a
+          default ``found=False``. Under one shared slot that failed whichever way the race fell,
+          so the test failed for a reason it never claimed.
+        * It answers in REVERSE order, and that is what makes the test sensitive to the
+          correlation rather than to arrival order. A client that matched each answer to the
+          OLDEST waiting caller instead of the one it names passes when answers come back in the
+          order they were asked - which is exactly what a fake answering inside ``send`` produces,
+          and it passed a deliberate sabotage of that shape.
+        """
+
+        def __init__(self, expected: int) -> None:
+            super().__init__()
+            self._expected = expected
+            self._held: list[pb.StreamsServerMessage] = []
 
         def send(self, message: pb.StreamsClientMessage) -> None:
-            super().send(message)
-            if message.WhichOneof("message") == "get":
-                self._outbound.put(pb.StreamsServerMessage(get_result=pb.GetResult(
-                    found=True, value=message.get.key, value_type=pb.DATA_TYPE_BYTES)))
+            if message.WhichOneof("message") != "get":
+                super().send(message)
+                return
+            with self._lock:
+                self.sent.append(message)
+                self._held.append(pb.StreamsServerMessage(get_result=pb.GetResult(
+                    call_id=message.get.call_id, found=True, value=message.get.key,
+                    value_type=pb.DATA_TYPE_BYTES)))
+                if len(self._held) < self._expected:
+                    return
+                answers = list(reversed(self._held))
+                self._held = []
+            for answer in answers:
+                self._outbound.put(answer)
 
-    engine = AnswersWithTheKeyItWasAsked()
+    # More than two: the original defect was masked by scheduling on some runs, so a single pair
+    # proves very little. Every key is distinct, so any crossed answer is named rather than counted.
+    keys = [f"key-{n}".encode() for n in range(CONCURRENT_ASKERS)]
+    engine = AnswersEveryQueryAtOnceInReverse(len(keys))
     session = StreamsSession(engine)
     session.open("concurrent", {})
 
     answers: dict[bytes, bytes | int | None] = {}
-    both_ready = threading.Barrier(2)
+    answers_lock = threading.Lock()
+    all_ready = threading.Barrier(len(keys))
 
     def ask(key: bytes) -> None:
-        both_ready.wait(timeout=5)
-        answers[key] = session.get("store", key, timeout=5.0)
+        all_ready.wait(timeout=10)
+        answer = session.get("store", key, timeout=10.0)
+        with answers_lock:
+            answers[key] = answer
 
-    threads = [threading.Thread(target=ask, args=(k,)) for k in (b"alpha", b"beta")]
+    threads = [threading.Thread(target=ask, args=(key,), name=key.decode()) for key in keys]
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=10)
+        thread.join(timeout=20)
 
     session.close()
-    assert answers == {b"alpha": b"alpha", b"beta": b"beta"}
+    assert answers == {key: key for key in keys}

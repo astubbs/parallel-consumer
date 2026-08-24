@@ -6,6 +6,9 @@ package bz.stub.parallelconsumer.streams;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.BuilderCall;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Count;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Describe;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Get;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.GetResult;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleAssigned;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
@@ -17,6 +20,7 @@ import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Sink;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Source;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsClientMessage;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsServerMessage;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.TopologyDescription;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 import org.junit.jupiter.api.Test;
@@ -159,6 +163,48 @@ class StreamsProtocolRoundTripTest {
         assertThat(okResult.hasError()).isFalse();
         assertThat(failedResult.getError()).isEqualTo("boom");
         assertThat(failedResult.hasValue()).isFalse();
+    }
+
+    /**
+     * The correlation on the query pair travels, and its absence is distinguishable from zero.
+     *
+     * <p>Both halves matter. A call id that failed to travel would leave every query unanswerable; a zero that
+     * could not be told from an absent field would make "this engine does not correlate" and "this is call 0"
+     * the same message, and a client cannot drop one while honouring the other.
+     */
+    @Test
+    void aQueryAndItsAnswerCarryTheirCorrelation() throws InvalidProtocolBufferException {
+        StreamsClientMessage asked = StreamsClientMessage.newBuilder()
+                .setGet(Get.newBuilder().setStoreName("counted").setKey(ByteString.copyFromUtf8("a")).setCallId(3))
+                .build();
+        StreamsServerMessage answered = StreamsServerMessage.newBuilder()
+                .setGetResult(GetResult.newBuilder().setCallId(3).setFound(true)
+                        .setValue(ByteString.copyFromUtf8("v")).setValueType(DataType.DATA_TYPE_BYTES))
+                .build();
+        StreamsServerMessage uncorrelated = StreamsServerMessage.newBuilder()
+                .setGetResult(GetResult.newBuilder().setFound(false))
+                .build();
+
+        assertThat(StreamsClientMessage.parseFrom(asked.toByteArray()).getGet().getCallId()).isEqualTo(3);
+        assertThat(StreamsServerMessage.parseFrom(answered.toByteArray()).getGetResult().getCallId()).isEqualTo(3);
+        assertThat(StreamsServerMessage.parseFrom(uncorrelated.toByteArray()).getGetResult().hasCallId()).isFalse();
+    }
+
+    /** Describe carries the same correlation, on the description that answers it. */
+    @Test
+    void aDescribeAndItsDescriptionCarryTheirCorrelation() throws InvalidProtocolBufferException {
+        StreamsClientMessage asked = StreamsClientMessage.newBuilder()
+                .setDescribe(Describe.newBuilder().setCallId(8))
+                .build();
+        StreamsServerMessage answered = StreamsServerMessage.newBuilder()
+                .setTopologyDescription(TopologyDescription.newBuilder().setCallId(8).setText("Topologies:"))
+                .build();
+
+        assertThat(StreamsClientMessage.parseFrom(asked.toByteArray()).getDescribe().getCallId()).isEqualTo(8);
+        TopologyDescription received =
+                StreamsServerMessage.parseFrom(answered.toByteArray()).getTopologyDescription();
+        assertThat(received.getCallId()).isEqualTo(8);
+        assertThat(received.getText()).isEqualTo("Topologies:");
     }
 
     @Test

@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.streams;
 
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.BuilderCall;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Describe;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Get;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.GetResult;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Fault;
@@ -16,6 +17,7 @@ import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Ready;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsClientMessage;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsServerMessage;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsServiceGrpc;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.TopologyDescription;
 import com.google.protobuf.ByteString;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
@@ -108,7 +110,7 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                 case REGISTER_FUNCTION -> log.debug("host registered function token {}",
                         message.getRegisterFunction().getToken());
                 case DESCRIBE_COMPLETE -> onDescribeComplete();
-                case DESCRIBE -> onDescribe();
+                case DESCRIBE -> onDescribe(message.getDescribe());
                 case GET -> onGet(message.getGet());
                 case INVOCATION_RESULT -> onResult(message.getInvocationResult());
                 // Named rather than ignored: a foreign caller that sends something this engine does not implement
@@ -185,11 +187,18 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
           * <p>Materialising the topology closes the description - no further builder call is
           * accepted afterwards - which is why this is worth saying out loud: asking is not free of
           * consequence, it just is not fatal.
+          *
+          * <p>The request's call_id is echoed back when it carries one, and omitted when it does
+          * not, so absence on the answer means the asker never correlated rather than that the
+          * engine lost the correlation.
           */
-        private void onDescribe() {
-            send(StreamsServerMessage.newBuilder()
-                    .setTopologyDescription(TopologyDescriber.describe(assembler.build()))
-                    .build());
+        private void onDescribe(Describe describe) {
+            TopologyDescription.Builder description =
+                    TopologyDescriber.describe(assembler.build()).toBuilder();
+            if (describe.hasCallId()) {
+                description.setCallId(describe.getCallId());
+            }
+            send(StreamsServerMessage.newBuilder().setTopologyDescription(description).build());
         }
 
         /**
@@ -198,6 +207,10 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
          * <p>Every failure answers rather than faults the session. A query for a missing key, a missing store, or
          * a topology that has not started is a question with an answer - "no" - and tearing the stream down over
          * one bad lookup would take the whole topology with it.
+         *
+         * <p>The answer carries back the query's call_id. Without it a host holds one answer slot for the whole
+         * session, and two threads querying at once are each handed whichever answer landed last - silently, and
+         * for a key neither of them asked about.
          */
         private void onGet(Get get) {
             GetResult.Builder result = GetResult.newBuilder();
@@ -216,6 +229,12 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
             } catch (Exception failed) {
                 result.clearFound().clearValue().setError(failed.getMessage() == null
                         ? failed.getClass().getSimpleName() : failed.getMessage());
+            }
+            // Set last, and outside the try, so the correlation survives every answer shape - a hit, a miss and a
+            // refusal alike. An error answer that lost its call_id would leave the asker waiting for a reply that
+            // has already been sent, which is the failure this correlation exists to remove.
+            if (get.hasCallId()) {
+                result.setCallId(get.getCallId());
             }
             send(StreamsServerMessage.newBuilder().setGetResult(result).build());
         }

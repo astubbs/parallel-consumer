@@ -55,10 +55,12 @@ class FakeEngine:
             self._outbound.put(pb.StreamsServerMessage(
                 ready=pb.Ready(application_id=message.open.application_id)))
         elif kind == "get":
-            self._outbound.put(pb.StreamsServerMessage(get_result=self._get_answer))
+            self._outbound.put(pb.StreamsServerMessage(
+                get_result=self._answered(self._get_answer, message.get.call_id)))
         elif kind == "describe":
             self._outbound.put(pb.StreamsServerMessage(
                 topology_description=pb.TopologyDescription(
+                    call_id=message.describe.call_id,
                     text="Topologies:\n   Sub-topology: 0\n    Source: KSTREAM-SOURCE-0000000000",
                     subtopologies=[pb.Subtopology(id=0, nodes=[
                         pb.Node(name="KSTREAM-SOURCE-0000000000",
@@ -92,6 +94,18 @@ class FakeEngine:
             self._outbound.put(pb.StreamsServerMessage(
                 handle_assigned=pb.HandleAssigned(
                     call_id=call_id, handle=self._next_handle, type=answered_type)))
+
+    @staticmethod
+    def _answered(answer: pb.GetResult, call_id: int) -> pb.GetResult:
+        """The arranged answer, stamped with the call id of the query it is answering.
+
+        Copied rather than mutated: ``_get_answer`` is arranged once and may answer several
+        queries, and stamping it in place would leave the previous query's id on it.
+        """
+        stamped = pb.GetResult()
+        stamped.CopyFrom(answer)
+        stamped.call_id = call_id
+        return stamped
 
     @staticmethod
     def _type_of(method: str | None) -> pb.HandleType:
@@ -514,13 +528,15 @@ class SlowDescribeEngine(FakeEngine):
                 self.describes += 1
                 nth = self.describes
             if self._answer:
-                threading.Timer(self._delay, self._deliver, args=(nth,)).start()
+                threading.Timer(
+                    self._delay, self._deliver, args=(nth, message.describe.call_id)).start()
             return
         super().send(message)
 
-    def _deliver(self, nth: int) -> None:
+    def _deliver(self, nth: int, call_id: int) -> None:
         self._outbound.put(pb.StreamsServerMessage(
-            topology_description=pb.TopologyDescription(text=f"description {nth}")))
+            topology_description=pb.TopologyDescription(
+                call_id=call_id, text=f"description {nth}")))
 
     def fault_later(self, reason: str) -> None:
         threading.Timer(self._delay, self._outbound.put, args=(
@@ -675,6 +691,102 @@ def test_a_query_that_could_not_be_served_raises_rather_than_reporting_absence(
 
     with pytest.raises(StreamsError, match="still restoring"):
         session.get("reduced", b"a")
+
+
+class AnswersWithoutACorrelation(FakeEngine):
+    """Answers every query, and never echoes the call id - an engine predating the correlation.
+
+    The shape that matters for skew: the answer is on the wire and is perfectly well formed, so
+    nothing about the transport looks wrong. Only the correlation is missing.
+    """
+
+    def send(self, message: pb.StreamsClientMessage) -> None:
+        if message.WhichOneof("message") != "get":
+            super().send(message)
+            return
+        with self._lock:
+            self.sent.append(message)
+        self._outbound.put(pb.StreamsServerMessage(get_result=self._get_answer))
+
+
+def test_an_answer_naming_no_call_is_dropped_rather_than_given_to_whoever_is_waiting() -> None:
+    """An uncorrelated answer must reach nobody, even though somebody is waiting for one.
+
+    The tempting fallback - "no call id, so give it to the only waiter" - is the single-slot bug
+    wearing a disguise: it is right exactly while there is one waiter, and silently wrong the
+    moment there are two. Failing the query is honest; the caller learns it got no answer instead
+    of learning the wrong one.
+    """
+    engine = AnswersWithoutACorrelation()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine._get_answer = pb.GetResult(found=True, value=b"v", value_type=pb.DATA_TYPE_BYTES)
+
+    with pytest.raises(StreamsError, match="did not answer"):
+        session.get("reduced", b"a", timeout=0.5)
+
+    engine.close()
+
+
+class DescribesConcurrently(FakeEngine):
+    """Answers every describe LATE and with a text naming the call it answers.
+
+    The delay is what makes the test concurrent rather than sequential: every describe is sent
+    before any answer lands, so all the waiters are in flight at once. The base fake answers inside
+    ``send``, which would settle each describe before the next was even asked.
+    """
+
+    def __init__(self, *, delay: float = 0.1) -> None:
+        super().__init__()
+        self._delay = delay
+
+    def send(self, message: pb.StreamsClientMessage) -> None:
+        if message.WhichOneof("message") != "describe":
+            super().send(message)
+            return
+        with self._lock:
+            self.sent.append(message)
+        call_id = message.describe.call_id
+        threading.Timer(self._delay, self._outbound.put, args=(
+            pb.StreamsServerMessage(topology_description=pb.TopologyDescription(
+                call_id=call_id, text=f"description for call {call_id}")),)).start()
+
+
+def test_concurrent_describes_each_receive_their_own_answer() -> None:
+    """``describe`` had the query's defect exactly, and needed the query's fix exactly.
+
+    One ``_described`` event and one ``_description`` slot for the whole session, so two hosts
+    threads asking what the topology looks like were both handed whichever answer landed last.
+    Parametrising the re-entrancy tests over all three crossings was what stopped a fix that
+    correlated queries and left this one alone from looking complete.
+
+    Asserting that the descriptions are DISTINCT rather than matching each caller to its own text:
+    a caller cannot see the call id it was allocated, and duplicates are precisely what one shared
+    slot produces.
+    """
+    engine = DescribesConcurrently()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    collected: list[str] = []
+    collected_lock = threading.Lock()
+    all_ready = threading.Barrier(8)
+
+    def ask() -> None:
+        all_ready.wait(timeout=10)
+        description = session.describe(timeout=10.0)
+        with collected_lock:
+            collected.append(description.text)
+
+    threads = [threading.Thread(target=ask, name=f"describer-{n}") for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    session.close()
+
+    assert len(collected) == 8, "not every describe returned"
+    assert len(set(collected)) == 8, f"two describes were handed the same answer: {collected}"
 
 
 def test_a_second_query_waits_for_its_own_answer() -> None:

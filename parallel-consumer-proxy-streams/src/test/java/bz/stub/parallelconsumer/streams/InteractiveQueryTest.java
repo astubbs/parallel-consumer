@@ -42,6 +42,7 @@ class InteractiveQueryTest {
     private final Map<String, Object> store = new HashMap<>();
     private final List<StreamsServerMessage> sent = new ArrayList<>();
     private boolean queryThrows;
+    private long lastQueryId;
 
     private final StreamsSessionService service = new StreamsSessionService((topology, open) ->
             new StreamsSessionService.TopologyRun() {
@@ -98,10 +99,48 @@ class InteractiveQueryTest {
         return sent.get(sent.size() - 1).getHandleAssigned().getHandle();
     }
 
+    /** Queries under a fresh call id each time, so an answer can be told from the one before it. */
     private GetResult query(StreamObserver<StreamsClientMessage> toEngine, String storeName, byte[] key) {
+        return query(toEngine, storeName, key, ++lastQueryId);
+    }
+
+    private GetResult query(
+            StreamObserver<StreamsClientMessage> toEngine, String storeName, byte[] key, long callId) {
         toEngine.onNext(StreamsClientMessage.newBuilder()
-                .setGet(Get.newBuilder().setStoreName(storeName).setKey(ByteString.copyFrom(key))).build());
+                .setGet(Get.newBuilder().setStoreName(storeName).setKey(ByteString.copyFrom(key))
+                        .setCallId(callId)).build());
         return sent.get(sent.size() - 1).getGetResult();
+    }
+
+    /**
+     * The correlation, on every answer shape there is.
+     *
+     * <p>A hit, a miss and a refusal are three different code paths through {@code onGet}, and only the first is
+     * the one anybody writes a test for. Losing the call id on the refusal path is the expensive one: the host
+     * would wait out its whole timeout for an answer the engine had already sent, and report an unreachable
+     * engine rather than the store error it was actually told about.
+     */
+    @Test
+    void everyAnswerCarriesBackTheCallIdOfTheQueryThatAskedIt() {
+        StreamObserver<StreamsClientMessage> toEngine = runningReduceTopology();
+        store.put("a", "stored".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(query(toEngine, "reduced", KEY, 11).getCallId()).isEqualTo(11);
+        assertThat(query(toEngine, "reduced", "absent".getBytes(StandardCharsets.UTF_8), 12).getCallId())
+                .isEqualTo(12);
+        assertThat(query(toEngine, "no-such-store", KEY, 13).getCallId()).isEqualTo(13);
+    }
+
+    /** A query that names no call id is answered without one, so absence means the asker never correlated. */
+    @Test
+    void anUncorrelatedQueryIsAnsweredWithoutACorrelation() {
+        StreamObserver<StreamsClientMessage> toEngine = runningReduceTopology();
+        store.put("a", "stored".getBytes(StandardCharsets.UTF_8));
+
+        toEngine.onNext(StreamsClientMessage.newBuilder()
+                .setGet(Get.newBuilder().setStoreName("reduced").setKey(ByteString.copyFrom(KEY))).build());
+
+        assertThat(sent.get(sent.size() - 1).getGetResult().hasCallId()).isFalse();
     }
 
     @Test

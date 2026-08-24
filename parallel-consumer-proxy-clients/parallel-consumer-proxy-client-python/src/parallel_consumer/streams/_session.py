@@ -275,13 +275,13 @@ class StreamsSession:
         self._functions: dict[int, tuple[FunctionKind, RecordFunction]] = {}
         self._tokens = itertools.count(1)
         self._call_ids = itertools.count(1)
+        #: One waiter per outstanding call, and one answer slot per outstanding call - never one
+        #: slot per KIND of call. Builder calls, queries and describes all draw from ``_call_ids``
+        #: and all settle through the same pair, so there is exactly one place where an answer is
+        #: matched to the caller that asked for it.
         self._pending: dict[int, threading.Event] = {}
-        self._handles: dict[int, Handle] = {}
+        self._answers: dict[int, object] = {}
         self._ready = threading.Event()
-        self._described = threading.Event()
-        self._got = threading.Event()
-        self._get_result: pb.GetResult | None = None
-        self._description: pb.TopologyDescription | None = None
         self._fault: str | None = None
         self._closing = False
         self._lock = threading.Lock()
@@ -313,14 +313,11 @@ class StreamsSession:
         The ``text`` field is what every existing Kafka Streams visualiser parses, so a language
         with no Streams tooling of its own gets all of it by printing this string.
         """
-        self._described.clear()
-        self._transport.send(pb.StreamsClientMessage(describe=pb.Describe()))
-        if not self._described.wait(timeout):
-            raise StreamsError("the engine did not answer the describe request")
-        self._raise_if_faulted()
-        description = self._description
-        if description is None:
-            # The event fired without a description attached. Raised rather than asserted: an
+        call_id, answered = self._begin()
+        self._transport.send(pb.StreamsClientMessage(describe=pb.Describe(call_id=call_id)))
+        description = self._await(call_id, answered, timeout, "the describe request")
+        if not isinstance(description, pb.TopologyDescription):
+            # The waiter woke with no description attached. Raised rather than asserted: an
             # assert is stripped under -O, and this would then return None from a method whose
             # signature promises otherwise.
             raise StreamsError("the engine signalled a description but sent none")
@@ -343,14 +340,11 @@ class StreamsSession:
         NOT reported as an absent key: the two mean very different things to whoever is
         deciding what to do next.
         """
-        self._got.clear()
+        call_id, answered = self._begin()
         self._transport.send(pb.StreamsClientMessage(
-            get=pb.Get(store_name=store_name, key=key)))
-        if not self._got.wait(timeout):
-            raise StreamsError(f"the engine did not answer a query for {store_name}")
-        self._raise_if_faulted()
-        answer = self._get_result
-        if answer is None:
+            get=pb.Get(store_name=store_name, key=key, call_id=call_id)))
+        answer = self._await(call_id, answered, timeout, f"a query for {store_name}")
+        if not isinstance(answer, pb.GetResult):
             raise StreamsError("the engine signalled a query answer but sent none")
         if answer.error:
             raise StreamsError(f"query on {store_name} failed: {answer.error}")
@@ -390,19 +384,65 @@ class StreamsSession:
 
     # ---- internals ---------------------------------------------------------------
 
-    def _call(self, call: pb.BuilderCall, timeout: float = 30.0) -> Handle:
+    def _begin(self) -> tuple[int, threading.Event]:
+        """Claims the next call id and registers its waiter, before anything is sent.
+
+        Registered BEFORE the send and never after: the engine may answer from inside ``send`` -
+        the test fakes do exactly that - and an answer arriving before its waiter existed would be
+        dropped as uncorrelated.
+        """
         call_id = next(self._call_ids)
-        call.call_id = call_id
         answered = threading.Event()
         with self._lock:
             self._pending[call_id] = answered
-        self._transport.send(pb.StreamsClientMessage(builder_call=call))
+        return call_id, answered
+
+    def _await(
+        self, call_id: int, answered: threading.Event, timeout: float, question: str,
+    ) -> object | None:
+        """Waits for the answer to one call id, and gives up the waiter either way.
+
+        Withdrawing the waiter on a timeout is what stops a late answer reaching somebody else:
+        with no waiter registered, :meth:`_settle` drops the answer instead of storing it. The
+        alternative - leaving the slot in place - is precisely how an abandoned query's answer used
+        to be collected by the next caller.
+        """
         if not answered.wait(timeout):
-            raise StreamsError(f"the engine did not answer builder call {call_id}")
+            with self._lock:
+                self._pending.pop(call_id, None)
+                self._answers.pop(call_id, None)
+            raise StreamsError(f"the engine did not answer {question}")
         self._raise_if_faulted()
         with self._lock:
-            return self._handles.pop(
-                call_id, Handle(0, HandleKind.UNKNOWN, DataType.UNKNOWN, DataType.UNKNOWN))
+            return self._answers.pop(call_id, None)
+
+    def _settle(self, call_id: int, answer: object, what: str) -> None:
+        """Hands one answer to the caller that asked for it, and to nobody else.
+
+        An answer no waiter claims is DROPPED with a warning, which covers three cases that were
+        previously indistinguishable: a caller that timed out and gave up, a duplicate answer, and
+        an engine too old to echo the call id at all. Passing any of them to whoever happens to be
+        waiting is the mis-delivery this correlation exists to remove, and it is silent - the host
+        is handed a confident answer to a question it never asked.
+        """
+        with self._lock:
+            waiting = self._pending.pop(call_id, None)
+            if waiting is None:
+                log.warning(
+                    "dropping a %s naming call %d that nobody is waiting for - the caller gave up, "
+                    "or the engine did not echo the call id", what, call_id)
+                return
+            self._answers[call_id] = answer
+        waiting.set()
+
+    def _call(self, call: pb.BuilderCall, timeout: float = 30.0) -> Handle:
+        call_id, answered = self._begin()
+        call.call_id = call_id
+        self._transport.send(pb.StreamsClientMessage(builder_call=call))
+        answer = self._await(call_id, answered, timeout, f"builder call {call_id}")
+        if isinstance(answer, Handle):
+            return answer
+        return Handle(0, HandleKind.UNKNOWN, DataType.UNKNOWN, DataType.UNKNOWN)
 
     def _read(self) -> None:
         try:
@@ -411,20 +451,18 @@ class StreamsSession:
                 if kind == "ready":
                     self._ready.set()
                 elif kind == "handle_assigned":
-                    self._on_handle(message.handle_assigned)
+                    self._settle(
+                        message.handle_assigned.call_id,
+                        Handle.from_assigned(message.handle_assigned), "handle")
                 elif kind == "invocation":
                     self._on_invocation(message.invocation)
                 elif kind == "get_result":
-                    # Assigned before the event, for the same reason the description is: a
-                    # waiter that woke first and read None would report "no answer" for one
-                    # that had in fact arrived.
-                    self._get_result = message.get_result
-                    self._got.set()
+                    self._settle(
+                        message.get_result.call_id, message.get_result, "query answer")
                 elif kind == "topology_description":
-                    # Assigned before the event is set: a waiter that woke first and read None
-                    # would report "no description" for a description that had in fact arrived.
-                    self._description = message.topology_description
-                    self._described.set()
+                    self._settle(
+                        message.topology_description.call_id, message.topology_description,
+                        "topology description")
                 elif kind == "fault":
                     self._on_fault(message.fault.reason)
                 else:
@@ -434,13 +472,6 @@ class StreamsSession:
             # break we did not ask for says something went wrong.
             if not self._closing:
                 self._on_fault(str(broken))
-
-    def _on_handle(self, assigned: pb.HandleAssigned) -> None:
-        with self._lock:
-            self._handles[assigned.call_id] = Handle.from_assigned(assigned)
-            waiting = self._pending.pop(assigned.call_id, None)
-        if waiting is not None:
-            waiting.set()
 
     def _on_invocation(self, invocation: pb.Invocation) -> None:
         registered = self._functions.get(invocation.function_token)
@@ -495,10 +526,9 @@ class StreamsSession:
         log.error("streams session faulted: %s", reason)
         self._fault = reason
         # Every waiter is released, not just the handshake. A waiter left blocked on a session that
-        # has already failed turns a reported error into a timeout, which reads as a hang.
+        # has already failed turns a reported error into a timeout, which reads as a hang. One loop
+        # covers queries, describes and builder calls alike now that they share one registry.
         self._ready.set()
-        self._described.set()
-        self._got.set()
         with self._lock:
             waiting = list(self._pending.values())
             self._pending.clear()

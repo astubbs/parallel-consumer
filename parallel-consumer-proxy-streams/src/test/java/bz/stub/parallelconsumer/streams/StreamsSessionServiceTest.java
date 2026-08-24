@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.streams;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.BuilderCall;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Count;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Describe;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.GroupByKey;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleAssigned;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
@@ -14,6 +15,7 @@ import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Sink;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Source;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsClientMessage;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsServerMessage;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.TopologyDescription;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
 
@@ -118,6 +120,41 @@ class StreamsSessionServiceTest {
         assertThat(countAnswer.getType().getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
         assertThat(countAnswer.getType().getKeyType()).isEqualTo(DataType.DATA_TYPE_BYTES);
         assertThat(countAnswer.getType().getValueType()).isEqualTo(DataType.DATA_TYPE_LONG);
+    }
+
+    /**
+     * A describe is correlated exactly as a builder call is, and for the same reason.
+     *
+     * <p>Without it a host holds one description slot for the whole session, so two threads asking what the
+     * topology looks like are both handed whichever answer landed last - the query defect, in the shape describe
+     * takes. It is answered on the description itself rather than on an envelope, as HandleAssigned carries both
+     * its call id and its handle.
+     */
+    @Test
+    void aDescribeIsAnsweredWithTheCallIdThatAskedIt() {
+        StreamObserver<StreamsClientMessage> toEngine = service.session(recorder);
+        toEngine.onNext(open("counts"));
+        toEngine.onNext(builderCall(1, b -> b.setSource(Source.newBuilder().setTopic("in"))));
+
+        toEngine.onNext(StreamsClientMessage.newBuilder()
+                .setDescribe(Describe.newBuilder().setCallId(9)).build());
+
+        TopologyDescription described = recorder.sent.get(2).getTopologyDescription();
+        assertThat(described.getCallId()).isEqualTo(9);
+        assertThat(described.getText()).contains("Sub-topology");
+    }
+
+    /** An uncorrelated describe is answered without a correlation, so absence never means "lost". */
+    @Test
+    void anUncorrelatedDescribeIsAnsweredWithoutACorrelation() {
+        StreamObserver<StreamsClientMessage> toEngine = service.session(recorder);
+        toEngine.onNext(open("counts"));
+        toEngine.onNext(builderCall(1, b -> b.setSource(Source.newBuilder().setTopic("in"))));
+
+        toEngine.onNext(StreamsClientMessage.newBuilder()
+                .setDescribe(Describe.getDefaultInstance()).build());
+
+        assertThat(recorder.sent.get(2).getTopologyDescription().hasCallId()).isFalse();
     }
 
     /** A sink mints nothing, and its answer says so with ONE signal: neither handle nor type is present. */

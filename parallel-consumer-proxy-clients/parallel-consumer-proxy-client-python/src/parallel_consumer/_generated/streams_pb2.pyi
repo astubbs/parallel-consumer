@@ -215,38 +215,46 @@ class Join(_message.Message):
     def __init__(self, stream_handle: _Optional[int] = ..., table_handle: _Optional[int] = ..., function_token: _Optional[int] = ...) -> None: ...
 
 class Get(_message.Message):
-    __slots__ = ("store_name", "key")
+    __slots__ = ("store_name", "key", "call_id")
     STORE_NAME_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
+    CALL_ID_FIELD_NUMBER: _ClassVar[int]
     store_name: str
     key: bytes
-    def __init__(self, store_name: _Optional[str] = ..., key: _Optional[bytes] = ...) -> None: ...
+    call_id: int
+    def __init__(self, store_name: _Optional[str] = ..., key: _Optional[bytes] = ..., call_id: _Optional[int] = ...) -> None: ...
 
 class GetResult(_message.Message):
-    __slots__ = ("found", "value", "value_type", "error")
+    __slots__ = ("found", "value", "value_type", "error", "call_id")
     FOUND_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     VALUE_TYPE_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
+    CALL_ID_FIELD_NUMBER: _ClassVar[int]
     found: bool
     value: bytes
     value_type: DataType
     error: str
-    def __init__(self, found: bool = ..., value: _Optional[bytes] = ..., value_type: _Optional[_Union[DataType, str]] = ..., error: _Optional[str] = ...) -> None: ...
+    call_id: int
+    def __init__(self, found: bool = ..., value: _Optional[bytes] = ..., value_type: _Optional[_Union[DataType, str]] = ..., error: _Optional[str] = ..., call_id: _Optional[int] = ...) -> None: ...
 
 class Describe(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
+    __slots__ = ("call_id",)
+    CALL_ID_FIELD_NUMBER: _ClassVar[int]
+    call_id: int
+    def __init__(self, call_id: _Optional[int] = ...) -> None: ...
 
 class TopologyDescription(_message.Message):
-    __slots__ = ("text", "subtopologies", "global_store_names")
+    __slots__ = ("text", "subtopologies", "global_store_names", "call_id")
     TEXT_FIELD_NUMBER: _ClassVar[int]
     SUBTOPOLOGIES_FIELD_NUMBER: _ClassVar[int]
     GLOBAL_STORE_NAMES_FIELD_NUMBER: _ClassVar[int]
+    CALL_ID_FIELD_NUMBER: _ClassVar[int]
     text: str
     subtopologies: _containers.RepeatedCompositeFieldContainer[Subtopology]
     global_store_names: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, text: _Optional[str] = ..., subtopologies: _Optional[_Iterable[_Union[Subtopology, _Mapping]]] = ..., global_store_names: _Optional[_Iterable[str]] = ...) -> None: ...
+    call_id: int
+    def __init__(self, text: _Optional[str] = ..., subtopologies: _Optional[_Iterable[_Union[Subtopology, _Mapping]]] = ..., global_store_names: _Optional[_Iterable[str]] = ..., call_id: _Optional[int] = ...) -> None: ...
 
 class Subtopology(_message.Message):
     __slots__ = ("id", "nodes")

@@ -193,6 +193,13 @@ message Join {
 message Get {
   optional string store_name = 1;
   optional bytes key = 2;
+
+  // Correlation, chosen by the client and echoed on the GetResult that answers - the same contract
+  // BuilderCall/HandleAssigned already carry, and for the same reason: without it a client holds one
+  // answer slot for every query in the session, so two concurrent callers receive each other's
+  // answers with no error anywhere. That is not hypothetical - it was the observed defect this field
+  // exists to close.
+  optional int64 call_id = 3;
 }
 
 // One answer to Get.
@@ -209,6 +216,9 @@ message GetResult {
   // Set instead of the rest when the query could not be served at all - no such store, or the
   // topology is not running yet.
   optional string error = 4;
+
+  // The call_id of the Get this answers, echoed verbatim. Absent only when the query carried none.
+  optional int64 call_id = 5;
 }
 
 // Asks what the topology currently looks like. Answered with exactly one TopologyDescription.
@@ -218,6 +228,10 @@ message GetResult {
 // assembled graph, including the nodes Kafka Streams generated rather than the host naming them,
 // the sub-topology split, and the repartition topics an aggregation implies.
 message Describe {
+  // Correlation, echoed on the TopologyDescription that answers. Describe shares Get's shape
+  // exactly, so it shares Get's defect exactly: one description slot for every describe in the
+  // session. A fix that correlated only queries would leave this one live and look complete.
+  optional int64 call_id = 1;
 }
 
 // One answer to Describe. Carries the SAME information twice, deliberately, because the two forms
@@ -239,6 +253,11 @@ message TopologyDescription {
   // to be empty. It exists so that if one ever does, it is visibly reported rather than silently
   // dropped from the structured form while remaining in the text.
   repeated string global_store_names = 3;
+
+  // The call_id of the Describe this answers, echoed verbatim. It rides on the description itself
+  // rather than on an envelope around it, exactly as HandleAssigned carries both its call_id and the
+  // handle it minted - one shape for every correlated answer on this wire, not two.
+  optional int64 call_id = 4;
 }
 
 message Subtopology {
