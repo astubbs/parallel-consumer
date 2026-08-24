@@ -50,12 +50,25 @@ class QuarantinedAnnotationContractTest {
         assertThat(Arrays.asList(target.value())).containsAtLeast(ElementType.TYPE, ElementType.METHOD);
     }
 
+    /**
+     * Asserts MEMBERSHIP of the quarantine tag in the default exclusion list, not the list's exact contents.
+     * <p>
+     * It used to pin the whole literal, `performance,chaos,quarantined`. That made every unrelated lane added
+     * to the list - the Lincheck one was the first - fail this test with a message about quarantined tests
+     * gating, which is not what had happened. Worse, the obvious repair is to paste the new literal in, and
+     * then the test is pinning a list nobody reasoned about. Membership is the actual contract, and it still
+     * goes red the moment the tag is dropped, which is the failure this test exists for.
+     */
     @Test
     void pomExcludesTheQuarantinedGroupFromDefaultSuites() throws IOException {
         String pom = read(REPO_ROOT.resolve("pom.xml"));
+        String open = "<excluded.groups>";
+        int start = pom.indexOf(open);
+        assertWithMessage("root pom must declare a default excluded.groups").that(start).isAtLeast(0);
+        String excluded = pom.substring(start + open.length(), pom.indexOf("</excluded.groups>", start));
         assertWithMessage("root pom's default excluded.groups must contain the quarantine tag - " +
-                "otherwise quarantined tests run (and fail) in the gating suites")
-                .that(pom).contains("<excluded.groups>performance,chaos," + Quarantined.TAG + "</excluded.groups>");
+                "otherwise quarantined tests run (and fail) in the gating suites. Found: " + excluded)
+                .that(Arrays.asList(excluded.split(","))).contains(Quarantined.TAG);
     }
 
     /**

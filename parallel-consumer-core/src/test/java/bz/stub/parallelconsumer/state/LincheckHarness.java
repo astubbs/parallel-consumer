@@ -6,12 +6,10 @@ package bz.stub.parallelconsumer.state;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 import org.jetbrains.lincheck.LincheckAssertionError;
-import org.jetbrains.lincheck.datastructures.ModelCheckingOptions;
 import org.jetbrains.lincheck.datastructures.Options;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static org.jetbrains.lincheck.datastructures.ManagedStrategyGuaranteeKt.forClasses;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -22,6 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * <em>its own internal crash</em> by throwing {@link LincheckAssertionError}, so a naive
  * {@code assertThrows(LincheckAssertionError.class, ...)} passes when Lincheck fell over having verified
  * nothing - the exact false-positive this whole evaluation exists to avoid. This method separates them.
+ * <p>
+ * <b>There are deliberately no {@code ManagedStrategyGuarantee} helpers here.</b> Three were written during
+ * the proof of concept - excluding this project's Lombok value types, the micrometer stack, and the two
+ * {@code PartitionState} accessors built on {@code parallelStream()} - and every one of them was removed with
+ * its measurement, because no model-checking arm over the product classes survived into this lane at all.
+ * What each was for and what it bought is in {@code docs/plans/2026-08-25-001-test-lincheck-poc-plan.md};
+ * bring one back with the arm that needs it, not before.
  *
  * @author Antony Stubbs
  */
@@ -88,30 +93,6 @@ public class LincheckHarness {
         log.info("{} - Lincheck found a violation ({}):\n{}", label,
                 cleanVerdict ? "clean verdict" : "reported via the non-determinism abort path", report);
         return report;
-    }
-
-    /**
-     * Excludes this project's value types from managed-strategy analysis.
-     * <p>
-     * Not a hint about where any bug is - these classes are immutable keys with no shared state, so nothing
-     * inside them can be part of a race. It is a workaround for a defect in Lincheck 3.7's instrumentation:
-     * it rewrites a {@code hashCode()} call into {@code Injections.hashCodeDeterministic(o)}, which dispatches
-     * VIRTUALLY, so Lombok's {@code @EqualsAndHashCode(callSuper = true)} - whose generated {@code hashCode}
-     * begins {@code int result = super.hashCode()} - re-enters the subclass method and recurses until
-     * StackOverflowError. Lincheck then prints "Wow! You've caught a bug in Lincheck".
-     * <p>
-     * The blast radius is wider than these classes: any Lombok {@code callSuper = true} value type reached by
-     * a model-checked operation hits it. That is a standing constraint on adopting the model checker here, not
-     * a property of this one harness.
-     */
-    public static ModelCheckingOptions withoutValueTypeAnalysis(ModelCheckingOptions options) {
-        return options.addGuarantee(forClasses(
-                        ShardKey.class.getName(),
-                        ShardKey.KeyOrderedKey.class.getName(),
-                        ShardKey.KeyWithEquals.class.getName(),
-                        ShardKey.TopicPartitionKey.class.getName())
-                .allMethods()
-                .treatAsAtomic());
     }
 
     /**

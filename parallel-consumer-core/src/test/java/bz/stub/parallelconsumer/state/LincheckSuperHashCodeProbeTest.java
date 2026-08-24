@@ -33,9 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * that Lincheck still has the defect. When a future Lincheck fixes it, THIS test goes red, and that is the
  * signal to re-enable model checking on the shard classes. A note in a plan document would never fire.
  *
+ * A {@code ManagedStrategyGuarantee} over the offending classes does NOT help, which is worth knowing before
+ * anyone tries it: transformation happens before analysis sections are consulted, so neither
+ * {@code treatAsAtomic} nor {@code ignore} prevents the rewrite.
+ *
  * @author Antony Stubbs
- * @see LincheckHarness#withoutValueTypeAnalysis a guarantee that does NOT help - transformation happens before
- *         analysis sections are consulted, which is itself worth knowing
  */
 @Slf4j
 @Tag("lincheck")
