@@ -648,9 +648,9 @@ green: whatever draws this signature is drawn per seed, and no tree-content expl
 pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
 
 **Thirteenth sighting, 2026-08-17 - the eager `CLASS2_STALL` again, and a DIFFERENT arm from the
-(Observed before the eighth, and numbered last because it arrived by merge from
-`feats/go-vendored-pc` rather than in date order - it was recorded on that branch as its
-seventh, a number master had already given to a different sighting.)
+(Observed before the eighth, and numbered last because it arrived by merge rather than
+in date order - it was recorded on this branch as its seventh, a number master had since
+given to a different sighting.)
 fleet `NO_PROGRESS` pair above, and it reproduces the second sighting
 almost exactly.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed fail-fast by
 `ProgressProbe` on

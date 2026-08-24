@@ -15,5 +15,5 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 - **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence, don't parallelise.
 - **File ownership right now:** astubbs#57 owns metrics + partition state, astubbs#106 owns the offset encoders, and
   astubbs#29 will want the poll/lifecycle internals astubbs#80 reshaped. Pick parallel work accordingly.
-- **astubbs#1 (`codeql`, 2026-04) and astubbs#8 (`features/retry-dlq`, 2022) are abandoned drafts**, kept only
-  because astubbs#8 is the sole DLQ code that exists. Close or finish them; they are not in flight.
+- **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
+  DLQ code that exists. Close or finish it; it is not in flight.
