@@ -346,6 +346,49 @@ to the adaptive layer. This is why the two layers compose by `min()` rather than
 is discoverable, a contractual quota is not. [`docs/inflight/core-distributed-throttling.md`](../inflight/core-distributed-throttling.md)
 owns the strategy-menu shape this plugs into.
 
+### What we do with a hard limit: nothing is stored, and that is the point
+
+The obvious question is where a discovered limit is kept, how long it is believed, what happens when
+there are several, and whether an operator can pin one forever. Most of it dissolves once a category
+error is removed.
+
+**`Retry-After` is a deferral, not a rate.** It says *do not call me for two seconds*. It never says
+*your quota is 100/s*. Treating it as a learned rate is the error; it is an actuator input with its
+own expiry built in. Three sources, three different lifetimes:
+
+| Source | What it actually is | Lifetime |
+|---|---|---|
+| Operator configuration | A genuine rate the operator holds by contract | Lives in config. No expiry, no discovery, nothing to store |
+| `Retry-After` / an explicit 429 | A **timed deferral** | Self-expiring. Applied, then gone |
+| Timeouts, 503s, a breaker opening, latency | Evidence feeding an estimate | Continuously re-derived, never persisted |
+
+**So no discovered limit is saved, and "save it forever" is refused rather than made configurable.**
+A remembered discovered limit is unfalsifiable - the ratchet in different clothes. Pin *payments =
+100/s* and the tier upgrade is never found, the quota raise is never found, and nothing in the system
+can report that the number is now wrong. The falsifiability rule that governs the latency baseline
+governs this identically: **any reference the controller's own behaviour cannot correct will
+eventually be wrong and will never say so.** An operator who genuinely holds a contractual number
+states it as configuration, where it is a declared input rather than an unfalsifiable memory.
+
+**Several at once** is the `min()` composition already chosen: configured limits, live deferrals and
+the adaptive estimate are all constraints, and the binding one wins. Which one binds is precisely
+what the constraint gauge exists to report - an operator seeing throughput capped should be able to
+read whether it is their own configured ceiling, a downstream's deferral, or discovered capacity.
+
+**Nothing survives a restart**, for the same reason, and re-discovery is cheap.
+
+**Keying, and the scope boundary it exposes.** The key is the **downstream name the user supplies** -
+not the topic, not the user function. That is forward-compatible with many-functions-to-many-topics
+for free, because two functions hitting one payments API *should* contend: they share one real
+downstream. But the engine today has **one admission target for the whole instance**, so genuine
+per-downstream limits need per-downstream admission - which is the sharding problem again, and a far
+larger change than this design. **v1 captures the name and keeps the target global**: the name costs
+nothing, makes the log and the constraint gauge legible, and does not commit the engine to per-key
+admission before anyone has asked for it.
+
+Fleet-wide quotas ("100/s across all instances") are a further step again - a global number divided
+by group membership - and belong to astubbs#228, not here.
+
 ---
 
 ## How each decision can be proven wrong
@@ -570,6 +613,28 @@ Not independently verified, and deliberately not relied on above: Pantheon's int
 (binning, per-run ellipses, replication error), the Chen & Kuo metamorphic-PID relations, MSER-5, and
 the deterministic-simulation-testing references. They are leads for the test plan, not citations.
 
-In-repo: `docs/inflight/pr-333-adaptive-concurrency-outstanding.md` (items 0-5),
-`docs/inflight/core-adaptive-concurrency-future-modes.md`, and the design-surface inventory of the
-engine's observables and actuators that this document's plant section rests on.
+For the overload signal specifically: RFC 6585 (429 Too Many Requests) and RFC 9110 section 10.2.3
+(`Retry-After`, previously RFC 7231 section 7.1.3) - the source of the deferral-not-a-rate reading
+above.
+
+In-repo prior art, which predates this design and should be read before re-opening any of it:
+
+- [`docs/ideation/2026-08-17-distributed-throttling-ideation.html`](../ideation/2026-08-17-distributed-throttling-ideation.html) -
+  the eight ranked, code-verified directions, the rejection table and the prior-art autopsies. **The
+  strategy menu (idea 5) and the convergence record (idea 8) are where the downstream-signal option
+  originates**; this design's signal section is that idea reached from the controller's side.
+- [`docs/inflight/core-distributed-throttling.md`](../inflight/core-distributed-throttling.md) -
+  **owns** the strategy-menu shape, the standalone-versus-controller decision, and the `min()`
+  composition. astubbs#228 (mirror of confluentinc#24), with confluentinc#766 as demand evidence.
+- [`docs/inflight/core-auto-scaling.md`](../inflight/core-auto-scaling.md) - the umbrella note for
+  astubbs#227, and the decisions of 2026-08-24 recorded there.
+- [`docs/inflight/pr-333-adaptive-concurrency-outstanding.md`](../inflight/pr-333-adaptive-concurrency-outstanding.md)
+  (items -1 to 5) and
+  [`docs/inflight/core-adaptive-concurrency-future-modes.md`](../inflight/core-adaptive-concurrency-future-modes.md).
+- [`docs/inflight/branch-engine-concurrency-family.md`](../inflight/branch-engine-concurrency-family.md) -
+  what each measurement and optimisation branch was cut to answer, including the refutations.
+- The abandoned prototypes catalogued in `docs/refactoring.md`'s idea bank - `features/rate-limiting`
+  (bucket4j POC), `features/dynamic-concurrency-control` (Netflix concurrency-limits), and
+  `feature/auto-tuning-pressure` - plus upstream draft PR confluentinc#22.
+- The design-surface inventory of the engine's observables and actuators that this document's plant
+  section rests on.
