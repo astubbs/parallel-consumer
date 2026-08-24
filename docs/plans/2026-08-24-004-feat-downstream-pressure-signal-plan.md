@@ -85,7 +85,12 @@ the classifier SPI gives existing code the behaviour with no discovery required 
 types to a pressure verdict - the R4 capability, supplied at construction. It is distinct from the
 internal `AdmissionOutcomeClassifier` named in the Goal Capsule, which is engine code the user never
 sees; the SPI is the hole through which a user's `TooManyRequestsException` reaches that internal
-classifier without the function body changing. Whether it ships in v1 is Resolve item 2.
+classifier without the function body changing. **It ships in v1 alongside the context method**
+(owner, 2026-08-24): the SPI is a thin mapping onto the context method's own internal path, so it is
+nearly free once the primitive exists, and sequencing two small surfaces adds process without saving
+work. The SPI carries adoption - existing throwing code, zero edits - while the context method is
+the primitive and the decorator channel: a wrapper around an HTTP client reporting on the user's
+behalf is the realistic route to the cell users cannot observe themselves.
 
 **And the two flavours have fixed destinations** - this is the owner-side source of the rule the
 003 design binds itself to: a **hard** signal (one carrying a number) feeds the **fixed** layer as a
@@ -158,6 +163,14 @@ self-expiring deferrals - never a durable per-service rate.** Durable rates ente
 declaration. "Only ever as good as what the user declares or the downstream reports" means exactly
 those two lifetimes, not a third.
 
+**Recorded override (2026-08-24): downstream-declared rate headers are deliberately reduced to
+deferrals in v1.** `X-RateLimit-Remaining: 0` with `Reset: 30s` is expressed perfectly as a
+thirty-second deferral through the method that already exists - the deferral *is* what those headers
+operationally mean to a consumer deciding when to call next. Honouring them as a standing declared
+**rate** is fixed-layer rate-limiter work, owned by the strategy-menu track (astubbs#228, where the
+ideation's rejection 3 folded them), not by this signal API. Recorded rather than silent because the
+narrowing of the ideation's scope would otherwise read as an oversight.
+
 Several at once compose by `min()`, and which constraint binds is what the constraint gauge reports.
 
 ### Per-service ceilings need hard limits, because the engine cannot see inside the function
@@ -200,8 +213,8 @@ further step again and belong to astubbs#228.
   done; the signal's only effect is on the controller. (The unscoped form of this requirement
   literally ordered duplicate processing in the flagship SDK-retried-and-won case, where there is no
   retry to defer.)
-- R4 *(contingent on Resolve item 2)*. Existing code that throws its own exception type can map it to
-  a pressure verdict without editing the function body.
+- R4. Existing code that throws its own exception type can map it to a pressure verdict without
+  editing the function body. (Ships in v1 - decided 2026-08-24, Resolve item 2.)
 - R5. Nothing discovered is persisted beyond its own expiry, and no expiry is honoured beyond a
   configurable cap - an over-cap deferral is clamped and reported. A contractual rate is
   configuration, and an unreachable configured limit is reported as a binding constraint rather than
@@ -227,8 +240,8 @@ backends (idea 1 and idea 5's extension artifacts).
 
 1. **The method's name**, given `RateLimiter` and *throttle* are both taken. `reportDownstreamPressure`
    is a placeholder, not a decision.
-2. **Whether the classifier SPI ships with v1** or the context method alone. It is the whole adoption
-   story for existing code, but it is a second public surface.
+2. **Decided (2026-08-24): the classifier SPI ships with v1.** The definition paragraph in the
+   Product Contract carries the reasoning; what remains for planning is only its registration shape.
 3. **What a soft signal with no duration actually does** to the controller - it is evidence, not an
    instruction, so it needs a weight, and that weight interacts with the throughput objective.
 4. **What weight a pressure report on a succeeded record carries in the controller.** (R3 now
@@ -245,13 +258,8 @@ backends (idea 1 and idea 5's extension artifacts).
    function has returned and can race the engine's verdict recording); and how multiple reports for
    one record compose (e.g. max deferral per service). Two implementers without this build
    incompatible things users code against.
-8. **Whether downstream-declared rate headers get a fourth lifetime row.** `X-RateLimit-Limit` /
-   `Remaining` / `Reset` carry a *rate* with its own window expiry - neither operator config, nor a
-   timed deferral, nor evidence. The ideation's rejection 3 explicitly folded them into the SPI's
-   number-owners, so their absence from the three-source table is currently an **unrecorded
-   narrowing** - the very thing this document's override convention exists to prevent. Either add
-   the row (expiring at the header's own reset window, consistent with nothing-outlives-its-expiry)
-   or record the override: v1 deliberately reduces rate headers to deferrals, and why.
+8. **Decided (2026-08-24): rate headers are deliberately reduced to deferrals in v1** - the recorded
+   override lives in the never-store section, and the declared-rate reading belongs to astubbs#228.
 9. **How observable the flagship cell actually is.** The SDK-retried-and-won case is argued as the
    common case, but reporting it requires the *user* to detect their SDK was throttled, and plain
    OkHttp, the JDK HttpClient and typical generated clients expose no such surface without

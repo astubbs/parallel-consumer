@@ -230,8 +230,17 @@ is the common case rather than the pathological one, which is what changes the a
   the pool to its own target, so the target *is* concurrency instead of a feeding rate. The design
   owns the mechanism -
   [`../plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md).
-- **How a user signals downstream overload is still open**, deliberately - options and the argument
-  against an exception are in the design's overload-signal section.
+- **How a user signals downstream overload is decided**: a method on the `PollContext` the function
+  already receives - *exceptions are for aborting, not for messaging* - with a classifier SPI
+  shipping alongside it in v1 for existing throwing code.
+  [`../plans/2026-08-24-004-feat-downstream-pressure-signal-plan.md`](../plans/2026-08-24-004-feat-downstream-pressure-signal-plan.md)
+  owns it, including the recorded override of the ideation's exception design and the v1 reduction
+  of X-RateLimit headers to deferrals (the declared-rate reading belongs to astubbs#228).
+- **The latency baseline is deleted, not augmented** (2026-08-24). The deciding frame: PC's engine
+  is a **work server**, so the precedent class is the CLR ThreadPool's throughput-only worker
+  sizing, not the request servers that keep latency because latency is their product objective. The
+  retreat is bounded by the `admission-gradient2-port` tag and gated on a named falsifier - the
+  design's phase-5 plateau test - never on opinion.
 
 **Delete `origin/features/rate-limiting` when this work is prepped for merge.** A 2021 bucket4j POC
 touching only the Reactor and Vertx example apps, still in `io.confluent` packages, never merged, no

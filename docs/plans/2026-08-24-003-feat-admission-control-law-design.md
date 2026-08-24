@@ -151,6 +151,23 @@ Three further reasons specific to this library:
 whole, including that an unreachable ceiling is *reported as a binding constraint* rather than
 pursued.
 
+### Delete versus augment: decided, and the deciding frame is what kind of server this is
+
+The review's strongest challenge: the cited Uber precedent *kept* its latency law and added the
+covariance veto - augmentation, not replacement - and no request-serving system cited here steers on
+throughput alone. Ruled (owner, 2026-08-24): **delete.** The frame that settles it: **PC's engine is
+a work server.** The right precedent class is not the request servers - Cinnamon keeps latency
+because a latency SLO *is* Uber's product objective, and Netflix and Envoy protect an RPC server's
+callers - it is the **.NET CLR ThreadPool**, which has sized worker concurrency for arbitrary
+user-supplied work on throughput alone, no latency model at all, on every .NET server for some
+fifteen years. Sizing workers for a black-box function is this engine's exact problem shape, and
+there the throughput-only precedent is production fact, not conjecture.
+
+The retreat is bounded and stated: the plateau that made deletion look dangerous is the HOLD band's
+job, phase 5 of the comparison test is that band's falsifier, and `admission-gradient2-port` tags
+the gradient law complete and green. If phase 5 fails, augmenting the latency term back is a
+measured, evidence-driven step - which is the only way this decision should ever reopen.
+
 ### The dither is not needed, and that deletes ten of the seventeen blockers
 
 The objective plan specified estimation by injected perturbation and demodulation, copying the .NET
