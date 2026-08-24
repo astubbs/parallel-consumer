@@ -106,9 +106,46 @@ message Sink {
 }
 
 // Handles are server-minted and opaque to the client, which may only name them back.
+//
+// Delivery contract: `handle` and `type` are present exactly when the call minted a handle. A
+// non-minting call (sink) is answered with neither, so the wire has ONE presence signal for "a
+// handle was minted" rather than two that could diverge.
 message HandleAssigned {
   optional int64 call_id = 1;
   optional int64 handle = 2;
+  optional HandleType type = 3;
+}
+
+// What a handle IS, declared at mint time - which is when the host needs it, because the host is
+// about to name this handle in its next call and to read what the topology writes.
+//
+// This exists because an operator can mint a value the host never supplied: count() produces a
+// table of longs, and without this message the host can only know that by convention. Every
+// aggregation, reduce and join mints a typed value the same way, so the type travels on the wire
+// or each one becomes engine-side tribal knowledge.
+message HandleType {
+  optional HandleKind kind = 1;
+  optional DataType key_type = 2;
+  optional DataType value_type = 3;
+}
+
+enum HandleKind {
+  HANDLE_KIND_UNSPECIFIED = 0;
+  HANDLE_KIND_STREAM = 1;
+  HANDLE_KIND_GROUPED_STREAM = 2;
+  HANDLE_KIND_TABLE = 3;
+}
+
+// The value vocabulary. Growth path: a new mintable type is a new member here (additive), plus
+// regenerated stubs, one engine serde-selection branch, and the client's mirrored member and
+// decode branch - the engine refuses to sink a type it has no serde for, and a client refuses to
+// decode a type it does not know, so a missing branch on either side fails loudly. Parameterised
+// types (windowed keys, lists) are the known limit of an enum; when one arrives it becomes an
+// additive structured field beside these, or a reshape of this unfrozen wire.
+enum DataType {
+  DATA_TYPE_UNSPECIFIED = 0;
+  DATA_TYPE_BYTES = 1;
+  DATA_TYPE_LONG = 2;
 }
 
 message RegisterFunction {

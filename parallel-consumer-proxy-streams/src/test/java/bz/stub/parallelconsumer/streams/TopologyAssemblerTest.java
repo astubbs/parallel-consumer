@@ -3,6 +3,9 @@ package bz.stub.parallelconsumer.streams;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.LongDeserializer;
@@ -65,16 +68,159 @@ class TopologyAssemblerTest {
     }
 
     @Test
-    void aCallAppliedToTheWrongKindOfHandleIsRefusedAndTheErrorSaysWhy() {
+    void aCallAppliedToTheWrongKindOfHandleIsRefusedInProtocolVocabulary() {
         TopologyAssembler assembler = new TopologyAssembler(echo);
         long source = assembler.source("in");
 
-        // count needs a grouped stream; a source is not one.
+        // count needs a grouped stream; a source is not one. The refusal speaks the protocol's vocabulary -
+        // "stream", "grouped stream" - never a Kafka Streams implementation class name, which means nothing to a
+        // host that has never seen a JVM.
         TopologyDescriptionException thrown =
                 assertThrows(TopologyDescriptionException.class, () -> assembler.count(source, "counts"));
 
         assertThat(thrown).hasMessageThat().contains("count");
-        assertThat(thrown).hasMessageThat().contains("KGroupedStream");
+        assertThat(thrown).hasMessageThat().contains("it names a stream");
+        assertThat(thrown).hasMessageThat().contains("grouped stream");
+        assertThat(thrown).hasMessageThat().doesNotContain("KStream");
+    }
+
+    @Test
+    void eachMintRecordsItsKindAndItsKeyAndValueTypes() {
+        TopologyAssembler assembler = new TopologyAssembler(echo);
+
+        long source = assembler.source("in");
+        long mapped = assembler.mapValues(source, 42);
+        long grouped = assembler.groupByKey(mapped);
+        long counted = assembler.count(grouped, "counts");
+
+        assertThat(assembler.typeOf(source)).isEqualTo(type(
+                HandleKind.HANDLE_KIND_STREAM, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES));
+        assertThat(assembler.typeOf(mapped)).isEqualTo(type(
+                HandleKind.HANDLE_KIND_STREAM, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES));
+        assertThat(assembler.typeOf(grouped)).isEqualTo(type(
+                HandleKind.HANDLE_KIND_GROUPED_STREAM, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES));
+        // The one mint whose value the host never supplied - the whole reason types travel at all.
+        assertThat(assembler.typeOf(counted)).isEqualTo(type(
+                HandleKind.HANDLE_KIND_TABLE, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_LONG));
+    }
+
+    /**
+     * The refusal matrix: every method applied to every wrong kind of handle it can meet, each refused by the
+     * RECORDED kind. One passing case per method is not enough - a resolver that reported every mismatch as
+     * "grouped stream" would pass a single-case test.
+     */
+    @Test
+    void everyMethodRefusesEveryWrongKindByItsRecordedName() {
+        TopologyAssembler assembler = new TopologyAssembler(echo);
+        long stream = assembler.source("in");
+        long grouped = assembler.groupByKey(stream);
+        long table = assembler.count(grouped, "counts");
+
+        assertRefusedNaming(() -> assembler.mapValues(grouped, 42), "mapValues", "grouped stream", "stream");
+        assertRefusedNaming(() -> assembler.mapValues(table, 42), "mapValues", "table", "stream");
+        assertRefusedNaming(() -> assembler.groupByKey(grouped), "groupByKey", "grouped stream", "stream");
+        assertRefusedNaming(() -> assembler.groupByKey(table), "groupByKey", "table", "stream");
+        assertRefusedNaming(() -> assembler.count(stream, "s"), "count", "stream", "grouped stream");
+        assertRefusedNaming(() -> assembler.count(table, "s"), "count", "table", "grouped stream");
+        assertRefusedNaming(() -> assembler.sink(grouped, "out"), "sink", "grouped stream", "stream or a table");
+    }
+
+    /**
+     * Sinking a grouped stream is refused as what it IS. Before types were recorded, this case fell through the
+     * instanceof chain and was misreported as a handle that "does not exist" - a lie about a handle the engine
+     * itself minted.
+     */
+    @Test
+    void sinkingAGroupedStreamIsRefusedByItsKindNotAsUnknown() {
+        TopologyAssembler assembler = new TopologyAssembler(echo);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+
+        TopologyDescriptionException thrown =
+                assertThrows(TopologyDescriptionException.class, () -> assembler.sink(grouped, "out"));
+
+        assertThat(thrown).hasMessageThat().contains("grouped stream");
+        assertThat(thrown).hasMessageThat().doesNotContain("does not exist");
+    }
+
+    /**
+     * A type with no serde branch is refused by name, naming the handle and the axis - never silently written as
+     * bytes. Driven through the selector directly because no current operator can mint an unspecified-typed
+     * handle; the pipeline tests prove the sink writes through this same selector. Both axes, because the sink
+     * selects a serde for each.
+     */
+    @Test
+    void aTypeWithNoSerdeIsRefusedNamingTheHandleTheAxisAndTheType() {
+        TopologyDescriptionException value = assertThrows(TopologyDescriptionException.class,
+                () -> TopologyAssembler.serdeFor(DataType.DATA_TYPE_UNSPECIFIED, "value type", 7));
+        TopologyDescriptionException key = assertThrows(TopologyDescriptionException.class,
+                () -> TopologyAssembler.serdeFor(DataType.DATA_TYPE_UNSPECIFIED, "key type", 9));
+
+        assertThat(value).hasMessageThat().contains("7");
+        assertThat(value).hasMessageThat().contains("value type unspecified");
+        assertThat(value).hasMessageThat().contains("no serde");
+        assertThat(key).hasMessageThat().contains("9");
+        assertThat(key).hasMessageThat().contains("key type unspecified");
+    }
+
+    /**
+     * A mint that pairs a node with the wrong recorded kind is an engine bug, and it fails at the mint that made
+     * it - not one call later as a ClassCastException naming a Kafka Streams implementation class to the host.
+     * This validation is what makes the assembler's erased casts safe against future operators.
+     */
+    @Test
+    void aMintPairingANodeWithTheWrongKindFailsAtTheMint() {
+        var builder = new org.apache.kafka.streams.StreamsBuilder();
+        var stream = builder.stream("in");
+
+        IllegalArgumentException mismatched = assertThrows(IllegalArgumentException.class,
+                () -> new TopologyAssembler.Minted(stream, type(
+                        HandleKind.HANDLE_KIND_TABLE, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_LONG)));
+        IllegalArgumentException unspecified = assertThrows(IllegalArgumentException.class,
+                () -> new TopologyAssembler.Minted(stream, type(
+                        HandleKind.HANDLE_KIND_UNSPECIFIED, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES)));
+
+        assertThat(mismatched).hasMessageThat().contains("engine bug");
+        assertThat(mismatched).hasMessageThat().contains("table");
+        assertThat(unspecified).hasMessageThat().contains("known kind");
+    }
+
+    /**
+     * A plain byte stream sinks as bytes. Paired with the count test below, this is what pins the serde selection
+     * to the recorded type: a selector hardcoded to longs fails here, one hardcoded to bytes fails there.
+     */
+    @Test
+    void aByteStreamSinksItsBytesUnchanged(@TempDir Path stateDir) {
+        TopologyAssembler assembler = new TopologyAssembler(echo);
+        long source = assembler.source("in");
+        assembler.sink(assembler.mapValues(source, 42), "out");
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer());
+            TestOutputTopic<byte[], byte[]> out = driver.createOutputTopic(
+                    "out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+
+            in.pipeInput(bytes("k"), bytes("payload"));
+
+            var record = out.readKeyValue();
+            assertThat(new String(record.key, StandardCharsets.UTF_8)).isEqualTo("k");
+            assertThat(new String(record.value, StandardCharsets.UTF_8)).isEqualTo("payload");
+        }
+    }
+
+    private static void assertRefusedNaming(
+            org.junit.jupiter.api.function.Executable call, String method, String actualKind, String neededKind) {
+        TopologyDescriptionException thrown = assertThrows(TopologyDescriptionException.class, call);
+        assertThat(thrown).hasMessageThat().contains(method);
+        assertThat(thrown).hasMessageThat().contains("it names a " + actualKind);
+        // The full phrase, not a bare contains(neededKind): for the "stream" rows a bare contains is already
+        // satisfied by the "grouped stream" in the actual-kind clause, which would let the needed-kind half of
+        // the message regress unnoticed.
+        assertThat(thrown).hasMessageThat().contains("needs a " + neededKind);
+    }
+
+    private static HandleType type(HandleKind kind, DataType keyType, DataType valueType) {
+        return HandleType.newBuilder().setKind(kind).setKeyType(keyType).setValueType(valueType).build();
     }
 
     @Test

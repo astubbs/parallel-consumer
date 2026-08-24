@@ -106,6 +106,18 @@ only when something is dirty.
 The asymmetry is load-bearing: a partition whose records are all failing is never dirty, so no commit
 is attempted for it, and anything waiting on a commit-time behaviour will wait indefinitely.
 
+## Streams proxy
+
+**Handle** (and **typed handle**)
+In the experimental Streams protocol, the engine performs each of the host's builder calls against a
+real topology builder and answers with a handle - a server-minted opaque integer the host may only
+name back in later calls. The host never holds the builder object, only its number.
+
+A *typed* handle travels with what it is: its kind (stream, grouped stream, table) and the key and
+value types it carries. The type matters because an operator can mint a value the host never supplied
+- a count produces a table of longs - and without the type on the wire, what a handle carries is
+engine-side convention the host has to know rather than be told.
+
 ## Test reliability
 
 **Load-tightness flake**

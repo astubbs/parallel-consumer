@@ -4,7 +4,13 @@ package bz.stub.parallelconsumer.streams;
  */
 
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.BuilderCall;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Count;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.GroupByKey;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleAssigned;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Open;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Sink;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Source;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsClientMessage;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.StreamsServerMessage;
@@ -89,6 +95,47 @@ class StreamsSessionServiceTest {
         assertThat(assigned.getHandle()).isGreaterThan(0L);
     }
 
+    /**
+     * A minting answer says what the handle IS. The count is the case that matters: its table of longs is a value
+     * the host never supplied, and this field is the only way the host can know what it will read off the sink.
+     */
+    @Test
+    void aMintingAnswerCarriesTheHandlesRecordedType() {
+        StreamObserver<StreamsClientMessage> toEngine = service.session(recorder);
+        toEngine.onNext(open("counts"));
+
+        toEngine.onNext(builderCall(1, b -> b.setSource(Source.newBuilder().setTopic("in"))));
+        long source = recorder.sent.get(1).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(2, b -> b.setGroupByKey(GroupByKey.newBuilder().setHandle(source))));
+        long grouped = recorder.sent.get(2).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(3, b -> b.setCount(Count.newBuilder().setHandle(grouped).setStoreName("s"))));
+
+        HandleAssigned sourceAnswer = recorder.sent.get(1).getHandleAssigned();
+        assertThat(sourceAnswer.hasType()).isTrue();
+        assertThat(sourceAnswer.getType().getKind()).isEqualTo(HandleKind.HANDLE_KIND_STREAM);
+        HandleAssigned countAnswer = recorder.sent.get(3).getHandleAssigned();
+        assertThat(countAnswer.getCallId()).isEqualTo(3);
+        assertThat(countAnswer.getType().getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
+        assertThat(countAnswer.getType().getKeyType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(countAnswer.getType().getValueType()).isEqualTo(DataType.DATA_TYPE_LONG);
+    }
+
+    /** A sink mints nothing, and its answer says so with ONE signal: neither handle nor type is present. */
+    @Test
+    void aSinkAnswerCarriesNeitherHandleNorType() {
+        StreamObserver<StreamsClientMessage> toEngine = service.session(recorder);
+        toEngine.onNext(open("counts"));
+
+        toEngine.onNext(builderCall(1, b -> b.setSource(Source.newBuilder().setTopic("in"))));
+        long source = recorder.sent.get(1).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(2, b -> b.setSink(Sink.newBuilder().setHandle(source).setTopic("out"))));
+
+        HandleAssigned sinkAnswer = recorder.sent.get(2).getHandleAssigned();
+        assertThat(sinkAnswer.getCallId()).isEqualTo(2);
+        assertThat(sinkAnswer.hasHandle()).isFalse();
+        assertThat(sinkAnswer.hasType()).isFalse();
+    }
+
     @Test
     void aBuilderCallNamingNoMethodIsRefusedAndTheRefusalNamesTheCall() {
         StreamObserver<StreamsClientMessage> toEngine = service.session(recorder);
@@ -130,6 +177,13 @@ class StreamsSessionServiceTest {
     private static StreamsClientMessage open(String applicationId) {
         return StreamsClientMessage.newBuilder()
                 .setOpen(Open.newBuilder().setApplicationId(applicationId))
+                .build();
+    }
+
+    private static StreamsClientMessage builderCall(
+            long callId, java.util.function.UnaryOperator<BuilderCall.Builder> call) {
+        return StreamsClientMessage.newBuilder()
+                .setBuilderCall(call.apply(BuilderCall.newBuilder().setCallId(callId)))
                 .build();
     }
 }

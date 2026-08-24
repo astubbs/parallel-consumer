@@ -11,6 +11,9 @@ Python, and nothing re-enters this runtime from an engine thread.
 """
 
 from ._session import (
+    DataType,
+    Handle,
+    HandleKind,
     RecordFunction,
     StreamsError,
     StreamsSession,
@@ -20,7 +23,10 @@ from ._session import (
 from ._transport import GrpcStreamsTransport
 
 __all__ = [
+    "DataType",
     "GrpcStreamsTransport",
+    "Handle",
+    "HandleKind",
     "RecordFunction",
     "StreamsError",
     "StreamsSession",

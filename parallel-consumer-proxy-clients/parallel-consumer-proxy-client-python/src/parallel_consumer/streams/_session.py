@@ -9,8 +9,10 @@ engine names the token when it wants an answer. The host calls the host's own fu
 
 from __future__ import annotations
 
+import enum
 import itertools
 import logging
+import struct
 import threading
 from typing import Protocol
 from collections.abc import Callable, Iterator
@@ -21,6 +23,127 @@ log = logging.getLogger(__name__)
 
 #: A per-record function: (key, value) -> value. Bytes in, bytes out; this side owns serialization.
 RecordFunction = Callable[[bytes, bytes], bytes]
+
+
+class HandleKind(enum.IntEnum):
+    """What a handle names on the engine side. Mirrors the wire's ``HandleKind`` values exactly.
+
+    ``UNKNOWN`` is this client's own member, not a wire value: it is what any unrecognised wire
+    value degrades to, so an engine newer than this client produces an explicit "I do not know
+    this" rather than a crash or a silent guess.
+    """
+
+    UNKNOWN = -1
+    UNSPECIFIED = 0
+    STREAM = 1
+    GROUPED_STREAM = 2
+    TABLE = 3
+
+    @classmethod
+    def _missing_(cls, value: object) -> HandleKind:
+        return cls.UNKNOWN
+
+
+class DataType(enum.IntEnum):
+    """A key or value type as the engine recorded it. Mirrors the wire's ``DataType`` values.
+
+    Decoding lives here so that ``key_type`` and ``value_type`` share one mechanism, and so a
+    count's long stops being tribal knowledge: ``handle.value_type.decode(raw)`` is the whole
+    story. ``UNKNOWN`` degrades unrecognised wire values, as on :class:`HandleKind`.
+    """
+
+    UNKNOWN = -1
+    UNSPECIFIED = 0
+    BYTES = 1
+    LONG = 2
+
+    @classmethod
+    def _missing_(cls, value: object) -> DataType:
+        return cls.UNKNOWN
+
+    def decode(self, data: bytes) -> bytes | int:
+        """Decodes one Kafka-serialised key or value of this type.
+
+        Bytes pass through; a long is Kafka's ``Serdes.Long()`` - 8 bytes, big-endian, signed.
+        A type this client cannot decode is refused by name rather than guessed at: returning
+        the raw bytes for an unknown type would silently hand the caller the wrong thing.
+
+        Every refusal is a :class:`StreamsError`, including malformed input - a short or foreign
+        record, or ``None``. A changelog tombstone has no value at all; callers filter those
+        before decoding, and one that does not gets the error, not a dead reader thread.
+        """
+        if self is DataType.BYTES:
+            return data
+        if self is DataType.LONG:
+            try:
+                value: int = struct.unpack(">q", data)[0]
+            except (struct.error, TypeError) as malformed:
+                raise StreamsError(
+                    f"cannot decode {data!r} as a long: Serdes.Long() is exactly 8 bytes"
+                ) from malformed
+            return value
+        raise StreamsError(
+            f"cannot decode a value of type {self.name}: this client has no decoder for it")
+
+
+class Handle(int):
+    """A minted handle: the engine's integer, carrying what the engine says it is.
+
+    An ``int`` subclass, deliberately: every existing call site, proto field assignment and
+    equality check keeps working unchanged, while the host can now ask ``handle.kind`` and
+    ``handle.value_type`` instead of knowing by convention that a count is a table of longs.
+    """
+
+    kind: HandleKind
+    key_type: DataType
+    value_type: DataType
+
+    def __new__(
+        cls, value: int, kind: HandleKind, key_type: DataType, value_type: DataType,
+    ) -> Handle:
+        handle = super().__new__(cls, value)
+        handle.kind = kind
+        handle.key_type = key_type
+        handle.value_type = value_type
+        return handle
+
+    # The override "narrows" int's declared tuple[int] shape, which mypy flags as an LSP breach -
+    # but pickle and copy read this hook dynamically from the concrete class, never through an
+    # int-typed reference, so the wider tuple is exactly what makes reconstruction correct here.
+    def __getnewargs__(self) -> tuple[int, HandleKind, DataType, DataType]:  # type: ignore[override]
+        """What copy and pickle rebuild this handle from.
+
+        An int subclass with required constructor arguments breaks the default int
+        reconstruction protocol: deepcopy raises, and pickle silently rebuilds a Handle with no
+        type attributes at all. This closes both, so a handle survives a host's cache or worker
+        boundary intact.
+        """
+        return (int(self), self.kind, self.key_type, self.value_type)
+
+    @classmethod
+    def from_assigned(cls, assigned: pb.HandleAssigned) -> Handle:
+        """Builds the typed handle a ``HandleAssigned`` describes.
+
+        A non-minting answer (sink) carries neither handle nor type and yields the zero handle
+        with UNKNOWN types; nothing may be named back with it, so its only job is to be inert.
+
+        The wire contract says handle and type are present exactly together. A handle WITHOUT a
+        type is therefore version skew (an engine predating typed handles) or an engine bug, and
+        it is warned about here, at the mint - otherwise the first symptom is an undecodable
+        UNKNOWN much later, with nothing pointing at the cause.
+        """
+        if assigned.HasField("type"):
+            return cls(
+                assigned.handle,
+                HandleKind(assigned.type.kind),
+                DataType(assigned.type.key_type),
+                DataType(assigned.type.value_type),
+            )
+        if assigned.HasField("handle"):
+            log.warning(
+                "handle %d arrived without a type; the engine may predate typed handles, and "
+                "this handle's kind and types are UNKNOWN", assigned.handle)
+        return cls(assigned.handle, HandleKind.UNKNOWN, DataType.UNKNOWN, DataType.UNKNOWN)
 
 
 class StreamsTransport(Protocol):
@@ -47,18 +170,18 @@ class TopologyBuilder:
     def __init__(self, session: StreamsSession) -> None:
         self._session = session
 
-    def source(self, topic: str) -> int:
+    def source(self, topic: str) -> Handle:
         return self._session._call(pb.BuilderCall(source=pb.Source(topic=topic)))
 
-    def map_values(self, handle: int, function: RecordFunction) -> int:
+    def map_values(self, handle: int, function: RecordFunction) -> Handle:
         token = self._session.register(function)
         return self._session._call(
             pb.BuilderCall(map_values=pb.MapValues(handle=handle, function_token=token)))
 
-    def group_by_key(self, handle: int) -> int:
+    def group_by_key(self, handle: int) -> Handle:
         return self._session._call(pb.BuilderCall(group_by_key=pb.GroupByKey(handle=handle)))
 
-    def count(self, handle: int, store_name: str) -> int:
+    def count(self, handle: int, store_name: str) -> Handle:
         return self._session._call(
             pb.BuilderCall(count=pb.Count(handle=handle, store_name=store_name)))
 
@@ -80,7 +203,7 @@ class StreamsSession:
         self._tokens = itertools.count(1)
         self._call_ids = itertools.count(1)
         self._pending: dict[int, threading.Event] = {}
-        self._handles: dict[int, int] = {}
+        self._handles: dict[int, Handle] = {}
         self._ready = threading.Event()
         self._described = threading.Event()
         self._description: pb.TopologyDescription | None = None
@@ -154,7 +277,7 @@ class StreamsSession:
 
     # ---- internals ---------------------------------------------------------------
 
-    def _call(self, call: pb.BuilderCall, timeout: float = 30.0) -> int:
+    def _call(self, call: pb.BuilderCall, timeout: float = 30.0) -> Handle:
         call_id = next(self._call_ids)
         call.call_id = call_id
         answered = threading.Event()
@@ -165,7 +288,8 @@ class StreamsSession:
             raise StreamsError(f"the engine did not answer builder call {call_id}")
         self._raise_if_faulted()
         with self._lock:
-            return self._handles.pop(call_id, 0)
+            return self._handles.pop(
+                call_id, Handle(0, HandleKind.UNKNOWN, DataType.UNKNOWN, DataType.UNKNOWN))
 
     def _read(self) -> None:
         try:
@@ -194,7 +318,7 @@ class StreamsSession:
 
     def _on_handle(self, assigned: pb.HandleAssigned) -> None:
         with self._lock:
-            self._handles[assigned.call_id] = assigned.handle
+            self._handles[assigned.call_id] = Handle.from_assigned(assigned)
             waiting = self._pending.pop(assigned.call_id, None)
         if waiting is not None:
             waiting.set()
