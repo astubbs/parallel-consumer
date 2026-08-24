@@ -22,4 +22,14 @@ interface AdmissionPolicy {
      * @param window         the closed window the plant produced under {@code previousTarget}
      */
     int nextTarget(int previousTarget, ClosedAdmissionWindow window);
+
+    /**
+     * Called by {@link ScenarioRunner} before each phase's windows run - the seam through which the U6
+     * lifecycle scenarios reach controller machinery the windows alone cannot express:
+     * {@link ControllerAdmissionPolicy} reads a zero-arrival phase as a PAUSE interval (delivering the
+     * pause-poison consumption when arrival returns) and a capacity-override phase as a REBALANCE. Pure-law
+     * policies and mutants ignore it.
+     */
+    default void onPhaseStart(ScenarioRunner.Phase phase) {
+    }
 }

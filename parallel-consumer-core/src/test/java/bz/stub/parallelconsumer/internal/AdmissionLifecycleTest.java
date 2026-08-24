@@ -223,6 +223,43 @@ class AdmissionLifecycleTest {
                 .that(controller().currentTarget()).isEqualTo(targetBefore);
     }
 
+    /**
+     * The U6 pause edge through the ENGINE seam (R6/KTD3): a floor-seeded processor closes empty windows -
+     * every gated signal reading empty - and the ungated escape still fires within N + jitter windows; a
+     * pause/resume cycle then aborts the in-flight probe at the poison-consuming tick, and the next boundary
+     * closes an ordinary empty window at the restored floor target.
+     */
+    @Test
+    void pauseAbortsAnInFlightEscapeProbeThroughTheEngineSeam() {
+        buildHarness(enforceOptions(1)); // seeded AT the one-slot floor
+        pc.setState(State.RUNNING);
+
+        int firedAtWindow = -1;
+        for (int window = 1; window <= 7 && firedAtWindow < 0; window++) {
+            module.clock.add(WINDOW_STEP);
+            pc.tickAdmissionController();
+            if (controller().lastDecisionReason().orElse(null) == AdmissionDecisionReason.ESCAPE_PROBE) {
+                firedAtWindow = window;
+            }
+        }
+        assertWithMessage("the escape must fire despite every gated signal reading empty (R6); N=5 plus at "
+                + "most one jitter window").that(firedAtWindow).isAtLeast(5);
+        assertThat(firedAtWindow).isAtMost(6);
+
+        pc.pauseIfRunning();
+        pc.resumeIfPaused();
+        pc.tickAdmissionController(); // consumes the poison: aborts the probe, restores the deferred floor
+
+        assertThat(controller().currentTarget()).isEqualTo(1);
+        module.clock.add(WINDOW_STEP);
+        pc.tickAdmissionController();
+        assertWithMessage("the probe is gone - the next boundary closes an ordinary empty window, not a "
+                + "probe window")
+                .that(controller().lastDecisionReason()).hasValue(AdmissionDecisionReason.INSUFFICIENT_SIGNAL);
+        assertWithMessage("the restored floor target holds")
+                .that(controller().currentTarget()).isEqualTo(1);
+    }
+
     // --- drain release (KTD9): the seam read is state-derived ---
 
     /**

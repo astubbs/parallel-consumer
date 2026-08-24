@@ -117,7 +117,24 @@ public enum AdmissionDecisionReason {
      * At least one assigned partition was refusing records under offset-encoding back-pressure at the boundary
      * (the design's R8 absolute brake): held, never grown - a partition refusing records makes growth meaningless.
      */
-    OFFSET_BACK_PRESSURE(16);
+    OFFSET_BACK_PRESSURE(16),
+
+    /**
+     * The U6 floor-escape probe is running (the design's R6): consecutive floor windows forced a re-measurement
+     * from the floor with a cleared elasticity history, on a path no gated signal can suppress. Hand-assigned a
+     * FRESH value - never {@code PROBING}'s retired {@code 4}, whose probe-DOWN semantics dashboards may already
+     * key on (see the class javadoc's retired-values note).
+     */
+    ESCAPE_PROBE(17),
+
+    /**
+     * The U6 descent probe is running (the design's R14 sweep-from-above): sustained plateau evidence at a target
+     * above the floor triggered a one-accelerator-step-down re-measurement - kept when throughput holds (the
+     * lower target paid), restored when it fell. Its own value rather than sharing {@link #ESCAPE_PROBE}: the two
+     * probes answer different operator questions (stranded-at-floor vs parked-above-the-knee), and a shared gauge
+     * value would make them indistinguishable on a dashboard.
+     */
+    DESCENT_PROBE(18);
 
     /**
      * What the constraint gauge publishes before the first window has closed - no gate has decided anything yet, so

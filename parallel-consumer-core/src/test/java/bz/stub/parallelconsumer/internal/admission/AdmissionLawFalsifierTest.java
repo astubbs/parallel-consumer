@@ -29,17 +29,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * <b>exactly 20</b> when the first elasticity verdict showed it bought nothing, and 20 for every window of the
  * settled tail - asserted below, pinned to those numbers.
  * <p>
- * <b>What is deliberately NOT asserted here:</b>
- * <ul>
- * <li>sweep arms starting ABOVE the knee (50, the ceiling) - descent on a flat plateau needs a signal this law
- * is forbidden to read (queueing latency, R8) or U6's escape probe; a throughput-steered law cannot distinguish
- * 50 slots from 20 when both complete the same 400 records/s.
- * <!-- TODO(refactor): assert the above-knee sweep arms once U6's escape probe lands (plan 2026-08-24-003, R6) -
- *  until then the law parks where the plateau band catches it, which the plateau scenario already pins. --></li>
- * <li>{@code pauseCycling}, {@code rebalanceShrink}, {@code floorPin} - they exercise controller machinery
- * (pause invalidation boundaries, rebalance restore, the ungated escape) that U6 builds; their TODOs live on the
- * scenarios themselves in {@link FalsifierScenarios}.</li>
- * </ul>
+ * <b>Two policies, one seam:</b> the band-machine gates run against {@link LawAdmissionPolicy} (the law alone,
+ * production calibration); the U6 lifecycle scenarios - {@code floorPin}, {@code pauseCycling},
+ * {@code rebalanceShrink}, {@code descentFromAbove} - run against {@link ControllerAdmissionPolicy}, because the
+ * machinery they falsify (the ungated escape, pause invalidation boundaries, the KTD4 rebalance restore, the
+ * descent probe) is deliberately controller-owned. The above-knee sweep arms (50, the ceiling) that U5
+ * documented as un-assertable by a throughput-steered law are asserted here as {@code descentFromAbove} - the
+ * descent probe is the signal-free-plateau descent the law alone was forbidden to have.
  */
 @Slf4j
 class AdmissionLawFalsifierTest {
@@ -153,5 +149,64 @@ class AdmissionLawFalsifierTest {
                 Arrays.asList(Phase.of(200, 1.5 * MU_MAX_RECORDS_PER_SECOND)));
 
         assertThat(trajectory.getFinalTarget()).isEqualTo(5);
+    }
+
+    // ------------------------------------------------------------------
+    // The U6 lifecycle scenarios, driven through the REAL controller (see the class javadoc).
+    // ------------------------------------------------------------------
+
+    private static ControllerAdmissionPolicy controllerPolicy(int initialTarget) {
+        return new ControllerAdmissionPolicy(initialTarget, 1);
+    }
+
+    /**
+     * The floor pin - the escape's falsifier (R6): pinned at the one-slot floor on a trickle plant whose windows
+     * never carry enough samples to adjudicate and never read limit-bound to the gates, the ungated escape must
+     * still fire and lift the target. Sabotage signature: make the floor counter respect the sample-count gate
+     * and the target never leaves 1.
+     */
+    @Test
+    void floorPinEscapeFiresDespiteEmptyGatedSignals() {
+        Trajectory trajectory = FalsifierScenarios.floorPin(controllerPolicy(1));
+
+        log.info("floor-pin trajectory: max commanded {} over {} windows",
+                trajectory.maxCommandedTarget(), trajectory.getRecords().size());
+    }
+
+    /**
+     * Pause-cycling - PC's public throttling idiom (R14/KTD2/KTD3): periodic pause/resume against a saturated
+     * plant, each resume stamping a real invalidation boundary through the controller. The target must not walk
+     * across cycles - N cycles share one warmup allowance, and each cycle's blind step is retracted by its own
+     * verdict.
+     */
+    @Test
+    void pauseCyclingDoesNotWalkTheTargetAcrossCycles() {
+        FalsifierScenarios.pauseCycling(controllerPolicy(KNEE_SLOTS), KNEE_SLOTS);
+    }
+
+    /**
+     * Rebalance-shrink (KTD4): capacity (and the oracle) halves mid-run as one of two assigned partitions moves
+     * away. The controller's reset must scale the carried-over seed by the partition ratio, and the restored
+     * trajectory must respect the NEW assignment's L* - a seed held open-loop through the 30s cooldown at the
+     * stale-high value fails the final-target band.
+     */
+    @Test
+    void rebalanceShrinkRespectsTheNewAssignmentsOracle() {
+        FalsifierScenarios.rebalanceShrink(new ControllerAdmissionPolicy(KNEE_SLOTS, 2), KNEE_SLOTS);
+    }
+
+    /**
+     * Descent from above - the flip of U5's documented gap: the {50, ceiling} sweep arms a throughput-steered
+     * law cannot descend (flat plateau, no distinguishing signal) now converge down to the knee band via the
+     * controller's descent probe (R14's sweep-from-above). Sabotage signature: make the probe keep a target
+     * whose throughput fell and the walk marches through the knee to the floor, out of band low.
+     */
+    @Test
+    void descentFromAboveConvergesToTheKneeBand() {
+        for (int start : Arrays.asList(50, CEILING_SLOTS)) {
+            Trajectory trajectory = FalsifierScenarios.descentFromAbove(controllerPolicy(start), start);
+            log.info("descent-from-above trajectory from {}: final {}, settled throughput {} records/s",
+                    start, trajectory.getFinalTarget(), trajectory.settledMeanThroughput(30));
+        }
     }
 }

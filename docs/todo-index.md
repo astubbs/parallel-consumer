@@ -219,12 +219,6 @@ that line, leave it in the code - it will show up here.
 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
 - awaitForSomeLoopCycles(3); // async commit can be slow - todo change this to event based
 
-**`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/admission/FalsifierScenarios.java`**
-
-- TODO(refactor): wire pauseCycling into the falsifier suite in U6 (plan 2026-08-24-003, R14) - it
-- TODO(refactor): wire rebalanceShrink into the falsifier suite in U6 (plan 2026-08-24-003, KTD4) - it
-- TODO(refactor): wire floorPin into the falsifier suite in U6 (plan 2026-08-24-003, the escape's
-
 **`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/utils/KafkaTestUtils.java`**
 
 - todo not used anymore - delete?

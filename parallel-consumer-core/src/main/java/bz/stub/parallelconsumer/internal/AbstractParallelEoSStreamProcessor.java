@@ -299,8 +299,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * R13 pause poison: set on the RUNNING-&gt;PAUSED transition ({@link #pauseIfRunning()}, any thread), consumed
      * by the control thread at the first post-resume {@link #tickAdmissionController()} pass, which discards the
      * admission controller's in-progress sample window - in-flight work keeps completing while PAUSED, so without
-     * this the first post-resume window would mix pre-pause and mid-pause samples into one reading. The law's
-     * EWMAs survive; a pause says nothing about the downstream.
+     * this the first post-resume window would mix pre-pause and mid-pause samples into one reading. Since U6 the
+     * same consumption also aborts any in-flight probe (restoring its deferred target) and stamps an elasticity
+     * invalidation boundary (KTD3: history predating a pause describes a plant an unknown span in the past); the
+     * warmup EPISODE survives, so pause-cycling shares one allowance (KTD2).
      */
     private final AtomicBoolean admissionWindowPoisonedByPause = new AtomicBoolean(false);
 
@@ -1528,7 +1530,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         var controller = module.admissionController();
         if (admissionWindowPoisonedByPause.getAndSet(false)) {
-            controller.discardWindow();
+            // U6's pause edge (KTD3): besides discarding the poisoned window, the controller aborts any
+            // in-flight probe (restoring its deferred target) and stamps an estimator invalidation boundary.
+            // A probe abort can move the published target, so the pool follows here too (R9/KTD5).
+            int targetBeforeResume = controller.currentTarget();
+            controller.notifyPauseResumed();
+            int targetAfterResume = controller.currentTarget();
+            if (targetAfterResume != targetBeforeResume) {
+                applyAdmissionTargetToWorkerPool(targetAfterResume);
+            }
             return;
         }
         int targetBefore = controller.currentTarget();

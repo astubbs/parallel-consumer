@@ -426,6 +426,133 @@ class AdmissionControlLawTest {
     }
 
     // ------------------------------------------------------------------
+    // U6 probe seams: what the controller's probes may do to law state, and nothing more (R6, KTD2/KTD3).
+    // The probe STATE machine itself - arming, duration, keep-vs-restore - is controller-owned (KTD4) and
+    // pinned in AdmissionControllerTest; here each seam's contract is pinned in isolation.
+    // ------------------------------------------------------------------
+
+    @Nested
+    class ProbeSeams {
+
+        @Test
+        void pinForProbeClearsHistoryOnlyWhenAsked() {
+            AdmissionControlLaw law = bandOnlyLaw(20, 100);
+            for (int i = 0; i < 3; i++) {
+                law.onWindowClosed(bound(400, 20));
+            }
+            assertWithMessage("fixture: history to protect or clear").that(law.estimatorHistorySize()).isEqualTo(3);
+
+            law.pinForProbe(10, false); // the descent probe keeps its history - its conclusion compares levels
+            assertThat(law.getEstimatedLimit()).isEqualTo(10.0);
+            assertThat(law.estimatorHistorySize()).isEqualTo(3);
+
+            law.pinForProbe(1, true); // the escape clears - pre-probe samples must not contaminate (safeguard 2)
+            assertThat(law.getEstimatedLimit()).isEqualTo(1.0);
+            assertThat(law.estimatorHistorySize()).isEqualTo(0);
+        }
+
+        @Test
+        void observeProbeWindowBuffersQualifyingEvidenceWithoutMovingAnyState() {
+            AdmissionControlLaw law = AdmissionControlLaw.newBuilder().initialLimit(20).ceiling(100).build();
+            law.pinForProbe(10, false);
+            double allowanceBefore = law.warmupAllowanceRemaining();
+
+            law.observeProbeWindow(bound(400, 10));                              // qualifies - buffered
+            law.observeProbeWindow(unboundNoWork(50));                           // unbound - refused (R2)
+            law.observeProbeWindow(TestWindows.window(5, 10_000_000.0, 5, 10, 0, 5, 0, 0)); // starved - refused
+            law.observeProbeWindow(TestWindows.withDrops(50, 10_000_000.0, 10, 2));         // braked - refused
+
+            assertWithMessage("observation never moves the pinned limit").that(law.getEstimatedLimit()).isEqualTo(10.0);
+            assertWithMessage("observation never spends allowance").that(law.warmupAllowanceRemaining()).isEqualTo(allowanceBefore);
+            assertWithMessage("buffered evidence is NOT in the history until the conclusion adopts it")
+                    .that(law.estimatorHistorySize()).isEqualTo(0);
+
+            law.concludeProbe(10, false, true);
+            assertWithMessage("only the one qualifying window was adopted")
+                    .that(law.estimatorHistorySize()).isEqualTo(1);
+        }
+
+        @Test
+        void concludingWithoutAdoptingDropsTheBufferedEvidence() {
+            AdmissionControlLaw law = AdmissionControlLaw.newBuilder().initialLimit(20).ceiling(100).build();
+            law.pinForProbe(16, false);
+            law.observeProbeWindow(bound(360, 16));
+
+            law.concludeProbe(20, false, false); // a failed descent: restore, and the rejected level's
+            // lower-throughput evidence must never teach the estimator to climb off the knee
+
+            assertThat(law.getEstimatedLimit()).isEqualTo(20.0);
+            assertThat(law.estimatorHistorySize()).isEqualTo(0);
+        }
+
+        @Test
+        void concludeProbeOpensAFreshWarmupEpisode_abortDoesNot() {
+            // Spend the whole allowance, then compare the two exits (KTD2's line between them).
+            AdmissionControlLaw concluded = AdmissionControlLaw.newBuilder().initialLimit(16).ceiling(100).build();
+            concluded.onWindowClosed(bound(400, 16));
+            assertWithMessage("fixture: allowance spent").that(concluded.warmupAllowanceRemaining()).isEqualTo(0.0);
+            concluded.pinForProbe(1, true);
+            concluded.concludeProbe(1, false, false);
+            assertWithMessage("a CONCLUDED probe gathered evidence - fresh allowance (KTD2)")
+                    .that(concluded.warmupAllowanceRemaining()).isEqualTo(DEFAULT_WARMUP_ALLOWANCE_SLOTS);
+
+            AdmissionControlLaw aborted = AdmissionControlLaw.newBuilder().initialLimit(16).ceiling(100).build();
+            aborted.onWindowClosed(bound(400, 16));
+            aborted.pinForProbe(1, true);
+            aborted.abortProbe(20);
+            assertWithMessage("an ABORTED probe gathered nothing - the episode stays spent, or pause-cycling "
+                    + "could refill blind growth through repeated aborted escapes")
+                    .that(aborted.warmupAllowanceRemaining()).isEqualTo(0.0);
+            assertWithMessage("the abort still restores the deferred limit")
+                    .that(aborted.getEstimatedLimit()).isEqualTo(20.0);
+        }
+
+        @Test
+        void provisionalConclusionIsRetractedWhenItBoughtNothing() {
+            // The escape's re-entry step is blind growth: adjudicated by the next verdict like a warmup grant.
+            AdmissionControlLaw law = AdmissionControlLaw.newBuilder().initialLimit(1).ceiling(100).build();
+            law.pinForProbe(1, true);
+            for (int i = 0; i < 4; i++) {
+                law.observeProbeWindow(bound(20, 1));
+            }
+            law.concludeProbe(2, true, true); // the re-entry step, provisional
+            assertThat(law.getEstimatedLimit()).isEqualTo(2.0);
+
+            // Flat evidence at the stepped level: the step bought nothing - the first acted verdict takes it back.
+            AdmissionDecision acted = null;
+            for (int i = 0; i < 12 && (acted == null || acted.getReason() != ADAPTING); i++) {
+                acted = law.onWindowClosed(bound(20, 2));
+            }
+            assertThat(acted.getReason()).isEqualTo(ADAPTING);
+            assertWithMessage("retracted to exactly the probe's operating point")
+                    .that(law.getEstimatedLimit()).isEqualTo(1.0);
+        }
+
+        @Test
+        void restoredConclusionIsNeverRetracted() {
+            // A failed descent's restore returns to a PROVEN level - the probe just measured that the lower one
+            // does not pay - so nothing is pending and a later HOLD verdict must park, not retract.
+            AdmissionControlLaw law = bandOnlyLaw(20, 100);
+            law.pinForProbe(16, false);
+            law.observeProbeWindow(bound(360, 16));
+            law.concludeProbe(20, false, false);
+            assertThat(law.hasPendingGrowth()).isFalse();
+
+            // Flat evidence with spread so a live HOLD verdict computes and acts.
+            AdmissionDecision decision = null;
+            for (int i = 0; i < 4; i++) {
+                law.onWindowClosed(bound(400, 20));
+            }
+            for (int i = 0; i < 4; i++) {
+                decision = law.onWindowClosed(bound(400, 21));
+            }
+            assertThat(decision.getReason()).isEqualTo(PLATEAU);
+            assertWithMessage("the restored level parks - it is never retracted below itself")
+                    .that(law.getEstimatedLimit()).isEqualTo(20.0);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Construction invariants
     // ------------------------------------------------------------------
 

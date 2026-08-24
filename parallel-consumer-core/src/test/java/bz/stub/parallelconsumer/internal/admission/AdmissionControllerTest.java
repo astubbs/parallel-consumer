@@ -14,6 +14,7 @@ import org.threeten.extra.MutableClock;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
+import java.util.HashSet;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.DEFAULT_MAX_CONCURRENCY;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionController.ADAPTIVE_DEFAULT_CEILING;
@@ -21,9 +22,14 @@ import static bz.stub.parallelconsumer.internal.admission.AdmissionController.RE
 import static bz.stub.parallelconsumer.internal.admission.AdmissionController.SAMPLE_WINDOW_DURATION;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionControlLaw.DEFAULT_MIN_SAMPLES_PER_WINDOW;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionControlLaw.LIMIT_FLOOR_SLOTS;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionController.FLOOR_ESCAPE_WINDOWS;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionController.PROBE_DURATION_WINDOWS;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionControlLaw.DEFAULT_WARMUP_ALLOWANCE_SLOTS;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.AT_CAP;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.BACKOFF;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.COOLDOWN;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.DESCENT_PROBE;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.ESCAPE_PROBE;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.INSUFFICIENT_SIGNAL;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.WARMUP;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.WARMUP_EXHAUSTED;
@@ -431,28 +437,425 @@ class AdmissionControllerTest {
     }
 
     /**
-     * {@link AdmissionController#discardWindow()} - the engine's pause-poison lever: the in-progress window's
-     * samples never reach the law, but the law itself (and its elasticity history) survives, because a pause
-     * says nothing about the downstream.
+     * {@link AdmissionController#notifyPauseResumed()} - the engine's pause-poison lever, U6 semantics (KTD3):
+     * the in-progress window's samples never reach the law, AND the pause stamps an invalidation boundary
+     * through the law's estimator - pre-pause entries describe a plant an unknown span in the past, so history
+     * and verdict die while the law INSTANCE (and, per KTD2, its warmup episode) survives. This deliberately
+     * supersedes the U5 lever's keep-the-history contract, which its own javadoc carried as "until U6 refines
+     * it".
      */
     @Test
-    void discardWindowDropsTheSamplesButKeepsTheLaw() {
+    void pauseResumedDropsTheSamplesAndStampsAnInvalidationBoundary() {
         var controller = seededEnforceController();
         warm(controller);
         var lawBefore = controller.law();
-        int historyBefore = lawBefore.estimatorHistorySize();
+        double allowanceBefore = lawBefore.warmupAllowanceRemaining();
+        assertWithMessage("fixture: warming must have left estimator history for the boundary to kill")
+                .that(lawBefore.estimatorHistorySize()).isGreaterThan(0);
         feedSamples(controller, 10 * MS, controller.currentTarget());
 
-        controller.discardWindow();
+        controller.notifyPauseResumed();
         clock.add(SAMPLE_WINDOW_DURATION);
         controller.tick();
 
         assertWithMessage("the first window after the discard must close EMPTY - a hold, never a decision on "
                 + "discarded samples")
                 .that(controller.lastDecisionReason()).hasValue(INSUFFICIENT_SIGNAL);
+        assertWithMessage("the law survives a pause - only its estimator's history dies")
+                .that(controller.law()).isSameInstanceAs(lawBefore);
+        assertWithMessage("KTD3: the pause boundary kills every pre-pause estimator entry")
+                .that(controller.law().estimatorHistorySize()).isEqualTo(0);
+        assertWithMessage("KTD2: the warmup EPISODE spans the boundary - pause must not refill the allowance")
+                .that(controller.law().warmupAllowanceRemaining()).isEqualTo(allowanceBefore);
+    }
+
+    // ------------------------------------------------------------------
+    // U6: the escape hatch, the descent probe, and the lifecycle edges (R6, KTD2-KTD4).
+    // ------------------------------------------------------------------
+
+    /** A fixed jitter seed so probe timing is deterministic; its value is arbitrary. */
+    private static final long JITTER_SEED = 42L;
+
+    /** The largest start delay the jitter can add - one window at N=5 with the 15% fraction. */
+    private static final int MAX_JITTER_WINDOWS =
+            (int) Math.round(FLOOR_ESCAPE_WINDOWS * AdmissionController.ESCAPE_JITTER_FRACTION);
+
+    private AdmissionController seededController(int maxConcurrency, int seedSlots) {
+        return new AdmissionController(options(AdaptiveConcurrencyMode.ENFORCE, maxConcurrency, seedSlots), clock,
+                AdmissionControlLaw.newBuilder(), null, JITTER_SEED);
+    }
+
+    /** Feeds {@code samples} successes and ticks across the boundary with LIMIT-BOUND signals at {@code slots}. */
+    private void feedCountedBoundWindowAndTick(AdmissionController controller, int samples, int slots) {
+        for (int i = 0; i < samples; i++) {
+            controller.recordServiceTime(10 * MS);
+            controller.recordInFlight(slots);
+            controller.recordOutcome(Outcome.SUCCESS);
+        }
+        clock.add(SAMPLE_WINDOW_DURATION);
+        controller.tick(() -> TestWindows.boundAt(slots));
+    }
+
+    /**
+     * Closes empty floor windows (every gated signal reading empty) until the escape fires, asserting it fires
+     * inside the N..N+jitter arming band, and returns the window index it fired at.
+     */
+    private int driveFloorWindowsUntilEscapeFires(AdmissionController controller,
+                                                  Runnable oneFloorWindow) {
+        for (int window = 1; window <= FLOOR_ESCAPE_WINDOWS + MAX_JITTER_WINDOWS; window++) {
+            oneFloorWindow.run();
+            if (controller.lastDecisionReason().orElse(null) == ESCAPE_PROBE) {
+                assertWithMessage("the escape fired before N consecutive floor windows elapsed")
+                        .that(window).isAtLeast(FLOOR_ESCAPE_WINDOWS);
+                return window;
+            }
+        }
+        throw new AssertionError("the escape never fired within N + jitter floor windows");
+    }
+
+    /**
+     * The ungated arming path (R6): empty UNSAMPLED windows at the floor - zero samples (the adjudication gate
+     * reads nothing), never limit-bound (the binding gate reads nothing) - must still arm and fire the escape
+     * within N + jitter windows. Sabotage signature: make the counter respect either gated signal and this
+     * (and the floor-pin falsifier) times out at the floor forever.
+     */
+    @Test
+    void escapeFiresAfterConsecutiveFloorWindowsDespiteEmptyGatedSignals() {
+        var controller = seededController(24, 1);
+
+        driveFloorWindowsUntilEscapeFires(controller, () -> {
+            clock.add(SAMPLE_WINDOW_DURATION);
+            controller.tick();
+        });
+
+        assertThat(controller.probeInFlight()).isTrue();
+        assertWithMessage("the deferred restore value at the floor IS the floor")
+                .that(controller.probeDeferredRestoreTarget()).isEqualTo(LIMIT_FLOOR_SLOTS);
+        assertWithMessage("the probe pins the published target to the floor")
+                .that(controller.currentTarget()).isEqualTo(LIMIT_FLOOR_SLOTS);
+    }
+
+    /**
+     * A genuinely idle floor (probe windows never limit-bound) concludes by restoring the floor unchanged with
+     * a FRESH warmup allowance - idleness must not fund growth, and the fresh allowance is what keeps the
+     * escape's liveness alive under the KTD2 cap once bound work returns.
+     */
+    @Test
+    void idleEscapeProbeConcludesByRestoringTheFloorUnchanged() {
+        var controller = seededController(24, 1);
+        driveFloorWindowsUntilEscapeFires(controller, () -> {
+            clock.add(SAMPLE_WINDOW_DURATION);
+            controller.tick();
+        });
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            assertWithMessage("probe window %s must still be in flight", probeWindow)
+                    .that(controller.probeInFlight()).isTrue();
+            assertThat(controller.lastDecisionReason()).hasValue(ESCAPE_PROBE);
+            clock.add(SAMPLE_WINDOW_DURATION);
+            controller.tick();
+        }
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("un-bound probe windows restore the floor - no step on idleness")
+                .that(controller.currentTarget()).isEqualTo(LIMIT_FLOOR_SLOTS);
+        assertWithMessage("a concluded probe opens a fresh allowance (KTD2)")
+                .that(controller.law().warmupAllowanceRemaining()).isEqualTo(DEFAULT_WARMUP_ALLOWANCE_SLOTS);
+    }
+
+    /**
+     * The escape's liveness half: probe windows that stay LIMIT-BOUND (even a trickle saturates the floor's one
+     * slot) conclude with ONE accelerator re-entry step - provisional growth the next verdict adjudicates like
+     * any warmup grant. Sample-starved throughout, so no gated band could ever have moved the target.
+     */
+    @Test
+    void boundEscapeProbeConcludesWithOneReEntryStep() {
+        var controller = seededController(24, 1);
+        Runnable boundStarvedWindow = () -> {
+            clock.add(SAMPLE_WINDOW_DURATION);
+            controller.tick(() -> TestWindows.boundAt(1));
+        };
+        driveFloorWindowsUntilEscapeFires(controller, boundStarvedWindow);
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            boundStarvedWindow.run();
+        }
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("floor + one accelerator step (sqrt(1) = 1)")
+                .that(controller.currentTarget()).isEqualTo(2);
+        assertThat(controller.law().getEstimatedLimit()).isEqualTo(2.0);
+    }
+
+    /**
+     * Jitter determinism under an injected seed: two controllers with the same seed fire at the identical
+     * window index - the property the fleet-level jitter must NOT have across instances, provided here for
+     * tests by the seeded constructor.
+     */
+    @Test
+    void escapeJitterIsDeterministicUnderAnInjectedSeed() {
+        var first = seededController(24, 1);
+        int firstFiredAt = driveFloorWindowsUntilEscapeFires(first, () -> {
+            clock.add(SAMPLE_WINDOW_DURATION);
+            first.tick();
+        });
+
+        var second = seededController(24, 1);
+        int secondFiredAt = driveFloorWindowsUntilEscapeFires(second, () -> {
+            clock.add(SAMPLE_WINDOW_DURATION);
+            second.tick();
+        });
+
+        assertThat(secondFiredAt).isEqualTo(firstFiredAt);
+    }
+
+    /**
+     * KTD3: cooldown-discarded windows advance neither the floor counter nor a probe - after the cooldown
+     * lapses the escape needs its full N floor windows again, however many floor windows the cooldown ate.
+     */
+    @Test
+    void cooldownWindowsDoNotAdvanceTheEscapeCounter() {
+        var controller = seededController(24, 1);
+        controller.onPartitionsAssigned(UniLists.of(TP_0));
+        controller.onPartitionsRevoked(UniLists.of(TP_0));
+        controller.onPartitionsAssigned(UniLists.of(TP_1));
+        controller.tick();
+        assertThat(controller.lastDecisionReason()).hasValue(COOLDOWN);
+
+        // A cooldown's worth of floor windows: discarded, and the counter must not move.
+        long windowsInsideCooldown =
+                REBALANCE_TARGET_FREEZE_COOLDOWN.toMillis() / SAMPLE_WINDOW_DURATION.toMillis() - 1;
+        for (long window = 0; window < windowsInsideCooldown; window++) {
+            clock.add(SAMPLE_WINDOW_DURATION);
+            controller.tick();
+            assertThat(controller.lastDecisionReason()).hasValue(COOLDOWN);
+            assertThat(controller.probeInFlight()).isFalse();
+        }
+
+        // Post-cooldown the arming starts from zero: the helper asserts the full N windows are needed again -
+        // had the discarded windows counted, the first evaluated window would have fired below N.
+        driveFloorWindowsUntilEscapeFires(controller, () -> {
+            clock.add(SAMPLE_WINDOW_DURATION);
+            controller.tick();
+        });
+    }
+
+    /**
+     * A floor held by an ABSOLUTE BRAKE is braked, not stranded: the brake is a live verdict that only fires
+     * when there IS signal, so braked windows must not arm the escape - an overloaded floor keeps cutting under
+     * {@code BACKOFF} instead of oscillating through pointless re-measurements.
+     */
+    @Test
+    void brakedFloorWindowsDoNotArmTheEscape() {
+        var controller = seededController(24, 1);
+
+        for (int window = 0; window < FLOOR_ESCAPE_WINDOWS + MAX_JITTER_WINDOWS + 2; window++) {
+            feedSamples(controller, 10 * MS, 1);
+            controller.recordOutcome(Outcome.OVERLOAD_DROP);
+            clock.add(SAMPLE_WINDOW_DURATION);
+            controller.tick();
+            assertThat(controller.lastDecisionReason()).hasValue(BACKOFF);
+            assertThat(controller.probeInFlight()).isFalse();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // U6: the descent probe (R14's sweep-from-above) and the probe lifecycle edges.
+    // ------------------------------------------------------------------
+
+    /**
+     * Drives a fresh ENFORCE controller (ceiling 100, seed 16) to its first descent probe: the warmup grant
+     * 16 -&gt; 20, the first verdict's retraction back to 16, then three plateau-held windows arm the probe,
+     * which pins to 16 - accelerator step = 12. Asserts the fixture landed where documented.
+     */
+    private AdmissionController driveToDescentProbe(int partitionCount) {
+        var controller = seededController(100, 16);
+        if (partitionCount > 0) {
+            var partitions = new HashSet<TopicPartition>();
+            for (int p = 0; p < partitionCount; p++) {
+                partitions.add(new TopicPartition("lifecycle-topic", p));
+            }
+            controller.onPartitionsAssigned(partitions);
+        }
+        for (int window = 0; window < 30; window++) {
+            feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+            if (controller.lastDecisionReason().orElse(null) == DESCENT_PROBE) {
+                assertWithMessage("fixture: the probe pins one accelerator step down")
+                        .that(controller.currentTarget()).isEqualTo(12);
+                assertWithMessage("fixture: the deferred restore value is the plateau level")
+                        .that(controller.probeDeferredRestoreTarget()).isEqualTo(16);
+                return controller;
+            }
+        }
+        throw new AssertionError("fixture: no descent probe fired within 30 plateau-shaped windows");
+    }
+
+    /**
+     * Descent KEEP: probe windows matching the reference throughput prove the lower target PAID - it is kept,
+     * and the walk repeats at the same cadence (the next probe steps down again after another plateau streak).
+     */
+    @Test
+    void descentProbeKeepsTheLowerTargetWhenThroughputHolds() {
+        var controller = driveToDescentProbe(0);
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget()); // same 12/s throughput
+        }
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("unchanged throughput at the lower target: the step down paid, keep it")
+                .that(controller.currentTarget()).isEqualTo(12);
+
+        // The walk repeats: within the un-backed-off cadence another probe steps down again.
+        for (int window = 0; window < AdmissionController.DESCENT_PLATEAU_WINDOWS; window++) {
+            feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        }
+        assertWithMessage("a kept probe leaves the cadence alone - the walk continues toward the knee")
+                .that(controller.lastDecisionReason()).hasValue(DESCENT_PROBE);
+        assertThat(controller.currentTarget()).isEqualTo(9); // 12 - sqrt(12), rounded
+    }
+
+    /**
+     * Descent RESTORE: probe windows whose throughput FELL beyond the tolerance restore the deferred target and
+     * back the cadence off (doubled) - the plant answered, so re-asking gets rarer. Throughput criterion only.
+     */
+    @Test
+    void descentProbeRestoresAndBacksOffWhenThroughputFalls() {
+        var controller = driveToDescentProbe(0);
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 10, 12); // 10/s against the 12/s reference: a 17% fall
+        }
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("fallen throughput restores the remembered target")
+                .that(controller.currentTarget()).isEqualTo(16);
+        assertThat(controller.law().getEstimatedLimit()).isEqualTo(16.0);
+
+        // The cadence doubled: the old cadence's worth of plateau windows must NOT re-fire...
+        for (int window = 0; window < AdmissionController.DESCENT_PLATEAU_WINDOWS; window++) {
+            feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+            assertWithMessage("window %s re-fired inside the backed-off cadence", window)
+                    .that(controller.lastDecisionReason().orElse(null)).isNotEqualTo(DESCENT_PROBE);
+        }
+        // ...while the doubled cadence does.
+        for (int window = 0; window < AdmissionController.DESCENT_PLATEAU_WINDOWS; window++) {
+            feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        }
+        assertThat(controller.lastDecisionReason()).hasValue(DESCENT_PROBE);
+    }
+
+    /**
+     * The pause edge (KTD3): a pause mid-probe aborts it - deferred target restored immediately, the law
+     * instance retained, the history boundary stamped - and the first bound post-resume window lands in the
+     * warmup band (never an absorbing hold), on the allowance the pause deliberately did NOT refill (KTD2).
+     */
+    @Test
+    void pauseMidProbeAbortsRestoresAndStampsTheBoundary() {
+        var controller = driveToDescentProbe(0);
+        var lawBefore = controller.law();
+
+        controller.notifyPauseResumed();
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("the deferred value is restored immediately")
+                .that(controller.currentTarget()).isEqualTo(16);
         assertThat(controller.law()).isSameInstanceAs(lawBefore);
-        assertWithMessage("an empty window leaves the estimator untouched (the adjudication gate holds all state)")
-                .that(controller.law().estimatorHistorySize()).isEqualTo(historyBefore);
+        assertWithMessage("KTD3: the pause kills the estimator history")
+                .that(controller.law().estimatorHistorySize()).isEqualTo(0);
+
+        feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        assertWithMessage("resume with binding work lands in the warmup band - never an absorbing hold")
+                .that(controller.lastDecisionReason()).hasValue(WARMUP);
+        assertThat(controller.currentTarget()).isEqualTo(20);
+    }
+
+    /**
+     * The rebalance edge (KTD4): a rebalance mid-probe seeds the reconstructed law from the DEFERRED restore
+     * value, never the pinned probe value - otherwise the reset launders the probe's reduced target into the
+     * frozen post-rebalance prior and group churn ratchets the target down.
+     */
+    @Test
+    void rebalanceMidProbeSeedsFromTheDeferredValueNotTheProbePin() {
+        var controller = driveToDescentProbe(1);
+        var lawBefore = controller.law();
+
+        controller.onPartitionsRevoked(UniLists.of(TP_0));
+        controller.onPartitionsAssigned(UniLists.of(TP_1));
+        controller.tick();
+
+        assertThat(controller.lastDecisionReason()).hasValue(COOLDOWN);
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("KTD4: the seed is the deferred restore value, not the probe's pinned 12")
+                .that(controller.currentTarget()).isEqualTo(16);
+        assertThat(controller.law()).isNotSameInstanceAs(lawBefore);
+        assertThat(controller.law().getEstimatedLimit()).isEqualTo(16.0);
+    }
+
+    /**
+     * KTD4's shrink scaling, mid-probe: the assignment halves while a descent probe is pinned at 12 with a
+     * deferred 16 - the seed is the DEFERRED value scaled by the partition ratio, floor-clamped.
+     */
+    @Test
+    void shrinkMidProbeScalesTheDeferredValueByThePartitionRatio() {
+        var controller = driveToDescentProbe(2);
+
+        controller.onPartitionsLost(UniLists.of(new TopicPartition("lifecycle-topic", 1)));
+        controller.tick();
+
+        assertThat(controller.lastDecisionReason()).hasValue(COOLDOWN);
+        assertWithMessage("deferred 16 scaled by the 1/2 partition ratio")
+                .that(controller.currentTarget()).isEqualTo(8);
+        assertThat(controller.law().getEstimatedLimit()).isEqualTo(8.0);
+    }
+
+    /**
+     * Shrink scaling without a probe: the carried-over target itself scales down by the partition ratio - and
+     * the protection is one-directional, so a GROWN assignment leaves the seed alone (growth is re-earned).
+     */
+    @Test
+    void assignmentShrinkScalesTheCarriedOverSeedGrowthDoesNot() {
+        var shrunk = new AdmissionController(options(AdaptiveConcurrencyMode.ENFORCE, 100, 12), clock,
+                AdmissionControlLaw.newBuilder(), null, JITTER_SEED);
+        shrunk.onPartitionsAssigned(UniLists.of(TP_0, TP_1));
+        shrunk.onPartitionsLost(UniLists.of(TP_1));
+        shrunk.tick();
+        assertWithMessage("half the partitions, half the seed")
+                .that(shrunk.currentTarget()).isEqualTo(6);
+
+        var grown = new AdmissionController(options(AdaptiveConcurrencyMode.ENFORCE, 100, 12), clock,
+                AdmissionControlLaw.newBuilder(), null, JITTER_SEED);
+        grown.onPartitionsAssigned(UniLists.of(TP_0));
+        grown.onPartitionsAssigned(UniLists.of(TP_1));
+        grown.tick();
+        assertWithMessage("a grown assignment must not inflate the seed - one-directional protection only")
+                .that(grown.currentTarget()).isEqualTo(12);
+    }
+
+    /**
+     * ESCAPE safeguard 2, observable end to end: the probe's conclusion measures from a CLEARED history only -
+     * pre-probe entries die at probe entry, and post-conclusion the history holds exactly the probe's own
+     * qualifying windows.
+     */
+    @Test
+    void escapeProbeConcludesMeasuringFromAClearedHistoryOnly() {
+        // Allowance zero: sample-rich bound floor windows adjudicate and feed the estimator, but cannot grow -
+        // the WARMUP_EXHAUSTED floor pin whose escape cadence is KTD2's named steady state.
+        var controller = new AdmissionController(options(AdaptiveConcurrencyMode.ENFORCE, 24, 1), clock,
+                AdmissionControlLaw.newBuilder().warmupAllowanceSlots(0), null, JITTER_SEED);
+        driveFloorWindowsUntilEscapeFires(controller,
+                () -> feedCountedBoundWindowAndTick(controller, SAMPLES, 1));
+        assertWithMessage("probe entry clears the pre-probe history (ESCAPE safeguard 2)")
+                .that(controller.law().estimatorHistorySize()).isEqualTo(0);
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, SAMPLES, 1);
+        }
+
+        assertWithMessage("the concluded probe's history is its own windows and nothing else")
+                .that(controller.law().estimatorHistorySize()).isEqualTo(PROBE_DURATION_WINDOWS);
+        assertWithMessage("bound throughout: the re-entry step fires")
+                .that(controller.currentTarget()).isEqualTo(2);
     }
 
     /**
@@ -466,7 +869,7 @@ class AdmissionControllerTest {
         controller.onPartitionsRevoked(UniLists.of(TP_0));
         controller.onPartitionsAssigned(UniLists.of(TP_1));
         controller.onPartitionsLost(UniLists.of(TP_1));
-        controller.discardWindow();
+        controller.notifyPauseResumed();
         clock.add(SAMPLE_WINDOW_DURATION.multipliedBy(2));
         controller.tick();
 

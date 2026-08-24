@@ -74,11 +74,12 @@ import java.time.Instant;
  * {@code accelerator(floor) >= 1} slot - or the accelerator could not act at the floor and the floor would be
  * absorbing.
  * <p>
- * <b>What this law cannot do yet, deliberately:</b> descend from a too-high start on a flat plateau (no signal in
- * a throughput-steered law distinguishes 50 slots from 20 when both complete the same 400 records/s - the
+ * <b>What this law deliberately does not do alone:</b> descend from a too-high start on a flat plateau (no signal
+ * in a throughput-steered law distinguishes 50 slots from 20 when both complete the same 400 records/s - the
  * operator-facing symptom is queueing latency, which R8 forbids this law to read), and escape a floor pin. Both
- * belong to U6's escape probe, which re-measures from a known-low operating point on a path no gated signal can
- * suppress.
+ * are owned by {@link AdmissionController}'s U6 probes (the ungated floor escape and the descent probe), which
+ * drive this class only through the package-private probe seams below ({@link #pinForProbe},
+ * {@link #observeProbeWindow}, {@link #concludeProbe}) - probe STATE stays controller-owned (KTD4).
  * <p>
  * PURE MATH ONLY: no clock, no threads, no metrics - every update is an explicit {@link #onWindowClosed} call.
  * The estimator's history horizon is driven by a synthetic instant cursor advanced by each window's own measured
@@ -188,6 +189,26 @@ public final class AdmissionControlLaw {
      */
     private Double pendingGrowthBaseline = null;
 
+    /**
+     * Windows observed during an in-flight U6 probe, held back until the probe's conclusion decides their fate
+     * ({@link #concludeProbe}): a KEPT descent probe's evidence enters the history; a RESTORED one's is dropped -
+     * feeding the failed level's lower throughput would read as positive elasticity and teach the law to climb
+     * the very hill the probe just proved it should stay parked on (measured: a 23&harr;28 limit cycle above the
+     * knee). Entries carry the cursor instant they were observed at, so a flush preserves horizon ordering.
+     */
+    private final java.util.List<BufferedProbeWindow> probeWindowBuffer = new java.util.ArrayList<>();
+
+    /** One probe window awaiting the probe's conclusion - see {@link #probeWindowBuffer}. */
+    private static final class BufferedProbeWindow {
+        final Instant cursorInstant;
+        final ClosedAdmissionWindow window;
+
+        BufferedProbeWindow(Instant cursorInstant, ClosedAdmissionWindow window) {
+            this.cursorInstant = cursorInstant;
+            this.window = window;
+        }
+    }
+
     private AdmissionControlLaw(Builder builder) {
         if (builder.ceiling < LIMIT_FLOOR_SLOTS) {
             throw new IllegalArgumentException("ceiling must be >= " + LIMIT_FLOOR_SLOTS);
@@ -217,9 +238,10 @@ public final class AdmissionControlLaw {
 
     /**
      * The accelerator: {@code q = sqrt(limit)}, floored at one whole slot (KTD6's working constant; the floor is
-     * what makes the R7 invariant hold at limit 1).
+     * what makes the R7 invariant hold at limit 1). Package-visible so {@link AdmissionController}'s U6 probes
+     * denominate their step in the same unit the bands use.
      */
-    private static double acceleratorStep(double limit) {
+    static double acceleratorStep(double limit) {
         return Math.max(1.0, Math.sqrt(limit));
     }
 
@@ -406,6 +428,122 @@ public final class AdmissionControlLaw {
     /** Entries currently in the owned estimator's history - reconstruction is observable through this. */
     int estimatorHistorySize() {
         return estimator.historySize();
+    }
+
+    /**
+     * Whether growth is pending adjudication - the pending baseline sits strictly BELOW the current limit, so a
+     * verdict still owes a confirm-or-retract. A baseline EQUAL to the limit (a warmup grant the ceiling clamp
+     * swallowed whole) is vacuous and reads false, or the {@code AT_CAP} state would suppress the U6 descent
+     * probe forever on a ceiling the estimator can never compute a verdict at (no in-flight spread).
+     */
+    boolean hasPendingGrowth() {
+        return pendingGrowthBaseline != null && pendingGrowthBaseline < estimatedLimit;
+    }
+
+    // ------------------------------------------------------------------
+    // U6 probe seams (R6, KTD2-KTD4). PROBE STATE - kind, deferred restore value, duration, cadence - is
+    // CONTROLLER-owned (KTD4: reconstruction destroys this class's fields, so the deferred value must live where
+    // resetForAssignmentDelta can read it); what lives here is only the part that touches law state.
+    // ------------------------------------------------------------------
+
+    /**
+     * Enters a probe: the limit is PINNED to {@code pinnedLimit} (clamped) and, for the escape probe
+     * ({@code clearHistory}), the estimator's history and verdict are killed
+     * ({@link AdmissionElasticityEstimator.InvalidationReason#ESCAPE_PROBE_CLEAR}) so pre-probe samples cannot
+     * contaminate the re-measurement (the design's ESCAPE safeguards 1-3; the descent probe keeps its history -
+     * its conclusion compares against the pre-probe operating level). Normal decisions are suspended by the
+     * CALLER routing windows to {@link #observeProbeWindow} instead of {@link #onWindowClosed}.
+     */
+    void pinForProbe(double pinnedLimit, boolean clearHistory) {
+        if (clearHistory) {
+            estimator.invalidate(AdmissionElasticityEstimator.InvalidationReason.ESCAPE_PROBE_CLEAR);
+        }
+        probeWindowBuffer.clear();
+        this.estimatedLimit = clampToBounds(pinnedLimit);
+    }
+
+    /**
+     * Observes one window closed DURING a probe: the synthetic clock cursor advances (horizon integrity), and a
+     * window that would have qualified for the estimator - adjudicated, un-braked, limit-bound - is BUFFERED for
+     * the conclusion to adopt or drop ({@link #probeWindowBuffer}). Nothing else moves: no band decision, no
+     * warmup spend, no settle-cadence advance - the probe suspends normal updates (ESCAPE safeguard 3).
+     */
+    void observeProbeWindow(ClosedAdmissionWindow window) {
+        windowClockCursor = windowClockCursor.plusNanos(Math.max(0L, window.getElapsedNanos()));
+        boolean adjudicatedAndUnbraked = window.getSampleCount() >= minSamplesPerWindow
+                && window.getOverloadDropCount() == 0
+                && window.nonSuccessFraction() <= FAILURE_FRACTION_GROWTH_FREEZE_THRESHOLD
+                && !window.isOffsetBackPressure();
+        if (adjudicatedAndUnbraked && window.isLimitBound()) {
+            probeWindowBuffer.add(new BufferedProbeWindow(windowClockCursor, window));
+        }
+    }
+
+    /**
+     * Concludes a probe: the limit lands on {@code newLimit} (clamped), the warmup EPISODE resets - a concluded
+     * probe opens a fresh allowance, because the cap guards evidence-free episodes and a probe is
+     * evidence-gathering (KTD2) - and the settle cadence opens so the first post-probe qualifying verdict may
+     * act (the design accepts that post-probe decisions extrapolate across the operating-point jump).
+     *
+     * @param newLimit            where updates resume from - the caller's restore value, kept probe value, or
+     *                            the escape's re-entry step
+     * @param growthIsProvisional whether a {@code newLimit} ABOVE the pinned level is blind growth to be
+     *                            adjudicated by the next verdict (the escape's re-entry step - retractable,
+     *                            spending the fresh allowance) rather than a proven level being restored (a
+     *                            failed descent's deferred value - never retracted, the probe just proved it)
+     * @param adoptProbeEvidence  whether the buffered probe windows enter the estimator's history (escape: always
+     *                            - the probe's product IS the fresh limit-bound history; descent: only when the
+     *                            lower level is KEPT - see {@link #probeWindowBuffer} for why a failed level's
+     *                            evidence is dropped)
+     */
+    void concludeProbe(double newLimit, boolean growthIsProvisional, boolean adoptProbeEvidence) {
+        if (adoptProbeEvidence) {
+            for (BufferedProbeWindow buffered : probeWindowBuffer) {
+                estimator.offer(buffered.cursorInstant, buffered.window, true);
+            }
+        }
+        probeWindowBuffer.clear();
+        warmupSlotsGranted = 0.0; // fresh episode (KTD2)
+        double clamped = clampToBounds(newLimit);
+        if (growthIsProvisional && clamped > estimatedLimit) {
+            pendingGrowthBaseline = estimatedLimit;
+            warmupSlotsGranted = Math.min(warmupAllowanceSlots, clamped - estimatedLimit);
+        } else {
+            pendingGrowthBaseline = null;
+        }
+        this.estimatedLimit = clamped;
+        this.offeredWindowsSinceMovement = settleWindows;
+    }
+
+    /**
+     * ABORTS a probe (pause edge, KTD3): the limit returns to {@code restoreLimit} and the buffered probe
+     * evidence is dropped - an aborted measurement proved nothing, in either direction. Unlike
+     * {@link #concludeProbe} the warmup EPISODE is left exactly as it was: KTD2's fresh allowance rewards a
+     * probe that GATHERED evidence, and an aborted one gathered none - resetting here would let pause-cycling
+     * refill blind growth through repeated aborted escapes.
+     */
+    void abortProbe(double restoreLimit) {
+        probeWindowBuffer.clear();
+        double clamped = clampToBounds(restoreLimit);
+        if (pendingGrowthBaseline != null && pendingGrowthBaseline >= clamped) {
+            pendingGrowthBaseline = null; // the restore landed at or below the anchor - nothing left to retract
+        }
+        this.estimatedLimit = clamped;
+        this.offeredWindowsSinceMovement = settleWindows;
+    }
+
+    /**
+     * Stamps an invalidation boundary through to the owned estimator (KTD3): entries predating a pause describe
+     * a plant an unknown span in the past, so history and verdict die. The warmup EPISODE deliberately survives -
+     * KTD2: episodes span invalidation boundaries, so N pause/resume cycles share one allowance and pause-cycling
+     * cannot refill blind growth.
+     */
+    void invalidateEstimator(AdmissionElasticityEstimator.InvalidationReason reason) {
+        estimator.invalidate(reason);
+    }
+
+    private double clampToBounds(double value) {
+        return Math.max(LIMIT_FLOOR_SLOTS, Math.min(ceiling, value));
     }
 
     /**

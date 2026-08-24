@@ -90,6 +90,7 @@ final class ScenarioRunner {
         List<WindowRecord> records = new ArrayList<>();
         int windowIndex = 0;
         for (Phase phase : phases) {
+            policy.onPhaseStart(phase);
             plant.setArrivalRatePerSecond(phase.getArrivalRatePerSecond());
             if (phase.getMuMaxOverrideRecordsPerSecond() > 0) {
                 plant.setMuMaxRecordsPerSecond(phase.getMuMaxOverrideRecordsPerSecond());

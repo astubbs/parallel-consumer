@@ -163,15 +163,9 @@ final class FalsifierScenarios {
     }
 
     // ------------------------------------------------------------------
-    // Scenarios built now, asserted from U6 - they exercise controller machinery
-    // (pause invalidation boundaries, the escape hatch, rebalance restore) that the
-    // U5 law does not carry, so AdmissionLawFalsifierTest does not drive them yet.
-    // TODO(refactor): wire pauseCycling into the falsifier suite in U6 (plan 2026-08-24-003, R14) - it
-    //  needs the controller's pause invalidation boundaries, which U6 builds.
-    // TODO(refactor): wire rebalanceShrink into the falsifier suite in U6 (plan 2026-08-24-003, KTD4) - it
-    //  needs the controller's rebalance restore path; not asserted against the old law by design.
-    // TODO(refactor): wire floorPin into the falsifier suite in U6 (plan 2026-08-24-003, the escape's
-    //  falsifier) - its green is owned by U6's verification, which builds the ungated escape it exercises.
+    // The U6 lifecycle scenarios: they exercise controller machinery (pause invalidation boundaries, the
+    // ungated escape, rebalance restore, the descent probe) the law alone does not carry, so
+    // AdmissionLawFalsifierTest drives them through ControllerAdmissionPolicy, never LawAdmissionPolicy.
     // ------------------------------------------------------------------
 
     /**
@@ -207,7 +201,7 @@ final class FalsifierScenarios {
      * The floor pin - ESCAPE's falsifier: pinned at the floor with the gated signals reading empty, the
      * re-measurement must fire within a deadline anyway (the hatch is on a path no gated signal can suppress).
      */
-    static void floorPin(AdmissionPolicy policy) {
+    static Trajectory floorPin(AdmissionPolicy policy) {
         DeterministicPlant plant = standardPlant(1);
         int escapeDeadlineWindows = 60;
         Trajectory trajectory = ScenarioRunner.run(policy, plant, 1,
@@ -216,6 +210,28 @@ final class FalsifierScenarios {
                 + escapeDeadlineWindows + " windows even with all gated signals empty")
                 .that(trajectory.maxCommandedTarget())
                 .isAtLeast(2);
+        return trajectory;
+    }
+
+    /**
+     * Descent from above - the R14 sweep-from-above arms the U5 suite documented as its gap: started ABOVE the
+     * knee on a saturating plant, flat throughput gives the elasticity bands nothing to descend on (both levels
+     * complete the same records/s), so only the controller's descent probe can walk the target down. The arm
+     * must be inside the knee's band for EVERY window from the deadline on - probe dips included, which is what
+     * keeps the probe's amplitude honest - and the walk must not cost throughput at the tail.
+     */
+    static Trajectory descentFromAbove(AdmissionPolicy policy, int initialTarget) {
+        DeterministicPlant plant = standardPlant(1);
+        double oracle = plant.optimalTargetSlots();
+        int convergenceDeadlineWindow = 120;
+        Trajectory trajectory = ScenarioRunner.run(policy, plant, initialTarget,
+                Arrays.asList(Phase.of(200, 1.5 * MU_MAX_RECORDS_PER_SECOND)));
+        assertTargetInBandFrom(trajectory, convergenceDeadlineWindow, oracle,
+                "descent from above: the sweep must converge down to the knee band from " + initialTarget);
+        assertWithMessage("descent from above: the walk must not cost settled throughput")
+                .that(trajectory.settledMeanThroughput(30))
+                .isAtLeast(0.9 * MU_MAX_RECORDS_PER_SECOND);
+        return trajectory;
     }
 
     // ------------------------------------------------------------------

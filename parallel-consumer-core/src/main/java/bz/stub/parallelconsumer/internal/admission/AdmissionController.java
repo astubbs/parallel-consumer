@@ -132,6 +132,53 @@ public class AdmissionController {
      */
     static final Duration REBALANCE_TARGET_FREEZE_COOLDOWN = Duration.ofSeconds(30);
 
+    // ------------------------------------------------------------------
+    // U6 probe working constants (the design's R6/R14; the falsifier suite, not opinion, moves them).
+    // ------------------------------------------------------------------
+
+    /**
+     * Consecutive floor windows before the escape probe fires (R6; Envoy's N=5, Uber arrived at the same design
+     * independently). The counter is denominated in CLOSED, EVALUATED windows - never wall-clock (KTD3):
+     * cooldown-discarded and pause-poisoned windows never advance it, and pause/rebalance clear it. Windows the
+     * law holds as {@code INSUFFICIENT_SIGNAL} or unbound DO advance it, deliberately - the sample-count and
+     * binding gates are themselves gated signals, and R6's whole point is that no gated signal can suppress the
+     * escape: the floor-pinned trickle plant (one sample per window, forever) is exactly the strand this hatch
+     * exists for. (This is a documented deviation from the unit packet's "unadjudicated windows do not advance":
+     * at production calibration that reading makes the floor-pin falsifier unsatisfiable.)
+     */
+    static final int FLOOR_ESCAPE_WINDOWS = 5;
+
+    /**
+     * The escape's start jitter (ESCAPE safeguard 4): up to this fraction of {@link #FLOOR_ESCAPE_WINDOWS} extra
+     * floor windows, drawn from {@link #escapeJitterRandom}, so a fleet does not probe in lockstep. Deterministic
+     * under an injected seed (the test-seam constructor).
+     */
+    static final double ESCAPE_JITTER_FRACTION = 0.15;
+
+    /**
+     * How many evaluated windows a probe (escape or descent) runs for before concluding. Same denomination as
+     * the escape counter - closed, evaluated windows, never wall-clock (KTD3).
+     */
+    static final int PROBE_DURATION_WINDOWS = 4;
+
+    /**
+     * Consecutive plateau-held windows above the floor before a descent probe fires (the U5 finding: a
+     * throughput-steered law cannot descend a flat plateau on its own - the probe is R14's sweep-from-above).
+     * Doubles on a failed probe up to {@link #DESCENT_CADENCE_WINDOWS_CAP} (the plant answered "the lower level
+     * does not pay", so re-asking gets exponentially rarer), resets on a FALL/RISE band change (the plant moved).
+     */
+    static final int DESCENT_PLATEAU_WINDOWS = 3;
+
+    /** The descent cadence's backoff ceiling: {@code 3 * 2^3}. */
+    static final int DESCENT_CADENCE_WINDOWS_CAP = 24;
+
+    /**
+     * The descent probe's keep-vs-restore criterion: the probe's mean success throughput must be within this
+     * fraction of the pre-probe reference or the deferred target is restored. THROUGHPUT ONLY - no latency term
+     * exists anywhere in this decision (R8).
+     */
+    static final double DESCENT_THROUGHPUT_TOLERANCE = 0.02;
+
     /**
      * The reasons that describe the target being HELD by something rather than adapting: a window closed, and the
      * constraint named is why the target is where it is. These are the ones worth SAYING out loud (see
@@ -152,7 +199,9 @@ public class AdmissionController {
             AdmissionDecisionReason.NO_WORK,
             AdmissionDecisionReason.ORDERING_STARVED,
             AdmissionDecisionReason.SELF_THROTTLED,
-            AdmissionDecisionReason.OFFSET_BACK_PRESSURE);
+            AdmissionDecisionReason.OFFSET_BACK_PRESSURE,
+            AdmissionDecisionReason.ESCAPE_PROBE,
+            AdmissionDecisionReason.DESCENT_PROBE);
 
     /**
      * How often at most the binding-constraint line above may speak. The condition it describes is a steady state
@@ -267,6 +316,61 @@ public class AdmissionController {
     private Instant cooldownUntil = null;
 
     // ------------------------------------------------------------------
+    // U6 probe state - CONTROLLER-owned, never law-owned (KTD4): resetForAssignmentDelta reconstructs the law,
+    // which destroys law fields, so the deferred restore value must live where the reset can read it. All
+    // control-thread-owned.
+    // ------------------------------------------------------------------
+
+    /**
+     * The two U6 probe kinds plus the quiescent state. Public rather than private only because the Truth
+     * subject generator walks nested types of the classes it explores and its generated entry points (in
+     * {@code bz.stub.parallelconsumer}) cannot reference a non-public nested type - the same constraint that
+     * shapes {@link Outcome}; nothing outside this class consumes it.
+     */
+    public enum ProbeKind {
+        NONE,
+        /** R6's ungated floor escape: re-measure at the floor with a cleared history. */
+        ESCAPE,
+        /** R14's sweep-from-above: step down one accelerator step and ask whether throughput held. */
+        DESCENT,
+    }
+
+    private ProbeKind probeKind = ProbeKind.NONE;
+
+    /**
+     * The pre-probe target - what a pause or rebalance restores, and what a failed descent probe returns to
+     * (ESCAPE safeguard 1: remember and restore, never re-derive). Meaningful only while a probe is in flight.
+     */
+    private int probeDeferredRestoreTarget;
+
+    /** Evaluated windows left before the in-flight probe concludes (KTD3: window-denominated, not wall-clock). */
+    private int probeWindowsRemaining;
+
+    /** Whether EVERY window of the in-flight probe read limit-bound - the escape's re-entry-step criterion. */
+    private boolean probeWindowsAllLimitBound;
+
+    /** The plateau throughput the descent probe compares against - captured at probe entry, throughput only. */
+    private double probeReferenceThroughput;
+
+    private double probeThroughputSum;
+    private int probeThroughputWindowCount;
+
+    /** Consecutive evaluated windows at the floor - the escape's arming counter (see its constant's javadoc). */
+    private int floorWindowStreak = 0;
+
+    /** Consecutive plateau-held windows above the floor - the descent probe's arming counter. */
+    private int plateauHoldStreak = 0;
+
+    /** The descent probe's current cadence in plateau windows - doubles on a failed probe, capped. */
+    private int descentCadenceWindows = DESCENT_PLATEAU_WINDOWS;
+
+    /** The jitter source the controller OWNS (deterministic under the test-seam seed). */
+    private final java.util.Random escapeJitterRandom;
+
+    /** Extra floor windows before the next escape fires - re-rolled per arming cycle. */
+    private int escapeJitterExtraWindows;
+
+    // ------------------------------------------------------------------
     // Assignment tracking (the plan's KTD9 delta gate). Callbacks arrive on the broker-poll thread; the reset they
     // may request runs control-loop-side at tick(). Guarded by assignmentLock - never windowLock, so a rebalance
     // never contends with worker-thread sample recording.
@@ -286,6 +390,13 @@ public class AdmissionController {
 
     /** The broker-poll-thread-to-control-thread handoff: set on a real delta, consumed at {@link #tick()}. */
     private final AtomicBoolean assignmentDeltaPending = new AtomicBoolean(false);
+
+    /**
+     * The compounded newCount/oldCount partition ratio across the delta cycles pending consumption (KTD4's
+     * shrink scaling input) - compounded so several cycles landing before one tick scale by their NET effect.
+     * Guarded by {@link #assignmentLock}; reset to 1.0 when the reset consumes it.
+     */
+    private double pendingAssignmentSizeRatio = 1.0;
 
     /**
      * Constructs an UNINSTRUMENTED controller - no meters are registered. For callers that have no metrics
@@ -315,6 +426,15 @@ public class AdmissionController {
     /** The tuned-law seam with metrics attached - what the instrumentation tests drive. */
     AdmissionController(ParallelConsumerOptions<?, ?> options, Clock clock, AdmissionControlLaw.Builder lawBuilder,
                         PCMetrics pcMetrics) {
+        this(options, clock, lawBuilder, pcMetrics, java.util.concurrent.ThreadLocalRandom.current().nextLong());
+    }
+
+    /**
+     * The full seam: as above plus the escape jitter seed (U6) - production draws it randomly (a fleet must not
+     * probe in lockstep, which is the jitter's whole point); tests inject it so probe timing is deterministic.
+     */
+    AdmissionController(ParallelConsumerOptions<?, ?> options, Clock clock, AdmissionControlLaw.Builder lawBuilder,
+                        PCMetrics pcMetrics, long escapeJitterSeed) {
         this.mode = options.getAdaptiveConcurrencyMode();
         this.clock = clock;
         this.staticTarget = options.getMaxConcurrency();
@@ -346,7 +466,15 @@ public class AdmissionController {
                     .build();
         }
         this.windowOpenedAt = clock.instant();
+        this.escapeJitterRandom = new java.util.Random(escapeJitterSeed);
+        rollEscapeJitter();
         initMetrics(pcMetrics);
+    }
+
+    /** Draws the next escape arming's extra floor windows - 0 to ~{@link #ESCAPE_JITTER_FRACTION} of N. */
+    private void rollEscapeJitter() {
+        int maxExtraWindows = (int) Math.round(FLOOR_ESCAPE_WINDOWS * ESCAPE_JITTER_FRACTION);
+        this.escapeJitterExtraWindows = escapeJitterRandom.nextInt(maxExtraWindows + 1);
     }
 
     /**
@@ -508,8 +636,20 @@ public class AdmissionController {
             return;
         }
         if (!trackedAssignment.equals(assignmentBaseline)) {
+            int oldSize = assignmentBaseline.size();
+            int newSize = trackedAssignment.size();
+            pendingAssignmentSizeRatio *= oldSize == 0 ? 1.0 : (double) newSize / oldSize;
             assignmentBaseline = new HashSet<>(trackedAssignment);
             assignmentDeltaPending.set(true);
+        }
+    }
+
+    /** Control-thread-side read of the compounded partition ratio for the delta being reset on. */
+    private double consumePendingAssignmentSizeRatio() {
+        synchronized (assignmentLock) {
+            double ratio = pendingAssignmentSizeRatio;
+            pendingAssignmentSizeRatio = 1.0;
+            return ratio;
         }
     }
 
@@ -571,22 +711,66 @@ public class AdmissionController {
             closed = window.close(elapsedNanos, boundarySignals);
         }
         windowOpenedAt = now;
+        processClosedWindow(closed, now);
+    }
+
+    /**
+     * Test seam (package-private): runs one PRE-CLOSED window through the full decision pipeline - the same
+     * assignment-delta consumption, cooldown discard, probe machinery and law consult {@link #tick(Supplier)}
+     * applies to a window its own accumulator closed - so the falsifier harness can drive a REAL controller
+     * against the deterministic plant's windows (the U6 scenarios exercise pause/rebalance/probe machinery the
+     * law alone does not carry). The caller owns the injected clock's cadence.
+     */
+    void injectClosedWindow(ClosedAdmissionWindow closed) {
+        if (mode == AdaptiveConcurrencyMode.DISABLED) {
+            return;
+        }
+        Instant now = clock.instant();
+        if (assignmentDeltaPending.getAndSet(false)) {
+            resetForAssignmentDelta(now);
+            return;
+        }
+        windowOpenedAt = now;
+        processClosedWindow(closed, now);
+    }
+
+    /**
+     * The decision pipeline for one closed window: cooldown discard first (settle-time samples describe a
+     * workload still rearranging itself), then the in-flight probe (which SUSPENDS normal law decisions - R6),
+     * then the law, the publish clamp, and finally the U6 probe arming counters.
+     */
+    private void processClosedWindow(ClosedAdmissionWindow closed, Instant now) {
         if (cooldownUntil != null) {
             if (now.isBefore(cooldownUntil)) {
-                // Frozen: the closed window is discarded, the target holds at its carried-over value.
+                // Frozen: the closed window is discarded, the target holds at its carried-over value. Discarded
+                // windows never advance the probe counters or an in-flight probe's duration (KTD3).
                 lastDecisionReason = AdmissionDecisionReason.COOLDOWN;
                 maybeReportBindingConstraint(AdmissionDecisionReason.COOLDOWN);
                 return;
             }
             cooldownUntil = null;
         }
+        if (probeKind != ProbeKind.NONE) {
+            processProbeWindow(closed, now);
+            return;
+        }
+        int windowTarget = adaptiveTarget; // the level this window actually measured
         AdmissionDecision decision = law.onWindowClosed(closed);
         lastDecisionReason = decision.getReason();
+        publishTarget(decision.getTargetConcurrency(), decision.getReason(), closed, now);
+        maybeReportBindingConstraint(decision.getReason());
+        armProbes(windowTarget, decision, closed, now);
+    }
 
-        // Defensive publish clamp - the law already clamps to [floor, ceiling], and its ceiling IS the enforce
-        // ceiling, so this is min(effective maximum, estimate) restated (the plan's clamp expression, which KD6's
-        // discovered-ceiling composition will extend here).
-        int newTarget = clamp(decision.getTargetConcurrency(), AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling);
+    /**
+     * Publishes a desired target through the defensive clamp - the law already clamps to [floor, ceiling], and
+     * its ceiling IS the enforce ceiling, so this is min(effective maximum, estimate) restated (the plan's clamp
+     * expression, which KD6's discovered-ceiling composition will extend here) - recording and reporting the
+     * movement when the published value actually changed.
+     */
+    private void publishTarget(int desired, AdmissionDecisionReason reason, ClosedAdmissionWindow closed,
+                               Instant now) {
+        int newTarget = clamp(desired, AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling);
         if (newTarget != adaptiveTarget) {
             int previousTarget = adaptiveTarget;
             adaptiveTarget = newTarget;
@@ -594,9 +778,202 @@ public class AdmissionController {
             if (movementCounter != null) {
                 movementCounter.increment();
             }
-            reportMovement(previousTarget, newTarget, decision.getReason(), closed);
+            reportMovement(previousTarget, newTarget, reason, closed);
         }
-        maybeReportBindingConstraint(decision.getReason());
+    }
+
+    // ------------------------------------------------------------------
+    // The U6 probes (R6, R14's sweep-from-above; probe state controller-owned per KTD4).
+    // ------------------------------------------------------------------
+
+    /**
+     * Advances the probe arming counters after a NORMAL (non-probe, non-cooldown) window. Two independent arms:
+     * <ul>
+     * <li><b>Floor escape (R6)</b> - {@code windowTarget} at the floor advances {@link #floorWindowStreak}
+     * whatever the law said about the window: the sample-count and binding gates are gated signals, and the
+     * escape's defining property is that no gated signal can suppress it (see
+     * {@link #FLOOR_ESCAPE_WINDOWS}).</li>
+     * <li><b>Descent (R14)</b> - above the floor, a window the law parked on plateau evidence (reason
+     * {@code PLATEAU} under a live HOLD verdict - never a settle park under a RISE verdict, which is a climb in
+     * progress) or blind-exhausted ({@code WARMUP_EXHAUSTED} with no growth pending adjudication - the
+     * stuck-blind state a verdict can never resolve at a spread-less operating point) advances
+     * {@link #plateauHoldStreak}. While growth IS pending, the next verdict owes a confirm-or-retract and the
+     * probe waits for it - probing first would erase the retraction anchor and park the target one blind step
+     * high (measured on the pause-cycling plant: 24 instead of the knee's 20).</li>
+     * </ul>
+     */
+    private void armProbes(int windowTarget, AdmissionDecision decision, ClosedAdmissionWindow closed,
+                           Instant now) {
+        if (windowTarget <= AdmissionControlLaw.LIMIT_FLOOR_SLOTS) {
+            plateauHoldStreak = 0;
+            if (enforceCeiling <= AdmissionControlLaw.LIMIT_FLOOR_SLOTS) {
+                return; // floor == ceiling: there is nowhere to escape to
+            }
+            if (isAbsoluteBrake(decision.getReason())) {
+                // A braked floor window is LIVE evidence actively holding the target down - the controller is
+                // braked, not stranded, and a brake can only fire when there IS signal (drops, failures, a
+                // blocked partition), so it cannot suppress the escape on the empty-signal strand R6 exists for.
+                floorWindowStreak = 0;
+                return;
+            }
+            floorWindowStreak++;
+            if (floorWindowStreak >= FLOOR_ESCAPE_WINDOWS + escapeJitterExtraWindows) {
+                beginEscapeProbe(closed, now);
+            }
+            return;
+        }
+        floorWindowStreak = 0;
+        AdmissionElasticityEstimator.Verdict verdict = law.currentVerdict();
+        boolean plateauHold = decision.getReason() == AdmissionDecisionReason.PLATEAU
+                && verdict.isLive()
+                && verdict.getBand() == AdmissionElasticityEstimator.Band.HOLD;
+        boolean blindExhausted = decision.getReason() == AdmissionDecisionReason.WARMUP_EXHAUSTED
+                && !law.hasPendingGrowth();
+        if (plateauHold || blindExhausted) {
+            plateauHoldStreak++;
+            if (plateauHoldStreak >= descentCadenceWindows) {
+                beginDescentProbe(closed, now);
+            }
+            return;
+        }
+        plateauHoldStreak = 0;
+        if (verdict.isLive() && verdict.getBand() != AdmissionElasticityEstimator.Band.HOLD) {
+            // A FALL/RISE band: the plant moved, so a backed-off descent cadence re-arms briskly.
+            descentCadenceWindows = DESCENT_PLATEAU_WINDOWS;
+        }
+    }
+
+    /** The law's ungated absolute brakes - live verdicts, so they never read as a strand (see armProbes). */
+    private static boolean isAbsoluteBrake(AdmissionDecisionReason reason) {
+        return reason == AdmissionDecisionReason.BACKOFF
+                || reason == AdmissionDecisionReason.FAILURE_LIMITED
+                || reason == AdmissionDecisionReason.OFFSET_BACK_PRESSURE;
+    }
+
+    /**
+     * Fires the R6 floor escape: remember the deferred restore value (which at the floor IS the floor), pin the
+     * published target to the floor with a CLEARED estimator history (ESCAPE safeguards 1-3), and suspend normal
+     * law decisions for {@link #PROBE_DURATION_WINDOWS} evaluated windows. The probe's product is a fresh
+     * limit-bound history at a known-low operating point.
+     */
+    private void beginEscapeProbe(ClosedAdmissionWindow closed, Instant now) {
+        probeKind = ProbeKind.ESCAPE;
+        probeDeferredRestoreTarget = adaptiveTarget;
+        probeWindowsRemaining = PROBE_DURATION_WINDOWS;
+        probeWindowsAllLimitBound = true;
+        probeThroughputSum = 0;
+        probeThroughputWindowCount = 0;
+        floorWindowStreak = 0;
+        law.pinForProbe(AdmissionControlLaw.LIMIT_FLOOR_SLOTS, true);
+        publishTarget(AdmissionControlLaw.LIMIT_FLOOR_SLOTS, AdmissionDecisionReason.ESCAPE_PROBE, closed, now);
+        lastDecisionReason = AdmissionDecisionReason.ESCAPE_PROBE;
+        log.info(LOG_PREFIX + " ({}): {} consecutive floor windows - firing the escape probe: re-measuring at "
+                        + "the floor for {} windows with a cleared elasticity history (R6).",
+                mode, FLOOR_ESCAPE_WINDOWS + escapeJitterExtraWindows, PROBE_DURATION_WINDOWS);
+    }
+
+    /**
+     * Fires the R14 descent probe: remember the current target, step the published target DOWN one accelerator
+     * step, and measure throughput there for {@link #PROBE_DURATION_WINDOWS} windows against the plateau's
+     * reference. Keep the lower target if throughput held (it paid - the knee is at or below it); restore if it
+     * fell. Throughput criterion only (R8).
+     */
+    private void beginDescentProbe(ClosedAdmissionWindow closed, Instant now) {
+        int probeTarget = Math.max(AdmissionControlLaw.LIMIT_FLOOR_SLOTS,
+                (int) Math.round(adaptiveTarget - AdmissionControlLaw.acceleratorStep(adaptiveTarget)));
+        plateauHoldStreak = 0;
+        if (probeTarget >= adaptiveTarget) {
+            return; // one step down lands where we already are - nothing to measure
+        }
+        probeKind = ProbeKind.DESCENT;
+        probeDeferredRestoreTarget = adaptiveTarget;
+        probeReferenceThroughput = closed.successThroughputPerSecond();
+        probeWindowsRemaining = PROBE_DURATION_WINDOWS;
+        probeWindowsAllLimitBound = true;
+        probeThroughputSum = 0;
+        probeThroughputWindowCount = 0;
+        law.pinForProbe(probeTarget, false);
+        publishTarget(probeTarget, AdmissionDecisionReason.DESCENT_PROBE, closed, now);
+        lastDecisionReason = AdmissionDecisionReason.DESCENT_PROBE;
+        log.info(LOG_PREFIX + " ({}): sustained plateau at {} slot(s) - descent probe to {} slot(s) for {} "
+                        + "windows against reference throughput {}/s (R14 sweep-from-above).",
+                mode, probeDeferredRestoreTarget, probeTarget, PROBE_DURATION_WINDOWS,
+                String.format(Locale.ROOT, "%.1f", probeReferenceThroughput));
+    }
+
+    /**
+     * One evaluated window while a probe is in flight: the law only OBSERVES it (cursor advance plus buffering
+     * of qualifying evidence - normal decisions stay suspended), the probe's own aggregates accumulate, and the
+     * duration counts down in evaluated windows (KTD3).
+     */
+    private void processProbeWindow(ClosedAdmissionWindow closed, Instant now) {
+        law.observeProbeWindow(closed);
+        probeThroughputSum += closed.successThroughputPerSecond();
+        probeThroughputWindowCount++;
+        probeWindowsAllLimitBound &= closed.isLimitBound();
+        AdmissionDecisionReason reason = probeKind == ProbeKind.ESCAPE
+                ? AdmissionDecisionReason.ESCAPE_PROBE : AdmissionDecisionReason.DESCENT_PROBE;
+        lastDecisionReason = reason;
+        probeWindowsRemaining--;
+        if (probeWindowsRemaining <= 0) {
+            concludeProbe(closed, now);
+            return;
+        }
+        maybeReportBindingConstraint(reason);
+    }
+
+    /**
+     * Concludes the in-flight probe (updates resume; the law opens a fresh warmup allowance either way - KTD2):
+     * <ul>
+     * <li><b>ESCAPE</b> - the probe's buffered limit-bound windows enter the estimator (valid by construction).
+     * When EVERY probe window read limit-bound, even the floor saturates its slot, so capacity above the floor
+     * plausibly exists: the conclusion takes ONE accelerator re-entry step up - provisional blind growth the next
+     * verdict adjudicates exactly like a warmup grant. This step is the escape's liveness where the deferred
+     * value IS the floor and restore alone would change nothing; on the sample-starved trickle plant no gated
+     * band can ever act, so the named steady state is the escape cadence itself (KTD2). Un-bound probe windows
+     * (a genuinely idle consumer) restore the floor unchanged - idleness must not fund growth.</li>
+     * <li><b>DESCENT</b> - throughput held within {@link #DESCENT_THROUGHPUT_TOLERANCE}: the lower target PAID;
+     * keep it, adopt its evidence, and the walk may repeat after another plateau streak. Throughput fell: restore
+     * the deferred target, DROP the probe's evidence (a rejected level's lower throughput would read as positive
+     * elasticity and teach the law to climb off the knee), and double the cadence up to its cap.</li>
+     * </ul>
+     */
+    private void concludeProbe(ClosedAdmissionWindow closed, Instant now) {
+        if (probeKind == ProbeKind.ESCAPE) {
+            int concluded = probeWindowsAllLimitBound
+                    ? (int) Math.round(probeDeferredRestoreTarget
+                    + AdmissionControlLaw.acceleratorStep(probeDeferredRestoreTarget))
+                    : probeDeferredRestoreTarget;
+            law.concludeProbe(concluded, true, true);
+            publishTarget(concluded, AdmissionDecisionReason.ESCAPE_PROBE, closed, now);
+            log.info(LOG_PREFIX + " ({}): escape probe concluded - {} - target {} slot(s), fresh warmup "
+                            + "allowance opened.",
+                    mode,
+                    probeWindowsAllLimitBound
+                            ? "the floor stayed limit-bound; taking one re-entry step"
+                            : "the floor did not bind; restoring unchanged",
+                    adaptiveTarget);
+        } else {
+            double probeMeanThroughput = probeThroughputSum / probeThroughputWindowCount;
+            boolean lowerTargetPaid =
+                    probeMeanThroughput >= probeReferenceThroughput * (1 - DESCENT_THROUGHPUT_TOLERANCE);
+            if (lowerTargetPaid) {
+                law.concludeProbe(adaptiveTarget, false, true); // the pinned probe value is the new level
+            } else {
+                law.concludeProbe(probeDeferredRestoreTarget, false, false);
+                publishTarget(probeDeferredRestoreTarget, AdmissionDecisionReason.DESCENT_PROBE, closed, now);
+                descentCadenceWindows = Math.min(DESCENT_CADENCE_WINDOWS_CAP, descentCadenceWindows * 2);
+            }
+            log.info(LOG_PREFIX + " ({}): descent probe concluded - throughput {}/s against reference {}/s: "
+                            + "{} - target {} slot(s), next probe after {} plateau window(s).",
+                    mode,
+                    String.format(Locale.ROOT, "%.1f", probeMeanThroughput),
+                    String.format(Locale.ROOT, "%.1f", probeReferenceThroughput),
+                    lowerTargetPaid ? "the lower target paid, keeping it" : "throughput fell, restoring",
+                    adaptiveTarget, descentCadenceWindows);
+        }
+        probeKind = ProbeKind.NONE;
+        rollEscapeJitter();
     }
 
     /**
@@ -695,39 +1072,94 @@ public class AdmissionController {
 
     /**
      * The R13 rebalance reset, control-thread-side: the in-progress window is discarded (the old assignment's
-     * samples describe partitions this instance may no longer own), the law is RECONSTRUCTED from
+     * samples describe partitions this instance may no longer own) and the law is RECONSTRUCTED from
      * {@link #lawBuilder} - identical calibration, fresh elasticity history/verdict/warmup episode (see the
-     * {@link #law} field javadoc for why reconstruction beats a hand-written reset; the law owns its estimator,
-     * so reconstruction IS the rebalance invalidation until U6 refines it) - seeded with the current target as
-     * the best available prior, and the target freezes for {@link #REBALANCE_TARGET_FREEZE_COOLDOWN}.
+     * {@link #law} field javadoc for why reconstruction beats a hand-written reset). The target freezes for
+     * {@link #REBALANCE_TARGET_FREEZE_COOLDOWN}.
+     * <p>
+     * <b>KTD4: restore BEFORE reconstruct, clamped to the new assignment.</b> Probe state is consulted FIRST:
+     * with a probe in flight the seed is the DEFERRED restore value, never the pinned probe value - otherwise
+     * the reset launders the probe's reduced target into the 30s-frozen post-rebalance prior, and group churn
+     * ratchets the target down. Then, when the assignment SHRANK, the seed is scaled by the partition ratio
+     * (floor one slot) - one-directional protection only, so a stale-high pre-rebalance target is not held
+     * open-loop through the cooldown against a plant whose per-instance share just fell; growth is left for the
+     * law to re-earn.
      */
     private void resetForAssignmentDelta(Instant now) {
         synchronized (windowLock) {
             window.discard();
         }
+        int seed = adaptiveTarget;
+        if (probeKind != ProbeKind.NONE) {
+            seed = probeDeferredRestoreTarget; // KTD4: a rebalance invalidates the probe's measurement anyway
+            probeKind = ProbeKind.NONE;
+            rollEscapeJitter();
+        }
+        double sizeRatio = consumePendingAssignmentSizeRatio();
+        if (sizeRatio < 1.0) {
+            seed = Math.max(AdmissionControlLaw.LIMIT_FLOOR_SLOTS, (int) Math.round(seed * sizeRatio));
+        }
+        seed = clamp(seed, AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling);
+        if (seed != adaptiveTarget) {
+            int previousTarget = adaptiveTarget;
+            adaptiveTarget = seed;
+            lastMovementAt = now;
+            if (movementCounter != null) {
+                movementCounter.increment();
+            }
+            log.info(LOG_PREFIX + " ({}): assignment delta moved the carried-over target {} -> {} slot(s) "
+                            + "(probe restore and/or shrink scaling by ratio {}) before reconstruction.",
+                    mode, previousTarget, seed, String.format(Locale.ROOT, "%.2f", sizeRatio));
+        }
         law = lawBuilder
-                .initialLimit(clamp(adaptiveTarget, AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling))
+                .initialLimit(seed)
                 .ceiling(enforceCeiling)
                 .build();
+        floorWindowStreak = 0;
+        plateauHoldStreak = 0;
+        descentCadenceWindows = DESCENT_PLATEAU_WINDOWS;
         windowOpenedAt = now;
         cooldownUntil = now.plus(REBALANCE_TARGET_FREEZE_COOLDOWN);
         lastDecisionReason = AdmissionDecisionReason.COOLDOWN;
     }
 
     /**
-     * Drops the in-progress window's samples and restarts the window from now - the law and its elasticity
-     * history survive untouched. The engine's pause-poison lever (R13): a {@code PAUSED} interval leaves the window holding
-     * samples from before (and completions from during) the pause, and the first post-resume window must not
-     * carry them; a pause says nothing about the downstream, so the law's history stays. No-op in DISABLED.
+     * The engine's pause-poison lever, first post-resume tick (R13/KTD3): drops the in-progress window's samples
+     * (pre-pause samples must not appear in the first post-resume window), ABORTS any in-flight probe restoring
+     * its deferred target (a pause voids the probe's measurement), and stamps an invalidation boundary through
+     * the law's estimator - entries predating a pause describe a plant an unknown span in the past, so history
+     * and verdict die and the first bound post-resume windows land in the warmup band. The warmup EPISODE
+     * deliberately survives (KTD2: pause/resume cycles share one allowance, so pause-cycling - PC's public
+     * throttling idiom - cannot refill blind growth). No-op in DISABLED.
      */
-    public void discardWindow() {
+    public void notifyPauseResumed() {
         if (mode == AdaptiveConcurrencyMode.DISABLED) {
             return;
         }
         synchronized (windowLock) {
             window.discard();
         }
-        windowOpenedAt = clock.instant();
+        Instant now = clock.instant();
+        windowOpenedAt = now;
+        if (probeKind != ProbeKind.NONE) {
+            int restored = clamp(probeDeferredRestoreTarget, AdmissionControlLaw.LIMIT_FLOOR_SLOTS, enforceCeiling);
+            probeKind = ProbeKind.NONE;
+            rollEscapeJitter();
+            law.abortProbe(restored); // aborted, not concluded: restore, drop the evidence, allowance untouched
+            if (restored != adaptiveTarget) {
+                int previousTarget = adaptiveTarget;
+                adaptiveTarget = restored;
+                lastMovementAt = now;
+                if (movementCounter != null) {
+                    movementCounter.increment();
+                }
+                log.info(LOG_PREFIX + " ({}): pause aborted the in-flight probe - target restored {} -> {} "
+                        + "slot(s).", mode, previousTarget, restored);
+            }
+        }
+        law.invalidateEstimator(AdmissionElasticityEstimator.InvalidationReason.PAUSE);
+        floorWindowStreak = 0;
+        plateauHoldStreak = 0;
     }
 
     /**
@@ -736,6 +1168,16 @@ public class AdmissionController {
      */
     AdmissionControlLaw law() {
         return law;
+    }
+
+    /** Test seam (package-private): whether a U6 probe (escape or descent) is currently in flight. */
+    boolean probeInFlight() {
+        return probeKind != ProbeKind.NONE;
+    }
+
+    /** Test seam (package-private): the in-flight probe's deferred restore value (KTD4). */
+    int probeDeferredRestoreTarget() {
+        return probeDeferredRestoreTarget;
     }
 
     // ------------------------------------------------------------------
