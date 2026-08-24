@@ -88,6 +88,21 @@ defect:
   met it had changed **zero** files under `parallel-consumer-core` (checked, not assumed), and the
   same module's tests had passed in three earlier full runs that session. Same classification:
   contention, not a regression
+- **`ParallelEoSStreamProcessorTest` under parallel-agent load, 2026-08-24: three consecutive full
+  runs, three DIFFERENT failing methods, one failure each.** `processInKeyOrder(CommitMode)[3]` with
+  the input sanity-check symptom already described below, then
+  `inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[1]`, then a third on the same
+  class. A subagent hit two more in the same window
+  (`closeAfterSingleMessageShouldBeEventBasedFast`, and a latch variant), each passing on re-run -
+  its rate was 2 red in 6 full runs.
+
+  **The moving target is the finding.** A defect in one method reproduces in that method; a
+  different method failing each run, all on latch and await deadlines, is what contention looks
+  like. Conditions were extreme and are reported rather than hidden: two agents running full Maven
+  builds on this machine concurrently, plus the demo's broker container. **Local only - none of
+  these is a CI sighting**, so treat it as evidence about the class rather than about a head, and do
+  not count it toward a quarantine case, which AGENTS.md rule 1 wants CI evidence for.
+
 - `ParallelEoSStreamProcessorTest.processInKeyOrder(CommitMode)[3]` - added 2026-08-21, seen once while
   building U10 in the proxy module (`-am` again). **A different assertion from the commit-frontier
   symptom this file records for the same test further down**: this one failed on

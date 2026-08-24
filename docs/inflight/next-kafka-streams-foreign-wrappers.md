@@ -162,12 +162,18 @@ produces confident false assurance.
 The note above guessed serdes would be a non-issue because the engine sees bytes. Mostly right: the
 source, the transform and the grouping all ran `byte[]` end to end.
 
+**ANSWERED 2026-08-24, and this section is kept because the reasoning still explains why.** Handles
+now carry their type: `HandleAssigned` reports a kind plus key and value types, the engine picks the
+sink serde from what it recorded, and the `Long` special case below is gone. The demo no longer
+hard-codes an eight-byte read - it asks the handle. Plan:
+[`../plans/2026-08-24-001-feat-streams-typed-handles-plan.md`](../plans/2026-08-24-001-feat-streams-typed-handles-plan.md).
+
 The exception is where an operator *creates* a value the host did not supply. `count()` produces a
 `Long`, so the sink has to write it with `Serdes.Long()` and the host has to know to decode eight
 big-endian bytes on the way out. The engine currently special-cases it. That does not generalise:
 aggregations, reduces and joins all mint typed values, and either the wire says what type a handle
-carries or every one of them becomes another special case. **This is the next real design question**,
-and it is more pressing than any of the deferred operators.
+carries or every one of them becomes another special case. That *was* the next real design
+question; it is now closed.
 
 **Answered 2026-08-24: the wire now says what a handle carries.** Every mint records its kind and
 key/value types, `HandleAssigned` delivers them, the sink selects its serde from the record (the
@@ -197,7 +203,6 @@ Each of these was deliberately out of scope. This is what the run says they woul
 |---|---|
 | **A sixth builder method (scalar args)** | Nothing structural - one more member of the `BuilderCall` `oneof`. |
 | **Operators taking behaviour** (serdes, comparators, joiners) | The function-token pattern again, generalised beyond `RecordFunction`. Proven mechanism, real design step. |
-| **Typed handles** | **Landed 2026-08-24.** `HandleAssigned` carries a `HandleType` (kind + key/value `DataType`), the engine selects the sink serde from the recorded type (the `Long` special case is deleted), and the Python client's handles expose the type and decode by it. Describe still reports the assembled graph, deliberately - the type travels at mint time, which is when the host needs it. |
 | **Interactive queries** | New message types for get/range/scan over a named store. New surface, not a new mechanism - and unlike the rest it makes the host a *reader* of engine state, which nothing else here does. |
 | **Punctuators** | Cheap, as predicted. A scheduled callback is another work frame in the pull model; the invocation correlation already carries everything needed. |
 | **More than one foreign operator** | Nothing on the wire - tokens already distinguish functions. The open question is empirical, not structural: whether crossings multiply with operator count, which the 400us figure says would hurt. |

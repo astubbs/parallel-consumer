@@ -27,6 +27,22 @@ document meaning opposite things.
 "AK" is already the repo's abbreviation for Apache Kafka. The comparison demo names its serial lane
 `AK_CORE` for the same reason.
 
+**Bundling** (never "batching", for the boundary)
+How many records cross the language boundary in one hop. A transport concern, invisible in the
+user's function signature: a client can bundle a hundred records per hop and still hand the user one
+at a time. Borrowed from Apache Beam, which calls exactly this unit a bundle.
+<p>
+Say **bundling**, because "batching" already means something else here and the collision was
+actively costing us: the two were being treated as one decision when they are independent axes with
+different owners, different difficulty, and different answers for Parallel Consumer and for Kafka
+Streams. `docs/language-bindings.md` maps the axes;
+`docs/inflight/next-batching-modes-for-clients.md` owns both definitions.
+
+**Batching** (the user's signature, never the wire)
+How many records the user's function receives per call. Core's API is already batch-shaped - `poll`
+hands the user a context of records - so a batch size of one is the degenerate case rather than a
+separate API. Says nothing about how many hops those records took to arrive.
+
 ## Parallel consumption
 
 **Control loop**
@@ -161,6 +177,10 @@ first evidence against the method, not for the code.
   a real deadline missed under contention, and an unforceable trigger is an awaited event that never
   occurred. All three present as the same expired await, and the whole diagnostic difficulty of this
   area is telling them apart.
+- **"Batching" was doing two jobs.** It meant both the user-facing API shape and the number of
+  records per boundary crossing, and because one word covered both, they were being weighed as a
+  single decision. They are independent: see **bundling** under Naming. Resolved 2026-08-24, after
+  the crossing cost was measured and the two answers turned out to differ.
 - **A tick-path assertion presents as that same expired await, and is the fourth member of the
   confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
   other three all mean the expected thing did not happen, while a tick-path assertion means something

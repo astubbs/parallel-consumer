@@ -23,7 +23,6 @@ import argparse
 import logging
 import os
 import pathlib
-import struct
 import sys
 import time
 import threading
@@ -40,7 +39,12 @@ from confluent_kafka.admin import AdminClient
 from demo_jvm import java_binary
 from demo_kafka import ensure_topic, key_of, key_slot, seed
 from parallel_consumer.sidecar import Sidecar, SidecarCommand
-from parallel_consumer.streams import GrpcStreamsTransport, StreamsSession
+from parallel_consumer.streams import (
+    DataType,
+    GrpcStreamsTransport,
+    StreamsError,
+    StreamsSession,
+)
 
 log = logging.getLogger("streams-demo")
 
@@ -148,7 +152,8 @@ class SinkRead(NamedTuple):
     must not be read as a processing window."""
 
 
-def read_counts(bootstrap: str, topic: str, expected: Counter[int], deadline: float) -> SinkRead:
+def read_counts(bootstrap: str, topic: str, expected: Counter[int], deadline: float,
+                value_type: DataType) -> SinkRead:
     """Reads the sink last-value-per-key until it agrees with ``expected`` or time runs out.
 
     Last-value-per-key rather than a tally of what arrived: the sink carries a KTable changelog, so
@@ -187,12 +192,23 @@ def read_counts(bootstrap: str, topic: str, expected: Counter[int], deadline: fl
                 foreign += 1
                 continue
             value = message.value()
-            if value is None or len(value) != 8:
+            if value is None:
+                # A changelog tombstone carries no value. Filtered before decoding, which is what
+                # the decoder's contract asks of its callers.
                 foreign += 1
                 continue
-            # Serdes.Long() is an 8-byte big-endian signed long. Decoded here rather than
-            # guessed: a wrong width would silently read a plausible number.
-            latest[slot] = struct.unpack(">q", value)[0]
+            try:
+                # The engine SAID what this handle carries, so nothing here knows the width. That
+                # is the point of typed handles: this demo used to hard-code an 8-byte big-endian
+                # read, which is correct for count() and silently wrong for any other aggregation.
+                decoded = value_type.decode(value)
+            except StreamsError:
+                foreign += 1
+                continue
+            if not isinstance(decoded, int):
+                foreign += 1
+                continue
+            latest[slot] = decoded
             updates += 1
             timestamp_type, timestamp_ms = message.timestamp()
             if timestamp_type != TIMESTAMP_LOG_APPEND_TIME:
@@ -372,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
         deadline = started + args.timeout
         expected = expected_counts(args.records)
         with GroupWatch(admin, application_id) as watch:
-            sink_read = read_counts(args.bootstrap, sink, expected, deadline)
+            sink_read = read_counts(args.bootstrap, sink, expected, deadline, counts.value_type)
         elapsed = time.monotonic() - started
         stable, group_state = watch.verdict()
     finally:
