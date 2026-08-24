@@ -24,8 +24,9 @@ and then fixes the leak the first fix created - walk-then-clear silently discard
 *during* the walk, so `close()` now drains. Read `git log master..fix/concurrent-collection-sweep`;
 the bodies carry the whole diagnosis. **It has no PR**, which is the part no command will tell you.
 
-**The undecided part is sequencing, not the fix.** It touches the files astubbs#57 declares it owns
-(`docs/inflight/pr-57-metrics-leak.md`), and astubbs#57 already has a merge position in the ordering
+**The undecided part is sequencing, not the fix.** It touches partition-state files astubbs#57 also
+changes (`PartitionState.java`, `PartitionStateManager.java`, `ShardManager.java` - `gh pr diff 57`
+is the current list), and astubbs#57 already has a merge position in the ordering
 recorded in [`pr-323-docs-outstanding.md`](pr-323-docs-outstanding.md). Whoever opens the PR decides
 whether it goes before or after, or folds into astubbs#267.
 
