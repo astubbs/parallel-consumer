@@ -175,6 +175,21 @@ product surface (15-17).
 
 ## Rise, fall, hold, escape
 
+**One estimator decides all three bands, and it is the settled objective made operational.** The
+elasticity of throughput against concurrency - estimated from the covariance of in-flight and useful
+throughput over the controller's movement history - is a single statistic read three ways:
+
+- **RISE** requires the limit to be binding **and** elasticity above the threshold (`1/(r+1)`, r=3):
+  more concurrency is still buying proportionally more throughput.
+- **HOLD** when elasticity sits between the threshold and zero: growth has stopped paying but is not
+  yet destructive. **This is the band that catches the graceful-saturation plateau** - a downstream
+  that saturates gently produces flat throughput (covariance near zero, *not* negative) while its
+  queue and latency climb; a law whose only relative brake is *negative* covariance never fires
+  there, the additive term wins every window, and the ratchet is reborn invisibly. The threshold
+  band is what stands in its way, and it is why the covariance test and the elasticity gate are one
+  estimator and not two - negative covariance is simply elasticity below zero.
+- **FALL** on elasticity below zero: more concurrency bought less work.
+
 ### RISE
 
 **Two terms, and the additive one is load-bearing.**
@@ -185,7 +200,8 @@ provable one-way ratchet *downward*. With `q = 0` and `g <= 1` the limit is mono
 for **all** inputs: every transient spike is permanent and no input sequence recovers it. Plan A
 proposed a brake-only design and this is why it was fatal.
 
-The accelerator must be **named and derived, not felt**. Solving `L = L*g + q` gives the fixed point
+The accelerator must be **named and derived, not felt**. In the Gradient2 family, solving
+`L = L*g + q` gives the fixed point
 
 ```
 g* = 1 - q(L)/L
@@ -195,6 +211,15 @@ so `q` does not merely set the growth *rate* - it sets the **steady-state cost y
 buy**. Pick the tolerated cost; that fixes `q`. `q(L) = sqrt(L)` self-scales (Envoy's choice, and
 `GradientLimit`'s rationale verbatim: a fixed queue "becomes too small for large limits but still
 prevents the limit from growing too much"); a constant does not.
+
+**A caveat the review is right about: that derivation belongs to the law being deleted.** It
+presumes a continuous multiplicative gradient `g`; the proposed law's contraction is a band
+transition, an event rather than a multiplier, so the steady state under accelerate-until-the-band
+dynamics is a limit cycle whose amplitude depends on `q`, the threshold and the history length - a
+different quantity with different tuning consequences. The *principle* stands (the accelerator's
+size is a chosen steady-state cost, stated rather than felt), and `q = sqrt(L)` remains the default
+candidate; the equilibrium arithmetic must be **re-derived for the actual dynamics** before the
+constant is defended by it - carried as a Resolve item.
 
 **Guard the arithmetic.** Netflix/concurrency-limits#35 is the cautionary case: with `smoothing < 1` and +/-1
 increments, `trunc(0.8n + 0.2(n+1)) = n` - the controller *never moved at all*, and it shipped. Our
@@ -228,9 +253,15 @@ it is today.
 
 **A relative brake and an absolute one. Both, because a ratio cannot see a steadily-bad level.**
 
-- **Relative:** negative covariance between in-flight and throughput over a bounded history - more
-  concurrency bought less work. This is the term Uber added to fix precisely our bug, and it cannot
-  be fooled by a drifting baseline because it has no baseline.
+- **Relative:** the elasticity estimator's negative band (see the section opening - one statistic,
+  three bands) - more concurrency bought less work. This is the term Uber added to fix precisely our
+  bug, and it cannot be fooled by a drifting baseline because it has no baseline. **Its evidence
+  base carries an invariant: a window enters the estimator's history only if the limit was binding
+  for that window.** A Kafka consumer's in-flight and throughput collapse together when the topic
+  drains and jump together on a burst - arrival-driven windows inject spurious positive covariance
+  that later licenses growth the plant never earned. The three binding signals already gate growth;
+  the same exclusion must gate the estimator's *input*, or the brake's evidence stays contaminated
+  by exactly the app-limited windows the growth gate rejects.
 - **Absolute:** the failure fraction (exists); the optional latency ceiling (KD4); and
   **offset-encoding back-pressure**, `PartitionState#isBlocked()` / `isAllowedMoreRecords()`, which
   is a real admission constraint the controller currently cannot see at all - a partition refusing
@@ -385,12 +416,42 @@ region-of-attraction test, and it is also the shape RFC 5166 has specified since
 convergence by **starting from a deliberately wrong state and bounding the time to reach the right
 region** (its delta-fair convergence time starts two flows at 100/101 and 1/101 of capacity).
 
+### Three companion scenarios, one per decision the sweep does not falsify
+
+- **The arrival-burst dual.** Hold `L*` **constant** while the arrival rate bursts, drains and gaps;
+  assert the controller stays near `L*` rather than chasing the load. Every phase above holds
+  arrival constant, so the confound that most threatens the estimator on a Kafka topic - in-flight
+  and throughput moving together under load swings, the normal case, not an edge - is otherwise
+  structurally invisible to the suite. The controlled-arrival harness already does this; it is one
+  more scenario, not new infrastructure.
+- **The app-limited lull - HOLD's falsifier.** Drop arrival well below capacity mid-run, then
+  restore it; assert the target was preserved through the lull and throughput recovers within a
+  deadline after it. This is the direct RFC 7661 regression test - the decay-on-idle failure Plan A
+  would have reintroduced currently has no assertion guarding against its return.
+- **The floor pin - ESCAPE's falsifier.** Pin the controller at the floor with the gated signals
+  reading empty, and assert the re-measurement fires within N windows anyway. The hatch's whole
+  point is being on a path no gated signal can suppress; that property is exactly the kind that
+  ships broken when nothing tests it.
+
+### The oracle's units, stated before they bite
+
+`L* = mu_max * W0` is dimensionally **in-flight records**; the target is in **slots**, one slot per
+in-flight batch. The oracle the sweep converges to is therefore `L*_slots = mu_max * W0 / batchSize`
+- and at `batchSize = 1` the mismatch is invisible, which is precisely how it would ship wrong. At
+least one sweep arm runs with `batchSize > 1` so the units seam the actuator section introduces is
+itself under test.
+
 ### And the comparison that cannot be gamed
 
 Run the adaptive controller against `FixedLimit(c)` for a spread of `c`, across several scenarios,
 interleaved, same seeds. Require the adaptive arm to beat **every** fixed baseline in aggregate.
 `FrozenLimit(c)` *is* `FixedLimit(c)` - it is definitionally in the baseline set and **cannot beat
 itself**. The suite fails it by construction.
+
+**This and the integration test below are one artifact, not two.** The `FixedLimit` spread *is* how
+the integration test's arm 2 gets selected - the phase-1 sweep - and the mutant controllers live in
+the cheap simulator-level scenario suite, not against a broker. Read as two separate interleaved
+harnesses this section would specify the same guarantee twice at benchmark prices; it does not.
 
 This also subsumes the owner's benchmark framing, and strengthens it: the third arm - static,
 hand-tuned to the best value a careful operator would find - is what makes the claim survive the
@@ -405,7 +466,12 @@ the weak half of the claim is tested.
   anti-drift decay, the probe-down arm, `baselineRecoveryMode`, and `preProbeShortTimeNanos`. All of
   them exist to manage a contaminated baseline that no longer exists.
 - The dither estimator and its ten blockers, never built.
-- `Outcome.OVERLOAD_DROP`'s dead AIMD arm, unless the classifier is given real causes to return.
+
+**Not deleted, despite being dead code today:** `Outcome.OVERLOAD_DROP` and its AIMD arm. The 004
+signal is this design's second prerequisite precisely because it makes that socket real, and the
+comparison test's rate-limit phase depends on it - deleting the arm while carrying the prerequisite
+that feeds it would be a contradiction an implementer resolves at random. It stays, and the
+classifier gains real causes to return.
 
 ## What must be preserved, and why
 
@@ -430,15 +496,27 @@ the roadmap's `implemented` for work proven in use. Opt-in is a stage, not the d
 step below exists to earn that graduation, which is why the falsifiers and the comparison test carry
 the weight they do.
 
-1. **The actuator fix comes first** - `maxConcurrency` must bound the pool and the ceiling together.
+1. **The actuator fix comes first** - the controller sizes the pool to its own target, with
+   `maxConcurrency` as the safety ceiling over both (the actuator section owns the mechanism).
    Tuning a control law whose actuator is disconnected above its own default measures nothing. This
    is an edit to the branch the admission package lives on; the package is not on master or on the
-   PR base, so nothing needs unwinding and nothing sequences around a merge.
+   PR base, so nothing needs unwinding and nothing sequences around a merge. **Blast radius: the
+   pool-follows-target mechanism and the safety-ceiling reading apply only under active ENFORCE.**
+   `DISABLED` and `OBSERVE` keep today's behaviour exactly - a fixed pool of `maxConcurrency`
+   threads - so no existing static configuration changes meaning, and this is not a breaking change.
 2. **The law rewrite lands in one move**, not as a migration. A half-migration leaves a throughput
    term and a latency ratio in the same law disagreeing, with arm order deciding which wins - which
    is how the present six-arm pile-up happened. `admission-gradient2-port` tags the Gradient2 port
    complete and green, as the point to return to if steering on throughput proves worse.
-3. **Then the benchmark.**
+3. **The overload signal (the 004 plan) lands before the benchmark's rate-limit phase** - it is the
+   second prerequisite, and it has to have a slot here or it silently becomes nobody's step. The
+   fallback is stated rather than improvised: if the signal is not ready, the benchmark runs its
+   other phases and **no rate-limit claim is published** - phase 4's assertion waits for the real
+   signal rather than being approximated around a classifier that scores every rejection `IGNORE`.
+4. **Then the benchmark.** The published claim is **per-instance in scope**; any fleet-scoped claim
+   gates on the fleet question (Resolve list) being settled first. A fleet that oscillates in
+   production earns the *tried it, turned it off* reputation that costs a trust-rebuilding fork
+   most, so the claim's scope is stated rather than left for a reader to assume.
 
 **The benchmark no longer gates the objective, and the earlier gate was wrong once the objective
 became the ratchet fix.** The prior plan held that nothing should be built while it is unknown
@@ -496,6 +574,7 @@ for it, since the user function *is* the abstraction over whatever the real down
 | 2. Downstream degrades | Concurrency capacity falls; service time rises under load | Static over-drives it and queues. Adaptive backs off. |
 | 3. Downstream recovers, then exceeds phase 1 | Capacity rises above where it started | Static leaves headroom unused. Adaptive grows into it. |
 | 4. Rate limiting | Downstream stops slowing and starts **rejecting** above a token-bucket rate | Static keeps hammering the limiter. Adaptive settles under the rate. |
+| 5. Graceful saturation | Throughput **plateaus flat** at the downstream's capacity while latency climbs - no fall, no rejection | Static queues blindly. Adaptive must **stop growing and hold near the knee** - the HOLD band's own falsifier, and the phase neither 2 (falls) nor 4 (rejects) exercises. |
 
 **Phase 1 is the phase that protects honesty.** The assertion there is *match within tolerance*,
 never *beat* - a controller that pays a small exploration cost on a steady workload is behaving
@@ -536,25 +615,39 @@ of the four phases.
 
 ## Resolve Before Planning
 
-1. **The elasticity denominator** - commanded target or achieved in-flight. They diverge exactly when
-   it matters, and an in-flight denominator can approach zero and make elasticity explode or flip
-   sign. (Carried from the objective plan, blocker 2, unresolved.)
-2. **Covariance history length and its interaction with window drift.** Uber uses 50 intervals at
-   2-30s. Our windows drift with the control-loop cadence, so a fixed count of windows is a variable
-   span of wall-clock time.
+1. **The elasticity estimator's full definition** - one item, because it is one statistic (the law
+   section owns why). The denominator: commanded target or achieved in-flight, which diverge exactly
+   when it matters, and an in-flight denominator can approach zero and make elasticity explode or
+   flip sign. The history: length, and its interaction with window drift - Uber uses 50 intervals at
+   2-30s, and our windows drift with the control-loop cadence, so a fixed count of windows is a
+   variable span of wall-clock time. The input filter: only limit-bound windows enter (the FALL
+   section owns why). (Merges the objective plan's blockers 2 and the history question, previously
+   two items.)
+2. **The minimum-excitation condition.** The dither was deleted because natural movement provides
+   excitation - but the HOLD band freezes the target, phase 1 asserts near-stationarity, and after
+   an app-limited lull the history is stale over an unknown wall-clock span. Name the variation
+   amplitude and recency below which the estimate is untrusted and the controller HOLDs rather than
+   decides, and what invalidates history after a lull (the parallel of Envoy's clear-on-probe-entry
+   rule the ESCAPE section already adopts).
 3. **Where the estimator's state lives across a rebalance** (blocker 8), and how the deliberate gaps
    in the window series enter it (blocker 7).
-4. **Whether `maxConcurrency` sizes the pool, caps the ceiling, or both** - and what it means under
-   virtual threads. This is prerequisite and may deserve its own change.
-5. **Whether the latency ceiling reads service time or residence time.** Residence time is what a
+4. **Whether the actuator fix ships as its own change or inside the law rewrite.** The design itself
+   is settled - the controller sizes the pool to its target, `maxConcurrency` is a pure safety
+   ceiling, the same meaning under virtual threads (the actuator section owns it, owner's ruling) -
+   so what remains is packaging only.
+5. **Re-derive the accelerator's equilibrium for the actual dynamics.** The `g* = 1 - q/L` fixed
+   point belongs to the deleted gradient law; under accelerate-until-the-band dynamics the steady
+   state is a limit cycle in `q`, the threshold and the history length. `q = sqrt(L)` stays the
+   candidate; its defence needs the right arithmetic.
+6. **Whether the latency ceiling reads service time or residence time.** Residence time is what a
    caller experiences and is already a percentile-capable `Timer`; service time is what the current
    tap measures and excludes queue wait.
-6. **Fleet behaviour** (blocker 14) - N instances against one shared downstream, now without a dither
+7. **Fleet behaviour** (blocker 14) - N instances against one shared downstream, now without a dither
    to correlate, but the covariance test still reads a shared plant.
-7. **The product surface** (blockers 15-17) - the parameter cannot honestly be documented as a
+8. **The product surface** (blockers 15-17) - the parameter cannot honestly be documented as a
    promised utilisation fraction, and a new tunable with no symptom-keyed decision rule becomes
    folklore.
-8. **The tolerated steady-state cost that fixes `q` - a product decision, not a tuning constant.**
+9. **The tolerated steady-state cost that fixes `q` - a product decision, not a tuning constant.**
    The RISE section derives that `q` sets the throughput a healthy workload permanently gives up for
    adaptivity, and the phase-1 *match within tolerance* band is the same number seen from the test
    side - the figure any published claim will be attacked on. Deriving them from one stated choice

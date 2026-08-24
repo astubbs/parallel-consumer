@@ -26,8 +26,8 @@ execution: code
   that socket real.
 - **Prior art it must reconcile with:**
   [`docs/ideation/2026-08-17-distributed-throttling-ideation.html`](../ideation/2026-08-17-distributed-throttling-ideation.html) -
-  read it before re-opening anything here. It settled three constraints and made one choice this
-  document deliberately overrides.
+  read it before re-opening anything here. It settled the binding constraints inherited below and
+  made one choice this document deliberately overrides.
 
 ---
 
@@ -79,7 +79,18 @@ mistake:
 
 The honest cost: a return type appears in a signature and demands attention, while a method on a
 parameter does not. Two things narrow that gap - the context is an object users already explore, and
-the classifier SPI below gives existing code the behaviour with no discovery required at all.
+the classifier SPI gives existing code the behaviour with no discovery required at all.
+
+**The classifier SPI, defined once:** a user-registered mapping from the function's own exception
+types to a pressure verdict - the R4 capability, supplied at construction. It is distinct from the
+internal `AdmissionOutcomeClassifier` named in the Goal Capsule, which is engine code the user never
+sees; the SPI is the hole through which a user's `TooManyRequestsException` reaches that internal
+classifier without the function body changing. Whether it ships in v1 is Resolve item 2.
+
+**And the two flavours have fixed destinations** - this is the owner-side source of the rule the
+003 design binds itself to: a **hard** signal (one carrying a number) feeds the **fixed** layer as a
+timed deferral; a **soft** signal (no number) feeds the **adaptive** layer as evidence. Resolve
+item 3 decides the soft signal's *weight*, never its destination. Layers compose by `min()`.
 
 ### Constraints inherited from the ideation, all binding
 
@@ -132,6 +143,21 @@ and nothing can report that the number is now wrong. An operator who genuinely h
 number states it as configuration, where it is a declared input rather than an unfalsifiable memory.
 Nothing survives a restart, for the same reason.
 
+**Stated precisely, the rule is: nothing discovered outlives its own expiry, and no expiry is
+honoured beyond a configurable cap.** A deferral *is* stored discovered state for its duration, and
+`Retry-After: 86400` - RFC-legal, and reachable by nothing more exotic than clock skew on an
+HTTP-date - would otherwise park an unfalsifiable constraint for a day: the save-forever disease,
+differing only in degree. An over-cap deferral is clamped to the cap and **reported** (log and
+constraint gauge), so a pathological downstream is visible and bounded rather than silently binding
+for its full claimed duration. This also names what the `min()` composition implies and the prose
+otherwise hides: a small registry of live deferrals per service exists, and its entries die at their
+expiry or the cap, whichever is sooner.
+
+The same reading settles what the fixed layer holds for *reported* numbers: **transient,
+self-expiring deferrals - never a durable per-service rate.** Durable rates enter only by
+declaration. "Only ever as good as what the user declares or the downstream reports" means exactly
+those two lifetimes, not a third.
+
 Several at once compose by `min()`, and which constraint binds is what the constraint gauge reports.
 
 ### Per-service ceilings need hard limits, because the engine cannot see inside the function
@@ -169,12 +195,25 @@ further step again and belong to astubbs#228.
   duration, without failing the record and without throwing.
 - R2. Reporting pressure and failing the record are independent; all four combinations are meaningful
   and none is an error.
-- R3. A reported pressure defers the record's retry without incrementing its failure history.
-- R4. Existing code that throws its own exception type can map it to a pressure verdict without
-  editing the function body.
-- R5. Nothing discovered is persisted; a contractual rate is configuration, and an unreachable
-  configured limit is reported as a binding constraint rather than pursued.
-- R6. The reported service name reaches the log and the constraint gauge.
+- R3. A reported pressure **on a record that also fails** defers its retry without incrementing its
+  failure history. A reported pressure on a **succeeded** record never re-enqueues it - the record is
+  done; the signal's only effect is on the controller. (The unscoped form of this requirement
+  literally ordered duplicate processing in the flagship SDK-retried-and-won case, where there is no
+  retry to defer.)
+- R4 *(contingent on Resolve item 2)*. Existing code that throws its own exception type can map it to
+  a pressure verdict without editing the function body.
+- R5. Nothing discovered is persisted beyond its own expiry, and no expiry is honoured beyond a
+  configurable cap - an over-cap deferral is clamped and reported. A contractual rate is
+  configuration, and an unreachable configured limit is reported as a binding constraint rather than
+  pursued.
+- R6. The reported service name reaches the log and the constraint gauge - and the v1 API contract
+  (javadoc, method documentation) states that **enforcement is global**: the name labels the signal,
+  it does not scope the response. Without that sentence, the first user whose search traffic stalls
+  because payments reported pressure files it as a bug.
+- R7. A reported pressure **reaches the admission layer** as an overload-class input; how the control
+  law weighs it is owned by `2026-08-24-003-feat-admission-control-law-design.md`. (Without this, a
+  build satisfying every other requirement could log the name, defer the retry, and feed nothing to
+  the controller - a reporting API whose reports change nothing.)
 
 ### Scope Boundaries
 
@@ -192,14 +231,34 @@ backends (idea 1 and idea 5's extension artifacts).
    story for existing code, but it is a second public surface.
 3. **What a soft signal with no duration actually does** to the controller - it is evidence, not an
    instruction, so it needs a weight, and that weight interacts with the throughput objective.
-4. **Whether a reported pressure with no failure should defer the record at all**, given the record
-   succeeded. Probably not, but then the signal's only effect is on the controller, which is worth
-   stating.
+4. **What weight a pressure report on a succeeded record carries in the controller.** (R3 now
+   settles that it never re-enqueues the record; what remains open is only how strongly the
+   controller weighs the report - which folds into item 3's soft-signal question.)
 5. **Reserve-then-settle's interaction with the admission target**, since a slot is one batch and the
    token cost is per downstream call, not per record.
 6. **Vert.x already mis-measures `pc_user_function_processing_time_seconds`** (confluentinc#766). Any
    signal taken around the user function inherits that, and the engine module wraps the function
    differently.
+7. **The invocation contract - part of the public API, not plan detail.** From which threads the
+   method may be called; until when a report is valid (function return, or async completion in the
+   Vert.x/Reactor/Mutiny modules, where the user's 429 surfaces inside a callback after the wrapped
+   function has returned and can race the engine's verdict recording); and how multiple reports for
+   one record compose (e.g. max deferral per service). Two implementers without this build
+   incompatible things users code against.
+8. **Whether downstream-declared rate headers get a fourth lifetime row.** `X-RateLimit-Limit` /
+   `Remaining` / `Reset` carry a *rate* with its own window expiry - neither operator config, nor a
+   timed deferral, nor evidence. The ideation's rejection 3 explicitly folded them into the SPI's
+   number-owners, so their absence from the three-source table is currently an **unrecorded
+   narrowing** - the very thing this document's override convention exists to prevent. Either add
+   the row (expiring at the header's own reset window, consistent with nothing-outlives-its-expiry)
+   or record the override: v1 deliberately reduces rate headers to deferrals, and why.
+9. **How observable the flagship cell actually is.** The SDK-retried-and-won case is argued as the
+   common case, but reporting it requires the *user* to detect their SDK was throttled, and plain
+   OkHttp, the JDK HttpClient and typical generated clients expose no such surface without
+   interceptors. Occurrence is not observability, and only the second drives adoption. A short
+   survey of the SDKs users actually run (AWS, Spring, OkHttp, JDK) would size the addressable
+   slice - and decide how much weight the context method's unique cell can honestly carry against
+   the classifier SPI, which serves the failure cells with zero user edits.
 
 ## Sources
 
