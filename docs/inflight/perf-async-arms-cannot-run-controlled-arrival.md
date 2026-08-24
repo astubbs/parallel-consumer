@@ -18,13 +18,16 @@ their own completion counters and never touch it**, so the barrier waits out its
 (`BENCH_ARRIVAL_WARMUP_TIMEOUT_MS`) and the row is recorded as a timeout. The template's own
 comment ("it needs no per-arm support") is true only of arms implemented inside `Bench` itself.
 
-## Fix shape
+## Fixed 2026-08-24, same day
 
-Have each arm class report completions into the shared counter (or expose its counter for `Bench`
-to poll) - the same one-line wiring per arm that `recordCompletion` gives the built-in paths. Until
-then, **no latency figure exists for any async engine or for the proxy path**, which matters
-because the proxy is what every non-JVM client runs on (astubbs#242) and its throughput already
-collapses under skew - its latency under skew is unmeasured.
+Each arm's completion callback now calls `Bench.recordCompletion(-1, ...)` - Reactor and Mutiny
+pass `Bench.contextValue(ctx)` so e2e is measured; the proxy passes the dispatched record's value;
+**Vert.x passes null**, because its only hook back is the HTTP response and no record context
+reaches it - its e2e column stays honestly blank (residence still comes from the engine's own
+meter). Verified by a reactor smoke under controlled arrival: barrier passed, e2e populated at the
+handler's own tail. The full async sweep runs with `BENCH_RUN_TIMEOUT=420`, which also covers the
+`proxy`/KEY/zipf capacity run the default deadline killed.
 
-Also open from the same sweep: `proxy`/KEY/zipf has no capacity number (its ~78 msg/s saturated
-rate needs `BENCH_RUN_TIMEOUT` raised above the capacity run's deadline).
+What remains open here: **Vert.x has no e2e measure** until its engine exposes the record context
+on the response hook (or the arm correlates request to record itself). Everything else this note
+described is closed by the sweep whose results land in `arrival-tail-skew-matrix-2-async.csv`.

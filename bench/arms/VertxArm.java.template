@@ -60,7 +60,15 @@ public class VertxArm implements BenchArm {
                 record -> new VertxParallelEoSStreamProcessor.RequestInfo("localhost",
                         Bench.calleePort(), "/", new HashMap<>()),
                 onSend -> { },
-                onResponse -> Bench.responses.incrementAndGet());
+                onResponse -> {
+                    Bench.responses.incrementAndGet();
+                    // The only hook back is the HTTP response - no record context reaches it, so the
+                    // value (and with it the e2e measure) is unavailable: null keeps e2e honestly
+                    // blank while still feeding the shared completedRecords counter the arrival
+                    // warmup barrier watches. Without this, every controlled-arrival run of this arm
+                    // timed out at that barrier.
+                    Bench.recordCompletion(-1, null);
+                });
         while (Bench.responses.get() < expected) Bench.sleep(25);
         long took = System.currentTimeMillis() - start;
         Bench.windowClosed();

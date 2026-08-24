@@ -48,8 +48,17 @@ public class ReactorArm implements BenchArm {
         pc.subscribe(Collections.singletonList(topic));
         Bench.responses.set(0);
         long start = System.currentTimeMillis();
-        pc.react(ignored -> Mono.fromCompletionStage(Bench.callCallee(delayMs))
-                .doOnNext(response -> Bench.responses.incrementAndGet()));
+        // recordCompletion feeds the shared completedRecords counter - the arrival warmup barrier and
+        // the backlog gauge watch THAT, not `responses`, and until it was wired here every
+        // controlled-arrival run of this arm timed out at the barrier. polledAt is unknown to an
+        // engine arm (residence stays blank, honestly); the context's value carries the intended send
+        // instant, so e2e is measured. Under a failure-injecting workload this counts an answered
+        // attempt, matching this arm's documented accounting.
+        pc.react(ctx -> Mono.fromCompletionStage(Bench.callCallee(delayMs))
+                .doOnNext(response -> {
+                    Bench.responses.incrementAndGet();
+                    Bench.recordCompletion(-1, Bench.contextValue(ctx));
+                }));
         while (Bench.responses.get() < expected) Bench.sleep(25);
         long took = System.currentTimeMillis() - start;
         Bench.windowClosed();

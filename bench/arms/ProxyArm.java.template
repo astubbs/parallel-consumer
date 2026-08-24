@@ -172,11 +172,13 @@ public class ProxyArm implements BenchArm {
                 // arms see the same durations and the same failing records.
                 int thisRecord = Bench.workDelayMs(delayMs);
                 boolean fails = Bench.workShouldFail();
+                String value = record.getRecord().hasValue()
+                        ? record.getRecord().getValue().toStringUtf8() : null;
                 if (async) {
                     // Counted at ARRIVAL, matching the async stub, which counts a request when it lands
                     // rather than when a thread picks it up - there is no thread to pick it up.
                     Bench.calleeEnter();
-                    timer.schedule(() -> complete(token, fails), thisRecord, TimeUnit.MILLISECONDS);
+                    timer.schedule(() -> complete(token, fails, value), thisRecord, TimeUnit.MILLISECONDS);
                 } else {
                     // Counted INSIDE the task, matching WireMock, which counts a request when a container
                     // thread begins serving it. Counting at submission would report the queue depth as
@@ -184,7 +186,7 @@ public class ProxyArm implements BenchArm {
                     pool.submit(() -> {
                         Bench.calleeEnter();
                         Bench.sleep(thisRecord);
-                        complete(token, fails);
+                        complete(token, fails, value);
                     });
                 }
             }
@@ -201,7 +203,7 @@ public class ProxyArm implements BenchArm {
          * a fixed count of COMPLETED records, and counting a failure as a response would let the run
          * end with records still outstanding and bill it for work it never did.
          */
-        private void complete(Token token, boolean fails) {
+        private void complete(Token token, boolean fails, String value) {
             Bench.calleeExit();
             if (fails) {
                 Bench.injectedFailures.incrementAndGet();
@@ -216,6 +218,9 @@ public class ProxyArm implements BenchArm {
                     .setSuccess(Report.Success.newBuilder().build())
                     .build());
             Bench.responses.incrementAndGet();
+            // Feeds the arrival warmup barrier's shared counter and the e2e measure - see ReactorArm.
+            // Success only, matching `responses`: a Failure is the protocol's retry, not a completion.
+            Bench.recordCompletion(-1, value);
         }
 
         void close() {
