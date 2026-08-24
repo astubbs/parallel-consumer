@@ -181,7 +181,7 @@ which is what makes the mirror set verifiable against upstream.
 
 `scripts/upstream-sweep.sh --audit` lists the zero-reply discussions. The unread backlog and the
 threads worth acting on are tracked in
-[`docs/inflight/next-upstream-discussions-unanswered.md`](inflight/next-upstream-discussions-unanswered.md).
+[`docs/inflight/upstream-discussions-unanswered.md`](inflight/upstream-discussions-unanswered.md).
 
 ## Backlinking upstream
 
@@ -235,7 +235,7 @@ Known blind spots, recorded so a clean audit is not mistaken for completeness: a
 on a quiet day never trips the bulk-day heuristic, and a discussion with one dismissive reply is not
 "zero reply". The audit narrows the field; only reading discharges the coverage obligation, which is
 tracked in
-[`docs/inflight/next-upstream-coverage-completeness.md`](inflight/next-upstream-coverage-completeness.md).
+[`docs/inflight/upstream-coverage-completeness.md`](inflight/upstream-coverage-completeness.md).
 
 ### Swept PR heads that only upstream had - now preserved as tags
 
@@ -320,7 +320,7 @@ reachable from nothing on this fork and are now pinned as `archive/upstream-bran
 tags: the release-line branches (`0.5.3.x`, `v0.5.2.x-dev`, `v0.6.x`), upstream's final `master`,
 `docs/back-pressure` (the swept confluentinc#508 head, out of the 2026-08-14 pass's scope),
 `features/batching`, `PL-176/DontDrainIssue` (content unassessed - flagged in
-`docs/inflight/next-branch-audit-orphans.md`), `python-cd-pipeline`, `correct-failing-license-check`,
+`docs/inflight/branch-audit-orphans.md`), `python-cd-pipeline`, `correct-failing-license-check`,
 and `DP-12547` (already ruled out as content below; pinned so the ruling stays checkable). The 18
 dependabot/renovate/chore branches were deliberately not preserved - recreatable version bumps, not
 work. Tag names, SHAs and check date live only in `preserved_branch_tips` in

@@ -34,9 +34,20 @@ run link, is recorded as the fifth sighting in
 [`docs/inflight/bug-857-family.md`](../../inflight/bug-857-family.md), under the heading
 **"Correction worth recording: a truncated log misattributed this sighting before it was written."**
 
+**It happened again the same day, to someone who had this document available and did not read it**,
+which is the most useful thing recorded here. Diagnosing a `Chaos Pain Suite` failure on astubbs#296
+([run 32104058992](https://github.com/astubbs/parallel-consumer/actions/runs/32104058992)), the
+job-log route returned 2207 lines of a 6266-line log; the tail carried the verdict, the autopsy and
+all three scenario seeds. The conclusion written from it - "the seed is lost, this sighting can never
+be replayed" - was published to a ledger entry on astubbs#29 and had to be corrected an hour later.
+The seed, `4709156528562690268`, had never been anywhere but the part of the log that was cut. Same
+command, same failure mode, same class of wrong claim, two days after this file was written to
+prevent exactly it. **Prior-art checks are the fix, not more documentation** - the entry was written
+without running the greps `AGENTS.md` requires before investigating anything.
+
 This is a sibling of an earlier trap in the same file's fourth sighting: there, GitHub truncated the
 log **stream** itself server-side, so neither `--log` nor `--log-failed` contained the
-`=== AMBIENT PROBE AUTOPSY === ` block at all, and the autopsy had to be recovered from the uploaded
+`AMBIENT PROBE AUTOPSY`  block at all, and the autopsy had to be recovered from the uploaded
 test-report artifact (see that entry's `**Retrieval note`). Two different truncation mechanisms,
 same failure mode: a log that looks complete but isn't, feeding a diagnosis that inherits the gap.
 
@@ -63,7 +74,13 @@ Three retrieval routes exist for this repo's CI logs, in order of completeness:
    ```
    Unzip and read the per-job `.txt` files. These downloads can be slow and large for a long
    job - use a generous timeout or background the fetch rather than letting it appear to hang.
-3. **`gh run view --job <id> --log`** - convenience only. It is fine for a short job or a quick
+3. **`gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs`** - the job-level route
+   [`docs/ci.md`](../../ci.md) recommends. It can exit **1 having written zero bytes to stdout**,
+   with `the response contains terminal escape sequences; pass --allow-escape-sequences to output it
+   anyway` on **stderr**. Redirect stdout to a file and you get an empty file and a job that appears
+   to have no log at all. It is the only route here that does signal - and it signals into the one
+   stream a `>` redirect does not capture.
+4. **`gh run view --job <id> --log`** - convenience only. It is fine for a short job or a quick
    skim, but it is **not diagnostic-grade for a long job**: it silently returned 1654 of 5948 lines
    in this incident, with no indication anything was cut.
 
@@ -73,6 +90,13 @@ ends with the job's real terminal lines - a surefire/failsafe summary (`Tests ru
 with no closing marker, is truncated, and any diagnosis built on it inherits the cut. A suspiciously
 round or repeated line count across two independent fetches (as happened here - two sessions both
 got exactly 1654 lines) is another tell that the cut is systematic, not incidental.
+
+**Corollary: never parse test totals out of console text.** When the tail is missing, no `Tests run:`
+line survives, so every parser downstream reports zero tests and zero failures - which is the shape
+of a suite that was *skipped*, not one that failed. A grep for a failure signature returning **0** on
+a truncated log is a false negative, and it reads exactly like a clean run; the more systematically
+you grep, the more confident the wrong answer gets. Parse the failsafe/surefire XML from the uploaded
+artifact instead, where the counts are attributes and the autopsy is captured inside `system-out`.
 
 ## Why This Matters
 
@@ -93,12 +117,13 @@ wrong.
   or attributes a CI failure to a specific phase of a job.
 - When a job was re-run and you need the failing attempt's log, not the latest (successful) attempt.
 - When `docs/testing.md`'s ambient-probe section is the next thing you'd check for a broker
-  integration-test failure: its current wording states that every such failure **log** includes the
-  `=== AMBIENT PROBE AUTOPSY === ` block. Both truncation incidents in this repo (fourth and fifth
-  sightings of `docs/inflight/bug-857-family.md`) show that claim needs a scope correction, not a
+  integration-test failure. It used to state that every such failure **log** includes the
+  `AMBIENT PROBE AUTOPSY` block; both truncation incidents in this repo (fourth and fifth sightings
+  of `docs/inflight/bug-857-family.md`) showed that needed a scope correction rather than a
   retraction - the autopsy is reliably **emitted** on failure, but the console **log** you fetch it
-  from is not a reliable place to find it; the artifact and archive routes above are. This is a gap
-  to fix in that doc's wording, not something already corrected there.
+  from is not a reliable place to find it; the artifact and archive routes above are. **That
+  correction has landed**: the section now says "emits" and defers the retrieval routes to this
+  document. What remains is to keep the two consistent if either moves.
 
 ## Examples
 
@@ -143,8 +168,9 @@ implicated.
 - [`docs/inflight/bug-857-family.md`](../../inflight/bug-857-family.md) - fourth sighting
   (`**Retrieval note`, server-side stream truncation, artifact recovery) and fifth sighting
   (`**Correction worth recording`, this incident, archive-zip recovery, both seeds).
-- [`docs/testing.md`](../../testing.md) - ambient-probe section (`=== AMBIENT PROBE AUTOPSY ===`)
-  whose "every failure log includes" wording needs the scope correction described above.
+- [`docs/testing.md`](../../testing.md) - ambient-probe section (`AMBIENT PROBE AUTOPSY`), which
+  now carries the corrected "emits" wording and points here for the retrieval routes rather than
+  restating them.
 - [`docs/ci.md`](../../ci.md) - "Reading a failed job's log", the topic doc for CI log retrieval;
   currently documents the job-level `actions/jobs/$jid/logs` API route only, not the run-level
   archive-zip endpoints or the terminal-marker completeness check this incident established.
