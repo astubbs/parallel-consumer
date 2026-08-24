@@ -26,6 +26,13 @@ what prompted it).
 4. **Why `proxy` collapses under key skew** (~78 msg/s against `core`'s 371) - unattributed, and it
    is every non-JVM client's path. Sightings in
    [`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md).
+   Probed 2026-08-24: with astubbs#342's buffer restored, proxy/KEY/zipf blew a 420s deadline
+   (under 29 msg/s or stalled) - the drip-feed hypothesis did NOT survive first contact, and the
+   direction is unresolved: the one-term A/B (old vs astubbs#342 engine, identical arm code) was
+   interrupted before its control arm ran. Two suspects stand: a real buffer-x-credit-protocol
+   interaction under serial lanes, or the 2026-08-24 ProxyArm completion edit, which this
+   operating point had never exercised. Resume: `$SCRATCH/proxy-skew-ab.sh` (machine-local,
+   scratchpad) - re-run when the machine is free, control arm first.
 5. **Why `core-dpvt` is the most failure-sensitive arm** (loses half its throughput to a 1% failure
    rate) - unattributed. Same source note.
 6. **`PARTITION` starves on the default buffer** - workaround known (`messageBufferSize` 20,000
