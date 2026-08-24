@@ -1,22 +1,30 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 
-"""What happens when a registered function calls back INTO the engine while it is being invoked.
+"""A registered function calling back INTO the engine while it is being invoked.
 
-Every crossing in the Streams session so far runs one way: the engine asks this process to compute
-something, and this process answers. These tests pin what the wire does when the host tries to ask
-a question of its own from inside that answer - a mapper that wants the current count for the key
-it is mapping, say, which is the obvious thing to reach for and reads as perfectly reasonable code.
+Every other crossing in the Streams session runs one way: the engine asks this process to compute
+something, and this process answers. These tests cover the host asking a question of its own from
+inside that answer - a mapper that wants the current count for the key it is mapping, say, which is
+the obvious thing to reach for and reads as perfectly reasonable code.
 
-**These are characterisation tests: they assert the CURRENT behaviour, which is a hang.** They are
-not asserting that the hang is correct. The session has exactly one thread reading the wire, and
-that thread is the one running the user's function, so an answer the engine has already sent cannot
-be delivered while the function that is waiting for it is still on the stack. When the wire gains
-per-caller correlation and something other than the reader thread can settle a waiter, these tests
-must be inverted rather than deleted - they are the record of what that change is for.
+**These were characterisation tests asserting a hang, and they are INVERTED here rather than
+deleted** - they are the record of what the two changes underneath them were for, in the order the
+changes had to happen:
+
+1. ``Get`` and ``Describe`` gained a ``call_id``, so a query's answer reaches the caller that asked
+   it. Before that, one answer slot served every query in the session.
+2. Registered functions moved off the reader thread onto a worker pool. Before that, the thread
+   running the user's function was the only thread that could deliver an answer to it, so every
+   waiting crossing - ``get``, ``describe``, a builder call - blocked until its own timeout while
+   the answer sat undelivered. The engine was never at fault: it answers a query on its transport
+   thread while every stream thread is blocked, which is why the answer existed to be abandoned.
+
+Doing (2) first would have made things worse rather than better, turning re-entrant queries from a
+hang into more concurrent callers contending for the one answer slot (1) removed.
 
 The fake is faithful in the one respect that matters here: it delivers answers through an iterator
 that only the session's reader thread drains, exactly as ``GrpcStreamsTransport.responses`` does.
-An answer produced instantly is still an answer nobody can collect.
+An answer produced instantly is still an answer nobody can collect if nobody is reading.
 """
 
 from __future__ import annotations
@@ -77,54 +85,71 @@ def _await_nth(engine: FakeEngine, kind: str, nth: int, timeout: float = 10.0) -
     raise AssertionError(f"the client never sent {nth} {kind} messages")
 
 
-def _crossing_get(session: StreamsSession) -> None:
-    session.get("counted", b"k", timeout=BLOCKED_FOR)
+def _crossing_get(session: StreamsSession) -> object:
+    return session.get("counted", b"k", timeout=BLOCKED_FOR)
 
 
-def _crossing_describe(session: StreamsSession) -> None:
-    session.describe(timeout=BLOCKED_FOR)
+def _crossing_describe(session: StreamsSession) -> object:
+    return session.describe(timeout=BLOCKED_FOR)
 
 
-def _crossing_builder_call(session: StreamsSession) -> None:
+def _crossing_builder_call(session: StreamsSession) -> object:
     # Through the private, because ``TopologyBuilder`` exposes no timeout - a builder call from
     # inside a function would otherwise block the stream thread for the full 30-second default.
-    session._call(pb.BuilderCall(source=pb.Source(topic="in")), timeout=BLOCKED_FOR)
+    return session._call(pb.BuilderCall(source=pb.Source(topic="in")), timeout=BLOCKED_FOR)
+
+
+def _is_the_stored_value(answer: object) -> bool:
+    return answer == b"stored"
+
+
+def _is_a_description(answer: object) -> bool:
+    return isinstance(answer, pb.TopologyDescription) and "Sub-topology" in answer.text
+
+
+def _is_a_minted_handle(answer: object) -> bool:
+    return isinstance(answer, int) and answer > 0
 
 
 @pytest.mark.parametrize(
-    ("name", "crossing"),
+    ("name", "crossing", "is_a_real_answer"),
     [
-        ("get", _crossing_get),
-        ("describe", _crossing_describe),
-        ("builder call", _crossing_builder_call),
+        ("get", _crossing_get, _is_the_stored_value),
+        ("describe", _crossing_describe, _is_a_description),
+        ("builder call", _crossing_builder_call, _is_a_minted_handle),
     ],
 )
-def test_any_host_to_engine_call_from_inside_a_function_blocks_until_its_own_timeout(
-    engine: FakeEngine, name: str, crossing: Callable[[StreamsSession], None],
+def test_any_host_to_engine_call_from_inside_a_function_is_answered(
+    engine: FakeEngine, name: str, crossing: Callable[[StreamsSession], object],
+    is_a_real_answer: Callable[[object], bool],
 ) -> None:
-    """The whole class, not one instance of it: every crossing that waits for an answer hangs.
+    """The whole class, not one instance of it: every crossing that waits for an answer gets one.
 
-    ``get`` is the one a host reaches for first, but the shape is shared by every call that waits
-    on an event only the reader thread sets - the handshake, each builder call, ``describe`` and
-    ``get`` alike. Parametrised rather than written once for ``get`` so that a fix which correlates
-    queries and leaves ``describe`` alone cannot look complete.
+    This asserted the opposite until registered functions moved off the reader thread. ``get`` is
+    the one a host reaches for first, but the shape is shared by every call that waits on a waiter
+    the reader settles - each builder call, ``describe`` and ``get`` alike. Parametrised rather
+    than written once for ``get`` so that a fix which unblocked queries and left ``describe``
+    hanging cannot look complete.
 
-    The engine is NOT slow here and never fails to answer: the fake answers inside ``send``, before
-    the waiting even begins. The answer simply cannot be delivered, because delivering it is the
-    job of the thread that is waiting for it.
+    The answer is checked for CONTENT, not merely for not raising: the failure this replaces was a
+    timeout, and a crossing that returned ``None`` promptly would satisfy a timing assertion while
+    being just as useless.
     """
     session = StreamsSession(engine)
     session.open("reentrancy", {})
-    blocked_for: list[float] = []
-    refusal: list[str] = []
+    engine._get_answer = pb.GetResult(
+        found=True, value=b"stored", value_type=pb.DATA_TYPE_BYTES)
+    took: list[float] = []
+    answers: list[object] = []
+    refusals: list[str] = []
 
     def mapper(key: bytes, value: bytes) -> bytes:
         started = time.monotonic()
         try:
-            crossing(session)
-        except StreamsError as timed_out:
-            refusal.append(str(timed_out))
-        blocked_for.append(time.monotonic() - started)
+            answers.append(crossing(session))
+        except StreamsError as refused:
+            refusals.append(str(refused))
+        took.append(time.monotonic() - started)
         return b"mapped"
 
     token = session.register(mapper)
@@ -132,21 +157,83 @@ def test_any_host_to_engine_call_from_inside_a_function_blocks_until_its_own_tim
 
     answered = engine.await_client_message("invocation_result", timeout=BLOCKED_FOR + 5.0)
 
-    # The function ran, and its own call sat blocked for the whole timeout rather than returning.
-    assert blocked_for, f"the {name} never returned at all"
-    assert blocked_for[0] >= BLOCKED_FOR, (
-        f"the {name} returned in {blocked_for[0]:.3f}s - if the session gained a second reader, "
-        f"or a way to settle a waiter off the reader thread, this test has served its purpose and "
-        f"must be inverted rather than relaxed")
-    # It fails as a timeout, which at the call site is indistinguishable from an unreachable engine.
-    assert refusal and "did not answer" in refusal[0]
+    assert not refusals, f"the {name} from inside a function was refused: {refusals}"
+    assert answers and is_a_real_answer(answers[0]), (
+        f"the {name} returned {answers!r}, which is not the answer the engine sent")
+    # Well inside its own timeout, so a pass cannot be a slow near-miss of the deadline that used
+    # to be hit exactly.
+    assert took[0] < BLOCKED_FOR / 2, (
+        f"the {name} took {took[0]:.3f}s of its {BLOCKED_FOR}s budget - it is being delivered "
+        f"late rather than promptly, which is the old hang wearing a shorter timeout")
 
-    # And the record was held hostage for the whole of it: the engine's stream thread stays blocked
-    # in InvocationRegistry.awaitResult for as long as this side takes, so the cost is not confined
-    # to the host.
+    # And the record was not held hostage: the engine's stream thread stays blocked in
+    # InvocationRegistry.awaitResult for as long as this side takes, so the cost of a hang here was
+    # never confined to the host.
     assert answered.invocation_result.correlation == 42
     assert answered.invocation_result.value == b"mapped"
     session.close()
+
+
+def test_a_blocked_user_function_does_not_stop_the_next_invocation_being_served(
+        engine: FakeEngine) -> None:
+    """The property underneath the inversion above, asserted directly rather than as a side effect.
+
+    The first function cannot finish until the second one runs. On the reader thread that is a
+    deadlock by construction - the second invocation is never even read - so this test cannot pass
+    unless invocations are dispatched off it. It is also what makes the re-entrancy fix a real
+    fix rather than a special case for ``get``: what a function waits for does not matter, only
+    that waiting no longer stops the wire being read.
+    """
+    session = StreamsSession(engine)
+    session.open("reentrancy", {})
+    first_running = threading.Event()
+    release_first = threading.Event()
+
+    def mapper(key: bytes, value: bytes) -> bytes:
+        if key == b"first":
+            first_running.set()
+            assert release_first.wait(10), "the second invocation never ran"
+            return b"first-done"
+        release_first.set()
+        return b"second-done"
+
+    token = session.register(mapper)
+    engine.invoke(correlation=1, token=token, key=b"first", value=b"v")
+    assert first_running.wait(5), "the first invocation never ran"
+    engine.invoke(correlation=2, token=token, key=b"second", value=b"v")
+
+    _await_nth(engine, "invocation_result", 2)
+    results = {
+        message.invocation_result.correlation: message.invocation_result.value
+        for message in engine.sent
+        if message.WhichOneof("message") == "invocation_result"
+    }
+    assert results == {1: b"first-done", 2: b"second-done"}
+    session.close()
+
+
+def test_closing_the_session_from_inside_a_user_function_does_not_deadlock(
+        engine: FakeEngine) -> None:
+    """A host closing the session from inside a mapper is ordinary, and must not hang.
+
+    The worker pool makes this a live hazard rather than a hypothetical one: the function calling
+    ``close`` is itself running on a worker, so a shutdown that waits for the pool to drain would
+    have that thread wait for itself. Asserted through an event rather than by the test simply
+    completing, so a regression fails in seconds instead of hanging the suite.
+    """
+    session = StreamsSession(engine)
+    session.open("reentrancy", {})
+    closed = threading.Event()
+
+    def mapper(key: bytes, value: bytes) -> bytes:
+        session.close()
+        closed.set()
+        return b"mapped"
+
+    token = session.register(mapper)
+    engine.invoke(correlation=7, token=token, key=b"k", value=b"v")
+
+    assert closed.wait(10), "close() from inside a registered function never returned"
 
 
 class ReleasesAnswersOneAtATime(FakeEngine):

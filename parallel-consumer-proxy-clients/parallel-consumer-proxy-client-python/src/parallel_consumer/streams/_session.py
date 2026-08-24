@@ -14,6 +14,7 @@ import itertools
 import logging
 import struct
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Protocol
 from collections.abc import Callable, Iterator
 
@@ -22,6 +23,12 @@ from .._generated import streams_pb2 as pb
 log = logging.getLogger(__name__)
 
 #: A per-record function: (key, value) -> value. Bytes in, bytes out; this side owns serialization.
+#:
+#: **It may be called concurrently and must be thread-safe.** Registered functions run on a worker
+#: pool rather than on the session's reader thread - which is what lets one call back into the
+#: engine - so a topology with several stream threads has several of these in flight at once.
+#: Ordering per partition and per key is still the engine's, and is unaffected: a stream thread is
+#: blocked for a whole round trip, so two calls running together always belong to different tasks.
 RecordFunction = Callable[[bytes, bytes], bytes]
 
 #: A combining function: (aggregate, value) -> aggregate. Mirrors Kafka's ``Reducer<V>`` exactly -
@@ -265,12 +272,29 @@ def _leading_argument(kind: FunctionKind, invocation: pb.Invocation) -> bytes:
 class StreamsSession:
     """One session over one transport.
 
-    A reader thread services the engine: it answers handle requests, and it runs the user's function
-    when an invocation arrives. The engine has a stream thread blocked on every invocation, so this
-    side must not be slower than it has to be - but correctness first, and this is a proof.
+    Two roles, deliberately held by different threads. A **reader thread** drains the wire and does
+    nothing else that can block: it settles waiters and hands invocations on. A small **worker
+    pool** runs the user's registered functions. The engine has a stream thread blocked on every
+    invocation, so this side must not be slower than it has to be - but correctness first, and this
+    is a proof.
+
+    **The split is what makes a registered function able to call back into the engine.** With the
+    user's function running on the reader thread, any crossing that waits for an answer - ``get``,
+    ``describe``, a builder call - waited on a waiter only that same thread could settle, so it hung
+    until its own timeout while the answer sat undelivered on the wire. The engine was never the
+    problem: it answers a query on its transport thread while every stream thread is blocked, which
+    is why the answer existed to be abandoned.
+
+    **Concurrency here cannot reorder anything.** A Kafka Streams operator is synchronous, so the
+    engine blocks a stream thread for a whole round trip (``ForeignValueMapper``, and
+    ``InvocationRegistry.awaitResult`` under it). At most one invocation per stream thread is
+    therefore ever in flight, so two invocations running at once belong to different tasks - and
+    ordering within a task, partition or key is enforced on the engine side by that blocking, not
+    here. Answers may now come back out of order, which the engine matches by correlation
+    (``InvocationRegistryTest.concurrentInvocationsEachReceiveTheirOwnResult``).
     """
 
-    def __init__(self, transport: StreamsTransport) -> None:
+    def __init__(self, transport: StreamsTransport, *, max_workers: int | None = None) -> None:
         self._transport = transport
         self._functions: dict[int, tuple[FunctionKind, RecordFunction]] = {}
         self._tokens = itertools.count(1)
@@ -286,6 +310,16 @@ class StreamsSession:
         self._closing = False
         self._lock = threading.Lock()
         self._reader: threading.Thread | None = None
+        #: Runs registered functions, so the reader thread never does. ``max_workers=None`` takes
+        #: Python's default, which is well above the number of stream threads a topology runs; an
+        #: invocation that finds no free worker only QUEUES, because a worker blocked in a
+        #: re-entrant call is waiting on the reader thread rather than on another worker. So a small
+        #: pool costs latency, never progress.
+        self._workers = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="pc-streams-worker")
+        #: Set on worker threads only, so :meth:`close` can tell a close from inside a user function
+        #: from a close by the host - the first must not wait for the pool it is running in.
+        self._on_worker = threading.local()
 
     # ---- lifecycle ---------------------------------------------------------------
 
@@ -361,9 +395,15 @@ class StreamsSession:
 
         Order matters: closing the transport breaks the response stream, and a reader that learned
         about the close afterwards would report the breakage as an engine fault.
+
+        The worker pool is drained last, and NOT waited on when this is called from inside a
+        registered function: that function is itself running on a worker, so waiting would have the
+        pool join the thread doing the joining. Closing a session from inside a mapper is an
+        ordinary thing for a host to do, and it must not deadlock.
         """
         self._closing = True
         self._transport.close()
+        self._workers.shutdown(wait=not getattr(self._on_worker, "running", False))
 
     # ---- function registry -------------------------------------------------------
 
@@ -455,7 +495,7 @@ class StreamsSession:
                         message.handle_assigned.call_id,
                         Handle.from_assigned(message.handle_assigned), "handle")
                 elif kind == "invocation":
-                    self._on_invocation(message.invocation)
+                    self._dispatch(message.invocation)
                 elif kind == "get_result":
                     self._settle(
                         message.get_result.call_id, message.get_result, "query answer")
@@ -472,6 +512,36 @@ class StreamsSession:
             # break we did not ask for says something went wrong.
             if not self._closing:
                 self._on_fault(str(broken))
+
+    def _dispatch(self, invocation: pb.Invocation) -> None:
+        """Hands one invocation to a worker, and returns to reading immediately.
+
+        This one line is the whole re-entrancy fix. Running the user's function here instead would
+        put it on the only thread that can deliver an answer to it, so anything it asked the engine
+        would be answered into a queue nobody was draining.
+        """
+        try:
+            self._workers.submit(self._run, invocation)
+        except RuntimeError as shutting_down:
+            # The pool is closed, so the session is on its way out. Answered rather than dropped:
+            # the engine has a stream thread blocked on this record, and a silent drop makes it
+            # wait out the full invocation timeout to learn what it can be told now.
+            log.warning("refusing invocation %d: %s", invocation.correlation, shutting_down)
+            self._answer(invocation.correlation, error="the session is closing")
+
+    def _run(self, invocation: pb.Invocation) -> None:
+        """Runs one invocation on a worker thread, marking the thread as one of ours.
+
+        Nothing awaits the future this returns, so an escaping exception would vanish without a
+        trace - hence the catch-all. ``_on_invocation`` answers the failures it knows about; what
+        reaches here is a broken transport or a bug in this file, and both must be visible.
+        """
+        self._on_worker.running = True
+        try:
+            self._on_invocation(invocation)
+        except Exception:
+            log.exception(
+                "invocation %d failed outside the user's function", invocation.correlation)
 
     def _on_invocation(self, invocation: pb.Invocation) -> None:
         registered = self._functions.get(invocation.function_token)

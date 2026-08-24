@@ -351,19 +351,29 @@ def main(argv: list[str] | None = None) -> int:
     python_seconds = 0.0
     first_entered = 0.0
     last_left = 0.0
+    # The accounting below is read-modify-write across four variables, and registered functions run
+    # on the session's worker pool - so with --stream-threads above 1 they run concurrently. It was
+    # safe only while the reader thread serialised every invocation, which it no longer does.
+    accounting = threading.Lock()
 
     def upper(key: bytes, value: bytes) -> bytes:
         """The Python that runs inside the topology. A stream thread is blocked on every call."""
         nonlocal invocations, python_seconds, first_entered, last_left
         entered = time.perf_counter()
-        if not invocations:
-            first_entered = entered
         if delay:
             time.sleep(delay)
         result = value.upper()
-        last_left = time.perf_counter()
-        python_seconds += last_left - entered
-        invocations += 1
+        left = time.perf_counter()
+        with accounting:
+            if not invocations:
+                first_entered = entered
+            # MIN and MAX, not first-write and last-write: with several calls in flight the one
+            # that finishes last is not necessarily the one that started first, and the window
+            # these two bound is what the reported rate is divided by.
+            first_entered = min(first_entered, entered)
+            last_left = max(last_left, left)
+            python_seconds += left - entered
+            invocations += 1
         return result
 
     sidecar = Sidecar(SidecarCommand(java, ("-cp", classpath, _MAIN_CLASS)))
