@@ -1,8 +1,8 @@
 # A skewed key distribution should starve `KEY` ordering the way a narrow buffer starves `PARTITION`
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
-<!-- inflight-labels: needs-measurement -->
+<!-- inflight-type: task -->
+<!-- inflight-state: closed - prediction CONFIRMED 2026-08-22: KEY under Zipf sustains 1-2 in flight of 24 at a third of UNORDERED's throughput; measured record in perf-the-tail-experiment-ran-2026-08-22.md -->
+<!-- inflight-impact: throughput -->
 
 **Written 2026-08-22, BEFORE the run that tests it**, so that it can be wrong. It is the sixth
 prediction attached to [`next-the-tail-experiment.md`](next-the-tail-experiment.md), and the only one

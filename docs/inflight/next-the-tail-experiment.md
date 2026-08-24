@@ -1,7 +1,8 @@
 # THE TAIL EXPERIMENT: one run that settles Share Groups, Kafka Streams, and PC's actual value
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: task -->
+<!-- inflight-state: closed - ran 2026-08-22; results, predictions and refutations in perf-the-tail-experiment-ran-2026-08-22.md -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 > **IT RAN, 2026-08-22 - results and predictions in
