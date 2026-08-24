@@ -36,6 +36,19 @@ class EveryModuleWiresUpArchUnitTest {
 
     private static final String ARCH_TEST = "TestConventionsArchTest.java";
 
+    /**
+     * Modules whose own architecture forbids the wiring, each with the reason - a VISIBLE opt-out, which is the
+     * opposite of the silent nothing this test exists to prevent. The wrapper needs core's test-jar for
+     * {@code TestConventionRules}, and the java-api module is dependency-free by design: its pom states that
+     * nothing there may depend on core, production or test tree alike, because its test-jar lands on the direct
+     * transport module's test classpath. It is not unwatched - {@code ClientSurfaceArchTest} runs ArchUnit there -
+     * but the shared conventions do not reach it until the rules move to a dependency-free artifact. Anything
+     * added here needs the same shape of reason, written where the next reader will find it.
+     */
+    private static final List<Path> DELIBERATELY_UNWIRED = java.util.Collections.singletonList(
+            Paths.get("parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/"
+                    + "parallel-consumer-proxy-client-java-api/src/test/java"));
+
     @Test
     void everyModuleWithTestSourcesWiresUpArchUnit() throws IOException {
         Path repoRoot = repoRoot();
@@ -48,6 +61,7 @@ class EveryModuleWiresUpArchUnitTest {
                     .filter(EveryModuleWiresUpArchUnitTest::hasJavaSources)
                     .filter(p -> !containsArchTest(p))
                     .map(repoRoot::relativize)
+                    .filter(p -> !DELIBERATELY_UNWIRED.contains(p))
                     .collect(Collectors.toList());
         }
 

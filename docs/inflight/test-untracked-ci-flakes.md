@@ -17,6 +17,13 @@ again since** - see below.
 
 ### Two more point checks in the same class, 2026-08-23
 
+A full core unit run on `throttling-ideation` (2026-08-25, immediately after merging
+`perf/engine-concurrency` in) failed three times, all in `ParallelEoSStreamProcessorTest`, all
+already on this ledger: `processInKeyOrder(CommitMode)[2]` and `[3]` at `[sanity check input data]`,
+and `inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[2]` at `[1 record completed
+during shutdown]`. Green on the class's immediate re-run - the recorded point-check diagnosis holds;
+the merge is not the suspect (neither side touched these paths).
+
 A full core unit run on `throttling-ideation` (adding the admission controller's metrics) failed four
 times, all in `ParallelEoSStreamProcessorTest`, all point checks:
 
