@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Self-test for the three hooks in `.claude/hooks/`. Feeds each one a crafted hook payload on stdin
+# Self-test for the eight hooks in `.claude/hooks/`. Feeds each one a crafted hook payload on stdin
 # and asserts its verdict.
 #
 # WHY IT EXISTS. docs/agent-harness.md's own rule 3 is "give it a negative control - make it go red
@@ -306,6 +306,473 @@ big_prompt="ready to merge $(head -c 150000 /dev/zero | tr '\0' 'x')"
 assert "a 150 KB merge-prep prompt is still injected" YES "$(injected "$big_prompt")"
 
 assert "the preamble points at the doc rather than restating it" pointer_only "$got"
+
+# ---------------------------------------------------------------------------------------------
+# warn-low-disk.sh
+#
+# This hook has an unusual failure mode: its correct behaviour on a healthy machine is to print
+# NOTHING, which is byte-identical to it being broken, misconfigured, or not running at all. So
+# almost every case here forces it to speak, and the one case that asserts silence pairs with a
+# case proving the same invocation can be made to talk.
+#
+# Every case pins PC_DISK_STATE_DIR into this test's own mktemp directory. Without that, the
+# throttle state is shared with the live session running the test, and cases would pass or fail
+# depending on whether a real warning had fired in the last ten minutes.
+#
+# The Docker Desktop cases pin PC_DISK_UNAME and a fake disk image, so they exercise the sparse-file
+# branch on a Linux CI runner too. They deliberately do NOT fake `stat`: the hook resolves stat
+# syntax from the real uname precisely because a forced platform would otherwise read filesystem
+# blocks instead of file blocks and get a wrong number rather than an error.
+# ---------------------------------------------------------------------------------------------
+
+DISK_HOOK="$HOOKS/warn-low-disk.sh"
+
+# EVERY case pins ALL FOUR thresholds, and each then raises exactly the one it is about. An earlier
+# version left the host thresholds at their defaults, so the cases silently depended on how much free
+# space the machine running them happened to have - and three of them flipped to failing mid-session
+# when this host dropped below the 25 GiB default warn line. A self-test for a disk warner must not
+# be a function of the disk. `env` applies assignments in order, so a caller's override wins.
+DISK_ALL_QUIET="PC_DISK_HOST_WARN_GIB=0 PC_DISK_HOST_CRIT_GIB=0 PC_DISK_VM_WARN_GIB=0 PC_DISK_VM_CRIT_GIB=0"
+
+disk_band() { # <VAR=value>... -> SILENT | WARN | CRITICAL | MALFORMED | BLOCKED:<rc>
+    local out rc state
+    state="$(mktemp -d "$TMP/disk.XXXXXX")"
+    out="$(echo '{"tool_input":{"command":"echo hi"}}' |
+        env PC_DISK_STATE_DIR="$state" $DISK_ALL_QUIET "$@" "$DISK_HOOK" 2>/dev/null)"
+    rc=$?
+    # A PreToolUse hook exiting non-zero can take the tool call away. This one never may.
+    [ "$rc" -ne 0 ] && { echo "BLOCKED:$rc"; return; }
+    [ -z "$out" ] && { echo SILENT; return; }
+    printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)["hookSpecificOutput"]
+except Exception:
+    print("MALFORMED"); raise SystemExit
+if d.get("permissionDecision") != "allow":
+    print("NOT_ALLOW:" + str(d.get("permissionDecision"))); raise SystemExit
+ctx = d.get("additionalContext", "")
+if ctx.startswith("DISK CRITICAL."):
+    print("CRITICAL")
+elif ctx.startswith("Disk running low."):
+    print("WARN")
+else:
+    print("UNRECOGNISED:" + ctx[:40])
+'
+}
+
+disk_context() { # <VAR=value>... -> the additionalContext string, or empty
+    local state
+    state="$(mktemp -d "$TMP/disk.XXXXXX")"
+    echo '{"tool_input":{"command":"echo hi"}}' |
+        env PC_DISK_STATE_DIR="$state" $DISK_ALL_QUIET "$@" "$DISK_HOOK" 2>/dev/null |
+        python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])
+except Exception: pass'
+}
+
+# A fake Docker Desktop: an empty disk image (so allocated rounds to 0 GiB) plus a settings file
+# naming the ceiling, which makes free-space arithmetic exact regardless of the host's real disk.
+make_fake_docker() { # <ceiling-MiB> -> directory
+    local dir; dir="$(mktemp -d "$TMP/dockerfake.XXXXXX")"
+    : >"$dir/Docker.raw"
+    printf '{"DiskSizeMiB": %s}\n' "$1" >"$dir/settings.json"
+    echo "$dir"
+}
+
+# The default state of a working machine. Paired with the forced cases below, which prove the same
+# call path can be made to speak - silence here is therefore a verdict, not an absence.
+assert "a disk above every threshold says nothing at all" SILENT "$(disk_band)"
+
+# Negative controls: the guard must be able to fire, in both bands.
+assert "host below the warn threshold warns" \
+    WARN "$(disk_band PC_DISK_HOST_WARN_GIB=99999999)"
+assert "host below the critical threshold escalates" \
+    CRITICAL "$(disk_band PC_DISK_HOST_CRIT_GIB=99999999)"
+
+# The single most important property: a disk warner that blocked Bash would remove the commands
+# needed to clear the disk. Asserted at the worst band, where the temptation to block would be
+# greatest.
+assert "even at critical it allows the call" \
+    CRITICAL "$(disk_band PC_DISK_HOST_CRIT_GIB=99999999)"
+
+# A bogus CLAUDE_PROJECT_DIR falls back to the working directory and still measures something real.
+# Asserted so the fallback is a documented decision rather than an accident nobody noticed.
+assert "a bogus project dir falls back to the working directory" \
+    WARN "$(disk_band CLAUDE_PROJECT_DIR=/nonexistent/path/that/cannot/exist PC_DISK_HOST_WARN_GIB=99999999)"
+
+# ...but when the disk CANNOT be read, silence is the only honest answer. The failure this rules
+# out is the dangerous one: a hook that fails to measure and therefore says nothing is byte-identical
+# to a hook reporting a healthy disk, so the guard must be the ABSENCE of a reading, never a default
+# of "fine". Shadowing `df` on PATH asks exactly that question - an earlier version of this case
+# emptied PATH entirely, which stopped `/usr/bin/env bash` finding an interpreter and tested only
+# that a script which never ran printed nothing.
+shadow_df() { # <body> -> a PATH prefix whose `df` behaves as given
+    local dir; dir="$(mktemp -d "$TMP/shadow.XXXXXX")"
+    { echo '#!/bin/sh'; echo "$1"; } >"$dir/df"
+    chmod +x "$dir/df"
+    echo "$dir"
+}
+
+for scenario in "exit 1::a df that fails" "echo garbage::a df that answers unparseably" "printf ''::a df that answers nothing"; do
+    body="${scenario%%::*}"; label="${scenario##*::}"
+    dir="$(shadow_df "$body")"
+    out="$(echo '{}' | env PATH="$dir:$PATH" \
+        PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" $DISK_ALL_QUIET \
+        PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null; echo "rc=$?")"
+    case "$out" in
+        "rc=0") got=silent_and_clean ;;
+        rc=*)   got="non-zero exit: $out" ;;
+        *)      got="claimed a reading it never took: $out" ;;
+    esac
+    assert "$label leaves it silent, exiting 0" silent_and_clean "$got"
+done
+
+# The positive control for the three above: the SAME stub mechanism with a plausible answer must
+# produce a warning. Without this, all three could be passing because the stub broke the invocation.
+dir_ok="$(shadow_df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"; echo "/dev/fake 100000000 99000000 1048576 99% /"')"
+out_ok="$(echo '{}' | env PATH="$dir_ok:$PATH" \
+    PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" $DISK_ALL_QUIET \
+    PC_DISK_HOST_WARN_GIB=25 "$DISK_HOOK" 2>/dev/null)"
+case "$out_ok" in *'Host volume: 1 GiB free'*) got=read_the_stub ;; *) got="did not read it: $out_ok" ;; esac
+assert "a stubbed df reporting 1 GiB free does warn" read_the_stub "$got"
+
+# THE HIGH-WATER-MARK CORRECTION. Docker Desktop's disk image never shrinks, so after a prune it
+# still claims the space. Without this correction the hook nags for days about space that is free.
+# The image claims 18 of a 20 GiB ceiling, leaving 2 GiB - comfortably under a realistic 12 GiB
+# threshold, so the cheap signal trips. Docker then reports it is really holding 2 GiB, so there are
+# 18 GiB actually free and the alarm is stale.
+fake="$(make_fake_docker 20480)"                     # a 20 GiB ceiling
+state_pruned="$(mktemp -d "$TMP/disk.XXXXXX")"
+echo "2GB" >"$state_pruned/docker-df"                # ...of which docker really holds 2 GiB
+out_pruned="$(echo '{}' | env \
+    PC_DISK_STATE_DIR="$state_pruned" $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=5 "$DISK_HOOK" 2>/dev/null)"
+[ -z "$out_pruned" ] && got=suppressed || got="warned anyway"
+assert "a VM alarm that a prune already cleared is suppressed" suppressed "$got"
+
+# ...and the other half, which is what stops the correction from becoming a blanket mute.
+state_full="$(mktemp -d "$TMP/disk.XXXXXX")"
+echo "19GB" >"$state_full/docker-df"                 # docker really is holding 19 of 20 GiB
+out_full="$(echo '{}' | env \
+    PC_DISK_STATE_DIR="$state_full" $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=0 "$DISK_HOOK" 2>/dev/null)"
+case "$out_full" in *'~1 GiB headroom of 20 GiB'*) got=reported ;; *) got="not reported: $out_full" ;; esac
+assert "a VM genuinely near full still warns, with the corrected figure" reported "$got"
+
+# THE CEILING PARSE, against the shape the real file has. `settings-store.json` is a large object
+# with many keys, not the single-key fixture above, and the parse this replaced leaned on
+# `grep -o '[0-9]*$'` - a pattern that can also match the empty string at end of line, which is
+# implementation-defined territory. GNU grep 3.11 emits one match; ugrep 7.5.0 emits two, and the
+# trailing `awk` then ran its `printf` twice and concatenated "20" and "0" into "200". A ceiling ten
+# times too large is not a visible error: free space is DERIVED from it, so the hook simply stops
+# warning about the Docker disk. Nothing in the fixtures could see that, because the fixture had one
+# key and the box had GNU grep.
+fake_multi="$(mktemp -d "$TMP/dockerfake.XXXXXX")"
+: >"$fake_multi/Docker.raw"
+printf '%s\n' '{"AutoStart":false,"DiskSizeMiB":20480,"MemoryMiB":8192}' >"$fake_multi/settings.json"
+ctx_multi="$(disk_context PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake_multi/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake_multi/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=19 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=0 PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_multi" in
+    *'~1 GiB headroom of 20 GiB'*) got=ceiling_20 ;;
+    *)                             got="wrong ceiling: $ctx_multi" ;;
+esac
+assert "the ceiling is read from a realistic multi-key settings line" ceiling_20 "$got"
+
+# `docker system df` reports logical sizes that double-count shared layers, so corrected usage can
+# exceed the ceiling. The user must never be shown a negative headroom.
+state_over="$(mktemp -d "$TMP/disk.XXXXXX")"
+echo "500GB" >"$state_over/docker-df"
+out_over="$(echo '{}' | env \
+    PC_DISK_STATE_DIR="$state_over" $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=5 "$DISK_HOOK" 2>/dev/null)"
+case "$out_over" in *-[0-9]*GiB*) got="negative headroom shown" ;; *) got=clamped ;; esac
+assert "over-reported docker usage cannot print negative headroom" clamped "$got"
+
+# THROTTLE. Firing on every Bash call is what makes the warning cheap to ignore.
+state_throttle="$(mktemp -d "$TMP/disk.XXXXXX")"
+first="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+second="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+[ -n "$first" ] && [ -z "$second" ] && got=throttled || got="first=${#first} second=${#second}"
+assert "the same band does not repeat on the next call" throttled "$got"
+
+# ...but getting worse must beat the throttle, or the escalation nobody wants to miss is the one
+# guaranteed to be swallowed.
+third="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_CRIT_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+case "$third" in *'DISK CRITICAL.'*) got=escalated ;; *) got="swallowed" ;; esac
+assert "worsening from warn to critical speaks through the throttle" escalated "$got"
+
+# ...and never the other way round. After a critical warning, a reading that has merely eased back to
+# `warn` must stay quiet until the timer expires - re-announcing the same disk in gentler language
+# reads as "it got better", which is the one thing a figure this coarse must not be allowed to say.
+# Added because a mutant deleting exactly that arm of the throttle condition survived the whole
+# suite: every other case here drives the band UPWARD, so the downgrade rule was asserted nowhere.
+# `$state_throttle` now records `critical` from the case above, which is the state this needs.
+fourth="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+[ -z "$fourth" ] && got=stayed_quiet || got="downgraded aloud: $fourth"
+assert "a downgrade from critical to warn stays quiet inside the window" stayed_quiet "$got"
+
+# CROSS-PLATFORM. A platform whose Docker layout is unknown still reports the host volume, and must
+# not invent or imply a Docker figure it never read.
+ctx_unknown="$(disk_context PC_DISK_UNAME=Plan9 PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_unknown" in
+    *'Host volume:'*'Docker'*) got="claims a docker reading" ;;
+    *'Host volume:'*)          got=host_only ;;
+    *)                         got="no host reading: $ctx_unknown" ;;
+esac
+assert "an unknown platform reports the host volume and no Docker figure" host_only "$got"
+
+# On Linux the engine writes into the host filesystem, so when that is the SAME mount the host
+# check already covers it and a second figure would be noise.
+#
+# Both paths are pinned INSIDE this test's own directory, as two DIFFERENT paths, so they share a
+# filesystem by construction on any host while still forcing the hook to compare devices rather than
+# strings. The first version left the project dir at the real one and pointed only the docker root at
+# `$TMP`, assuming `mktemp` lands on the project's filesystem. It does not wherever `/tmp` is a tmpfs
+# - this box included - so the case drove the SEPARATE-mount branch and asserted the opposite of its
+# own name. Right about what to check, wrong about its scope, with every sibling case green
+# throughout: the failure docs/agent-harness.md rule 3 was extended to ask about.
+same_mount="$(mktemp -d "$TMP/samemount.XXXXXX")"
+mkdir -p "$same_mount/project" "$same_mount/docker"
+ctx_linux_same="$(disk_context PC_DISK_UNAME=Linux CLAUDE_PROJECT_DIR="$same_mount/project" \
+    PC_DISK_DOCKER_ROOT="$same_mount/docker" PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_linux_same" in
+    *'Docker data filesystem'*) got="reported twice" ;;
+    *'Host volume:'*)           got=not_duplicated ;;
+    *)                          got="no host reading: $ctx_linux_same" ;;
+esac
+assert "Linux docker root on the project's own mount is not reported twice" not_duplicated "$got"
+
+# The GREEN half of that pair, and the reason the case above cannot stand alone: delete the Linux
+# branch from the hook entirely and "not reported twice" still passes. Which device a path sits on
+# cannot be arranged portably - `/tmp` is a tmpfs here and part of `/` elsewhere - so `df`'s device
+# column is stubbed rather than hunted for, and the stub answers per path.
+two_dev="$(shadow_df 'for p in "$@"; do last="$p"; done
+case "$last" in
+    *dockerroot*) dev=/dev/docker ;;
+    *)            dev=/dev/project ;;
+esac
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+echo "$dev 100000000 99000000 2097152 99% /"')"
+mkdir -p "$TMP/dockerroot"
+ctx_linux_split="$(disk_context PATH="$two_dev:$PATH" PC_DISK_UNAME=Linux \
+    PC_DISK_DOCKER_ROOT="$TMP/dockerroot" PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_linux_split" in
+    *'Host volume: 2 GiB free.'*'Docker data filesystem: 2 GiB free.'*) got=both_reported ;;
+    *) got="not reported separately: $ctx_linux_split" ;;
+esac
+assert "Linux docker root on a SEPARATE mount is reported alongside the host" both_reported "$got"
+
+# THE STATE FILE IS INPUT, NOT OUR OWN DATA. It sits at a predictable path in a shared /tmp and is
+# read back on a LATER run, so its content is untrusted in exactly the way a `df` answer is. Every
+# case above pins a fresh `PC_DISK_STATE_DIR`, so the stamp was always absent or hook-written and
+# this read was never exercised against anything else - which is why a green suite sat on top of an
+# arbitrary-command-execution bug and a broken never-exit-non-zero invariant.
+#
+# `last_at` reaches `$(( ))`, and bash arithmetic resolves a non-numeric operand as a variable NAME,
+# recursively - so a command substitution inside an array subscript RUNS. The shapes below are the
+# ones that mattered: hostile, merely garbled, from the future, and genuinely fine.
+stamp_case() { # <stamp-content> -> SILENT | WARNED | BLOCKED:<rc>
+    local dir out rc
+    dir="$(mktemp -d "$TMP/disk.XXXXXX")"
+    printf '%s\n' "$1" >"$dir/last-warning"
+    out="$(echo '{}' | env PC_DISK_STATE_DIR="$dir" $DISK_ALL_QUIET \
+        PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+    rc=$?
+    [ "$rc" -ne 0 ] && { echo "BLOCKED:$rc"; return; }
+    [ -n "$out" ] && echo WARNED || echo SILENT
+}
+
+# THE PAYLOAD MUST BE SPACE-FREE, and that is the whole trick. `read -r last_at last_band` splits on
+# whitespace, so `band[$(touch /path)] warn` lands in `last_at` as `band[$(touch` - a truncated
+# subscript that is a syntax error rather than a command substitution, and it cannot execute whatever
+# the guard does. The first version of this case used exactly that and was therefore decorative: it
+# passed with both guards deleted. A redirect needs no space, so `id>FILE` is the shape that really
+# reaches the evaluator - it is the payload that executed against the unguarded hook.
+pwn_dir="$(mktemp -d "$TMP/disk.XXXXXX")"
+pwn_marker="$pwn_dir/EXECUTED"
+printf 'band[$(id>%s)] warn\n' "$pwn_marker" >"$pwn_dir/last-warning"
+echo '{}' | env PC_DISK_STATE_DIR="$pwn_dir" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 \
+    "$DISK_HOOK" >/dev/null 2>&1
+[ -e "$pwn_marker" ] && got="EXECUTED IT" || got=inert
+assert "a command substitution in the throttle stamp is not executed" inert "$got"
+
+# ...and the same payload must not take the Bash call away either. A `set -u` abort is a NON-ZERO
+# exit, the one thing this hook must never do - so this asserts the invariant against hostile STATE,
+# where every other never-block case asserts it only against readings the hook took itself. The
+# garbled variants need no attacker at all: a torn write is likeliest when the disk is full, which
+# is the condition this hook exists for.
+assert "a hostile throttle stamp still warns, exiting 0"   WARNED "$(stamp_case 'band[$(id)] warn')"
+assert "a garbled throttle stamp still warns, exiting 0"   WARNED "$(stamp_case 'garbage warn')"
+assert "a one-field throttle stamp still warns, exiting 0" WARNED "$(stamp_case 'warn')"
+# A stamp from the future - a clock step, an NTP correction, a resumed VM - makes the age negative,
+# which is always inside the window, holding the warner shut until wall-clock time catches up.
+assert "a future-dated throttle stamp is treated as stale" WARNED "$(stamp_case '9999999999 warn')"
+# The control that stops the four above from passing on a hook that ignores the stamp entirely.
+assert "a fresh same-band stamp still throttles"           SILENT "$(stamp_case "$(date +%s) warn")"
+
+# `mkdir -p` SUCCEEDS against a directory another user already owns, so it is not the check it looks
+# like - and everything in that directory is then read back by this hook. `/` stands in for a
+# pre-created state dir: it exists, `mkdir -p` returns 0 on it, and it is root-owned on every machine
+# this runs on. Skipped rather than silently inverted where that last assumption does not hold.
+if [ -O / ]; then
+    echo "skip: foreign state-dir case - this process owns /, so no foreign directory is available"
+else
+    out_foreign="$(echo '{}' | env PC_DISK_STATE_DIR=/ $DISK_ALL_QUIET \
+        PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null; echo "rc=$?")"
+    case "$out_foreign" in
+        "rc=0") got=refused_silently ;;
+        rc=*)   got="non-zero exit: $out_foreign" ;;
+        *)      got="used a foreign state dir: $out_foreign" ;;
+    esac
+    assert "a state directory owned by another user is refused, exiting 0" refused_silently "$got"
+fi
+
+# `$HOME` is expanded on the Docker Desktop branch, and an unset one aborts under `set -u` - a
+# non-zero exit, which takes the Bash call away. `env -u` is the only way to reach it, so this case
+# cannot go through disk_context.
+out_nohome="$(echo '{}' | env -u HOME PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" \
+    $DISK_ALL_QUIET PC_DISK_UNAME=Darwin PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+rc_nohome=$?
+if [ "$rc_nohome" -eq 0 ] && [ -n "$out_nohome" ]; then got=warned_and_clean
+else got="rc=$rc_nohome bytes=${#out_nohome}"; fi
+assert "an unset HOME on the Docker Desktop branch still warns, exiting 0" warned_and_clean "$got"
+
+# THE COLUMN PARSE. `df -P` puts Available immediately before Capacity, but nothing guarantees the
+# DEVICE column is one word - macOS autofs reports `map auto_home`, and a CIFS share can carry a
+# space too. Counting fields from the left then read the USED column as free space: a confident
+# wrong number in the dangerous direction, since Used is largest exactly when free is smallest.
+dir_spaced="$(shadow_df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"; echo "map auto_home 100000000 99000000 1048576 99% /home"')"
+ctx_spaced="$(disk_context PATH="$dir_spaced:$PATH" PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_spaced" in
+    *'Host volume: 1 GiB free'*)  got=read_available ;;
+    *'Host volume: 94 GiB free'*) got="read the USED column" ;;
+    *)                            got="unexpected: $ctx_spaced" ;;
+esac
+assert "a df device name containing a space does not shift the free-space column" read_available "$got"
+
+# ...and a well-formed line whose Available column is not a number must be silence, not zero. The
+# three `df`-unreadable cases above never emit a SECOND line, so this gate was never reached.
+dir_nan="$(shadow_df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"; echo "/dev/fake 100000000 99000000 N/A 99% /"')"
+out_nan="$(echo '{}' | env PATH="$dir_nan:$PATH" \
+    PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" $DISK_ALL_QUIET \
+    PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null; echo "rc=$?")"
+case "$out_nan" in
+    "rc=0") got=silent_and_clean ;;
+    rc=*)   got="non-zero exit: $out_nan" ;;
+    *)      got="claimed a reading from a non-numeric column: $out_nan" ;;
+esac
+assert "a df whose Available column is not a number leaves it silent" silent_and_clean "$got"
+
+# THE CORRECTION MUST NOT TOUCH A LINUX READING. `vm_is_high_water` is set only on the Docker Desktop
+# sparse-image branch; Linux's figure is LIVE and needs no confirming. Nothing exercised that gate on
+# the branch it protects - delete it and only the Desktop cases notice. Asserted two ways: the figure
+# reported is the live one, and no `docker system df` cache is created at all.
+live_dev="$(shadow_df 'for p in "$@"; do last="$p"; done
+case "$last" in
+    *dockerroot*) dev=/dev/docker;  avail=1048576 ;;
+    *)            dev=/dev/project; avail=104857600 ;;
+esac
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+echo "$dev 209715200 104857600 $avail 50% /"')"
+state_live="$(mktemp -d "$TMP/disk.XXXXXX")"
+ctx_live="$(echo '{}' | env PATH="$live_dev:$PATH" PC_DISK_STATE_DIR="$state_live" \
+    $DISK_ALL_QUIET PC_DISK_UNAME=Linux PC_DISK_DOCKER_ROOT="$TMP/dockerroot" \
+    PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null |
+    python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])
+except Exception: pass')"
+case "$ctx_live" in
+    *'Docker data filesystem: 1 GiB free'*) got=live_reading ;;
+    *)                                      got="not the live reading: $ctx_live" ;;
+esac
+assert "a Linux docker filesystem is reported from its live df reading" live_reading "$got"
+[ -e "$state_live/docker-df" ] && got="consulted docker" || got=no_docker_call
+assert "the high-water correction never runs for a Linux live reading" no_docker_call "$got"
+
+# THE REFRESH HALF OF THE CORRECTION. Every case above pre-seeds `docker-df`, so `command -v docker`,
+# the `docker system df` call and the cache write were all dead code as far as the suite knew. This
+# drives them: no cache, a stubbed `docker`, and the suppression can only happen if the stub ran.
+docker_stub="$(mktemp -d "$TMP/shadow.XXXXXX")"
+{ echo '#!/bin/sh'; echo 'echo 2GB'; } >"$docker_stub/docker"
+chmod +x "$docker_stub/docker"
+state_refresh="$(mktemp -d "$TMP/disk.XXXXXX")"
+out_refresh="$(echo '{}' | env PATH="$docker_stub:$PATH" PC_DISK_STATE_DIR="$state_refresh" \
+    $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null)"
+if [ -z "$out_refresh" ] && [ -s "$state_refresh/docker-df" ]; then got=refreshed_and_suppressed
+else got="cache=$([ -s "$state_refresh/docker-df" ] && echo written || echo missing) bytes=${#out_refresh}"; fi
+assert "an absent docker-df cache is refreshed from docker itself" refreshed_and_suppressed "$got"
+
+# A FULLY PRUNED DOCKER IS A READING, NOT AN ABSENCE. The correction used to fire only when the total
+# was ABOVE zero, which conflated "docker holds nothing" with "we could not read docker" - so the one
+# case where the sparse file is most wrong, an image emptied completely, was the one case the
+# correction refused to clear. It nagged until the file itself shrank, which it never does.
+state_pruned_zero="$(mktemp -d "$TMP/disk.XXXXXX")"
+printf '0B\n0B\n0B\n' >"$state_pruned_zero/docker-df"
+out_zero="$(echo '{}' | env PC_DISK_STATE_DIR="$state_pruned_zero" $DISK_ALL_QUIET \
+    PC_DISK_UNAME=Darwin PC_DISK_DESKTOP_RAW="$fake/Docker.raw" \
+    PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null)"
+[ -z "$out_zero" ] && got=suppressed || got="nagged about an empty image: $out_zero"
+assert "a fully pruned Docker clears the stale VM alarm" suppressed "$got"
+
+# ...and a reading we could NOT parse must not be treated as "docker holds nothing", which would
+# suppress a real warning. An unrecognised unit disqualifies the whole reading.
+state_unknown="$(mktemp -d "$TMP/disk.XXXXXX")"
+printf '19GB\nnonsense\n' >"$state_unknown/docker-df"
+out_unknown="$(echo '{}' | env PC_DISK_STATE_DIR="$state_unknown" $DISK_ALL_QUIET \
+    PC_DISK_UNAME=Darwin PC_DISK_DESKTOP_RAW="$fake/Docker.raw" \
+    PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null)"
+[ -n "$out_unknown" ] && got=warned_from_high_water || got="suppressed on an unreadable reading"
+assert "an unparseable docker-df row does not suppress the warning" warned_from_high_water "$got"
+
+# REGISTRATION. docs/agent-harness.md names "unregistered" as one of the three states byte-identical
+# to a healthy hook, and a self-test genuinely cannot prove the harness INVOKES one - but that the
+# tracked settings.json NAMES it is mechanically checkable, and nothing checked it. This asserts both
+# directions, so a hook added to either side without the other goes red, and it pins the disk hook's
+# two registration properties: present as a PreToolUse hook, and deliberately unfiltered.
+registration="$(python3 - "$REPO_ROOT" <<'REGCHECK'
+import json, re, sys, pathlib
+root = pathlib.Path(sys.argv[1])
+cfg = json.loads((root / ".claude/settings.json").read_text())
+registered = {h["command"].rsplit("/", 1)[-1].rstrip('"')
+              for groups in cfg["hooks"].values() for g in groups for h in g["hooks"]}
+covered = set(re.findall(r"\$HOOKS/([a-z0-9-]+\.sh)",
+                         (root / "bin/test-check-agent-hooks.sh").read_text()))
+disk = [h for g in cfg["hooks"].get("PreToolUse", []) for h in g["hooks"]
+        if h["command"].rstrip('"').endswith("warn-low-disk.sh")]
+problems = []
+# The doc states the count in prose, and it has now drifted TWICE - it said "five" against seven
+# registered, and this PR's own first pass incremented it to "six" against eight. A number nobody
+# checks is a number that rots, so it is checked here rather than trusted to the next editor.
+WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+doc = (root / "docs/agent-harness.md").read_text()
+m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z]+) hooks", doc)
+if not m:
+    problems.append("docs/agent-harness.md no longer states a settings.json hook count")
+elif WORDS.get(m.group(1)) != len(registered):
+    problems.append("docs/agent-harness.md says %s hooks; settings.json registers %d"
+                    % (m.group(1), len(registered)))
+if registered - covered:
+    problems.append("registered but not self-tested: %s" % sorted(registered - covered))
+if covered - registered:
+    problems.append("self-tested but not registered: %s" % sorted(covered - registered))
+if not disk:
+    problems.append("warn-low-disk.sh is not registered as a PreToolUse hook")
+elif any("if" in h for h in disk):
+    problems.append("warn-low-disk.sh grew an `if` filter")
+print("; ".join(problems) if problems else "in_sync")
+REGCHECK
+)"
+assert "every registered hook is self-tested, and the disk hook is registered unfiltered" in_sync "$registration"
 
 # ---------------------------------------------------------------------------------------------
 # inject-recorded-knowledge.sh
