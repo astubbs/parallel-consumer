@@ -142,6 +142,152 @@ another session's sweep sharing the 3.9.0 container rather than a Kafka version 
 the 2.5x result the campaign was actually for:
 [`perf-share-groups-versus-pc-2026-08-22.md`](perf-share-groups-versus-pc-2026-08-22.md).
 
+## Re-taken on a realistic workload, 2026-08-23 - the ranking above is a ranking of `UNORDERED`
+
+**Read this before quoting anything above it.** Every row in this document was taken on one
+partition, all-distinct keys, `UNORDERED`, a constant handler and a zero failure rate. On all-distinct
+keys `KEY` ordering constrains nothing - every record is its own shard - so the table ranks engines on
+the one workload in which Parallel Consumer has no differentiator. That is the audit in
+[`next-benchmark-a-model-of-work-not-work.md`](next-benchmark-a-model-of-work-not-work.md), and this
+section is the re-take it asked for. **The figures above are not wrong. They are answers to a
+narrower question than they read as.**
+
+### Conditions
+
+**Matrix A, the ordering matrix**: 12,000 records, **24 partitions**, 10ms handler, `maxConcurrency`
+24, `messageBufferSize` 20,000, `max.poll.records` 500, non-blocking (timer) callee, Kafka 4.3.1
+broker, JDK 21, two repeats, seed 42. Keys swept `distinct` and `zipf` (200 keys, exponent 1.0, top
+key 16.6%); failures swept 0 and 1%; ordering swept `KEY` and `UNORDERED` inside one invocation so the
+arms alternate. Data:
+[`bench/results/realistic-ordering-matrix.csv`](../../bench/results/realistic-ordering-matrix.csv).
+
+**`maxConcurrency` 24 rather than 5,000, and the reason is arithmetic.** `KEY` on a skewed
+distribution is bounded by the hot key, which runs serially however wide the engine is, so its
+throughput barely moves with concurrency while `UNORDERED`'s rises with it. At `maxConcurrency` 200
+the span between the two ends of the matrix is 9x and no single record count gives both a usable
+`UNORDERED` window and a finishable `KEY` one. **This is therefore not a re-take of the concurrency
+question**; it is a measurement of what ordering costs. The concurrency question is answered at its
+own operating point below.
+
+### Every engine pays the same 3.1-3.3x, and none of them escapes it
+
+Zipf keys, flat handler, no failures. `msg/s` (sustained records in flight, of a configured 24):
+
+| arm | `UNORDERED` | `KEY` | cost of `KEY` | `KEY` in flight |
+|---|---:|---:|---:|---:|
+| `mutiny` | 1,289.3 | **410.2** | 3.14x | 2 |
+| `reactor` | 1,271.6 | **407.9** | 3.12x | 2 |
+| `vertx` | 1,267.8 | **407.9** | 3.11x | 2 |
+| `core` | 1,232.3 | **370.9** | 3.32x | 2 |
+| `core` **@ 0.5.3.3** | 1,227.8 | **369.7** | 3.32x | 2 |
+| `core-vt` | 1,160.7 | **362.6** | 3.20x | 2 |
+| `core-dpvt` | 1,155.3 | **361.6** | 3.19x | 2 |
+| **`proxy`** | 796.9 | **78.0** | **10.2x** | **0** |
+
+**Virtual threads do not help, direct pull does not help, and neither does moving to an
+`ExternalEngine`.** Point 1 above - virtual threads are worth 1.4x - is a statement about the
+platform-thread ceiling, and at `maxConcurrency` 24 there is no ceiling to lift: `core-vt` is 6%
+*slower* than `core` here. Point 3 - the async engines converge ~23% above the shipped default at
+100ms - survives in sign but not in magnitude on this workload.
+
+**The distinct-key control is the row that ties this table to the one above it.** Same arms, same
+everything, keys distinct: `core` 1,217.2 `KEY` against 1,224.3 `UNORDERED`, 0.5.3.3 1,210.8 against
+1,223.4, and every engine within 1.5% of itself across the two modes. **On that workload the ordering
+axis has no result to find**, which is exactly why nobody found one.
+
+### `proxy` is the arm that breaks, and it is the one every non-JVM client uses
+
+**78.0 msg/s at a residence p99 of 139,586ms, sustaining ZERO records in flight** - 4.8x worse than
+`core` on the identical workload, where on distinct keys it is only 1.5x worse (803.5 against 1,217.2).
+Point 4 above reads *"`proxy` is the surprise: within 1% of virtual threads at 2ms"*, and that holds
+at its own operating point. **On a skewed keyed workload the same path is the worst arm measured by a
+factor of five.**
+
+That matters more than a benchmark row usually does, because
+[`astubbs#242`](https://github.com/astubbs/parallel-consumer/issues/242)'s language proxies reach PC
+through `ProxyProcessor` and through nothing else - so this is the ceiling for **every** non-JVM
+client on the workload those clients are being offered for. The mechanism is not established here;
+the arm drives the engine in-process across the `DispatchSink`/`report` seam, where production
+funnels every report through one serialised inbound callback per session, and a workload that
+produces one runnable record at a time is the worst possible case for a serialised report path.
+**Unattributed, and the single most important thing this re-take found that was not being looked
+for.**
+
+### Matrix B - the published operating point, reproduced and then given the two missing axes
+
+**First the reproduction, because without it nothing below is attributable.** Same dataset the table
+at the top of this note used - 100,000 records, **one partition**, 2ms, `maxConcurrency` 5,000,
+`UNORDERED`, all-distinct keys, no failures, non-blocking callee - re-run 2026-08-23:
+
+| Arm | published 2026-08-22 | re-taken 2026-08-23 | drift |
+|---|---:|---:|---:|
+| `proxy` | 25,615 | **26,721** | +4.3% |
+| `core-vt` | 25,934 | **26,368** | +1.7% |
+| `core-dpvt` | 26,396 * | **26,089** | -1.2% |
+| `core` | 18,546 | **18,634** | +0.5% |
+| `vertx` | 17,364 | **18,497** | +6.5% |
+| `reactor` | 17,840 | 13,045 ** | - |
+| `mutiny` | 17,049 | **17,291** | +1.4% |
+
+\* from the share-groups campaign. \*\* `reactor`'s two repeats disagreed by 75%; not a comparison.
+
+**Five of six arms are within 7% and the ranking is unchanged, so the machine has not moved.** Any
+difference in the tables below is the workload.
+
+### The two axes, at 24 partitions
+
+`UNORDERED` throughout, `msg/s` (sustained in flight), two repeats, load 6-14:
+
+| Arm | distinct, no failures | **Zipf**, no failures | distinct, **1% failures** | **Zipf, 1% failures** |
+|---|---:|---:|---:|---:|
+| `proxy` | 26,582 | 26,075 | 16,526 | 16,529 |
+| `core-vt` | 26,490 | 26,393 | 17,064 | 16,942 |
+| `core-dpvt` | **25,861** | 25,850 | **12,616** | 13,596 |
+| `vertx` | 18,135 | 18,465 | *void* | *void* |
+| `reactor` | 17,953 | 14,123 ! | 10,211 ! | 12,508 |
+| `core` | 17,588 | 16,967 | 13,010 | 13,476 |
+| `core` **@ 0.5.3.3** | 17,685 | 17,649 | 13,593 | 12,925 |
+| `mutiny` | 16,882 | 12,456 ! | 12,520 | 7,888 ! |
+
+`!` = the two repeats disagreed by more than 15%; those cells are noise, not results. `vertx`'s
+failure cells are **void** - the arm counts a failed record as a completed one, see the harness NOTE
+it now prints.
+
+**The key-distribution columns are a control and they behave like one.** Under `UNORDERED` there are
+no shards to contend for, so a skewed key distribution should cost nothing - and it costs nothing:
+`core` @0.5.3.3 reads 17,649 against 17,685, `core-vt` 26,393 against 26,490, `core-dpvt` 25,850
+against 25,861, `proxy` 26,075 against 26,582. **That is what makes the 3.3x in matrix A attributable
+to ordering rather than to the dataset.**
+
+### The failure rate is what reorders this table, and it takes the winner out
+
+**`core-dpvt` loses half its throughput to a 1% failure rate** - 25,861 to 12,616 - which drops the
+fastest arm below the shipped default. The others lose 26-38%:
+
+| Arm | flat | 1% failures | cost |
+|---|---:|---:|---:|
+| `core` | 17,588 | 13,010 | -26% |
+| `core-vt` | 26,490 | 17,064 | -36% |
+| `proxy` | 26,582 | 16,526 | -38% |
+| **`core-dpvt`** | **25,861** | **12,616** | **-51%** |
+
+**That bears directly on P4 of the v6 announcement** - *"a direct-pull engine, opt-in - fastest
+configuration measured when paired with virtual threads"*. It is the fastest configuration measured
+**on a workload where nothing fails**, and it is the slowest of the four when 1% of records do.
+Unattributed; the obvious suspect is how the direct-pull worker pool interacts with the retry queue,
+and nothing here isolates it.
+
+### What survives from the original table, point by point
+
+| # | Claim | Verdict on a realistic workload |
+|---|---|---|
+| 1 | Virtual threads are the only PC arm that reaches `maxConcurrency` on a blocking callee, worth **1.4x** | **Holds at its own operating point, worth nothing at this one.** It removes a platform-thread ceiling; a hot shard is not that ceiling |
+| 2 | A blocking callee makes the async engines meaningless, by 3x | **Untouched** - a harness property, not a workload one, and the guard that enforces it still stands |
+| 3 | At 100ms every async engine holds 5,000 in flight and beats the default by ~23% | **Untested here** and untouched; this matrix runs at `maxConcurrency` 24 |
+| 4 | `proxy` is within 1% of virtual threads | **Holds on distinct keys, fails badly on skewed ones** - see above |
+| 5 | `core` is within 1% of a hand-rolled consumer-plus-pool | **Narrow, and the audit already said so**: a thread pool cannot do `KEY` ordering at all, so on this workload the comparison has no counterpart |
+| 6 | llingr leads by 14%, uncontrolled | **Unchanged and still must not be quoted** |
+
 ## Caveats that bound all of it
 
 - **One partition, all-distinct keys, one broker, one machine.** A best case for any key-sharded

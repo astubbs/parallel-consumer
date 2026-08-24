@@ -26,6 +26,30 @@ public class VertxArm implements BenchArm {
     @Override
     public long run(String bootstrap, String topic, int expected, int delayMs, int concurrency, int bufferSize)
             throws Exception {
+        // THIS ARM CANNOT MODEL A FAILURE, AND SAID NOTHING ABOUT IT UNTIL 2026-08-23.
+        //
+        // The user function here is the ENGINE'S, not this harness's: vertxHttpReqInfo hands the
+        // engine a request and the engine issues it, so the only hook back is onResponse - which
+        // fires for ANY answered request, including the 500 the async stub returns for an injected
+        // failure. `onResponse -> responses.incrementAndGet()` therefore counts a failed record as a
+        // completed one.
+        //
+        // Measured: 12,000 records, Zipf keys, KEY ordering, a configured 1% failure rate. Every
+        // other arm lost 30-40% of its throughput to the retries - core 370.9 to 235.6 - and this arm
+        // read 412.8 against 407.9 flat, with 112 failures dutifully recorded in its own column. The
+        // harness cannot tell from outside whether the failure was discarded or the retry was
+        // double-counted; either way the row is not a measurement of a failing workload.
+        //
+        // A NOTE rather than a refusal, because run-bisect.sh surfaces NOTE as a warning and the
+        // flat rows from this arm are perfectly good. Fixing it needs a way to tell the ENGINE that a
+        // response is a failure, which is a question about VertxParallelEoSStreamProcessor's API
+        // rather than about this file.
+        if (Bench.FAILURE_RATE > 0) {
+            System.err.println("NOTE: BENCH_FAILURE_RATE is not applied to the 'vertx' arm - the engine "
+                    + "issues its own HTTP request and onResponse fires for any answered request, "
+                    + "including the 500 that signals an injected failure, so a failed record is "
+                    + "counted as completed and never retried. This row measures a FLAT workload.");
+        }
         KafkaConsumer<String, String> consumer = new KafkaConsumer<>(Bench.consumerProps(bootstrap));
         VertxParallelEoSStreamProcessor<String, String> pc =
                 new VertxParallelEoSStreamProcessor<>(Bench.options(consumer, concurrency, bufferSize));
@@ -36,7 +60,15 @@ public class VertxArm implements BenchArm {
                 record -> new VertxParallelEoSStreamProcessor.RequestInfo("localhost",
                         Bench.calleePort(), "/", new HashMap<>()),
                 onSend -> { },
-                onResponse -> Bench.responses.incrementAndGet());
+                onResponse -> {
+                    Bench.responses.incrementAndGet();
+                    // The only hook back is the HTTP response - no record context reaches it, so the
+                    // value (and with it the e2e measure) is unavailable: null keeps e2e honestly
+                    // blank while still feeding the shared completedRecords counter the arrival
+                    // warmup barrier watches. Without this, every controlled-arrival run of this arm
+                    // timed out at that barrier.
+                    Bench.recordCompletion(-1, null);
+                });
         while (Bench.responses.get() < expected) Bench.sleep(25);
         long took = System.currentTimeMillis() - start;
         Bench.windowClosed();

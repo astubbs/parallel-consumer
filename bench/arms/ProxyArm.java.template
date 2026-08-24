@@ -147,35 +147,80 @@ public class ProxyArm implements BenchArm {
             this.timer = async ? Executors.newScheduledThreadPool(4, daemon("pc-bench-worker-timer")) : null;
         }
 
+        /**
+         * THE WORK MODEL REACHES THIS CLASS TOO, AND IT DID NOT UNTIL 2026-08-23.
+         * <p>
+         * This worker is a SIXTH call site for {@code workDelayMs}/{@code workShouldFail}, and the
+         * 2026-08-22 sweep that fixed the other two - {@code Bench#callCallee} and the async stub -
+         * did not know it existed, because this arm does not go through {@code callCallee} at all: it
+         * has its own pool and its own timer, so that the thread model on the far side of the dispatch
+         * seam is the thing being measured.
+         * <p>
+         * The symptom was the one this defect class always produces. At a configured 1% failure rate
+         * on 12,000 records, every other arm reported 121-222 injected failures and this one reported
+         * <b>zero</b>, at 811.2 msg/s against 803.5 msg/s flat - a 1% difference, which is to say no
+         * difference. The row recorded the configured rate in its own column and looked exactly like
+         * an arm that shrugs off failures.
+         */
         @Override
         public void dispatch(Dispatch wave) {
             for (DispatchRecord record : wave.getRecordsList()) {
                 Token token = record.getToken();
+                // Drawn HERE, once per record, on the dispatching thread - not inside the pool task or
+                // the timer callback. Drawing it on a worker thread would make the sequence depend on
+                // which worker picked the record up, and the work model's whole contract is that two
+                // arms see the same durations and the same failing records.
+                int thisRecord = Bench.workDelayMs(delayMs);
+                boolean fails = Bench.workShouldFail();
+                String value = record.getRecord().hasValue()
+                        ? record.getRecord().getValue().toStringUtf8() : null;
                 if (async) {
                     // Counted at ARRIVAL, matching the async stub, which counts a request when it lands
                     // rather than when a thread picks it up - there is no thread to pick it up.
                     Bench.calleeEnter();
-                    timer.schedule(() -> complete(token), delayMs, TimeUnit.MILLISECONDS);
+                    timer.schedule(() -> complete(token, fails, value), thisRecord, TimeUnit.MILLISECONDS);
                 } else {
                     // Counted INSIDE the task, matching WireMock, which counts a request when a container
                     // thread begins serving it. Counting at submission would report the queue depth as
                     // in-flight work and hide exactly the ceiling this arm exists to look for.
                     pool.submit(() -> {
                         Bench.calleeEnter();
-                        Bench.sleep(delayMs);
-                        complete(token);
+                        Bench.sleep(thisRecord);
+                        complete(token, fails, value);
                     });
                 }
             }
         }
 
-        private void complete(Token token) {
+        /**
+         * A FAILURE IS REPORTED AS {@code Report.Failure}, which is the proxy protocol's retry: the
+         * engine re-offers the record after its retry delay, exactly as a thrown user function does in
+         * the core arm. {@code Terminal} would be wrong - it resolves the record to the terminal topic
+         * and advances the offset, which is a different product behaviour and would make the arm
+         * finish a run it should have had to retry through.
+         * <p>
+         * {@code responses} is incremented only on success, for the same reason: the harness waits for
+         * a fixed count of COMPLETED records, and counting a failure as a response would let the run
+         * end with records still outstanding and bill it for work it never did.
+         */
+        private void complete(Token token, boolean fails, String value) {
             Bench.calleeExit();
+            if (fails) {
+                Bench.injectedFailures.incrementAndGet();
+                engine.report(Report.newBuilder()
+                        .setToken(token)
+                        .setFailure(Report.Failure.newBuilder().setReason("bench: injected failure").build())
+                        .build());
+                return;
+            }
             engine.report(Report.newBuilder()
                     .setToken(token)
                     .setSuccess(Report.Success.newBuilder().build())
                     .build());
             Bench.responses.incrementAndGet();
+            // Feeds the arrival warmup barrier's shared counter and the e2e measure - see ReactorArm.
+            // Success only, matching `responses`: a Failure is the protocol's retry, not a completion.
+            Bench.recordCompletion(-1, value);
         }
 
         void close() {

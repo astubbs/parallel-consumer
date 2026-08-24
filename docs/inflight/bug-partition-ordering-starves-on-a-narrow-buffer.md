@@ -75,7 +75,35 @@ A row with in-flight far below the partition count is a starved run, whatever el
 
 ## Not yet done
 
-- Not established whether the same starvation reaches `KEY` ordering on a **skewed** key distribution,
-  where a few shards hold most records. The measurements here use all-distinct keys, which is the best
-  possible case for `KEY` and says nothing about the worst.
-- The direct-pull engine takes work from the shards itself and may not share this; unmeasured.
+- ~~Not established whether the same starvation reaches `KEY` ordering on a **skewed** key
+  distribution.~~ **ESTABLISHED 2026-08-22, and it is worse than this note guessed** - see
+  [`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md). On a
+  Zipf distribution over 200 keys, `KEY` ordering sustains **1 record in flight of a configured 24**
+  and runs at a third of `UNORDERED` on the identical records, with a flat handler and no failures.
+  It is that a hot key is a serial queue whatever the buffer holds, so the ceiling is set by the
+  busiest shard rather than by the fetch. `peak_in_flight` reads 24 throughout and cannot see it,
+  which is why the harness gained an `inflight_p50` column.
+- ~~**It is not the buffer**: `messageBufferSize` was already 20,000, the fix this note
+  prescribes.~~ **Half right, and the half that was wrong is this note's own subject.** The tail
+  experiment was run at 20,000, so the hot-key floor it found is real and is not a buffer effect.
+  But **PC's DEFAULT buffer costs another 2.3x on top of it**, on the ordered arm only. One term
+  changed, `core`, 12,000 records, 24 partitions, `maxConcurrency` 24, Zipf over 200 keys, flat
+  handler, no failures:
+
+  | `messageBufferSize` | failures | `KEY` msg/s | `UNORDERED` msg/s | cost of `KEY` |
+  |---|---|---:|---:|---:|
+  | 20,000 | none | **370.9** | 1,232.3 | 3.3x |
+  | **PC's default** | none | **161.8** | 1,218.9 | **7.5x** |
+  | **PC's default** | **1%** | **95.7** | 1,093.6 | **11.4x** |
+
+  `UNORDERED` does not move - 1,232.3 against 1,218.9, 1% apart - which is what makes the ordered
+  figure attributable. The released **0.5.3.3** behaves identically (168.3 and 95.0), so this is not
+  something the fork introduced. **So the starvation this note describes reaches `KEY` on a skewed
+  distribution after all**, and the note's own prescription is what the tail experiment had already
+  applied without saying so. **A user who configures nothing gets the 161.8 row, or the 95.7 one if
+  their records ever fail** - at a drain p99 of 123 seconds over 12,000 records.
+- ~~The direct-pull engine takes work from the shards itself and may not share this; unmeasured.~~
+  **MEASURED 2026-08-23: it shares it exactly.** On the same Zipf workload at `messageBufferSize`
+  20,000, `core` reads 370.9 msg/s at 2 sustained in flight, `core-vt` 362.6 at 2, and `core-dpvt`
+  **362.9 at 2**. Taking work from the shards directly does not help, because the constraint is not
+  how work is fetched or selected - it is that the busiest shard may only run one record at a time.

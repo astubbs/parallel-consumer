@@ -137,11 +137,52 @@ Ordered by how much a reader who already knows PC would care.
 
 | # | Point | L | B | Notes / evidence |
 |---|---|---|---|---|
-| P1 | **Nearly twice the throughput of the last public release** | **yes** | yes | ~1.75x vs 0.5.3.3, same hardware, same workload. **NOT YET PUBLISHABLE** - measured at 50,000 records on one partition, one repeat pair. Re-take at 100k across several partitions before this goes out |
+| P1 | ~~**Nearly twice the throughput of the last public release**~~ | **no** | no | **WITHDRAWN 2026-08-23. The claim is false as stated and the ~1.75x had no measurement behind it.** Measured against 0.5.3.3 from Maven Central: the shipped default is **1.00x** in all ten cells taken. The best opt-in arm reaches **1.5x**, and only on all-distinct keys, `UNORDERED`, a 2ms handler and `maxConcurrency` 5,000. See below |
 | P2 | The engine now reaches the concurrency you configure - 40,000 records in flight | yes | yes | Frame as virtual threads lifting a platform-thread ceiling. **Do not** frame as the old version being broken |
 | P3 | Virtual threads, opt-in, JDK 21+ | no | yes | Needs the Java-baseline caveat alongside it |
 | P4 | A direct-pull engine, opt-in - fastest configuration measured when paired with virtual threads | no | yes | Preview-grade. Say so |
 | P5 | PC now sits within ~13% of a bare Java consumer that does no ordering at all | no | yes | The honest framing of overhead, and it invites the "what does it cost me" question rather than dodging it |
+
+#### P1 was withdrawn on 2026-08-23, and why is worth reading before writing any other number here
+
+**The ~1.75x had no measurement behind it.** It appears twice, both times as prose in this file,
+introduced by `ef8b5515c`; there is no results file, no sweep command and no pair of msg/s figures
+anywhere in the tree or in git history. The nearest committed data - the version bisect in
+`bench/results/core-curve.csv` and `curve.csv` - already put LOCAL against **0.5.3.2** at
+**1.00-1.02x**, which is parity, on the same axis, and had been sitting there the whole time.
+
+**It has now been measured against 0.5.3.3**, which is genuinely on Maven Central (see
+[`release-0.6.0.0.md`](release-0.6.0.0.md), where this file's neighbour asserted the opposite until
+today). `core` against `core`, alternating within one sweep, two repeats each:
+
+| Workload | 0.5.3.3 | 0.6.0.0-SNAPSHOT | ratio |
+|---|---:|---:|---:|
+| 100,000 records, 1 partition, 2ms, `maxConcurrency` 5,000, distinct keys, `UNORDERED` - *the published operating point* | 17,442 | 17,372 | **1.00x** |
+| 12,000 records, 24 partitions, 10ms, `maxConcurrency` 24, distinct keys, `UNORDERED` | 1,223 | 1,224 | **1.00x** |
+| the same, `KEY` ordering | 1,211 | 1,217 | **1.01x** |
+| the same, **Zipf keys**, `KEY` ordering | 370 | 371 | **1.00x** |
+| the same, Zipf keys, `KEY`, **1% failure rate** | 242 | 236 | **0.97x** |
+
+**Ten cells, all parity.** Full data:
+[`bench/results/realistic-ordering-matrix.csv`](../../bench/results/realistic-ordering-matrix.csv)
+and `realistic-throughput-matrix.csv`.
+
+**What CAN be said, and it needs three qualifiers rather than none.** The gain is not in the engine a
+user gets by upgrading; it is in the opt-in engines this release adds, and only where a
+platform-thread ceiling is what binds:
+
+| Arm against 0.5.3.3 `core` | ratio | conditions |
+|---|---:|---|
+| `core-vt` (virtual threads, JDK 21+) | **1.51x** | 100,000 records, one partition, 2ms handler, `maxConcurrency` 5,000, all-distinct keys, `UNORDERED`, no failures, non-blocking callee |
+| `core-dpvt` (direct pull + virtual threads) | **1.50x** | same |
+| `core` shipped default | **1.00x** | same |
+| **any arm**, at `maxConcurrency` 24 over 24 partitions with a 10ms handler | **1.00x or below** | `core-vt` and `core-dpvt` are 5-6% *slower* than the shipped default there |
+
+**So the publishable sentence is something like "up to 1.5x on an opt-in virtual-thread engine, at
+high concurrency and a short handler" - and it must carry the operating point**, because at a
+realistic one the number is 1.0x and the arms that win at 5,000 lose at 24. Per
+[`docs/data/landing-page.yaml`](../data/landing-page.yaml)'s own rule, no throughput figure goes out
+without its key distribution, per-record delay and concurrency setting.
 
 ### Self-tuning - the strategy doc calls this the capability nothing else offers
 
@@ -231,8 +272,133 @@ Ordered by how much a reader who already knows PC would care.
 
 ## Known gaps in this list
 
-- **The head-of-line latency number does not exist** (K4). It is the strongest argument available and
-  is currently an argument rather than a measurement.
-- **P1's ~1.75x needs re-taking** at 100,000 records across several partitions before publication.
+- ~~**The head-of-line latency number does not exist** (K4).~~ **Measured 2026-08-24** - see
+  [`bench/results/streams-model-head-of-line.csv`](../../bench/results/streams-model-head-of-line.csv):
+  on a tailed handler with distinct keys, the Kafka Streams threading model (partition-serial)
+  amplifies e2e p99 from ~630ms to ~940ms as utilisation rises (p999 ~1.3s), while PC's `KEY`
+  ordering holds at the handler's own 505ms tail at every load measured. Under Zipf skew both
+  degrade (PC ~1,200 vs partition-serial ~1,724 at 90%) - the K4 claim is strongest on
+  well-distributed keys, and should be stated with that condition.
+- ~~**P1's ~1.75x needs re-taking** at 100,000 records across several partitions before publication.~~
+  **Done 2026-08-23, and the claim is withdrawn** - see the note under the performance table. The
+  shipped default is at parity with 0.5.3.3 in all ten cells measured; the best opt-in arm reaches
+  1.5x on all-distinct keys at `maxConcurrency` 5,000 and 1.0x or below on a realistic one.
+- **Every remaining performance point in this list was measured on the same narrow workload P1 was**:
+  all-distinct keys, `UNORDERED`, a constant handler and no failures. P2's "40,000 records in flight"
+  and P4's "fastest configuration measured" are both high-concurrency `UNORDERED` results, and on a
+  Zipf key distribution under `KEY` ordering **every engine measured sustains 2 records in flight of
+  a configured 24** - see
+  [`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md). They
+  are not wrong; they need their conditions attached, and P2 in particular must not be read as "the
+  engine now reaches the concurrency you configure" without them.
+- **R1/R2's non-JVM clients have a ceiling nobody has quoted.** The `proxy` arm - the path every
+  language client takes - runs at **78 msg/s against `core`'s 371** on a Zipf keyed workload, a 4.8x
+  gap where on all-distinct keys it is 1.5x. Unattributed, and it should be understood before the
+  clients are announced on throughput grounds.
 - **Nothing here says what it is like to USE.** Every point is a capability or a number. A release post
   with no code in it is a specification, not an announcement.
+
+## The claims decision - 2026-08-24, proposed for the owner to ratify
+
+The re-take is done, the withdrawals are recorded above, and the question left by the measurement
+work is what v6 actually says about performance. This section settles it, claim by claim. Nothing
+here is public until the owner ratifies it; the experimental-status rule above still governs.
+
+**1. No throughput headline. The shipped default did not get faster, and the announcement does not
+imply it did.** `core` against `core` on 0.5.3.3 is 0.96-1.04x across fourteen cells including the
+previously published operating point. The release leads with capability - concurrency beyond
+partition count, in nine languages, with self-tuning - not with speed. This is also what
+[`landing-page.yaml`](../data/landing-page.yaml) already decided for the website: no number in the
+hero.
+
+**2. The one throughput sentence that survives, with its conditions welded on:** *"an opt-in
+virtual-thread engine (JDK 21+) reaches up to 1.5x the default engine's throughput - at high
+configured concurrency (thousands in flight) with short handlers; at partition-count concurrency it
+is neutral or slightly slower."* Both halves are measured
+([`realistic-throughput-matrix.csv`](../../bench/results/realistic-throughput-matrix.csv)). The
+second half ships with the first or the first does not ship.
+
+**3. P2's "the engine reaches the concurrency you configure" is true only as a conditional.** It
+holds under `UNORDERED`, and under `KEY` when keys are well distributed. On a Zipf distribution the
+same engine sustains 1-2 records in flight of a configured 24 - because that is what ordering
+*means* under skew, not because the engine is broken. The claim is stated as: virtual threads
+removed the *engine's* ceiling (the platform-thread activation limit, `min(maxConcurrency, r x
+handler_latency)`); your key distribution sets the ceiling that remains. Stated that way it is both
+true and more credible than the unconditioned version.
+
+**4. The characterisation work is itself the claim.** No competing library publishes what ordering
+costs. v6 can: `KEY` under realistic skew costs 3.1x against `UNORDERED`; a 1% failure rate costs
+ordered arms 40-44% where a 101x latency tail costs 3-6%; `PARTITION` on a narrow buffer starves to
+2-6 in flight of 24. Publishing these against ourselves - with the harness that took them - is the
+positioning: our numbers carry their conditions, which is precisely what makes the rest of them
+believable. This gives the blog a performance *section* that needs no headline multiplier.
+
+**5. Latency is claimed as observability, not speed.** Residence time (O3) is the first latency
+measurement the project has had. The claim is "you can now see how long a record spends inside PC,
+retries included" - not any millisecond figure, since every figure taken so far is
+workload-specific.
+
+**6. No share-groups number, in either direction, while the 5.9x inter-broker variance stands.**
+The comparison appears only qualitatively, per the rewritten `STRATEGY.md`: what survives Share
+Groups is per-key ordering, getting ahead of your own batch, old brokers, and retry policy in your
+own code. If the variance is explained before ship, this decision can be revisited; it is not a
+blocker for the announcement because the announcement does not depend on it.
+
+**7. P5's "~13% of a bare consumer" does not ship as-is.** It is a narrow-workload figure
+(all-distinct keys, `UNORDERED`). Either it is re-taken on the realistic matrix before publication,
+or the overhead question is answered qualitatively. An overhead claim that collapses under someone
+else's re-measurement is worse than no overhead claim.
+
+**8. P4's "fastest configuration measured" keeps the preview label and gains its operating point.**
+`core-dpvt` wins only where `core-vt` wins, and it is the most failure-sensitive arm measured
+(loses 51% to a 1% failure rate - unattributed). "Fastest" without those qualifiers is the P1
+mistake again.
+
+What this leaves for the announcement's performance story, in one line each: the engine's own
+ceiling is gone (conditional, stated with its law); one conditioned 1.5x for the opt-in engine; a
+characterisation section that no rival can copy without doing the work; latency you can finally
+see. That is enough, and every sentence of it survives hostile re-measurement - which, per the
+rule at the top of this file, is the whole point.
+
+### Amendment, 2026-08-24, after owner review of the decision
+
+The owner pushed back on two points and asked where the latency work stands. Both pushbacks are
+accepted.
+
+**Point 7 is reversed: the overhead numbers publish, framed as overhead.** 0ms is not a workload
+anyone runs, and that is exactly why it is the right operating point for measuring pure engine
+overhead. The post-virtual-threads control
+([`next-franz-go-as-a-client-option.md`](next-franz-go-as-a-client-option.md), 2026-08-22 - 200,000
+records, 10 partitions, timer callee, concurrency 5,000): franz-go 62,384 msg/s; a bare Java
+consumer with virtual-thread workers 58,064 (**93% of the Go client**); PC's full engine
+(`core-dpvt`) 50,768 (**81% of the Go client, ~13% over the bare Java floor**, 11% at 2ms). The
+publishable sentence: *"a virtual-thread Java consumer sits within 7% of the fastest Go client, and
+Parallel Consumer's entire engine - ordering, retries, offset tracking - costs about 13% over that
+floor."* The nearly-match belongs to the JVM client, the 13% to PC; do not blur them into "PC
+nearly matches Go". **Cite franz-go by name only** - llingr rows sit in the same result files and
+remain private under the standing constraint.
+
+**A ninth claim: the bottleneck-removal story, told on synthetic benchmarks and labelled as such.**
+"No headline multiplier" (point 1) does not mean no performance story. The engine ceilings found
+and removed are real engineering even where realistic workloads never hit them: the platform-thread
+activation ceiling (`min(maxConcurrency, r x handler_latency)` - removing it is worth 2.15x at 2ms
+on the same client, and is the difference between 64% and 81% of the Go floor); the dispatch scan
+(440 entries examined per record dispatched down to 1.00 at 5,000 in flight); the in-flight ceiling
+above 2,000. The frame: *we hunted the engine's own limits with synthetic benchmarks and removed
+them - here are the numbers, and here is why most workloads never hit them.* Saying the second half
+out loud is what makes point 4's characterisation section credible.
+
+**Where latency stands, for the record.** The mechanics are built and merged: residence, drain and
+end-to-end percentile families, controlled arrival rate, snapshots taken at window close. Two
+committed result sets:
+[`arrival-tail-skew-matrix.csv`](../../bench/results/arrival-tail-skew-matrix.csv) (85 rows -
+flat/tail/failure workloads x distinct/Zipf keys x 50/70/90% utilisation) and
+[`ordering-head-of-line-latency.csv`](../../bench/results/ordering-head-of-line-latency.csv).
+Headline findings: on distinct keys `KEY` ordering adds nothing to the handler's own p99 (510/509/
+508ms against a 505ms injected handler tail, at every load measured); on Zipf it holds at 50%
+utilisation and amplifies from 70% up (512 / 750 / 1,200ms). Update 2026-08-24, later the same day: `core-vt` and
+`core-dpvt` latency rows now exist (`arrival-tail-skew-matrix-2.csv` and its quiet-machine re-run),
+and K4's head-of-line number is measured (see the Known gaps entry above). Still missing: latency
+rows for the async engines and `proxy` - their arm classes never bump the arrival barrier's
+completion counter, so every controlled-arrival run they attempt times out at the warmup barrier;
+harness work, tracked in `perf-async-arms-cannot-run-controlled-arrival.md`.

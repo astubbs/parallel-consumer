@@ -7,6 +7,17 @@
 **Release gate (owner, 2026-08-20):** the question to answer before v6 is whether this throughput can
 be recovered legitimately - without going back to ignoring the concurrency the user asked for.
 
+> **ANSWERED 2026-08-24 - recovered legitimately, and the fix is astubbs#342.** The PR (branch
+> `fix/external-engine-pipeline-buffer`, from master) deletes `ExternalEngine`'s shortfall-only
+> `getTargetOutForProcessing()` override so external engines inherit core's pipelined target;
+> `checkPipelinePressure()` stays a no-op per this note's own second patch arm (the buffer, not the
+> stepping, is the recovery). `ExternalEnginePipelineBufferTest` pins the formula and was proven red
+> on the old code. One-term controlled bench on the Vert.x arm, 100,000 records, 2ms, concurrency
+> 100: 12,324/12,531 msg/s old against 14,984/15,550 fixed (+23%; this note's 350k experiment read
+> +34%), **peak in flight exactly 100 in both arms** - the ceiling honoured, exactly as the patch
+> experiment predicted. Sustained in-flight rose from ~60 to ~85 of 100: the drip-feed, visible,
+> then gone.
+
 Found 2026-08-20 while rescuing the 2021 Vert.x demo behind the README's asciinema cast (see
 `branch-classic-comparison-demo.md`). The rescued demo ran slower than the recording, which looked
 like an environment difference until it was measured against a control.

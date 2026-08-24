@@ -99,9 +99,17 @@ number this project has ever published, and each one removes a reason to adopt P
 | Dimension | What every run used | What a real workload does | Knob |
 |---|---|---|---|
 | **Ordering mode** | `UNORDERED` | `KEY` - it is why people adopt PC | already there |
-| **Handler duration** | constant | long-tailed: GC, a slow dependency, an outsized payload | **built 2026-08-22, never used** |
-| **Failure rate** | zero | records fail and retry, and retries reorder work | **built 2026-08-22, never used** |
-| **Key distribution** | all keys distinct | skewed - a few hot keys carry most traffic | **does not exist** |
+| **Handler duration** | constant | long-tailed: GC, a slow dependency, an outsized payload | `BENCH_DELAY_P99` / `BENCH_DELAY_STDDEV` |
+| **Failure rate** | zero | records fail and retry, and retries reorder work | `BENCH_FAILURE_RATE` |
+| **Key distribution** | all keys distinct | skewed - a few hot keys carry most traffic | `BENCH_KEY_DISTRIBUTION` |
+
+**All four knobs exist and all four have now been used.** The audit below was written when the last
+three read "built and never used" and "does not exist"; the key-distribution axis was built the same
+day and swept on 2026-08-22
+([`perf-the-tail-experiment-ran-2026-08-22.md`](perf-the-tail-experiment-ran-2026-08-22.md)), and the
+failure axis was swept across the engine, version and share-group comparisons on 2026-08-23. **The
+paragraphs that follow are kept as written, because the conclusions they draw are what got tested** -
+see each one's outcome recorded at the end of this section.
 
 ### The ordering-mode count, which is the one that should be uncomfortable
 

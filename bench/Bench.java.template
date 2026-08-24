@@ -42,6 +42,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.*;
  *   Bench produce  <bootstrap> <topic> <count>
  *   Bench vanilla  <bootstrap> <topic> <count> <delayMs>
  *   Bench pool     <bootstrap> <topic> <count> <delayMs> <concurrency>
+ *   Bench streams  <bootstrap> <topic> <count> <delayMs>
  *   Bench core     <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
  *   Bench <engine> <bootstrap> <topic> <count> <delayMs> <concurrency> [messageBufferSize]
  *
@@ -99,6 +100,25 @@ public class Bench {
         int bufferSize = args.length > 6 ? Integer.parseInt(args[6]) : 0;
         concurrencySetting = concurrency;
         sizeLatencyRecorders(count);
+        // vanilla and pool have NO retry mechanism - a thrown user function loses the record - so
+        // applying the failure rate to them would simply prevent the run from ever reaching its
+        // expected count, and it would do so as a timeout, which reads as a slow arm. Said out loud
+        // rather than silently skipped: a configured axis that does nothing is exactly what this
+        // harness has already published once.
+        if (FAILURE_RATE > 0 && ("vanilla".equals(mode) || "pool".equals(mode) || "streams".equals(mode))) {
+            System.err.println("NOTE: BENCH_FAILURE_RATE is not applied to the '" + mode + "' arm - it has "
+                    + "no retry mechanism, so a failed record would never complete and the run would "
+                    + "time out rather than measure anything");
+        }
+        // The sampler runs for EVERY run, not only the arrival ones: sustained in-flight is the
+        // measure that says whether an arm used its concurrency, and that question is asked of the
+        // saturated path just as much.
+        startSampler();
+        if (arrivalMode()) {
+            // The feeder starts BEFORE the arm, because the warmup barrier is what decides when the
+            // schedule's clock starts and the arm has to already be joining for that to happen.
+            startFeeder(bootstrap, topic, count);
+        }
         // Fallback stamp for the engine arms, whose clocks live in their own files. runVanilla,
         // runPool and runCore overwrite it with their own precise start a moment later, so only an
         // arm reached through BenchArm carries this slightly-early one - and what it adds is the
@@ -110,6 +130,8 @@ public class Bench {
             ms = runVanilla(bootstrap, topic, count);
         } else if ("pool".equals(mode)) {
             ms = runPool(bootstrap, topic, count, delayMs, concurrency);
+        } else if ("streams".equals(mode)) {
+            ms = runStreamsModel(bootstrap, topic, count, delayMs);
         } else if ("core".equals(mode)) {
             ms = runCore(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         } else {
@@ -117,9 +139,43 @@ public class Bench {
             if (arm.usesSharedCallee()) startCallee(delayMs, concurrency);
             ms = arm.run(bootstrap, topic, count, delayMs, concurrency, bufferSize);
         }
-        System.out.printf("RESULT %s %d %d %.1f peak=%d res=%s drain=%s%n",
+        // THE ARRIVAL VERDICT COMES BEFORE THE RESULT LINE, and it voids the run rather than
+        // annotating it. A run whose feed could not hold its schedule measured the producer; printing
+        // its latency percentiles anyway would put a number nobody can interpret in the same column
+        // as ones they can.
+        if (arrivalMode()) {
+            // The arm returns when the last record COMPLETES, which can be a few microseconds before
+            // the feeder thread has finished its flush and computed the achieved rate. Without this
+            // wait the verdict occasionally reads an unset rate and voids a perfectly good run.
+            long waitFrom = System.currentTimeMillis();
+            while (achievedArrivalRate <= 0 && arrivalFailure == null
+                    && System.currentTimeMillis() - waitFrom < 10_000) {
+                sleep(10);
+            }
+            String verdict = arrivalVerdict();
+            if (verdict != null) {
+                System.err.println("ARRIVAL_FAIL: " + verdict);
+                System.err.printf("ARRIVAL_FAIL: requested=%.1f/s achieved=%.1f/s fed=%d completed=%d "
+                                + "feedLag(p50/p99/max)=%s backlog(p50/p99/max)=%s%n",
+                        ARRIVAL_RATE, achievedArrivalRate, fedRecords.get(), completedRecords.get(),
+                        feedLag.renderShort(), backlog.renderShort());
+                System.exit(3);
+            }
+        }
+        // "-" rather than 0.0 off the arrival path. A zero in an arrival-rate column reads as a
+        // measured rate of zero, which is a different claim from "this run did not control arrival".
+        String arrivals = arrivalMode()
+                ? String.format("%.1f/%.1f", ARRIVAL_RATE, achievedArrivalRate) : "-/-";
+        System.out.printf("RESULT %s %d %d %.1f peak=%d res=%s drain=%s e2e=%s arr=%s "
+                        + "feed=%s backlog=%s inflight=%s fails=%d%n",
                 mode, count, ms, count * 1000.0 / ms, peakInFlight.get(),
-                residenceMillis(), drain.render());
+                residenceMillis(),
+                rendered(drainSnapshot, drain, false),
+                rendered(e2eSnapshot, e2e, false), arrivals,
+                feedLag.renderShort(),
+                rendered(backlogSnapshot, backlog, true),
+                rendered(inFlightSnapshot, sustainedInFlight, true),
+                injectedFailures.get());
         if (stub != null) stub.stop();
         if (asyncStubVertx != null) asyncStubVertx.close();
         if (calleeVertx != null) calleeVertx.close();
@@ -197,12 +253,40 @@ public class Bench {
         if (calleeTimer != null) {
             calleeEnter();
             java.util.concurrent.CompletableFuture<Object> done = new java.util.concurrent.CompletableFuture<>();
-            calleeTimer.schedule(() -> { calleeExit(); done.complete(Boolean.TRUE); },
-                    delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            // workDelayMs and workShouldFail, NOT delayMs and nothing.
+            //
+            // THIS LINE WAS A SILENT NO-OP UNTIL 2026-08-22, and it is the shape of defect that
+            // produces a confident null result. The work model - BENCH_DELAY_P99, BENCH_DELAY_STDDEV,
+            // BENCH_FAILURE_RATE - was applied in runCore, runPool and the blocking WireMock stub, and
+            // NOWHERE ELSE. Every arm whose user function is this method (share, share-explicit,
+            // reactor, mutiny, proxy) therefore ran a FLAT handler with no failures however the work
+            // model was configured, printed a perfectly ordinary results row, and recorded the
+            // configured tail in its own column. A tail experiment run that way would have compared a
+            // tailed PC arm against a flat share arm and reported the difference as an engine property.
+            int thisRecord = workDelayMs(delayMs);
+            calleeTimer.schedule(() -> {
+                calleeExit();
+                if (workShouldFail()) {
+                    injectedFailures.incrementAndGet();
+                    done.completeExceptionally(new InjectedWorkFailure(-1));
+                } else {
+                    done.complete(Boolean.TRUE);
+                }
+            }, thisRecord, java.util.concurrent.TimeUnit.MILLISECONDS);
             return done;
         }
+        // A 500 IS A FAILURE, and it has to be turned into one here. The stubs signal an injected
+        // failure with a status code, and the Vert.x WebClient treats any answered request as a
+        // success - so without this the failure rate would be applied, counted, and then thrown away
+        // at the one point where the engine could have seen it. Silent, and it would have read as
+        // "failures cost this engine nothing".
         return calleeClient().get(calleePort(), "localhost", "/").send()
-                .map(response -> (Object) response)
+                .map(response -> {
+                    if (response.statusCode() >= 500) {
+                        throw new InjectedWorkFailure(-1);
+                    }
+                    return (Object) response;
+                })
                 .toCompletionStage();
     }
 
@@ -291,6 +375,23 @@ public class Bench {
         // the first run of this actually did. This method is already the one point every arm reaches
         // between stopping its clock and touching anything, which is why the capture belongs in it.
         residenceSnapshot = residenceFromPcMeter();
+        // AND EVERY OTHER MEASURE, for exactly the same reason - which the residence capture above
+        // discovered and then did not generalise.
+        //
+        // drain and e2e were rendered at PRINT time, which is after closeDrainFirst(). Whatever the
+        // engine had fetched beyond the measured record count keeps completing during that drain, and
+        // every one of those completions was recorded into the same arrays the percentiles come from.
+        // Measured 2026-08-22 on a topic that happened to hold twice the run's record count: the arm
+        // reported 1,285 msg/s over a 9.3-second window and a drain p99 of 51,945ms - a percentile
+        // five times longer than the run it claimed to describe, which is not a number that can be
+        // wrong quietly, and yet it sat in a results file looking ordinary.
+        //
+        // The condition is not exotic: any topic holding more records than the run consumes does it,
+        // and re-running a sweep into an existing topic is the ordinary way to get one.
+        drainSnapshot = drain.render();
+        e2eSnapshot = e2e.render();
+        inFlightSnapshot = sustainedInFlight.renderShort();
+        backlogSnapshot = backlog.renderShort();
         System.err.println("BENCH_WINDOW_CLOSED");
     }
 
@@ -327,13 +428,23 @@ public class Bench {
         asyncStubVertx.createHttpServer().requestHandler(req -> {
             int now = inFlight.incrementAndGet();
             peakInFlight.accumulateAndGet(now, Math::max);
-            if (delayMs <= 0) {
+            // workDelayMs, not delayMs - the same silent no-op callCallee had, in the other
+            // non-blocking callee. The blocking WireMock stub applied the work model from the day it
+            // was written; this one did not, so BENCH_DELAY_P99 did nothing under BENCH_ASYNC_STUB.
+            int thisRecord = workDelayMs(delayMs);
+            int status = 200;
+            if (workShouldFail()) {
+                injectedFailures.incrementAndGet();
+                status = 500;
+            }
+            int reply = status;
+            if (thisRecord <= 0) {
                 inFlight.decrementAndGet();
-                req.response().setStatusCode(200).end();
+                req.response().setStatusCode(reply).end();
             } else {
-                asyncStubVertx.setTimer(delayMs, id -> {
+                asyncStubVertx.setTimer(thisRecord, id -> {
                     inFlight.decrementAndGet();
-                    req.response().setStatusCode(200).end();
+                    req.response().setStatusCode(reply).end();
                 });
             }
         }).listen(0).onComplete(ar -> {
@@ -373,9 +484,9 @@ public class Bench {
                 // the SAME definition Parallel Consumer's own residence timer uses, which is the only
                 // reason this arm's number may sit in the same column as a PC arm's.
                 long polledAt = System.currentTimeMillis();
-                for (Object ignored : poll) {
+                for (org.apache.kafka.clients.consumer.ConsumerRecord<String, String> record : poll) {
                     blockingGet(url);
-                    recordCompletion(polledAt);
+                    recordCompletion(polledAt, record.value());
                     if (++seen >= expected) break;
                 }
             }
@@ -491,7 +602,7 @@ public class Bench {
                 ConsumerRecords<String, String> polled = c.poll(Duration.ofSeconds(1));
                 // See runVanilla: poll-return is this arm's arrival instant, matching PC's.
                 long polledAt = System.currentTimeMillis();
-                for (Object ignored : polled) {
+                for (org.apache.kafka.clients.consumer.ConsumerRecord<String, String> record : polled) {
                     if (submitted >= expected) break;
                     submitted++;
                     permits.acquire();
@@ -500,7 +611,7 @@ public class Bench {
                         peakInFlight.accumulateAndGet(now, Math::max);
                         sleep(workDelayMs(delayMs));
                         inFlight.decrementAndGet();
-                        recordCompletion(polledAt);
+                        recordCompletion(polledAt, record.value());
                         done.incrementAndGet();
                         permits.release();
                     });
@@ -511,6 +622,55 @@ public class Bench {
         long took = System.currentTimeMillis() - start;
         windowClosed();
         pool.shutdownNow();
+        return took;
+    }
+
+    /**
+     * THE KAFKA STREAMS THREADING MODEL, as a floor: a plain consumer with one single-thread executor per
+     * partition, so records within a partition run strictly serially and in order - which is what a Streams
+     * topology gives a stateless task, and exactly the head-of-line blocking Parallel Consumer's KEY ordering
+     * exists to escape. NO ENGINE: no retries, no offset tracking beyond the plain consumer's own, and the
+     * configured concurrency argument is ignored - this arm's concurrency IS the partition count.
+     * <p>
+     * Deliberately polls ahead without backpressure (Streams buffers per task too, {@code
+     * buffered.records.per.partition}); under controlled arrival the queue a lane accumulates IS the
+     * head-of-line cost being measured - a tailed record delays every record behind it in its partition, and
+     * the e2e columns price exactly that. {@code polledAt} is captured per poll batch, so residence for a
+     * lane-queued record includes its wait behind the slow one, matching what PC's residence would charge.
+     */
+    static long runStreamsModel(String bootstrap, String topic, int expected, int delayMs) throws Exception {
+        Map<Integer, ExecutorService> perPartition = new HashMap<>();
+        AtomicInteger done = new AtomicInteger();
+        int submitted = 0;
+        long start;
+        try (KafkaConsumer<String, String> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
+            c.subscribe(Collections.singletonList(topic));
+            start = System.currentTimeMillis();
+            runStartMs = start;
+            while (submitted < expected) {
+                ConsumerRecords<String, String> polled = c.poll(Duration.ofSeconds(1));
+                // See runVanilla: poll-return is this arm's arrival instant, matching PC's.
+                long polledAt = System.currentTimeMillis();
+                for (org.apache.kafka.clients.consumer.ConsumerRecord<String, String> record : polled) {
+                    if (submitted >= expected) break;
+                    submitted++;
+                    ExecutorService lane = perPartition.computeIfAbsent(record.partition(),
+                            p -> Executors.newSingleThreadExecutor());
+                    lane.submit(() -> {
+                        int now = inFlight.incrementAndGet();
+                        peakInFlight.accumulateAndGet(now, Math::max);
+                        sleep(workDelayMs(delayMs));
+                        inFlight.decrementAndGet();
+                        recordCompletion(polledAt, record.value());
+                        done.incrementAndGet();
+                    });
+                }
+            }
+            while (done.get() < expected) sleep(5);
+        }
+        long took = System.currentTimeMillis() - start;
+        windowClosed();
+        for (ExecutorService lane : perPartition.values()) lane.shutdownNow();
         return took;
     }
 
@@ -538,10 +698,12 @@ public class Bench {
                 injectedFailures.incrementAndGet();
                 throw new InjectedWorkFailure(now);
             }
-            // Drain latency only. Residence for a PC arm comes off the engine's own meter, never from
-            // here: this instant is where the USER FUNCTION finished, which is the input to the
-            // measurement rather than its output.
-            recordCompletion(-1);
+            // Drain and end-to-end latency only. Residence for a PC arm comes off the engine's own
+            // meter, never from here: this instant is where the USER FUNCTION finished, which is the
+            // input to the measurement rather than its output. End-to-end is different - it is
+            // measured from an instant the ENGINE never sees, the record's scheduled send, so it can
+            // only be taken here.
+            recordCompletion(-1, contextValue(ctx));
             responses.incrementAndGet();
         });
         while (responses.get() < expected) sleep(25);
@@ -586,11 +748,52 @@ public class Bench {
         p.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         p.put("linger.ms", "50");
         p.put("batch.size", "65536");
+        applyBoundedDelivery(p);
         List<Future<RecordMetadata>> sends = new ArrayList<>();
+        // The key sequence, not "key-" + i. Identical output when BENCH_KEY_DISTRIBUTION is unset,
+        // which is why every pre-produced dataset this harness has ever made still reproduces.
+        KeySequence keys = newKeySequence();
+        Map<String, Integer> keyCounts = new HashMap<>();
         try (KafkaProducer<String, String> pr = new KafkaProducer<>(p)) {
-            for (int i = 0; i < n; i++) sends.add(pr.send(new ProducerRecord<>(topic, "key-" + i, "value-" + i)));
+            for (int i = 0; i < n; i++) {
+                String key = keys.keyFor(i);
+                keyCounts.merge(key, 1, Integer::sum);
+                sends.add(pr.send(new ProducerRecord<>(topic, key, "value-" + i)));
+            }
         }
         for (Future<RecordMetadata> f : sends) f.get();
+        if (n > 0) reportKeyDistribution(keyCounts, n);
+    }
+
+    /**
+     * BOUNDS EVERY PRODUCE THIS HARNESS DOES, and turns an unbounded retry into a loud failure.
+     * <p>
+     * <b>The producer is idempotent by default</b> (Kafka 3.0+), which sets {@code acks=all} and makes
+     * the broker track a per-partition sequence number. Recreate a topic under a name the broker still
+     * holds producer state for - which is what deleting and re-producing a bench dataset does - and
+     * the next send comes back {@code OUT_OF_ORDER_SEQUENCE_NUMBER}. The default retry count is
+     * {@code Integer.MAX_VALUE}, so the client retries **two billion times**, silently, on stderr
+     * nobody reads.
+     * <p>
+     * <b>What that cost on 2026-08-22.</b> Two of twenty-four partitions were stuck in that loop while
+     * the other twenty-two produced fine. The produce never returned, the topic was left holding
+     * 17,806 of the 20,000 records its name claimed, and every consumer arm afterwards waited forever
+     * for a count the topic could not supply - at near-zero CPU, with nothing logged. Twenty-five
+     * minutes, and the visible symptom was "the benchmark hangs".
+     * <p>
+     * Idempotence buys this harness nothing: the dataset is written once, by one producer, and no arm
+     * cares whether a record was written twice. What it costs is an unbounded failure mode. So it is
+     * off, {@code acks=1}, and delivery is bounded - a send that cannot be delivered inside the
+     * timeout throws out of {@code f.get()} and fails the produce, which is the outcome that can be
+     * acted on.
+     */
+    static void applyBoundedDelivery(Properties p) {
+        p.put("enable.idempotence", "false");
+        p.put("acks", "1");
+        // Comfortably above linger.ms + request.timeout.ms, which the client REQUIRES and which is
+        // easy to violate by picking a round number: request.timeout.ms defaults to 30,000, so a
+        // delivery timeout of 30,000 with any linger at all fails the KafkaProducer constructor.
+        p.put("delivery.timeout.ms", System.getenv().getOrDefault("BENCH_DELIVERY_TIMEOUT_MS", "120000"));
     }
 
     static Properties consumerProps(String bootstrap) {
@@ -657,8 +860,14 @@ public class Bench {
     //
     // DETERMINISTIC BY SEED, because a run that cannot be repeated cannot be compared.
     // BENCH_WORK_SEED defaults to 42; every arm in a sweep therefore sees the SAME sequence of
-    // durations and the same failing offsets, which is what makes the comparison fair rather than
-    // merely similar.
+    // durations and the same NUMBER of failures.
+    //
+    // IT DOES NOT PROMISE THE SAME RECORDS FAIL IN TWO ARMS, and the comment here promised exactly
+    // that ("the same failing offsets") until 2026-08-23. Which record takes which draw depends on
+    // dispatch order, which is an engine property. The promise that can be kept, and the one a
+    // comparison actually needs, is that two arms are handed the same workload in aggregate - see
+    // WORK_DRAW, whose per-thread predecessor kept neither promise and silently handed the
+    // virtual-thread arms 1.85x the configured failure rate.
     static final long WORK_SEED = Long.getLong("bench.workSeed",
             Long.parseLong(System.getenv().getOrDefault("BENCH_WORK_SEED", "42")));
     static final double DELAY_STDDEV = Double.parseDouble(
@@ -668,9 +877,61 @@ public class Bench {
     static final double FAILURE_RATE = Double.parseDouble(
             System.getenv().getOrDefault("BENCH_FAILURE_RATE", "0"));
 
-    /** Per-record, so concurrent callers never contend on one Random and never share a sequence. */
-    static final ThreadLocal<java.util.Random> WORK_RANDOM =
-            ThreadLocal.withInitial(() -> new java.util.Random(WORK_SEED + Thread.currentThread().getId()));
+    /**
+     * The draw counter. Every work-model decision takes the NEXT value from it and mixes that, so the
+     * Nth draw of a run is the same number whichever thread makes it and whatever thread made the one
+     * before.
+     * <p>
+     * <b>IT WAS A PER-THREAD {@code Random} UNTIL 2026-08-23, AND THAT OVERSTATED THE FAILURE RATE BY
+     * 85% ON EXACTLY THE ARMS THIS PROJECT'S RELEASE HEADLINE IS ABOUT.</b>
+     * <p>
+     * The old form was {@code ThreadLocal.withInitial(() -> new Random(WORK_SEED + threadId))}, whose
+     * comment read "per-record, so concurrent callers never contend on one Random". On platform
+     * threads that is a fixed pool of a few dozen {@code Random}s each drawn thousands of times, and
+     * it is fine. **Virtual threads are one thread per task** -
+     * {@code Executors.newThreadPerTaskExecutor} in {@code AbstractParallelEoSStreamProcessor} - so
+     * every record got a BRAND NEW {@code Random} and exactly ONE draw from it, and the first draw of
+     * a freshly seeded {@code java.util.Random} is not uniform across consecutive seeds.
+     * <p>
+     * Measured off-broker, in forty lines, after the arm disagreed with its own configuration: at a
+     * configured 1% over 12,000 records, {@code new Random(seed + i).nextDouble() < 0.01} fires
+     * <b>222</b> times (1.85%), and one shared {@code Random} drawn 12,000 times fires <b>128</b>
+     * (1.07%). The {@code core-vt} arm had reported <b>222</b> injected failures and the platform
+     * {@code core} arm <b>128</b> - the two predicted numbers exactly, which is what turned a
+     * suspicion into a cause.
+     * <p>
+     * <b>So the virtual-thread arms were being handed nearly twice the failures of the arms they were
+     * being compared against</b>, in the only rows where failures exist, and the tell was a column
+     * nobody reads against its own configured rate.
+     * <p>
+     * SplitMix64 over a counter rather than a shared {@code Random}: a shared {@code Random} is a
+     * single CAS loop that thousands of concurrent callers would contend on, which is what the
+     * original comment was rightly avoiding. This has one atomic increment and no shared mutable
+     * state beyond it, and its output is uniform for consecutive inputs by construction.
+     * <p>
+     * <b>What this does and does not promise.</b> It promises every arm the same NUMBER of failures
+     * and the same DISTRIBUTION of durations, which is the property that makes a comparison fair. It
+     * does not promise the same records fail in two arms, because which record takes which draw
+     * depends on dispatch order - and neither did the per-thread form, whose interleaving across a
+     * pool was never reproducible either.
+     */
+    static final java.util.concurrent.atomic.AtomicLong WORK_DRAW = new java.util.concurrent.atomic.AtomicLong();
+
+    /** The next uniform [0,1) from the work model's own stream. SplitMix64 over the draw counter. */
+    static double nextWorkDraw() {
+        long z = WORK_DRAW.getAndIncrement() * 0x9E3779B97F4A7C15L + WORK_SEED;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        z = z ^ (z >>> 31);
+        return (z >>> 11) * 0x1.0p-53;
+    }
+
+    /** A standard normal from the same stream, for {@code BENCH_DELAY_STDDEV}. Box-Muller. */
+    static double nextWorkGaussian() {
+        double u1 = Math.max(nextWorkDraw(), Double.MIN_VALUE);
+        double u2 = nextWorkDraw();
+        return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
 
     /** True when nothing below is configured, so the constant-delay path stays exactly as it was. */
     static boolean workModelIsFlat() {
@@ -684,12 +945,11 @@ public class Bench {
      */
     static int workDelayMs(int delayMs) {
         if (workModelIsFlat()) return delayMs;
-        var rnd = WORK_RANDOM.get();
         if (DELAY_P99 > 0) {
-            return rnd.nextDouble() < 0.01 ? DELAY_P99 : delayMs;
+            return nextWorkDraw() < 0.01 ? DELAY_P99 : delayMs;
         }
         if (DELAY_STDDEV > 0) {
-            long d = Math.round(delayMs + rnd.nextGaussian() * DELAY_STDDEV);
+            long d = Math.round(delayMs + nextWorkGaussian() * DELAY_STDDEV);
             return (int) Math.max(0, d);
         }
         return delayMs;
@@ -697,7 +957,7 @@ public class Bench {
 
     /** Whether this invocation should throw. Retries are the point: a serial engine stalls for them too. */
     static boolean workShouldFail() {
-        return FAILURE_RATE > 0 && WORK_RANDOM.get().nextDouble() < FAILURE_RATE;
+        return FAILURE_RATE > 0 && nextWorkDraw() < FAILURE_RATE;
     }
 
     /** Thrown by the simulated user function, so a real bug is never mistaken for the injected rate. */
@@ -707,6 +967,360 @@ public class Bench {
         }
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // THE KEY DISTRIBUTION. Every record this harness ever produced had a DISTINCT key, and that one
+    // choice is what made `KEY` ordering measure nothing.
+    //
+    // WHY IT MATTERS MORE THAN IT LOOKS. A shard in Parallel Consumer is one key under KEY ordering.
+    // With all keys distinct, every record is its own shard of exactly one entry, so the ordering
+    // constraint "records with the same key run in order" binds NOTHING: there are never two records
+    // with the same key. `KEY` in that dataset is `UNORDERED` wearing a different name, which is why
+    // every measurement here has found the two within a few percent of each other. See
+    // docs/inflight/next-benchmark-a-model-of-work-not-work.md, "Key distribution is the gap with no
+    // knob at all".
+    //
+    //   BENCH_KEY_DISTRIBUTION=distinct   key-0, key-1, ... - one key per record. TODAY'S BEHAVIOUR
+    //                                     and the default, so every committed results file still
+    //                                     means exactly what it meant.
+    //   BENCH_KEY_DISTRIBUTION=zipf       Zipf over BENCH_KEY_COUNT keys with exponent
+    //                                     BENCH_ZIPF_EXPONENT. A few keys carry most of the traffic,
+    //                                     which is what a real keyed stream looks like.
+    //   BENCH_KEY_DISTRIBUTION=hot        uniform over BENCH_KEY_COUNT keys - a bounded key set with
+    //                                     no skew. The control that separates "few keys" from
+    //                                     "unevenly used keys": zipf changes both at once.
+    //
+    // SEEDED THE SAME WAY THE WORK MODEL IS, and more strictly. The sequence is drawn by ONE
+    // single-threaded loop from a Random seeded with BENCH_WORK_SEED, and the key for record i
+    // depends only on i - so two arms, two repeats and two sweeps all see the identical key
+    // sequence. That is stronger than the delay model's per-thread seeding, and it has to be: the
+    // key sequence decides the shard map, so an arm that saw a different one is measuring a
+    // different experiment rather than a noisier version of the same one.
+    //
+    // AN UNKNOWN VALUE IS FATAL, never a silent fall back to `distinct`. Falling back would produce
+    // exactly the all-distinct null result this axis exists to end, from a run that reported having
+    // been skewed.
+    static final String KEY_DISTRIBUTION =
+            System.getenv().getOrDefault("BENCH_KEY_DISTRIBUTION", "distinct");
+    static final int KEY_COUNT = Integer.parseInt(
+            System.getenv().getOrDefault("BENCH_KEY_COUNT", "1000"));
+    static final double ZIPF_EXPONENT = Double.parseDouble(
+            System.getenv().getOrDefault("BENCH_ZIPF_EXPONENT", "1.0"));
+
+    /** The key for record i. Stateful across i, deliberately - see the seeding note above. */
+    interface KeySequence {
+        String keyFor(int i);
+    }
+
+    /**
+     * A fresh, identically-seeded key sequence. Called once per produce loop, so the pre-produced
+     * path and the arrival feeder generate the same keys for the same record indices.
+     */
+    static KeySequence newKeySequence() {
+        String spec = KEY_DISTRIBUTION.trim();
+        if (spec.equals("distinct")) {
+            return i -> "key-" + i;
+        }
+        java.util.Random rnd = new java.util.Random(WORK_SEED);
+        if (spec.equals("hot")) {
+            return i -> "key-" + rnd.nextInt(KEY_COUNT);
+        }
+        if (spec.equals("zipf")) {
+            double[] cumulative = zipfCumulative(KEY_COUNT, ZIPF_EXPONENT);
+            return i -> "key-" + zipfDraw(cumulative, rnd.nextDouble());
+        }
+        throw new IllegalArgumentException("BENCH_KEY_DISTRIBUTION=" + KEY_DISTRIBUTION
+                + " is not one of: distinct, hot, zipf");
+    }
+
+    /** Cumulative probabilities for ranks 1..n with p(k) proportional to 1/k^s. */
+    static double[] zipfCumulative(int n, double s) {
+        double[] cumulative = new double[n];
+        double total = 0;
+        for (int k = 1; k <= n; k++) {
+            total += 1.0 / Math.pow(k, s);
+            cumulative[k - 1] = total;
+        }
+        for (int k = 0; k < n; k++) {
+            cumulative[k] /= total;
+        }
+        return cumulative;
+    }
+
+    /** Inverse-CDF sample. Binary search rather than a scan: KEY_COUNT can reasonably be large. */
+    static int zipfDraw(double[] cumulative, double u) {
+        int lo = 0, hi = cumulative.length - 1;
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (cumulative[mid] < u) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    /**
+     * What the key sequence ACTUALLY produced, on stderr, for the run that produced the dataset.
+     * <p>
+     * The distribution is a configured input, so printing it back is not corroboration - it is the
+     * receipt. A skew that was requested and not applied (a typo in the count, an exponent of zero)
+     * looks exactly like a skew that was applied and did nothing, and this is the one line that
+     * separates them.
+     */
+    static void reportKeyDistribution(Map<String, Integer> counts, int records) {
+        int distinctKeys = counts.size();
+        int topCount = 0;
+        String topKey = "-";
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
+            if (e.getValue() > topCount) { topCount = e.getValue(); topKey = e.getKey(); }
+        }
+        List<Integer> sorted = new ArrayList<>(counts.values());
+        sorted.sort(Collections.reverseOrder());
+        int topTen = 0;
+        for (int i = 0; i < Math.min(10, sorted.size()); i++) topTen += sorted.get(i);
+        System.err.printf("KEYDIST distribution=%s records=%d distinctKeys=%d topKey=%s topKeyShare=%.3f "
+                        + "top10Share=%.3f%n",
+                KEY_DISTRIBUTION, records, distinctKeys, topKey,
+                topCount / (double) records, topTen / (double) records);
+    }
+
+    // =============================================================================================
+    // CONTROLLED ARRIVAL. Records fed into the topic DURING the measured window, at a rate the caller
+    // chooses, so the consumer is not draining a backlog.
+    //
+    // WHY IT HAD TO EXIST BEFORE THE TAIL EXPERIMENT COULD RUN. Every run this harness has ever done
+    // drains a backlog produced before the window opened. Residence time is then buffered depth over
+    // throughput, and two arms with the same buffer and the same throughput ceiling have EQUAL
+    // residence by construction. Measured 2026-08-22: PARTITION and KEY, both at 24 in flight over 24
+    // partitions with a handler p99 at 50x its median, came back at residence p99 15,568ms against
+    // 15,565ms - 0.02% apart, from an experiment that could not have shown a difference had one
+    // existed. docs/inflight/next-the-tail-experiment.md, "BLOCKED, and not on what this note first
+    // said".
+    //
+    // At 100% utilisation every queueing system measures its backlog. Below it, it measures the
+    // engine. That is the whole reason for this section.
+    //
+    //   BENCH_ARRIVAL_RATE       records per second fed during the run. Unset or 0 = the pre-produced
+    //                            path, unchanged, which stays the default.
+    //   BENCH_ARRIVAL_WARMUP     records fed before the clock starts, to cover the group join. The
+    //                            schedule's t0 is the moment the FIRST of them completes, so a slow
+    //                            rebalance cannot be mistaken for a backlog. Default 1.
+    //   BENCH_ARRIVAL_TOLERANCE  fractional divergence between requested and achieved arrival rate
+    //                            that voids the run. Default 0.05.
+    //   BENCH_ARRIVAL_MAX_LAG_MS feed-lag p99 that voids the run. Default 100.
+    //
+    // THE RUN IS VOIDED, NOT ANNOTATED, WHEN THE FEED CANNOT KEEP UP. If the producer is the
+    // bottleneck then the whole experiment measures the producer, and the resulting latency figures
+    // are not a weaker version of the answer - they are an answer to a different question, sitting in
+    // a column that says nothing about which. So the arm prints ARRIVAL_FAIL and exits non-zero, and
+    // run-bisect.sh records the row as ARRIVAL_VOID.
+    static final double ARRIVAL_RATE = Double.parseDouble(
+            System.getenv().getOrDefault("BENCH_ARRIVAL_RATE", "0"));
+    static final int ARRIVAL_WARMUP = Integer.parseInt(
+            System.getenv().getOrDefault("BENCH_ARRIVAL_WARMUP", "1"));
+    static final double ARRIVAL_TOLERANCE = Double.parseDouble(
+            System.getenv().getOrDefault("BENCH_ARRIVAL_TOLERANCE", "0.05"));
+    static final long ARRIVAL_MAX_LAG_MS = Long.parseLong(
+            System.getenv().getOrDefault("BENCH_ARRIVAL_MAX_LAG_MS", "100"));
+    static final long ARRIVAL_WARMUP_TIMEOUT_MS = Long.parseLong(
+            System.getenv().getOrDefault("BENCH_ARRIVAL_WARMUP_TIMEOUT_MS", "60000"));
+
+    static boolean arrivalMode() {
+        return ARRIVAL_RATE > 0;
+    }
+
+    /** Records handed to the producer so far, for the backlog gauge. */
+    static final java.util.concurrent.atomic.AtomicLong fedRecords = new java.util.concurrent.atomic.AtomicLong();
+    /** Records the arm has finished, for the backlog gauge and for the warmup barrier. */
+    static final java.util.concurrent.atomic.AtomicLong completedRecords = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Non-null once the feed has failed to deliver the schedule it was asked for. */
+    static volatile String arrivalFailure;
+    static volatile double achievedArrivalRate;
+
+    /** How late each record was handed to the producer against its scheduled instant. */
+    static Latencies feedLag = new Latencies(0);
+    /** Fed-minus-completed, sampled during the run. The direct evidence of whether a backlog formed. */
+    static Latencies backlog = new Latencies(0);
+    /** Completion minus INTENDED send time - the coordinated-omission-free end-to-end latency. */
+    static Latencies e2e = new Latencies(0);
+
+    /**
+     * Feeds the topic on a fixed schedule, on its own thread, for the life of the run.
+     * <p>
+     * <b>The schedule is absolute, not incremental.</b> Each record's due time is
+     * {@code t0 + i / rate} rather than "the previous send plus an interval", so a late send does not
+     * push every later one back with it. An incremental schedule silently converts producer jitter
+     * into a lower arrival rate, which is precisely the confound this whole section exists to remove.
+     * <p>
+     * <b>t0 is when the consumer is demonstrably live</b>, not when this thread starts. A consumer
+     * group join takes seconds; feeding through it would hand the arm a backlog of
+     * {@code rate x joinTime} records before the first one it ever sees, which is the condition being
+     * escaped. So {@code BENCH_ARRIVAL_WARMUP} records go first, and the schedule starts when the arm
+     * reports having finished one of them. That signal is {@link #completedRecords}, which every arm
+     * increments through {@link #recordCompletion}, so it needs no per-arm support and no Admin call
+     * that a share group would not answer.
+     * <p>
+     * <b>The warmup records are part of the dataset and are excluded from the e2e measure only.</b>
+     * They carry an intended time of -1. Their residence is a real measurement - residence starts at
+     * poll-return, which is after the join - and their drain latency is not, which is one record in
+     * however many thousands and is said here rather than silently corrected.
+     */
+    static void startFeeder(String bootstrap, String topic, int count) {
+        Thread feeder = new Thread(() -> {
+            Properties p = new Properties();
+            p.put("bootstrap.servers", bootstrap);
+            p.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            p.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            // linger 0 and acks 1: the schedule is the experiment, so nothing may sit in an
+            // accumulator waiting for a batch to fill. The pre-produced path keeps its linger of 50,
+            // because there the only thing that matters is finishing.
+            p.put("linger.ms", "0");
+            p.put("max.block.ms", "10000");
+            // Same bound as the pre-produced path, and it matters more here: a feeder stuck in an
+            // unbounded retry does not merely fail, it silently stops being the arrival schedule the
+            // run is claiming to have measured.
+            applyBoundedDelivery(p);
+            KeySequence keys = newKeySequence();
+            Map<String, Integer> keyCounts = new HashMap<>();
+            try (KafkaProducer<String, String> producer = new KafkaProducer<>(p)) {
+                int warmup = Math.max(ARRIVAL_WARMUP, 1);
+                for (int i = 0; i < warmup && i < count; i++) {
+                    String key = keys.keyFor(i);
+                    keyCounts.merge(key, 1, Integer::sum);
+                    producer.send(new ProducerRecord<>(topic, key, "-1|value-" + i));
+                    fedRecords.incrementAndGet();
+                }
+                producer.flush();
+                long waitedFrom = System.currentTimeMillis();
+                while (completedRecords.get() < 1) {
+                    if (System.currentTimeMillis() - waitedFrom > ARRIVAL_WARMUP_TIMEOUT_MS) {
+                        arrivalFailure = "consumer processed nothing within "
+                                + ARRIVAL_WARMUP_TIMEOUT_MS + "ms of the warmup record being produced";
+                        return;
+                    }
+                    sleep(5);
+                }
+                long t0 = System.currentTimeMillis();
+                double intervalMs = 1000.0 / ARRIVAL_RATE;
+                long lastSend = t0;
+                for (int i = warmup; i < count; i++) {
+                    long due = t0 + Math.round((i - warmup) * intervalMs);
+                    parkUntil(due);
+                    long at = System.currentTimeMillis();
+                    feedLag.record(Math.max(0, at - due));
+                    String key = keys.keyFor(i);
+                    keyCounts.merge(key, 1, Integer::sum);
+                    producer.send(new ProducerRecord<>(topic, key, due + "|value-" + i));
+                    fedRecords.incrementAndGet();
+                    lastSend = at;
+                }
+                producer.flush();
+                long span = Math.max(1, lastSend - t0);
+                // THE RECEIPT IS PRINTED HERE, not after the try block, and that is not tidiness.
+                // This thread is a daemon and main calls System.exit as soon as the arm returns -
+                // which is as soon as the last record COMPLETES, and that can be before a line placed
+                // after the producer's close ever runs. The receipt was silently absent from the
+                // whole arrival path until this was moved, which is the same class of defect as
+                // everything else in this file's history: a diagnostic that is missing rather than
+                // wrong.
+                reportKeyDistribution(keyCounts, count);
+                achievedArrivalRate = (count - warmup) * 1000.0 / span;
+            } catch (Exception e) {
+                arrivalFailure = "feeder threw: " + e;
+                reportKeyDistribution(keyCounts, count);
+            }
+        }, "bench-arrival-feeder");
+        feeder.setDaemon(true);
+        feeder.start();
+    }
+
+    /**
+     * Parks until {@code due}. Returns immediately when already late, which is what keeps the
+     * schedule absolute: a late record is sent at once rather than waiting out its own interval.
+     */
+    static void parkUntil(long due) {
+        long remaining;
+        while ((remaining = due - System.currentTimeMillis()) > 0) {
+            java.util.concurrent.locks.LockSupport.parkNanos(remaining * 1_000_000L);
+        }
+    }
+
+    /** Records actually in the user function, sampled. See {@link #startSampler}. */
+    static Latencies sustainedInFlight = new Latencies(0);
+
+    /**
+     * Samples two gauges every 20ms, for the whole run.
+     * <p>
+     * <b>{@code backlog}</b> is fed-minus-completed. A bounded backlog is what "unsaturated" means,
+     * and it is the direct evidence that an arrival run measured the engine rather than a queue.
+     * <p>
+     * <b>{@code sustainedInFlight} is here because {@code peak_in_flight} is a MAXIMUM, and a maximum
+     * cannot answer the question it keeps being asked.</b> An arm that reaches its configured
+     * concurrency once, in its first second, and then runs two records at a time for two minutes
+     * reports the same {@code peak_in_flight} as one that holds full concurrency throughout - and the
+     * two are completely different engines to the person choosing one. Measured 2026-08-22: `KEY`
+     * ordering on a skewed key distribution reported peak 24 of a configured 24 while taking 4.1x
+     * longer than `UNORDERED` over the identical records, because the run ends with one hot key
+     * draining one record at a time. The peak was true and told you nothing.
+     * <p>
+     * <b>IT DOES NOT SAMPLE BEFORE THE FIRST RECORD REACHES THE USER FUNCTION, and that gate is the
+     * fix for a defect that made the column read zero on short runs.</b> The sampler is started from
+     * {@code main} - it has to be, because the arms take their own clocks and there is no earlier
+     * common hook - so until this gate existed it recorded a zero every 20ms through consumer
+     * construction, subscribe and the consumer-group join. That is four to six seconds of zeros
+     * PREPENDED to every run's sample set, which does not perturb a percentile on a thirty-second run
+     * and completely determines it on a four-second one.
+     * <p>
+     * Measured 2026-08-22 on the calibration for this campaign: {@code core}, {@code UNORDERED},
+     * maxConcurrency 200, 12,000 records - <b>2,978 msg/s at a reported sustained in flight of
+     * ZERO</b>, which Little's law puts at about 30. The same arm at maxConcurrency 24, whose run
+     * lasts 9.8s rather than 4.0s, reported 22 and looked entirely healthy. So the column did not
+     * fail loudly on the short run; it produced a number that was wrong by the whole quantity being
+     * measured, next to rows where it was roughly right, and the only tell was an arithmetic check
+     * nobody is required to perform.
+     * <p>
+     * Armed by work rather than by a clock, because the arms own their clocks: once any record is in
+     * the user function the run has begun for every arm here, and once armed it stays armed, so a
+     * genuine idle stretch mid-run - which is exactly what a hot key produces, and exactly what this
+     * column exists to show - is still recorded as the zero it is.
+     */
+    static volatile boolean samplerArmed = false;
+
+    static void startSampler() {
+        Thread sampler = new Thread(() -> {
+            while (true) {
+                backlog.record(Math.max(0, fedRecords.get() - completedRecords.get()));
+                if (!samplerArmed && inFlight.get() > 0) samplerArmed = true;
+                if (samplerArmed) sustainedInFlight.record(inFlight.get());
+                sleep(20);
+            }
+        }, "bench-sampler");
+        sampler.setDaemon(true);
+        sampler.start();
+    }
+
+    /**
+     * @return null when the feed delivered the schedule it was asked for, or the reason it did not
+     */
+    static String arrivalVerdict() {
+        if (arrivalFailure != null) {
+            return arrivalFailure;
+        }
+        if (achievedArrivalRate <= 0) {
+            return "the feeder never completed its schedule";
+        }
+        double divergence = Math.abs(achievedArrivalRate - ARRIVAL_RATE) / ARRIVAL_RATE;
+        if (divergence > ARRIVAL_TOLERANCE) {
+            return String.format("achieved arrival rate %.1f/s against a requested %.1f/s (%.1f%% out, "
+                            + "tolerance %.1f%%) - this run measures the producer",
+                    achievedArrivalRate, ARRIVAL_RATE, divergence * 100, ARRIVAL_TOLERANCE * 100);
+        }
+        long lagP99 = feedLag.quantileMillis(0.99);
+        if (lagP99 > ARRIVAL_MAX_LAG_MS) {
+            return String.format("feed-lag p99 %dms exceeds %dms - records were handed to the producer "
+                            + "late enough that the arrival schedule is not the one requested",
+                    lagP99, ARRIVAL_MAX_LAG_MS);
+        }
+        return null;
+    }
 
     // =============================================================================================
     // LATENCY. Every figure this harness has ever produced is throughput, and throughput is the one
@@ -757,6 +1371,14 @@ public class Bench {
     static void sizeLatencyRecorders(int count) {
         drain = new Latencies(count * 4);
         benchResidence = new Latencies(count * 4);
+        e2e = new Latencies(count * 4);
+        feedLag = new Latencies(count + 16);
+        // A run is bounded by BENCH_RUN_TIMEOUT and the sampler ticks every 20ms, so 50 samples a
+        // second for an hour is ample and costs 1.4MB. Sized generously rather than exactly: a
+        // recorder that silently stops sampling would bias the backlog gauge towards the early part
+        // of the run, which is the direction that flatters.
+        backlog = new Latencies(180_000);
+        sustainedInFlight = new Latencies(180_000);
     }
 
     /**
@@ -768,10 +1390,91 @@ public class Bench {
      *                   meter instead.
      */
     static void recordCompletion(long polledAtMs) {
+        recordCompletion(polledAtMs, null);
+    }
+
+    /**
+     * As above, plus the END-TO-END latency when the record carries its own intended arrival instant.
+     *
+     * @param value the record's value. Under controlled arrival it is "{@code <intendedMs>|value-<i>}"
+     *              and this is the measure that cannot be fooled by coordinated omission; on the
+     *              pre-produced path it is "{@code value-<i>}" and no e2e latency is recorded, because
+     *              there is no arrival instant to measure from - every record arrived before the run.
+     */
+    static void recordCompletion(long polledAtMs, String value) {
         long now = System.currentTimeMillis();
+        completedRecords.incrementAndGet();
         drain.record(now - runStartMs);
         if (polledAtMs >= 0) {
             benchResidence.record(now - polledAtMs);
+        }
+        long intended = intendedArrivalMs(value);
+        if (intended > 0) {
+            e2e.record(now - intended);
+        }
+    }
+
+    /**
+     * THE MEASURE RESIDENCE CANNOT REPLACE, and the reason it is worth carrying a timestamp in every
+     * record.
+     * <p>
+     * Residence starts at poll-return, so a record that sat in the broker because the consumer was
+     * behind is charged nothing for the wait - the classic coordinated omission, and under controlled
+     * arrival it is the exact failure mode that would make a saturated arm look fast. Measuring from
+     * the instant the record was SCHEDULED to be sent charges it, and charges the feeder's own
+     * lateness too, which is why the feed-lag gate above exists.
+     *
+     * @return the intended arrival instant encoded in the value, or -1 for a record that carries none
+     *         (the pre-produced path, and the warmup records)
+     */
+    static long intendedArrivalMs(String value) {
+        if (value == null) {
+            return -1;
+        }
+        int bar = value.indexOf('|');
+        if (bar <= 0) {
+            return -1;
+        }
+        try {
+            return Long.parseLong(value.substring(0, bar));
+        } catch (NumberFormatException notATimestamp) {
+            return -1;
+        }
+    }
+
+    /**
+     * The record's value out of whatever the engine handed the user function.
+     * <p>
+     * Reflective because {@code runCore}'s lambda parameter is deliberately untyped - the template
+     * compiles against releases whose user function takes a {@code ConsumerRecord} and against ones
+     * that take a {@code PollContext}. Both expose {@code value()}, so one cached lookup covers both,
+     * and a release that exposes neither reports no e2e rather than failing the sweep.
+     */
+    static volatile java.lang.reflect.Method valueAccessor;
+    static volatile boolean valueAccessorResolved;
+
+    static String contextValue(Object ctx) {
+        if (!valueAccessorResolved) {
+            synchronized (Bench.class) {
+                if (!valueAccessorResolved) {
+                    try {
+                        valueAccessor = ctx.getClass().getMethod("value");
+                    } catch (NoSuchMethodException absent) {
+                        System.err.println("NOTE: the user function's argument (" + ctx.getClass().getName()
+                                + ") has no value() method; end-to-end latency will be reported as '-'");
+                    }
+                    valueAccessorResolved = true;
+                }
+            }
+        }
+        if (valueAccessor == null) {
+            return null;
+        }
+        try {
+            Object v = valueAccessor.invoke(ctx);
+            return v instanceof String ? (String) v : null;
+        } catch (ReflectiveOperationException cannotRead) {
+            return null;
         }
     }
 
@@ -813,6 +1516,28 @@ public class Bench {
             Arrays.sort(sorted);
             return quantile(sorted, 0.50) + "/" + quantile(sorted, 0.99) + "/"
                     + quantile(sorted, 0.999) + "/" + sorted[n - 1];
+        }
+
+        /** "p50/p99/max" - the three-field form, for a diagnostic rather than a headline measure. */
+        String renderShort() {
+            int n = count();
+            if (n == 0) {
+                return "-";
+            }
+            long[] sorted = Arrays.copyOf(samples, n);
+            Arrays.sort(sorted);
+            return quantile(sorted, 0.50) + "/" + quantile(sorted, 0.99) + "/" + sorted[n - 1];
+        }
+
+        /** One quantile, for a gate that has to compare against a threshold rather than print. */
+        long quantileMillis(double q) {
+            int n = count();
+            if (n == 0) {
+                return 0;
+            }
+            long[] sorted = Arrays.copyOf(samples, n);
+            Arrays.sort(sorted);
+            return quantile(sorted, q);
         }
 
         private static long quantile(long[] sorted, double q) {
@@ -927,6 +1652,23 @@ public class Bench {
 
     /** The engine's residence percentiles, taken at {@link #windowClosed()} before teardown. */
     static String residenceSnapshot;
+
+    /**
+     * The other four measures, taken at the same instant and for the same reason.
+     * <p>
+     * Everything after {@link #windowClosed()} is teardown, and teardown completes records. A measure
+     * rendered later describes a window nobody asked about.
+     */
+    static String drainSnapshot, e2eSnapshot, inFlightSnapshot, backlogSnapshot;
+
+    static String rendered(String snapshot, Latencies fallback, boolean shortForm) {
+        if (snapshot != null) {
+            return snapshot;
+        }
+        // An arm that never reached windowClosed did not finish, and its numbers are already voided
+        // by the harness - rendering live is only so the line is well-formed.
+        return shortForm ? fallback.renderShort() : fallback.render();
+    }
 
     /** The meter Parallel Consumer publishes; see PCMetricsDef.RECORD_RESIDENCE_TIME. */
     static final String RESIDENCE_METER = "pc.record.residence.time";

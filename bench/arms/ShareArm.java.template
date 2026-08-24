@@ -132,6 +132,7 @@ public class ShareArm implements BenchArm {
         // "throughput" cannot do it - the three counters below can, because they say WHICH part of
         // the cycle the missing time is in.
         int emptyPolls = 0;
+        int released = 0;
         long pollNanos = 0, joinNanos = 0, ackNanos = 0;
         long start;
         try (KafkaShareConsumer<String, String> consumer = new KafkaShareConsumer<>(props)) {
@@ -148,14 +149,39 @@ public class ShareArm implements BenchArm {
                 // Dispatch the whole batch, then wait for the whole batch. The wait is the structural
                 // property described in the class javadoc, not a simplification: neither acknowledgement
                 // mode lets a correct processor poll again while this batch is outstanding.
+                // POLL-RETURN IS THIS ARM'S ARRIVAL INSTANT, the same definition runVanilla and
+                // runPool use and the same one Parallel Consumer's own residence meter uses. Until
+                // 2026-08-22 this arm recorded no latency at all - it never called
+                // Bench#recordCompletion - so every latency column on a share row was a dash, which
+                // reads as "this arm cannot report that" rather than "nobody wired it up". A tail
+                // experiment naming share as an arm could not have produced a share row.
+                long polledAt = System.currentTimeMillis();
                 List<CompletableFuture<Void>> batch = new ArrayList<>();
                 List<ConsumerRecord<String, String>> acked = new ArrayList<>();
+                List<Boolean> succeeded = new ArrayList<>();
                 for (ConsumerRecord<String, String> record : polled) {
                     if (seen + batch.size() >= expected) break;
                     permits.acquire();
                     acked.add(record);
+                    final int slot = succeeded.size();
+                    succeeded.add(Boolean.FALSE);
                     CompletionStage<Object> work = Bench.callCallee(delayMs);
-                    batch.add(work.toCompletableFuture().thenAccept(ignored -> permits.release()));
+                    // handle, not thenAccept: an injected failure completes the stage exceptionally,
+                    // and thenAccept would propagate it out of the join and abort the whole run
+                    // rather than modelling a record that failed and has to be redelivered.
+                    batch.add(work.toCompletableFuture().handle((ignored, failure) -> {
+                        permits.release();
+                        if (failure == null) {
+                            synchronized (succeeded) { succeeded.set(slot, Boolean.TRUE); }
+                            // HERE, not after the batch join. A record's residence ends when ITS OWN
+                            // work finishes; charging it for its siblings would fold the batch
+                            // structure into the per-record measure twice. The batch-synchronous cost
+                            // is real and it lands where it belongs - on the NEXT poll's records,
+                            // which wait longer in the broker - and the e2e measure is what sees it.
+                            Bench.recordCompletion(polledAt, record.value());
+                        }
+                        return null;
+                    }));
                 }
                 long t1 = System.nanoTime();
                 CompletableFuture.allOf(batch.toArray(new CompletableFuture[0])).join();
@@ -166,13 +192,36 @@ public class ShareArm implements BenchArm {
                 // acknowledging BEFORE the work completes would be the at-most-once shortcut this arm
                 // exists to not take.
                 long t2 = System.nanoTime();
-                if (explicitAcks()) {
-                    for (ConsumerRecord<String, String> record : acked) {
-                        consumer.acknowledge(record, AcknowledgeType.ACCEPT);
+                int done = 0;
+                for (int i = 0; i < acked.size(); i++) {
+                    ConsumerRecord<String, String> record = acked.get(i);
+                    boolean ok = Boolean.TRUE.equals(succeeded.get(i));
+                    if (ok) {
+                        done++;
+                    } else {
+                        released++;
+                    }
+                    if (explicitAcks()) {
+                        // RELEASE IS SHARE GROUPS' RETRY, and it is the honest counterpart of Parallel
+                        // Consumer's retry queue: the broker hands the record to someone again. It is
+                        // NOT equivalent - a released record is immediately re-acquirable, where PC
+                        // waits out defaultMessageRetryDelay (1s) before re-offering it - so a share
+                        // row and a PC row at the same failure rate are not paying the same retry
+                        // cost, and any comparison between them has to say so.
+                        consumer.acknowledge(record, ok ? AcknowledgeType.ACCEPT : AcknowledgeType.RELEASE);
+                    } else if (!ok) {
+                        // IMPLICIT MODE CANNOT DO THIS AT ALL, and that is a structural finding rather
+                        // than a limitation of this arm. The next poll() acknowledges the whole
+                        // previous batch, so a failed record is gone - an implicit-mode processor that
+                        // wants at-least-once has to retry IN PROCESS, holding the batch open, which
+                        // is what this does. It is why the failure axis is run on share-explicit.
+                        throw new IllegalStateException("BENCH_FAILURE_RATE cannot be modelled in implicit "
+                                + "acknowledgement mode: poll() acknowledges the previous batch wholesale, "
+                                + "so a failed record can never be redelivered. Use share-explicit.");
                     }
                 }
                 ackNanos += System.nanoTime() - t2;
-                seen += batch.size();
+                seen += done;
             }
             long took = System.currentTimeMillis() - start;
             // THE BATCH SIZE IS THIS ARM'S CONCURRENCY, so it is printed with every run rather than
@@ -183,9 +232,9 @@ public class ShareArm implements BenchArm {
             // (group config, default 2000) per share-partition. A reader comparing this arm's
             // concurrency against PC's needs to know which of those two bound the run.
             System.err.printf("SHARE_BATCH mode=%s polls=%d emptyPolls=%d maxBatch=%d records=%d "
-                            + "pollMs=%d joinMs=%d ackMs=%d totalMs=%d%n",
+                            + "released=%d pollMs=%d joinMs=%d ackMs=%d totalMs=%d%n",
                     explicitAcks() ? "explicit" : "implicit", polls, emptyPolls, maxBatch, seen,
-                    pollNanos / 1_000_000, joinNanos / 1_000_000, ackNanos / 1_000_000, took);
+                    released, pollNanos / 1_000_000, joinNanos / 1_000_000, ackNanos / 1_000_000, took);
             // A THROUGHPUT FIGURE IS COMPUTED FROM THE RECORD COUNT THE HARNESS WAS ASKED FOR, not
             // from what the arm did - Bench prints `count * 1000.0 / ms` using its ARGUMENT. So an arm
             // that returned early would publish a proportionally inflated rate and look like a

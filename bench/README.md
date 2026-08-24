@@ -46,9 +46,70 @@ BENCH_WORK=/some/dir bench/run-bisect.sh     # keep resolved classpaths between 
 BENCH_SKIP_PRODUCE=1 bench/run-bisect.sh     # topic already holds the dataset; don't re-produce
 ```
 
-`MODES`, `DELAYS` and `CONCURRENCIES` are lists, so one invocation produces a whole comparison
-table - the full cross product of the three. `MODE` and the positional `delayMs` and `concurrency`
-still work and now just mean a list of one.
+`MODES`, `DELAYS`, `CONCURRENCIES`, `ORDERINGS` and `ARRIVAL_RATES` are lists, so one invocation
+produces a whole comparison table - the full cross product of the five. `MODE`, `BENCH_ORDERING` and
+the positional `delayMs` and `concurrency` still work and now just mean a list of one.
+
+### Controlled arrival - `ARRIVAL_RATES`, and why every latency figure before it was unusable
+
+```sh
+ARRIVAL_RATES="400 560 720" ORDERINGS="KEY PARTITION" MODES=core \
+  BENCH_KEY_DISTRIBUTION=zipf BENCH_KEY_COUNT=200 BENCH_DELAY_P99=1020 \
+  bench/run-bisect.sh 15000 20 24 2
+```
+
+**Every run this harness does by default drains a backlog produced before the window opened.**
+Residence time is then buffered depth over throughput, so two arms with the same buffer and the same
+throughput ceiling have equal residence *by construction*. That is not a subtle bias: `PARTITION` and
+`KEY` at 24 in flight over 24 partitions, with the handler's p99 at 50x its median, came back at
+residence p99 **15,568ms against 15,565ms**. The experiment could not have shown a difference had one
+existed.
+
+`ARRIVAL_RATES` feeds records **during** the measured window at a fixed rate, into a **topic created
+for that run**, so the consumer starts with nothing queued and residence measures the engine rather
+than the queue. It is a list because at 100% utilisation every queueing system measures its backlog -
+sweep it as a fraction of the arm's own measured throughput (50%, 70%, 90%) and the percentiles turn
+up somewhere in between.
+
+- **The schedule is absolute** - record *i* is due at `t0 + i / rate`, not "the last send plus an
+  interval" - so producer jitter cannot silently lower the arrival rate.
+- **`t0` is when the consumer is demonstrably live.** `BENCH_ARRIVAL_WARMUP` records go first and the
+  clock starts when the arm reports finishing one, so a slow group join is not fed into the arm as a
+  backlog.
+- **A run whose feed could not hold its schedule is VOIDED**, as `ARRIVAL_VOID`, not recorded. If the
+  producer is the bottleneck the whole run measures the producer, and its percentiles answer a
+  different question than the one in the column heading. `arrival_achieved`, `feed_lag_p99_ms` and
+  `backlog_p99` are the evidence, on every row, that it was not.
+- **`msg_per_sec` stops being a throughput measure** under controlled arrival. It is bounded by the
+  arrival rate by construction, and the run's wall clock includes the group join. Read it only as a
+  check that the arm kept up.
+
+**A fresh topic, rather than starting an existing one at `latest`.** The reset is applied at
+*assignment*, so a record produced between subscribe and assignment is silently skipped, the arm
+never reaches its expected count, and the row comes back as a timeout - which reads as a slow arm. A
+fresh topic with the harness's usual `earliest` turns that race into a harmless ordering.
+
+### Key distribution - `BENCH_KEY_DISTRIBUTION`, the axis that makes `KEY` ordering mean something
+
+| Value | What it produces |
+|---|---|
+| `distinct` (default) | `key-0`, `key-1`, ... - one key per record. Today's behaviour, byte for byte |
+| `zipf` | Zipf over `BENCH_KEY_COUNT` keys (default 1,000) with exponent `BENCH_ZIPF_EXPONENT` (default 1.0) |
+| `hot` | uniform over `BENCH_KEY_COUNT` keys - a bounded key set with **no** skew, the control that separates "few keys" from "unevenly used keys" |
+
+**All-distinct keys is the best possible case for any key-sharded design**, and it was the only one
+this harness could produce. A shard under `KEY` ordering is one key; with every key distinct, every
+record is its own shard of exactly one entry, so the ordering constraint binds nothing and `KEY`
+behaves precisely like `UNORDERED`. That is why the two have matched in every table here - **the
+project had never tested key ordering, it had tested `UNORDERED` wearing its name.**
+
+Seeded from `BENCH_WORK_SEED` by a single-threaded loop, so the key for record *i* depends only on
+*i* and every arm, repeat and sweep sees the identical key sequence. The producing run prints a
+`KEYDIST` receipt line - distinct keys, top-key share, top-ten share - because a skew that was
+requested and silently not applied looks exactly like a skew that was applied and did nothing.
+
+The distribution is part of the **topic name**, for the same reason the partition count is: two
+datasets differing only in their keys must never share a topic.
 
 Concurrency became an axis for the same reason delay did, and the finding that forced it is worth
 knowing before you use it: at delay 0 llingr beat PC while holding **two or three** records in
@@ -77,7 +138,7 @@ value into it that nobody measured. `curve.csv`, `core-curve.csv` and `matched-c
 predate `delay_ms` and were all taken at 2ms; `delay-sweep-llingr.csv` predates `concurrency` and
 was taken at 100.
 
-### The two latency columns, which are not two views of one thing
+### The three latency columns, which are not three views of one thing
 
 Until 2026-08-22 this harness measured throughput and nothing else, which is exactly the number a
 serial engine can hide behind: a run finishing in the same wall clock can have put one record in a
@@ -122,8 +183,85 @@ p50 of **4.98ms**, having silently forgotten all of them, while the meter's coun
 Without the filter, any run longer than Micrometer's rotation would publish percentiles for its tail
 alone, with nothing anywhere saying so. With it, the same probe reported 1,006ms.
 
+**`e2e_p50_ms` / `p99` / `p999` / `max` - the record's INTENDED send instant to completion.** Only
+populated under `ARRIVAL_RATES`, because only then does a record have an arrival instant at all.
+
+**It is the one measure coordinated omission cannot fool, and that is why it exists.** Residence
+starts at poll-return, so a record that sat in the broker because the consumer had fallen behind is
+charged **nothing** for the wait - under an arrival sweep that is precisely the failure mode that
+would make a saturated arm look fast, which is the same shape of false negative the backlog drain
+produced before controlled arrival existed. Each record carries its own scheduled send time in its
+value, so the measurement starts from the instant the workload *intended* to hand it over, not from
+whenever the producer managed to. It therefore also charges the feeder's own lateness, which is why
+`feed_lag_p99_ms` is gated and a late feed voids the run.
+
 **Read `p999` and `max`, not the mean.** Head-of-line blocking shows up in the upper percentiles long
 before it shows up anywhere else, which is the entire reason these columns exist.
+
+### `inflight_p50` - because `peak_in_flight` is a maximum, and a maximum answers the wrong question
+
+`peak_in_flight` is the highest the engine ever reached. `inflight_p50` is the median of a 20ms
+sample taken across the whole run - what it **sustained**.
+
+They come apart exactly where it matters. An arm that touches its configured concurrency once, in
+its first second, and then runs two records at a time for two minutes reports the same
+`peak_in_flight` as one that holds full concurrency throughout, and those are not the same engine to
+anybody choosing between them. Measured 2026-08-22: `KEY` ordering on a skewed key distribution
+reported **peak 24 of a configured 24** while taking **4.1x** longer than `UNORDERED` over the
+identical records - because the run's whole tail is one hot key draining one record at a time. The
+peak was true and told you nothing.
+
+Read the two together: `peak == concurrency` with `inflight_p50` far below it is an arm that is
+*starved*, not one that is *slow*.
+
+**It samples from the first record into the user function, not from JVM start, and it did not until
+2026-08-22.** The sampler is started from `main` - it has to be, because each arm takes its own clock
+and there is no earlier common hook - so before the gate it recorded a zero every 20ms through
+consumer construction, subscribe and the consumer-group join. That is four to six seconds of zeros
+prepended to every run's samples: **invisible on a thirty-second run and decisive on a four-second
+one.** Measured while calibrating the realistic-workload campaign: `core`, `UNORDERED`,
+maxConcurrency 200, 12,000 records - **2,978 msg/s at a reported sustained in flight of ZERO**, where
+Little's law puts it near 30 and the fixed instrument reads 196. The same arm at maxConcurrency 24,
+whose run lasts 9.8s rather than 4.0s, reported 22 and looked perfectly healthy.
+
+**So a short run's `inflight_p50` taken before that fix is not merely noisy, it is wrong by the whole
+quantity being measured** - and it was wrong quietly, in a column beside rows where it was roughly
+right. Once armed it stays armed, so a genuine idle stretch mid-run - which is exactly what a hot key
+produces, and exactly what this column exists to show - is still recorded as the zero it is.
+
+### `pc_build` - `LOCAL` names a coordinate, not a build
+
+`PC_VERSIONS=LOCAL` resolves to `bz.stub.parallelconsumer:*:0.6.0.0-SNAPSHOT` out of a `~/.m2` that
+every worktree and every concurrent session on the machine shares. Whoever ran `mvn install` most
+recently owns it, and a sweep already in progress picks the change up at its next JVM start. On
+2026-08-22 that happened twice in one evening and put four rows in a results file measured against
+code their author had never seen; `pc_version` read `LOCAL` for every row and identified nothing.
+
+`pc_build` carries the core jar's checksum, taken **before and after every run**, so a swap that
+happens mid-cell voids that cell as `BUILD_CHANGED_<before>_TO_<after>` rather than being averaged
+into it. Two rows that disagree are visibly two experiments instead of two repeats.
+
+**`pc_build` detects the swap; `LOCAL_VERSION` prevents it, and a sweep longer than a few minutes
+should use it.** `LOCAL_VERSION=<version>` changes the coordinate `LOCAL` resolves to, so a sweep can
+measure a version nobody else on the machine has heard of:
+
+```bash
+./mvnw -B versions:set -DnewVersion=0.6.0.0-myrun-SNAPSHOT -DgenerateBackupPoms=false
+JAVA_HOME=~/.sdkman/candidates/java/17.0.18-tem ./mvnw -B install -DskipTests -Dcopyright.skip=true
+git checkout -- '*/pom.xml' pom.xml          # put the poms back BEFORE committing anything
+LOCAL_VERSION=0.6.0.0-myrun-SNAPSHOT MODES=core bench/run-bisect.sh
+```
+
+It is additive - the ordinary `0.6.0.0-SNAPSHOT` coordinate is left exactly as another session left
+it, so there is nothing to restore afterwards and no window in which somebody else's sweep is
+measuring your build. **This is not hypothetical**: `0.6.0.0-SNAPSHOT` was overwritten by another
+session partway through the realistic-workload campaign's calibration, between one run and the next,
+and the only outward sign was the residence column going blank.
+
+**Two cautions.** `cksum` on a jar is not a code identity - two installs of the *same* source produce
+different checksums, because the archive carries timestamps - so `pc_build` answers "did this change
+under me", never "is this the code I think it is". And `versions:set` rewrites every pom in the tree:
+put them back before committing, or the version bump ships with your measurement.
 
 ### Results in this directory
 
@@ -137,6 +275,21 @@ before it shows up anywhere else, which is the entire reason these columns exist
 | `direct-pull-delay-sweep.csv` | the shipped engine against the direct-pull engine, 3 delays x 2 concurrencies |
 | `direct-pull-concurrency-sweep-0ms.csv` | the same two engines at delay 0 across six concurrencies - where the result is |
 | `ordering-head-of-line-latency.csv` | `PARTITION` against `KEY` at three buffer depths, flat and tailed handler - the first latency comparison |
+| `saturated-skew-baseline.csv` | The saturated baseline on a Zipf key distribution: `KEY` / `PARTITION` / `UNORDERED` / `share-explicit` across three workloads, plus the distinct-key control. **`KEY` costs 0.13% on distinct keys and 3.1x on skewed ones** |
+| `arrival-tail-skew-matrix.csv` | The tail experiment: the same arms under **controlled arrival** at 50/70/90% of each arm's own capacity, skewed and distinct keys, flat / tailed / tailed-with-failures. The first file here with an end-to-end latency column |
+| `arrival-tail-skew-matrix-2.csv` + `arrival-matrix-2-capacity.csv` | The matrix extended to `core-vt` and `core-dpvt` (JDK 21 whole-sweep, `core` bridge control), by `run-arrival-matrix.sh` - the protocol as a script rather than prose. Also the record of two gaps: every async-engine arrival run times out at the warmup barrier (their arm classes never bump `completedRecords`, so controlled arrival cannot see them finish), and `proxy`/KEY/zipf never got a capacity number. **Machine was under load for parts of this sweep** - read `load_1m` before quoting any row |
+| `arrival-tail-skew-matrix-2-rerun.csv` + `arrival-matrix-2-rerun-capacity.csv` | The flagged cells re-taken on a quiet machine. The bridge disagreements were contamination and resolved; what still varies between repeats is intrinsic - 90%-utilisation cells, and every `tailf` cell (1s-retry queueing is heavy-tailed; quote ranges, not points) |
+| `streams-model-head-of-line.csv` + `streams-model-capacity.csv` | **The head-of-line measurement**: the `streams` arm (partition-serial, the Kafka Streams threading model) under controlled arrival against PC's `KEY` rows. On the tailed workload with distinct keys, PC holds e2e p99 at the handler's own tail (510/509/508ms at 50/70/90%) while partition-serial amplifies (~630/~760/~940ms, p999 ~1.3s) - a tailed record delays every record behind it in its partition, and PC's per-key shards do not. Caveat carried in the data: the arm's measured flat capacity is depressed by group-join wall-clock bias, so its true utilisation per label is lower than stated - the amplification is conservative |
+| `realistic-ordering-matrix.csv` | The realistic-workload re-take, ordering half: seven engines plus **0.5.3.3 from Maven Central**, `KEY` against `UNORDERED`, distinct keys against Zipf, 0% against 1% failures. 12,000 records, 24 partitions, 10ms, `maxConcurrency` 24, `messageBufferSize` 20,000 |
+| `realistic-throughput-matrix.csv` | The same re-take at the operating point the engine and share-group tables were published at - 100,000 records, 2ms, `maxConcurrency` 5,000, `UNORDERED` - with the key distribution and the failure rate added. Includes the **one-partition rows that reproduce the published tables**, so a figure that moved can be attributed |
+| `realistic-default-buffer-control.csv` | `realistic-ordering-matrix.csv`'s workload with one term changed: PC's **default** `messageBufferSize` instead of 20,000. The ordered arm loses another 2.3x; `UNORDERED` does not move |
+| `realistic-share-groups-matrix.csv` | The share-groups re-take, `kafka-clients` **pinned to 4.3.1 for every arm** - which is why it is a separate file from the throughput matrix, where the pin is `NATIVE`. **The 2.5x did not reproduce**: 29,709 msg/s against a published 66,524, while every PC arm in the same sweep held within 3% |
+| `realistic-share-groups-fresh-broker-control.csv` | The control that tested why, on a broker started fresh (176 records of share state against 87,106). **The accumulated-state hypothesis is refuted** - `share` does not recover, `share-explicit` falls further to 11,225, and the `core-vt` negative control is unchanged |
+
+**The two skew files are the only ones taken on anything but all-distinct keys**, and that is the
+single most important caveat on every other row in this table: with distinct keys `KEY` ordering
+constrains nothing, so every `KEY` figure above is `UNORDERED` under a different name. See
+[`docs/inflight/perf-the-tail-experiment-ran-2026-08-22.md`](../docs/inflight/perf-the-tail-experiment-ran-2026-08-22.md).
 
 `ordering-head-of-line-latency.csv` carries three extra LEADING columns the others do not -
 `message_buffer_size` and `handler_p99_ms`, because both were swept and neither is a column the
@@ -219,6 +372,7 @@ The project ships four engines. Until 2026-08-21 it compared one.
 | Mode | Engine | Arm file | Extra artifact |
 |---|---|---|---|
 | `core` | `ParallelEoSStreamProcessor` - **not** an `ExternalEngine` | in `Bench` itself | - |
+| `streams` | none - the Kafka Streams THREADING MODEL as a floor: plain consumer, one single-thread executor per partition, records in a partition strictly serial. The head-of-line comparator for PC's `KEY` ordering | in `Bench` itself | - |
 | `pc` (alias `vertx`) | `VertxParallelEoSStreamProcessor` | `arms/VertxArm.java.template` | - |
 | `reactor` | `ReactorProcessor` | `arms/ReactorArm.java.template` | `parallel-consumer-reactor` |
 | `mutiny` | `MutinyProcessor` | `arms/MutinyArm.java.template` | `parallel-consumer-mutiny` |

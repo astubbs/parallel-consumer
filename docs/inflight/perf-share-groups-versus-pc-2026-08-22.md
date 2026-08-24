@@ -1,14 +1,22 @@
-# Share groups beat Parallel Consumer on this workload by 2.5x, and cost the broker 5x for it - measured 2026-08-22
+# The share-groups comparison does not reproduce, and the 2.5x must not be quoted - measured 2026-08-22, re-taken 2026-08-23
 
 <!-- inflight-type: next -->
 <!-- inflight-impact: strategy -->
 <!-- inflight-labels: needs-decision -->
 
-**Say it first, because burying it would make every other number in this repository less
-trustworthy.** On the workload this harness measures, a bare `KafkaShareConsumer` loop with **no
-Parallel Consumer in it at all** processes 100,000 records at **~66,000 msg/s** where PC's best arm
-manages **~27,000** and the shipped default manages **~17,500**. Same broker, same topic, same bytes,
-same simulated work per record, same machine, same minute.
+> **READ THIS BEFORE ANYTHING BELOW IT.** The 2.5x headline was re-taken on 2026-08-23 at its own
+> operating point and **it did not reproduce**. Across three broker instances on one machine in one
+> day the same `share-explicit` arm read **66,524 / 29,709 / 11,225 msg/s** - a 5.9x range - while
+> every Parallel Consumer arm in the same sweeps held within 3% of its published figure. The
+> accumulated-coordinator-state hypothesis was tested with a negative control and **refuted**. See
+> [the re-take](#the-25x-did-not-reproduce-and-the-pc-arms-did). **Nothing in this document's
+> throughput tables may be quoted in either direction until that variance is understood.** The
+> broker-CPU and structural findings are unaffected.
+
+**What was said on 2026-08-22, and what it rested on.** On the workload this harness measures, a bare
+`KafkaShareConsumer` loop with **no Parallel Consumer in it at all** processed 100,000 records at
+**~66,000 msg/s** where PC's best arm managed **~27,000** and the shipped default **~17,500**. Same
+broker, same topic, same bytes, same simulated work per record, same machine, same minute.
 
 This replaces the *position* `STRATEGY.md` holds against share groups with a *number*, which is worth
 more - and the number goes against us.
@@ -182,6 +190,144 @@ not a broker effect. **The 100ms campaign says the same**: `core-vt` 18,258 agai
 **So no existing figure in this repository needs re-stating for the broker version.** They need
 re-stating for who else was using the broker, which is a different and much older problem -
 `bench/README.md` already documents it and this is another instance.
+
+## Re-taken with a key distribution and a failure rate, 2026-08-23
+
+**The 2.5x was measured on `UNORDERED`, all-distinct keys, one partition, a 2ms constant handler and a
+zero failure rate - share groups' best case and Parallel Consumer's worst**, which is the audit in
+[`next-benchmark-a-model-of-work-not-work.md`](next-benchmark-a-model-of-work-not-work.md). This
+section re-takes it with the two axes it never had.
+
+**`UNORDERED` stays, and that is the fair reading rather than a convenience.** Share groups have no
+ordering guarantee at all, so a `KEY` row beside them would compare a system that orders against one
+that does not, and flatter share groups for doing strictly less work. What changes is the key
+distribution, the failure rate and the partition count - and all three apply to both sides.
+
+### THE 2.5x DID NOT REPRODUCE, AND THE PC ARMS DID
+
+**Say this first, because it is the whole headline and it goes in Parallel Consumer's favour - which
+is exactly why it needs the most scepticism.** The published condition was re-run on 2026-08-23: same
+broker container, same harness, same machine, same dataset, 100,000 records over **one** partition,
+2ms, `maxConcurrency` 5,000, `UNORDERED`, all-distinct keys, no failures, `kafka-clients` 4.3.1 for
+every arm, two repeats.
+
+| Arm | published 2026-08-22 | re-taken 2026-08-23 | drift |
+|---|---:|---:|---:|
+| `share` implicit | 67,898 | **31,162** | **-54%** |
+| `share-explicit` | 66,524 | **29,709** | **-55%** |
+| `core-vt` | 27,289 | 26,494 | -2.9% |
+| `core-dpvt` | 26,396 | 25,959 | -1.7% |
+| `core` | 17,780 | 17,982 | +1.1% |
+
+**Every PC arm reproduces within 3%. Both share arms come back at 45% of their published figure.**
+So the machine has not moved, the harness has not moved, and the dataset has not moved - and on those
+numbers **the 2.5x is 1.18x** (`share` against `core-vt`), or 1.12x for the honest acknowledgement
+mode. `share`'s peak in flight also fell from 2,520 to 922.
+
+### The cause was hypothesised, tested with a control, and the hypothesis was REFUTED
+
+**Prediction, written before the run:** the broker container was created for the share campaign and
+has served every share run since, so `__share_group_state` now holds **87,106 records across 50
+partitions** where the published run met an empty one. Share groups keep per-record delivery state
+there. So on a broker started fresh, `share` should return to roughly 60-68k and `core-vt` - which
+never touches the share coordinator - should be unchanged.
+
+**A broker started fresh on its own port, 176 records of share state at the end of the run instead of
+87,106, everything else identical:**
+
+| Arm | stateful broker (87,106) | **fresh broker (176)** | |
+|---|---:|---:|---|
+| `core-vt` - the negative control | 26,494 | **25,686** | -3.1%, unchanged |
+| `share` implicit | 31,162 | **28,874** | -7.3%, unchanged |
+| `share-explicit` | 29,709 | **11,225** | **-62%** |
+
+**The prediction fails on both halves.** `share` does not recover on a clean coordinator - it sits at
+28,874, still 43% of its published 67,898 - so **accumulated share-coordinator state is not the
+explanation**. And `share-explicit`, which should also have recovered, instead falls by another 2.6x.
+
+**The negative control is what makes that attributable.** `core-vt` reads within 3% on both brokers,
+so the fresh container is not slower in general; whatever moves is specific to the share path.
+
+### So the honest finding is not a number, it is that this arm has no reproducible number
+
+Across three broker instances on one machine, in one day, with the same harness, the same client, the
+same dataset and the same operating point:
+
+| `share-explicit` | msg/s |
+|---|---:|
+| published, 2026-08-22 | **66,524** |
+| stateful 4.3.1 broker, 2026-08-23 | **29,709** |
+| fresh 4.3.1 broker, 2026-08-23 | **11,225** |
+
+**A 5.9x range.** Every PC arm in the same sweeps holds within a few percent of itself and of its own
+published figure. **So "Share Groups beat PC 2.5x" must not be quoted, and neither may "PC beats
+Share Groups" - the share measurement is not currently reproducible enough to support a claim in
+either direction**, and finding out why is now the prerequisite for any share-group number this
+project publishes. The two repeats *within* each broker agree to 1-1.3%, so the variance is between
+broker instances rather than run-to-run noise, which is the useful clue.
+
+**One instability worth recording either way, and it is not a one-off.** In BOTH cells where `share`
+implicit was run twice, **the first repeat completed and the second hung until the 300-second deadline
+killed it** - 2 of 2. The stderr shows `IllegalStateException: BENCH_FAILURE_RATE cannot be modelled
+in implicit acknowledgement mode` at a configured failure rate of **zero**: `ShareArm` treats *any*
+exceptionally-completed stage as an injected failure, so something failing for another reason takes
+that branch, aborts `main`, and leaves the JVM alive on its non-daemon threads.
+
+**So the arm that produced the 2.5x completes one run in two on this broker today**, and the
+published figure is the median of four. Whether the second-run failure is the arm's error handling or
+something the first run leaves behind in the share coordinator is not established - but "first run
+fine, second run wedged" is the signature of state carried between runs, which is the same suspect as
+the halved throughput.
+
+### More partitions do NOT lift share groups' ceiling - the note's own next measurement, answered
+
+This note names it as *"the single most obvious next measurement"*: share groups' in-flight ceiling is
+`share.partition.max.record.locks` per share-partition, so more partitions should raise it. Measured
+at 1 partition and at 24, everything else identical:
+
+| | 1 partition | 24 partitions |
+|---|---:|---:|
+| `share` msg/s | 31,162 | 31,119 |
+| `share` peak in flight | 922 | 976 |
+| `share-explicit` msg/s | 29,709 | 29,659 |
+
+**Nothing moves.** 24x the partitions buys 6% more in-flight and no throughput at all, so whatever
+bounds this arm is not the per-share-partition lock limit. That closes the question in the negative,
+and it means the 100ms row PC wins - which the note flagged as set by a limit that rises with
+partition count - is not at risk from that direction.
+
+### One method note before any number, because it cost a whole pass
+
+**The share arms need `kafka-clients` 4.3.1 pinned explicitly, and under `CLIENT_PINS=NATIVE` they do
+not compile.** This fork's transitive client is 3.9.2, which has no `KafkaShareConsumer` at all, so a
+sweep that forgets the pin records `COMPILE_FAILED` for every share row - correctly, loudly, and only
+after the whole matrix has run. The published campaign pinned 4.3.1 for **every** arm precisely so
+that the client is not a free variable between the two sides, and the re-take does the same.
+
+**Its PC rows are therefore NOT comparable with the ones in
+[`perf-engine-comparison-2026-08-22.md`](perf-engine-comparison-2026-08-22.md)'s re-take**, which run
+at `NATIVE`. Two rows that disagree about the client are two experiments; they live in
+[`bench/results/realistic-share-groups-matrix.csv`](../../bench/results/realistic-share-groups-matrix.csv)
+rather than in the throughput matrix for that reason.
+
+### The structural finding, which is not a number and does not depend on one
+
+**In its default implicit acknowledgement mode a share consumer cannot model a failure at all.**
+`poll()` acknowledges the whole previous batch, so by the time processing has failed the record has
+already been acknowledged and can never be redelivered. An implicit-mode processor that wants
+at-least-once has to retry **in process**, holding the batch open - and a share consumer cannot poll
+while a batch is outstanding, so retrying holds the entire fetch pipeline.
+
+The harness refuses the combination rather than reporting a number for it, which is why the tables
+below carry `share-explicit` in every failure cell and `share` in none. **That refusal is the
+finding**: of the two acknowledgement modes, only one can be compared against PC on a workload where
+records fail, and it is not the default.
+
+**And the comparison that remains still runs in share groups' favour.** `share-explicit` answers a
+failure with `RELEASE`, and a released record is immediately re-acquirable, where PC waits out
+`defaultMessageRetryDelay` - one second - before re-offering it. So at the same configured failure
+rate the two arms are not paying the same retry cost, and **no row putting them side by side may be
+quoted without saying so.**
 
 ## What it does NOT show
 

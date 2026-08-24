@@ -42,8 +42,13 @@ public class MutinyArm implements BenchArm {
         pc.subscribe(Collections.singletonList(topic));
         Bench.responses.set(0);
         long start = System.currentTimeMillis();
-        pc.onRecord(ignored -> Uni.createFrom().completionStage(Bench.callCallee(delayMs))
-                .onItem().invoke(response -> Bench.responses.incrementAndGet()));
+        // See ReactorArm: recordCompletion feeds the arrival warmup barrier's shared counter and the
+        // e2e measure; without it every controlled-arrival run of this arm timed out at the barrier.
+        pc.onRecord(ctx -> Uni.createFrom().completionStage(Bench.callCallee(delayMs))
+                .onItem().invoke(response -> {
+                    Bench.responses.incrementAndGet();
+                    Bench.recordCompletion(-1, Bench.contextValue(ctx));
+                }));
         while (Bench.responses.get() < expected) Bench.sleep(25);
         long took = System.currentTimeMillis() - start;
         Bench.windowClosed();
