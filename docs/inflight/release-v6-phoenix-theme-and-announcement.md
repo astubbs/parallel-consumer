@@ -396,7 +396,9 @@ flat/tail/failure workloads x distinct/Zipf keys x 50/70/90% utilisation) and
 [`ordering-head-of-line-latency.csv`](../../bench/results/ordering-head-of-line-latency.csv).
 Headline findings: on distinct keys `KEY` ordering adds nothing to the handler's own p99 (510/509/
 508ms against a 505ms injected handler tail, at every load measured); on Zipf it holds at 50%
-utilisation and amplifies from 70% up (512 / 750 / 1,200ms). Still missing: latency rows for
-`core-vt`, the async engines and `proxy` (only `core` and `share-explicit` were measured), and
-K4's head-of-line number against a *plain consumer* - the Kafka Streams argument - which the
-committed head-of-line file does not provide because it compares PC's own modes against each other.
+utilisation and amplifies from 70% up (512 / 750 / 1,200ms). Update 2026-08-24, later the same day: `core-vt` and
+`core-dpvt` latency rows now exist (`arrival-tail-skew-matrix-2.csv` and its quiet-machine re-run),
+and K4's head-of-line number is measured (see the Known gaps entry above). Still missing: latency
+rows for the async engines and `proxy` - their arm classes never bump the arrival barrier's
+completion counter, so every controlled-arrival run they attempt times out at the warmup barrier;
+harness work, tracked in `perf-async-arms-cannot-run-controlled-arrival.md`.
