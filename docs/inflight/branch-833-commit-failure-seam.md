@@ -1,9 +1,14 @@
 # Branch `docs/833-commit-failure-seam`: commit-failure seam requirements (astubbs#317)
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 Requirements-only plan for the commit-failure seam -
 `docs/plans/2026-08-24-001-feat-commit-failure-seam-plan.md`. The feature: a commit-failure handler
 returning SHUT_DOWN (default) or CONTINUE when a retriable commit failure exhausts its budget
-(astubbs#317; the request is embedded in upstream confluentinc#833). No PR yet.
+(astubbs#317; the request is embedded in upstream confluentinc#833). No PR yet. The feature's
+rationale and research record is `docs/inflight/core-commit-failure-seam.md`; the adjacent open
+budget-default question is `docs/inflight/bug-offset-commit-timeout-does-two-jobs.md`.
 
 Delete this file when the plan's work lands; the review record below then lives in that PR's history.
 

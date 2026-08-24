@@ -72,7 +72,7 @@ The astubbs#177 fixes (landed on master) sharpened the event this seam intercept
 **Observability**
 
 - R16. Every exhausted budget is loud regardless of decision: an ERROR-level log line, plus metrics for exhaustion count, consecutive exhaustions, time since the last successful commit, and the seam's current state - a continuing-but-failing instance must never be quiet.
-- R17. The failing-commit state is a required surface for the embedded web dashboard when it lands (astubbs#268); the exposure is registered in `docs/inflight/pr-268-web-gui-surfaces.md`.
+- R17. The failing-commit state is a required surface for the embedded web dashboard when it lands (astubbs#268); the exposure is registered in `docs/inflight/web-gui-surfaces.md`.
 
 ### Key Flows
 
