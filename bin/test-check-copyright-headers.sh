@@ -328,9 +328,19 @@ reordered="$WORK/scanner-reordered.sh"
 # The closing quote travels with whichever rule ends up last, so strip it from every extracted rule
 # and re-attach it once - otherwise moving the general rule up would move the quote with it and the
 # "control arm" would be testing a syntax error.
-all_rules=$(grep -E '^bz/stub/parallelconsumer' "$SCANNER" | tr -d '"')
-general_rule=$(grep -E '^bz/stub/parallelconsumer\|' <<<"$all_rules")
-nested_rules=$(grep -E '^bz/stub/parallelconsumer/internal/' <<<"$all_rules")
+# `|| true` on every capture, and an explicit emptiness check below. A bare `$(grep ...)` that
+# matches NOTHING returns 1, and under `set -euo pipefail` that kills this whole script on the
+# spot - no FAIL line, no summary, exit before the "could not rebuild" diagnostic three lines
+# down ever runs. So the guard written to report a broken parse was unreachable precisely when
+# the parse broke, and every case after this point (27-43) vanished with it. A self-test that
+# dies silently is indistinguishable from one that was never run.
+all_rules=$(grep -E '^bz/stub/parallelconsumer' "$SCANNER" | tr -d '"' || true)
+general_rule=$(grep -E '^bz/stub/parallelconsumer\|' <<<"$all_rules" || true)
+nested_rules=$(grep -E '^bz/stub/parallelconsumer/internal/' <<<"$all_rules" || true)
+if [ -z "$all_rules" ] || [ -z "$general_rule" ] || [ -z "$nested_rules" ]; then
+    echo "FAIL: could not read PACKAGE_MOVES out of the scanner (all='$all_rules' general='$general_rule' nested='$nested_rules') - the control arm below would prove nothing"
+    failures=$((failures + 1))
+fi
 # Through a FILE rather than `awk -v`: BSD awk rejects a newline inside a -v assignment outright
 # ("newline in string"), so the same command that works on a CI runner dies on a maintainer's Mac.
 printf '%s\n%s"\n' "$general_rule" "$nested_rules" > "$WORK/moves-block.txt"
@@ -346,8 +356,11 @@ awk -v blockfile="$WORK/moves-block.txt" '
 ' "$SCANNER" > "$reordered"
 # A control arm that was not actually built is worse than none: it would pass by testing the
 # original file. Demand that the general rule now comes FIRST among the rules in the rewritten copy.
-first_rule=$(grep -E '^bz/stub/parallelconsumer' "$reordered" | sed -n '1p')
-if [ "$first_rule" != "$general_rule" ] || ! bash -n "$reordered"; then
+# `|| true` again - `grep | sed` under pipefail returns grep's 1 when the rewrite produced no rules
+# at all, which is exactly the case this check exists to report, and `set -e` would kill the script
+# here before it could.
+first_rule=$( (grep -E '^bz/stub/parallelconsumer' "$reordered" || true) | sed -n '1p')
+if [ -z "$first_rule" ] || [ "$first_rule" != "$general_rule" ] || ! bash -n "$reordered"; then
     echo "FAIL: the ordering control arm could not rebuild PACKAGE_MOVES (first rule: '$first_rule') - a control that cannot be built proves nothing"
     failures=$((failures + 1))
 else
@@ -465,13 +478,26 @@ fi
 #   35. fork-original file mentioning Confluent in PROSE           -> pass (the claim test is
 #       same-line; this is the regression that extending past .java exposed)
 #   36. notice present but NOT inside a comment                    -> FAIL
-#   37. header placed ABOVE a #! shebang                           -> FAIL
+#   37. header placed ABOVE a #! shebang, hash style               -> FAIL
+#  37b. the same shape in a SLASH-comment language (.mjs)          -> FAIL. The shebang scan lived
+#       in the `hash` branch only, so a `.mjs` CLI with its notice above `#!/usr/bin/env node`
+#       passed green while the identical `.sh` file failed
 #   38. header placed ABOVE the <?xml ...?> declaration            -> FAIL
+#  38b. fork-original file MENTIONING the holder with no notice
+#       anywhere (an @author byline)                               -> FAIL. The fork-original arm
+#       tested the window for the holder's NAME rather than for a NOTICE, so a file with no
+#       `Copyright (C)` at all passed; renaming the holder was what turned it red
+#  38c. upstream file unmarked at the fork point that has since
+#       gained a FORK copyright claim                              -> FAIL. Grandfathering excuses
+#       "no notice at all", never a claim of fork authorship over derived content
+#  38d. --report accounts for EVERY tracked path, one row each     -> the end-to-end statement of
+#       "every tracked file is classified", which is what catches a silent skip
 repoF="$WORK/f"
 new_repo "$repoF"
 printf 'workflow: yes\n'                                                      > "$repoF/bare-upstream.yml"      # 32
 printf 'workflow: yes\n'                                                      > "$repoF/bare-upstream-edited.yml" # 33
 printf '/*-\n * Copyright (C) 2020-2022 Confluent, Inc.\n */\nclass X {}\n'    > "$repoF/WasMarked.java"         # 34
+printf 'workflow: yes\n'                                                      > "$repoF/bare-then-claimed.yml"  # 38c
 git -C "$repoF" add -A && git -C "$repoF" commit -qm upstream
 fork_point_f=$(git -C "$repoF" rev-parse HEAD)
 
@@ -487,6 +513,11 @@ printf '# Copyright (C) 2026 Antony Stubbs and contributors\n#\n#!/usr/bin/env b
                                                                               > "$repoF/aboveshebang.sh"       # 37
 printf '<!-- Copyright (C) 2026 Antony Stubbs and contributors -->\n<?xml version="1.0"?>\n<root/>\n' \
                                                                               > "$repoF/abovedecl.xml"         # 38
+printf '// Copyright (C) 2026 Antony Stubbs and contributors\n#!/usr/bin/env node\nconsole.log(1)\n' \
+                                                                              > "$repoF/aboveshebang.mjs"      # 37b
+printf '/*-\n * @author Antony Stubbs and contributors\n */\nclass X {}\n'      > "$repoF/MentionOnly.java"      # 38b
+printf '# Copyright (C) 2026 Antony Stubbs and contributors\nworkflow: yes\nextra: true\n' \
+                                                                              > "$repoF/bare-then-claimed.yml" # 38c
 git -C "$repoF" add -A && git -C "$repoF" commit -qm fork
 
 out=$( (cd "$repoF" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_f" bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
@@ -497,11 +528,27 @@ assert_contains "the unclassified violation names the file"         "): mystery.
 assert_contains "an upstream file that HAD a notice and lost it still fails" \
     "upstream-derived file has no copyright header): WasMarked.java" "$out"
 assert_contains "a notice outside a comment is rejected"            "notice is not in a # comment): instring.py" "$out"
-assert_contains "a header above the shebang is rejected"            "header sits above the #! shebang" "$out"
+assert_contains "a header above the shebang is rejected"            "header sits above the #! shebang, which must be the first line): aboveshebang.sh" "$out"
+assert_contains "a header above the shebang is rejected in a SLASH language too" \
+    "header sits above the #! shebang, which must be the first line): aboveshebang.mjs" "$out"
 assert_contains "a header above the XML declaration is rejected"    "header sits above the <?xml ...?> declaration" "$out"
+assert_contains "a fork-original file that only MENTIONS the holder, with no notice, is rejected" \
+    "fork-original file missing 'Antony Stubbs and contributors' header): MentionOnly.java" "$out"
+assert_contains "grandfathering does not excuse a FORK claim on an unmarked upstream file" \
+    "upstream-derived file lost its Confluent header): bare-then-claimed.yml" "$out"
 assert_contains "grandfathered upstream files are counted, not silently skipped" \
     "2 upstream file(s) grandfathered" "$out"
-assert_contains "structural fixture reports exactly 5 violations"   "5 violation(s)" "$out"
+assert_contains "structural fixture reports exactly 8 violations"   "8 violation(s)" "$out"
+
+# 38d. EVERY tracked path gets exactly one --report row. This is the invariant the scanner's header
+# states ("EVERY TRACKED FILE IS CLASSIFIED... A quiet skip is not reachable from here") asserted
+# end-to-end rather than per-rule, and it is what catches a path dropped BEFORE classification -
+# the shape a non-ASCII filename produced, where the file was neither enforced, exempt, nor
+# unclassified and did not appear in --report at all.
+report_out=$( (cd "$repoF" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_f" bash "$SCANNER" --report) 2>&1 )
+tracked_n=$(git -C "$repoF" ls-files | wc -l | tr -d ' ')
+report_n=$(printf '%s\n' "$report_out" | grep -c . || true)
+assert "--report accounts for every tracked path, one row each" "$tracked_n" "$report_n"
 case "$out" in
     *"bare-upstream.yml"*|*"bare-upstream-edited.yml"*)
         echo "FAIL: an upstream file that never carried a notice was told to grow one"; failures=$((failures + 1)) ;;
@@ -600,10 +647,13 @@ RENAME_SCRIPT="$(dirname "$SCANNER")/rename-packages.sh"
 if [ ! -f "$RENAME_SCRIPT" ]; then
     echo "ok:   drift guard skipped - bin/rename-packages.sh is gone (the rename has landed)"
 else
-    # dot form `old|new` -> path form `new|old`, which is how the scanner writes it
-    from_rename=$(grep -E '^io(\.[a-z0-9]+){2,}\|bz(\.[a-z0-9]+){2,}"?$' "$RENAME_SCRIPT" \
+    # dot form `old|new` -> path form `new|old`, which is how the scanner writes it.
+    # `|| true` for the same reason as the control arm above: a zero-match `$(grep ...)` under
+    # `set -e` would kill the script before the emptiness check below - the very check written to
+    # catch it - so the "guard that cannot see its subject" branch was unreachable.
+    from_rename=$( (grep -E '^io(\.[a-z0-9]+){2,}\|bz(\.[a-z0-9]+){2,}"?$' "$RENAME_SCRIPT" || true) \
         | tr -d '"' | tr '.' '/' | awk -F'|' '{ print $2 "|" $1 }' | sort)
-    from_scanner=$(grep -E '^bz(/[a-z0-9]+){2,}\|io(/[a-z0-9]+){2,}"?$' "$SCANNER" | tr -d '"' | sort)
+    from_scanner=$( (grep -E '^bz(/[a-z0-9]+){2,}\|io(/[a-z0-9]+){2,}"?$' "$SCANNER" || true) | tr -d '"' | sort)
     if [ -z "$from_rename" ] || [ -z "$from_scanner" ]; then
         echo "FAIL: drift guard could not read one of the tables (rename script: '$from_rename', scanner: '$from_scanner') - a guard that cannot see its subject passes for the wrong reason"
         failures=$((failures + 1))
