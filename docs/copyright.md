@@ -81,6 +81,52 @@ worktrees.
   Confluent header becomes a violation - measured at 0 → 197, in maven's `validate` phase, so every
   `./mvnw` on the tree dies before it starts. The script's header carries the reasoning.
 
+## Why a header at all, and why prose does not get one
+
+**A notice does not create protection.** Copyright subsists automatically on creation under Berne,
+and in the US has required no notice since 1989. Every file in this tree is protected whether or not
+it carries a header, prose included. So any argument that `.md` files are somehow unprotected
+because they lack a notice is wrong, and it is not why this gate exists.
+
+What a notice actually does is narrower, and every part of it concerns **a reader who has the file
+and not the repository**:
+
+- it carries the licence terms to a file that has been separated from `LICENSE`;
+- it makes the file legible to a licence scanner - no header reads as *unknown licence*, which in
+  many corporate ingestion pipelines means *cannot use*;
+- it defeats an innocent-infringement defence in mitigation of damages (17 U.S.C. 401(d));
+- for upstream-derived files it discharges Apache-2.0 4(b), which requires modified files to carry
+  prominent notice that they were changed.
+
+**So the question a file has to answer is whether it can reach someone detached from `LICENSE`.**
+The build publishes sources jars, so `.java` files do exactly that: somebody opens a source file out
+of a `-sources.jar` with no other context, and the header is the only thing telling them the terms.
+The poms travel the same way, published beside the jar, which is why the root `pom.xml`'s
+`Modifications Copyright` line is the most load-bearing line this gate enforces.
+
+Prose cannot. No `.md` or `.adoc` file lives under `src/main`, nothing sweeps documentation into an
+artefact, and `README.adoc` is generated at build time from `README_TEMPLATE.adoc` and sits at the
+repository root. Anyone reading one of these is looking at the repository, and the repository
+contains `LICENSE`. A per-file notice there has no recipient.
+
+**Everything else with a comment syntax is headered uniformly, including files that never ship** -
+workflows, `bin/` scripts, `codecov.yml`. That is deliberately over-inclusive, for a mechanical
+reason rather than a legal one: "does this file travel?" is a per-file judgement, it is easy to get
+wrong, and it is **silent** when wrong. A rule keyed on file type is one a scanner can enforce and a
+reviewer can check. The cost is notices on files nobody will read; the cost of the alternative is a
+shipped file with no notice, and nothing to catch it.
+
+The line is therefore drawn at **prose versus everything else that can hold a comment**, and it is
+drawn there because prose is the one category that is both never distributed and read constantly by
+people working in the repository - where a notice on every working note is pure noise.
+
+**Decided 2026-08-24 on astubbs#338.** The exemption already existed and was right; its stated
+reason was not. It read "the notice would render into the document", which is false - markdown,
+AsciiDoc and HTML all have non-rendering comment syntax, and this repository already depends on
+that, since every `docs/inflight/` note carries `inflight-type` markers no reader ever sees. A false
+reason is worse than none, because the obvious way to "fix" it is to add headers to a hundred
+documents. The rule stands; the reasoning is now the real one.
+
 ## What is exempt, and why
 
 The reasons live beside the globs in `EXEMPT_PATHS`; only four kinds qualify, and "nobody got round
@@ -91,4 +137,4 @@ to it" is not one of them - that makes the file a violation, which is the point.
 | **Generated** | protoc and ts-proto output (`_generated/`, `generated/`, `*_pb.rb`), lockfiles, `go.sum`. Regeneration overwrites the whole file, so a header cannot survive there. |
 | **No comment syntax** | `*.json`, `*.sln`, binary fixtures, `py.typed`, the ServiceLoader registry. Strict JSON has no comments at all; where a notice has to sit in-band the conventions are a `"//"` key (`tsconfig.json`) or the `description` string (`package.json`) - but a scanner cannot demand either in general. |
 | **Vendored** | the Maven wrapper (`mvnw`, `mvnw.cmd`, `.mvn/`). The header is its author's business, and `mvn wrapper:wrapper` rewrites it. |
-| **Not authored source** | prose (`*.md`, `*.adoc`, `*.html`), where the notice would render into the document a reader sees, and IDE/VCS/tool configuration (`.idea/`, `.gitignore`, `.editorconfig`, `.gitmessage`, `CODEOWNERS`, `.claude/`). `LICENSE` and `NOTICE` are the licence texts themselves. |
+| **Not distributed** | prose (`*.md`, `*.adoc`, `*.html`) - see the section above - and IDE/VCS/tool configuration (`.idea/`, `.gitignore`, `.editorconfig`, `.gitmessage`, `CODEOWNERS`, `.claude/`). `LICENSE` and `NOTICE` are the licence texts themselves. |

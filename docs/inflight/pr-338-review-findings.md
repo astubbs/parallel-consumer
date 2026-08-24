@@ -17,12 +17,6 @@ note when these are resolved, not when the PR merges.
 - **`.claude/*` is exempt, and that exempts seven hand-written hook scripts** which already carry
   correct headers. Narrowing the exemption is verified green (416 files, 0 violations). Whether
   unshipped agent tooling owes a notice is a policy call, not a defect.
-- **Prose documentation is exempt for a reason that is not true.** The type table gives
-  `*.md`/`*.adoc`/`*.html` the reason "the notice would render into the document". All three take
-  non-rendering comments, and this repo already relies on that - `docs/inflight/*.md` carry
-  `inflight-type` markers no reader ever sees. Either header them or restate the exemption honestly
-  (covered by the root `LICENSE`; a notice on every working note is noise). The current wording does
-  not survive contact with the repo's own files.
 - **The grandfathering prose is stated twice**, in the scanner and in `docs/copyright.md`. Trimming
   either increases divergence from the language-proxy origin the scanner was extracted from.
 
