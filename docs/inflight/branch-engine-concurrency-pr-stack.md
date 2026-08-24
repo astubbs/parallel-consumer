@@ -65,7 +65,7 @@ particular needed a review where the reviewer looks at nothing else.
 ## Extractions beyond the stack - surveyed 2026-08-24
 
 Independent fixes of SHIPPED defects, buried in this branch and cuttable from master the way
-astubbs#335 was:
+astubbs#335 was (the first became astubbs#336 on 2026-08-24):
 
 - **`fa4d1cf25` - the broker-poller load gate drifts.** `availableWorkContainerCnt` has two
   conditional decrements whose conditions do not match the increment's, both single-threaded:
@@ -75,7 +75,11 @@ astubbs#335 was:
   derives the gate by conservation (`RecordPopulation`, admitted - retired) and carries a test that
   fails on the old code. Predates dp/vt, so it cuts clean.
 - **`bce044b3f` (astubbs#155) - the load-factor ceiling warning** shouts, and warns about a pinned
-  buffer. Small and fully independent.
+  buffer. CORRECTION 2026-08-24: astubbs#201 (`fix/155-load-factor-noise`) already fixes the same
+  two defects - rate-limited warning plus the pinned/static-factor case - independently implemented.
+  Do NOT open a second PR; refresh astubbs#201 (rename sweep + master merge, its branch predates the
+  package rename) and graft this commit's additions onto it: the proven-red tests, the
+  demote-to-DEBUG-with-reasoning, and the @Isolated appender-interference lesson.
 
 Master-relevant records that should not wait for the stack: the PARTITION-starves-on-a-narrow-
 buffer bug note (a shipped-mode defect sighting), the shutdown-commit flake sighting astubbs#260
