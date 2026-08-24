@@ -27,6 +27,27 @@ you have read this file.
   `TestConventionsArchTest`, so **a new module has no guard until you add one**. Integration tests are
   selected by package instead, so an `*IT` name there is correct.
 
+## A run that prints nothing is normal, and the flag that changes it
+
+`parallel-consumer-core/src/test/resources/logback-test.xml` sets the root logger to
+`${pc.log.level:-warn}`, so a passing run emits **nothing** from the library. That is deliberate - a
+suite that floods stdout hides the one failure worth reading - but it looks identical to a run that
+never executed, and the reflex is to start debugging the harness. Check
+`target/surefire-reports/<FQCN>.txt` before concluding anything: an absent report means the class
+really did not run.
+
+Turn it up per command, never by editing the file:
+
+```bash
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=info    # the library's own progress
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=debug   # per-record decisions
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=trace   # everything PC emits
+```
+
+A committed logger at `debug` or `trace` is a separate failure this repo already gates - see
+`bin/check-test-log-config.sh`, which pins the four library modules to this harness and fails any
+such logger, because the resulting flood is silent in exactly the way an empty run is.
+
 ## The ambient probe: contention artifact, or genuine bug?
 
 Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
