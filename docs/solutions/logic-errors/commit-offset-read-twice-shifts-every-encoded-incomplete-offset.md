@@ -169,9 +169,23 @@ around an encode step means reading a moving value twice and treating the two re
 Threading it through a tuple makes payload and committed offset the same number **by construction** -
 there is no longer a second read that could observe a different state.
 
-The residual race is in the safe direction. Work completing between the sample and the encode only
-makes the commit more conservative: a lower offset, at-least-once replay, and the next commit cycle
-catches up. There is no remaining path that commits ahead of what the payload describes.
+Within `createOffsetAndMetadata` the residual race is in the safe direction: work completing between
+the sample and the encode only makes the commit more conservative - a lower offset, at-least-once
+replay, and the next commit cycle catches up.
+
+**That is a statement about this method, not about the commit path, and an earlier version of this
+document made the wider claim.** One layer down, `OffsetMapCodecManager.encodeOffsetsCompressed`
+takes two further unsynchronised reads of the same moving state - the incomplete set, then
+`getOffsetHighestSucceeded()` as the encoder's range top - and the second can widen the range past
+what the first was filtered against, encoding genuinely-incomplete offsets as complete. That code is
+untouched here, predates the fork (2022), and is on master today. It is being reproduced separately
+before anything is changed there, on the same principle this document argues for: a fix without a
+failing control arm is not evidence.
+
+So the accurate claim is narrower than "every path is closed". The offset-to-commit read is now
+taken once and cannot disagree with the payload it is filed under. Whether the *payload's own
+contents* can be built from a torn read is a live question with its own investigation, and this
+write-up should not be cited as having settled it.
 
 The silent variant follows from the same arithmetic. When the fabricated state carries
 `offsetHighestSucceeded` above what the partition ever produced, real records arriving into that
