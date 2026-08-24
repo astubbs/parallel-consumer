@@ -83,7 +83,26 @@ On large records they do not compete, because bundling never addresses the domin
 stopped.** Flink kept process mode alongside thread mode, for isolation. That is the strongest hint
 available about the shape of the answer: **both, selectable**, rather than a choice.
 
-Nothing is decided here yet. See the unresolved collision below, which is the reason.
+**DECIDED 2026-08-24, conditionally - and the condition is the payload, not the design.** Both
+measurements this axis was waiting on are in
+([`inflight/perf-streams-crossing-attribution.md`](inflight/perf-streams-crossing-attribution.md),
+[`inflight/perf-crossing-fixed-versus-per-byte.md`](inflight/perf-crossing-fixed-versus-per-byte.md)),
+and they resolve it as follows.
+
+- **Records under a few KB: bundle.** The crossing is essentially all fixed cost there, which is
+  exactly and entirely what bundling removes - 16x at 1 KB, 92x at 16 B. It needs no new toolchain,
+  no shared library and no per-language FFI, so it is both the larger win and the cheaper build.
+- **Records above ~18 KB: a zero-copy transport, or nothing.** The per-byte copy dominates and
+  bundling cannot touch it. This is the FFI track's defensible niche.
+- **Between the two, either helps and neither transforms.** 5x at 4 KB from bundling.
+- **Establish the payload profile before building either.** It is a cheaper question than either
+  build and it reorders both, and nobody has asked it of the intended workloads yet. That is now
+  the open item on this axis - not which lever, but which workload.
+
+**What is still genuinely unresolved is the collision below**, which bundling does not escape: N
+records crossing in one frame must still produce N independent outcomes, and Beam bought its
+bundling by giving that up. That constraint is the design work, and it does not go away now that
+the arithmetic favours bundling.
 
 ### 4. Transport - what the frames travel over
 

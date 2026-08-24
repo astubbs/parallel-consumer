@@ -166,6 +166,28 @@ against.** "Not meaningfully faster" had no figure behind it; it has one now. Se
   (slope -0.3us/record, bounded above by ~15us), so there is no large engine-side cost hiding behind
   the crossing and making a transport improvement pointless.
 
+**REFINED 2026-08-24: the prize is payload-dependent, and that changes who this track competes
+with.** See
+[`../inflight/perf-crossing-fixed-versus-per-byte.md`](../inflight/perf-crossing-fixed-versus-per-byte.md).
+The ~150us splits into **about 120us fixed plus ~6.5us per KB**, and the consequence is not
+arithmetic detail - it decides whether this track has a job at all.
+
+- **On small records, bundling can take almost the whole prize before this track ships.** Under a
+  few KB the crossing is essentially all fixed cost, and one frame carrying a hundred records
+  divides that by a hundred. If bundling lands first on sub-KB workloads, an embedded transport
+  arrives to find ~1us per record left to argue over. **This is a new and serious threat to the
+  performance case, and it is not the one this plan was written to guard against.**
+- **On large records, this track is the ONLY lever, and bundling cannot touch it.** Above about
+  18 KB the per-byte copy overtakes the fixed cost, and bundling amortises nothing there - it still
+  copies every byte. A shared-memory transport passing a pointer is the only thing that removes
+  that term. **That is the defensible niche, and it should be stated as the case for the track
+  rather than the general speed claim.**
+- **So the honest framing of the kill criterion is now conditional.** The bar below still stands as
+  written, but a failure to clear it matters far less if the target workloads are large-payload,
+  and far more if they are small - because in the small case bundling is both cheaper to build and
+  nearly as effective. Whoever revisits this should establish the payload profile of the intended
+  workloads FIRST; it is a cheaper question than either build and it reorders both.
+
 ### CTD3 - The measurement must compare like with like
 
 Any throughput comparison MUST run the sidecar arm as a **native image**, not a JVM. The Go
