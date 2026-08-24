@@ -66,10 +66,11 @@ public class KafkaClientUtils implements AutoCloseable {
     public static final String GROUP_ID_PREFIX = "group-1-";
 
     /**
-     * Gives every PC built here a unique id so its threads ({@code pc-control-PCn}, {@code pc-broker-poll-PCn})
-     * and the {@code pcId} MDC are attributable to one instance in the logs. Without it, concurrent PC
-     * instances all log under the same generic thread names and are impossible to tell apart - which made
-     * the confluentinc#857 silent-stall investigation much harder than it needed to be.
+     * Gives every PC built here a READABLE id so its threads ({@code pc-control-PCn},
+     * {@code pc-broker-poll-PCn}) and the {@code pcId} MDC name a numbered instance rather than the abbreviated
+     * UUID PC now defaults to. Telling concurrent instances apart at all is no longer this counter's job - a
+     * default id landed with the adaptive-concurrency log work - but {@code PC1} beats {@code 5f3ed23e} when you
+     * are following two of them by eye, which is what the confluentinc#857 silent-stall investigation needed.
      */
     private static final AtomicInteger PC_INSTANCE_COUNTER = new AtomicInteger();
 

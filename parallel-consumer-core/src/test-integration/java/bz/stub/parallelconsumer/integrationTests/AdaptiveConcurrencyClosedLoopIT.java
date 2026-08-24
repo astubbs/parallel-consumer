@@ -261,10 +261,10 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
         ParallelEoSStreamProcessor<String, String> pc = new ParallelEoSStreamProcessor<>(options, module);
         pc.subscribe(UniSets.of(getTopic()));
 
-        // Take the controller reference BEFORE poll() starts any engine thread - PCModule's accessor is an
-        // unsynchronized lazy initialiser, so a first touch racing the control loop yields TWO controllers and this
-        // test would then watch an orphan sitting at its seed forever. See
-        // docs/inflight/bug-pcmodule-admission-controller-lazy-init-race.md.
+        // Take the controller reference BEFORE poll() starts any engine thread. PCModule#admissionController() is
+        // synchronized now, so a racing first touch can no longer yield TWO controllers and leave this test
+        // watching an orphan sitting at its seed forever - but taking the reference while this is the only thread
+        // makes that independent of the accessor's guarantees.
         AdmissionController controller = module.admissionController();
 
         pc.poll(context -> {

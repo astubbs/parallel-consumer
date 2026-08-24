@@ -1263,7 +1263,8 @@ Set `maxConcurrency` explicitly whenever you want a specific ceiling.
 
 The controller serves the core engine's pre-loaded queue path only.
 The engines that dispatch into an external runtime - Vert.x, Reactor and Mutiny - and the measurement-only direct-pull engine cannot serve it, because the concurrency an admission controller would steer lives outside anything this library sizes.
-Requesting adaptive mode on any of them logs one WARN at construction and runs static.
+Setting `adaptiveConcurrencyMode` on any of them *fails construction*, naming the engine and why: you asked for something that will not happen, and a warning you never read gets you to "this feature is broken" rather than "I configured it wrong".
+The one exception is a mode picked up from the `pc.adaptiveConcurrency` system property instead of set in your code - that is a JVM-wide ambient default, not a request, so it keeps the older behaviour of one WARN at construction and running static.
 It is never silently ignored.
 
 === What to watch

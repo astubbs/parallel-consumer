@@ -56,8 +56,12 @@ boundaries:
     does to somebody else's system, so it must be a code decision rather than an environment one.
   - >-
     Core engine, pre-loaded queue path only. Engines dispatching into an external runtime (Vert.x,
-    Reactor, Mutiny) and the measurement-only direct-pull engine refuse it with one WARN at
-    construction and run static - never a silent ignore.
+    Reactor, Mutiny) and the measurement-only direct-pull engine refuse it. Set explicitly on the
+    builder, that refusal FAILS construction - an explicit request that cannot be honoured is a
+    configuration error, not a degraded configuration. Arriving from the pc.adaptiveConcurrency
+    system property it is an ambient default rather than a request, and keeps the older behaviour of
+    one WARN at construction and running static - a JVM-wide flag must not be able to fail every
+    external-engine consumer sharing that JVM. Never a silent ignore either way.
   - >-
     In ENFORCE, maxConcurrency is the ceiling and is never exceeded, with one documented exception -
     leaving it at the library default selects a higher adaptive default ceiling instead, because

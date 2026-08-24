@@ -207,6 +207,22 @@ public final class AdmissionControlLaw {
      */
     private final ServiceTimeExpAvg longServiceTime;
 
+    /**
+     * The long-term baseline value that the LAST evaluated window's gradient was actually computed against, in
+     * nanoseconds - i.e. {@code longTime} as {@link #onWindowClosed} sampled it, before any anti-drift decay or
+     * probe-down snap applied to {@link #longServiceTime} for the NEXT window.
+     * <p>
+     * Purely observational: written and never read by the law itself, so it changes no computation. It exists
+     * because the comparison the law makes - short-term against long-run - is the number that decides everything
+     * and was invisible from outside, which made the baseline ratchet undiagnosable from the log alone.
+     * {@link #getServiceTimeBaselineNanos()} answers a different question (where the baseline is NOW), and reading
+     * it after the fact would misreport a window in which the decay fired.
+     * <p>
+     * Zero until a window has been evaluated far enough to compute it - a window held by the minimum-samples arm
+     * never reaches the gradient, and deliberately leaves this untouched along with the rest of the state.
+     */
+    private double lastWindowBaselineNanos = 0.0;
+
     private int windowsSinceProbeDown = 0;
     private boolean awaitingProbeDownResult = false;
     private double preProbeShortTimeNanos = 0.0;
@@ -255,6 +271,7 @@ public final class AdmissionControlLaw {
         // MIN_SERVICE_TIME_NANOS is the zero-latency guard (see its javadoc).
         final double shortTime = Math.max(MIN_SERVICE_TIME_NANOS, window.getMeanServiceTimeNanos());
         final double longTime = longServiceTime.add(shortTime);
+        this.lastWindowBaselineNanos = longTime; // observation only - see the field's javadoc
 
         // PR-88 anti-drift: a long baseline left stale-high after a load episode is decayed toward reality.
         // As upstream, the decayed value takes effect from the NEXT window; this window uses longTime as sampled.
@@ -381,6 +398,26 @@ public final class AdmissionControlLaw {
      */
     public double getServiceTimeBaselineNanos() {
         return longServiceTime.get();
+    }
+
+    /**
+     * The long-run baseline the LAST evaluated window's short-term service time was compared against, in
+     * nanoseconds - see {@link #lastWindowBaselineNanos}. Read-only; zero before any window has reached the
+     * gradient.
+     */
+    public double getLastWindowServiceTimeBaselineNanos() {
+        return lastWindowBaselineNanos;
+    }
+
+    /**
+     * The tolerated short/long service-time ratio: the threshold the comparison is actually tested against.
+     * <p>
+     * The gradient is {@code clamp(tolerance * long / short, 0.5, 1.0)}, so it stops being 1.0 - and the limit
+     * therefore stops growing and starts contracting - exactly when {@code short / long} rises above this value.
+     * Reported alongside the ratio so a reader can see which side of the line a window fell on.
+     */
+    public double getServiceTimeTolerance() {
+        return serviceTimeTolerance;
     }
 
     /**

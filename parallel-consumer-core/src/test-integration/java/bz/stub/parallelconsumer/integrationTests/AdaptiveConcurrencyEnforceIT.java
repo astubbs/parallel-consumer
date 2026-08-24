@@ -64,13 +64,22 @@ import static org.awaitility.Awaitility.await;
  * Or filter an existing log on the prefix every one of those lines opens with: {@code grep 'Adaptive concurrency'}.
  * Two shapes appear - the target MOVING, and (rate-limited) the target being HELD by a named constraint:
  * <pre>
- * Adaptive concurrency (ENFORCE): live admission target 2 -&gt; 3 slot(s), decided by ADAPTING - service time
- *     mean 14.09ms, in-flight median 2 (spread 0) over 129 snapshot(s), 139 sample(s), effective maximum 32.
- * Adaptive concurrency (ENFORCE): the admission target is being held by COOLDOWN - live target 9 slot(s),
- *     would-be target 9 slot(s), effective maximum 32.
+ * 49:14.248 5f3ed23e [pc-control-5f3ed23e] Adaptive concurrency (ENFORCE): live admission target 2 -&gt; 3
+ *     slot(s), decided by ADAPTING - service time mean 12.12ms against long-run baseline 12.28ms, ratio 0.99
+ *     (contracts above 1.50), in-flight median 2 (spread 0) over 154 snapshot(s), 162 sample(s), effective
+ *     maximum 32.
+ * 49:22.827 5f3ed23e [pc-control-5f3ed23e] Adaptive concurrency (ENFORCE): the admission target is being held
+ *     by COOLDOWN - live target 9 slot(s), would-be target 9 slot(s), effective maximum 32.
  * </pre>
  * Both are real lines from a run of this test - the second is the post-rebalance freeze, which is what the
  * target does for thirty seconds after a member joins.
+ * <p>
+ * Two things in there are what make a two-instance run readable at all, and both are worth knowing about when you
+ * read your own logs. {@code 5f3ed23e} is the instance id ({@code %X{pcId}}, and the suffix on the thread name):
+ * this test runs a second instance in the same JVM, and without it the two trajectories interleave into one
+ * stream that reads as a single controller jumping from 9 back to 2. And {@code against long-run baseline ...
+ * ratio ... (contracts above ...)} is the comparison the law actually decided on - the short-term figure alone
+ * never says why it means grow.
  *
  * <h2>Why this shape of workload</h2>
  * The controller's law needs at least ten service-time samples in a one-second window before it will move
@@ -173,12 +182,13 @@ class AdaptiveConcurrencyEnforceIT extends BrokerIntegrationTest<String, String>
         ParallelEoSStreamProcessor<String, String> pcA = new ParallelEoSStreamProcessor<>(optionsA, moduleA);
         pcA.subscribe(UniSets.of(getTopic()));
 
-        // Take the controller reference BEFORE poll() starts any engine thread. PCModule's accessor is an
-        // unsynchronized lazy initialiser, and on the default path (no messageBufferSize) nothing forces it
-        // during construction - so a first touch from this thread racing the control loop's yields TWO
-        // controllers, and the one the test holds then sits at its seed forever while the engine steers the
-        // other. That is exactly how the first run of this test failed: a flat target here, and a full 2 -> 12
-        // ramp in the log beside it. See docs/inflight/bug-pcmodule-admission-controller-lazy-init-race.md.
+        // Take the controller reference BEFORE poll() starts any engine thread, and keep doing so even though
+        // PCModule#admissionController() is now synchronized. The first run of this test raced that accessor -
+        // a touch from this thread against the control loop's first pass constructed TWO controllers, and the
+        // one the test held then sat at its seed for the full ninety-second await while a complete 2 -> 12 ramp
+        // printed beside it from the other. Taking the reference before any engine thread exists keeps this
+        // deterministic regardless of the accessor's guarantees, and the isSameInstanceAs guard below fails
+        // loudly if a second controller ever appears again.
         AdmissionController controllerA = moduleA.admissionController();
 
         pcA.poll(context -> {

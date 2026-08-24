@@ -21,18 +21,30 @@ import java.util.List;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ADAPTIVE_CONCURRENCY_MODE_PROPERTY;
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * The engine-capability half of the adaptive-concurrency contract: a requested mode meeting an engine that cannot
- * serve it must construct fine, WARN once naming why, and leave {@code adaptiveConcurrencyActive} false - the single
- * field downstream components read, so "unsupported" and "disabled" are indistinguishable from then on.
+ * The engine-capability half of the adaptive-concurrency contract: what happens when a requested mode meets an
+ * engine that cannot serve it.
  * <p>
+ * The answer depends on WHO asked, and both branches are covered here:
+ * <ul>
+ * <li><b>Set explicitly on the builder</b> - construction FAILS. The user asked for something that will not
+ * happen, and a WARN they never read gets them to "this feature is broken".</li>
+ * <li><b>Arrived from the {@value ParallelConsumerOptions#ADAPTIVE_CONCURRENCY_MODE_PROPERTY} system property</b> -
+ * construction succeeds, WARNs once naming why, and leaves {@code adaptiveConcurrencyActive} false, so
+ * "unsupported" and "disabled" are indistinguishable from then on. The property is JVM-wide and turns measurement
+ * on for a whole bench harness or CI matrix; throwing on it would kill every external-engine consumer in the JVM.
+ * </li>
+ * </ul>
  * The options half - property resolution and seed validation - lives in
  * {@code bz.stub.parallelconsumer.AdaptiveConcurrencyOptionTest}.
  *
  * @see AbstractParallelEoSStreamProcessor#supportsAdaptiveConcurrency()
  * @see AbstractParallelEoSStreamProcessor#isAdaptiveConcurrencyActive()
+ * @see ParallelConsumerOptions#isAdaptiveConcurrencyModeExplicit()
  */
 // Same reasoning as PipelinePressureLoggingTest: counting log events means attaching an appender to the shared
 // AbstractParallelEoSStreamProcessor logger, which any concurrently running test would also write to.
@@ -72,44 +84,102 @@ class AdaptiveConcurrencyCapabilityTest {
 
     /**
      * Direct pull is an option on the core engine, not a subclass, so the capability answer has to fold it in -
-     * an override-only design would report the core class as capable and then have no pool queue to steer.
+     * an override-only design would report the core class as capable and then have no pool queue to steer. Asked
+     * for explicitly, it is a configuration error.
      */
     @Test
-    void observeWithTheDirectPullEngineConstructsButWarnsAndDeactivates() {
-        var captured = captureProcessorLogging(() -> {
-            try (var pc = new TestParallelEoSStreamProcessor<>(options()
-                    .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.OBSERVE)
-                    .directPullEngine(true)
-                    .build())) {
-                return pc.isAdaptiveConcurrencyActive();
-            }
-        });
+    void explicitObserveWithTheDirectPullEngineFailsConstruction() {
+        var options = options()
+                .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.OBSERVE)
+                .directPullEngine(true)
+                .build();
 
-        assertThat(captured.result).isFalse();
-        var warnings = adaptiveWarnings(captured.events);
-        assertThat(warnings).hasSize(1);
-        assertThat(warnings.get(0)).contains("direct-pull");
+        var thrown = assertThrows(IllegalArgumentException.class,
+                () -> new TestParallelEoSStreamProcessor<>(options).close());
+
+        assertThat(thrown).hasMessageThat().contains("adaptiveConcurrencyMode");
+        assertThat(thrown).hasMessageThat().contains("direct-pull");
     }
 
     /**
-     * The override contract: {@link ExternalEngine} declines the capability, so a requested mode deactivates with
-     * the WARN naming the engine class. Exercised through a minimal test subclass rather than a real Vert.x or
-     * Reactor engine - those modules are not on the core test classpath, and what is under test is
+     * The override contract: {@link ExternalEngine} declines the capability, so an explicitly requested mode is
+     * refused with an exception naming the engine class. Exercised through a minimal test subclass rather than a
+     * real Vert.x or Reactor engine - those modules are not on the core test classpath, and what is under test is
      * {@link ExternalEngine}'s own override, which every subclass inherits.
      */
     @Test
-    void observeOnAnExternalEngineConstructsButWarnsAndDeactivates() {
-        var captured = captureProcessorLogging(() -> {
-            try (var pc = new StubExternalEngine<>(options().adaptiveConcurrencyMode(AdaptiveConcurrencyMode.OBSERVE).build())) {
-                assertThat(pc.supportsAdaptiveConcurrency()).isFalse();
-                return pc.isAdaptiveConcurrencyActive();
-            }
-        });
+    void explicitObserveOnAnExternalEngineFailsConstruction() {
+        var options = options().adaptiveConcurrencyMode(AdaptiveConcurrencyMode.OBSERVE).build();
 
-        assertThat(captured.result).isFalse();
-        var warnings = adaptiveWarnings(captured.events);
-        assertThat(warnings).hasSize(1);
-        assertThat(warnings.get(0)).contains(StubExternalEngine.class.getSimpleName());
+        var thrown = assertThrows(IllegalArgumentException.class,
+                () -> new StubExternalEngine<>(options).close());
+
+        assertThat(thrown).hasMessageThat().contains("adaptiveConcurrencyMode");
+        assertThat(thrown).hasMessageThat().contains(StubExternalEngine.class.getSimpleName());
+    }
+
+    /**
+     * The other branch, and the reason the throw above is conditional: the same unservable mode arriving from the
+     * JVM-wide {@value ParallelConsumerOptions#ADAPTIVE_CONCURRENCY_MODE_PROPERTY} property must NOT throw. That
+     * property is how the bench harness and the CI matrix turn measurement on for a whole JVM, so an exception
+     * here would fail every Vert.x, Reactor and Mutiny consumer in it - none of whose authors asked for anything.
+     * <p>
+     * Note what makes this the ambient case rather than the explicit one: the builder is never told the mode, so
+     * the value comes from the {@code @Builder.Default} resolver.
+     */
+    @Test
+    void ambientObserveOnAnExternalEngineConstructsButWarnsAndDeactivates() {
+        String original = System.getProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
+        System.setProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY, "OBSERVE");
+        try {
+            var captured = captureProcessorLogging(() -> {
+                var options = options().build();
+                assertThat(options.getAdaptiveConcurrencyMode()).isEqualTo(AdaptiveConcurrencyMode.OBSERVE);
+                assertThat(options.isAdaptiveConcurrencyModeExplicit()).isFalse();
+                try (var pc = new StubExternalEngine<>(options)) {
+                    assertThat(pc.supportsAdaptiveConcurrency()).isFalse();
+                    return pc.isAdaptiveConcurrencyActive();
+                }
+            });
+
+            assertThat(captured.result).isFalse();
+            var warnings = adaptiveWarnings(captured.events);
+            assertThat(warnings).hasSize(1);
+            assertThat(warnings.get(0)).contains(StubExternalEngine.class.getSimpleName());
+            assertThat(warnings.get(0)).contains(ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
+        } finally {
+            if (original == null) {
+                System.clearProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
+            } else {
+                System.setProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY, original);
+            }
+        }
+    }
+
+    /**
+     * The same ambient value on an engine that CAN serve it is simply active - the property does its job, and the
+     * severity split above never comes into play.
+     */
+    @Test
+    void ambientObserveOnTheCoreEngineIsActiveWithoutWarning() {
+        String original = System.getProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
+        System.setProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY, "OBSERVE");
+        try {
+            var captured = captureProcessorLogging(() -> {
+                try (var pc = new TestParallelEoSStreamProcessor<>(options().build())) {
+                    return pc.isAdaptiveConcurrencyActive();
+                }
+            });
+
+            assertThat(captured.result).isTrue();
+            assertThat(adaptiveWarnings(captured.events)).isEmpty();
+        } finally {
+            if (original == null) {
+                System.clearProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
+            } else {
+                System.setProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY, original);
+            }
+        }
     }
 
     // --- helpers ---

@@ -3,14 +3,16 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
 
-The controller landed opt-in and off by default on astubbs#333. Four things are outstanding, in the
-order they are worth doing. The last is the only one that can answer *does it help*.
+The controller landed opt-in and off by default on astubbs#333. What is outstanding is below, in the
+order it is worth doing. Item 4 is the only one that can answer *does it help*.
 
 The widest gap - that **every** adaptive test was a unit test, so the controller and a genuinely
 running engine had never been observed composing - is closed on this branch by
 `AdaptiveConcurrencyEnforceIT`: two instances in `ENFORCE` against a real broker, ramping, losing
-nothing and surviving a rebalance. It also found what only a real engine could
-([`bug-pcmodule-admission-controller-lazy-init-race.md`](bug-pcmodule-admission-controller-lazy-init-race.md)).
+nothing and surviving a rebalance. It also found what only a real engine could - a lazy-init race in
+`PCModule` that built two controllers and left one of them reporting its seed forever, since fixed
+and written up in
+[`docs/solutions/logic-errors/a-racing-lazy-singleton-announces-itself-as-a-duplicate-meter-2026-08-24.md`](../solutions/logic-errors/a-racing-lazy-singleton-announces-itself-as-a-duplicate-meter-2026-08-24.md).
 Its sibling `AdaptiveConcurrencyClosedLoopIT` closes the next gap - a handler whose latency is a
 function of the concurrency the controller chose, so the loop is actually closed - and that is where
 item 2 below came from.
@@ -113,6 +115,11 @@ downward samples freely and upward ones grudgingly. Both need measuring, not cho
 deliberately does **not** assert a band, because a band fitted to a 100-second run would go red the
 day someone lengthened it.
 
+The ratchet is now **visible in the log** rather than only in a simulation: every movement line
+carries the long-run baseline, the short-term figure's ratio to it, and the tolerance that ratio is
+tested against, so a baseline creeping upward while the ratio sits harmlessly below 1.50 can be read
+straight off a run.
+
 ## 3. The controller cannot report the most useful thing it knows
 
 The requirements say a starved workload is reported as `starved`. The decision-reason enum has no
@@ -155,53 +162,7 @@ scrutiny: adaptive matches a hand-tuned configuration without the hand-tuning, a
 moment conditions move away from whatever that tuning assumed. The second half is the real product
 argument, and it needs the workload to change partway through the run to show it.
 
-## 5. The log cannot be read when two instances share a JVM, and does not show its reasoning
-
-Three separate defects, all found by the owner reading the integration test's own output, 2026-08-24.
-
-**It looks like the target jumps from 9 to 2 with no explanation. It does not - those are two
-different instances.** The integration test runs a second instance in the same JVM, and neither the
-movement line nor the held line carries any instance identifier, so the two trajectories interleave
-into one stream that reads as a single controller behaving impossibly. `%X{pcId}` is empty on
-`pc-control` lines. Until then every multi-instance log - which is every real deployment reading a
-shared aggregator - is unreadable in exactly this way.
-
-**The fix is one line, and nothing new has to be built.** The whole mechanism is already present and
-simply unused: `MDC_INSTANCE_ID` (`pcId`) exists, `addInstanceMDC()` sets it on the control thread,
-the broker poller sets it on its own thread, and the logback pattern already renders `%X{pcId}`. It
-is blank because the field behind it, `myId`, is `Optional.empty()` by default - its javadoc says
-*useful when testing with more than one instance*, so it was built as a manual testing aid and never
-defaulted. **Default it** to a generated short identifier, ideally the same UUID `PCMetrics` already
-generates for its `pcinstance` meter tag, which would make a log line and a metric correlate to the
-same instance for free.
-
-Note for whoever does it: this is **not** what astubbs#205 (MDC context propagation) provides. That
-PR carries the *caller's* MDC into the worker threads running the user function - user context
-flowing into PC. This is PC's own identity on PC's own threads, the opposite direction. The two are
-adjacent enough to check for conflict, and neither substitutes for the other.
-
-**The line reports its inputs but never its reasoning.** *service time mean 11.70ms ... decided by
-ADAPTING* does not tell the reader why 11.70ms means grow. The number that decided it is the ratio
-of that figure to the long-run baseline, and the baseline is invisible. Log the comparison, not just
-one side of it: the baseline, the ratio, and the threshold it was tested against. Item 2's ratchet
-is precisely a drifting baseline, and it is currently undiagnosable from the log alone.
-
-**`This Gauge has been already registered` fires for `pc.admission.target`,** with an identical
-`pcinstance` tag - so it is not two instances colliding, it is the same instance registering twice.
-That is corroborating evidence for the lazy-init race in
-[`bug-pcmodule-admission-controller-lazy-init-race.md`](bug-pcmodule-admission-controller-lazy-init-race.md):
-two controller objects for one processor, each running its own `initMetrics`. Fixing the race should
-make the warning disappear, and if it does not, the two are separate problems.
-
-## 6. Two configuration surfaces that ask the user to guess, or fail quietly
-
-**Refusing the mode with a warning is the wrong severity.** Enabling adaptive concurrency on a
-Vert.x or Reactor engine is not a degraded configuration, it is an invalid one: the user asked for
-something that will not happen. A log line they do not read gets them to *this feature is broken*
-rather than *I configured it wrong*. **Fail construction loudly instead** - which is what virtual
-threads already do on an unsupported JVM, so the inconsistency is ours, not the user's. Note the
-constraint that shaped it: `validate()` cannot see the engine subclass, so the throw has to happen
-where capability is resolved rather than in options validation.
+## 5. `maxConcurrency` under virtual threads asks for a number that may not exist
 
 **`maxConcurrency` under virtual threads asks for a number that may not exist.** The README calls it
 the upper limit, and under a platform pool it genuinely is one. Under virtual threads there may be

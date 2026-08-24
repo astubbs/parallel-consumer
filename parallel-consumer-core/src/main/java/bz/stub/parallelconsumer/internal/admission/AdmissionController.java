@@ -63,8 +63,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * target on TWO channels, so an operator running the feature with no Micrometer registry configured (the
  * ordinary case for someone trying it out) still gets its product:
  * <ul>
- * <li>every window that MOVES the target logs one line - old and new target, the deciding arm, and the window
- * aggregates that drove it ({@link #reportMovement});</li>
+ * <li>every window that MOVES the target logs one line - old and new target, the deciding arm, the window
+ * aggregates that drove it, and the law's own comparison: the long-run baseline, the short-term figure's ratio to
+ * it, and the tolerance that ratio is tested against ({@link #reportMovement});</li>
  * <li>every window that HOLDS it behind a constraint logs one RATE-LIMITED line naming that constraint
  * ({@link #NO_MOVEMENT_CONSTRAINTS}, {@link #maybeReportBindingConstraint}) - the condition is a steady state,
  * not an event, so it is not repeated once per second.</li>
@@ -580,25 +581,50 @@ public class AdmissionController {
      * window's own aggregates because the target alone is uninterpretable: the same {@code 8 -> 9} means
      * something different at 2ms service time with 200 samples than at 200ms with 11.
      * <p>
+     * <b>And it carries the law's REASONING, not only its inputs.</b> "service time mean 11.70ms ... decided by
+     * ADAPTING" does not say why 11.70ms means grow: the number that decided it is that figure's ratio to the
+     * long-run baseline, and the baseline is the law's own state, invisible from the window. So the comparison is
+     * logged whole - the baseline, the ratio, and the tolerance the ratio is tested against (see
+     * {@link AdmissionControlLaw#getServiceTimeTolerance()}). A baseline that inflates window after window while
+     * the ratio sits harmlessly below the tolerance IS the ratchet, and without these three figures it cannot be
+     * seen in the log at all.
+     * <p>
      * Named for what actually moved: under {@code OBSERVE} the LIVE target never changes, so calling the moved
      * number "the admission target" there would report an enforcement that is not happening.
      */
     private void reportMovement(int previousTarget, int newTarget, AdmissionDecisionReason reason,
                                 ClosedAdmissionWindow closed) {
-        log.info(LOG_PREFIX + " ({}): {} target {} -> {} slot(s), decided by {} - service time mean {}, " +
-                        "in-flight median {} (spread {}) over {} snapshot(s), {} sample(s), effective maximum {}.{}",
+        double baselineNanos = law.getLastWindowServiceTimeBaselineNanos();
+        log.info(LOG_PREFIX + " ({}): {} target {} -> {} slot(s), decided by {} - service time mean {} against " +
+                        "long-run baseline {}, ratio {} (contracts above {}), in-flight median {} (spread {}) " +
+                        "over {} snapshot(s), {} sample(s), effective maximum {}.{}",
                 mode,
                 mode == AdaptiveConcurrencyMode.ENFORCE ? "live admission" : "would-be",
                 previousTarget,
                 newTarget,
                 reason,
                 formatNanosAsMillis(closed.getMeanServiceTimeNanos()),
+                formatNanosAsMillis(baselineNanos),
+                formatRatio(closed.getMeanServiceTimeNanos(), baselineNanos),
+                String.format(Locale.ROOT, "%.2f", law.getServiceTimeTolerance()),
                 closed.getInFlightMedian(),
                 closed.getInFlightSpread(),
                 closed.getInFlightSampleCount(),
                 closed.getSampleCount(),
                 effectiveMaximum(),
                 nonSuccessNote(closed));
+    }
+
+    /**
+     * The short-term figure over the long-run baseline - the one number the law's gradient turns on. Rendered as
+     * {@code n/a} rather than an infinity when there is no baseline yet to divide by, which is every movement
+     * before the first window reaches the gradient (and every movement in a mode whose arms return early).
+     */
+    private static String formatRatio(double shortNanos, double baselineNanos) {
+        if (baselineNanos <= 0) {
+            return "n/a";
+        }
+        return String.format(Locale.ROOT, "%.2f", shortNanos / baselineNanos);
     }
 
     /**

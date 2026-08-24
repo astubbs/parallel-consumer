@@ -421,8 +421,13 @@ public class ParallelConsumerOptions<K, V> {
      * <p>
      * <b>What it does not do.</b> It does not change ordering guarantees, offset management, or batching, and in
      * OBSERVE it changes no runtime behaviour at all. Engines that dispatch into an external runtime (Vert.x,
-     * Reactor, Mutiny) and the measurement-only {@link #directPullEngine} cannot serve it - requesting it there logs
-     * one WARN at construction and behaves as {@link AdaptiveConcurrencyMode#DISABLED}.
+     * Reactor, Mutiny) and the measurement-only {@link #directPullEngine} cannot serve it. <b>Asking for it there
+     * FAILS construction</b>, with an exception naming the engine and why - you asked for something that will not
+     * happen, and a log line you do not read gets you to "this feature is broken" instead of "I configured it
+     * wrong". The one exception is a mode that arrived from the {@value #ADAPTIVE_CONCURRENCY_MODE_PROPERTY}
+     * property rather than from your code: that is an ambient default, not a request, so it keeps the older
+     * WARN-and-run-as-{@link AdaptiveConcurrencyMode#DISABLED} behaviour - see
+     * {@link #isAdaptiveConcurrencyModeExplicit()}.
      * <p>
      * Defaults from the {@value #ADAPTIVE_CONCURRENCY_MODE_PROPERTY} system property, for the same reason
      * {@link #isDirectPullEngine()} does - but the property may select {@code DISABLED} or {@code OBSERVE} only:
@@ -452,6 +457,17 @@ public class ParallelConsumerOptions<K, V> {
      * see {@link #getAdaptiveConcurrencyMode()} for why the property is not allowed to select enforcement.
      */
     static AdaptiveConcurrencyMode resolveAdaptiveConcurrencyModeFromProperty() {
+        return resolveAdaptiveConcurrencyModeFromProperty(true);
+    }
+
+    /**
+     * @param announceDowngrade whether an {@code ENFORCE} property value should say out loud that it is being
+     *                          downgraded. True on the path that establishes the option's value (once per build);
+     *                          false when the same resolution is re-run only to ANSWER a question about it - see
+     *                          {@link #isAdaptiveConcurrencyModeExplicit()} - because a question must not produce
+     *                          a second copy of an answer already given.
+     */
+    private static AdaptiveConcurrencyMode resolveAdaptiveConcurrencyModeFromProperty(boolean announceDowngrade) {
         String raw = System.getProperty(ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
         if (raw == null) {
             return AdaptiveConcurrencyMode.DISABLED;
@@ -466,14 +482,40 @@ public class ParallelConsumerOptions<K, V> {
                     Arrays.toString(AdaptiveConcurrencyMode.values())), e);
         }
         if (parsed == AdaptiveConcurrencyMode.ENFORCE) {
-            log.warn("System property {} requested {}, which the property is not allowed to select - enforcement " +
-                            "changes what this deployment does to its downstream systems, so it must be an explicit " +
-                            "builder value ({}). Resolving to {} instead.",
-                    ADAPTIVE_CONCURRENCY_MODE_PROPERTY, AdaptiveConcurrencyMode.ENFORCE,
-                    Fields.adaptiveConcurrencyMode, AdaptiveConcurrencyMode.OBSERVE);
+            if (announceDowngrade) {
+                log.warn("System property {} requested {}, which the property is not allowed to select - enforcement " +
+                                "changes what this deployment does to its downstream systems, so it must be an explicit " +
+                                "builder value ({}). Resolving to {} instead.",
+                        ADAPTIVE_CONCURRENCY_MODE_PROPERTY, AdaptiveConcurrencyMode.ENFORCE,
+                        Fields.adaptiveConcurrencyMode, AdaptiveConcurrencyMode.OBSERVE);
+            }
             return AdaptiveConcurrencyMode.OBSERVE;
         }
         return parsed;
+    }
+
+    /**
+     * Whether {@link #getAdaptiveConcurrencyMode()} is a deliberate line of the user's code rather than whatever
+     * the ambient {@value #ADAPTIVE_CONCURRENCY_MODE_PROPERTY} system property happened to select.
+     * <p>
+     * <b>Why the distinction is load-bearing.</b> An engine that cannot serve the mode (an external engine, or
+     * {@link #isDirectPullEngine()}) treats the two differently, and must: an explicit request that cannot be
+     * honoured is a configuration error and fails construction, while an ambient default that does not apply is
+     * not the user's mistake and keeps the WARN-and-run-static behaviour. The property is JVM-wide and exists so
+     * a bench harness or a CI matrix can turn measurement on globally, so throwing on it would take down every
+     * Vert.x, Reactor and Mutiny consumer in that JVM - which is not a thing an operator flag may do.
+     * <p>
+     * <b>How it is decided, and the one case it gets wrong.</b> By comparing the resolved mode against what the
+     * property resolves to. There is no Lombok-visible record of which builder methods were called, and the two
+     * mechanisms that would produce one both misreport: a hand-written builder setter would be re-run by
+     * {@code toBuilder()}, marking a round-tripped ambient value as explicit, and a captured-at-build companion
+     * field would leak a meaningless builder method onto this class's public surface. The comparison's blind spot
+     * is a mode set explicitly to exactly the value the property already selects, which reads as ambient and
+     * warns instead of throwing. It fails in the safe direction, and in the only direction the CI lane could
+     * tolerate.
+     */
+    public boolean isAdaptiveConcurrencyModeExplicit() {
+        return adaptiveConcurrencyMode != resolveAdaptiveConcurrencyModeFromProperty(false);
     }
 
     /**

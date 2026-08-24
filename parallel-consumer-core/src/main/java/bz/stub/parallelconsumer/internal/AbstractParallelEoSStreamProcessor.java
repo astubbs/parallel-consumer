@@ -357,9 +357,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Whether adaptive concurrency was requested ({@link ParallelConsumerOptions#getAdaptiveConcurrencyMode()} not
      * {@code DISABLED}) <b>and</b> this engine can serve it ({@link #supportsAdaptiveConcurrency()}). Resolved once,
      * in the constructor, before the worker pool is built - so pool construction can consult it - and is the single
-     * truth every downstream component reads: nothing else re-derives the mode-versus-capability decision. When the
-     * mode is requested but unsupported, resolution logs one WARN naming why and this stays {@code false} - the
-     * system then behaves as {@code DISABLED} everywhere.
+     * truth every downstream component reads: nothing else re-derives the mode-versus-capability decision. When an
+     * EXPLICITLY set mode is unsupported, resolution throws rather than resolving; when an unsupported mode came
+     * from the ambient system property it logs one WARN naming why and this stays {@code false}, so the system
+     * behaves as {@code DISABLED} everywhere - see {@link #resolveAdaptiveConcurrencyActive()}.
      */
     @Getter(PROTECTED)
     private final boolean adaptiveConcurrencyActive;
@@ -391,6 +392,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 newOptions);
         //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
         pcMetrics = module.pcMetrics();
+
+        // Defaulted here, and not later: the worker pool, the broker poller and the control thread all read it when
+        // they name themselves, and all three are wired below.
+        this.myId = Optional.of(defaultInstanceId(newOptions, pcMetrics));
 
         this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
 
@@ -510,7 +515,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * The constructor-time half of {@link #isAdaptiveConcurrencyActive()}: folds the requested mode into the
-     * capability answer, and is the one place the "requested but unsupported" WARN is emitted.
+     * capability answer, and is the one place an unservable request is answered.
+     * <p>
+     * <b>The severity depends on who asked.</b> A mode set explicitly on the builder
+     * ({@link ParallelConsumerOptions#isAdaptiveConcurrencyModeExplicit()}) meeting an engine that cannot serve it
+     * is not a degraded configuration, it is an invalid one - the user asked for something that will not happen -
+     * so it THROWS, as {@code useVirtualThreads} already does on a JVM that cannot provide them. A mode that
+     * arrived from the JVM-wide {@value ParallelConsumerOptions#ADAPTIVE_CONCURRENCY_MODE_PROPERTY} property keeps
+     * the WARN and runs static: that property exists so a bench harness or a CI matrix can enable measurement
+     * across a whole JVM, and an ambient default that throws would take down every Vert.x, Reactor and Mutiny
+     * consumer sharing it.
+     * <p>
+     * This is where the decision has to live: {@code ParallelConsumerOptions#validate()} cannot see the engine
+     * subclass, so capability is not knowable until a processor is being constructed.
      */
     private boolean resolveAdaptiveConcurrencyActive() {
         boolean requested = options.getAdaptiveConcurrencyMode() != ParallelConsumerOptions.AdaptiveConcurrencyMode.DISABLED;
@@ -525,9 +542,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 "workers select their own work"
                 : msg("{} dispatches into an external runtime, so the concurrency to adapt lives out there, " +
                 "not in a pool this library sizes", this.getClass().getSimpleName());
-        log.warn("adaptiveConcurrencyMode is {} but this configuration cannot serve it: {}. Continuing with " +
-                        "adaptive concurrency DISABLED.",
-                options.getAdaptiveConcurrencyMode(), reason);
+        if (options.isAdaptiveConcurrencyModeExplicit()) {
+            throw new IllegalArgumentException(msg("adaptiveConcurrencyMode is {} but this configuration cannot " +
+                            "serve it: {}. Remove the option, or run this workload on an engine that can steer " +
+                            "its own concurrency. (A mode picked up from the {} system property instead of set " +
+                            "here would only warn - it is an ambient default, not a request.)",
+                    options.getAdaptiveConcurrencyMode(), reason,
+                    ParallelConsumerOptions.ADAPTIVE_CONCURRENCY_MODE_PROPERTY));
+        }
+        log.warn("adaptiveConcurrencyMode is {} but this configuration cannot serve it: {}. It came from the {} " +
+                        "system property rather than from this application's code, so it is an ambient default and " +
+                        "not a request - continuing with adaptive concurrency DISABLED.",
+                options.getAdaptiveConcurrencyMode(), reason,
+                ParallelConsumerOptions.ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
         return false;
     }
 
@@ -1148,11 +1175,45 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * Optional ID of this instance. Useful for testing.
+     * This instance's identity in the logs: rendered as the {@value #MDC_INSTANCE_ID} MDC key (the logback
+     * patterns in this repo carry {@code %X{pcId}}) and appended to the {@code pc-control}, {@code pc-broker-poll}
+     * and worker thread names.
+     * <p>
+     * <b>Defaulted at construction</b> - see {@link #defaultInstanceId} - so that two instances sharing a JVM are
+     * distinguishable in one log stream without anyone opting in. It was previously {@code Optional.empty()} by
+     * default, built as a manual testing aid, which left {@code %X{pcId}} blank on every line: two interleaved
+     * trajectories then read as one impossible controller.
+     * <p>
+     * Still settable - {@code setMyId} after construction wins over the default, which is what the test harnesses
+     * that give instances readable names (e.g. {@code PC1}, {@code Runner-2}) rely on.
      */
     @Setter
     @Getter
     private Optional<String> myId = Optional.empty();
+
+    /**
+     * How many characters of a GENERATED instance tag reach the log. {@link PCMetrics} generates a full UUID when
+     * the user supplied no {@code pcInstanceTag}, and 36 characters on every line is a tax nobody would accept for
+     * an id whose only job is to tell two instances apart. A prefix still grep-matches the full tag on the metric,
+     * so the log line and the meter remain correlatable in the direction that matters.
+     */
+    private static final int GENERATED_INSTANCE_ID_LENGTH = 8;
+
+    /**
+     * The default {@link #myId}: the same identity {@link PCMetrics} publishes as its {@code pcinstance} meter tag,
+     * so a log line and a metric name the same instance.
+     * <p>
+     * A user-supplied {@link ParallelConsumerOptions#getPcInstanceTag() pcInstanceTag} is used verbatim - they
+     * chose that string to be read. A tag PC generated for itself is a UUID, and is abbreviated to
+     * {@value #GENERATED_INSTANCE_ID_LENGTH} characters.
+     */
+    private static String defaultInstanceId(ParallelConsumerOptions<?, ?> options, PCMetrics metrics) {
+        String tag = metrics.getInstanceTag().getValue();
+        boolean generated = options.getPcInstanceTag() == null;
+        return generated && tag.length() > GENERATED_INSTANCE_ID_LENGTH
+                ? tag.substring(0, GENERATED_INSTANCE_ID_LENGTH)
+                : tag;
+    }
 
     /**
      * Kicks off the control loop in the executor, with supervision and returns.
