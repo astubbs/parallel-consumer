@@ -33,6 +33,9 @@ class FakeEngine:
         self._outbound: queue.Queue[pb.StreamsServerMessage | None] = queue.Queue()
         self._next_handle = 100
         self._fault_on_call = fault_on_call
+        #: What the next query is answered with. Absent by default, so a test that forgets to
+        #: arrange a value gets the honest answer, not a stale one from an earlier case.
+        self._get_answer = pb.GetResult(found=False, value_type=pb.DATA_TYPE_BYTES)
         self._forced_type: pb.HandleType | None = None
         self._answer_bare = False
         self._lock = threading.Lock()
@@ -45,6 +48,8 @@ class FakeEngine:
         if kind == "open":
             self._outbound.put(pb.StreamsServerMessage(
                 ready=pb.Ready(application_id=message.open.application_id)))
+        elif kind == "get":
+            self._outbound.put(pb.StreamsServerMessage(get_result=self._get_answer))
         elif kind == "describe":
             self._outbound.put(pb.StreamsServerMessage(
                 topology_description=pb.TopologyDescription(
@@ -473,6 +478,13 @@ class SlowDescribeEngine(FakeEngine):
         self.describes = 0
 
     def send(self, message: pb.StreamsClientMessage) -> None:
+        if not self._answer and message.WhichOneof("message") == "get":
+            # Swallowed deliberately. The base fake answers a query inside send(), which
+            # would settle the waiter before the fault could reach it - so a test about a
+            # fault interrupting a pending query could never exercise one.
+            with self._lock:
+                self.sent.append(message)
+            return
         if message.WhichOneof("message") == "describe":
             with self._lock:
                 self.sent.append(message)
@@ -600,3 +612,54 @@ def test_the_builder_issues_a_reduce_naming_its_store(engine: FakeEngine) -> Non
     assert call.builder_call.WhichOneof("call") == "reduce"
     assert call.builder_call.reduce.store_name == "reduced-store"
     assert call.builder_call.reduce.handle == grouped
+
+
+def test_a_query_returns_the_value_decoded_by_the_reported_type(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine._get_answer = pb.GetResult(found=True, value=b"\x00\x00\x00\x00\x00\x00\x00\x07",
+                                      value_type=pb.DATA_TYPE_LONG)
+
+    assert session.get("counted", b"a") == 7
+
+    sent = engine.await_client_message("get")
+    assert sent.get.store_name == "counted"
+    assert sent.get.key == b"a"
+
+
+def test_an_absent_key_is_None_and_an_empty_value_is_not(engine: FakeEngine) -> None:
+    """The distinction the engine's `found` flag exists for.
+
+    Collapsing them would tell a host its data was gone when the stored value is simply empty, and
+    both are perfectly ordinary states for a byte-valued store to be in.
+    """
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    engine._get_answer = pb.GetResult(found=False, value_type=pb.DATA_TYPE_BYTES)
+    assert session.get("reduced", b"a") is None
+
+    engine._get_answer = pb.GetResult(found=True, value=b"", value_type=pb.DATA_TYPE_BYTES)
+    assert session.get("reduced", b"a") == b""
+
+
+def test_a_query_that_could_not_be_served_raises_rather_than_reporting_absence(
+        engine: FakeEngine) -> None:
+    """A store that cannot be read is not the same as a key that is not there."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine._get_answer = pb.GetResult(error="the store is still restoring")
+
+    with pytest.raises(StreamsError, match="still restoring"):
+        session.get("reduced", b"a")
+
+
+def test_a_second_query_waits_for_its_own_answer() -> None:
+    """The stale-event bug, in the shape it takes for queries."""
+    engine = SlowDescribeEngine(answer=False)
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine.fault_later("the engine gave up")
+
+    with pytest.raises(StreamsError, match="the engine gave up"):
+        session.get("reduced", b"a", timeout=3.0)

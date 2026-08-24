@@ -9,6 +9,9 @@ import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StoreQueryParameters;
+import org.apache.kafka.streams.state.QueryableStoreTypes;
+import org.apache.kafka.streams.state.ReadOnlyKeyValueStore;
 import org.apache.kafka.streams.StreamsConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,6 +102,20 @@ public final class StreamsMain {
 
         KafkaStreams streams = new KafkaStreams(topology, config);
         streams.start();
-        return streams::close;
+        return new StreamsSessionService.TopologyRun() {
+            @Override
+            public void close() {
+                streams.close();
+            }
+
+            @Override
+            public Object get(String storeName, byte[] key) {
+                // Queried live. A store that is still restoring throws, and that surfaces to the host as a
+                // failed query rather than as a silent absent key - the two mean very different things.
+                ReadOnlyKeyValueStore<byte[], Object> store = streams.store(
+                        StoreQueryParameters.fromNameAndType(storeName, QueryableStoreTypes.keyValueStore()));
+                return store.get(key);
+            }
+        };
     }
 }

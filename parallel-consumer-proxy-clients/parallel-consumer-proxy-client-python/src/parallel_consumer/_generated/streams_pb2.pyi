@@ -41,34 +41,38 @@ NODE_KIND_PROCESSOR: NodeKind
 NODE_KIND_SINK: NodeKind
 
 class StreamsClientMessage(_message.Message):
-    __slots__ = ("open", "builder_call", "register_function", "describe_complete", "invocation_result", "describe")
+    __slots__ = ("open", "builder_call", "register_function", "describe_complete", "invocation_result", "describe", "get")
     OPEN_FIELD_NUMBER: _ClassVar[int]
     BUILDER_CALL_FIELD_NUMBER: _ClassVar[int]
     REGISTER_FUNCTION_FIELD_NUMBER: _ClassVar[int]
     DESCRIBE_COMPLETE_FIELD_NUMBER: _ClassVar[int]
     INVOCATION_RESULT_FIELD_NUMBER: _ClassVar[int]
     DESCRIBE_FIELD_NUMBER: _ClassVar[int]
+    GET_FIELD_NUMBER: _ClassVar[int]
     open: Open
     builder_call: BuilderCall
     register_function: RegisterFunction
     describe_complete: DescribeComplete
     invocation_result: InvocationResult
     describe: Describe
-    def __init__(self, open: _Optional[_Union[Open, _Mapping]] = ..., builder_call: _Optional[_Union[BuilderCall, _Mapping]] = ..., register_function: _Optional[_Union[RegisterFunction, _Mapping]] = ..., describe_complete: _Optional[_Union[DescribeComplete, _Mapping]] = ..., invocation_result: _Optional[_Union[InvocationResult, _Mapping]] = ..., describe: _Optional[_Union[Describe, _Mapping]] = ...) -> None: ...
+    get: Get
+    def __init__(self, open: _Optional[_Union[Open, _Mapping]] = ..., builder_call: _Optional[_Union[BuilderCall, _Mapping]] = ..., register_function: _Optional[_Union[RegisterFunction, _Mapping]] = ..., describe_complete: _Optional[_Union[DescribeComplete, _Mapping]] = ..., invocation_result: _Optional[_Union[InvocationResult, _Mapping]] = ..., describe: _Optional[_Union[Describe, _Mapping]] = ..., get: _Optional[_Union[Get, _Mapping]] = ...) -> None: ...
 
 class StreamsServerMessage(_message.Message):
-    __slots__ = ("ready", "handle_assigned", "invocation", "fault", "topology_description")
+    __slots__ = ("ready", "handle_assigned", "invocation", "fault", "topology_description", "get_result")
     READY_FIELD_NUMBER: _ClassVar[int]
     HANDLE_ASSIGNED_FIELD_NUMBER: _ClassVar[int]
     INVOCATION_FIELD_NUMBER: _ClassVar[int]
     FAULT_FIELD_NUMBER: _ClassVar[int]
     TOPOLOGY_DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    GET_RESULT_FIELD_NUMBER: _ClassVar[int]
     ready: Ready
     handle_assigned: HandleAssigned
     invocation: Invocation
     fault: Fault
     topology_description: TopologyDescription
-    def __init__(self, ready: _Optional[_Union[Ready, _Mapping]] = ..., handle_assigned: _Optional[_Union[HandleAssigned, _Mapping]] = ..., invocation: _Optional[_Union[Invocation, _Mapping]] = ..., fault: _Optional[_Union[Fault, _Mapping]] = ..., topology_description: _Optional[_Union[TopologyDescription, _Mapping]] = ...) -> None: ...
+    get_result: GetResult
+    def __init__(self, ready: _Optional[_Union[Ready, _Mapping]] = ..., handle_assigned: _Optional[_Union[HandleAssigned, _Mapping]] = ..., invocation: _Optional[_Union[Invocation, _Mapping]] = ..., fault: _Optional[_Union[Fault, _Mapping]] = ..., topology_description: _Optional[_Union[TopologyDescription, _Mapping]] = ..., get_result: _Optional[_Union[GetResult, _Mapping]] = ...) -> None: ...
 
 class Open(_message.Message):
     __slots__ = ("application_id", "kafka_properties")
@@ -186,6 +190,26 @@ class RegisterFunction(_message.Message):
 class DescribeComplete(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
+
+class Get(_message.Message):
+    __slots__ = ("store_name", "key")
+    STORE_NAME_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    store_name: str
+    key: bytes
+    def __init__(self, store_name: _Optional[str] = ..., key: _Optional[bytes] = ...) -> None: ...
+
+class GetResult(_message.Message):
+    __slots__ = ("found", "value", "value_type", "error")
+    FOUND_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    VALUE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    found: bool
+    value: bytes
+    value_type: DataType
+    error: str
+    def __init__(self, found: bool = ..., value: _Optional[bytes] = ..., value_type: _Optional[_Union[DataType, str]] = ..., error: _Optional[str] = ...) -> None: ...
 
 class Describe(_message.Message):
     __slots__ = ()

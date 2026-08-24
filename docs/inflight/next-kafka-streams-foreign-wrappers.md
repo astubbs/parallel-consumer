@@ -195,6 +195,22 @@ which makes it the clearest single artifact of the wrap-rather-than-reimplement 
 two of them declare no licence at all and one is GPL-3.0, so pointing users at them is free and
 vendoring them is not.
 
+### State durability across a restart - deferred on purpose, 2026-08-25
+
+Restarting the engine and re-querying the table would show state surviving, from the changelog on an
+in-memory store and from local disk on RocksDB. **Not being tested yet, and the reason is a
+priority rather than a difficulty:** that path is Kafka Streams' own machinery, it is expected to
+just work, and testing it proves something about Kafka rather than about this project.
+
+**What is worth proving instead is each dimension of the COUPLING**, because that is the part
+nobody has built before. So far: the host defines the topology, the engine calls the host per record
+(stateless), the engine calls the host *with state* (a reducer), and the host reads engine state
+(interactive queries). Unproven dimensions - more than one foreign operator in a topology, and the
+host learning the engine's own lifecycle state - are worth more than durability right now.
+
+Pick durability up when the coupling surface is broad enough that a restart test would exercise
+something other than Kafka.
+
 ### Deferred capabilities, and what each would actually need
 
 Each of these was deliberately out of scope. This is what the run says they would cost.

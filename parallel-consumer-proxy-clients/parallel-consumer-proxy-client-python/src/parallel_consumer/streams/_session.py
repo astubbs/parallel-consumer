@@ -228,6 +228,8 @@ class StreamsSession:
         self._handles: dict[int, Handle] = {}
         self._ready = threading.Event()
         self._described = threading.Event()
+        self._got = threading.Event()
+        self._get_result: pb.GetResult | None = None
         self._description: pb.TopologyDescription | None = None
         self._fault: str | None = None
         self._closing = False
@@ -272,6 +274,38 @@ class StreamsSession:
             # signature promises otherwise.
             raise StreamsError("the engine signalled a description but sent none")
         return description
+
+    def get(self, store_name: str, key: bytes, timeout: float = 30.0) -> bytes | int | None:
+        """Read one key from a running store, decoded by the type the engine reports.
+
+        Information flowing the other way. Every other crossing has the engine asking
+        this process to compute something; this is this process asking the engine what
+        it holds. Without it a host can build a table and never see inside it, since the
+        only window onto state is whatever the topology happens to sink.
+
+        Returns None when the key is absent. That is distinct from a key holding empty
+        bytes, which returns ``b""``, and the engine reports the difference explicitly
+        rather than leaving it to be inferred.
+
+        Raises :class:`StreamsError` when the query could not be served at all - an
+        unknown store, or a topology that is not running. A store that cannot be read is
+        NOT reported as an absent key: the two mean very different things to whoever is
+        deciding what to do next.
+        """
+        self._got.clear()
+        self._transport.send(pb.StreamsClientMessage(
+            get=pb.Get(store_name=store_name, key=key)))
+        if not self._got.wait(timeout):
+            raise StreamsError(f"the engine did not answer a query for {store_name}")
+        self._raise_if_faulted()
+        answer = self._get_result
+        if answer is None:
+            raise StreamsError("the engine signalled a query answer but sent none")
+        if answer.error:
+            raise StreamsError(f"query on {store_name} failed: {answer.error}")
+        if not answer.found:
+            return None
+        return DataType(answer.value_type).decode(answer.value)
 
     def start(self) -> None:
         """Ends the description. The engine builds the topology and starts it on this message."""
@@ -323,6 +357,12 @@ class StreamsSession:
                     self._on_handle(message.handle_assigned)
                 elif kind == "invocation":
                     self._on_invocation(message.invocation)
+                elif kind == "get_result":
+                    # Assigned before the event, for the same reason the description is: a
+                    # waiter that woke first and read None would report "no answer" for one
+                    # that had in fact arrived.
+                    self._get_result = message.get_result
+                    self._got.set()
                 elif kind == "topology_description":
                     # Assigned before the event is set: a waiter that woke first and read None
                     # would report "no description" for a description that had in fact arrived.
@@ -396,6 +436,7 @@ class StreamsSession:
         # has already failed turns a reported error into a timeout, which reads as a hang.
         self._ready.set()
         self._described.set()
+        self._got.set()
         with self._lock:
             waiting = list(self._pending.values())
             self._pending.clear()

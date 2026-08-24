@@ -96,6 +96,7 @@ public class TopologyAssembler {
 
     private final StreamsBuilder builder = new StreamsBuilder();
     private final Map<Long, Minted> handles = new HashMap<>();
+    private final Map<String, DataType> storeValueTypes = new HashMap<>();
     private final AtomicLong nextHandle = new AtomicLong(1);
     private final MapperFactory mappers;
     private final ReducerFactory reducers;
@@ -147,6 +148,7 @@ public class TopologyAssembler {
         // The store serdes derive from the SAME recorded type the sink will later select by, so the two cannot
         // drift apart when the next typed operator is copied from this one.
         HandleType resultType = TABLE_OF_LONGS;
+        storeValueTypes.put(storeName, resultType.getValueType());
         return mint(upstream.count(Materialized.<byte[], Long>as(Stores.inMemoryKeyValueStore(storeName))
                 .withKeySerde(operatorSerde(resultType.getKeyType()))
                 .withValueSerde(operatorSerde(resultType.getValueType()))), resultType);
@@ -170,6 +172,7 @@ public class TopologyAssembler {
         KGroupedStream<byte[], byte[]> upstream = resolve(
                 handle, HandleKind.HANDLE_KIND_GROUPED_STREAM, "reduce");
         HandleType resultType = TABLE_OF_BYTES;
+        storeValueTypes.put(storeName, resultType.getValueType());
         return mint(upstream.reduce(reducers.forToken(functionToken),
                 Materialized.<byte[], byte[]>as(Stores.inMemoryKeyValueStore(storeName))
                         .withKeySerde(operatorSerde(resultType.getKeyType()))
@@ -281,6 +284,21 @@ public class TopologyAssembler {
         @SuppressWarnings("unchecked")
         Serde<T> cast = (Serde<T>) serde;
         return cast;
+    }
+
+    /**
+     * What a named store holds, recorded where the store was created.
+     *
+     * <p>An interactive query has only a store name to go on, so something must remember whether that store
+     * holds longs or bytes. Recording it at the mint is the one place that cannot drift from the serde the
+     * same call just chose.
+     */
+    public DataType storeValueType(String storeName) {
+        DataType recorded = storeValueTypes.get(storeName);
+        if (recorded == null) {
+            throw new TopologyDescriptionException("no store named " + storeName + " in this topology");
+        }
+        return recorded;
     }
 
     private long mint(Object node, HandleType type) {

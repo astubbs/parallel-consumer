@@ -42,6 +42,7 @@ message StreamsClientMessage {
     DescribeComplete describe_complete = 4;
     InvocationResult invocation_result = 5;
     Describe describe = 6;
+    Get get = 7;
   }
 }
 
@@ -52,6 +53,7 @@ message StreamsServerMessage {
     Invocation invocation = 3;
     Fault fault = 4;
     TopologyDescription topology_description = 5;
+    GetResult get_result = 6;
   }
 }
 
@@ -168,6 +170,32 @@ message RegisterFunction {
 
 // The topology is built and started on this message, and not before.
 message DescribeComplete {
+}
+
+// Reads one key from a running store - an interactive query.
+//
+// The host built the table but has no other way to see inside it: without this it can only observe
+// state indirectly, by consuming whatever the topology happens to sink. That is a real gap for a
+// language whose only window into the engine is this wire.
+message Get {
+  optional string store_name = 1;
+  optional bytes key = 2;
+}
+
+// One answer to Get.
+message GetResult {
+  // FOUND distinguishes an absent key from a present one holding empty bytes. Without it the two are
+  // the same on the wire, and a host cannot tell "no such key" from "a key whose value is empty".
+  optional bool found = 1;
+  optional bytes value = 2;
+
+  // How to decode `value`. A count store holds longs and a reduce store holds bytes, so the answer
+  // has to say which - the same reason handles carry their type.
+  optional DataType value_type = 3;
+
+  // Set instead of the rest when the query could not be served at all - no such store, or the
+  // topology is not running yet.
+  optional string error = 4;
 }
 
 // Asks what the topology currently looks like. Answered with exactly one TopologyDescription.

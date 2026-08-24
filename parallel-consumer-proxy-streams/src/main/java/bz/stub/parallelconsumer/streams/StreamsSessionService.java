@@ -4,6 +4,9 @@ package bz.stub.parallelconsumer.streams;
  */
 
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.BuilderCall;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Get;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.GetResult;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Fault;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleAssigned;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Invocation;
@@ -41,10 +44,19 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
         this.runner = runner;
     }
 
-    /** A started topology, so the session can stop it without knowing how it was started. */
+    /** A started topology, so the session can stop it and read from it without knowing how it was started. */
     public interface TopologyRun extends AutoCloseable {
         @Override
         void close();
+
+        /**
+         * Read one key from a named store, or null when the key is absent.
+         *
+         * <p>Returns the store's own value type - a Long for a count, a byte array for a reduction - because a
+         * store knows what it holds and this interface should not pretend otherwise. The caller converts using
+         * the type the assembler recorded when it created that store.
+         */
+        Object get(String storeName, byte[] key);
     }
 
     @Override
@@ -96,6 +108,7 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                         message.getRegisterFunction().getToken());
                 case DESCRIBE_COMPLETE -> onDescribeComplete();
                 case DESCRIBE -> onDescribe();
+                case GET -> onGet(message.getGet());
                 case INVOCATION_RESULT -> onResult(message.getInvocationResult());
                 // Named rather than ignored: a foreign caller that sends something this engine does not implement
                 // needs to be told which message was refused, not left waiting.
@@ -173,6 +186,45 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
             send(StreamsServerMessage.newBuilder()
                     .setTopologyDescription(TopologyDescriber.describe(assembler.build()))
                     .build());
+        }
+
+        /**
+         * Serve one interactive query.
+         *
+         * <p>Every failure answers rather than faults the session. A query for a missing key, a missing store, or
+         * a topology that has not started is a question with an answer - "no" - and tearing the stream down over
+         * one bad lookup would take the whole topology with it.
+         */
+        private void onGet(Get get) {
+            GetResult.Builder result = GetResult.newBuilder();
+            try {
+                if (run == null) {
+                    throw new TopologyDescriptionException("the topology is not running yet");
+                }
+                DataType valueType = assembler.storeValueType(get.getStoreName());
+                Object stored = run.get(get.getStoreName(), get.getKey().toByteArray());
+                result.setValueType(valueType);
+                if (stored == null) {
+                    result.setFound(false);
+                } else {
+                    result.setFound(true).setValue(ByteString.copyFrom(encode(stored, valueType)));
+                }
+            } catch (Exception failed) {
+                result.clearFound().clearValue().setError(failed.getMessage() == null
+                        ? failed.getClass().getSimpleName() : failed.getMessage());
+            }
+            send(StreamsServerMessage.newBuilder().setGetResult(result).build());
+        }
+
+        /** Serialises a stored value the way the sink would, so a queried value and a sunk value agree. */
+        private byte[] encode(Object stored, DataType valueType) {
+            return switch (valueType) {
+                case DATA_TYPE_LONG -> new org.apache.kafka.common.serialization.LongSerializer()
+                        .serialize("", (Long) stored);
+                case DATA_TYPE_BYTES -> (byte[]) stored;
+                default -> throw new TopologyDescriptionException(
+                        "this engine cannot serialise a stored " + valueType + " for a query");
+            };
         }
 
         private void onDescribeComplete() {
