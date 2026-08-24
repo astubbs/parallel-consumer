@@ -706,5 +706,38 @@ In-repo prior art, which predates this design and should be read before re-openi
 - The abandoned prototypes catalogued in `docs/refactoring.md`'s idea bank - `features/rate-limiting`
   (bucket4j POC), `features/dynamic-concurrency-control` (Netflix concurrency-limits), and
   `feature/auto-tuning-pressure` - plus upstream draft PR confluentinc#22.
-- The design-surface inventory of the engine's observables and actuators that this document's plant
-  section rests on.
+- [`2026-08-24-005-research-admission-design-surface.md`](2026-08-24-005-research-admission-design-surface.md) -
+  the design-surface inventory this document's plant section rests on, and
+  [`2026-08-24-006-research-controller-prior-art.md`](2026-08-24-006-research-controller-prior-art.md) -
+  the full external survey the citations above distil, with its provenance caveats.
+
+## Deferred / Open Questions
+
+### From 2026-08-24 review
+
+Residuals and reviewer questions that survived the round without becoming findings or rulings -
+kept so planning inherits them rather than rediscovering them.
+
+- The beat-every-baseline **aggregate scalar and phase weighting are unspecified**; a controller
+  losing phase 1 (the common production state) could win the aggregate on rare-phase gains, and the
+  phase-1 tolerance itself is Resolve item 9's number.
+- The mutant set has **no slow-drift mutant** (increment-every-window); over finite phases a slow
+  ratchet may pass within tolerance, and it is exactly the failure shape this design kills.
+- **Does Cinnamon rely on natural movement only, or does it deliberately probe?** If it probes, the
+  no-dither claim loses its production precedent and the deleted blockers need re-examination. Also:
+  does its veto fire on strictly-negative covariance or below a positive threshold?
+- **Is the latency ceiling expected OFF by default?** If so the default deployment has no
+  latency-denominated brake at all, which sharpens the plateau band's load-bearing role.
+- Under virtual threads the pool actuator has no analogue - target enforcement stays dispatch
+  gating there, so contraction drain-down dynamics differ between thread models even after the
+  actuator fix.
+- The 15% escape jitter is fleet scope arriving ahead of the fleet decision (Resolve item 7) -
+  cheap to carry, noted as deliberate.
+- Constants this artifact fixes that planning must not inherit as derived: the escape's N, the
+  covariance history length (item 1 owns both), `LIMIT_FLOOR_SLOTS = 1` against `q = sqrt(L)`.
+- A bespoke law is a permanent maintenance surface for a small team; the blocker-17 folklore-tunable
+  concern applies to the replacement's own constants.
+- The comparison test's simulated downstream invites a "synthetic benchmark" rebuttal; no
+  real-workload replication path is named yet.
+- Blocker numbering (2, 7, 8, 14, 15-17) resolves only through the absorbed 002 plan; if 002 is
+  ever archived, the numbers become unresolvable from here.

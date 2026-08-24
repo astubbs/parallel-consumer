@@ -278,3 +278,27 @@ backends (idea 1 and idea 5's extension artifacts).
   decisions of 2026-08-24.
 - RFC 6585 (429 Too Many Requests); RFC 9110 section 10.2.3 (`Retry-After`, previously RFC 7231
   section 7.1.3) - the source of the deferral-not-a-rate reading.
+
+## Deferred / Open Questions
+
+### From 2026-08-24 review
+
+- **The flagship cell may be dark fleet-wide**: if mainstream SDKs offer no throttle observability,
+  the pressure+success case goes unreported everywhere and nothing in the requirements surfaces
+  that. Resolve item 9's survey is the sizing instrument; the decorator channel is the mitigation.
+- **The async modules may force a context-lifetime redesign late** if the invocation contract
+  (Resolve item 7) is deferred to implementation - in Vert.x/Reactor/Mutiny the 429 surfaces in a
+  callback after the wrapped function returned and can race the engine's verdict recording.
+- **Per-engine behavioural drift**: any weighting of soft signals inherits Vert.x's mis-measured
+  timing (confluentinc#766), so core and the engine modules may act differently on the same report.
+- **Decorator-ecosystem potential depends on the name freezing early** - naming churn after v1
+  (Resolve item 1) forecloses the wrapper route to the unobservable cell.
+- **Soft and hard reports for services touched by one batch** need a composition rule; folds into
+  Resolve item 7's multi-report question.
+- Whether the R4 SPI plugs into the existing `recordCompletion(boolean, Throwable)` choke point or
+  a new seam - implementation-level, correctly deferred.
+- The "constraint gauge" is used as settled vocabulary here and in 003 but defined in neither; the
+  referent is the admission constraint gauge in `PCMetricsDef`.
+- If adoption stays near zero, STRATEGY.md's self-tuning claim quietly reverts to inference-only
+  and nothing in the metrics surfaces the non-adoption - worth a call-rate counter at
+  implementation time.
