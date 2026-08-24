@@ -17,6 +17,8 @@
 #    9. `| grep query` - a bare word, no q-bearing FLAG          -> pass (0)
 #   10. the guard skips itself, matched on BASENAME not path     -> pass (0)
 #   11. the guard skips its OWN self-test, same reason           -> pass (0)
+#   12. the NO-ARG form CI runs exits clean on the real tree     -> pass (0)
+#   13. ...and its default scan set names .claude/hooks          -> pass (0)
 #
 # Cases 4 and 5 are the ones worth keeping: the first version of the guard matched
 # `grep -[a-zA-Z]*q`, which a space defeats, so `grep -v -q` slipped through. Case 9 guards the
@@ -96,6 +98,18 @@ testdir="$TMP/selftest"; mkdir -p "$testdir"
 cp "$0" "$testdir/test-$(basename "$GUARD")"
 ec=0; "$GUARD" "$testdir" >/dev/null 2>&1 || ec=$?
 assert "guard skips its own self-test by basename" 0 "$ec"
+
+# THE DEFAULT PATH IS THE PRODUCT: CI invokes the guard with NO arguments, and every case above
+# hands it a fixture directory - so widening the default scan to .claude/hooks (the point of the
+# astubbs#324 change) ran in no test at all. Invoke it the way CI does, and pin the scanned set by
+# the guard's own report line: reverting the widening changes that line, so this goes red.
+no_arg_out=$("$GUARD" 2>&1); no_arg_ec=$?
+assert "no-arg run (CI's invocation) exits clean on the real tree" 0 "$no_arg_ec"
+case "$no_arg_out" in
+    *".claude/hooks"*) got=scans_hooks ;;
+    *)                 got="hooks_not_in_scan_set" ;;
+esac
+assert "the default scan set includes .claude/hooks" scans_hooks "$got"
 
 echo
 if [ "$failures" -eq 0 ]; then

@@ -169,6 +169,7 @@
         <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
+        <netty.version>4.1.137.Final</netty.version>
         <logback.version>1.6.1</logback.version>
         <!-- Held at 1.13.0: keep the micrometer family version-aligned with
              micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
@@ -488,6 +489,20 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Netty arrives transitively through vertx-core, so the only lever here is a pin.
+                 CVE-2026-75596 (CVSS 6.9) lands on netty-handler 4.1.136.Final, which is the version
+                 the August 2026 batch (-59898, -59899, -59901) was fixed in - see the
+                 excludeVulnerabilityIds comment below, which records that batch. Importing the BOM
+                 rather than pinning netty-handler alone keeps every netty artifact on one version;
+                 pinning a single one is how a codec and a handler end up a release apart. Drop this
+                 block once vertx-core resolves 4.1.137.Final or later on its own. -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <!-- Pin byte-buddy so mockito 5.23 gets the version it needs (see byte-buddy.version
                  property); overrides the stale 1.12.18 pulled transitively by wiremock-jre8. -->
             <dependency>

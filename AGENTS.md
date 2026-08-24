@@ -72,9 +72,10 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 | Document | Read it when |
 |---|---|
-| [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
+| [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, **why a run prints nothing and the flag that fixes it**, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
+| [`docs/compound-engineering.md`](docs/compound-engineering.md) | Asking whether a piece of work is *finished* - the failure-to-mechanism loop, what "done" means beyond green, and the three techniques `investigating.md` does not own |
 | [`docs/issue-references.md`](docs/issue-references.md) | Writing any reference to an issue or PR - the full convention and the gate |
 | [`docs/citations.md`](docs/citations.md) | Repairing a citation that no longer resolves, in a plan or solution write-up you may not rewrite |
 | [`docs/copyright.md`](docs/copyright.md) | Adding, renaming or extracting a file: which header it gets and why |
@@ -106,7 +107,7 @@ a file in it is touched, rather than waiting to be opened.
 | **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
-| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires a diagnosis, or a recorded owner-granted exception |
+| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
 | **`docs/test-hardening/`** | Dated audits of tests that do not run, do not assert, or were never written - per-test evidence and the commit that disabled each one | A live or generated registry - each audit is point-in-time; triage goes in `refactoring.md` |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
@@ -115,8 +116,28 @@ a file in it is touched, rather than waiting to be opened.
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
-Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
-**already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+Rule of thumb - and the axis is **weight**, not when the work happens:
+
+- **A refactor too small to deserve its own note** → [`docs/refactoring.md`](docs/refactoring.md). One
+  or two lines, no owner, no tags, no state. It is a lightweight list of things that should be tidied,
+  and nothing about it says *when*.
+- **Anything needing context, evidence, tracking or a decision** → `docs/inflight/`, one file per item,
+  tagged. Including work decided to happen **later**: a note may carry
+  `inflight-state: deferred - <what it waits on>` and still belongs here. Deferred is a schedule, not
+  an exile - and it is why "later → refactoring.md" was wrong.
+- **Already settled** → [`docs/solutions/`](docs/solutions/) for the knowledge. **Not
+  `CHANGELOG.adoc`** - see [Changelog](#changelog): a PR never adds an entry, the file is generated at
+  release time from commit messages, so "put it in the changelog" is an instruction nobody may follow.
+
+**When a `refactoring.md` line outgrows a line or two - it needs a decision, has a blocker, or has
+evidence worth keeping - promote it to a note and delete the line in the same commit.** Neither file
+may state it twice. The stale-arrival guard is the worked example: a one-line tidy-up in
+`refactoring.md` until it turned out to be blocked on a null-safety decision, at which point it became
+`docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`.
+
+This wording replaces "happening now → inflight; should happen later → refactoring.md", which stopped
+being true the moment `docs/inflight/` gained deferred notes: 34 of them are "later" work and none of
+them belong in `refactoring.md`.
 
 ### Cite by anchor, never by line number
 
@@ -125,6 +146,11 @@ citation while the file and the section are both intact, so it still reads as va
 checks it. Cite the path plus the smallest distinctive greppable string - an identifier, a flag, a
 config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. Run
 the grep before you commit the citation.
+
+**The path half is now enforced: `bin/check-file-refs.sh` fails a cited path that does not exist**,
+across the whole tree, and the `PR Checklist` workflow runs the same module - so deleting a file
+also fails the PR that leaves citations behind. The anchor half is still yours: a gate can only tell
+you the file is there, never that your quoted string is still in it.
 
 Repairing one that has already gone stale in a dated record is its own procedure, because those
 documents may not be rewritten to match today's code - [`docs/citations.md`](docs/citations.md)
@@ -174,6 +200,9 @@ and the traps that voided earlier experiments.
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
 
+- **The titles are already in your context**, injected at session start by
+  `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
+  an excuse, and the check costs one grep against a list you have been handed.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
 - **`--state open` is a collision check, not a prior-art search.** The PR that already solved
@@ -309,13 +338,13 @@ chaos suite, the ambient probe - and wins where the two disagree. Four rules bin
   test an uncontended broker: passes → contention; still fails → investigate the code, do not mask
   it. Say in the commit/PR which cause you established and how. Loosening deadlines to go green
   hides exactly the bugs this library exists to prevent. **When a broker integration test fails,
-  read its `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing by hand** - and check the
+  read its `AMBIENT PROBE AUTOPSY` block before diagnosing by hand** - and check the
   probe's thresholds before believing a clean one.
 - **A flake fails the build - there is no retry, deliberately.** The CI scripts no longer pass
   `-Dsurefire.rerunFailingTestsCount=2`: it retried failures into green runs and hid three flakes no
   ledger knew about, one of them a regression of an already-fixed one. **Do not restore it to get a
-  build green** - the lever is `@Quarantined` with a diagnosis
-  ([`docs/testing.md`](docs/testing.md)), which relocates the signal where a retry destroys it, and
+  build green** - the lever is `@Quarantined` with evidence: a diagnosis, or a sighting ledger
+  ([`docs/quarantined-tests.md`](docs/quarantined-tests.md)), which relocates the signal where a retry destroys it, and
   nothing enforces this. Background:
   [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md);
   the flakes it uncovered are open in

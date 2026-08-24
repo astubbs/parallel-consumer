@@ -1,5 +1,9 @@
 # Open question: two paths release the same `ProducingLock`, and nothing stops the second
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
+
 **Not confirmed a defect.** It is an unresolved invariant in the transactional poll-and-produce lock
 lifecycle. Recorded because the reasoning is cheap to lose and the code path is one that has already
 produced two flakes.

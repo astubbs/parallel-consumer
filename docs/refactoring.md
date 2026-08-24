@@ -59,11 +59,19 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ## Breaking changes queued for next major version
 
-API/behaviour changes that are ready in principle but must wait for a major-version
-bump (current line is 0.6.x). Unlike the internal refactors below - which are
-non-breaking and can land any time - these change the public, user-visible surface,
-so they are **release-gated**: do not fold them into a minor/patch. Collected here
-so a major-release prep can action them in one pass.
+**The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
+cut right now.** It already carries a `=== Breaking` section in `CHANGELOG.adoc` (the `bz.stub`
+package rename), so the items below are **not** waiting for some future bump - this is the pass they
+were collected for, and work that lands now lands in the right release.
+
+Do not read "queued for next major" as "not yet". Check
+[`CHANGELOG.adoc`](../CHANGELOG.adoc) for whether the top section is still marked `(unreleased)`
+before deciding a breaking change must wait: while it is, the gate is open. It closes when 0.6.0.0
+ships, and then this section starts accruing for the release after it.
+
+These change the public, user-visible surface, so they still may not be folded into a **minor or
+patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
+refactors below, which are non-breaking and can land at any point in any line.
 
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
@@ -156,6 +164,18 @@ Do not start one casually.
   lambda-actor-bus's `Actor`/`ActorImpl`; its commit d391398f1 records the unification as unfinished).
   Only meaningful as part of the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) rework.
   Registered in the manifest as `sweep-2023-actor-ipc` (this doc stays the editorial owner).
+- **A concrete, already-costed first slice: stop signalling the control thread by interrupting it.**
+  `Thread#interrupt` has no payload, so the one bit currently carries four meanings - wake up, stop
+  blocking, shut down, and "your next commit-lock acquisition will throw". Receivers cannot tell
+  which, so the class has accumulated four hand-clears instead of a fix, one of which does not clear
+  and merely warns that it cannot tell. astubbs#296 hit it by adding an ordinary state transition and
+  inheriting a shutdown hazard from a wakeup.
+  `ControllerEventMessage` is already an actor message in all but name and the loop already blocks on
+  its mailbox, so the first slice is small: a payload-free nudge variant, shutdown as a message, and
+  coalescing on an `AtomicBoolean` (clear **before** draining, or a nudge arriving mid-processing is
+  lost). Full design, including which of the five blocking sites a message cannot reach, in
+  [`docs/solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md`](solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md).
+  Belongs with the God-class decomposition above, not before it.
 
 ### Remove static state (unblocks parallel test execution)
 *Mirror: [#131](https://github.com/astubbs/parallel-consumer/issues/131).*
@@ -237,6 +257,30 @@ Do not start one casually.
 ### offsets/OffsetDecodingError.java
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
+
+### state/ShardKey.java
+
+- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
+  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
+  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
+  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
+  doc fix plus a field rename, not a behaviour change.
+
+### state/ProcessingShard.java
+
+- **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
+  `iterator.remove()` and decrements the counter, but never calls `retryQueue.remove` - whereas the
+  sweep does both, and says so: `// remove stale containers from both processingShards and retryQueue`
+  in `ShardManager.removeStaleContainers`, which maps `retryQueue::remove` over what the shard
+  returned. If the control thread's inline removal reaches a *failed* (retry-queue-resident) container
+  that has just gone stale before the poll thread's sweep does, that queue entry is orphaned
+  permanently, inflating `getQueueSizeAndNumberReadyToBeRetried` and therefore
+  `getNumberOfWorkQueuedInShardsAwaitingSelection`. Throttle-gate noise and a false "ready to retry"
+  signal - **not record loss**. Pre-existing and independent of astubbs#31.
+  **There is no test that would catch it**: the only retryQueue coverage is `ShardManagerTest`'s
+  `retryQueueOrdering`, `testRetryQueueOrdering` and `testRetryQueueOrderingMultipleTries`, all of
+  which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
+  either path.
 
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
@@ -365,6 +409,19 @@ but not this.*
 
 ---
 
+### Test infrastructure - `MockConsumerTestBase` assumes one partition and one key
+
+- **Generalise the harness to take a partition count and a key supplier.** `MockConsumerTestBase`
+  hardcodes `new TopicPartition(topic, 0)` and a single record key, which is right for the six
+  scenarios on it today and wrong for any scenario whose subject is ordering or backlog:
+  `CommitResponseTimeoutSymptomTest` reproduces a reported workload of 1000 keys across 4 partitions
+  under `KEY` ordering, so it repeats the manual rebalance dance rather than inheriting it, and its
+  javadoc says why. Two smaller mismatches come with it: options are built once per class in
+  `@BeforeEach`, so a class needing two option sets must split into subclasses, and the teardown
+  asserts a null failure cause, which a scenario that expects PC to die must override. Doing this
+  means re-verifying the six classes already on the base, which is why it is here rather than folded
+  into the PR that noticed it (astubbs#204).
+
 ### Test infrastructure - timing-based waits
 
 - **`ParallelEoSStreamProcessorTest` waits on loop cycles, not events** - four markers:
@@ -469,7 +526,7 @@ Only the items needing a decision are listed here - do not restate the inventory
 - **Three deleted stubs are missing *features*, not missing tests** - record them as issues, never as
   test debt. `poisonPillGoesToDeadLetterQueue`: PC has no dead-letter-queue concept and never has
   (zero DLQ occurrences in any `src/main/java`); tracked as astubbs#149, and already the
-  most-demanded missing feature in `docs/inflight/next-candidates.md`. `maxPerPartition` and
+  most-demanded missing feature in `docs/inflight/process-candidate-ranking.md`. `maxPerPartition` and
   `maxPerTopic`: no per-partition or per-topic in-flight limit exists - `ParallelConsumerOptions` has
   only the global `maxConcurrency`, and `ShardKey` never keys by topic. Nearest tracked: astubbs#160
   and astubbs#236. **They were written as a trio with `maxOverall`, and only the global scope was
@@ -498,6 +555,21 @@ A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.
 considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
 such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
 revisiting once the audit has been in use.
+<!-- file-refs: N/A - names a generated file this entry records as NOT built -->
+
+### Test infrastructure - a logback config nothing loads
+
+`parallel-consumer-examples/parallel-consumer-example-core/src/test/resources/logback-temp-test.xml`
+is dead. Logback loads `logback-test.xml` then `logback.xml`; nothing sets
+`logback.configurationFile`, and a repo-wide grep finds no reference to the file except the comment
+in `bin/check-test-log-config.sh` that records it as dead. So its settings - including
+`bz.stub.parallelconsumer` at `debug` - have never taken effect, and anyone editing it to change that
+module's test output is editing nothing.
+
+Either delete it, or rename it to `logback-test.xml` if its contents were the intent - which is a
+behaviour change for that module's test output and should be decided, not defaulted. Found while
+scoping `bin/check-test-log-config.sh`, which deliberately excludes the examples modules; noted here
+rather than fixed there so the gate's scope stayed one decision.
 
 ### Build - jacoco coverage under forked surefire
 

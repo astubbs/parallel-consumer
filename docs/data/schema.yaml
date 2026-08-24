@@ -60,6 +60,7 @@ kinds:
       - reader_contract
       - concerns
       - horizons
+      - stages
       - entries
       - one_point_zero
       - update_policy
@@ -69,7 +70,9 @@ kinds:
       - backlog
     # An entry is something a reader can watch finish. blocks_1_0 is what separates a 1.0 gate from
     # something merely targeted at it - the distinction the upstream release train drew, and the
-    # reason its checklist stayed workable.
+    # reason its checklist stayed workable. stage/stage_detail are required so no entry can claim a
+    # horizon without saying how real the work behind it is - the PR that advances a track updates
+    # them in the same change.
     item_contracts:
       entry_required: entries
     entry_optional:
@@ -81,12 +84,15 @@ kinds:
       - blocked_by
       - evidence
       - caveat
+      - stage_delivery
     entry_required:
       - id
       - title
       - serves
       - horizon
       - blocks_1_0
+      - stage
+      - stage_detail
       - why_now
       - done_when
   testing-evidence:
@@ -170,6 +176,11 @@ kinds:
       observability: Metrics, diagnostics and warnings.
       integration: Adapter modules and other frameworks.
       compatibility: Platform, runtime and dependency constraints.
+      engineering: How the project itself is built and maintained. Added 2026-08-19 for the agent
+        harness and the embedded issue tracker - capabilities an ADOPTER evaluates rather than calls.
+        For an abandoned-upstream fork, "how is this kept alive" is a question a user acts on, which
+        is the test for belonging in this catalogue; a value here must still be user-visible in that
+        sense, not an internal refactor.
     # "stable" was the wrong word and was withdrawn. A module cannot be called stable while a known
     # defect can lock up a consumer in production, and the honest claim is narrower: it works well,
     # it is run in production, and every known CRITICAL defect has a resolution ready to land. Note
