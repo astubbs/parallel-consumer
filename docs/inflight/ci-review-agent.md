@@ -1,5 +1,10 @@
 # Automated PR reviewer - gaps that affect what you can trust
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, affects how we work rather than what ships -->
+
+
 How the reviewer and its gate work, and the contract for asking for a review, are in
 [`docs/ci.md`](../ci.md). This file is only the open gaps.
 
@@ -13,7 +18,9 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   PR. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
-- **The DISPATCHED reviewer cannot open inline review comments; the comment route can.** The
+- **The DISPATCHED reviewer cannot open inline review comments; the comment route can** - read off
+  the action's entity-event handling below, not off an observed thread; see the measured note linked
+  further down for what has and has not actually been seen. The
   action installs the inline-comment MCP server only for an *entity* event. `workflow_dispatch` is
   not one, so on a dispatch the tool does not exist and the grant was removed rather than left
   inert - blocking findings arrive as a marked section in the summary comment, and
@@ -90,19 +97,38 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   **The comment route is no better off, for a different reason.** It looks testable - just comment
   on a PR - but `issue_comment` workflows always run the **default branch's** copy, so a comment
   exercises master's `claude.yml`, never the one on your branch. The tool grants and the
-  `refresh-gate` added there are unverified in exactly the same way. The dispatch half of that
-  exercise is now done and is the entry above; **the comment route is still unexercised** - the
-  open questions are whether it really does open an inline thread, and whether `claude-review`
-  clears itself afterwards.
-- **The duplication scanners are pointed away from where agents duplicate.** `dups: clones` and
-  `dups: similarity` scan `parallel-consumer-*/src` only, and the similarity job additionally
-  filters `file_extensions: 'java'` - so `docs/`, `.github/`, `bin/` and `AGENTS.md` are scanned by
-  neither. Both were green throughout astubbs/parallel-consumer#287 while one contract sat restated
-  in nine files, four of them stale. Two separate follow-ups, and they are not substitutes:
-  (a) point a clone engine at `docs/` and `.github/` - jscpd handles markdown - which catches
-  verbatim copy-paste between docs, a frequent agent behaviour, but **not** paraphrase; and (b) for
-  a contract specifically, a narrow guard asserting the canonical phrasing appears in its one home
-  and nowhere else, which is more reliable than any similarity metric. Full write-up:
+  `refresh-gate` added there are unverified in exactly the same way.
+
+  **Both routes have since been exercised and measured**, and the result is closed, so it lives in
+  [`docs/solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md`](../solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md)
+  rather than here. The short version: the comment route posts, at both ends; the dispatch route can
+  run for nine minutes, conclude success, and post nothing, leaving `claude-review` green on an older
+  comment. **What is still open is only the inline thread** - neither run had a blocking finding, so
+  neither had occasion to open one, and deciding it needs a PR that does.
+
+  **Reproduced again 2026-08-19 on astubbs/parallel-consumer#320**, and this sighting narrows it.
+  Run `32218074377`: dispatched with a long, specific `-f focus` naming four areas, ran 5m47s,
+  concluded **success**, and posted neither an issue comment nor a review. The two comment-route
+  reviews on the same PR that morning both posted normally, so the difference is the route, not the
+  reviewer or the diff. `claude-review` stayed green throughout on a comment from 04:22 - which is
+  the part that makes this worse than a plain failure: a run that produces nothing is
+  indistinguishable, from the gate's side, from one that found nothing.
+
+  **So the practical rule until this is fixed: ask for a review by comment.** `-f focus` is the only
+  thing the dispatch route uniquely buys, and a steer that reliably produces no review is worth less
+  than an unsteered one that posts. Say the focus in the `@claude review this` comment instead.
+- **A contract restated in nine files still has no mechanical guard.** Follow-up (a) - point a clone
+  engine at `docs/`, `.github/` and `bin/` - **landed** in astubbs/parallel-consumer#320: both jobs
+  now scan `.` rather than a whitelist of Java module directories. Do not read that as the problem
+  being solved. It catches **verbatim copy-paste**, and the failure recorded in the write-up was
+  **paraphrase**: nine sentences saying one thing, sharing almost no token runs, which no clone
+  engine can see. astubbs/parallel-consumer#320 hit the same wall from the other side - a genuine
+  22-line clone that both engines are structurally unable to compare, because it was JavaScript
+  embedded in a YAML string on one side and a shell heredoc on the other.
+  What remains open is follow-up (b), which is the one that would actually have caught astubbs#287: for a
+  contract specifically, a narrow guard asserting the canonical phrasing appears in its one home and
+  nowhere else. More reliable than any similarity metric, because it tests the thing you care about
+  instead of a proxy for it. Full write-up:
   [`docs/solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](../solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md).
 - **NOT ENFORCED YET: the two tool allowlists can drift apart.** `claude.yml` and
   `claude-code-review-dispatch.yml` now carry byte-identical `--allowedTools` lists (the comment
@@ -125,7 +151,7 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   rather than a judgement about comment metadata. This is now the single highest-value change left
   in this area. Do not confuse it with restoring head-freshness as a *rule* - that is a separate,
   deliberately parked decision in
-  [`parked-strict-review-gate-freshness.md`](parked-strict-review-gate-freshness.md).
+  [`ci-strict-review-gate-freshness.md`](ci-strict-review-gate-freshness.md).
 - **The gate runs from the PR's own checkout.** A `pull_request` job checks out the PR, so both
   the gate script and the workflow file come from the tree they are policing. Pre-existing and
   repo-wide rather than anything the on-demand split introduced: `copyright`, `shell: sigpipe`,
@@ -160,6 +186,7 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   it. (That ambiguity is exactly why `AGENTS.md` -> "Cite by anchor" forbids `file:line`.) The rule it ran
   into is stated once, canonically, in [`docs/ci.md`](../ci.md) -> "Editing the reviewer"; this
   entry does not restate it.
+  <!-- file-refs: N/A - names the script this note PROPOSES writing; it does not exist yet -->
 
   **What is left open is only that the grants remain unexercised**, which is the general condition
   of the bullet above rather than anything specific to these four: a grant a PR adds can never apply

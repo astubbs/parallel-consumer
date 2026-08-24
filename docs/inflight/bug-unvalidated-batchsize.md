@@ -1,5 +1,9 @@
 # `batchSize` is unvalidated, and zero fails in two different ways
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
+
+
 Tracked as astubbs#311, alongside the arithmetic defect in
 [`bug-batch-quantity-over-request.md`](bug-batch-quantity-over-request.md) - same config field, same
 one-PR fix, so one issue covers both. Kept as its own note because this directory is one item per

@@ -67,8 +67,8 @@ The flake was not a broker/infra problem to paper over with retries — it was *
 
 ## Related
 
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` — `createTopic`, `createTopicsBlocking`, `createTopics`
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/BrokerIntegrationTest.java` — `ensureTopic` (now delegates)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` — `createTopic`, `createTopicsBlocking`, `createTopics`
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java` — `ensureTopic` (now delegates)
 - `docs/inflight.md` — "CI reliability / gate issues" (this was the top-priority flaky *required* gate)
   - Pointer repair: that single file became the directory [`docs/inflight/`](../../inflight/) on
     2026-08-04 and was deleted in `0de96fc`. Read the section as it stood with `git show

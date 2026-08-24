@@ -529,11 +529,21 @@ for record in maturity_records:
             f"<modules> list - published coordinates for a module the reactor does not build "
             f"cannot resolve"
         )
+# One value that is deliberately not a Maven module. A feature whose deliverable IS the repository -
+# a convention, a record-keeping layout, a set of files rather than a jar - has no module to name,
+# and forcing it to borrow an unrelated one would put a false coordinate in the corpus, which is the
+# exact scar the rule above exists to prevent. Spelled as a single literal rather than a wildcard so
+# that a genuine typo in a module name still fails.
+REPOSITORY_ITSELF = "repository"
+
 for module, path in feature_modules:
+    if module == REPOSITORY_ITSELF:
+        continue
     if module not in reactor:
         problems.append(
             f"{path}: module '{module}' is in no pom.xml <modules> list - a feature record must "
-            f"name a module the reactor builds"
+            f"name a module the reactor builds, or '{REPOSITORY_ITSELF}' when the deliverable is "
+            f"the repository itself"
         )
 
 # Every non-deferred maturity row's evidence_id must resolve to a module_evidence id somewhere in
