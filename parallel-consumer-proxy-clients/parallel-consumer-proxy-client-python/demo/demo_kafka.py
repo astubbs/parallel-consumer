@@ -78,15 +78,25 @@ def key_slot(key: bytes | None) -> int | None:
     return ordinal if 0 <= ordinal < KEY_SPACE else None
 
 
-def ensure_topic(bootstrap: str, topic: str, partitions: int) -> None:
+def ensure_topic(
+    bootstrap: str, topic: str, partitions: int, config: dict[str, str] | None = None,
+) -> None:
     """Creates the demo's topic, tolerating one that a previous run already left behind.
 
     Reusing a topic silently is fine; reusing one with a **different partition count** is not,
     because the effective-configuration block would print a ``--partitions`` value that never
     applied - and that block is the demo's whole reproducibility promise.
+
+    ``config`` applies only when this call creates the topic; a reused topic keeps whatever it
+    already had. A caller whose measurement depends on a config therefore has to verify it on
+    the records themselves rather than trust it was applied - the streams demo does exactly that
+    with the sink's timestamp type.
     """
     admin = AdminClient({"bootstrap.servers": bootstrap})
-    wanted = NewTopic(topic, num_partitions=partitions, replication_factor=1)
+    # config is only ever passed when there is one: NewTopic type-checks config as a dict, so
+    # config=None is a TypeError rather than a default.
+    extra: dict[str, Any] = {"config": dict(config)} if config else {}
+    wanted = NewTopic(topic, num_partitions=partitions, replication_factor=1, **extra)
     created = admin.create_topics([wanted])
     try:
         created[topic].result(timeout=_TOPIC_CREATION_TIMEOUT)

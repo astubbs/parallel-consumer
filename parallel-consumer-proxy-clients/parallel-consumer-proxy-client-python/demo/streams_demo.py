@@ -28,13 +28,13 @@ import sys
 import time
 import threading
 from collections import Counter
-from typing import Any
+from typing import Any, NamedTuple
 
 # demo_kafka is a sibling, not a package: the same one-line path fix reference_demo.py makes,
 # for the same reason - the demo is run as a script, not imported.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from confluent_kafka import Consumer
+from confluent_kafka import TIMESTAMP_LOG_APPEND_TIME, Consumer
 from confluent_kafka.admin import AdminClient
 
 from demo_jvm import java_binary
@@ -62,6 +62,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--partitions", type=int,
                         default=int(os.environ.get("PC_DEMO_STREAMS_PARTITIONS", "4")),
                         help="partitions on both topics (default 4)")
+    parser.add_argument("--no-transform", action="store_true",
+                        default=bool(os.environ.get("PC_DEMO_STREAMS_NO_TRANSFORM")),
+                        help="control arm: the same topology with the mapValues node left out, "
+                             "so no invocation ever crosses the boundary - what it measures is "
+                             "Kafka's and Streams' own per-record cost, for attributing the "
+                             "round-trip figure")
     parser.add_argument("--function-delay-ms", type=float,
                         default=float(os.environ.get("PC_DEMO_STREAMS_FUNCTION_DELAY_MS", "0")),
                         help="sleep inside the Python transform; over the poll interval this is "
@@ -126,13 +132,33 @@ def expected_counts(records: int) -> Counter[int]:
     return Counter(int(key_of(ordinal).decode().removeprefix("key-")) for ordinal in range(records))
 
 
-def read_counts(bootstrap: str, topic: str, expected: Counter[int], deadline: float) -> tuple[
-        dict[int, int], int]:
+class SinkRead(NamedTuple):
+    """What the verifier saw on the sink, counts and clock together."""
+
+    latest: dict[int, int]
+    foreign: int
+    updates: int
+    """Count updates that were ours - one per input record when the state store cache is off."""
+    window_seconds: float | None
+    """First own count's broker append time to the last's, or None below two updates."""
+    log_append_clock: bool
+    """Whether every own record carried a broker log-append timestamp. False means the sink
+    topic was created without ``message.timestamp.type=LogAppendTime`` (a reused topic can do
+    that) and the window is record CREATION time - the seed's clock, not the engine's - so it
+    must not be read as a processing window."""
+
+
+def read_counts(bootstrap: str, topic: str, expected: Counter[int], deadline: float) -> SinkRead:
     """Reads the sink last-value-per-key until it agrees with ``expected`` or time runs out.
 
     Last-value-per-key rather than a tally of what arrived: the sink carries a KTable changelog, so
     a key with a final count of 12 also carries 1 through 11 ahead of it. Summing the topic would
     report 78 for that key and call the run broken when it was correct.
+
+    The window is measured on the records' **broker log-append timestamps**, never on when this
+    consumer happened to see them. A verifier that starts late reads a finished backlog at its own
+    speed, so arrival times here measure the verifier; the broker stamped each count as the engine
+    produced it, which is the engine's own timeline.
     """
     consumer = Consumer({
         "bootstrap.servers": bootstrap,
@@ -142,6 +168,10 @@ def read_counts(bootstrap: str, topic: str, expected: Counter[int], deadline: fl
     })
     latest: dict[int, int] = {}
     foreign = 0
+    updates = 0
+    first_append_ms: int | None = None
+    last_append_ms: int | None = None
+    log_append_clock = True
     try:
         consumer.subscribe([topic])
         while time.monotonic() < deadline:
@@ -163,11 +193,22 @@ def read_counts(bootstrap: str, topic: str, expected: Counter[int], deadline: fl
             # Serdes.Long() is an 8-byte big-endian signed long. Decoded here rather than
             # guessed: a wrong width would silently read a plausible number.
             latest[slot] = struct.unpack(">q", value)[0]
+            updates += 1
+            timestamp_type, timestamp_ms = message.timestamp()
+            if timestamp_type != TIMESTAMP_LOG_APPEND_TIME:
+                log_append_clock = False
+            if first_append_ms is None or timestamp_ms < first_append_ms:
+                first_append_ms = timestamp_ms
+            if last_append_ms is None or timestamp_ms > last_append_ms:
+                last_append_ms = timestamp_ms
             if all(latest.get(k) == v for k, v in expected.items()):
                 break
     finally:
         consumer.close()
-    return latest, foreign
+    window = None
+    if first_append_ms is not None and last_append_ms is not None and updates > 1:
+        window = (last_append_ms - first_append_ms) / 1000.0
+    return SinkRead(latest, foreign, updates, window, log_append_clock)
 
 
 class GroupWatch:
@@ -252,6 +293,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if not args.bootstrap:
         raise SystemExit("--bootstrap is required (demo/run.sh sets PC_DEMO_BOOTSTRAP)")
+    if args.no_transform and args.function_delay_ms:
+        raise SystemExit("--no-transform and --function-delay-ms are mutually exclusive: the "
+                         "control arm has no transform to slow down")
 
     run_id = int(time.time())
     source = args.topic or f"pc-streams-demo-{run_id}"
@@ -263,7 +307,11 @@ def main(argv: list[str] | None = None) -> int:
 
     log.info("Creating topics %s and %s (%d partitions)...", source, sink, args.partitions)
     ensure_topic(args.bootstrap, source, args.partitions)
-    ensure_topic(args.bootstrap, sink, args.partitions)
+    # LogAppendTime on the sink, because the counts' own timestamps are the measurement: Streams
+    # stamps an output with its *input's* timestamp - the seed's clock - so without this the sink
+    # window would measure when the backlog was produced, not when the engine processed it.
+    ensure_topic(args.bootstrap, sink, args.partitions,
+                 config={"message.timestamp.type": "LogAppendTime"})
     seed(args.bootstrap, source, 0, args.records)
 
     delay = args.function_delay_ms / 1000.0
@@ -307,8 +355,11 @@ def main(argv: list[str] | None = None) -> int:
         })
         builder = session.builder()
         records = builder.source(source)
-        transformed = builder.map_values(records, upper)
-        grouped = builder.group_by_key(transformed)
+        # The control arm changes exactly one term: whether the mapValues node exists at all.
+        # mapValues preserves the key, so leaving it out moves no repartition and changes no
+        # grouping - the printed topology is the proof, and differs only by this node.
+        staged = records if args.no_transform else builder.map_values(records, upper)
+        grouped = builder.group_by_key(staged)
         counts = builder.count(grouped, "counts-store")
         builder.sink(counts, sink)
 
@@ -321,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         deadline = started + args.timeout
         expected = expected_counts(args.records)
         with GroupWatch(admin, application_id) as watch:
-            observed, foreign = read_counts(args.bootstrap, sink, expected, deadline)
+            sink_read = read_counts(args.bootstrap, sink, expected, deadline)
         elapsed = time.monotonic() - started
         stable, group_state = watch.verdict()
     finally:
@@ -332,14 +383,15 @@ def main(argv: list[str] | None = None) -> int:
     # join and the verifier's polling, none of which is round-trip cost - including them made the
     # first draft of this demo report a rate four times worse than the boundary actually is.
     invocation_window = max(last_left - first_entered, 0.0)
-    return report(args, expected, observed, foreign, invocations, python_seconds,
+    return report(args, expected, sink_read, invocations, python_seconds,
                   invocation_window, elapsed, stable, group_state)
 
 
-def report(args: argparse.Namespace, expected: Counter[int], observed: dict[int, int], foreign: int,
+def report(args: argparse.Namespace, expected: Counter[int], sink: SinkRead,
            invocations: int, python_seconds: float, invocation_window: float, elapsed: float,
            stable: bool, group_state: str) -> int:
     """Prints the outcome and returns the exit code. Counts first: they are the claim."""
+    observed, foreign = sink.latest, sink.foreign
     missing = sorted(k for k in expected if k not in observed)
     wrong = sorted(k for k, v in expected.items() if k in observed and observed[k] != v)
     matched = len(expected) - len(missing) - len(wrong)
@@ -356,6 +408,8 @@ def report(args: argparse.Namespace, expected: Counter[int], observed: dict[int,
     if foreign:
         print(f"Records not ours        {foreign} (a pre-existing topic, counted separately)")
     print()
+    if args.no_transform:
+        print("Transform               none - control arm, nothing ever crossed the boundary")
     print(f"Python invocations      {invocations}")
     print(f"Run                     {elapsed:.1f}s end to end, including engine startup")
     if invocations > 1 and invocation_window > 0:
@@ -368,6 +422,18 @@ def report(args: argparse.Namespace, expected: Counter[int], observed: dict[int,
               f"({python_us / per_call_us * 100:.1f}%)")
         print(f"Single-thread ceiling   {1e6 / per_call_us:,.0f} invocations/sec "
               "(within-session, one stream thread, this machine)")
+    if sink.window_seconds is not None:
+        if sink.log_append_clock:
+            # sink.updates - 1 for the same reason as invocations - 1 above: the window spans
+            # the gaps between appends. This clock exists in BOTH arms, which is what makes the
+            # two comparable - the invocation figures above only exist when something crosses.
+            per_update_us = sink.window_seconds / (sink.updates - 1) * 1e6
+            print(f"Sink window             {sink.window_seconds:.2f}s, first count's broker "
+                  f"append to the last's, {sink.updates} updates")
+            print(f"Per count update        {per_update_us:.0f}us on the broker's clock")
+        else:
+            print("Sink window             unusable - the sink topic predates this run and does "
+                  "not carry log-append timestamps; name a fresh --topic to measure")
     print(f"Consumer group          {group_state}")
     print()
 

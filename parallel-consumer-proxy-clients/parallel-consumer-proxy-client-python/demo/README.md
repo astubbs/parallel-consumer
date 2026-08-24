@@ -236,6 +236,31 @@ This is the argument for wrapping the real engine rather than reimplementing it,
 none of the Python-native stream processors has a `describe()`, so none of them has any of this
 tooling, and none of them can grow it without also growing an ecosystem. We inherited it.
 
+### The control arm
+
+```bash
+# the same topology with the mapValues node left out - nothing ever crosses the boundary
+demo/run.sh --streams --native --no-transform
+```
+
+This arm exists to *attribute* the round-trip figure, not to demo anything. The treatment arm's
+per-record time is a total: the boundary crossing plus Kafka's and Streams' own per-record work,
+which would be paid with no foreign function at all. This arm removes exactly one term - the
+`mapValues` node, and with it every crossing - and keeps everything else: same partitions, same
+record count, same properties, same single stream thread. `mapValues` preserves the key, so
+leaving it out moves no repartition and changes no grouping; the printed topology is the proof,
+and differs from the treatment's only by that node.
+
+To make the two arms comparable, both report a **sink window**: the broker's log-append time of
+the first count to the last (the sink topic is created with `message.timestamp.type=LogAppendTime`
+for this). That clock exists whether or not anything crossed, and it measures the engine's own
+production timeline rather than when the verifier happened to read it. One caution learned running
+it: a single record count cannot attribute anything, because both arms carry a fixed startup and
+cadence component that dominates small runs - compare the *slope* of the sink window across
+several `--records` values, not one run's per-record figure. What the comparison found, with
+numbers and run counts, is in
+[`docs/inflight/perf-streams-crossing-attribution.md`](../../../docs/inflight/perf-streams-crossing-attribution.md).
+
 ### The failure arm
 
 ```bash

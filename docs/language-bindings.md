@@ -136,12 +136,24 @@ From the Kafka Streams PoC, one stream thread, loopback gRPC, on one developer m
 of a few hundred microseconds, of which **the Python function itself was around 0.05%**.
 
 Read carefully, that single number frames axes 3 and 4 entirely: **optimising the foreign function is
-pointless, and only the crossing is worth attacking.** It does not, on its own, say whether to attack
-the crossing's cost or its frequency, because it was never decomposed into transport versus engine
-overhead. **That attribution is unfinished and is the cheapest useful experiment available** — a
-control arm with a Java-side identity mapper against the same topology, one term changed.
+pointless, and only the crossing is worth attacking.** That attribution has now been run - a control
+arm of the same topology with the `mapValues` node removed, so nothing crosses, one term changed -
+and it answered the cost-versus-frequency question:
+[`inflight/perf-streams-crossing-attribution.md`](inflight/perf-streams-crossing-attribution.md)
+owns the numbers, the method and the spread.
 
-Do not cite the number as a transport cost. It is a total.
+- **The crossing is essentially all of the marginal per-record cost**: ~140-160us per record at
+  steady state against an engine-side share too small to measure (at most ~15us). Attacking the
+  crossing - cost via the C ABI, frequency via batching - is confirmed as the right target, and the
+  two still compose.
+- **The few-hundred-microsecond total overstates the crossing.** Roughly half of it at the PoC's
+  scale was fixed warm-up and cadence that an arm with no crossing pays identically; the
+  steady-state single-thread ceiling is nearer 7,000 invocations/sec than the PoC's ~2,400. Cost
+  the C-transport and batching work against ~150us per record, not ~450us.
+
+Do not cite the old total as a transport cost, and do not quote a per-record figure from a single
+short run - both arms carry a fixed component that dominates small runs, so per-record cost is only
+meaningful as a slope across run lengths.
 
 ## Prior art, and what each is good for
 
