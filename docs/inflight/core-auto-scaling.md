@@ -213,3 +213,29 @@ safety margin the load-factor work needs. It is not a switch.
 its entire reason for existing is switched off. Under a Streams topology, though, that operating point
 is the common case rather than the pathological one, which is what changes the answer.
 
+
+## Decisions taken 2026-08-24, and one branch to delete at merge prep
+
+- **Continue with adaptive discovery; do not divert to rate limiting first.** The overload signal is
+  worth much less without a controller to feed, and this work is far enough along that reordering
+  costs more than it buys. Owner's call.
+- **Fixed and adaptive rate limiting are layers that compose, not rivals.** An explicit ceiling
+  ("our endpoint allows 100/s total") and adaptive discovery answer different questions - capacity is
+  discoverable, a contractual quota never is - so they compose by `min()`. This is the same
+  conclusion [`core-distributed-throttling.md`](core-distributed-throttling.md) reached from the
+  other side; that note owns the strategy-menu shape.
+- **`maxConcurrency` is a maximum concurrency, not a thread count.** If the engine is auto-scaling,
+  how the ceiling is honoured - platform pool, virtual threads, no pool - is the engine's business.
+  This turns the open-loop defect into a design correction rather than a patch: the controller sizes
+  the pool to its own target, so the target *is* concurrency instead of a feeding rate. The design
+  owns the mechanism -
+  [`../plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md).
+- **How a user signals downstream overload is still open**, deliberately - options and the argument
+  against an exception are in the design's overload-signal section.
+
+**Delete `origin/features/rate-limiting` when this work is prepped for merge.** A 2021 bucket4j POC
+touching only the Reactor and Vertx example apps, still in `io.confluent` packages, never merged, no
+PR, and contained in no other branch - so nothing is lost. Its idea is already catalogued in
+`docs/refactoring.md`'s idea bank, which is where the record belongs; the branch itself is just a
+stale ref that reads as live work to anyone listing branches. Do it at merge prep, not now, so the
+catalogue entry can be checked against the branch one last time.

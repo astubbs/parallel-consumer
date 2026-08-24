@@ -269,19 +269,82 @@ refuses to drop when it would leave the queue below one MTU. `LIMIT_FLOOR_SLOTS 
 
 ## The actuator must be fixed before any law is worth tuning
 
-**`maxConcurrency` must bound the pool and the ceiling together, or the loop is open above the pool
-size.** This is prerequisite work, not part of the law:
+**`maxConcurrency` is a maximum concurrency, not a thread count** (owner's ruling, 2026-08-24). If the
+engine is auto-scaling, how a concurrency ceiling gets honoured - platform pool, virtual threads, no
+pool at all - is the engine's business, not a number the user should be nominating.
 
-- On platform threads, either size the pool from the resolved ceiling, or refuse a ceiling above the
-  pool size. The current 64-against-16 default does neither.
-- Under virtual threads the target is already the only bound, so the question inverts: `maxConcurrency`
-  asks for a number that may not exist (inflight item 5). A controller with a real objective needs a
-  ceiling far less than one without, which is the argument for treating it as a pure safety cap.
+That reframe dissolves the open-loop defect instead of patching it. **The controller sizes the pool to
+its own target**: `ThreadPoolExecutor#setCorePoolSize` is documented as safe at runtime, and shrinking
+it lets surplus threads terminate as they next go idle - which is exactly the drain-down behaviour a
+contraction wants. Then:
+
+- the target **is** concurrency rather than a feeding rate, so the loop is closed at every value
+  instead of only below the pool size;
+- no queue depth accumulates, so the excluded-queue-wait measurement problem disappears with it
+  rather than needing to be corrected for;
+- platform threads and virtual threads come to mean the same thing, where today the target is the
+  only bound under one and a feeding rate under the other;
+- `maxConcurrency` becomes a pure safety ceiling, which is the honest reading of its name and
+  resolves the "asks for a number that may not exist" problem under virtual threads (inflight item 5).
+
+Note the units: the target is in **slots** - one slot is one concurrent user-function invocation, i.e.
+one in-flight batch - so the pool size is the slot count, not the record count the seam derives from
+it.
+
+An alternative considered and rejected: size the pool once from the resolved ceiling. It closes the
+loop but reserves the ceiling's worth of threads permanently, which is tolerable at 64 and absurd at
+the ceilings a virtual-thread deployment would want.
 
 Independently: the service-time tap excludes queue wait, so it does not measure what a caller
 experiences. `WorkContainer#getResidenceTime()` and the existing `RECORD_RESIDENCE_TIME` timer
 already capture end-to-end time including queueing and retries. If a latency signal is kept as a
 ceiling, that is the one to use.
+
+## The overload signal: how a user says "the downstream is pushing back"
+
+**Still open.** The mechanism is not chosen; what follows is the argument and the options, because
+this is the input that makes the dead `OVERLOAD_DROP` socket real.
+
+### Reporting pressure and failing a record are orthogonal, and that is what rules out an exception
+
+| | Record failed | Record succeeded |
+|---|---|---|
+| **Pressure reported** | Rejected with a 429, not processed, retry it | **The SDK retried internally and eventually won** |
+| **Nothing reported** | A bug, or a bad record | Normal |
+
+The top-right cell is the common case and is invisible today: most HTTP SDKs retry 429 internally, so
+the user's function returns success and the engine learns nothing. An exception cannot express that
+row at all - there is no exception. It also welds the two facts together, cannot name *which* of
+several downstreams pushed back, and unwinds the stack before the user's cleanup.
+
+**So overload is a reportable condition, not an error** - which is the owner's framing: throws stay
+for bugs and genuine failures.
+
+### Options
+
+1. **A method on the context the function already receives.** Works for every poll variant including
+   the void one; the rate figure is optional, so implicit overload with no published limit is
+   expressible; it can be called once per downstream; and a decorator around an HTTP client or a
+   bulkhead can report without the user's function knowing it exists.
+2. **A richer return object.** Reads most naturally as "a valid return state" - but `poll()` returns
+   `void` and has no return channel at all, so it needs new overloads for every variant, doubling the
+   API surface for a signal that must also work where there is nothing to return.
+3. **A classifier SPI at construction**, mapping the user's existing exception types to overload.
+   Zero edits to existing function bodies, so it is the cheapest adoption path - but it inherits every
+   limit of the exception design for anyone starting fresh.
+
+Options 1 and 3 are complements rather than rivals: 3 makes existing code work untouched, 1 lets new
+code report richly. Option 2's discoverability advantage is real and is the strongest argument
+against 1; the counter is that the context is an object the user already holds, so the method is
+reachable by autocomplete rather than needing to be known in advance.
+
+### Two flavours, feeding two layers
+
+A **hard** signal carries a number (a 429 with `Retry-After`, a published quota) and belongs to the
+fixed layer. A **soft** signal carries none (a timeout, a 503, a circuit breaker opening) and belongs
+to the adaptive layer. This is why the two layers compose by `min()` rather than competing: capacity
+is discoverable, a contractual quota is not. [`docs/inflight/core-distributed-throttling.md`](../inflight/core-distributed-throttling.md)
+owns the strategy-menu shape this plugs into.
 
 ---
 
