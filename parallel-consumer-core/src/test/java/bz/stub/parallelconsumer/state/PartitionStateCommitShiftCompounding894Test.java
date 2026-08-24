@@ -18,7 +18,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -67,6 +69,26 @@ class PartitionStateCommitShiftCompounding894Test {
 
     /** Enough rebalance cycles to tell compounding from a plateau, and to let a self-correction show itself. */
     static final int CYCLES = 6;
+
+    /**
+     * Log end offset of the single-incomplete fixture: offsets 0 to 2 have been produced. The growing-partition
+     * loop starts here and adds to it.
+     */
+    static final long SINGLE_INCOMPLETE_LOG_END_OFFSET = 3L;
+
+    /**
+     * How many records the partition produces between one commit cycle and the next. The single free parameter of
+     * the growing-partition loop, swept rather than picked: 0 reproduces the static case, and the rest bracket the
+     * point where new records arrive faster than the fabricated state runs away from them. It is stated here rather
+     * than buried in the loop because it is the one assumption the result depends on.
+     */
+    static final long[] RECORDS_PRODUCED_PER_CYCLE = {0L, 1L, 2L, 3L};
+
+    /** Highest offset the single-incomplete fixture polls. */
+    static final long SINGLE_INCOMPLETE_HIGHEST_POLLED = 2L;
+
+    /** The offset the single-incomplete fixture leaves outstanding, to be raced. */
+    static final List<Long> SINGLE_INCOMPLETE_OUTSTANDING = Collections.singletonList(1L);
 
     /**
      * Claim A, measured: the shift is a property of the fixture. The single-incomplete state shifts the commit two
@@ -152,12 +174,161 @@ class PartitionStateCommitShiftCompounding894Test {
     }
 
     /**
+     * The question the static loop could not reach: on a partition that <b>keeps producing</b>, does the overshoot
+     * past the log end offset compound?
+     * <p>
+     * The static loop parked because the phantom offsets the shifted payload names never arrive, so the incomplete
+     * set never empties and the commit never falls through to a fabricated {@code offsetHighestSucceeded + 1}. Once
+     * records keep arriving those phantoms can become real, the set can empty again, and the fall-through is back in
+     * reach. This runs the full cycle - encode, commit, decode, reassign, produce, poll, complete, commit - and
+     * reports the committed offset against the partition's true log end offset each time.
+     * <p>
+     * Each cycle polls everything the partition holds from the resume position that the restored state dictates,
+     * completes all of it, and lets the lowest of those completions land inside the commit rather than before it.
+     * That is the maximal-progress reading: the consumer is not behind, and one of its completions is merely
+     * unlucky about when it finishes.
+     * <p>
+     * The one free parameter is {@link #RECORDS_PRODUCED_PER_CYCLE}, swept rather than picked. The assertion is the
+     * same invariant throughout - a committed offset above the log end offset is out of range on the next poll -
+     * and the per-cycle ledger travels in the failure message so the shape of the answer is legible from the
+     * failure alone.
+     */
+    @Test
+    void repeatingTheRaceOnAPartitionThatKeepsProducing() throws OffsetDecodingError {
+        List<String> ledger = new ArrayList<>();
+        long worstOvershoot = Long.MIN_VALUE;
+
+        for (long producedPerCycle : RECORDS_PRODUCED_PER_CYCLE) {
+            worstOvershoot = Math.max(worstOvershoot, runGrowingPartition(producedPerCycle, ledger));
+        }
+
+        String report = String.join("\n  ", ledger);
+        log.info("confluentinc#894 growing-partition ledger:\n  {}", report);
+
+        assertWithMessage("confluentinc#894: a committed offset above the partition's log end offset is out of range "
+                + "on the next poll, and fires auto.offset.reset. Worst overshoot across the sweep was %s. "
+                + "Per-cycle ledger:\n  %s", worstOvershoot, report)
+                .that(worstOvershoot)
+                .isAtMost(0L);
+    }
+
+    /**
+     * One sweep point of {@link #repeatingTheRaceOnAPartitionThatKeepsProducing()}.
+     * <p>
+     * Skipped records are counted in two separate columns, because one is correct and the other is not. A record
+     * this consumer genuinely processed in an earlier cycle is rightly recognised by
+     * {@link PartitionState#isRecordPreviouslyCompleted} and skipped. A record no cycle ever ran, dismissed only
+     * because a fabricated {@code offsetHighestSucceeded} sits above it, is silently dropped. Counting them together
+     * would let the second hide inside the first. Both are measured and reported rather than asserted on - the
+     * assertion here is about the committed offset - so the ledger carries them either way.
+     *
+     * @return the largest amount by which a committed offset exceeded the true log end offset, or
+     *         {@link Long#MIN_VALUE} if no cycle ever committed
+     */
+    private long runGrowingPartition(long producedPerCycle, List<String> ledger) throws OffsetDecodingError {
+        long logEndOffset = SINGLE_INCOMPLETE_LOG_END_OFFSET;
+        long worstOvershoot = Long.MIN_VALUE;
+        HighestOffsetAndIncompletes carriedOverRebalance = null;
+        // Seeded with what the cycle-1 fixture itself completes before the loop starts. Without this the harness
+        // counts those as never having run, and reports correct skips as data loss - which it did, until the
+        // control arm showed a fixed build "losing" records it had in fact processed.
+        Set<Long> everActuallyCompleted = completedBySingleIncompleteFixture();
+
+        for (int cycle = 1; cycle <= CYCLES; cycle++) {
+            RacingCommitCycleState state;
+            int skippedHavingActuallyRun = 0;
+            int droppedWithoutEverRunning = 0;
+
+            if (carriedOverRebalance == null) {
+                state = singleIncompleteState();
+            } else {
+                logEndOffset += producedPerCycle;
+                state = new RacingCommitCycleState(mu.getModule(), tp, carriedOverRebalance);
+                for (long offset = state.getOffsetToCommit(); offset < logEndOffset; offset++) {
+                    ConsumerRecord<String, String> polled = record(offset);
+                    if (state.isRecordPreviouslyCompleted(polled)) {
+                        // Two very different things look identical here, so they are counted apart: a record this
+                        // consumer really did process in an earlier cycle (correct), and one no cycle ever ran,
+                        // dismissed only because a fabricated offsetHighestSucceeded sits above it (silent loss).
+                        if (everActuallyCompleted.contains(offset)) {
+                            skippedHavingActuallyRun++;
+                        } else {
+                            droppedWithoutEverRunning++;
+                        }
+                    } else {
+                        state.addNewIncompleteRecord(polled);
+                    }
+                }
+            }
+
+            List<Long> deliverable = new ArrayList<>();
+            for (Long outstanding : sorted(state.getAllIncompleteOffsets())) {
+                if (outstanding < logEndOffset) {
+                    deliverable.add(outstanding);
+                }
+            }
+            if (deliverable.isEmpty()) {
+                ledger.add(String.format("K=%d cycle %d: log end offset %d, nothing outstanding that a record could "
+                                + "arrive for - the cycle cannot run again",
+                        producedPerCycle, cycle, logEndOffset));
+                break;
+            }
+
+            long racing = deliverable.get(0);
+            for (Long done : deliverable) {
+                if (done.longValue() != racing) {
+                    state.onSuccess(done);
+                }
+            }
+            everActuallyCompleted.addAll(deliverable);
+            state.armRaceOn(racing);
+
+            OffsetAndMetadata committed = state.createOffsetAndMetadata();
+            long overshoot = committed.offset() - logEndOffset;
+            worstOvershoot = Math.max(worstOvershoot, overshoot);
+
+            if (committed.metadata().isEmpty()) {
+                ledger.add(String.format("K=%d cycle %d: log end offset %d, committed %d (overshoot %+d), no payload "
+                                + "- nothing carries to the next assignment",
+                        producedPerCycle, cycle, logEndOffset, committed.offset(), overshoot));
+                break;
+            }
+
+            carriedOverRebalance = decode(committed);
+            ledger.add(String.format("K=%d cycle %d: log end offset %d, raced %d, committed %d (overshoot %+d), "
+                            + "%d skipped having actually run / %d DROPPED without ever running, decodes to "
+                            + "highest-seen %s incompletes %s",
+                    producedPerCycle, cycle, logEndOffset, racing, committed.offset(), overshoot,
+                    skippedHavingActuallyRun, droppedWithoutEverRunning,
+                    carriedOverRebalance.getHighestSeenOffset().orElse(null),
+                    carriedOverRebalance.getIncompleteOffsets()));
+        }
+
+        return worstOvershoot;
+    }
+
+    /**
      * Offsets 0 to 2 polled, 0 and 2 complete, 1 outstanding. Completing 1 empties the set, so the second read of
      * the offset to commit falls through to {@code offsetHighestSucceeded + 1}. This is the sibling test's fixture,
      * rebuilt here so the two magnitudes are measured side by side in one run.
      */
     private RacingCommitCycleState singleIncompleteState() {
-        return polledState(2L, Collections.singletonList(1L));
+        return polledState(SINGLE_INCOMPLETE_HIGHEST_POLLED, SINGLE_INCOMPLETE_OUTSTANDING);
+    }
+
+    /**
+     * @return the offsets {@link #singleIncompleteState()} really processes when it is built - derived from the same
+     *         two constants the fixture is built from, so the two cannot drift. The growing-partition loop needs
+     *         this or it mistakes a correct skip for a dropped record.
+     */
+    private Set<Long> completedBySingleIncompleteFixture() {
+        Set<Long> completed = new TreeSet<>();
+        for (long offset = 0; offset <= SINGLE_INCOMPLETE_HIGHEST_POLLED; offset++) {
+            if (!SINGLE_INCOMPLETE_OUTSTANDING.contains(offset)) {
+                completed.add(offset);
+            }
+        }
+        return completed;
     }
 
     /**
