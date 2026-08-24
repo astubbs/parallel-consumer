@@ -48,6 +48,27 @@ throughput modes both need a completions-per-window measure the controller does 
 it samples service time, outcomes and in-flight, but never rate. That is a small addition to the
 window and a large addition to what the controller can reason about.
 
+### A number cannot be a target, because you cannot know it is reachable
+
+The owner's follow-up, and it rules out the obvious design. Suppose the operator says *20ms*. Two
+things go wrong with treating that as a goal to aim at.
+
+**It presumes achievability.** If runtime conditions put the real floor at 50ms, a controller
+chasing 20ms contracts forever - down to a single slot, destroying throughput, still missing the
+target, and looking from the inside like it is working perfectly. It is obeying its objective. The
+objective was impossible.
+
+**It presumes a cliff where people have a region.** 5ms and 10ms are both *instant* to most use
+cases, so doubling there is a fine trade for throughput; 20ms might not be. What an operator
+actually holds is a tolerance region with a soft floor and a hard edge, not a point.
+
+The design conclusion: **a latency number is a CEILING, never a target.** Seek the knee (power,
+above), and let an operator optionally clamp the result - and when the clamp turns out to be below
+anything the system can reach, say so as a binding constraint rather than strangling throughput in
+pursuit of it. That is a new reported state, and it is the honest failure mode: *you asked for 20ms,
+nothing here goes below 50ms, so I am optimising throughput and telling you rather than pretending.*
+The same argument applies to a throughput floor.
+
 ## 1. The probe-down cycles forever when it has already learned the answer
 
 At the cap with flat latency the probe-down fires on its cadence, steps the target down by its
@@ -118,6 +139,21 @@ And the ramp is **linear**: growth is a constant additive step per window regard
 headroom exists, while contraction is proportional to the degradation. Reaching a wide ceiling from
 a low start therefore takes time proportional to the distance, which is what the seed option exists
 to skip.
+
+### The comparison that makes the point (owner, 2026-08-23)
+
+Run a workload that can clearly go faster than it is being allowed to, with the core engine pinned
+at a static concurrency of twenty. Then run it again with adaptive turned on, and report the
+difference. The result is not in doubt; the point is having the number, and it transfers to every
+alternative product, none of which can do this at all because none of them own the dispatch
+decision.
+
+Worth strengthening before it is published: a deliberately-low static arm makes the claim true but
+easy, and the obvious rebuttal is *so tune your config*. Run a THIRD arm - static, hand-tuned to the
+best value a careful operator would find - so the claim becomes the one that actually survives
+scrutiny: adaptive matches a hand-tuned configuration without the hand-tuning, and beats it the
+moment conditions move away from whatever that tuning assumed. The second half is the real product
+argument, and it needs the workload to change partway through the run to show it.
 
 ## One correction worth carrying
 
