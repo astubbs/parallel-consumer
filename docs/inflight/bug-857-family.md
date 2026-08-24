@@ -95,6 +95,23 @@ one-line test annotation, so the branch is not a suspect. As with the second sig
 suite randomises its seed per run, so other branches passing the same day only means their seeds did
 not draw this interleaving.
 
+**Fifth sighting, 2026-08-24 - the EAGER variant again, a clean probe kill, same signature as the
+second.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` was killed fail-fast by
+`ProgressProbe` on
+[job 97320214735](https://github.com/astubbs/parallel-consumer/actions/runs/32689392702/job/97320214735)
+(astubbs#201's CI): `CLASS2_STALL/LAG_STAGNATION` on THREE partitions at once - lag 2,916 / 2,523 /
+982 with committed offsets stagnant at 47 / 653 / 2,107 for 154s against the 150s bound, group
+STABLE, heartbeats flowing. The protocol-invisible stall, exactly the second sighting's shape.
+**Replay seed `1197508156275542070`:**
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1197508156275542070
+
+**Branch context:** astubbs#201 changes logging only (the load-factor ceiling report), so the branch
+is not a suspect. The cooperative variant PASSED in the same run, which is now the third time the
+red draws eager and the cooperative control holds - strengthening the eager-specific reading that
+points at the `onPartitionsRevoked` / `commitOffsetsThatAreReady` contention astubbs#29 addresses.
+
 **Fourth sighting, 2026-08-12 - the `ZOMBIE_MEMBER` arm, and the probe genuinely fired.**
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed fail-fast by `ProgressProbe` on
 [job 94014375262](https://github.com/astubbs/parallel-consumer/actions/runs/31564815332/job/94014375262),
