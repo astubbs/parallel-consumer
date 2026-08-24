@@ -31,9 +31,27 @@ meaningless against a *throughput* goal, because catching up IS maximising throu
 coincide. So this is not a fourth peer mode alongside the objectives; it is a temporary override
 that only exists when the standing objective is latency-flavoured.
 
+**And catch-up is not permission to saturate the downstream** - owner's own qualifier, and it
+collapses the design. Burning latency does not mean ignoring the downstream: past some point the
+dependency slows under the load and you stop draining the backlog any faster. So catch-up is not a
+fourth mode with its own machinery. **It is the standing objective with the latency ceiling
+suspended, falling back to seeking the point that produces the most results fastest** - the same
+equilibrium search the controller already performs. That is a far smaller feature than it first
+appeared: one suspension, not a new controller.
+
+One real distinction survives, and it is where the two objectives differ. The knee - where power,
+throughput over latency, is maximised - is not the same point as maximum throughput. Past the knee,
+throughput keeps rising for a while but you pay disproportionate latency for each remaining
+percent. Normal running probably wants the knee; **catch-up probably wants the plateau**, because
+the latency it is paying was already declared acceptable. The plateau is self-limiting rather than
+unbounded - a saturated dependency stops rewarding more admission with more completions, which is
+exactly the backing-off the qualifier asks for, arriving as a consequence of the objective rather
+than as a separate guard.
+
 Open: what measures "caught up" (absolute lag, lag as a fraction of the topic, or the derivative -
-is lag shrinking?), and the hysteresis so a workload sitting near the threshold does not flap
-between modes.
+is lag shrinking?), the hysteresis so a workload sitting near the threshold does not flap between
+modes, and whether catch-up seeks the plateau or the knee - which is the same throughput-versus-
+latency choice as item 0, asked about a period the operator has already said they will pay for.
 
 ## Rate-limit feedback: jump to the answer instead of searching for it
 

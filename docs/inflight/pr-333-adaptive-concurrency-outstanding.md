@@ -163,9 +163,22 @@ Three separate defects, all found by the owner reading the integration test's ow
 different instances.** The integration test runs a second instance in the same JVM, and neither the
 movement line nor the held line carries any instance identifier, so the two trajectories interleave
 into one stream that reads as a single controller behaving impossibly. `%X{pcId}` is empty on
-`pc-control` lines, so the mapped diagnostic context does not save us. **Put an instance identifier
-in both lines.** Until then every multi-instance log - which is every real deployment reading a
+`pc-control` lines. Until then every multi-instance log - which is every real deployment reading a
 shared aggregator - is unreadable in exactly this way.
+
+**The fix is one line, and nothing new has to be built.** The whole mechanism is already present and
+simply unused: `MDC_INSTANCE_ID` (`pcId`) exists, `addInstanceMDC()` sets it on the control thread,
+the broker poller sets it on its own thread, and the logback pattern already renders `%X{pcId}`. It
+is blank because the field behind it, `myId`, is `Optional.empty()` by default - its javadoc says
+*useful when testing with more than one instance*, so it was built as a manual testing aid and never
+defaulted. **Default it** to a generated short identifier, ideally the same UUID `PCMetrics` already
+generates for its `pcinstance` meter tag, which would make a log line and a metric correlate to the
+same instance for free.
+
+Note for whoever does it: this is **not** what astubbs#205 (MDC context propagation) provides. That
+PR carries the *caller's* MDC into the worker threads running the user function - user context
+flowing into PC. This is PC's own identity on PC's own threads, the opposite direction. The two are
+adjacent enough to check for conflict, and neither substitutes for the other.
 
 **The line reports its inputs but never its reasoning.** *service time mean 11.70ms ... decided by
 ADAPTING* does not tell the reader why 11.70ms means grow. The number that decided it is the ratio
