@@ -396,9 +396,82 @@ your config*. The claim worth having is that adaptive **matches a carefully hand
 without the hand-tuning, then beats it once conditions move away from what that tuning assumed** -
 which needs the third hand-tuned arm and a workload that changes partway through the run.
 
-The arrival-controlled harness this needs is on `perf/bench-arrival-and-key-skew`, which at the time
-of writing has no remote branch and no PR - it exists in one local worktree. That is a
-stranded-work risk independent of this design.
+**The arrival-controlled harness this needs is already on this PR's base**, `perf/engine-concurrency`,
+pushed - the commit that added controlled arrival and skewed keys is `perf(bench): controlled arrival,
+skewed keys, and the two work-model no-ops that would have voided the run`. What is missing is that
+this branch has not merged that base since it arrived. So the harness is a merge away, not a piece of
+work waiting to be done.
+
+Recorded because the first reading of this was wrong in a way worth not repeating: the local branch
+`perf/bench-arrival-and-key-skew` has no remote of its own, which was read as the work being unpushed.
+A branch name without a remote says nothing about whether its **commits** are on one - here every one
+of them is already contained in the pushed base. Ask `git merge-base --is-ancestor <branch>
+<pushed-ref>`, never `git branch -a`.
+
+## The comparison integration test
+
+**The claim under test: a compiled setting cannot change and the load can.** So a test that holds
+conditions still cannot express the claim at all - it can only ask whether adaptive beats a static
+number on the workload that number was chosen for, which is the weak form nobody should publish.
+
+### Three arms, and the middle one is the real opponent
+
+1. **Static, deliberately low** - makes the claim true and easy. Kept only as a floor.
+2. **Static, hand-tuned** - swept over a range against **phase 1 only**, best value chosen. This is
+   what a careful operator does: they tune against the load they can see at deploy time. **This arm
+   is the actual opponent**, and it is also the negative control - a controller that never moves
+   degenerates into exactly this arm and therefore cannot beat it.
+3. **Adaptive.**
+
+### The workload has to move under all three
+
+Four phases, one run, arrival rate held by the controlled-arrival harness so the comparison is made
+below saturation. The downstream is simulated inside the user function - which is the honest place
+for it, since the user function *is* the abstraction over whatever the real downstream is.
+
+| Phase | What changes | What each arm should do |
+|---|---|---|
+| 1. Steady | Downstream healthy, fixed capacity and service time | Hand-tuned arm is optimal **by construction**. Adaptive must **match within tolerance**, not beat it. |
+| 2. Downstream degrades | Concurrency capacity falls; service time rises under load | Static over-drives it and queues. Adaptive backs off. |
+| 3. Downstream recovers, then exceeds phase 1 | Capacity rises above where it started | Static leaves headroom unused. Adaptive grows into it. |
+| 4. Rate limiting | Downstream stops slowing and starts **rejecting** above a token-bucket rate | Static keeps hammering the limiter. Adaptive settles under the rate. |
+
+**Phase 1 is the phase that protects honesty.** The assertion there is *match within tolerance*,
+never *beat* - a controller that pays a small exploration cost on a steady workload is behaving
+correctly, and asserting that it wins would force a design that games steady state. Phases 2 to 4
+carry the strict inequalities.
+
+### Phase 4 is not a harder version of phase 2, and it is the interesting one
+
+A degrading downstream slows down; a rate-limited one **rejects while staying fast**. Successful
+calls keep returning at their normal latency while a growing fraction fail immediately - so latency
+looks *fine* or even improves, while useful throughput collapses. **A latency-steered controller
+cannot see this at all, and may even grow into it.** A throughput-steered one sees it directly. That
+is the single sharpest argument in this design for the objective change, and phase 4 is where it
+becomes an assertion rather than a claim.
+
+### It has a prerequisite: the overload socket is currently dead code
+
+`AdmissionOutcomeClassifier.classifyFailure` returns `Outcome.IGNORE` for **every** cause, so
+`OVERLOAD_DROP` is unreachable and the AIMD backoff arm never fires in production. A rate-limit
+rejection is precisely the failure shape that socket was reserved for - one that *structurally names*
+overload rather than being a business failure. **Phase 4 cannot be written until the classifier
+actually classifies**, and a test asserting behaviour on rate limiting while every rejection is
+scored `IGNORE` would pass for the wrong reason.
+
+This is the second prerequisite the design carries, alongside the pool/ceiling fix.
+
+### What is measured, and the oracle
+
+Measure **end-to-end residence time at the given arrival rate**, plus useful completion rate. Never
+the target value itself - `perf/split-shard-inflight` is the standing warning here: it moved dispatch
+10x and end-to-end 0%. A controller that moves impressively is not a controller that helps.
+
+The oracle is absolute and per phase, not a fitted band: the simulated downstream's capacity and
+uncongested service time are *set* by the test, so Little's Law gives the correct admission target
+for each phase directly, and it moves when the phase moves. That is what makes the assertions
+falsifiable rather than merely descriptive - a frozen controller is provably wrong in at least three
+of the four phases.
 
 ## Resolve Before Planning
 
