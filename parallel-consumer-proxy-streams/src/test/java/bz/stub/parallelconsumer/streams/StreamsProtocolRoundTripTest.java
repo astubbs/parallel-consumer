@@ -5,6 +5,10 @@ package bz.stub.parallelconsumer.streams;
 
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.BuilderCall;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Count;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleAssigned;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Invocation;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.InvocationResult;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.MapValues;
@@ -82,6 +86,42 @@ class StreamsProtocolRoundTripTest {
                 .isEqualTo("s");
         assertThat(StreamsClientMessage.parseFrom(sink.toByteArray()).getBuilderCall().getSink().getTopic())
                 .isEqualTo("out");
+    }
+
+    @Test
+    void aMintingAnswerCarriesWhatTheHandleIs() throws InvalidProtocolBufferException {
+        StreamsServerMessage sent = StreamsServerMessage.newBuilder()
+                .setHandleAssigned(HandleAssigned.newBuilder()
+                        .setCallId(4)
+                        .setHandle(9)
+                        .setType(HandleType.newBuilder()
+                                .setKind(HandleKind.HANDLE_KIND_TABLE)
+                                .setKeyType(DataType.DATA_TYPE_BYTES)
+                                .setValueType(DataType.DATA_TYPE_LONG)))
+                .build();
+
+        HandleAssigned received = StreamsServerMessage.parseFrom(sent.toByteArray()).getHandleAssigned();
+
+        assertThat(received.getHandle()).isEqualTo(9);
+        assertThat(received.getType().getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
+        assertThat(received.getType().getKeyType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(received.getType().getValueType()).isEqualTo(DataType.DATA_TYPE_LONG);
+    }
+
+    /**
+     * The delivery contract on the wire: a non-minting call's answer omits handle and type both, so
+     * "was a handle minted" has exactly one presence signal and a reader cannot see the two disagree.
+     */
+    @Test
+    void aNonMintingAnswerCarriesNeitherHandleNorType() throws InvalidProtocolBufferException {
+        StreamsServerMessage sent = StreamsServerMessage.newBuilder()
+                .setHandleAssigned(HandleAssigned.newBuilder().setCallId(5))
+                .build();
+
+        HandleAssigned received = StreamsServerMessage.parseFrom(sent.toByteArray()).getHandleAssigned();
+
+        assertThat(received.hasHandle()).isFalse();
+        assertThat(received.hasType()).isFalse();
     }
 
     @Test

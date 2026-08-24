@@ -9,12 +9,32 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class HandleKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    HANDLE_KIND_UNSPECIFIED: _ClassVar[HandleKind]
+    HANDLE_KIND_STREAM: _ClassVar[HandleKind]
+    HANDLE_KIND_GROUPED_STREAM: _ClassVar[HandleKind]
+    HANDLE_KIND_TABLE: _ClassVar[HandleKind]
+
+class DataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    DATA_TYPE_UNSPECIFIED: _ClassVar[DataType]
+    DATA_TYPE_BYTES: _ClassVar[DataType]
+    DATA_TYPE_LONG: _ClassVar[DataType]
+
 class NodeKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     NODE_KIND_UNSPECIFIED: _ClassVar[NodeKind]
     NODE_KIND_SOURCE: _ClassVar[NodeKind]
     NODE_KIND_PROCESSOR: _ClassVar[NodeKind]
     NODE_KIND_SINK: _ClassVar[NodeKind]
+HANDLE_KIND_UNSPECIFIED: HandleKind
+HANDLE_KIND_STREAM: HandleKind
+HANDLE_KIND_GROUPED_STREAM: HandleKind
+HANDLE_KIND_TABLE: HandleKind
+DATA_TYPE_UNSPECIFIED: DataType
+DATA_TYPE_BYTES: DataType
+DATA_TYPE_LONG: DataType
 NODE_KIND_UNSPECIFIED: NodeKind
 NODE_KIND_SOURCE: NodeKind
 NODE_KIND_PROCESSOR: NodeKind
@@ -124,12 +144,24 @@ class Sink(_message.Message):
     def __init__(self, handle: _Optional[int] = ..., topic: _Optional[str] = ...) -> None: ...
 
 class HandleAssigned(_message.Message):
-    __slots__ = ("call_id", "handle")
+    __slots__ = ("call_id", "handle", "type")
     CALL_ID_FIELD_NUMBER: _ClassVar[int]
     HANDLE_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
     call_id: int
     handle: int
-    def __init__(self, call_id: _Optional[int] = ..., handle: _Optional[int] = ...) -> None: ...
+    type: HandleType
+    def __init__(self, call_id: _Optional[int] = ..., handle: _Optional[int] = ..., type: _Optional[_Union[HandleType, _Mapping]] = ...) -> None: ...
+
+class HandleType(_message.Message):
+    __slots__ = ("kind", "key_type", "value_type")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    KEY_TYPE_FIELD_NUMBER: _ClassVar[int]
+    VALUE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    kind: HandleKind
+    key_type: DataType
+    value_type: DataType
+    def __init__(self, kind: _Optional[_Union[HandleKind, str]] = ..., key_type: _Optional[_Union[DataType, str]] = ..., value_type: _Optional[_Union[DataType, str]] = ...) -> None: ...
 
 class RegisterFunction(_message.Message):
     __slots__ = ("token", "description")
