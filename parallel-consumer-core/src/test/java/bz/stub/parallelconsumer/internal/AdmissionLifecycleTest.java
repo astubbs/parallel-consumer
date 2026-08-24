@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -42,10 +43,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * and never in {@code DISABLED}.</li>
  * <li><b>Pause poison (R13)</b> - a RUNNING-&gt;PAUSED-&gt;RUNNING cycle discards the in-progress window at the
  * first post-resume tick, so pre-pause samples never appear in the first post-resume window.</li>
- * <li><b>Drain release (KTD9)</b> - {@link PCModule#admissionTargetRecords()} is STATE-DERIVED: only a
- * {@code RUNNING} processor reads the live target; every other state reads the effective-maximum derivation, with
- * no tick and no edge action required - including when {@code close()} arrives before the control loop ever
- * ran.</li>
+ * <li><b>Drain release (KTD9, and U2's R11)</b> - {@link PCModule#admissionTargetRecords()} is STATE-DERIVED: only
+ * a {@code RUNNING} processor reads the live target; every other state reads the effective-maximum derivation,
+ * with no tick required - including when {@code close()} arrives before the control loop ever ran. The worker
+ * POOL's release is the counterpart a read cannot perform - R11's widening edge action plus {@code doClose}
+ * backstop, pinned in {@link AdmissionPoolActuatorTest} - so the full-width drain test below enters DRAINING
+ * through the real edge, exercising both halves together.</li>
  * <li><b>Load-factor pinning (KTD10)</b> - adaptive ENFORCE constructs {@link DynamicLoadFactor} static
  * (initial == max) through {@link PCModule}, with the {@code messageBufferSize} branch dividing by the
  * CEILING-derived in-flight figure; DISABLED and OBSERVE construction stays byte-for-byte today's.</li>
@@ -262,8 +265,11 @@ class AdmissionLifecycleTest {
     /**
      * AE7, unit level: a contracted target with more-than-a-ceiling of buffered records dispatches at the LIVE
      * width while RUNNING, then at FULL width on the first DRAINING pass - the release is what keeps
-     * {@code close(DRAIN)} inside {@code drainTimeout}. (The transactional variant is a deferred integration
-     * scenario - see the class javadoc.)
+     * {@code close(DRAIN)} inside {@code drainTimeout}. DRAINING is entered through the REAL edge
+     * ({@code transitionToDraining}), so the pass exercises U2's R11 with it: the seam read releases the record
+     * budget, and the edge action widens the pool that has to run it - full-width dispatch through a still-
+     * contracted pool would just relocate the drain bottleneck into the executor queue. (The transactional
+     * variant is a deferred integration scenario - see the class javadoc.)
      */
     @Test
     void drainDispatchesAtFullWidthUnderAContractedTarget() {
@@ -275,7 +281,10 @@ class AdmissionLifecycleTest {
         assertWithMessage("while RUNNING, dispatch is bounded by the contracted live target")
                 .that(runningPass).isEqualTo(CONTRACTED_TARGET_SLOTS);
 
-        pc.setState(State.DRAINING);
+        pc.transitionToDraining();
+        assertWithMessage("the R11 edge action must widen the pool with the state flip - a contracted core would "
+                + "drain the released records %s workers at a time", CONTRACTED_TARGET_SLOTS)
+                .that(((ThreadPoolExecutor) pc.workerThreadPool.get()).getCorePoolSize()).isEqualTo(CEILING_SLOTS);
         int drainingPass = pc.retrieveAndDistributeNewWork(userFunction, callback);
         assertWithMessage("the first DRAINING pass must top dispatch up to the effective maximum")
                 .that(drainingPass).isEqualTo(CEILING_SLOTS - CONTRACTED_TARGET_SLOTS);

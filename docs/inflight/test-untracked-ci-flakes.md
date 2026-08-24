@@ -17,6 +17,12 @@ again since** - see below.
 
 ### Two more point checks in the same class, 2026-08-23
 
+Second sighting pair on `throttling-ideation`, 2026-08-25, on the U2 (pool actuator) full run:
+`JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and
+`inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[1]` - both already ledgered, both
+green on immediate class re-run, and neither can be the change's doing: both run under DISABLED
+mode, where the new actuator is gated inert.
+
 A full core unit run on `throttling-ideation` (2026-08-25, immediately after merging
 `perf/engine-concurrency` in) failed three times, all in `ParallelEoSStreamProcessorTest`, all
 already on this ledger: `processInKeyOrder(CommitMode)[2]` and `[3]` at `[sanity check input data]`,

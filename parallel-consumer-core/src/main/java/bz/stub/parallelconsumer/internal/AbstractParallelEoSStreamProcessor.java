@@ -411,6 +411,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // it only stops the precondition's timing from depending on that, and moves the failure ahead of the poller
         // and producer manager, so nothing half built has to be unwound.
         workerThreadPool.get();
+        sizeWorkerPoolForAdmission();
 
         this.wm = module.workManager();
 
@@ -648,6 +649,83 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             "executor - report a bug.",
                     System.getProperty("java.vm.name"), System.getProperty("java.version")), e);
         }
+    }
+
+    /**
+     * The worker pool, when the pool actuator applies to it - empty when the actuator is INERT (the plan's
+     * R10/KTD5): active ENFORCE only, and only a {@link ThreadPoolExecutor}, the same {@code instanceof}
+     * capability test {@link #initMetrics()} uses for {@link ExecutorServiceMetrics}. A virtual-thread executor,
+     * a subclass-overridden pool and an external engine's dispatch thread all answer empty - for those, dispatch
+     * gating (R12, {@link #calculateQuantityToRequest()}) remains the bound on concurrency.
+     * <p>
+     * The {@link #adaptiveEnforcementActive()} gate is also KTD5's two-ceilings exclusion: it folds in
+     * {@link #isAdaptiveConcurrencyActive()}, so the controller's ceiling is only ever read here AFTER capability
+     * resolution - a controller constructed with mode ENFORCE can report the substituted ceiling while the engine
+     * downgraded the mode to static, and behind this gate that state is unreachable.
+     */
+    private Optional<ThreadPoolExecutor> steerableWorkerPool() {
+        if (!adaptiveEnforcementActive()) {
+            return Optional.empty();
+        }
+        ExecutorService pool = workerThreadPool.get();
+        return pool instanceof ThreadPoolExecutor ? Optional.of((ThreadPoolExecutor) pool) : Optional.empty();
+    }
+
+    /**
+     * The construction-time half of the pool actuator (the plan's R9/KTD5): under active ENFORCE with a steerable
+     * pool, {@code maximumPoolSize} is set to the resolved ceiling and {@code corePoolSize} to the seeded initial
+     * target. Under the unbounded work queue the maximum is INERT for thread creation - workers beyond core are
+     * only added when the queue rejects an offer, which an unbounded queue never does - so the ceiling reservation
+     * costs nothing; what it buys is making {@code setCorePoolSize} legal at every value the controller may ever
+     * publish ({@code setCorePoolSize} above {@code maximumPoolSize} throws on JDK 9+).
+     * <p>
+     * Ordering is load-bearing: the pool arrives {@code core == max == maxConcurrency}, and the seeded target may
+     * legitimately exceed that under the substituted default ceiling - so max is raised FIRST.
+     * <p>
+     * DISABLED and OBSERVE never reach the body: their pool stays exactly today's construction.
+     */
+    private void sizeWorkerPoolForAdmission() {
+        steerableWorkerPool().ifPresent(pool -> {
+            var controller = module.admissionController();
+            pool.setMaximumPoolSize(controller.effectiveMaximum());
+            pool.setCorePoolSize(controller.currentTarget());
+        });
+    }
+
+    /**
+     * The live half of the pool actuator (R9): tracks the published admission target with {@code setCorePoolSize}
+     * as the single knob. Called from the control thread on each published target CHANGE - only on change, never
+     * every tick: the target holds on most windows, and {@code setCorePoolSize} takes the pool's main lock.
+     * Lowering it interrupts only IDLE workers, so surplus workers exit as they finish - a contraction never cuts
+     * a running user function.
+     * <p>
+     * Clamped to the pool's own {@code maximumPoolSize} (and to a floor of one worker) so the JDK 9+
+     * {@code IllegalArgumentException} is unreachable whatever a future law publishes - the ceiling was reserved
+     * as max at construction precisely so this clamp is normally a no-op.
+     * <p>
+     * Package-private so the actuator contract is testable without driving a whole control loop - the
+     * {@link #tickAdmissionController()} pattern.
+     */
+    void applyAdmissionTargetToWorkerPool(int targetSlots) {
+        steerableWorkerPool().ifPresent(pool ->
+                pool.setCorePoolSize(Math.max(1, Math.min(targetSlots, pool.getMaximumPoolSize()))));
+    }
+
+    /**
+     * The shutdown half of the pool actuator (the plan's R11): entering DRAINING or CLOSING widens
+     * {@code corePoolSize} back to the ceiling, so a drain that starts with a contracted target does not race
+     * {@code drainTimeout} at contracted width - a breach there discards in-flight work. The seam release
+     * ({@link PCModule#admissionTargetRecords()}) is a READ and cannot resize the pool, which is why this edge
+     * action exists at all.
+     * <p>
+     * Called from {@link #transitionToDraining()} (the caller's or broker-poll thread - {@code setCorePoolSize}
+     * is internally locked, so cross-thread is safe) AND as a mandatory backstop from {@link #innerDoClose}
+     * before pool shutdown: a control-thread tick that read {@code RUNNING} just before the state flipped can
+     * transiently re-narrow the pool after the edge action, and a {@code DONT_DRAIN} close never runs the edge
+     * at all.
+     */
+    void widenWorkerPoolForShutdown() {
+        steerableWorkerPool().ifPresent(pool -> pool.setCorePoolSize(pool.getMaximumPoolSize()));
     }
 
     /**
@@ -1055,6 +1133,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         directPullPool.ifPresent(DirectPullWorkerPool::stop);
         //Clear scheduled but not started work in execution pool
         discardQueuedWork();
+        // R11 backstop, mandatory: a control-thread tick can have transiently re-narrowed the pool after
+        // transitionToDraining's edge action, and a DONT_DRAIN close never ran that edge at all - widen before
+        // shutdown so the accepted in-flight work drains at full width rather than racing the timeout contracted.
+        widenWorkerPoolForShutdown();
         //request graceful shutdown
         workerThreadPool.get().shutdown();
         if (userFunctionTaskAccounting.getActive() > 0) {
@@ -1147,9 +1229,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return isRecordsAwaitingProcessing || threadsDone;
     }
 
-    private void transitionToDraining() {
+    /**
+     * Package-private (not {@code private}) so the R11 pool-widening edge below is testable without running a
+     * whole control loop - the {@link #tickAdmissionController()} pattern.
+     */
+    void transitionToDraining() {
         log.debug("Transitioning to draining...");
         this.state = State.DRAINING;
+        // R11 edge action: state is set FIRST, so a tick arriving after this line is already gated out of
+        // re-narrowing; a tick that read RUNNING just before it is the race the innerDoClose backstop covers.
+        widenWorkerPoolForShutdown();
         notifySomethingToDo();
     }
 
@@ -1414,8 +1503,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Gating: only while {@link State#RUNNING} and adaptive concurrency is active (which already folds in
      * mode-not-DISABLED and engine capability). Not ticking outside RUNNING is load-bearing for the R13 lifecycle:
      * DRAINING/CLOSING releases enforcement through the STATE-DERIVED seam read in
-     * {@link PCModule#admissionTargetRecords()}, with no edge action needed here, and a PAUSED interval simply
-     * stops the clock's windows from being acted on until the poison below cleans up.
+     * {@link PCModule#admissionTargetRecords()} plus the R11 pool widening
+     * ({@link #widenWorkerPoolForShutdown()} - the one release a read cannot perform), and a PAUSED interval
+     * simply stops the clock's windows from being acted on until the poison below cleans up.
      * <p>
      * Pause poison (R13): the first tick after a RUNNING-&gt;PAUSED-&gt;RUNNING cycle consumes
      * {@link #admissionWindowPoisonedByPause} and discards the in-progress window, so no pre-pause samples appear
@@ -1442,7 +1532,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         int targetBefore = controller.currentTarget();
         controller.tick();
-        if (controller.currentTarget() > targetBefore) {
+        int targetAfter = controller.currentTarget();
+        if (targetAfter != targetBefore) {
+            // The actuator half of the tick (R9/KTD5): the pool follows the published target, applied on CHANGE
+            // only - the target holds on most windows, and setCorePoolSize takes the pool's main lock.
+            applyAdmissionTargetToWorkerPool(targetAfter);
+        }
+        if (targetAfter > targetBefore) {
             maybeWakeupPoller();
         }
     }
@@ -1783,6 +1879,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 int extraToFillBatch = batchSize - modulo;
                 delta = delta + extraToFillBatch;
             }
+        }
+
+        // R12: under active ENFORCE dispatch is gated in TASKS - free pool slots - with the record-denominated
+        // seam above as a cap. The record arithmetic alone cannot see task counts: under-filled batches (thin
+        // shards) carry fewer records per task than batchSize, so topping records up to the seam queues tasks
+        // beyond the slots the target commands - reopening the excluded-queue-wait loop the pool actuator exists
+        // to close. The min's seam side is the cap the other way: full batches must not exceed the record budget
+        // just because slots sit idle.
+        if (adaptiveEnforcementActive()) {
+            int freeSlots = module.admissionTargetSlots() - userFunctionTaskAccounting.getActive();
+            delta = Math.min(delta, freeSlots * options.getBatchSize());
         }
 
         log.debug("Will try to get work - target: {}, current queue size: {}, requesting: {}, loading factor: {}",

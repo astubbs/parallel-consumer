@@ -216,7 +216,9 @@ public class PCModule<K, V> {
      * unreachable. A state-derived read needs no tick at all - {@code close(DRAIN)} with a contracted target
      * dispatches at full width on the very next pass (and holds even when {@code close()} arrives before the
      * control loop ever ran, state {@code UNUSED}), so a contracted target can never stretch a drain past
-     * {@code drainTimeout}.
+     * {@code drainTimeout}. The WORKER POOL's drain release is the one thing a read cannot do - widening it back
+     * to the ceiling is R11's edge action plus backstop,
+     * {@code AbstractParallelEoSStreamProcessor#widenWorkerPoolForShutdown()}.
      * <p>
      * Everywhere else - {@code DISABLED}, {@code OBSERVE}, an engine that refused the mode, or no processor attached
      * yet (bare-{@code WorkManager} test envs) - it is exactly today's static derivation,
@@ -228,12 +230,30 @@ public class PCModule<K, V> {
     public int admissionTargetRecords() {
         AbstractParallelEoSStreamProcessor<K, V> processor = parallelEoSStreamProcessor;
         if (processor != null && processor.adaptiveEnforcementActive()) {
-            int slots = processor.getState() == State.RUNNING
-                    ? admissionController().currentTarget()
-                    : admissionController().effectiveMaximum();
-            return slots * options().getBatchSize();
+            return admissionTargetSlots() * options().getBatchSize();
         }
         return options().getTargetAmountOfRecordsInFlight();
+    }
+
+    /**
+     * The admission target denominated in SLOTS - one slot is one concurrent user-function invocation, i.e. one
+     * in-flight batch (the plan's KTD5 units note) - what the R12 task-denominated dispatch gate in
+     * {@code AbstractParallelEoSStreamProcessor#calculateQuantityToRequest()} subtracts active tasks from.
+     * {@link #admissionTargetRecords()} is exactly this times the batch size, so the two seams can never disagree
+     * about the state split: under active enforcement the slot count is STATE-DERIVED the same way - the live
+     * target while {@code RUNNING}, the effective maximum in every other state (the drain release).
+     * <p>
+     * Outside active enforcement it is the static {@code maxConcurrency}, which is what the slot count has always
+     * meant there - though no caller gates on it outside enforcement today.
+     */
+    public int admissionTargetSlots() {
+        AbstractParallelEoSStreamProcessor<K, V> processor = parallelEoSStreamProcessor;
+        if (processor != null && processor.adaptiveEnforcementActive()) {
+            return processor.getState() == State.RUNNING
+                    ? admissionController().currentTarget()
+                    : admissionController().effectiveMaximum();
+        }
+        return options().getMaxConcurrency();
     }
 
     /**
