@@ -112,10 +112,23 @@ public class PartitionState<K, V> {
     /**
      * Cache view of the state of the partition. Is set dirty when the incomplete state of any offset changes. Is set
      * clean after a successful commit of the state.
+     * <p>
+     * {@code volatile} because it crosses threads with no other fence: written on the control thread
+     * ({@code onSuccess} via the mailbox), read on the broker-poll thread by the commit path's
+     * dirty-partition collection in the default {@code PERIODIC_CONSUMER_ASYNCHRONOUS} mode. As a plain
+     * field, jcstress measured the reader observing {@code dirty} set while {@code offsetHighestSucceeded}
+     * was still stale at ~1.4e-7 per sample even with the real surrounding {@code ConcurrentSkipListMap}
+     * accesses on both sides - a burnt commit cycle, which on a partition that then goes idle holds the
+     * committed offset back until the next rebalance. With only this flag volatile the anomaly was 0 in
+     * 4.29e9 samples with the outcome declared FORBIDDEN: the release store on the write publishes the
+     * preceding plain writes, and the acquire load on the read observes them. The {@code long}s stay
+     * plain deliberately - fencing them too buys nothing the flag does not already provide, at extra
+     * cost on every read. Evidence: docs/plans/2026-08-25-002-test-jcstress-poc-plain-long-visibility.md
+     * and the jcstress-poc module on the test/jcstress-poc-plain-long-visibility branch.
      */
     @Setter(PRIVATE)
     @Getter(PACKAGE)
-    private boolean dirty;
+    private volatile boolean dirty;
 
     /**
      * The highest seen offset for a partition.
