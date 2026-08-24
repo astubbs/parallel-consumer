@@ -2,7 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-state: closed - ran 2026-08-22; results, predictions and refutations in perf-the-tail-experiment-ran-2026-08-22.md -->
-<!-- inflight-impact: throughput -->
+<!-- inflight-impact: coordination -->
 <!-- inflight-labels: needs-measurement -->
 
 > **IT RAN, 2026-08-22 - results and predictions in
