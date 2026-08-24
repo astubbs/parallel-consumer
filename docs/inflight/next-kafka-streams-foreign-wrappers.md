@@ -95,6 +95,16 @@ IDL change plus N client changes. Replaying calls has no shared model to drift. 
 is adding one message to a `oneof`, which is additive on the wire, and a client that does not know
 about it simply never sends it.
 
+**Corrected 2026-08-24: "beat" is too strong, and the comparison says why.** Handles beat an IDL
+*for this goal*. Beam chose an IDL because a runner must **reason** about a pipeline - fuse stages,
+optimise, and run the same pipeline on Flink or Dataflow. We only need to *build* one, so we can
+take the cheaper option; but nothing about our wire is inspectable or portable, because there is no
+model in it to inspect. The day cross-engine portability or engine-side optimisation matters, the
+IDL comes back and this decision is revisited rather than defended. Note also that Beam does not
+pass function references at all - it **pickles the DoFn into the pipeline proto** - so the token
+registry here is not the Beam design either. See
+[`next-architecture-landscape-comparison.md`](next-architecture-landscape-comparison.md).
+
 **The kill criterion's first condition is met.** A sixth method taking a typed scalar argument
 requires no wire redesign - `BuilderCall` is a `oneof` of per-method messages, so a new method is a
 new member. The condition that would *not* be met is an argument that is itself behaviour: a serde,
@@ -159,6 +169,32 @@ aggregations, reduces and joins all mint typed values, and either the wire says 
 carries or every one of them becomes another special case. **This is the next real design question**,
 and it is more pressing than any of the deferred operators.
 
+### Describing the topology turned out to be the cheapest real feature
+
+Added as U9 after the PoC. One request, one answer, and the answer carries the text
+`Topology.describe()` produces - which **every Kafka Streams topology visualiser parses**. A host in
+a language with no Streams tooling and no way to grow any can now print that string and use all of
+it. None of the Python-native stream processors has a `describe()`, so none of them has any of this,
+which makes it the clearest single artifact of the wrap-rather-than-reimplement argument.
+
+**Embedding one of those visualisers in a web UI is blocked, and it is a licensing problem rather
+than a technical one.** Checked directly on the repositories:
+
+| Tool | Licence | Can we embed it? |
+|---|---|---|
+| [`zz85/kafka-streams-viz`](https://github.com/zz85/kafka-streams-viz) | **none declared** | No - no licence means all rights reserved |
+| [`gaetancollaud/kafka-streams-visualization`](https://github.com/gaetancollaud/kafka-streams-visualization) | **none declared** | No - same |
+| [KSTD](https://github.com/thriving-dev/kafka-streams-topology-design) | **GPL-3.0** | No - would force this Apache-2.0 project to GPL-3 |
+| KCM Hub topology explorer | hosted tool | Not distributed as embeddable source |
+
+*Linking* to them or telling a user to paste into them is fine and costs nothing - that is using a
+website, not distributing code. Vendoring any of them is not.
+
+If a rendered diagram is ever wanted in our own UI, **write the renderer**: the structured form the
+Describe answer already carries makes it a graph-layout exercise with no parsing at all, whereas
+every one of the tools above has had to reverse-engineer the ASCII. Being able to skip the parsing
+is a direct benefit of owning both ends of the protocol.
+
 ### Deferred capabilities, and what each would actually need
 
 Each of these was deliberately out of scope. This is what the run says they would cost.
@@ -167,7 +203,7 @@ Each of these was deliberately out of scope. This is what the run says they woul
 |---|---|
 | **A sixth builder method (scalar args)** | Nothing structural - one more member of the `BuilderCall` `oneof`. |
 | **Operators taking behaviour** (serdes, comparators, joiners) | The function-token pattern again, generalised beyond `RecordFunction`. Proven mechanism, real design step. |
-| **Typed handles** | A type tag on `HandleAssigned`, so the host knows what a handle carries and the sink stops special-casing `Long`. Prerequisite for aggregations. |
+| **Typed handles** | A type tag on `HandleAssigned`, so the host knows what a handle carries and the sink stops special-casing `Long`. Prerequisite for aggregations. Still open - U9's Describe reports the assembled graph, not the type a handle carries. |
 | **Interactive queries** | New message types for get/range/scan over a named store. New surface, not a new mechanism - and unlike the rest it makes the host a *reader* of engine state, which nothing else here does. |
 | **Punctuators** | Cheap, as predicted. A scheduled callback is another work frame in the pull model; the invocation correlation already carries everything needed. |
 | **More than one foreign operator** | Nothing on the wire - tokens already distinguish functions. The open question is empirical, not structural: whether crossings multiply with operator count, which the 400us figure says would hurt. |

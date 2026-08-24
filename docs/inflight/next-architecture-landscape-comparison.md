@@ -18,6 +18,39 @@ branch are all solved problems elsewhere, with published rationale:
   fans out internally — threads for Java and Go, one subprocess per core for Python because of the
   GIL. Work travels as bundles, and **any element failing discards and retries the whole bundle**;
   per-item outcomes were considered and deliberately rejected as not worth the complexity.
+  **Correction, from building the Kafka Streams PoC (2026-08-23): Beam does not pass function
+  references, it passes the function.** A `ParDoPayload` carries a `FunctionSpec` whose URN is
+  `beam:dofn:pythonsdk:0.1` and whose payload is a **pickled DoFn**; the harness deserializes and
+  runs it. That is materially different from the token-and-local-lookup this project uses, and the
+  difference is forced by distribution: Beam's harness may run on another machine, so the code has
+  to travel, which is where Python's pickling constraints on closures and unpicklable resources
+  come from. Our harness *is* the host process, so the function never moves and no serialization
+  constraint exists. We are strictly less capable (cannot distribute the harness) and strictly more
+  ergonomic (capture anything). Do not describe the two as the same mechanism.
+
+- **PyFlink and PySpark** — the closest *shipped* analogues to wrapping a JVM engine from another
+  language, and worth more attention than they have had here, because they are the same shape as
+  the language-proxy work rather than merely adjacent to it. Both split control plane from data
+  plane and answer them differently:
+  - **Control plane: Py4J in both.** A generic reflective Java-object-proxy bridge over a local
+    socket - the Python side holds proxies and calls arbitrary Java methods to build a DAG or query
+    plan. This is a handle model, so it is the same *family* as our builder-call replay, but it is
+    reflective and untyped where ours is an explicit versioned schema. The consequence that matters:
+    **Py4J requires a JVM at the far end forever and can never become a C ABI**, because it is
+    Java-reflection-shaped. Our messages are transport-shaped, which is the whole reason the FFI
+    path is even possible.
+  - **Data plane, and this is the finding worth acting on: both moved off per-record IPC.** PySpark
+    pipes rows to forked Python workers and its answer to the cost was **Arrow-batched vectorized
+    UDFs**. PyFlink's process mode uses Beam's Fn API over gRPC, and
+    [FLIP-206](https://cwiki.apache.org/confluence/display/FLINK/FLIP-206:+Support+PyFlink+Runtime+Execution+in+Thread+Mode)
+    added a **thread mode** where PEMJA embeds the Python interpreter in the JVM process and they
+    call each other through C - no IPC at all.
+  - **Both escape routes we are considering have already been taken by someone bigger, which is
+    validation rather than a warning.** PEMJA's thread mode is our FFI/embedded path; Arrow
+    batching is the bundling question. Neither project chose one and stopped - Flink kept process
+    mode for isolation. That is the shape of the decision, and it says the answer is probably
+    "both, selectable" rather than "pick one".
+
 - **Temporal** — replaced N full-logic SDKs with a shared Rust core plus thin bindings, explicitly to
   stop reimplementing hard protocol logic per language. Note the limit, which is easy to overstate:
   the **Go and Java SDKs are independent implementations**, not core bindings; only Python,
