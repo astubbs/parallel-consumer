@@ -81,6 +81,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="max.poll.interval.ms for the engine's consumer; 0 leaves Kafka's "
                              "own default, and the failure arm lowers it so the failure it is "
                              "demonstrating fits inside a demo rather than five minutes")
+    parser.add_argument("--stream-threads", type=int,
+                        default=int(os.environ.get("PC_DEMO_STREAMS_THREADS", "1")),
+                        help="num.stream.threads for the engine. Threads cross the boundary "
+                             "concurrently, so this is the cheapest lever against the crossing's "
+                             "cost - and the one that must be ruled out before any protocol work. "
+                             "Capped by partitions, so raise --partitions with it")
     parser.add_argument("--payload-bytes", type=int,
                         default=int(os.environ.get("PC_DEMO_STREAMS_PAYLOAD_BYTES", "0")),
                         help="pad each seeded record to this many bytes; 0 leaves the short "
@@ -245,9 +251,14 @@ class GroupWatch:
     recorded in the inflight note; until it closes, the admin API is the only observer available.
     """
 
-    def __init__(self, admin: AdminClient, application_id: str, interval: float = 0.5) -> None:
+    def __init__(self, admin: AdminClient, application_id: str, expected_members: int = 1,
+                 interval: float = 0.5) -> None:
         self._admin = admin
         self._application_id = application_id
+        # Each stream thread is its own consumer and its own group member, so the settled member
+        # count is the thread count - not 1. Hardcoding 1 made every multi-threaded run report
+        # "never settled" and fail a correct run.
+        self._settled = f"STABLE/{expected_members}"
         self._interval = interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -291,7 +302,7 @@ class GroupWatch:
             # not exist, then it is forming, then one member is in it. Counting that against the
             # run would fail every run for doing the one thing it has to do first. The measured
             # window starts here.
-            if observation != "STABLE/1":
+            if observation != self._settled:
                 self.before_settling += 1
                 return
             self.settled = True
@@ -304,9 +315,9 @@ class GroupWatch:
         if not self.samples:
             return False, f"never settled - {joining}, {self.errors} attempt(s) could not read it"
         summary = ", ".join(f"{key} x{n}" for key, n in sorted(self.observations.items()))
-        if set(self.observations) != {"STABLE/1"}:
+        if set(self.observations) != {self._settled}:
             return False, f"{summary} (after {joining})"
-        return True, f"STABLE/1 for all {self.samples} samples after joining"
+        return True, f"{self._settled} for all {self.samples} samples after joining"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -367,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             "auto.offset.reset": "earliest",
             # One thread, so every invocation is serialized behind the one before it. That is what
             # makes the observed rate below a per-thread ceiling rather than an aggregate.
-            "num.stream.threads": "1",
+            "num.stream.threads": str(args.stream_threads),
             # Emit every update instead of only the flushed ones. The demo checks a final value per
             # key, and a cache would hold the last of them until a timer the demo does not control.
             "statestore.cache.max.bytes": "0",
@@ -392,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
 
         deadline = started + args.timeout
         expected = expected_counts(args.records)
-        with GroupWatch(admin, application_id) as watch:
+        with GroupWatch(admin, application_id, args.stream_threads) as watch:
             sink_read = read_counts(args.bootstrap, sink, expected, deadline, counts.value_type)
         elapsed = time.monotonic() - started
         stable, group_state = watch.verdict()
@@ -441,8 +452,10 @@ def report(args: argparse.Namespace, expected: Counter[int], sink: SinkRead,
         print(f"Per invocation          {per_call_us:.0f}us round trip, "
               f"of which {python_us:.1f}us was Python "
               f"({python_us / per_call_us * 100:.1f}%)")
-        print(f"Single-thread ceiling   {1e6 / per_call_us:,.0f} invocations/sec "
-              "(within-session, one stream thread, this machine)")
+        threads = args.stream_threads
+        label = "one stream thread" if threads == 1 else f"{threads} stream threads"
+        print(f"Per-thread ceiling      {1e6 / per_call_us:,.0f} invocations/sec "
+              f"(within-session, {label}, this machine)")
     if sink.window_seconds is not None:
         if sink.log_append_clock:
             # sink.updates - 1 for the same reason as invocations - 1 above: the window spans

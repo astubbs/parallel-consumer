@@ -71,6 +71,13 @@ around 6,700 records/sec.
 | 100,000 rec/s | 15 | ~15 cores, or **360 core-hours a day** |
 | 1,000,000 rec/s | 150 | ~150 cores |
 
+**CORRECTED 2026-08-24: this table understates CPU by about 1.5x.** It equates an occupied stream
+thread with a burned core. Measured, a crossing costs ~232us of CPU against ~152us of wall time,
+because the host and the engine burn CPU concurrently on different cores - so one crossing occupies
+roughly 1.5 cores, not one. See
+[`perf-crossing-is-cpu-and-serialised.md`](perf-crossing-is-cpu-and-serialised.md). The figures
+below are therefore a floor.
+
 Two consequences that are easy to miss from the per-record figure:
 
 - **It sets a partition floor.** Kafka Streams cannot run more stream threads than partitions, so
