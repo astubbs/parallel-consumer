@@ -1127,6 +1127,14 @@ push_repo="$(mktemp -d)"
 )
 cd "$push_repo" || exit 1
 push_stub="$(mktemp -d)"
+# A PRIVATE TMPDIR, because the hook builds its throttle stamp as
+# `${TMPDIR:-/tmp}/pc-push-reminder-<branch>` and the fixture branch is a CONSTANT, so every
+# concurrent copy of this suite on one machine collides on one path - and the cleanup below then
+# deletes another run's stamp mid-flight. Observed twice while several agent sessions ran this suite
+# on the same box: "an immediate second push is throttled" failed with `repeated`, because the stamp
+# the first invocation had just written was removed before the second read it. Test-infra
+# contention, not a hook bug, and the hook needs no seam for it - it already honours TMPDIR.
+push_tmp="$(mktemp -d)"
 printf '#!/usr/bin/env bash\necho 90003\n' > "$push_stub/gh"
 chmod +x "$push_stub/gh"
 mkdir -p docs/inflight
@@ -1141,9 +1149,9 @@ cat > docs/inflight/pr-90003-selftest.md <<'NOTE'
 NOTE
 
 push_fire() { # <command> -> stdout of the hook
-    rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+    rm -f "$push_tmp"/pc-push-reminder-* 2>/dev/null
     printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
-        | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null
+        | env PATH="$push_stub:$PATH" TMPDIR="$push_tmp" bash "$PUSH_HOOK" 2>/dev/null
 }
 
 out="$(push_fire 'git push')"
@@ -1180,14 +1188,13 @@ out="$(push_fire 'npm push')"
 assert "a non-git binary does not fire" silent "$got"
 
 # THROTTLED, or a push loop repeats the whole note and teaches the reader to skip it.
-printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" >/dev/null 2>&1
-out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null)"
+printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | env PATH="$push_stub:$PATH" TMPDIR="$push_tmp" bash "$PUSH_HOOK" >/dev/null 2>&1
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | env PATH="$push_stub:$PATH" TMPDIR="$push_tmp" bash "$PUSH_HOOK" 2>/dev/null)"
 [ -z "$out" ] && got=throttled || got=repeated
 assert "an immediate second push is throttled" throttled "$got"
 
 rm -f docs/inflight/pr-90003-selftest.md
-rm -rf "$push_stub"
-rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+rm -rf "$push_stub" "$push_tmp"
 
 echo
 echo "--- check-history-rewrite.sh ---"
