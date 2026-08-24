@@ -120,7 +120,13 @@ strip_spans() { sed 's/`[^`]*`/ /g' "$1"; }
 # UNTRACKED FILES COUNT. `git ls-files` alone reads the index, so a note you just wrote about your own
 # branch - the single commonest way to trip this gate - was invisible until you staged it, and the
 # local run this header advertises reported green on the exact case it exists for.
-mapfile -t candidates < <(
+# `mapfile` is bash 4; macOS ships bash 3.2, where this line died with "mapfile: command not found"
+# and the script still exited 0 - a local run that reported success having checked nothing, which is
+# the exact failure this gate exists to prevent, one level up. Read the lines portably instead.
+candidates=()
+while IFS= read -r _line; do
+    [ -n "$_line" ] && candidates+=("$_line")
+done < <(
     {
         git ls-files -- 'docs/inflight/*.md' || true
         git ls-files --others --exclude-standard -- 'docs/inflight/*.md' || true
