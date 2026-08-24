@@ -28,8 +28,20 @@ public class PCModule<K, V> {
 
     protected ParallelConsumerOptions<K, V> optionsInstance;
 
+    /**
+     * Volatile because it is WRITTEN during processor construction (by {@code setParallelEoSStreamProcessor}, on
+     * whichever thread built the processor) and READ from the control thread and the broker-poll thread - see
+     * {@link #adaptiveSignalsActive()} and {@link #admissionTargetRecords()}, both of which read this field
+     * deliberately rather than calling {@link #pc()}. Without it those readers may observe a stale null and answer
+     * "no processor attached" - which is a legal answer for a bare-module test environment, so the wrong answer is
+     * silent: signals stop flowing and the admission seam falls back to the static derivation, exactly as if the
+     * feature were switched off.
+     * <p>
+     * The other accessors on this module keep their unsynchronised lazy shape: they are touched only during
+     * single-threaded processor construction.
+     */
     @Setter
-    protected AbstractParallelEoSStreamProcessor<K, V> parallelEoSStreamProcessor;
+    protected volatile AbstractParallelEoSStreamProcessor<K, V> parallelEoSStreamProcessor;
 
     public PCModule(ParallelConsumerOptions<K, V> options) {
         this.optionsInstance = options;
@@ -135,8 +147,28 @@ public class PCModule<K, V> {
      * ACTIVE (mode requested AND the engine can serve it) stays the processor's call
      * ({@code AbstractParallelEoSStreamProcessor#isAdaptiveConcurrencyActive()}); the controller's own DISABLED
      * guard is defensive depth.
+     * <p>
+     * <b>Why this one accessor is {@code synchronized} when none of its neighbours are.</b> Every other lazy
+     * initialiser here is touched only during single-threaded processor construction. This one is reached from at
+     * least three threads once the engine is running - the CONTROL thread every loop pass (the admission tick and
+     * the in-flight sampler), the BROKER-POLL thread on every rebalance callback, and user or test code holding the
+     * module, which is a documented seam - and on the default path nothing forces it during construction
+     * ({@link #initDynamicLoadFactor()} only touches it when {@code messageBufferSize > 0}), so the FIRST touch
+     * happens at runtime from whichever thread gets there first. Unsynchronised, two of them read null and both
+     * construct: one wins the field, and the loser's caller keeps a live-looking controller that nothing ever
+     * ticks, reporting its seed forever while the engine steers the other - and the rebalance freeze can land on
+     * the instance that is not steering. The {@code pc.admission.*} meters get registered twice, which is the
+     * observable tell ({@code This Gauge has been already registered}, with an identical {@code pcinstance} tag).
+     * <p>
+     * Mutual exclusion is chosen over the cheaper alternatives because it makes the second construction
+     * <em>impossible</em> rather than unlikely: the lock both serialises the check-then-create and publishes the
+     * write. Forcing the controller from the processor's constructor instead would fix only the engine's own path -
+     * a bare module (the test seam) still races, and the field would still be published unsafely - and a
+     * {@code volatile} field alone still admits two constructions. The lock is uncontended in practice (one
+     * uncontended acquire per control-loop pass) and reentrant, so {@link #initAdmissionController()}'s call back
+     * into {@link #pcMetrics()} is safe.
      */
-    public AdmissionController admissionController() {
+    public synchronized AdmissionController admissionController() {
         if (admissionController == null) {
             admissionController = initAdmissionController();
         }
