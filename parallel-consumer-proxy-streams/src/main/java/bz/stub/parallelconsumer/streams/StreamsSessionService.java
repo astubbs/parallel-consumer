@@ -68,7 +68,8 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
             this.toClient = toClient;
             InvocationSink sink = this::emitInvocation;
             this.assembler = new TopologyAssembler(
-                    token -> new ForeignValueMapper(registry, sink, token, INVOCATION_TIMEOUT));
+                    token -> new ForeignValueMapper(registry, sink, token, INVOCATION_TIMEOUT),
+                    token -> new ForeignReducer(registry, sink, token, INVOCATION_TIMEOUT));
         }
 
         @Override
@@ -132,6 +133,9 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                 case MAP_VALUES -> minted(callId, assembler.mapValues(
                         call.getMapValues().getHandle(), call.getMapValues().getFunctionToken()));
                 case GROUP_BY_KEY -> minted(callId, assembler.groupByKey(call.getGroupByKey().getHandle()));
+                case REDUCE -> minted(callId, assembler.reduce(
+                        call.getReduce().getHandle(), call.getReduce().getFunctionToken(),
+                        call.getReduce().getStoreName()));
                 case COUNT -> minted(callId,
                         assembler.count(call.getCount().getHandle(), call.getCount().getStoreName()));
                 case SINK -> {
@@ -187,7 +191,8 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
         }
 
         /** Called from Kafka Streams threads, which is why the send is locked. */
-        private void emitInvocation(long correlation, long functionToken, byte[] key, byte[] value) {
+        private void emitInvocation(long correlation, long functionToken, byte[] key, byte[] value,
+                                    byte[] aggregate) {
             Invocation.Builder invocation = Invocation.newBuilder()
                     .setCorrelation(correlation)
                     .setFunctionToken(functionToken);
@@ -196,6 +201,11 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
             }
             if (value != null) {
                 invocation.setValue(ByteString.copyFrom(value));
+            }
+            if (aggregate != null) {
+                // Set only when there IS one. Its presence is what tells the host to combine rather than map, so
+                // an unconditional set would turn every mapping into a reduction against empty bytes.
+                invocation.setAggregate(ByteString.copyFrom(aggregate));
             }
             send(StreamsServerMessage.newBuilder().setInvocation(invocation).build());
         }

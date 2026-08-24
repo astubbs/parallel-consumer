@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -42,9 +43,17 @@ class TopologyAssemblerTest {
     /** Echoes the value back, so the assembly is what is under test rather than any mapping behaviour. */
     private final TopologyAssembler.MapperFactory echo = token -> (key, value) -> value;
 
+    /** Concatenates aggregate and value, so a reduction's result depends on BOTH arguments crossing correctly. */
+    private final TopologyAssembler.ReducerFactory concat = token -> (aggregate, value) -> {
+        byte[] joined = new byte[aggregate.length + value.length];
+        System.arraycopy(aggregate, 0, joined, 0, aggregate.length);
+        System.arraycopy(value, 0, joined, aggregate.length, value.length);
+        return joined;
+    };
+
     @Test
     void eachCallReturnsAHandleTheNextCallCanName() {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
 
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
@@ -57,7 +66,7 @@ class TopologyAssemblerTest {
 
     @Test
     void aCallNamingAnUnknownHandleIsRefusedAndTheErrorNamesIt() {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         assembler.source("in");
 
         TopologyDescriptionException thrown =
@@ -69,7 +78,7 @@ class TopologyAssemblerTest {
 
     @Test
     void aCallAppliedToTheWrongKindOfHandleIsRefusedInProtocolVocabulary() {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         long source = assembler.source("in");
 
         // count needs a grouped stream; a source is not one. The refusal speaks the protocol's vocabulary -
@@ -86,7 +95,7 @@ class TopologyAssemblerTest {
 
     @Test
     void eachMintRecordsItsKindAndItsKeyAndValueTypes() {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
 
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
@@ -111,7 +120,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void everyMethodRefusesEveryWrongKindByItsRecordedName() {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         long stream = assembler.source("in");
         long grouped = assembler.groupByKey(stream);
         long table = assembler.count(grouped, "counts");
@@ -132,7 +141,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void sinkingAGroupedStreamIsRefusedByItsKindNotAsUnknown() {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         long grouped = assembler.groupByKey(assembler.source("in"));
 
         TopologyDescriptionException thrown =
@@ -190,7 +199,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void aByteStreamSinksItsBytesUnchanged(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         long source = assembler.source("in");
         assembler.sink(assembler.mapValues(source, 42), "out");
 
@@ -225,7 +234,7 @@ class TopologyAssemblerTest {
 
     @Test
     void describingAfterTheTopologyIsBuiltIsRefused() {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         long source = assembler.source("in");
         assembler.sink(source, "out");
         assembler.build();
@@ -238,7 +247,7 @@ class TopologyAssemblerTest {
 
     @Test
     void theDescribedTopologyCountsPerKeyAndTheSinkCarriesTheCounts(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
         long grouped = assembler.groupByKey(mapped);
@@ -268,7 +277,7 @@ class TopologyAssemblerTest {
 
     @Test
     void theAggregationUsesNoRocksDb(@TempDir Path stateDir) throws IOException {
-        TopologyAssembler assembler = new TopologyAssembler(echo);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
         long grouped = assembler.groupByKey(assembler.source("in"));
         assembler.sink(assembler.count(grouped, "counts"), "out");
 
@@ -301,6 +310,74 @@ class TopologyAssemblerTest {
                 StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092",
                 StreamsConfig.STATE_DIR_CONFIG, stateDir.toString())));
         return properties;
+    }
+
+    @Test
+    void reduceCombinesEachKeysValuesThroughTheForeignFunction(@TempDir Path stateDir) {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        assembler.sink(assembler.reduce(grouped, 7, "reduced"), "out");
+
+        Map<String, String> lastPerKey = new LinkedHashMap<>();
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer());
+            // Bytes out, NOT longs. A reduction preserves the value type, which is the whole reason the recorded
+            // handle type must distinguish it from count - a LongDeserializer here would fail outright.
+            TestOutputTopic<byte[], byte[]> out = driver.createOutputTopic(
+                    "out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+
+            in.pipeInput(bytes("a"), bytes("x"));
+            in.pipeInput(bytes("b"), bytes("p"));
+            in.pipeInput(bytes("a"), bytes("y"));
+            in.pipeInput(bytes("a"), bytes("z"));
+
+            out.readKeyValuesToList().forEach(kv -> lastPerKey.put(
+                    new String(kv.key, StandardCharsets.UTF_8), new String(kv.value, StandardCharsets.UTF_8)));
+        }
+
+        // "xyz" can only be produced by the STORED aggregate crossing to the reducer and back on the second and
+        // third values for "a". A reducer that ignored its aggregate would leave "z"; one never called would leave
+        // "x". The assertion distinguishes all three failures.
+        assertThat(lastPerKey).containsExactly("a", "xyz", "b", "p");
+    }
+
+    @Test
+    void theFirstValueForAKeyNeverReachesTheReducer(@TempDir Path stateDir) {
+        // Kafka does not call a reducer for a key's first value - that value becomes the aggregate untouched. The
+        // wire depends on this: it uses the aggregate's PRESENCE to mean "combine", so a first value that invoked
+        // the reducer would have to invent an aggregate, and an empty one is a different and wrong thing to send.
+        List<String> aggregatesSeen = new ArrayList<>();
+        TopologyAssembler.ReducerFactory recording = token -> (aggregate, value) -> {
+            aggregatesSeen.add(new String(aggregate, StandardCharsets.UTF_8));
+            return value;
+        };
+        TopologyAssembler assembler = new TopologyAssembler(echo, recording);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        assembler.sink(assembler.reduce(grouped, 7, "reduced"), "out");
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            driver.createInputTopic("in", new ByteArraySerializer(), new ByteArraySerializer())
+                    .pipeInput(bytes("a"), bytes("first"));
+            driver.createInputTopic("in", new ByteArraySerializer(), new ByteArraySerializer())
+                    .pipeInput(bytes("a"), bytes("second"));
+        }
+
+        assertThat(aggregatesSeen).containsExactly("first");
+    }
+
+    @Test
+    void reduceMintsATableOfBytesWhereCountMintsLongs() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        long counted = assembler.count(grouped, "counted");
+        long reduced = assembler.reduce(grouped, 7, "reduced");
+
+        // Both are tables and the difference is exactly the value type. Getting it wrong is silent: the sink would
+        // pick a Long serde for reduced bytes and write plausible nonsense.
+        assertThat(assembler.typeOf(counted).getValueType()).isEqualTo(DataType.DATA_TYPE_LONG);
+        assertThat(assembler.typeOf(reduced).getValueType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(assembler.typeOf(reduced).getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
     }
 
     private static byte[] bytes(String s) {

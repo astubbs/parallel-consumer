@@ -17,6 +17,7 @@ import org.apache.kafka.streams.kstream.KGroupedStream;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
+import org.apache.kafka.streams.kstream.Reducer;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.kstream.ValueMapperWithKey;
 import org.apache.kafka.streams.state.Stores;
@@ -45,6 +46,17 @@ public class TopologyAssembler {
     @FunctionalInterface
     public interface MapperFactory {
         ValueMapperWithKey<byte[], byte[], byte[]> forToken(long functionToken);
+    }
+
+    /**
+     * The combining half of the same seam: resolves a token to a reducer whose step runs in the host's language.
+     *
+     * <p>A second interface rather than a second method on {@link MapperFactory}, so both stay lambda-shaped at
+     * every call site. Two abstract methods would force an anonymous class on the service and on every test.
+     */
+    @FunctionalInterface
+    public interface ReducerFactory {
+        Reducer<byte[]> forToken(long functionToken);
     }
 
     /**
@@ -77,6 +89,8 @@ public class TopologyAssembler {
             HandleKind.HANDLE_KIND_STREAM, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES);
     private static final HandleType GROUPED_STREAM_OF_BYTES = handleType(
             HandleKind.HANDLE_KIND_GROUPED_STREAM, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES);
+    private static final HandleType TABLE_OF_BYTES = handleType(
+            HandleKind.HANDLE_KIND_TABLE, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_BYTES);
     private static final HandleType TABLE_OF_LONGS = handleType(
             HandleKind.HANDLE_KIND_TABLE, DataType.DATA_TYPE_BYTES, DataType.DATA_TYPE_LONG);
 
@@ -84,11 +98,13 @@ public class TopologyAssembler {
     private final Map<Long, Minted> handles = new HashMap<>();
     private final AtomicLong nextHandle = new AtomicLong(1);
     private final MapperFactory mappers;
+    private final ReducerFactory reducers;
     private boolean built;
     private Topology topology;
 
-    public TopologyAssembler(MapperFactory mappers) {
+    public TopologyAssembler(MapperFactory mappers, ReducerFactory reducers) {
         this.mappers = mappers;
+        this.reducers = java.util.Objects.requireNonNull(reducers, "reducers");
     }
 
     public long source(String topic) {
@@ -140,6 +156,26 @@ public class TopologyAssembler {
      * Terminates a chain into a topic. The value serde is selected from the handle's RECORDED value type - there is
      * no per-operator special case, so a new typed operator needs a new serde branch here and nothing else.
      */
+    /**
+     * Combine each key's values with a host-supplied function, into a table of bytes.
+     *
+     * <p>The sibling of {@link #count(long, String)} and the more interesting one. Count computes its own result
+     * and the host never sees the state; reduce sends the stored aggregate OUT to the host and stores what comes
+     * back, so engine state is computed by foreign code. The result is a table of bytes rather than longs -
+     * a reduction preserves the value type - which is why the recorded handle type earns its keep twice over.
+     */
+    public long reduce(long handle, long functionToken, String storeName) {
+        requireNotBuilt("reduce");
+        require(storeName != null && !storeName.isEmpty(), "reduce names no store");
+        KGroupedStream<byte[], byte[]> upstream = resolve(
+                handle, HandleKind.HANDLE_KIND_GROUPED_STREAM, "reduce");
+        HandleType resultType = TABLE_OF_BYTES;
+        return mint(upstream.reduce(reducers.forToken(functionToken),
+                Materialized.<byte[], byte[]>as(Stores.inMemoryKeyValueStore(storeName))
+                        .withKeySerde(operatorSerde(resultType.getKeyType()))
+                        .withValueSerde(operatorSerde(resultType.getValueType()))), resultType);
+    }
+
     public void sink(long handle, String topic) {
         requireNotBuilt("sink");
         require(topic != null && !topic.isEmpty(), "sink names no topic");

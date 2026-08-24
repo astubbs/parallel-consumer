@@ -76,6 +76,7 @@ message BuilderCall {
     GroupByKey group_by_key = 4;
     Count count = 5;
     Sink sink = 6;
+    Reduce reduce = 7;
   }
 }
 
@@ -98,6 +99,17 @@ message GroupByKey {
 message Count {
   optional int64 handle = 1;
   optional string store_name = 2;
+}
+
+// Combine each key's values with a function the HOST supplies. Unlike count, whose result the engine
+// computes alone, this is the first operator whose STATE passes through the host: the stored
+// aggregate crosses the boundary, the host's reducer combines it with the new value, and the answer
+// crosses back to be stored. Mirrors Kafka's Reducer<V> exactly - two values in, one out, no key and
+// no initializer - so the host's function signature is the framework's, not one this wire invented.
+message Reduce {
+  optional int64 handle = 1;
+  optional int64 function_token = 2;
+  optional string store_name = 3;
 }
 
 message Sink {
@@ -220,6 +232,16 @@ message Invocation {
   optional int64 function_token = 2;
   optional bytes key = 3;
   optional bytes value = 4;
+
+  // The current stored aggregate, for a reducer. PRESENT distinguishes a reduction from a mapping -
+  // absent means the host should call a one-record function, present means it should combine. It is
+  // absent rather than empty on the first value for a key, because Kafka's Reducer is not called at
+  // all for that record: the value becomes the aggregate untouched, and an empty-bytes aggregate
+  // would be a different and wrong thing to hand a host.
+  //
+  // No key travels with a reduction, because Kafka's Reducer does not receive one and inventing a
+  // richer signature here would put the host's function out of step with the framework it wraps.
+  optional bytes aggregate = 5;
 }
 
 message InvocationResult {

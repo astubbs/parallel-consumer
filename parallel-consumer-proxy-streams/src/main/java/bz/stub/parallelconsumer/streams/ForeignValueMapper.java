@@ -34,6 +34,6 @@ public class ForeignValueMapper implements ValueMapperWithKey<byte[], byte[], by
 
     @Override
     public byte[] apply(byte[] key, byte[] value) {
-        return registry.awaitResult(functionToken, key, value, sink, timeout);
+        return registry.awaitResult(functionToken, key, value, null, sink, timeout);
     }
 }
