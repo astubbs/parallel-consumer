@@ -52,8 +52,12 @@ exposure the hook was written to close, while appearing to be protected by it.
 
 Two parts, and the second matters more than the first:
 
-- Read the mtime portably - try `stat -c %Y` and fall back to `stat -f %m`, or use `find -newermt` /
-  `perl -e 'print (stat($f))[9]'`.
+- Read the mtime portably, and **do not write it as `stat -c %Y || stat -f %m`.** A blind fallback is
+  the same silent-wrong-answer bug one layer up: GNU `stat -f` is `--file-system`, so on Linux that
+  second arm *succeeds* and returns a number about the filesystem, not the file. The fallback fires
+  whenever the first arm fails for any reason, and what it hands back is wrong rather than absent.
+  Branch on the platform explicitly (`uname`), or use one implementation that behaves the same
+  everywhere - `perl -e 'print((stat($ARGV[0]))[9])'` is already a dependency-free option here.
 - **Fail closed when the mtime cannot be read.** A file matched the session's `tasks/*.output` glob;
   being unable to date it is not evidence that nothing is running. The current `continue` treats an
   unreadable clock as proof of quiescence, which is the same inversion the hook's own header warns
