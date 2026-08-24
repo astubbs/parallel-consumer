@@ -55,11 +55,15 @@ worker pool, and a rebalance that revokes and reassigns the partition.
 | ------------------------------------------------------------- |
 |         Thread 1          |             Thread 2              |
 | ------------------------------------------------------------- |
+<!-- issue-refs: exempt-begin - verbatim Lincheck trace output; #1 is a thread/object label, not an issue -->
 | revokeAndReassign(): void | completeWork(): AssertionError #1 |
+<!-- issue-refs: exempt-end -->
 | ------------------------------------------------------------- |
 
 Exception stack traces:
+<!-- issue-refs: exempt-begin - verbatim Lincheck trace output; #1 is a thread/object label, not an issue -->
 #1: java.lang.AssertionError: null
+<!-- issue-refs: exempt-end -->
 	at bz.stub.parallelconsumer.state.PartitionState.onSuccess
 	at bz.stub.parallelconsumer.state.PartitionStateManager.onSuccess
 	at bz.stub.parallelconsumer.state.WorkManager.onSuccessResult
@@ -88,10 +92,14 @@ failure, revoke sweep.
 | -------------------------------------------------------------- |
 |       Thread 1       |                Thread 2                 |
 | -------------------------------------------------------------- |
+<!-- issue-refs: exempt-begin - verbatim Lincheck trace output; #1 is a thread/object label, not an issue -->
 | revokeSweep(0): void | revokeSweep(0): NullPointerException #1 |
+<!-- issue-refs: exempt-end -->
 | -------------------------------------------------------------- |
 
+<!-- issue-refs: exempt-begin - verbatim Lincheck trace output; #1 is a thread/object label, not an issue -->
 #1: java.lang.NullPointerException: Cannot invoke
+<!-- issue-refs: exempt-end -->
     "bz.stub.parallelconsumer.state.ProcessingShard.remove(long)" because "shard" is null
 	at bz.stub.parallelconsumer.state.ShardManager.removeWorkFromShardFor
 	at bz.stub.parallelconsumer.state.ShardManager.removeAnyShardEntriesReferencedFrom
