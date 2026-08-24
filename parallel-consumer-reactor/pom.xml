@@ -31,7 +31,11 @@
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
-            <version>3.8.6</version>
+            <!-- 3.8.7, not 3.8.6: CVE-2026-47857 and CVE-2026-47863 (CVSS 5.9) land on 3.8.6. Fixed
+                 version exists, so this moves up rather than adding an excludeVulnerabilityIds entry -
+                 a suppression is for an advisory with no fix. Verified with ossindex-maven-plugin:audit
+                 against the bumped tree, not inferred from the version number. -->
+            <version>3.8.7</version>
         </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>
