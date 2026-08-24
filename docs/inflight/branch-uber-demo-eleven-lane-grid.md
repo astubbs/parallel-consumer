@@ -1,8 +1,11 @@
 # The uber demo: eleven language clients, one workload, one view
 
-Branch `feats/uber-demo-all-languages`, stacked on `feats/polyglot-demos`
-(astubbs/parallel-consumer#331). **Design only - nothing implemented, and three decisions are open
-below. Do not start until they are settled; each one changes what gets built.**
+Carried by `feats/polyglot-demos` (astubbs/parallel-consumer#331), which is the work this designs
+the successor to. It had a branch and a draft PR of its own - astubbs/parallel-consumer#332, closed
+as superseded - and that was over-engineering: a design nobody needs to review separately from the
+work it follows does not need a rung in the stack, and this one had acquired two PRs stacked above
+it. **Design only - nothing implemented, and three decisions are open below. Do not start until
+they are settled; each one changes what gets built.**
 
 ## Prior art, which reshaped this before any code
 
