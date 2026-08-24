@@ -132,7 +132,8 @@ else
   echo "PIT: no resolvable base ref - full sweep of ${TARGET_CLASSES}"
 fi
 
-# The Lincheck lane is excluded BY NAME above, not by tag, for the same reason the note below gives:
+# The Lincheck lane is excluded BY NAME in -DexcludedTestClasses below, not by tag, for the reason the
+# next note gives:
 # whether pitest honours excluded.groups is unverified, and being wrong is expensive here rather than
 # merely inaccurate. Each Lincheck class runs a scheduler-controlled search taking seconds, and pitest
 # re-runs its covering tests once per mutant.

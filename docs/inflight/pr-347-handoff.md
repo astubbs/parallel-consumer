@@ -1,4 +1,5 @@
-# astubbs#347 handoff - the lane INVERTS as the fix PRs merge, and that is the designed behaviour
+<!-- post-merge: checked -->
+# Lincheck lane handoff - the lane INVERTS as the fix PRs merge, and that is the designed behaviour
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
@@ -21,7 +22,7 @@ regression detector over the whole operation set - never reverting the fix, neve
 | astubbs#346 (checkpoint-3 double lookup) | `WorkManagerLincheckTest` |
 | astubbs#345 (ShardManager NPE) | `ShardManagerLincheckTest` |
 | astubbs#337 (confluentinc#894 two-read) | `PartitionStateLincheckTest` |
-| astubbs#57 (PCMetrics ArrayList - the unprompted find) | the PCMetrics arm; also delete `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md` (this branch) |
+| astubbs#57 (PCMetrics ArrayList - the unprompted find) | no harness arm exists to invert - the scenario that found it was retired as unreachable in production (`WorkManagerLincheckTest.revokeAndReassign`). Delete `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md` (this branch) |
 
 The lane is non-gating and must stay so - `bin/lincheck-test.sh`, ~28s. It is excluded from the
 gating suites at **five** distinct points; the commit `test(ci): a new test lane must be excluded in

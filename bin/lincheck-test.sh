@@ -46,6 +46,12 @@ if [ -n "${LINCHECK_TEST:-}" ]; then
     TEST_ARG=(-Dtest="${LINCHECK_TEST}" -Dsurefire.failIfNoSpecifiedTests=false)
 fi
 
+# Delete last run's reports BEFORE this one, so the count below can only be non-zero if THIS run
+# selected classes. Without it the guard reads stale files and a lane that selected nothing scores a
+# healthy count - the very false green the guard exists to catch. `clean` would do it too, at the cost
+# of rebuilding -am every time; deleting just these reports keeps the lane incremental.
+find parallel-consumer-core -path '*/surefire-reports/TEST-*Lincheck*.xml' -delete
+
 start=$(date +%s)
 
 set +e
@@ -63,7 +69,8 @@ set -e
 total=$(( $(date +%s) - start ))
 
 # A lane that selected nothing must say so rather than impersonating a green run - the same failure
-# mode the chaos lane guards against, and the one the mutation lane shipped with.
+# mode the chaos lane guards against, and the one the mutation lane shipped with. Counts only reports
+# this run wrote, because the stale ones were deleted above.
 selected=$(find parallel-consumer-core -path '*/surefire-reports/TEST-*Lincheck*.xml' | wc -l | tr -d ' ')
 
 printf '\n## Lincheck lane\n\n'

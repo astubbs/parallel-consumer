@@ -144,7 +144,9 @@ class QuarantinedAnnotationContractTest {
         String open = "<excluded.groups>";
         int start = pom.indexOf(open);
         assertWithMessage("root pom must declare a default excluded.groups").that(start).isAtLeast(0);
-        return pom.substring(start + open.length(), pom.indexOf("</excluded.groups>", start));
+        int end = pom.indexOf("</excluded.groups>", start);
+        assertWithMessage("root pom's excluded.groups element must be closed").that(end).isAtLeast(start);
+        return pom.substring(start + open.length(), end);
     }
 
     /**
