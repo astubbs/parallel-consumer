@@ -9,7 +9,6 @@ import com.google.common.truth.Truth;
 import com.google.common.truth.Truth8;
 import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessorTestBase;
-import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.PartitionStateManager;
@@ -76,14 +75,6 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
     @Test
     // needed due to static accessors in parallel tests
     @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ_WRITE)
-    @Quarantined(
-            reason = "UNDIAGNOSED - quarantined as an explicit rule-1 exception by owner decision, because at "
-                    + "4/45 it blocked every PR. Fails as ConditionTimeout at the getHighestSeenOffset() "
-                    + "assertion: the committed high-water mark never reaches expectedHighestSeen (139), with "
-                    + "a different actual each run (136, 132 seen). Unverified hypothesis and its "
-                    + "falsification path are in the tracking entry.",
-            tracking = "docs/inflight/test-untracked-ci-flakes.md",
-            flapping = true)
     void backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing() throws OffsetDecodingError {
         // mock messages downloaded for processing > MAX_TO_QUEUE
         // make sure work manager doesn't queue more than MAX_TO_QUEUE
@@ -208,9 +199,37 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                                         .that(partitionState)
                                         .isBlocked()); // blocked
 
-                Long partitionOffsetHighWaterMarks = wm.getPm().getHighestSeenOffset(topicPartition);
-                assertThat(partitionOffsetHighWaterMarks)
-                        .isGreaterThan(numberOfRecordsToPrimeWith); // high watermark is beyond our initial processed count upon blocking
+                // Back pressure gates which records may be TAKEN as work, not which are polled and
+                // registered - so every extra record IS seen, even though the partition is blocked.
+                long lastOffsetSent = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1;
+                waitAtMost(defaultTimeout).untilAsserted(() ->
+                        assertThat(wm.getPm().getHighestSeenOffset(topicPartition))
+                                .as("every extra record was polled and registered, even while blocked")
+                                .isEqualTo(lastOffsetSent));
+
+                // Wait for the succeeded frontier to settle before reading it. Once the partition is
+                // blocked, PartitionState#couldBeTakenAsWork refuses every record at or above the
+                // highest succeeded offset, so nothing else can complete and only the two records we
+                // are deliberately holding remain in flight. That makes this a quiescent state, not
+                // a moving one, so the frontier read below cannot race the assertion that uses it.
+                await().untilAsserted(() ->
+                        assertThat(wm.getNumberRecordsOutForProcessing())
+                                .as("nothing left in flight but the records this test holds")
+                                .isEqualTo(numberOfBlockedMessages));
+
+                // The encoded high-water mark is the highest SUCCEEDED offset, not the highest polled
+                // one - see `use offsetHighestSucceeded instead of offsetHighestSeen` in PartitionState.
+                // Back pressure therefore freezes it wherever the encoding crossed the size threshold,
+                // which for this configuration is measured at offset 136 of the 100..139 batch. Asserting
+                // the last polled offset here only passed when the control loop happened to claim the
+                // whole extra batch as work before that commit tick - a race the test does not control,
+                // and this class's most frequent CI flake (astubbs#286, astubbs#288). Assert instead that
+                // the payload records the frontier exactly, having established above that the frontier
+                // did move past the primed batch.
+                long settledHighestSucceeded = partitionState.getOffsetHighestSucceeded();
+                assertThat(settledHighestSucceeded)
+                        .as("the extra records advanced the succeeded frontier past the primed batch")
+                        .isGreaterThan((long) numberOfRecordsToPrimeWith - 1);
 
                 parallelConsumer.requestCommitAsap();
                 awaitForOneLoopCycle();
@@ -228,8 +247,7 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                                     .deserialiseIncompleteOffsetMapFromBase64(0L, meta);
                             Truth.assertWithMessage("The only incomplete record now is offset zero, which we are blocked on")
                                     .that(incompletes.getIncompleteOffsets()).containsExactlyElementsIn(blockedOffsets);
-                            int expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1;
-                            Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen);
+                            Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(settledHighestSucceeded);
                         }
                 );
             }

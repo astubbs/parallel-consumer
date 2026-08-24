@@ -101,13 +101,3 @@ were hidden by the surefire retry until astubbs#224 removed it.
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
   Owner: PR astubbs#262, which anchors the measurement to a nanos stamp taken just before
   `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
-
-- [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  **UNDIAGNOSED, quarantined on its sighting ledger (rule 1)**: at 4/45 it is the
-  most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
-  `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
-  `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier
-  quarantine attributed it to the retry-delay sleep and was reverted: that code runs *after* the
-  failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
-  unverified hypothesis and its falsification path are in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).

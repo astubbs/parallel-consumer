@@ -8,13 +8,16 @@ and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any
 
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
-which also has the scan method. What is open is the tests themselves - one of the scan's three, plus
-one met later. The other two are fixed and out of this ledger (astubbs#260 and astubbs#265); where
-their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
+which also has the scan method. What is open is the tests themselves - the ones met after it. All three the scan found are fixed and out of this ledger: astubbs#260,
+astubbs#265, and `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
+(4/45, the most frequent), which asserted an offset that back pressure exists to stop advancing -
+written up in
+[`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
+Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
-| `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED; quarantined on its sighting ledger (rule 1) - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
+| `PCMetricsTest.metricsRegisterBinding` | 2 seen | Second sighting, mechanism known, quarantined (owner astubbs#265) - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 | `simpleBatchTest` in **both** `ReactorBatchTest` and `MutinyBatchTest` | 2 seen (2026-08-18, 2026-08-19) | Not from the original scan - both found while babysitting a **docs-only** branch (astubbs#308 head `d930ca98d`; astubbs#320 head `70a247184`). Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda - see below, the second sighting is what makes it worth diagnosing. UNDIAGNOSED - classify (contention vs product) before touching |
 
@@ -127,8 +130,8 @@ head - with only `821a91af` failing.
 
 Re-running the identical job on the identical commit did not reproduce it. It failed at
 `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
-instead - `ConditionTimeout`, `expected: 139 but was: 136 within 30 seconds` - which is **row 1 of
-the table above**, the 4/45 entry.
+instead - `ConditionTimeout`, `expected: 139 but was: 136 within 30 seconds` - the 4/45 entry, since
+diagnosed and removed from this ledger (see the header).
 
 An earlier revision of this entry called that "the strongest evidence", on the reasoning that a code
 regression fails the same way twice and this did not. **That reasoning does not hold and is withdrawn.**
@@ -140,55 +143,3 @@ that AGENTS.md warns about, and left standing it would have licensed quarantinin
 What the rerun **does** establish: the failure is not deterministic, and the unit lane is currently
 producing red from more than one already-tracked test. What it is *not* is evidence about any one
 test's mechanism - that has always come from a source-level read, never from a rerun's landing spot.
-
-### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - quarantined anyway, by explicit exception
-
-It was quarantined on astubbs#286 and **removed again in the same PR**, because the diagnosis was
-wrong. Recorded here so the mistake is not repeated.
-
-The failure was attributed to the retry section - "sleeps out the static retry delay instead of
-awaiting the retry event" - and owned by astubbs#265, which replaces that
-`sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with an `await`. Review checked the line number instead of
-the narrative and found it does not fit:
-
-- The failure is at line 211 of the commit CI ran, which is the
-  `waitAtMost(defaultTimeout).untilAsserted(...)` block asserting the committed offset metadata -
-  specifically `Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen)`.
-  The `value of: optional.get()` in the failure text is that `Optional`.
-  (Citation repair: "the commit CI ran" is never named, so that 211 cannot be resolved by a reader,
-  and on master today it lands on a *different* `waitAtMost` block - the one asserting
-  `isBlocked()` - which is close enough to the description to be believed. The durable anchor is the
-  assertion already quoted: grep `hasValue(expectedHighestSeen)` in
-  `OffsetEncodingBackPressureTest`, exactly one hit. The number is left in place because it is what
-  the failure report said, not a pointer this note chose.)
-- That block runs **before** the retry section astubbs#265 rewrites. A change downstream of a failing
-  assertion cannot fix it.
-
-So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen`
-(actuals vary run to run - 136 and 132 have both been seen against an expected 139), and nothing
-currently explains why.
-
-**This entry is why rule 1 changed.** Under the old wording - *no quarantine without diagnosis* - an
-undiagnosed test stayed in the gating lane, so this one (4/45, the most frequent tracked flake)
-blocked every unrelated PR, and the repository owner had to quarantine it as an explicit
-rule-1 exception. It now qualifies on the rule itself: 4 failures in 45 runs, with the signature and
-runs recorded above, is exactly the *sighting ledger* rule 1 asks for. No exception is needed, and
-the entry is unchanged in every other respect - no Owner (unowned, flagged advisory by the audit),
-`flapping = true`, and the diagnosis below still the open task. Quarantine defers; it does not
-resolve. This entry stays open until the test is understood and fixed.
-
-**The open lead - an UNVERIFIED hypothesis, test it before acting on it.** The test computes
-`expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1`, and
-the extra records exist precisely to push the offset encoding past the size threshold that makes the
-partition block and stop taking records. If back-pressure engages before the last extra record is
-polled, the expectation is **unreachable rather than late** - matching the varying shortfall and the
-fact that a 30-second wait never rescues it. Falsification: if the actual value tracks the encoding
-block point, the hypothesis holds; if the high-water mark eventually reaches 139 given long enough,
-it is dead and this is a slowness problem. Compare
-`vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` (same area, different test,
-`root_cause: test_design_bug`) - rule it in or out, don't assume.
-
-The general lesson is the one that produced the error: the fix PR was matched to the failure by
-**subject-matter resemblance** (both concern this test, both concern waiting) rather than by checking
-that the changed lines execute before the failing assertion. Match a `fixedBy` to a stack line, not
-to a theme.
