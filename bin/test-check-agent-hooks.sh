@@ -538,7 +538,7 @@ expect DENY  "the override token AFTER the command is not a prefix"        'gh p
 # THE PR'S OWN INFLIGHT NOTE, surfaced at merge. A note recording what is still open is written so
 # the items are not forgotten and is then read by nobody at the moment it could still change the
 # outcome. These cases prove the arm fires, quotes the right part, and stays out of the way otherwise.
-touch -d '@1000000000' "$ow_tasks/agent-live.output"   # nothing in flight, so only the note arm can fire
+touch -t 200109090146 "$ow_tasks/agent-live.output"   # nothing in flight, so only the note arm can fire
 
 # IN A SCRATCH REPOSITORY, NOT THE REAL WORKING TREE. The guard resolves the note from
 # `git rev-parse --show-toplevel`, so this arm used to write `docs/inflight/pr-90001-selftest.md`
@@ -585,8 +585,63 @@ cd "$ow_return" || exit 1
 rm -rf "$ow_repo"
 
 # Stale task file == nothing in flight. Proves the window is load-bearing rather than "any file".
-touch -d '@1000000000' "$ow_tasks/agent-live.output"
+touch -t 200109090146 "$ow_tasks/agent-live.output"
 expect ALLOW "a task that stopped writing long ago does not block"         'gh pr merge 31 --rebase'
+
+# BOTH ARMS OF THE MTIME READ, plus the two that cannot be reached with a working stat.
+#
+# CI is Linux, so the BSD arm shipped unexecuted, and the fail-closed arm is unreachable on any
+# platform with a functioning stat - a file `find` has just listed can always be dated. A stub `stat`
+# earlier on PATH forces each in turn: same file, same command throughout, only stat changing.
+stub_bin="$TMP/stub-stat"; mkdir -p "$stub_bin"
+saved_path="$PATH"
+stub_stat() { cat > "$stub_bin/stat"; chmod +x "$stub_bin/stat"; PATH="$stub_bin:$saved_path"; }
+
+# A BSD stat: rejects -c, answers `-f %m <file>`. MODELLED, not borrowed - the mtime read goes
+# through python3 (which this suite already requires for every payload) rather than the host's stat,
+# because on macOS the host stat IS BSD stat and would reject the `-c` a delegating stub hands it.
+# That is how this case reddened on the very platform the branch exists for.
+stub_stat <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+    -c) exit 1 ;;                     # BSD stat has no -c
+    -f) exec python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$3" ;;
+esac
+exit 1
+STUB
+expect ALLOW "BSD stat: a long-stale task still does not block"            'gh pr merge 31 --rebase'
+printf 'still writing\n' > "$ow_tasks/agent-live.output"
+expect DENY  "BSD stat: a task still writing is still caught"              'gh pr merge 31 --rebase'
+
+# A stat that answers nothing. The file matched the session's tasks glob, so something is there;
+# being unable to date it is not evidence that nothing is running. Red against the pre-fix code,
+# which skipped the file and allowed the merge - the macOS behaviour this branch exists to fix.
+stub_stat <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+touch -t 200109090146 "$ow_tasks/agent-live.output"
+expect DENY  "an undateable task file is assumed LIVE, not stale"          'gh pr merge 31 --rebase'
+
+# A stat that FAILS AND STILL PRINTS - which is what real GNU coreutils does when handed `-f %m
+# FILE`: exit 1, six lines of filesystem prose on stdout (measured on 9.7). So the value reaching
+# the guard is not absent, it is garbage, and a fail-closed arm testing only `-z` waves it through
+# to `$(( now - mtime ))`, where the arithmetic evaluates `File` as a variable name and `set -u`
+# aborts the hook - non-zero with no verdict, which PreToolUse ALLOWS. Hence the arm tests the
+# value's SHAPE. Keep the task file LIVE so nothing but that arm can produce the refusal.
+stub_stat <<'STUB'
+#!/usr/bin/env bash
+case "$1" in -c) exit 1 ;; esac
+printf '  File: "x"\n    ID: 7f048f3f Namelen: 255     Type: tmpfs\nBlock size: 4096\n'
+exit 1
+STUB
+printf 'still writing\n' > "$ow_tasks/agent-live.output"
+expect DENY  "a stat that fails but still PRINTS cannot defeat the guard"  'gh pr merge 31 --rebase'
+
+PATH="$saved_path"
+rm -f "$stub_bin/stat"
+touch -t 200109090146 "$ow_tasks/agent-live.output"
+expect ALLOW "the same stale file, with stat working, does not block"      'gh pr merge 31 --rebase'
 
 # Fail-open paths. A guard that blocks on its own bug jams the tool call shut.
 printf 'still writing\n' > "$ow_tasks/agent-live.output"
