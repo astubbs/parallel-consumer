@@ -26,10 +26,14 @@ name: review gate
 #
 # IT NO LONGER ASKS WHETHER THE REVIEW COVERED THE CURRENT HEAD. It used to, and the strict
 # implementation is archived at the tag `archive/review-gate-strict-head-freshness` with the
-# reasoning in docs/inflight/parked-strict-review-gate-freshness.md. Short version: strict is
-# the stronger guarantee, but per-push coverage already comes from an auto-reviewer, and
-# enforcing strictness here cost a write-scoped job on every review route plus a page of
-# timestamp plumbing. Do not re-add it without reading that entry.
+# reasoning in docs/inflight/ci-strict-review-gate-freshness.md. Short version: strict is
+# the stronger guarantee, but enforcing it here cost a page of timestamp plumbing, and the
+# per-push coverage it protected came from an auto-reviewer - which was switched off on
+# 2026-08-19 on cost grounds and now runs on request only. The gap that leaves is accepted
+# deliberately; docs/ci.md, "The gate asks ...", owns why. Do not re-add strictness without
+# reading that entry. (An earlier version of this comment also charged strictness for the
+# `actions: write` scope on the refresh-gate jobs; that was wrong - the scope is a cost of the
+# check being produced by a `pull_request` workflow, and it survives leniency unchanged.)
 #
 # THE JOB NAME `claude-review` IS AN API. It is a required status check in the master ruleset
 # (`gh api repos/astubbs/parallel-consumer/rules/branches/master`), matched by name. Rename the

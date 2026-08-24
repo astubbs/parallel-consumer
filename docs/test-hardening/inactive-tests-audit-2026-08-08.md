@@ -415,7 +415,7 @@ feature first, and each already has a home in the tracker.
 
 - **`poisonPillGoesToDeadLetterQueue`** - **parallel-consumer has no dead-letter-queue concept and
   never has.** Zero occurrences of dead-letter or DLQ in any `src/main/java` in the tree. Tracked as
-  **astubbs#149** (mirroring `confluentinc#310`), and `docs/inflight/next-candidates.md` already
+  **astubbs#149** (mirroring `confluentinc#310`), and `docs/inflight/process-candidate-ranking.md` already
   ranks DLQ as **the most-demanded missing feature**. The stub is a 2020-era vote for that feature,
   not a test debt.
 - **`maxPerPartition`** - **no per-partition in-flight limit exists.** `ParallelConsumerOptions` has
@@ -859,6 +859,7 @@ modelled on `bin/todo-index.sh`. It is consistent with repo convention and worth
 does not address why the previous audit was lost - that was invisibility, not drift - and its gate
 would fail the PR Checklist job on any open PR that touches a test annotation, `astubbs#29`
 included.
+<!-- file-refs: N/A - names the generated file that was decided against; see docs/refactoring.md -->
 
 Per repo convention, triage for these lives in `docs/refactoring.md`, not here. This document is the
 inventory and the evidence.
@@ -917,3 +918,4 @@ at `git show a69cd348:docs/plans/2026-08-12-001-test-recover-manual-test-procedu
 recovered rungs now live in the tests themselves - `LoadTest.RECOVERED_VOLUMES`, the concurrency
 ladder in `TransactionAndCommitModeTest`, the environment dump in `AmbientProbeExtension`, and the
 Vert.x 5xx characterization in `VertxTest`.
+<!-- file-refs: N/A - the follow-up plan named here was never committed to master -->

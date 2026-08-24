@@ -1,5 +1,9 @@
 # Branches safe to delete, and one to salvage
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
+
+
 **Diagnostic-only, investigations landed:** `debug/committedoffset-firstpoll-stall` and
 `debug/chaos-w4-red-commit-response-stall` (astubbs#80 and astubbs#100, both with write-ups in `docs/solutions/`).
 
