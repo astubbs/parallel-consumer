@@ -2,7 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: reach -->
-<!-- inflight-labels: needs-design -->
+<!-- inflight-state: deferred - after the embedded dashboard lands -->
 
 The Kafka Streams PoC can already report a topology
 ([`next-kafka-streams-foreign-wrappers.md`](next-kafka-streams-foreign-wrappers.md), U9). This note
