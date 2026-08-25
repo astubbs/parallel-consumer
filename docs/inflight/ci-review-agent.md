@@ -223,3 +223,31 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
 - **The `@claude` trigger fires on prose about it**, so a comment merely discussing the mechanism
   starts a billed job. Own note, since it is a distinct open defect:
   [`ci-claude-trigger-fires-on-prose.md`](ci-claude-trigger-fires-on-prose.md).
+<!-- post-merge: checked-begin -->
+- **The dispatched reviewer can run, report success, and post NOTHING - and the step that exists to
+  catch that cannot see it.** Measured on astubbs#348: `claude-code-review-dispatch.yml --ref master
+  -f pr=348` produced
+  [run 32800879336](https://github.com/astubbs/parallel-consumer/actions/runs/32800879336), whose
+  `review` job ran 02:18:07-02:20:16 and concluded **success**, ending with `No buffered inline
+  comments`. No `claude[bot]` issue comment and no review appeared on the PR, before or after -
+  checked with `gh api repos/astubbs/parallel-consumer/issues/348/comments` and
+  `gh pr view 348 --json reviews`. The job's own appended system prompt is unambiguous that this may
+  not happen: *"FINISH BY POSTING A SUMMARY COMMENT. THIS IS NOT OPTIONAL"*.
+
+  The guard is the step literally named **"Refuse to report success for a review that did not
+  run"**, and its log shows it deciding on `CONCLUSION: success` and printing *"The reviewer ran and
+  concluded successfully."* It reads the **action's exit status**, so it catches a reviewer that
+  CRASHED and is blind to one that ran and stayed silent - which is the failure that actually
+  happens. A ~2-minute run is the tell, against 1m39s-2m45s for mention-route reviews that did post,
+  but nothing checks duration either.
+
+  **The gate is not falsely satisfied** - `claude-review` still wants a `claude[bot]` comment, so it
+  stays red. The damage is to the REQUESTER: the run is green, the dispatch looks done, and an agent
+  or human reasonably reports "review completed" with a run URL and no findings behind it. That has
+  now happened twice, the other on astubbs#350.
+
+  **The fix is cheap and belongs in the guard**: after the reviewer step, query the PR for a
+  `claude[bot]` comment newer than the job's start time and fail the step when there is none. That
+  turns a silent no-op into a red run, which is the only signal a requester will not misread. Until
+  it exists, **verify a dispatched review by reading the PR, never by reading the run**.
+<!-- post-merge: checked-end -->
