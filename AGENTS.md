@@ -426,8 +426,9 @@ Nothing lints commit messages, so all of this is on you.
   widens the investigation.
 - **Before merging, recommend a merge strategy - and say why**, and **offer** to write the squash
   message and to re-cut the commits into atomic units rather than doing either silently. Keep the
-  recommendation to a line or two: write the squash message where it is used, not into the
-  conversation, unless asked for it.
+  recommendation to a line or two, and **never write the squash message into the PR body** - that is
+  the reviewer-facing description of the change, and a merge artefact there becomes a second one that
+  drifts. Where it does go is the checklist's call, not this file's.
   [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
   generated release notes, the three strategies and when each applies, and the reset-to-merge-base
   trap that silently reverts master.
