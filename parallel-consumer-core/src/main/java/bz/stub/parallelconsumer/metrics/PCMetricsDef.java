@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.metrics;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import bz.stub.parallelconsumer.internal.CommitFailureSeamState;
 import bz.stub.parallelconsumer.internal.State;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
@@ -59,12 +60,24 @@ public enum PCMetricsDef {
     OFFSETS_ENCODING_TIME("offsets.encoding.time", "Time spend encoding offsets", PCMetricsSubsystem.OFFSET_ENCODER, TIMER),
     OFFSETS_ENCODING_USAGE("offsets.encoding.usage", "Offset encoding usage per encoding type", PCMetricsSubsystem.OFFSET_ENCODER, COUNTER, tag("codec", "BitSet|BitSetCompressed|BitSetV2Compressed|RunLength")),
     METADATA_SPACE_USED("metadata.space.used", "Ratio between offset metadata payload size and available space", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
-    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY);
+    PAYLOAD_RATIO_USED("payload.ratio.used", "Ratio between offset metadata payload size and offsets encoded", PCMetricsSubsystem.OFFSET_ENCODER, DISTRIBUTION_SUMMARY),
+
+
+    // the commit-failure seam's observability (astubbs#317): a continuing-but-failing instance must be visible from
+    // a dashboard, not only from the logs
+    COMMIT_FAILURE_EXHAUSTIONS("commit.failure.exhaustions", "Total number of exhausted offset-commit retry budgets. Each increment is one terminal commit failure consulting the configured commitFailureHandler - sync, transactional and escalated rebalance-deferral failures all count here", PCMetricsSubsystem.COMMITTER, COUNTER),
+    COMMIT_FAILURE_CONSECUTIVE_EXHAUSTIONS("commit.failure.consecutive.exhaustions", "Number of commit retry budgets exhausted in a row with no intervening successful commit. Resets to 0 on a successful commit and on a fresh partition assignment", PCMetricsSubsystem.COMMITTER, GAUGE),
+    COMMIT_TIME_SINCE_LAST_SUCCESS("commit.time.since.last.success", "Seconds since the last successful offset commit. While no commit has succeeded in the current assignment yet, measured from the assignment's start (before the first assignment: from instance construction), so the gauge always has an epoch and never reports an absent-state sentinel", PCMetricsSubsystem.COMMITTER, GAUGE),
+    COMMIT_FAILURE_SEAM_STATE("commit.failure.seam.state", "Commit-failure seam state, reported as number with following mapping - " + getCommitFailureSeamStateToValueListing(), PCMetricsSubsystem.COMMITTER, GAUGE);
 
     public static final String PC_INSTANCE_TAG = "pcinstance";
 
     private static String getStateToValueListing() {
         return Arrays.stream(State.values()).map(state -> state.getValue() + ":" + state).collect(Collectors.joining(", "));
+    }
+
+    private static String getCommitFailureSeamStateToValueListing() {
+        return Arrays.stream(CommitFailureSeamState.values()).map(state -> state.getValue() + ":" + state).collect(Collectors.joining(", "));
     }
 
     private static ParallelConsumer.Tuple<String, String>[] topicPartitionTags() {
@@ -185,7 +198,8 @@ public enum PCMetricsDef {
         SHARD_MANAGER("shardmanager"),
         WORK_MANAGER("workmanager"),
         BROKER_POLLER("poller"),
-        OFFSET_ENCODER("offsetencoder");
+        OFFSET_ENCODER("offsetencoder"),
+        COMMITTER("committer");
 
         private final String subsystemTag;
 

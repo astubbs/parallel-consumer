@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.state.WorkManager;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import lombok.*;
@@ -342,6 +343,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private Gauge loadFactorGauge;
     private Gauge statusGauge;
 
+    /**
+     * The commit-failure seam's meters (astubbs#317): one increment per exhausted budget, plus gauges over the
+     * accounting fields above - so a continuing-but-failing instance is visible from a dashboard, not only from the
+     * ERROR log each exhaustion emits. Registered in {@link #initMetrics()}; the gauge fields hold the strong
+     * references micrometer needs to keep observing.
+     */
+    private Counter commitFailureExhaustionsCounter;
+    private Gauge commitFailureConsecutiveExhaustionsGauge;
+    private Gauge commitTimeSinceLastSuccessGauge;
+    private Gauge commitFailureSeamStateGauge;
+
     private Duration shutdownTimeout;
 
     private Duration drainTimeout;
@@ -410,6 +422,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.loadFactorGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.DYNAMIC_EXTRA_LOAD_FACTOR,
                 dynamicExtraLoadFactor, DynamicLoadFactor::getCurrentFactor);
         this.statusGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.PC_STATUS, this, pc -> pc.state.getValue());
+        this.commitFailureExhaustionsCounter =
+                pcMetrics.getCounterFromMetricDef(PCMetricsDef.COMMIT_FAILURE_EXHAUSTIONS);
+        this.commitFailureConsecutiveExhaustionsGauge = pcMetrics.gaugeFromMetricDef(
+                PCMetricsDef.COMMIT_FAILURE_CONSECUTIVE_EXHAUSTIONS, this, pc -> pc.consecutiveExhaustedBudgets);
+        this.commitTimeSinceLastSuccessGauge = pcMetrics.gaugeFromMetricDef(
+                PCMetricsDef.COMMIT_TIME_SINCE_LAST_SUCCESS, this, pc -> pc.secondsSinceLastSuccessfulCommit());
+        this.commitFailureSeamStateGauge = pcMetrics.gaugeFromMetricDef(
+                PCMetricsDef.COMMIT_FAILURE_SEAM_STATE, this, pc -> pc.commitFailureSeamState().getValue());
         new ExecutorServiceMetrics(this.getWorkerThreadPool().get(), "pc-user-function-executor",
                 USER_FUNCTION_EXECUTOR_PREFIX,
                 pcMetrics.getCommonTags()).bindTo(pcMetrics.getMeterRegistry());
@@ -1210,6 +1230,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
 
         consecutiveExhaustedBudgets++;
+        // counted here, the seam's single interception point, so every lane's exhaustion - sync, transactional,
+        // and an escalated rebalance-deferral streak - increments exactly once, whatever the decision below
+        commitFailureExhaustionsCounter.increment();
         CommitFailureContext context = buildCommitFailureContext(commitFailure);
 
         // loud regardless of the decision (R16): a continuing-but-failing instance must never be quiet
@@ -1256,6 +1279,33 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 .commitMode(options.getCommitMode())
                 .assignmentEpoch(assignmentEpoch)
                 .build();
+    }
+
+    /**
+     * Seconds since the last successful commit, observed by {@link PCMetricsDef#COMMIT_TIME_SINCE_LAST_SUCCESS}.
+     * The same epoch rule as {@link #buildCommitFailureContext}: while no commit has succeeded in the current
+     * assignment, measured from {@link #assignmentStartTime} - which is initialised at construction, so the gauge
+     * always has an epoch and never needs an absent-state sentinel (before the first assignment it counts from
+     * construction).
+     */
+    private double secondsSinceLastSuccessfulCommit() {
+        Instant successEpoch = lastSuccessfulCommitTime != null ? lastSuccessfulCommitTime : assignmentStartTime;
+        return Duration.between(successEpoch, Instant.now()).toMillis() / 1_000.0;
+    }
+
+    /**
+     * The seam's observable state, observed by {@link PCMetricsDef#COMMIT_FAILURE_SEAM_STATE}. Derived from the
+     * accounting fields on each observation rather than stored, so it can never drift from the behaviour it
+     * reports.
+     */
+    private CommitFailureSeamState commitFailureSeamState() {
+        if (commitFailurePauseActive) {
+            return CommitFailureSeamState.FAILING_PAUSED;
+        }
+        if (consecutiveExhaustedBudgets > 0) {
+            return CommitFailureSeamState.FAILING_CONTINUING;
+        }
+        return CommitFailureSeamState.HEALTHY;
     }
 
     /**

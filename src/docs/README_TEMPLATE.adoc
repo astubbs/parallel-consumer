@@ -1133,6 +1133,32 @@ Distribution Summary `pc.payload.ratio.used{subsystem=offsetencoder}`
 
 Ratio between offset metadata payload size and offsets encoded
 
+==== Committer
+
+**Commit Failure Exhaustions**
+
+Counter `pc.commit.failure.exhaustions{subsystem=committer}`
+
+Total number of exhausted offset-commit retry budgets. Each increment is one terminal commit failure consulting the configured commitFailureHandler - sync, transactional and escalated rebalance-deferral failures all count here
+
+**Commit Failure Consecutive Exhaustions**
+
+Gauge `pc.commit.failure.consecutive.exhaustions{subsystem=committer}`
+
+Number of commit retry budgets exhausted in a row with no intervening successful commit. Resets to 0 on a successful commit and on a fresh partition assignment
+
+**Commit Time Since Last Success**
+
+Gauge `pc.commit.time.since.last.success{subsystem=committer}`
+
+Seconds since the last successful offset commit. While no commit has succeeded in the current assignment yet, measured from the assignment's start (before the first assignment: from instance construction), so the gauge always has an epoch and never reports an absent-state sentinel
+
+**Commit Failure Seam State**
+
+Gauge `pc.commit.failure.seam.state{subsystem=committer}`
+
+Commit-failure seam state, reported as number with following mapping - 0:HEALTHY, 1:FAILING_CONTINUING, 2:FAILING_PAUSED
+
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.
 In addition, if desired - Kafka Consumer, Producer can be bound to the registry as well as general JVM metric, logging system and other common binders.
