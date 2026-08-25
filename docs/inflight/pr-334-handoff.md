@@ -4,8 +4,8 @@
 <!-- inflight-impact: coordination -->
 
 Written 2026-08-25, covering the branch up to and including its own commit. The last piece of work
-it describes is the `PCMetricsTest` registry fold; anything in `git log` after that arrived later
-than this file and is not accounted for here. **Delete this file when astubbs#334 merges** - it
+it describes is moving registered functions off the reader thread; anything in `git log` after that
+arrived later than this file and is not accounted for here. **Delete this file when astubbs#334 merges** - it
 exists only to hand the branch between sessions, and a stale handoff reads as live.
 
 This file carries **only what is not written down elsewhere**: the branch and stack state, what was
@@ -19,7 +19,7 @@ the notes linked below and is deliberately not repeated here.
 | [`next-kafka-streams-foreign-wrappers.md`](next-kafka-streams-foreign-wrappers.md) | The PoC's findings and the deferred-capability table. The oldest and broadest of these. |
 | [`streams-coupling-dimensions.md`](streams-coupling-dimensions.md) | **The register of what to prove next**, ranked by what would falsify the approach - including dimension 1's result and the inference it overturned. Start here. |
 | [`test-cross-binding-streams-conformance.md`](test-cross-binding-streams-conformance.md) | How to test a binding in N languages without writing the suite N times, and the three extractions it is earmarked for. |
-| [`bug-streams-queries-share-one-answer-slot.md`](bug-streams-queries-share-one-answer-slot.md) | A live silent bug on the public query API, and **why its fix must come first**. |
+| [`docs/solutions/architecture-patterns/one-answer-slot-for-many-callers-is-a-correlation-bug.md`](../solutions/architecture-patterns/one-answer-slot-for-many-callers-is-a-correlation-bug.md) | **Fixed, so it moved out of `inflight/`.** The silent mis-delivery on the query API, the ordering trap in fixing it, and the two test markers used for a defect versus a limitation. |
 | [`perf-streams-crossing-attribution.md`](perf-streams-crossing-attribution.md), [`perf-crossing-fixed-versus-per-byte.md`](perf-crossing-fixed-versus-per-byte.md), [`perf-crossing-is-cpu-and-serialised.md`](perf-crossing-is-cpu-and-serialised.md) | What a crossing costs, measured. |
 | [`perf-streams-crossing-optimisation.md`](perf-streams-crossing-optimisation.md) | The optimisation work, **parked on purpose** until the concept is proven. Do not restart it. |
 | [`docs/plans/2026-08-22-002-feat-kafka-streams-foreign-wrappers-plan.md`](../plans/2026-08-22-002-feat-kafka-streams-foreign-wrappers-plan.md) | The original plan. |
@@ -68,8 +68,8 @@ is work:
 
 ## Verified this session, and how
 
-Java streams suite 53 tests; Python 46 plus 1 xfail; ruff clean; copyright, file-ref (as a
-citation check on new notes only) and issue-ref gates green locally. The join was proved **end to
+Java streams suite **73 tests**; Python **51**; ruff clean; copyright and issue-ref gates green
+locally. (`file-refs` fails on the standing citation debt below, not on this work.) The join was proved **end to
 end against a real broker**, not only in unit tests - one topology running a map, a join and a
 reduce, 200 calls to each of three Python functions.
 
@@ -79,18 +79,21 @@ and dropping the table value-type guard.
 **mypy reports four pre-existing `unused-ignore` errors** in `_transport.py` and `_session.py`,
 confirmed unchanged with this session's edits stashed. Not caused here, not fixed here.
 
-## The plan, in order
+## The plan: steps 1 and 2 are DONE
 
-The first two are settled and sequential; the third has an open decision on it.
+Both landed on 2026-08-25, in the order the register said was load-bearing.
 
-1. **Correlate `Get`/`Describe`**, copying the `call_id` pattern that `BuilderCall`/`HandleAssigned`
-   already use. Closes the silent bug. The `xfail(strict=True)` test turns into an XPASS failure
-   when it lands, which is the signal to delete its marker.
-2. **Move user functions off the reader thread**, which closes re-entrancy properly. The
-   characterisation tests in `test_streams_reentrancy.py` are then **inverted, not deleted**.
-   **Order matters**: doing this before (1) makes things worse, turning re-entrant queries from a
-   hang into more concurrent callers contending for one answer slot.
-3. **Attack the next dimension.** Which one is the open question below.
+1. **`Get`/`Describe` now carry a call id** and are settled through per-call waiters, closing the
+   silent bug where two concurrent host threads received each other's answers. An answer no waiter
+   claims is dropped with a warning rather than handed to whoever is waiting - which also makes an
+   engine too old to echo the id fail loudly instead of mis-delivering.
+2. **Registered functions now run off the reader thread**, so a host function may call back into the
+   engine while it is being invoked. The characterisation tests that pinned the hang were inverted
+   rather than deleted, and two were added for the risks the fix introduces.
+
+**Next is the windowing spike** - see the dimension decision below. Its plan is being written to
+`docs/plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md`; if that file is absent, the
+plan run did not finish and the decision below is still the authority.
 
 ## The dimension decision, settled 2026-08-25
 

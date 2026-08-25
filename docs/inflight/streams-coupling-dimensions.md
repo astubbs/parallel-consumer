@@ -89,16 +89,20 @@ blocking, and `onGet` runs on the gRPC transport thread - so the engine genuinel
 while every stream thread is blocked, which is why the answer existed to be abandoned. The
 deadlock is purely client-local, in one design decision in one Python file.
 
-**So this is a defect, not a limit of the approach**, and the Processor API is not ruled out. The
-fix has an order that matters: **correlate `Get`/`Describe` first** - see
-[`bug-streams-queries-share-one-answer-slot.md`](bug-streams-queries-share-one-answer-slot.md),
-which is needed regardless of re-entrancy - and only then move user functions off the reader
-thread. Doing them the other way round makes things worse, because more concurrent queries hitting
-one answer slot is exactly the failure the correlation fixes.
+**So this is a defect, not a limit of the approach**, and the Processor API is not ruled out.
+**Both halves are now fixed**, in the order that mattered: `Get`/`Describe` gained a call id first,
+then user functions moved off the reader thread. The reverse order would have made things worse,
+turning re-entrant queries from a hang into more concurrent callers contending for one answer slot.
+The write-up, including the silent mis-delivery bug the first half removed and the two different
+test markers used for a defect versus an accepted limitation, is
+[`docs/solutions/architecture-patterns/one-answer-slot-for-many-callers-is-a-correlation-bug.md`](../solutions/architecture-patterns/one-answer-slot-for-many-callers-is-a-correlation-bug.md).
 
-Characterisation tests are in the tree pinning current behaviour
-(`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_streams_reentrancy.py`);
-they are to be **inverted, not deleted**, when the fix lands.
+The tests in
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/tests/test_streams_reentrancy.py`
+have been inverted rather than deleted, as that file said they should be: they now assert that a
+re-entrant call is answered, and two were added for the risks the fix introduced - a blocked user
+function must not stop the next invocation being served, and closing the session from inside a user
+function must not deadlock.
 
 **Two JVM-side hazards the run turned up, neither a deadlock.** gRPC serialises a single stream's
 inbound callbacks, so `onGet` performing a live store read delays `InvocationResult` delivery for
