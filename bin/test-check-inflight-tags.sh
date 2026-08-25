@@ -88,7 +88,13 @@ cp bin/check-inflight-tags.sh "$dry_dir/bin/"
 cp bin/lib/inflight-tags.sh "$dry_dir/bin/lib/"
 cp docs/inflight/AGENTS.md "$dry_dir/docs/inflight/"
 
-sed -i 's/^INFLIGHT_TASK_IMPACTS="\(.*\)"$/INFLIGHT_TASK_IMPACTS="\1 undocumented-value"/' "$dry_dir/bin/lib/inflight-tags.sh"
+# Not `sed -i`: GNU takes the suffix attached (-i.bak), BSD takes it as the NEXT argument, so the one
+# spelling cannot mean in-place on both. On BSD this read the script as the suffix and the file as the
+# script - "sed: 1: invalid command code f" - leaving the fixture unedited, so both directions of this
+# doc-and-lib agreement check silently tested nothing and reported the gate as broken.
+sed 's/^INFLIGHT_TASK_IMPACTS="\(.*\)"$/INFLIGHT_TASK_IMPACTS="\1 undocumented-value"/' \
+    "$dry_dir/bin/lib/inflight-tags.sh" > "$dry_dir/inflight-tags.tmp"
+mv "$dry_dir/inflight-tags.tmp" "$dry_dir/bin/lib/inflight-tags.sh"
 out=$( cd "$dry_dir" && bash bin/check-inflight-tags.sh 2>&1 )
 case "$out" in *undocumented-value*) dry_got=caught ;; *) dry_got=missed ;; esac
 dry_assert "a lib value the doc never explains is caught" "$dry_got"
