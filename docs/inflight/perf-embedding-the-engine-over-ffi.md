@@ -257,3 +257,29 @@ disappears entirely rather than shrinking to a queue handoff.
   Hazards inherited from this note: crash isolation (a segfaulting compiled function kills the
   topology process where the sidecar dies loudly), CTD7's stack-swap FFI incompatibility, the
   per-entry isolate thread-attach rule, and the release-matrix gate on shipping anything embedded.
+
+### Prior art for the candidate, surveyed 2026-08-25 - the repo had not looked
+
+The earlier sweeps covered streaming architectures (Beam/PyFlink/PySpark/Faust/Quix/Bytewax, in
+the windowing plan's Problem Frame) and per-language FFI mechanics (the parked C-client note);
+the UDF-compilation family was unsurveyed until this entry.
+
+- **The pattern ships today.** cuDF/RAPIDS intercepts user Python UDFs at runtime, compiles them
+  with Numba, and runs them inside the engine; `scipy.LowLevelCallable` + Numba `@cfunc` is the
+  established CPU idiom for native libraries taking compiled-Python C callbacks. Bodo and Codon
+  are the whole-program end of the same family. **Redpanda Data Transforms is the nearest
+  neighbour in this domain**: user functions compiled to WASM, run inside the broker, sandboxed.
+- **The Graal-family strategy** is hosting rather than compiling: GraalPy/Truffle puts Python on
+  the runtime this repo already builds with (near-free polyglot calls after warmup), composing
+  with the native-image tooling - against the Jython cautionary tale (died on the C-extension
+  cliff, which GraalPy still fights) and a real AOT-versus-Truffle-warmup tension.
+- **WASM may fit this product best and stays in the family (GraalWasm)**: Numba serves Python
+  only, but a WASM UDF fast path gives all ten bindings one target, one sandboxed engine-side
+  runtime, and restores the crash isolation a raw C pointer gives up - at the cost of Python's
+  to-WASM toolchain being the least mature of the bindings'.
+- **The third ecosystem answer is already half-built here**: DuckDB/Polars answer slow UDFs by
+  growing the engine's expression algebra so users declare rather than ship code - the declared
+  combine (U5) generalised. Cheapest lane; parity-limited by construction (KTD16).
+
+The crossing-cost ladder therefore gains arms: (e) GraalPy polyglot call, (f) GraalWasm UDF -
+with (f) the only candidate serving every binding, and the same pre-registered bar.
