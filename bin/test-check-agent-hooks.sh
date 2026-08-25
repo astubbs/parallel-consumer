@@ -1182,6 +1182,39 @@ case "$ctx" in *'is not a remote URL'*) got=accurate ;; *) got=plausible_wrong_r
 assert "a file:// origin is a local clone, not a repository to ask about" accurate "$got"
 case "$ctx" in *'/some/local/path'*|*'#9412'*) got=invented ;; *) got=clean ;; esac
 assert "...and no slug is invented from its path segments either" clean "$got"
+
+# EVERY SPELLING THE GUARD CLAIMS TO HANDLE, DRIVEN THROUGH `git remote` RATHER THAN ASSERTED IN
+# PROSE. Review of astubbs/parallel-consumer#350 noted that the claim "verified against N forms" rested
+# on ad-hoc checks: only the default `https://` origin and the `file://` case above actually reached
+# the code, so an edit to the scheme regex could regress credentialed, trailing-slash, scp-style,
+# `ssh://`-with-a-port or `git://` remotes and nothing would go red. Each row sets the SAME
+# repository, so the expected slug is a constant and any row that resolves differently is the bug.
+bctx_accepts() { # <label> <url>
+    bctx_clean_stamps
+    git -C "$bctx_tmp/wt" remote set-url origin "$2"
+    case "$(bctx_context "$(bctx_fire "$sess_payload" "$stub_pr:$PATH")")" in
+        *'selftest-owner/selftest-repo#9412'*) got=resolved ;;
+        *) got=lost ;;
+    esac
+    assert "a $1 origin still resolves to the repository" resolved "$got"
+}
+bctx_accepts "credentialed https"   'https://x-access-token:TOKEN@github.com/selftest-owner/selftest-repo.git'
+bctx_accepts "trailing-slash https" 'https://github.com/selftest-owner/selftest-repo/'
+bctx_accepts "scp-style"            'git@github.com:selftest-owner/selftest-repo.git'
+bctx_accepts "ssh://"               'ssh://git@github.com/selftest-owner/selftest-repo.git'
+bctx_accepts "ssh:// on a nonstandard port" 'ssh://git@ghe.internal:2222/selftest-owner/selftest-repo.git'
+bctx_accepts "git://"               'git://github.com/selftest-owner/selftest-repo.git'
+
+# A scheme that is not a git transport is the same class as `file://`, and the reject arm needs a row
+# too or the allowlist could quietly become "any scheme" again without a case noticing.
+bctx_clean_stamps
+git -C "$bctx_tmp/wt" remote set-url origin 'ftp://example.com/selftest-owner/selftest-repo'
+case "$(bctx_context "$(bctx_fire "$sess_payload" "$stub_pr:$PATH")")" in
+    *'is not a remote URL'*) got=rejected ;;
+    *) got=trusted ;;
+esac
+assert "an ftp:// origin is not a transport git clones from, and is rejected" rejected "$got"
+git -C "$bctx_tmp/wt" remote set-url origin https://github.com/selftest-owner/selftest-repo.git
 rm -rf "$local_origin"
 
 # BSD `mktemp` NEEDS A TEMPLATE, AND A HOOK THAT CANNOT MAKE ITS TEMP FILE SAYS NOTHING AT ALL.
