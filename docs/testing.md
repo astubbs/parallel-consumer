@@ -204,7 +204,14 @@ ArchUnit cannot see the family at all.
 
 Harnesses live in core's `bz.stub.parallelconsumer.state` package next to the classes they model:
 `ShardManagerLincheckTest`, `PartitionStateLincheckTest`, `WorkManagerLincheckTest`, plus two
-controls. The `lincheck` tag sits in the pom's default `excluded.groups`, and each gating wrapper
+controls. **That placement is forced, not stylistic, so do not move them to a `lincheck`
+sub-package**: `ShardManagerLincheckTest` drives the package-private `ShardManager.addWorkContainer`
+and `removeAnyShardEntriesReferencedFrom`, and `PartitionStateLincheckTest` calls the `protected`
+`PartitionState.createOffsetAndMetadata`. A harness models a seam, and the seams worth modelling are
+usually the ones the class does not expose. Moving them out would mean widening main-code visibility
+to suit a test, which trades a real encapsulation boundary for a tidier package tree; splitting only
+the two that *could* move is worse still, because then the lane has no single home to document. The
+two toolchain controls stay with them for that reason alone - they model nothing in `state`. The `lincheck` tag sits in the pom's default `excluded.groups`, and each gating wrapper
 repeats it in its own hardcoded list - `QuarantinedAnnotationContractTest` is what fails when the two
 disagree, because a tag the pom excludes and a wrapper does not runs in the GATING suite.
 
