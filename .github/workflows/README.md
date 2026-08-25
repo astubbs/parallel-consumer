@@ -36,6 +36,16 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `release.yml` | Cuts a release. `workflow_dispatch`, and deliberately the most dangerous button here. |
 | `repo-hygiene.yml` | Small always-on repo checks - shell sigpipe traps, one pinned version per GitHub Action, and expiring the pom's temporary CVE exclusions. |
 
+## One required check is not in this directory
+
+**`CodeQL` is a required status check that no workflow file here produces**, so grepping the YAML
+for a red check's name works for every context except that one - this paragraph is what the search
+lands on instead. It is GitHub's code-scanning default setup,
+configured in repository settings rather than in the tree; `gh api
+repos/astubbs/parallel-consumer/code-scanning/default-setup` is what answers for it. Do not add a
+`codeql-analysis.yml` to fix the asymmetry - the two setups are mutually exclusive, and what that
+trade costs is in [`docs/ci.md`](../../docs/ci.md).
+
 ## Two conventions that will bite you
 
 - **Job names are an API.** `claude-review`, `review: human LGTM`, `shell: sigpipe`, `workflows: action versions`,
