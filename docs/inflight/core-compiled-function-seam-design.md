@@ -155,3 +155,34 @@ is `fold_wasm.rs`, because no C-to-wasm toolchain was reachable.
    a Numba pointer is meaningful only in-process and therefore forces the embedded (`--shared`)
    engine shape. Branches `spike/242-fastpath-wasm` and `spike/242-fastpath-numba`, each with its
    own branch note.
+
+## Reassessment, 2026-08-25: both spikes ran, and the fork partially inverted
+
+Owner's gate, exercised. Both paths proved end to end with sabotage checks (each spike's note
+lives on its branch: `spike/242-fastpath-wasm` and `spike/242-fastpath-numba`,
+`docs/inflight/perf-spike-fastpath-wasm.md` / `perf-spike-fastpath-numba.md`).
+<!-- file-refs: N/A - the two spike notes live on their own branches, not this one; branch names above locate them -->
+
+- **Path A held its shape**: a 966-byte wasm artifact over today's wire into today's sidecar,
+  1.9x end to end, 94.9 percent of the wire-to-control gap closed, artifact identity checked at
+  registration, Temurin refusal instead of silent interpretation. Deployment verdict: topology
+  unchanged, sidecar artifact ~50MB fatter with a GraalVM pin.
+- **Path B inverted the premise**: embedding deleted gRPC's ~165us/record reliably, and the
+  compiled pointer added ~27us-at-the-median on top - not separable from noise. Its raw-address
+  registration is a hole in a protocol, not a capability, and does not ship in that shape. Its
+  accidental discovery outranks its thesis: **the embedded streams engine itself** - the whole
+  engine as a --shared native library inside the Python process, built first try on the traced
+  metadata - is a product capability independent of compiled functions.
+- **Convergent finding, both spikes independently: the engine floor is the next question.**
+  ~250us/record (embedded, B) and ~132us control (A's box) with NOTHING crossing. The crossing is
+  solved; what stands between the wrapper and the reimplementation floor is Kafka Streams' own
+  per-record cost.
+- **Convergent test hole, both spikes independently: the streams demo's assertions are
+  value-blind** - a wrong-valued transform passes the count checks on every path. Spike A's
+  --verify-mapped sink is the fix and should be adopted regardless of the fork.
+- **Disposition**: Path A is the ship-shape candidate; Path B rescopes to the embedded engine with
+  the pointer mechanism parked until artifacts carry identity; nothing is fleshed out until the
+  engine floor is understood (spike dispatched, results in
+  [`perf-streams-engine-floor.md`](perf-streams-engine-floor.md) once it lands, created by that
+  spike).
+<!-- file-refs: N/A - perf-streams-engine-floor.md is created by the engine-floor spike this entry dispatches -->
