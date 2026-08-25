@@ -55,20 +55,34 @@ Not free coverage, and it should not be sold as such:
 Ranked by what each buys, not by effort. Prefer widening what an existing harness explores over
 adding a class with a narrow guess in it.
 
-1. **`ProcessingShard` - the standout, because the code already concedes the bug.**
-   `availableWorkContainerCnt` (an `AtomicLong`) must track `entries` (a `ConcurrentSkipListMap`):
-   the signature above, in one class. The stale-replacement path in `addWorkContainer` carries a
-   ~15-line comment admitting the counter undercounts, that **"the deficit survives it and can
-   accumulate across replacements"**, and that it resyncs only when the shard drains far enough for
-   the clamp in `dcrAvailableWorkContainerCntByDelta` to floor it at zero - a clamp whose own comment
-   reads `// in case of possible race condition`. **A clamp to zero for a race is the admission.**
+1. **The work claim in `ProcessingShard#getWorkIfAvailable` - a check-then-act on two fields that
+   must move together.** Selection asked three terms via `isAvailableToTakeAsWork()` and acted via
+   `onQueueingForExecution()`, re-validating none of them. astubbs#335 replaces the plain
+   `boolean inFlight` and `Optional<Boolean> maybeUserFunctionSucceeded` with a single
+   `AtomicReference<ExecutionState>` so the check IS the act - a six-state CAS machine, which is the
+   shape bounded model checking is best at.
 
-   Today the drift is *argued* to be a backpressure-gauge inaccuracy that errs towards fetching sooner
-   rather than starving. That argument may well be right, but it is an argument; Lincheck would
-   replace it with a measurement - which interleaving produces the drift, and how far it can go. That
-   is exactly what this PoC demonstrated when a faithful arm found what reasoning had dismissed.
-   Bonus: `bug-retry-queue-orphaned-by-inline-stale-removal.md` records a known defect in
-   `getWorkIfAvailable`, the same class, so the harness doubles as a regression detector.
+   **Why this one first:** astubbs#335's own verification says the losing interleaving had to be
+   "played out by hand with no threads - the concurrent reproduction needed millions of completions
+   per occurrence" (4 in 14,400,000). That is the exact gap between *one bad schedule exists* and
+   *every schedule is safe*, and only a model checker closes it. It is also **time-sensitive**: the
+   gap is unreachable here only because the control loop is the sole selector, and astubbs#361 gives
+   every worker its own. Calibrate against pre-astubbs#335 master, where the defect still lives.
+
+   Same trigger, also worth a harness, and deliberately unfixed:
+   `bug-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
+   `PartitionState#maybeRegisterNewPollBatchAsWork` makes a record selectable before its offset is
+   registered, latent for the same single-selector reason.
+
+   **`ProcessingShard.availableWorkContainerCnt` is NOT a Lincheck target, and this list said it was.**
+   The `AtomicLong`-must-track-`ConcurrentSkipListMap` signature fits, and the clamp in
+   `dcrAvailableWorkContainerCntByDelta` is commented `// in case of possible race condition`, so the
+   drift reads as a race. astubbs#336 measured it and it is not one: both drift paths are conditional
+   mismatches **reproducible on a single thread**, the clamp's comment is wrong, and that PR deletes
+   the clamp. Lincheck finds interleavings; this needs none, and astubbs#336 already has the
+   single-threaded tests. Recorded rather than quietly dropped, because the wrong inference here was
+   made twice - reading a comment claiming a race instead of measuring - which is the same error this
+   lane's own calibration caught in itself.
 2. **`PCMetrics.registeredMeters` - a plain `ArrayList` written from two threads.** Not a concurrent
    collection at all (`private List<Meter.Id> registeredMeters = new ArrayList<>()`, added to from
    four registration paths). **The lane found this unprompted, during calibration, from a scenario
