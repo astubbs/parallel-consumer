@@ -363,6 +363,15 @@ one number prices every bound, and it took eight two-second runs to obtain:
 | 400 | 1% | - |
 | 1,000 (committed now) | 0.001% | 0 misses in 8 |
 
+**The other two harnesses were probed the same way and are not marginal.** Starved to a tenth of
+their committed bounds - `ShardManagerLincheckTest` at 5 iterations instead of 50,
+`PartitionStateLincheckTest` at 30 instead of 300 - both hit 8 times in 8. Zero misses in eight
+starved runs puts the miss probability at that starved bound below 31% with 95% confidence, which
+compounds to below 1e-5 at the bounds they actually carry. Their per-run times are also tightly
+clustered (3.1-4.8s and 6.6-12.8s) where `WorkManagerLincheckTest` ranged 4.7-32.2s across whole-lane
+runs, and that spread is itself the signature of a search finishing near the edge of its budget. So
+the flake was specific to the one harness, and the other two bounds are left alone.
+
 **Raising `iterations` is free on the path that matters**, which is why the bound moved to 1,000
 rather than to the smallest sufficient number. Lincheck stops at the first violation, so a run that
 finds the tear never reaches the extra iterations: measured 6.7-19.1s at 1,000 against 5.3-23.8s at
