@@ -707,6 +707,11 @@ push_repo="$(mktemp -d)"
   cd "$push_repo" || exit 1
   git init -q .
   git checkout -q -b selftest/push-fixture 2>/dev/null || git branch -q -m selftest/push-fixture
+  # AND A HOSTED `origin`, which is now load-bearing rather than cosmetic: both hooks derive the
+  # repository to ask gh about from `origin` and refuse to fall back to an unqualified lookup, so a
+  # fixture without one exercises the could-not-derive path instead of the case under test. A repo
+  # made by `git init` has no remote at all, which is exactly the gap that made this line necessary.
+  git remote add origin https://github.com/astubbs/parallel-consumer.git
   # An UNBORN branch reads as empty from `rev-parse --abbrev-ref HEAD`, which trips the same silent
   # exit as a detached one - so the fixture needs a commit, not just a branch name.
   : > .keep
@@ -864,6 +869,147 @@ assert "a PR with nothing outstanding still states the risk" states_the_risk "$g
 hist_out="$(hist 'git push --force origin main')"
 case "$hist_out" in *"LAST step before a merge"*) got=explains ;; *) got=bare_refusal ;; esac
 assert "the refusal says when a rewrite IS allowed" explains "$got"
+echo
+echo "--- the PR lookup, in the three hooks that make one ---"
+
+# ONE LOOKUP, THREE ANSWERS. `gh pr list --head "$branch" 2>/dev/null || true` produced a single
+# outcome for three unrelated situations, and every hook that used it told the operator the same
+# thing in all three: the branch has no PR; the lookup FAILED (gh missing, unauthenticated,
+# rate-limited, offline); or the lookup answered for the WRONG REPOSITORY, because gh prefers
+# `upstream` in this fork and `remote.origin.gh-resolved` is local and uncommitted. Both of the
+# first two were hit live on astubbs/parallel-consumer#356 in one day, each time reported as "No PR
+# was found for this branch".
+#
+# These arms run in the fixture repo the push section created, whose `origin` is what the hooks now
+# derive the slug from. Each swaps in its own `gh`, first on PATH, so the answer under test is
+# chosen rather than ambient - the property the section is about is what the hook SAYS, and the
+# refusal it must still emit while saying it.
+lk_stub="$(mktemp -d)"
+lk_tmp="$(mktemp -d)"
+lk_gh() { cat > "$lk_stub/gh"; chmod +x "$lk_stub/gh"; }
+lk_fire() { # <hook-path> <command> -> stdout of the hook
+    printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$2" \
+        | PATH="$lk_stub:$PATH" TMPDIR="$lk_tmp" CLAUDE_CODE_SESSION_ID=selftest-lookup \
+          bash "$1" 2>/dev/null
+}
+lk_rewrite() { rm -f "$lk_tmp"/pc-push-reminder-*; lk_fire "$HIST_HOOK" 'git push --force origin HEAD'; }
+
+# 1. THE LOOKUP FAILED. Red against the pre-fix hook, which printed "No PR was found for this
+# branch" here - an assertion of absence built on an answer nobody received.
+lk_gh <<'GH'
+#!/usr/bin/env bash
+echo "gh: To get started with GitHub CLI, please run: gh auth login" >&2
+exit 4
+GH
+lk_out="$(lk_rewrite)"
+case "$lk_out" in *"lookup FAILED"*) got=names_the_failure ;; *) got=silent_about_it ;; esac
+assert "a failed lookup is reported as a failure" names_the_failure "$got"
+case "$lk_out" in *"No PR was found"*|*"came back empty"*) got=claims_absence ;; *) got=claims_nothing ;; esac
+assert "a failed lookup never claims the branch has no PR" claims_nothing "$got"
+case "$lk_out" in *"auth login"*) got=quotes_gh ;; *) got=discards_the_reason ;; esac
+assert "the refusal repeats what gh actually said" quotes_gh "$got"
+[ -n "$lk_out" ] && got=DENY || got=ALLOW
+assert "a failed lookup still REFUSES the rewrite" DENY "$got"
+
+# 2. THE NEAR MISS: gh answers, and the answer is that there is no PR. gh exits 0 printing nothing
+# for a head branch with no open PR, so this - and only this - is a measured absence. The message
+# must still name the repository it asked, or the reader cannot tell it from the wrong-repo answer.
+lk_gh <<'GH'
+#!/usr/bin/env bash
+exit 0
+GH
+lk_out="$(lk_rewrite)"
+case "$lk_out" in *"came back empty"*) got=measured_absence ;; *) got=undifferentiated ;; esac
+assert "an empty answer is reported as a measured absence" measured_absence "$got"
+case "$lk_out" in *"lookup FAILED"*) got=cries_wolf ;; *) got=accurate ;; esac
+assert "an empty answer is not reported as a failure" accurate "$got"
+case "$lk_out" in *astubbs/parallel-consumer*) got=names_the_repo ;; *) got=unattributed ;; esac
+assert "the no-PR message names the repository it asked" names_the_repo "$got"
+[ -n "$lk_out" ] && got=DENY || got=ALLOW
+assert "no PR still REFUSES the rewrite" DENY "$got"
+
+# 3. EVERY CALL NAMES THE REPOSITORY. The wrong-repo case cannot be observed from the message - a
+# lookup that answers for confluentinc/parallel-consumer succeeds and reads exactly like a correct
+# one - so it is pinned at the only place it is visible: the argv gh was handed. Red against the
+# pre-fix hook, whose three calls carried no `-R` and whose `gh api` used the `{owner}/{repo}`
+# placeholder, which resolves the same wrong way.
+cat > "$lk_stub/gh" <<GH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$lk_stub/argv.log"
+case "\$*" in
+    *"pr list"*)   echo 90003 ;;
+    *"/comments"*) echo 0 ;;
+    *"run list"*)  echo 0 ;;
+esac
+GH
+chmod +x "$lk_stub/gh"
+: > "$lk_stub/argv.log"
+lk_rewrite > /dev/null
+lk_calls=0; lk_unqualified=0
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    lk_calls=$((lk_calls + 1))
+    case "$line" in
+        *"-R astubbs/parallel-consumer"*|*"repos/astubbs/parallel-consumer/"*) ;;
+        *) lk_unqualified=$((lk_unqualified + 1)) ;;
+    esac
+done < "$lk_stub/argv.log"
+assert "all three gh calls were made" 3 "$lk_calls"
+assert "no gh call is left to resolve the repository itself" 0 "$lk_unqualified"
+
+# 4. AND NO UNQUALIFIED FALLBACK when the slug cannot be derived. A local-path `origin` has no
+# hosting slug to read, and asking gh anyway is the wrong-repo bug arriving by another door - so the
+# lookup is not attempted at all, and the refusal says so.
+git remote set-url origin /a/local/path/parallel-consumer
+: > "$lk_stub/argv.log"
+lk_out="$(lk_rewrite)"
+git remote set-url origin https://github.com/astubbs/parallel-consumer.git
+case "$lk_out" in *"DID NOT RUN"*) got=says_it_skipped ;; *) got=quiet ;; esac
+assert "an underivable repository is reported, not guessed at" says_it_skipped "$got"
+[ -s "$lk_stub/argv.log" ] && got=called_gh_anyway || got=called_nothing
+assert "gh is not called unqualified when the slug is unknown" called_nothing "$got"
+[ -n "$lk_out" ] && got=DENY || got=ALLOW
+assert "an underivable repository still REFUSES the rewrite" DENY "$got"
+
+# 5. THE PUSH REMINDER, whose whole output is a reminder - so a lookup that failed produced silence
+# there, indistinguishable from a branch with no PR and from a branch whose note says nothing.
+# Advisory in both directions: it must say the lookup failed, and must still never deny.
+lk_gh <<'GH'
+#!/usr/bin/env bash
+echo "gh: could not connect to api.github.com" >&2
+exit 1
+GH
+rm -f "$lk_tmp"/pc-push-reminder-*
+lk_out="$(lk_fire "$PUSH_HOOK" 'git push')"
+case "$lk_out" in *"could not find out"*) got=says_so ;; *) got=silent ;; esac
+assert "the push reminder says when the lookup failed" says_so "$got"
+case "$lk_out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "the push reminder still never denies" advisory "$got"
+lk_gh <<'GH'
+#!/usr/bin/env bash
+exit 0
+GH
+rm -f "$lk_tmp"/pc-push-reminder-*
+lk_out="$(lk_fire "$PUSH_HOOK" 'git push')"
+[ -z "$lk_out" ] && got=silent || got=fired
+assert "a branch with no PR stays silent on push" silent "$got"
+
+# 6. THE MERGE GUARD's second arm reads the PR's inflight note, and a failed lookup switched that
+# arm off without a word - the merge then proceeded with half the guard having measured nothing.
+# It stays fail-open by design (its header owns that decision), so the fix is that it says so.
+lk_gh <<'GH'
+#!/usr/bin/env bash
+echo "gh: HTTP 403: API rate limit exceeded" >&2
+exit 1
+GH
+lk_out="$(lk_fire "$HOOKS/check-merge-outstanding-work.sh" 'gh pr merge --squash')"
+case "$lk_out" in *"did NOT check"*) got=says_so ;; *) got=silent ;; esac
+assert "the merge guard says when it could not identify the PR" says_so "$got"
+case "$lk_out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "the merge guard stays fail-open on its own inability" advisory "$got"
+
+rm -rf "$lk_stub" "$lk_tmp"
+
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
     exit 0
