@@ -89,6 +89,13 @@
 # and the incident behind it. `.github/workflows/repo-hygiene.yml` fetches full history for this job
 # precisely so the arm runs there.
 #
+# MID-MERGE IT ACCUSES YOU OF MASTER'S SENTENCES, and that is expected rather than a bug. Between
+# merging master and committing that merge, the merge base is still the OLD one, so every file master
+# added since it reads as a line this branch added - and the arm asks you to attest to notes you have
+# never seen. Committing the merge makes `git merge-base HEAD origin/master` the merged tip and the
+# accusations vanish. It surfaces because `bin/check-all.sh` mid-merge is a normal thing to do; the
+# fix is to finish the merge, never to mark someone else's note.
+#
 # WHAT IT DOES NOT DO. It cannot tell whether your rewritten sentence is actually true after the
 # merge; no grep can. It forces a human to look at every self-reference at the one moment fixing it is
 # cheap, and records that they did. It also does not care about OTHER branches or PRs - only your own,
