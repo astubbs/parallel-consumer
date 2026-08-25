@@ -263,9 +263,18 @@ except Exception as exc:
     print("failed\tthe PR lookup could not be completed (%s)" % exc.__class__.__name__)
 PY
 )"
+        # THE `*)` ARM IS NOT DEFENSIVE PADDING. Every path the block above can reach prints
+        # `found`, `failed` or `none`, so a fourth answer means the interpreter never got to print -
+        # killed for memory, or a BaseException its `except Exception` cannot catch. With no arm for
+        # it, that empty string set neither variable and this guard's note arm switched itself off
+        # in silence, indistinguishable from a PR that genuinely has no note. Treating it as a
+        # failure routes it to the advisory at the foot of this file, which is the whole point:
+        # fail-open, but never fail-silent.
         case "${lookup%%$'\t'*}" in
             found)  pr_num="${lookup#*$'\t'}" ;;
             failed) lookup_problem="${lookup#*$'\t'}" ;;
+            none)   ;;
+            *)      lookup_problem="the lookup returned no recognizable answer - whatever ran it did not print one" ;;
         esac
     fi
 fi

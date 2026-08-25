@@ -17,8 +17,6 @@ these three are guards. There is nowhere better yet: the shared hooks library `h
 arrives with astubbs#357 under `.claude/hooks/lib/` and does not centralise this lookup today, so
 extracting now would mean inventing a second shared location for hooks.
 
-<!-- file-refs: N/A - the shared hooks library is named as a file on another branch (astubbs#357); it is deliberately not in this tree, which is the whole point of the note -->
-
 **What to do once that library is on master.** Move one copy into it behind a fail-closed source
 guard - the loader in `bin/check-file-refs.sh`, which errors loudly rather than continuing without
 `bin/lib/node-gate.sh`, is the shape to copy - and delete the other two. The self-test arms under
@@ -30,3 +28,18 @@ Do not fold `bin/check-pr-ready.sh` into the same helper on that pass. `bin/` sc
 with an env-overridable constant (`bin/check-pr-analysis-surfaces.sh`,
 `bin/check-branch-self-reference.sh`) rather than deriving it from `origin`, and the two conventions
 differ on purpose - a hook runs wherever the agent happens to be, a gate runs against this repo.
+
+**Count a FOURTH copy, and two prior shapes, before extracting anything.** Whoever does the fold-in
+inherits more than the three hooks in this tree:
+
+- `.claude/hooks/inject-branch-context.sh`, arriving with astubbs#350, already has an `origin_slug()`
+  doing this - and it is the copy where the `file://` local-clone case was found and fixed, so it is
+  ahead of the three here rather than behind them. Reconcile against it; do not assume the newest
+  copy is the most correct one.
+  <!-- file-refs: N/A - that hook is the fourth copy and it is on astubbs#350, not in this tree; naming a file before it lands is what this note is for -->
+- `bin/check-quarantine-owners.sh` solved the neighbouring half - telling a confirmed absence apart
+  from a transient `gh` failure - in bash, in `gh_query()`, classifying to `MISSING` or `TRANSIENT`.
+  It is not a drop-in: it wraps `gh pr view <number>`, which exits non-zero for *both* outcomes and
+  so must read stderr, whereas `gh pr list --head` exits 0 with empty output for a real absence and
+  non-zero only on failure. Its slug derivation also predates the `file://` fix. Read it for the
+  shape of the problem, not for code to lift.

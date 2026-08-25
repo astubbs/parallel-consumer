@@ -111,12 +111,13 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 # causes, with the operator told the same thing each time.
 #
 # THE REPO IS DERIVED FROM `origin`, NOT LEFT TO gh AND NOT HARDCODED - the same reasoning
-# .claude/hooks/inject-branch-context.sh states at "THE REPO IS DERIVED FROM `origin`": a bare `gh`
-# in this fork resolves to confluentinc/parallel-consumer, because gh prefers the `upstream` remote
-# and the fix (`gh repo set-default`) writes `remote.origin.gh-resolved` into a LOCAL, uncommitted
-# config that a CI runner or a fresh sandbox does not have. Hardcoding the slug would be wrong the
-# moment someone works in their own fork. When `origin` cannot be read the lookup is NOT retried
-# unqualified: a wrong answer that resolves is worse than no answer.
+# .claude/hooks/inject-branch-context.sh states at "THE REPO IS DERIVED FROM `origin`", a file that
+# ARRIVES WITH astubbs#350 and is not in this tree yet, so grep it on that branch rather than here:
+# a bare `gh` in this fork resolves to confluentinc/parallel-consumer, because gh prefers the
+# `upstream` remote and the fix (`gh repo set-default`) writes `remote.origin.gh-resolved` into a
+# LOCAL, uncommitted config that a CI runner or a fresh sandbox does not have. Hardcoding the slug
+# would be wrong the moment someone works in their own fork. When `origin` cannot be read the
+# lookup is NOT retried unqualified: a wrong answer that resolves is worse than no answer.
 #
 # BOUNDED, and bounded in python3 rather than with `timeout(1)`, which is GNU-only and absent on
 # macOS - the portability rule this directory already follows. An unbounded lookup would hang the
@@ -128,6 +129,7 @@ elif [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
     detail="HEAD is detached here, so there is no branch to look a pull request up by and nothing could be measured - which is not the same as nothing being at risk."
 else
     detail="$(python3 - "$branch" <<'PY'
+import concurrent.futures
 import re
 import subprocess
 import sys
@@ -159,8 +161,10 @@ def origin_slug():
         return None, "the `origin` remote could not be read - %s" % problem
     # A HOSTED REMOTE, not any path and not any scheme: a clone whose origin is a local directory
     # otherwise yields a slug built from the last two path segments, and gh is then asked about a
-    # repository that does not exist. inject-branch-context.sh carries the worked case, including
-    # why `file://` has to be excluded by allowlisting the schemes rather than requiring one.
+    # repository that does not exist. inject-branch-context.sh, on astubbs#350, carries the worked
+    # case, including why `file://` has to be excluded by allowlisting the schemes rather than
+    # requiring one - that hook shipped the bug and fixed it there, so the allowlist here is its
+    # conclusion rather than an independent one.
     hosted = re.match(r"^(?:https?|ssh|git)://", url) or re.match(r"^[^/]+@[^/:]+:", url)
     m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url) if hosted else None
     if not m:
@@ -200,12 +204,23 @@ try:
              "head branch. So nothing could be measured, which is not the same as nothing being at "
              "risk - an unpushed branch still carries commits a rewrite drops." % (slug, BRANCH))
 
-    threads, threads_problem = run(["gh", "api", "repos/%s/pulls/%s/comments" % (slug, number),
-                                    "--jq", "length"], GH_SECONDS)
-    runs, runs_problem = run(["gh", "run", "list", "-R", slug, "--branch", BRANCH,
-                              "--json", "status,name", "--jq",
-                              '[.[] | select(.status=="in_progress" or .status=="queued")] | length'],
-                             GH_SECONDS)
+    # TWO INDEPENDENT ROUND TRIPS, OVERLAPPED. Neither answer feeds the other, but run one after the
+    # other their bounds ADD: this hook sits in front of the tool call it is guarding for
+    # GIT_SECONDS + three times GH_SECONDS in the worst case, and the operator is waiting the whole
+    # time for a message that ends in "ask the operator". Overlapping the pair costs one import and
+    # takes the worst case for these two from 20s to 10s. `subprocess.run` is thread-safe and each
+    # call keeps its own timeout, so the two results are the same two results, read back in the same
+    # order - only the waiting is shared. Bounded at two workers because there are two calls; this
+    # is not a pool to grow.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        threads_call = pool.submit(run, ["gh", "api", "repos/%s/pulls/%s/comments" % (slug, number),
+                                         "--jq", "length"], GH_SECONDS)
+        runs_call = pool.submit(run, ["gh", "run", "list", "-R", slug, "--branch", BRANCH,
+                                      "--json", "status,name", "--jq",
+                                      '[.[] | select(.status=="in_progress" or .status=="queued")] | length'],
+                                GH_SECONDS)
+        threads, threads_problem = threads_call.result()
+        runs, runs_problem = runs_call.result()
 
     parts = ["This branch is %s#%s." % (slug, number)]
     found = False

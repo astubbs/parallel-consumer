@@ -892,7 +892,7 @@ lk_fire() { # <hook-path> <command> -> stdout of the hook
         | PATH="$lk_stub:$PATH" TMPDIR="$lk_tmp" CLAUDE_CODE_SESSION_ID=selftest-lookup \
           bash "$1" 2>/dev/null
 }
-lk_rewrite() { rm -f "$lk_tmp"/pc-push-reminder-*; lk_fire "$HIST_HOOK" 'git push --force origin HEAD'; }
+lk_rewrite() { lk_fire "$HIST_HOOK" 'git push --force origin HEAD'; }
 
 # 1. THE LOOKUP FAILED. Red against the pre-fix hook, which printed "No PR was found for this
 # branch" here - an assertion of absence built on an answer nobody received.
@@ -1007,6 +1007,38 @@ case "$lk_out" in *"did NOT check"*) got=says_so ;; *) got=silent ;; esac
 assert "the merge guard says when it could not identify the PR" says_so "$got"
 case "$lk_out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
 assert "the merge guard stays fail-open on its own inability" advisory "$got"
+
+# 7. AND A FOURTH ANSWER NOBODY DESIGNED: none of the three. The lookup prints `found`, `failed` or
+# `none` on every path it can reach, so an EMPTY answer means the interpreter died before printing -
+# killed for memory, or a BaseException that its `except Exception` cannot catch. Neither status
+# dispatch had a fallback arm, so empty fell through the `found`/`failed` tests and landed exactly
+# where `none` lands: silence. That is this branch's own defect one level down - an absence of
+# measurement rendered as a measurement of absence - and `check-history-rewrite.sh` already carried
+# the backstop (`detail` empty -> "produced no answer at all") that these two lacked.
+#
+# The lookup is the only python3 call in either hook whose first argument is `-`, so a stub that
+# kills just that invocation leaves the token scan and the JSON emitter on the real interpreter -
+# the hook still decides that the command is in scope, and still emits, which is what makes the
+# silence attributable to the dispatch rather than to a hook that never ran.
+lk_real_py3="$(command -v python3)"
+cat > "$lk_stub/python3" <<PY3
+#!/usr/bin/env bash
+if [ "\${1:-}" = "-" ]; then cat > /dev/null; exit 137; fi
+exec "$lk_real_py3" "\$@"
+PY3
+chmod +x "$lk_stub/python3"
+rm -f "$lk_tmp"/pc-push-reminder-*
+lk_out="$(lk_fire "$PUSH_HOOK" 'git push')"
+case "$lk_out" in *"no recognizable answer"*) got=says_so ;; *) got=silent ;; esac
+assert "the push reminder speaks up when the lookup answered nothing at all" says_so "$got"
+case "$lk_out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "an unrecognizable answer still never denies the push" advisory "$got"
+lk_out="$(lk_fire "$HOOKS/check-merge-outstanding-work.sh" 'gh pr merge --squash')"
+case "$lk_out" in *"no recognizable answer"*) got=says_so ;; *) got=silent ;; esac
+assert "the merge guard speaks up when the lookup answered nothing at all" says_so "$got"
+case "$lk_out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "an unrecognizable answer leaves the merge guard fail-open" advisory "$got"
+rm -f "$lk_stub/python3"
 
 rm -rf "$lk_stub" "$lk_tmp"
 

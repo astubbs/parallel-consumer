@@ -107,9 +107,10 @@ fi
 # reminder is exactly what nobody notices.
 #
 # The slug is derived from `origin`, never hardcoded and never left to gh; the lookup is bounded in
-# python3 rather than by `timeout(1)`, which is GNU-only. `.claude/hooks/inject-branch-context.sh`
-# ("THE REPO IS DERIVED FROM `origin`") and `.claude/hooks/check-history-rewrite.sh` state the full
-# reasoning; this is the same lookup in its smallest form.
+# python3 rather than by `timeout(1)`, which is GNU-only. `.claude/hooks/check-history-rewrite.sh`
+# states the full reasoning in this tree, and `.claude/hooks/inject-branch-context.sh` states it at
+# "THE REPO IS DERIVED FROM `origin`" - but that file arrives with astubbs#350 and is not here yet,
+# so grep it on that branch. This is the same lookup in its smallest form.
 command -v python3 >/dev/null 2>&1 || exit 0
 lookup="$(python3 - "$branch" <<'PY'
 import re
@@ -160,6 +161,18 @@ PY
 )"
 lookup_status="${lookup%%$'\t'*}"
 lookup_info="${lookup#*$'\t'}"
+
+# AN ANSWER THAT IS NONE OF THE THREE IS A FAILURE, not a fourth quiet way of saying "no PR". Every
+# path the block above can reach prints `found`, `failed` or `none`, so anything else means the
+# interpreter never got to print - killed for memory, or a BaseException its `except Exception`
+# cannot catch. Without this arm that empty string matched neither test below and fell through to
+# the same silent exit as a measured absence, which is the defect this hook was just fixed for,
+# arriving one level down. check-history-rewrite.sh already had the equivalent backstop.
+case "$lookup_status" in
+    found|failed|none) ;;
+    *) lookup_status="failed"
+       lookup_info="the lookup returned no recognizable answer - whatever ran it did not print one" ;;
+esac
 
 # A LOOKUP THAT COULD NOT RUN IS NOT "NO PR". Staying silent here would report the same nothing as a
 # branch with no PR, on a hook whose entire output is a reminder - so the failure is said out loud,
