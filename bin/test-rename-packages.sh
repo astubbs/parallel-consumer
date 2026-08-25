@@ -740,7 +740,11 @@ ORPH="$TMP/prose-orphan"
 new_fixture "$ORPH"
 plant_prose_guard "$ORPH"
 # Delete the guarded sentence outright - the shape of a branch cut before the sentence was written.
-sed -i '/drop-in replacement/d' "$ORPH/src/docs/README_TEMPLATE.adoc"
+# Not `sed -i`: GNU takes the suffix attached (-i.bak), BSD takes it as the NEXT argument, so the one
+# spelling cannot mean in-place on both. BSD would read the script as the suffix and the file as the
+# script, failing "invalid command code". Rewriting through a temp file is the portable form.
+sed '/drop-in replacement/d' "$ORPH/src/docs/README_TEMPLATE.adoc" > "$ORPH/README_TEMPLATE.tmp"
+mv "$ORPH/README_TEMPLATE.tmp" "$ORPH/src/docs/README_TEMPLATE.adoc"
 (cd "$ORPH" && git add -A && git commit -qm "a branch that never had the guarded sentence")
 
 if grep -q '^src/docs/README_TEMPLATE.adoc|drop-in replacement' "$ORPH/bin/rename-packages.sh"; then
