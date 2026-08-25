@@ -675,6 +675,16 @@
                 <version>${logback.version}</version>
                 <scope>test</scope>
             </dependency>
+            <!-- Managed here because core's test-jar leaks it across module boundaries: PCModuleTestEnv
+                 uses MutableClock, and test-scope dependencies are not transitive, so every module whose
+                 integration tests reach the shared KafkaClientUtils/ModelUtils path must declare it
+                 itself - with one version, this one. -->
+            <dependency>
+                <groupId>org.threeten</groupId>
+                <artifactId>threeten-extra</artifactId>
+                <version>1.10.0</version>
+                <scope>test</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
