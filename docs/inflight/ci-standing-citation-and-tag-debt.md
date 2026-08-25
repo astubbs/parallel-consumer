@@ -18,6 +18,7 @@ ways, and only the third is ordinary rot:
   leading `@` of a CLAUDE.md import before resolving, so it reports a live path as missing. One-line
   fix in the gate. **Not covered** by `fix/node-gates-preflight`, which addresses a different defect
   in the same script (a node that cannot start being reported as a policy violation).
+  <!-- file-refs: N/A - the import path above is this note's specimen of the gate bug, not a citation to follow -->
 - **~50 are plan documents citing files that were planned and never built.** The gate's own message
   prescribes the repair: close the paragraph with `<!-- file-refs: N/A - <reason> -->`. Note that
   dated plans may not be rewritten to match today's code - [`../citations.md`](../citations.md)
