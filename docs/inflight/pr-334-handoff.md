@@ -91,9 +91,14 @@ Both landed on 2026-08-25, in the order the register said was load-bearing.
    engine while it is being invoked. The characterisation tests that pinned the hang were inverted
    rather than deleted, and two were added for the risks the fix introduces.
 
-**Next is the windowing spike** - see the dimension decision below. Its plan is being written to
-`docs/plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md`; if that file is absent, the
-plan run did not finish and the decision below is still the authority.
+**Next is the windowing spike**, and its plan is written and committed:
+[`docs/plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md`](../plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md).
+Nine units, ordered so the two that need no new code run first. It has **not** been through
+`ce-doc-review`. Two findings in it are worth knowing before reading: sinking a windowed table is
+*refused* rather than encoded, because a Kafka topic key cannot carry the decomposed form and the
+alternative is shipping Kafka's internal layout; and the hypothesis that a slow host breaches
+`max.poll.interval.ms` was already refuted by the PoC, so that unit was re-aimed at the unclean-stop
+path instead.
 
 ## The dimension decision, settled 2026-08-25
 
