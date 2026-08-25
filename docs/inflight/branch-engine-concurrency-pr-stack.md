@@ -37,6 +37,22 @@ independent PRs that would conflict in the same files.
 Each PR carries its own inflight notes - notes travel with the code they describe, no omnibus docs
 PR. Each stacked PR body carries `depends on astubbs/parallel-consumer#N`, one line per parent.
 
+## Train progress
+
+| Wagon | State |
+|---|---|
+| Dispatch-parity guard, counted not timed (`0bf220aad`) | **astubbs#358**, cut from master 2026-08-25. Independent - the astubbs#336 conservation half was dropped from the cherry-pick, so the two only touch one shared constructor line |
+| Residence-time metric (`5a0321282` + its clock fix `078ab1c9d`) | **astubbs#359**, stacked on astubbs#335 (`depends on`), cut 2026-08-25. The branch's verdict-free abandonment path was excluded - it belongs to the proxy work |
+| Virtual threads (`b6083f5ef` + CI harness `e337b166a`) | not cut |
+| Direct pull (`416f03dec` + tests `4926aec03`) | not cut |
+| Scan fix (`b73f8b97e` + `3c617f4f7`) | next up. | **Improves the shipped default too** - the 440 -> 1.00 examinations-per-dispatch collapse in `UNORDERED` - so it may deserve promotion ahead of direct pull |
+| Bench harness, results, measurement docs | not cut |
+| The ledger itself (register, this note, K4 data, strategy notes) | not cut - belongs on a docs-only branch off master, so the records land whatever the code does |
+
+**Owner's steer 2026-08-25:** the branches are useful markers whether or not each becomes a PR; the
+split is chosen for REVIEW QUALITY, so combine where the review is genuinely one idea (direct pull
+with its scan fix; virtual threads with its CI harness) rather than maximising PR count.
+
 ## Rules for the re-cuts (owner: "don't do any recutting yet" - astubbs#335 was ordered explicitly)
 
 - Cut each from master in its own worktree; keep the branch text where possible (identical text
