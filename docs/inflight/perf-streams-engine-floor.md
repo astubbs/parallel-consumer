@@ -837,3 +837,388 @@ reproduced a fast untouched 128,000-record run, at loads from 1.27 to 8.15, so t
 condition is named rather than measured. **What would settle it:** the same ladder run against a
 broker under concurrent read load, with the fetcher's delivery rate recorded per run rather than
 inferred from the consumer's.
+
+### The crossover ladder, rung 1: what durability costs the reimplementation, 2026-08-25
+
+Every F2 verdict in the three sections above divides by **arm H** - a bare single-threaded Python
+`confluent_kafka` consumer folding records into a dict, whose own docstring says it is *stateless
+and non-durable*: no state store, no changelog, no restore, no rebalance recovery, no late-record
+handling, no exactly-once. The owner's judgement, now recorded in `STRATEGY.md` and in
+[`docs/solutions/architecture-patterns/a-per-record-crossing-loses-to-reimplementation-before-features-enter.md`](../solutions/architecture-patterns/a-per-record-crossing-loses-to-reimplementation-before-features-enter.md)
+("Correction, 2026-08-25 (second)"), is that **this comparison decides nothing**: Kafka Streams is
+not in the business of trivial stateless aggregation, so a floor built from a dict is the floor for
+a different product, and a toy beats an engine at toy work at any transport speed.
+
+The question that does decide it is the **crossover**: *how many of the features a user actually
+came for can be added back to that dictionary before hand-rolling becomes the worse choice?* This
+section takes the first step on that ladder. The owner has chosen the first feature: **durability**.
+
+**Everything from here to the `#### Measured results` marker was written into the tree before the
+first arm ran**, harness included - the same rule the bimodality section states, and for the same
+reason: what gets recorded beside each rate is itself a claim about what could be responsible.
+
+#### What "durability" means here, and what it deliberately does not
+
+**One term moved.** H-durable is arm H plus the two halves of what Kafka Streams' state store gives
+you, and nothing else:
+
+- **a changelog** - each state update produced to a compacted Kafka topic, so the dict's contents
+  are recoverable;
+- **restore on restart** - read that changelog back and rebuild the dict before processing resumes.
+
+**Not on this rung, and not smuggled in:** exactly-once (`enable.idempotence` is explicitly `false`
+on the changelog producer), rebalance handling, late-record logic, a real state store. Those are
+later rungs. The wrapper arms it is compared against carry all of them anyway, so every omission
+here runs in the reimplementer's favour - which is the direction this whole programme has kept its
+thumb on the scale.
+
+#### Pre-registered design decisions, and what each one means for the number
+
+These determine what the number means, so they are registered rather than reported.
+
+| Decision | Choice | What it means for the number |
+|---|---|---|
+| **Write granularity** | **Both, as two rungs**: `H-dur-per` writes one changelog record per state update; `H-dur-coal` coalesces the dirty `(key, window)` set and writes it once per commit interval | These are two different reimplementers, not one with an optimisation. The naive one writes per update - at hopping-12 that is 12 changelog records per input record, exactly `D0`'s volume. The careful one hand-rolls what Kafka Streams' state-store cache does, the toggle the decomposition above priced at **4.05x** (`D-cache`). Measuring only one would model only one reimplementer |
+| **Delivery guarantee** | `acks=all`, `enable.idempotence=false`, librdkafka's default linger, **`flush()` awaited at every boundary, inside the timed window** | A changelog you do not wait for is not durable, and this choice is expected to dominate. The final boundary is inside the window on purpose: an arm whose last 200 ms of state reached the broker only after the clock stopped was not durable at the moment it claimed a rate |
+| **Boundary interval** | **200 ms**, i.e. `--commit-interval-ms`, the same cadence the engine arms commit at | Both sides flush at the same rate, so the comparison is not a comparison of flush cadences. On a pre-seeded backlog a fast arm may reach only one or two boundaries; that is maximum batching and it favours the reimplementer |
+| **Source-offset commit** | **Included**, synchronous, *after* the flush | A restored dict with no resume point is not durability - you would rebuild the state and then reprocess from the beginning. Flush-then-commit is the ordering that makes the pair mean anything. It is ~10 synchronous calls per run and `commit_s` is reported separately so it can be seen not to dominate |
+| **Changelog key** | the **state** key (`key|windowStart`), topic `cleanup.policy=compact` | This is what makes it a changelog rather than a log of deltas. Compaction is asynchronous and will not have run in a session this short, so **restore reads the uncompacted log** - an upper bound on restore time, stated rather than glossed |
+| **What restore is measured as** | wall clock from asking the broker where the log ends to the dict being complete, **rebuilt entry count asserted** against `keys x multiplier` | Steady-state throughput and restart latency are different quantities and both matter, so restore is its own figure and is never folded into a rate |
+| **Restore fetch config** | measured **twice**, on librdkafka's defaults and with `fetch.queue.backoff.ms=10` | A restore reads far more bytes than the arm that wrote them, so the stall that turned arm H's own rate into a 4.7x artefact (section above) can land here. Two configurations price it instead of arguing about it |
+
+#### Arms
+
+Interleaved within each repetition (KTD18 - in-session control arms, the whole reason the previous
+two rounds exist). Host arms first, while no sidecar is up (`_shared_phase`'s inherited rule).
+
+| Arm | One term against `H-base` | Why it is here |
+|---|---|---|
+| **`H-base`** | - | The control. Plain arm H, unchanged. Without it in-session nothing else means anything |
+| **`H-dur-per`** | changelog, one awaited record per state update | The naive reimplementer - what someone writes first |
+| **`H-dur-coal`** | changelog, dirty set coalesced per 200 ms boundary | The careful reimplementer - Kafka Streams' state-store cache, hand-rolled |
+| **`H-dur-nowait`** | the same changelog volume, `acks=0`, **flush moved outside the window** | Not durable, and here on purpose: a durable arm that is accidentally not durable looks wonderfully fast, and this prices exactly how fast |
+| **`T0-cache`** | (engine) tumbling, cache 64 MB, crossing-free | The wrapper's best case at tumbling. Cache on, **changelog on** - so it is durable too, which is what makes this rung's comparison like-for-like for the first time |
+| **`D-cache`** | (engine) hopping-12, cache 64 MB, crossing-free | The wrapper's best case at hopping-12 |
+| **`D0`, `T0`** | (engine) the cache-off anchors | They tie this box to the two sessions above through `_F2_ANCHOR_RATES`; a disagreeing anchor is a finding about the box, reported and never tuned away |
+
+#### Pre-registered predictions
+
+Written before any arm ran, against the in-session figures the `f2-rerun` section reported
+(`T0-cache` 169,748, `D-cache` 69,265, arm H tumbling 797,338, arm H hopping-12 460,026 rec/s).
+
+| # | Prediction | Predicted effect |
+|---|---|---|
+| 1 | `H-base` reproduces `f2-rerun`'s in-session arm H within ~1.5x, both specifications | tumbling 550k-1.1M, hopping-12 320k-620k rec/s |
+| 2 | **`H-dur-per` at hopping-12 falls by more than 8x against `H-base`** - it produces 768,000 acked 1 KB records where `H-base` produces nothing, the same volume `D0` writes | 25,000-60,000 rec/s |
+| 3 | **`H-dur-coal` is 3-8x faster than `H-dur-per`** at hopping-12: coalescing collapses 768,000 writes into at most 12,000 per boundary, the same trick the cache toggle bought 4.05x with | 120,000-300,000 rec/s |
+| 4 | **The crossover INVERTS at hopping-12 for the naive reimplementer and NOT for the careful one.** `D-cache` overtakes `H-dur-per`; `H-dur-coal` stays 2-4x ahead of `D-cache` | wrapper wins one rung, loses the other |
+| 5 | **Tumbling narrows but does not invert at either granularity** - one changelog record per record is a twelfth of the hopping volume | `H-dur-per` 100k-250k, `H-dur-coal` 300k-600k, both above `T0-cache` |
+| 6 | **Restore of the per-update changelog at hopping-12 takes longer than the whole steady-state run it recovers** - 768,000 records of ~1 KB against a 64,000-record window | restore 1-10 s; coalesced restore shorter roughly in the ratio of records written |
+| 7 | **`H-dur-nowait` lands within 1.5x of `H-base`** - i.e. essentially the entire durability cost is the awaited write, and an unawaited changelog would have looked almost free | the accounting error, priced |
+| 8 | **Instrument check**: every awaited arm's changelog end offsets, summed off the broker, equal the records it produced exactly | 64,000 / 768,000 / one-per-boundary-per-dirty-entry |
+
+**Prediction 4 is the uncomfortable one and it is why this rung is worth running.** If it holds, the
+first feature on the ladder is already enough to beat the naive reimplementer and nowhere near
+enough to beat the careful one, and the crossover question becomes a question about *which
+reimplementer* rather than about *how many features*.
+
+#### Conditions
+
+Matched to the established series so the numbers join it: **1,000 keys, 8 partitions, 1 KB
+payloads, `commit.interval.ms` 200, 8 stream threads, in-memory window store, constant event time
+past the epoch clamp, crossing-free engine arms (no host function registered at all)**.
+
+**64,000 records per arm**, both sides, the count `f2-rerun` used - and the count the ladder in the
+section above places **below** the 80,000-96,000 fetch-stall threshold, so arm H runs on
+librdkafka's default `fetch.queue.backoff.ms` and the guard in `measure_host` is left at full
+strength rather than lowered to get a run through. **n=5 reps**, arms interleaved within each rep,
+1-minute load recorded beside every run.
+
+**Nothing above this line changes after the first run; corrections land below as dated entries.**
+
+#### Measured results
+
+**Conditions.** Harness `streams_windowing_lab.py`, new experiment `crossing-ladder`
+(`run_crossing_ladder`, arms in `_LADDER_ARMS`, engine arms in `_LADDER_ENGINE_ORDER`), which
+reuses `measure_host`/`HostRun` and the engine-floor arms through `_run_floor_arm` rather than
+restating either. Engine on Temurin 17.0.20+8 (resolved through `mise`) under the box's ambient
+`JAVA_TOOL_OPTIONS` (`MaxRAM=48g`, `MaxRAMPercentage=20`, `ActiveProcessorCount=8`), Kafka Streams
+3.9.2, compose broker `confluentinc/cp-kafka:7.9.0` on loopback `127.0.0.1:19100` (compose project
+`pc-ladder`, started and torn down by this run alone), Python 3.13.5 with `confluent-kafka` 2.15.0
+(librdkafka 2.15.0), 32-core Linux box. 1,000 keys, 64,000 records, 8 partitions, 8 stream threads,
+1 KB payloads, `commit.interval.ms` 200, in-memory window store, constant event time past the epoch
+clamp. Every engine arm registered no host function and reported `crossings/rec=0.00` **measured**
+client-side on all twenty runs. **Two passes of 5 reps, pooled to n=10 per arm**; 1-minute load read
+and recorded beside every one of the 120 measured arm runs: **1.27-14.20, median 3.99**, against a
+limit of 40, so no run ever waited. **The engine classpath was the one already built in this
+worktree** (`parallel-consumer-proxy-streams/target/classes`), not rebuilt: a rebuild mid-session
+would have contended with the measurement it was for.
+
+**No fetch-path stall was seen anywhere.** Every arm-H run at every rung reported **0 polls over
+100 ms**, on librdkafka's default `fetch.queue.backoff.ms`, exactly as the record-count ladder in
+the section above predicts for 64,000 records. **The guard was left at full strength and nothing
+was lowered to get a run through.**
+
+**Deviations from the pre-registration, named rather than glossed:**
+
+- **Two 5-rep passes pooled to n=10, rather than one pass of 5.** The first pass's `T0-cache`
+  spread was 7x (40,000-289,593), so a second pass was run and both are pooled. The passes agree on
+  every arm that is not `T0-cache`; the second ran under a heavier ambient load (2.68-14.20 against
+  1.27-4.62), which is where the wider min-max columns come from.
+- **A harness bug aborted the first attempt at pass 2 and was fixed rather than worked around.**
+  The synchronous source-offset commit at the *final* boundary raises `_NO_OFFSET` whenever the
+  last batch had already triggered a boundary - "nothing new to commit", not a failed commit. It
+  now catches exactly that code and re-raises anything else. It cannot change a measured quantity:
+  a boundary that hits it does no commit, so it adds nothing to `commit_s`, and pass 1 (which never
+  hit it) and pass 2 agree.
+- **`H-dur-per`'s reported `durable share` understates its own cost, by construction.** In
+  per-update mode the `produce()` calls happen inline in the fold loop, so they land in `fold_s`
+  and only the awaited flush and commit are counted in `produce_s`/`flush_s`/`commit_s`. The
+  decomposition below therefore prices the produce path from the arm difference
+  (`H-dur-nowait` - `H-base`), not from that column.
+- **An arm the pre-registration named but did not size: `H-dur-coal`'s changelog volume varies with
+  the boundary count** (12,000-24,000 records per hopping-12 run, 1,000 per tumbling run). A run
+  that reaches two boundaries writes the dirty set twice. That is the arm behaving correctly and it
+  is why its changelog column is a range.
+- **The kill-and-rebuild check ran as its own experiment** (`ladder-kill`, n=3) after both passes,
+  not interleaved. It carries no ratio - it exists to prove the durability is real under an
+  uncontrolled death, and interleaving a process kill inside the throughput passes would have put a
+  fresh JVM's worth of contention beside the arms it was supposed to leave alone.
+- **The engine's own restore was not measured.** The wrapper arms are durable (changelog on) and
+  their restore path exists, but measuring it means restarting a Kafka Streams application and
+  waiting for `RUNNING`, which is a different instrument. **So the restore figures below are the
+  reimplementation's alone and are NOT a comparison** - stated here because a reader will reach
+  for one.
+- **Restore reads the UNCOMPACTED changelog.** Compaction is asynchronous and does not run inside a
+  session this short. The consequence is quantified below rather than waved at.
+- **`--load-limit 40`, not the harness default of 8**, as in all three sections above.
+- **Broker on port 19100 in compose project `pc-ladder`**, torn down by this run alone. The
+  leftover `pcnumba-broker-1` on 19096 was left untouched.
+
+#### The engine arms, and the anchors
+
+Medians over 10 runs, min-max beside; rates in RECORDS per second on the sink's broker log-append
+clock, with the committed-source-offset clock beside them.
+
+| Arm | rec/s (min-max) | us/rec | committed clock | emits (median) |
+|---|---|---|---|---|
+| **`T0-cache`** tumbling, cache 64 MB | **213,388** (40,000-289,593) | 4.7 | 230,921 | 1,188 |
+| **`D-cache`** hopping-12, cache 64 MB | **73,442** (52,718-85,447) | 13.6 | 81,308 | 40,992 |
+| `D0` hopping-12, cache off (anchor) | 20,637 (11,858-22,425) | 48.5 | 20,399 | 768,000 |
+| `T0` tumbling, cache off (anchor) | 89,264 (78,049-97,710) | 11.2 | 95,881 | 64,000 |
+
+**The anchors reproduce, high and in the same direction**: `D0` 20,637 against the decomposition's
+16,758 (**1.23x**) and `T0` 89,264 against 81,946 (**1.09x**), which is the same 10-20 percent
+box-condition offset the `f2-rerun` section reported (1.19x and 1.11x). The wrapper arms reproduce
+too: `D-cache` 73,442 here against `f2-rerun`'s 69,265 (**1.06x**). **`T0-cache` is the exception
+and it is not new** - 213,388 here (40,000-289,593) against `f2-rerun`'s 169,748 (113,879-246,154).
+That arm emits ~1,188 records for 64,000 inputs, so its log-append window is the spread of one or
+two commit flushes and is quantised by the commit interval; its committed-offset clock agrees run
+for run, so the variance is the engine's, not the clock's. **Every tumbling verdict below is
+therefore stated with bands, not medians alone.**
+
+#### The ladder: arm H with one feature added back
+
+Medians over 10 runs, min-max beside, on this process's wall clock (arm H produces no sink, so
+there is no log-append record of its progress). `fold-only` is the rate charging the aggregation
+loop alone - the clock the bimodality section established as independent of the harness's polling.
+
+| Arm | Durability | rec/s (min-max) | us/rec | fold-only rec/s | changelog records/run |
+|---|---|---|---|---|---|
+| **tumbling** | | | | | |
+| `H-base` | none (the control) | **831,476** (498,810-1,312,502) | 1.20 | 2,127,714 | 0 |
+| `H-dur-per` | one awaited write per update | **327,385** (99,835-339,282) | 3.05 | 448,576 | 64,000 |
+| `H-dur-coal` | dirty set per 200 ms boundary | **810,778** (444,543-1,059,461) | 1.23 | 1,568,833 | 1,000 |
+| `H-dur-nowait` | same volume, `acks=0`, not awaited | 389,423 (334,816-421,742) | 2.57 | 580,380 | 64,000 |
+| **hopping-12** | | | | | |
+| `H-base` | none (the control) | **428,554** (322,677-494,424) | 2.33 | 537,002 | 0 |
+| `H-dur-per` | one awaited write per update | **42,028** (27,716-44,117) | 23.79 | 43,136 | 768,000 |
+| `H-dur-coal` | dirty set per 200 ms boundary | **282,575** (184,926-302,246) | 3.54 | 310,428 | 12,000-24,000 |
+| `H-dur-nowait` | same volume, `acks=0`, not awaited | 45,922 (31,145-48,817) | 21.78 | 47,746 | 768,000 |
+
+`H-base` reproduces the `f2-rerun` session's in-session arm H at both specifications - 831,476
+against 797,338 (1.04x) at tumbling, 428,554 against 460,026 (0.93x) at hopping-12 - which is what
+makes the rest of this table readable.
+
+#### What the durability term actually is, and it is not what the pre-registration assumed
+
+Read off the three arms that differ by one term each, at both specifications:
+
+| Term | tumbling (1 write/record) | hopping-12 (12 writes/record) | Per changelog write |
+|---|---|---|---|
+| `H-base` | 1.20 us/rec | 2.33 us/rec | - |
+| **+ the changelog writes, unawaited** (`H-dur-nowait` - `H-base`) | **+1.37 us/rec** | **+19.44 us/rec** | **1.37 us / 1.62 us** |
+| **+ awaiting them** (`H-dur-per` - `H-dur-nowait`) | +0.49 us/rec | +2.02 us/rec | - |
+| **durability, naive, total** | +1.85 us/rec (**2.54x** slower) | +21.46 us/rec (**10.20x** slower) | - |
+| **durability, coalesced, total** | +0.03 us/rec (**1.03x** slower) | +1.21 us/rec (**1.52x** slower) | - |
+
+**Prediction 7 is refuted, and the refutation is the finding of this rung.** The pre-registration
+expected the awaited flush to dominate - "this choice will dominate the number" is the brief's own
+wording, and it was written into the design table as such. It does not: at hopping-12 the awaited
+`acks=all` flush plus the synchronous offset commit is **2.02 of 21.46 us/rec, 9 percent** of the
+durability cost. **91 percent of it is the `produce()` calls themselves** - client-side per-record
+work in the reimplementer's own process, before a byte reaches the broker.
+
+The two specifications price that call independently, at **1.37 us** (one write per record) and
+**1.62 us** (twelve), from arms whose rates differ by an order of magnitude. **Nobody tuned the
+harness to make those agree**, and they are the reason the naive rung collapses exactly in
+proportion to the window multiplier: durability written per update costs the reimplementer *one
+librdkafka produce call per (record x window)*, which is precisely the volume term the
+decomposition above showed the engine's state-store cache deleting (`D-cache`, 4.05x).
+
+**So the first feature drags a second one in with it.** A reimplementer who adds durability the
+obvious way must then also hand-roll the engine's cache to get back to where they started - and
+`H-dur-coal` measures exactly that: coalescing recovers **19 of the 21.5 us**, leaving 1.21 us/rec
+(1.52x) at hopping-12 and 0.03 us/rec (1.03x) at tumbling.
+
+#### Restore, as its own figure
+
+Medians over 10 restores each, rebuilt entry count asserted against `keys x multiplier` on every
+one - a restore that does not reproduce the dict fails the run.
+
+| Arm | Spec | Changelog records read | Restore, default fetch config | Restore, `fetch.queue.backoff.ms=10` | Entries rebuilt |
+|---|---|---|---|---|---|
+| `H-dur-per` | tumbling | 64,000 | **0.103 s** (0.051-0.184) | 0.132 s (0.096-0.181) | 1,000 |
+| `H-dur-coal` | tumbling | 1,000 | **0.031 s** (0.004-0.061) | 0.057 s (0.004-0.060) | 1,000 |
+| `H-dur-per` | hopping-12 | 768,000 | **1.222 s** (0.448-1.391) | 0.708 s (0.449-1.349) | 12,000 |
+| `H-dur-coal` | hopping-12 | 12,000-24,000 | **0.071 s** (0.022-0.279) | 0.076 s (0.012-0.300) | 12,000 |
+
+- **The naive changelog costs 17x the restore time of the coalesced one** at hopping-12 (1.222 s
+  against 0.071 s), for identical recovered state - 12,000 entries either way. The naive log holds
+  768,000 records for 12,000 logical entries, **64x write amplification**, and an uncompacted
+  restore reads all of it.
+- **Restore of the naive hopping-12 changelog takes 80 percent of the steady-state run that
+  produced it** (1.222 s against a 1.52 s window). **Prediction 6 is refuted, narrowly** - it
+  predicted longer, and it is not; it is the same order.
+- **Compaction is the difference between a 1.2 s and a 0.07 s restart, and it did not run here.**
+  The figures above are the uncompacted upper bound. A compacted log holds one record per entry -
+  the coalesced arm's row is what that looks like.
+- **The fetch stall did not bite the restore path**, and the second configuration is what says so:
+  `fetch.queue.backoff.ms=10` moves the largest figure from 1.222 s to 0.708 s and leaves the rest
+  inside their own spread, with 0 or 1 polls over 100 ms in every run. **Named as measured rather
+  than clean**: at 768 MB the default config is slower in the tail, which is the same fetcher race
+  the section above named, showing up as a restore cost instead of as a fake throughput.
+
+#### Kill and rebuild: does the state actually survive?
+
+`restore_host` on a complete changelog measures a rebuild; it does not prove the thing durability is
+*for*. So the writer was run as a separate process and **SIGKILLed mid-run** - nothing flushed,
+nothing closed, no `finally` ran - and the parent then rebuilt from whatever had reached the broker
+(`ladder-kill`, `run_ladder_kill`, arm `H-dur-per` hopping-12, n=3):
+
+| Rep | Changelog records that survived the kill | Entries rebuilt | Restore |
+|---|---|---|---|
+| 1 | 276,000 of the 768,000 a complete run writes | **12,000 of 12,000** | 0.184 s |
+| 2 | 272,883 | **12,000 of 12,000** | 0.414 s |
+| 3 | 272,878 | **12,000 of 12,000** | 0.351 s |
+
+The full key space comes back because 1,000 keys are all touched within the first few thousand
+records; what is *not* claimed is that the recovered values equal a completed run's. They are the
+values as of the last awaited boundary, and the committed source offset is where processing
+resumes - which is at-least-once, and is exactly the guarantee this rung buys.
+
+**And the check failed first, which is the more useful half.** At a 600 ms kill the writer had not
+yet reached its first commit boundary: **0 changelog records survived and 0 entries were rebuilt**,
+and `run_ladder_kill` refused the run rather than reporting a restore of nothing. **Durability has
+a granularity of one commit interval** - state younger than the last boundary is gone - and that is
+a property of the design registered above, not a fault in it.
+
+#### The instrument check, and what it returned
+
+Two halves, both direct rather than argued:
+
+- **The changelog end offsets, summed off the broker and compared with what each arm says it
+  produced.** Across all 40 durable runs, **every awaited arm matched exactly**: 64,000/64,000 and
+  768,000/768,000 for `H-dur-per`, 1,000/1,000 and 12,000-24,000 matched for `H-dur-coal`. A
+  durable arm that was accidentally not durable would look wonderfully fast, and this is the check
+  that would have caught it.
+- **`H-dur-nowait` is the negative control, and it failed the check on its own terms.** With
+  `acks=0` and the flush moved outside the window, one hopping-12 run of ten produced 768,000
+  changelog records and left **758,486** on the broker - **9,514 records of state silently
+  lost**, with **zero** error delivery reports. An earlier smoke run at 8,000 records lost 1,070 of
+  8,000 the same way. The mechanism is not established here and is not claimed; the observation is,
+  and it is what "a changelog you do not wait for is not durable" looks like when measured instead
+  of asserted.
+
+The wrapper-side instrument checks (`T0` -> `I0`, the crossing; `I0` -> `I1000`, the injected cost)
+were **deliberately not re-run**: both were taken in the two sessions above, the crossing one moved
+by 112-173 us against an independently fitted 135 us, and this rung moves no term on the wrapper
+side. The check that had to be new is the durability one, and it is the one above.
+
+#### Predictions, confirmed and refuted
+
+| # | Prediction | Outcome |
+|---|---|---|
+| 1 | `H-base` reproduces `f2-rerun`'s arm H within ~1.5x | **confirmed** - tumbling 831,476 vs 797,338 (1.04x), hopping-12 428,554 vs 460,026 (0.93x) |
+| 2 | `H-dur-per` at hopping-12 falls >8x, landing 25,000-60,000 rec/s | **confirmed** - 42,028 rec/s, a 10.20x fall |
+| 3 | `H-dur-coal` is 3-8x faster than `H-dur-per` at hopping-12, 120,000-300,000 rec/s | **confirmed** - 282,575 rec/s, 6.72x faster, top of the band |
+| 4 | The crossover **inverts at hopping-12 for the naive reimplementer and not for the careful one** | **confirmed, and with non-overlapping bands both ways** - `D-cache` 73,442 (52,718-85,447) against `H-dur-per` 42,028 (27,716-44,117), and against `H-dur-coal` 282,575 (184,926-302,246) |
+| 5 | Tumbling narrows but does not invert; `H-dur-per` 100k-250k, `H-dur-coal` 300k-600k | **direction confirmed, magnitudes refuted HIGH** - 327,385 and 810,778, both above their bands. Neither inverts, but `H-dur-per` now **straddles** `T0-cache` rather than clearing it |
+| 6 | Restore of the naive hopping-12 changelog takes longer than the run that produced it | **refuted, narrowly** - 1.222 s against a 1.52 s window, 80 percent of it |
+| 7 | `H-dur-nowait` lands within 1.5x of `H-base` - the awaited write is essentially the whole cost | **REFUTED, badly, and it reframes the rung** - 9.33x from `H-base` at hopping-12. The awaited flush is **9 percent** of the durability cost; 91 percent is the `produce()` calls |
+| 8 | Every awaited arm's changelog end offsets equal what it produced | **confirmed** - 40 of 40 runs exact |
+
+#### Where durability puts the crossover
+
+**This is the number the whole rung exists to produce.** Wrapper best case against each rung, at the
+same specification, in the same session, interleaved. Bands are min-max; "clears" means
+non-overlapping in the stated direction.
+
+| Specification | Wrapper | Rung | Reimplementation | **H / wrapper** | Band |
+|---|---|---|---|---|---|
+| hopping-12 | `D-cache` 73,442 | rung 0: `H-base`, non-durable | 428,554 | **5.84x** | reimplementation clears |
+| hopping-12 | `D-cache` 73,442 | **rung 1a: durable, naive** | 42,028 | **0.57x** | **WRAPPER clears** |
+| hopping-12 | `D-cache` 73,442 | **rung 1b: durable, coalesced** | 282,575 | **3.85x** | reimplementation clears |
+| tumbling | `T0-cache` 213,388 | rung 0: `H-base`, non-durable | 831,476 | **3.90x** | reimplementation clears |
+| tumbling | `T0-cache` 213,388 | **rung 1a: durable, naive** | 327,385 | **1.53x** | straddles |
+| tumbling | `T0-cache` 213,388 | **rung 1b: durable, coalesced** | 810,778 | **3.80x** | reimplementation clears |
+
+**Stated plainly, because the brief asks for it plainly: durability alone does not close the gap.**
+
+- **Against a careful reimplementer it barely moves it.** At hopping-12 the gap goes 5.84x -> 3.85x,
+  which is **41 percent of the distance to parity**; at tumbling 3.90x -> 3.80x, **3 percent**. In
+  both cases the wrapper still loses, with non-overlapping bands. One feature, and the answer at
+  tumbling is *no measurable movement at all*.
+- **Against a naive reimplementer it closes the gap and inverts it, at hopping-12.** 5.84x in the
+  reimplementation's favour becomes **1.75x in the wrapper's**, non-overlapping. At tumbling the
+  same rung takes 3.90x down to a straddle. So the first feature is already enough to beat the
+  reimplementer *who writes the obvious thing* - and the reason is not durability's inherent cost
+  but write volume, which the engine deduplicates and the naive reimplementer does not.
+- **The crossover question is therefore not only "how many features" but "which reimplementer".**
+  The two rungs at the same feature differ by 6.7x and land on opposite sides of the wrapper. Every
+  later rung has to be quoted against both, or it is quoting whichever one flatters the answer.
+
+**What the next rung would have to be worth.** To close 3.85x at hopping-12 against the careful
+reimplementer, the remaining features would have to cost it another **3.85x** - and durability, the
+feature with the largest obvious per-record footprint on this list, bought **1.52x** when written
+carefully. So on today's evidence the ladder does not converge on throughput grounds within the
+features that remain (exactly-once, rebalance recovery, late-record handling, a real spilling state
+store), unless one of them turns out to be structurally worse to hand-roll than durability was -
+and the candidate for that is **exactly-once**, which forces a transactional producer and a
+per-boundary commit the coalescing trick cannot amortise away. **That is the next rung to measure,
+and it is now the one with the most to decide.**
+
+**What this does NOT license.** No claim here is about correctness, operability or effort - only
+throughput and restart latency. `H-dur-coal` is 200 lines that get at-least-once durability right
+for one topology under no rebalances; the wrapper gets it for any topology under all of them. The
+strategic write-up's title claim is untouched: what this rung adds is that **the first feature on
+the ladder moves the number by 41 percent of the way at one specification and 3 percent at the
+other**, and that a comparison against "a reimplementation" is meaningless until it says *which*.
+
+#### What is not settled
+
+- **`T0-cache`'s variance.** 40,000-289,593 across ten runs, agreeing on the committed-offset clock,
+  so it is the engine's and not the clock's. At ~1,188 emits per 64,000 records its window is one or
+  two commit flushes. Every tumbling figure above is quoted with its band for that reason, and the
+  tumbling median should not be cited alone. **What would settle it:** an emit-count-independent
+  clock for the cache-on tumbling arm, or a record count large enough to span many commit intervals
+  - which at this specification runs into the fetch-stall threshold on the host side.
+- **The engine's restore was not measured**, so the restore figures are one-sided. A like-for-like
+  restart comparison needs a Kafka Streams application restarted to `RUNNING` against the same
+  state, and that is a different instrument.
+- **`H-dur-nowait`'s lost records.** 9,514 of 768,000 in one run of ten, 1,070 of 8,000 in a smoke
+  run, zero error delivery reports in both. The mechanism is not established - it is reported as an
+  observation that `acks=0` silently dropped state, which is all this rung needs it for.
+- **One box, one broker, one container.** As in all three sections above, the broker's write
+  bandwidth is visibly the binding constraint on the cache-off arms, and the durable arms write into
+  the same single container.

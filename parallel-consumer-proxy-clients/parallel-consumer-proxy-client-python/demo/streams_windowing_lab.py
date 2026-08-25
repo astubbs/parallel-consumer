@@ -111,6 +111,7 @@ import os
 import pathlib
 import re
 import statistics
+import subprocess
 import sys
 import tempfile
 import threading
@@ -123,6 +124,8 @@ from confluent_kafka import (
     OFFSET_BEGINNING,
     TIMESTAMP_LOG_APPEND_TIME,
     Consumer,
+    KafkaError,
+    KafkaException,
     Producer,
     TopicPartition,
 )
@@ -230,6 +233,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "fetch stall inside arm H's timed window and reads as a 4.7x "
                              "slower reimplementation (measured; see the engine-floor note). "
                              "The stall now fails the run rather than being averaged over")
+    # --- crossing-ladder ---
+    parser.add_argument("--ladder-restore-backoff-ms", type=int, default=10,
+                        help="crossing-ladder: every changelog is restored TWICE, once on "
+                             "librdkafka's defaults and once with fetch.queue.backoff.ms set to "
+                             "this. A restore reads more bytes than the arm that wrote them, so "
+                             "the stall that turned arm H's own rate into a 4.7x artefact can "
+                             "land on the restore figure; two configurations price it rather "
+                             "than argue about it (default 10)")
+    parser.add_argument("--ladder-kill-after-ms", type=int, default=600,
+                        help="ladder-kill: how long the durable writer runs before it is "
+                             "SIGKILLed (default 600). It must be shorter than the run, and a "
+                             "writer that finishes first fails the check rather than passing it")
+    parser.add_argument("--ladder-child-arm", default="H-dur-per",
+                        help="ladder-kill: which durable arm the killed writer runs")
+    parser.add_argument("--ladder-child-spec", default="hopping-12",
+                        choices=("tumbling", "hopping-12"),
+                        help="ladder-kill: which window specification the killed writer runs")
+    parser.add_argument("--ladder-child-source", default="",
+                        help="ladder-kill-child only: the seeded source topic to read")
+    parser.add_argument("--ladder-child-changelog", default="",
+                        help="ladder-kill-child only: the changelog topic to write")
     # --- host-bimodal ---
     parser.add_argument("--bimodal-phases", default="observe,toggle,positive",
                         help="host-bimodal: which phases to run, in order - observe (the "
@@ -1140,6 +1164,20 @@ class HostRun:
     gc_pause_s: float = 0.0   # measured collector pause time inside the window
     gc_max_pause_s: float = 0.0
     calib_s: float = 0.0      # a fixed pure-CPU loop timed just before the window - box speed
+    # --- durability (the crossing-ladder's first rung; zero on every non-durable arm) ---
+    changelog_topic: str = ""     # where this run's state was written, "" when it was not
+    changelog_records: int = 0    # records PRODUCED to it, counted client-side
+    changelog_end: int = 0        # end offsets summed off the BROKER after the run - the check
+    boundaries: int = 0           # commit boundaries reached inside the window
+    delivery_failures: int = 0    # changelog delivery reports that carried an error
+    produce_s: float = 0.0        # time inside ``produce()`` at the boundaries (coalesced only)
+    flush_s: float = 0.0          # time inside ``flush()`` - the AWAITED half of durability
+    commit_s: float = 0.0         # time inside the synchronous source-offset commit
+
+    @property
+    def durable_s(self) -> float:
+        """The window time this run spent making its aggregate survive process death."""
+        return self.produce_s + self.flush_s + self.commit_s
 
     @property
     def rate(self) -> float:
@@ -1173,6 +1211,16 @@ class HostArm:
     fresh_topic: bool = False                          # H2: a topic this rep seeded and nobody read
     expect_stall: bool = False                         # this arm EXHIBITS the stall on purpose,
     #                                                    so the validity guard below stands down
+    # --- durability, the crossing-ladder's first rung (astubbs#242) ---
+    # ONE feature added back to the reimplementation, and nothing else: the aggregate survives
+    # process death. Two halves, and an arm needs both to claim it - a changelog write per state
+    # update, and a restore that rebuilds the dict from it (``restore_host``). No exactly-once,
+    # no rebalance handling, no late-record logic; those are later rungs.
+    changelog_mode: str = "none"       # "none" | "per-update" | "coalesced"
+    changelog_acks: str = "all"        # the delivery guarantee; "0" is the not-really-durable arm
+    changelog_await: bool = True       # await the flush AT EVERY BOUNDARY, inside the window.
+    #                                    False writes the same records and waits for none of them,
+    #                                    which is what an accidentally-non-durable arm looks like
     why: str = ""
 
     @property
@@ -1253,9 +1301,138 @@ def _window_starts(timestamp_ms: int, size_ms: int, advance_ms: int) -> list[int
     return starts
 
 
+def _new_changelog_topic(args: argparse.Namespace, label: str) -> str:
+    """A compacted topic for one durable arm-H run, created fresh so its end offsets are that
+    run's alone - which is what makes the end-offset check below a check rather than a total.
+
+    ``cleanup.policy=compact`` is what a changelog IS; Kafka Streams creates its own the same
+    way. Compaction is asynchronous and will not have run inside a session this short, so a
+    restore here reads the UNCOMPACTED log - an upper bound on restore time, named as such.
+    """
+    topic = f"pc-wlab-cl-{label}-{time.time_ns()}"
+    ensure_topic(args.bootstrap, topic, args.partitions,
+                 config={"cleanup.policy": "compact", "min.cleanable.dirty.ratio": "0.1"})
+    return topic
+
+
+def _await_changelog_end(args: argparse.Namespace, topic: str, expected: int,
+                         timeout_s: float = 30.0, strict: bool = True) -> int:
+    """THE INSTRUMENT CHECK for durability, read off the BROKER rather than the client.
+
+    A durable arm that is accidentally not durable would look wonderfully fast, so the claim
+    "these records are on the broker" is never taken from the producer's own count: the end
+    offsets are summed from the cluster and must equal what the arm says it produced. Bounded
+    retry, because with ``acks=0`` the delivery report races the append.
+
+    ``strict=False`` is for the arm whose whole definition is that it does NOT wait: a shortfall
+    there is the result rather than a fault, so it is returned and reported instead of raising.
+    """
+    probe = Consumer({"bootstrap.servers": args.bootstrap,
+                      "group.id": f"pc-wlab-clprobe-{time.time_ns()}",
+                      "enable.auto.commit": False})
+    deadline = time.monotonic() + timeout_s
+    total = 0
+    try:
+        while time.monotonic() < deadline:
+            total = sum(_end_offsets(probe, topic).values())
+            if total >= expected:
+                break
+            time.sleep(0.5)
+    finally:
+        probe.close()
+    if total != expected and not strict:
+        log.warning("changelog %s holds %d of the %d records the arm produced - a %.1f%% "
+                    "shortfall, which for a not-awaited arm is the finding rather than a fault",
+                    topic, total, expected, 100.0 * (expected - total) / expected)
+        return total
+    if total != expected:
+        raise RuntimeError(
+            f"changelog end offsets on {topic} sum to {total:,} against {expected:,} records "
+            "produced - the arm claims a durability cost it did not pay, which is exactly the "
+            "failure this check exists to catch")
+    return total
+
+
+@dataclasses.dataclass(frozen=True)
+class RestoreRun:
+    """One restore: rebuild the reimplementation's dict from its changelog, timed.
+
+    Restore time and steady-state throughput are different quantities and both matter, so this
+    is reported as its own figure and never folded into a rate.
+    """
+
+    arm: str
+    spec: str
+    backoff_ms: int | None      # the ONE term moved between the two restore configurations
+    seconds: float
+    records: int                # changelog records read - the UNCOMPACTED log
+    entries: int                # distinct (key, window) entries rebuilt
+    long_polls: int             # consume() calls over 100ms - the fetch stall, if it is here
+    load1: float
+
+
+def restore_host(args: argparse.Namespace, topic: str, expected_entries: int | None, *,
+                 arm: str, spec: str, backoff_ms: int | None = None) -> RestoreRun:
+    """The other half of durability: rebuild the dict from the changelog before processing.
+
+    Timed from the moment the restoring process asks the broker where the log ends to the moment
+    the dict is complete - which is the wait a user actually experiences on restart.
+
+    ``backoff_ms`` moves librdkafka's ``fetch.queue.backoff.ms``, the one term that turned arm H's
+    own rate into a 4.7x artefact (see the engine-floor note, "Why arm H's hopping-12 rate is
+    bimodal"). A restore reads far more bytes than the arm that wrote them, so the same stall can
+    land here; measuring both configurations prices it instead of arguing about it.
+    """
+    load1 = wait_for_quiet(args.load_limit)
+    config: dict[str, object] = {
+        "bootstrap.servers": args.bootstrap,
+        "group.id": f"pc-wlab-restore-{time.time_ns()}",
+        "enable.auto.commit": False,
+    }
+    if backoff_ms is not None:
+        config["fetch.queue.backoff.ms"] = backoff_ms
+    consumer = Consumer(config)
+    state: dict[bytes, bytes] = {}
+    read = 0
+    long_polls = 0
+    started = time.monotonic()
+    try:
+        ends = _end_offsets(consumer, topic)
+        total = sum(ends.values())
+        consumer.assign([TopicPartition(topic, p, OFFSET_BEGINNING) for p in sorted(ends)])
+        deadline = started + 600
+        while read < total and time.monotonic() < deadline:
+            poll_started = time.monotonic()
+            batch = consumer.consume(num_messages=1000, timeout=5.0)
+            if time.monotonic() - poll_started > 0.1:
+                long_polls += 1
+            if not batch:
+                break
+            for message in batch:
+                if message.error():
+                    continue
+                state[message.key()] = message.value()
+                read += 1
+    finally:
+        elapsed = time.monotonic() - started
+        consumer.close()
+    if read != total or (expected_entries is not None and len(state) != expected_entries):
+        raise RuntimeError(
+            f"restore invalid: read {read:,}/{total:,} changelog records and rebuilt "
+            f"{len(state):,} entries against {expected_entries} expected - a restore that "
+            "does not reproduce the dict is not a restore")
+    print(f"    restore  arm={arm:<13s} {spec:<10s} backoff="
+          f"{'default' if backoff_ms is None else f'{backoff_ms}ms':>7s} "
+          f"{elapsed:7.3f}s for {read:>9,} changelog records -> {len(state):>7,} entries "
+          f"({read / elapsed:9,.0f} rec/s, {long_polls} polls over 100ms) load1={load1:.2f}")
+    return RestoreRun(arm=arm, spec=spec, backoff_ms=backoff_ms, seconds=elapsed,
+                      records=read, entries=len(state), long_polls=long_polls, load1=load1)
+
+
 def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
                  window: TimeWindow, spec_label: str, *, arm: HostArm | None = None,
-                 rep: int = 0, verbose: bool = False) -> HostRun:
+                 rep: int = 0, verbose: bool = False,
+                 changelog_topic: str | None = None) -> HostRun:
     """Arm H: consume the same input single-threaded and aggregate into a dict.
 
     Deliberately stateless and non-durable - no store, no changelog, no rebalance recovery, no
@@ -1266,6 +1443,12 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
     Runs while the engine is idle (the lab tears each sidecar down before any H run starts).
     Timed on this process's wall clock from first message to last - H produces nothing, so there
     is no log-append record of its progress; the consume loop IS the reimplementation.
+
+    ``arm.changelog_mode`` is the ONE exception to "non-durable", and it is the crossing-ladder's
+    first rung (astubbs#242): the reimplementer's aggregate is made to survive process death by
+    writing every state update to a compacted Kafka topic and awaiting it at a commit boundary.
+    ``restore_host`` is its other half. Nothing else about the arm changes, so a durable arm
+    differs from ``H-base`` by exactly one feature - the discipline this whole program runs on.
 
     ``arm`` moves exactly one term (see ``HostArm``); omitted, the loop is the untouched one every
     prior session measured. THE UNTOUCHED PATH MUST STAY UNTOUCHED: the instrumentation added for
@@ -1288,6 +1471,7 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
     config.update(dict(arm.consumer_extra))
     consumer = Consumer(config)
     state: dict[tuple[bytes, int], bytes] = {}
+    dirty: set[tuple[bytes, int]] = set()
     updates = 0
     seen = 0
     started: float | None = None
@@ -1304,6 +1488,97 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
     stalls: list[tuple[int, float]] = []
     batches = 0
     forced = False
+    changelog_records = 0
+    boundaries = 0
+    produce_s = 0.0
+    flush_s = 0.0
+    commit_s = 0.0
+    delivery_failures: list[object] = []
+
+    def _delivered(error: object, _message: object) -> None:
+        if error is not None:
+            delivery_failures.append(error)
+
+    producer: Producer | None = None
+    if arm.changelog_mode != "none":
+        if not changelog_topic:
+            raise SystemExit(f"arm {arm.label} writes a changelog but no topic was given")
+        # STATED EXPLICITLY, because an unstated producer config is an unreproducible run - the
+        # same rule this lab already applies to commit.interval.ms. acks is the arm's term.
+        # enable.idempotence stays OFF: exactly-once is a LATER rung of the ladder and turning it
+        # on here would move two features at once. The two buffering ceilings are raised past the
+        # whole backlog so that a BufferError-driven wait can never be mistaken for produce cost;
+        # seed_keyed already raises the first for the same reason.
+        producer = Producer({
+            "bootstrap.servers": args.bootstrap,
+            "acks": arm.changelog_acks,
+            "enable.idempotence": False,
+            "queue.buffering.max.messages": 2_000_000,
+            "queue.buffering.max.kbytes": 2_097_152,
+        })
+
+    def _produce_entry(entry: tuple[bytes, int], value: bytes) -> None:
+        """One changelog record for one (key, window) state entry.
+
+        The key is the STATE key, so the topic's compaction can collapse the history to the
+        current value - which is the whole reason a changelog is a compacted topic rather than
+        a log of deltas.
+        """
+        nonlocal changelog_records
+        entry_key, entry_start = entry
+        while True:
+            try:
+                producer.produce(changelog_topic,
+                                 key=entry_key + b"|" + str(entry_start).encode(),
+                                 value=value, on_delivery=_delivered)
+                break
+            except BufferError:  # ceilings are raised past the backlog, so this is a backstop
+                producer.poll(0.5)
+        changelog_records += 1
+
+    def _boundary() -> None:
+        """The reimplementer's commit point: get the state durable, THEN move the resume point.
+
+        Flush before commit is the ordering that makes the pair meaningful - committing first
+        would advance past records whose state had not reached the broker. A restored dict with
+        no resume point is not durability either, which is why the source-offset commit is part
+        of this rung rather than a separate one; it is ~10 synchronous calls per run, and
+        ``commit_s`` is reported separately so it can be seen not to dominate.
+        """
+        nonlocal boundaries, produce_s, flush_s, commit_s
+        opened = time.monotonic()
+        if arm.changelog_mode == "coalesced":
+            # KAFKA STREAMS' STATE-STORE CACHE, hand-rolled: one write per (key, window) touched
+            # since the last boundary, not one per update. The engine-floor decomposition priced
+            # exactly this coalescing at 4.05x (D-cache), so it is a rung of the same ladder.
+            for entry in dirty:
+                _produce_entry(entry, state[entry])
+            dirty.clear()
+        produced = time.monotonic()
+        produce_s += produced - opened
+        if not arm.changelog_await:
+            # The arm that writes a changelog and waits for none of it. It is here as the
+            # instrument's other half: a durable arm that is accidentally not durable looks
+            # wonderfully fast, and this prices exactly how fast.
+            boundaries += 1
+            return
+        producer.flush()
+        flushed = time.monotonic()
+        flush_s += flushed - produced
+        try:
+            consumer.commit(asynchronous=False)
+        except KafkaException as failure:
+            # _NO_OFFSET means the previous boundary already committed everything consumed so
+            # far - which the FINAL boundary hits whenever the last batch happened to trigger
+            # one. It is "nothing new to commit", not a failed commit, and treating it as an
+            # error aborted a five-rep pass mid-run.
+            if failure.args[0].code() != KafkaError._NO_OFFSET:
+                raise
+        commit_s += time.monotonic() - flushed
+        boundaries += 1
+
+    boundary_s = args.commit_interval_ms / 1000.0
+    last_boundary = 0.0
     watch = _GcWatch()
     watch.install()
     gc_was_enabled = gc.isenabled()
@@ -1335,6 +1610,7 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
             if started is None:
                 started = poll_ended
                 cpu_started = time.process_time()
+                last_boundary = poll_ended
                 watch.arm()
             batches += 1
             for message in batch:
@@ -1349,6 +1625,15 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
                 for start in _window_starts(timestamp_ms, window.size_ms, window.advance_ms):
                     state[(key, start)] = value
                     updates += 1
+                    if producer is not None:
+                        if arm.changelog_mode == "per-update":
+                            # The naive reimplementer: every state update is a changelog write.
+                            _produce_entry((key, start), value)
+                        else:
+                            dirty.add((key, start))
+            if producer is not None and time.monotonic() - last_boundary >= boundary_s:
+                _boundary()
+                last_boundary = time.monotonic()
             ended = time.monotonic()
             fold_s += ended - poll_ended
             if arm.force_gen2 and not forced and seen >= records // 2:
@@ -1358,6 +1643,14 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
                 forced = True
                 gc.collect(2)
                 ended = time.monotonic()
+        if producer is not None and started is not None:
+            # THE FINAL BOUNDARY IS INSIDE THE TIMED WINDOW, and it has to be: an arm whose last
+            # 200 ms of state reached the broker only after the clock stopped was not durable at
+            # the moment it claimed a rate.
+            final_opened = time.monotonic()
+            _boundary()
+            ended = time.monotonic()
+            fold_s += ended - final_opened
     finally:
         if arm.gc_disabled and gc_was_enabled:
             gc.enable()
@@ -1365,7 +1658,22 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
             cpu_s = time.process_time() - cpu_started
         watch.remove()
         consumer.close()
+        if producer is not None and not arm.changelog_await:
+            # OUTSIDE the window on purpose: this arm's whole definition is that it does not pay
+            # for the wait. The records still have to arrive for the end-offset check below to
+            # mean anything, so the wait happens - it is just not charged to the rate, which is
+            # precisely the accounting error the arm exists to price.
+            producer.flush()
     window_s = (ended - started) if started is not None else 0.0
+    changelog_end = 0
+    if producer is not None:
+        if delivery_failures and arm.changelog_await:
+            raise RuntimeError(f"arm {arm.label} invalid: the changelog producer reported "
+                               f"{len(delivery_failures)} delivery failure(s), first "
+                               f"{delivery_failures[0]} - a changelog that did not arrive is "
+                               "not durability")
+        changelog_end = _await_changelog_end(args, changelog_topic, changelog_records,
+                                             strict=arm.changelog_await)
     result = HostRun(spec=spec_label, records=seen, keys=keys, updates=updates,
                      window_s=window_s, load1=load1, arm=arm.label, rep=rep, cpu_s=cpu_s,
                      fold_s=fold_s, consume_s=consume_s, empty_polls=empty_polls,
@@ -1373,7 +1681,10 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
                      long_polls=long_polls, stalls=tuple(stalls), batches=batches,
                      gc_gen0=watch.counts[0], gc_gen1=watch.counts[1], gc_gen2=watch.counts[2],
                      gc_pause_s=watch.pause_s, gc_max_pause_s=watch.max_pause_s,
-                     calib_s=calib_s)
+                     calib_s=calib_s, changelog_topic=changelog_topic or "",
+                     changelog_records=changelog_records, changelog_end=changelog_end,
+                     boundaries=boundaries, produce_s=produce_s, flush_s=flush_s,
+                     commit_s=commit_s, delivery_failures=len(delivery_failures))
     stalled = (long_polls or empty_polls) and not arm.expect_stall
     ok = seen == records and updates == multiplier * records
     print(f"  arm={arm.label:<9s} {spec_label:<10s} records={seen:>7,} keys={keys:>5,} "
@@ -1395,6 +1706,15 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
         print(f"      collector inside the window: gen0={watch.counts[0]} gen1={watch.counts[1]} "
               f"gen2={watch.counts[2]} pause={watch.pause_s:.3f}s "
               f"(max {watch.max_pause_s:.3f}s)  cpu-calibration={calib_s * 1e3:.1f}ms")
+    if producer is not None:
+        print(f"      durability: changelog {changelog_records:,} records produced, "
+              f"{changelog_end:,} on the broker (end offsets, "
+              f"{changelog_records - changelog_end:,} MISSING, "
+              f"{len(delivery_failures)} failed reports), {boundaries} boundaries, "
+              f"acks={arm.changelog_acks} await={arm.changelog_await}  "
+              f"produce={produce_s:.3f}s flush={flush_s:.3f}s commit={commit_s:.3f}s "
+              f"= {result.durable_s:.3f}s of a {window_s:.3f}s window "
+              f"({result.durable_s / window_s:.0%})")
     if not ok:
         raise RuntimeError(f"arm H invalid: saw {seen:,}/{records:,} records, "
                            f"{updates:,} updates against {multiplier * records:,} expected")
@@ -2225,6 +2545,281 @@ def run_f2_rerun(args: argparse.Namespace) -> int:
     return 0
 
 
+_LADDER_ARMS: tuple[HostArm, ...] = (
+    HostArm(label="H-base", spec="hopping-12",
+            why="the control: plain arm H, stateless and non-durable, unchanged"),
+    HostArm(label="H-dur-per", spec="hopping-12", changelog_mode="per-update",
+            why="durability, written the naive way - one awaited changelog record per state "
+                "update, which is what a reimplementer writes first"),
+    HostArm(label="H-dur-coal", spec="hopping-12", changelog_mode="coalesced",
+            why="durability, written the careful way - the dirty (key, window) set flushed once "
+                "per commit interval, which is what the engine's state-store cache does"),
+    HostArm(label="H-dur-nowait", spec="hopping-12", changelog_mode="per-update",
+            changelog_acks="0", changelog_await=False,
+            why="the same changelog volume with the wait removed - not durable, and here to "
+                "price how fast an accidentally-non-durable arm would have looked"),
+)
+"""The first rung of the crossover ladder (astubbs#242), each arm ONE feature from ``H-base``.
+
+Spec-agnostic: the experiment replaces ``spec`` per specification, so an arm is defined by its
+durability term alone and the two window specifications cannot drift apart."""
+
+_LADDER_ENGINE_ORDER: tuple[str, ...] = ("T0-cache", "D-cache", "D0", "T0")
+"""The engine arms, in the order they run within a repetition - after the host arms, which go
+first while no sidecar is up (``_shared_phase``'s inherited rule). The two cache-on arms carry
+the comparison; ``D0`` and ``T0`` are the cache-off anchors that tie this box to the two prior
+sessions through ``_F2_ANCHOR_RATES``."""
+
+
+def run_crossing_ladder(args: argparse.Namespace) -> int:
+    """The crossover ladder, rung 1: what does DURABILITY cost the reimplementation?
+
+    Every F2 verdict in this program compares the wrapper against arm H - a bare dict, stateless
+    and non-durable. The owner's judgement, recorded in ``STRATEGY.md`` and in
+    ``docs/solutions/architecture-patterns/``
+    ``a-per-record-crossing-loses-to-reimplementation-before-features-enter.md``, is that this
+    comparison decides nothing: a toy beats an engine at toy work at any transport speed. The
+    question that decides it is the CROSSOVER - how many of the features a user actually came for
+    can be added back to that dictionary before hand-rolling becomes the worse choice.
+
+    This experiment takes the first step. It adds ONE feature - durability, meaning a changelog
+    per state update plus a restore that rebuilds the dict from it - and measures what it costs,
+    at two write granularities, against ``H-base`` and against the wrapper's cache-on
+    crossing-free arms IN THE SAME SESSION (KTD18). It reports restore time as its own figure,
+    because steady-state throughput and restart latency are different quantities.
+    """
+    records = args.floor_records
+    by_label = {arm.label: arm for arm in _FLOOR_ARMS + _INSTRUMENT_ARMS}
+    engine_arms = tuple(by_label[label] for label in _LADDER_ENGINE_ORDER)
+
+    print("crossing-ladder rung 1 - what DURABILITY costs the reimplementation")
+    print(f"  records per run         {records:,} (host arms AND engine arms - one count)")
+    print(f"  keys                    {args.keys:,}")
+    print(f"  reps                    {args.reps} (arms interleaved within each rep, host first)")
+    print(f"  partitions              {args.partitions}, {args.stream_threads} stream threads, "
+          f"{args.payload_bytes} B payloads")
+    print(f"  commit.interval.ms      {args.commit_interval_ms} - the engine's commit cadence AND "
+          "the durable arms' boundary interval, so both sides flush at the same rate")
+    print(f"  quiescence              {args.quiescence_intervals} commit intervals (engine arms)")
+    print(f"  event time              constant {_EVENT_TIME_MS} ms for every record")
+    print(f"  load limit              {args.load_limit:g} (1-minute load beside every run)")
+    backoff = args.host_fetch_queue_backoff_ms
+    print("  fetch.queue.backoff.ms  " + (f"{backoff} (set explicitly)" if backoff is not None
+                                          else "librdkafka's default 1,000 - the record count "
+                                               "sits below the 80,000-96,000 stall threshold "
+                                               "measured in the bimodality section"))
+    print(f"  restore control         a second read of every changelog with "
+          f"fetch.queue.backoff.ms={args.ladder_restore_backoff_ms}")
+    print(f"  JAVA_TOOL_OPTIONS       {os.environ.get('JAVA_TOOL_OPTIONS', '(unset)')}")
+    print("  arms                    " + ", ".join(f"{a.label} ({a.why})" for a in _LADDER_ARMS))
+
+    h_topic = _seed_host_topic(args, records, args.keys, "ladder")
+    admin = AdminClient({"bootstrap.servers": args.bootstrap})
+    host_runs: list[HostRun] = []
+    restores: list[RestoreRun] = []
+    runs: dict[str, list[PlacementRun]] = {}
+    try:
+        for rep in range(args.reps):
+            print(f"\n  rep {rep + 1}/{args.reps}")
+            for spec_label, window in (("tumbling", _TUMBLE), ("hopping-12", _HOP5)):
+                multiplier = -(-window.size_ms // window.advance_ms)
+                for base_arm in _LADDER_ARMS:
+                    arm = dataclasses.replace(base_arm, spec=spec_label)
+                    changelog = (_new_changelog_topic(args, f"{arm.label}-{spec_label}")
+                                 if arm.changelog_mode != "none" else None)
+                    try:
+                        run = measure_host(args, h_topic, records, args.keys, window, spec_label,
+                                           arm=arm, rep=rep + 1, verbose=True,
+                                           changelog_topic=changelog)
+                        host_runs.append(run)
+                        if changelog is not None and arm.changelog_await:
+                            # The nowait arm's changelog is byte-for-byte the same shape as
+                            # H-dur-per's, so restoring it would re-measure the same quantity.
+                            for backoff in (None, args.ladder_restore_backoff_ms):
+                                restores.append(restore_host(
+                                    args, changelog, args.keys * multiplier,
+                                    arm=arm.label, spec=spec_label, backoff_ms=backoff))
+                    finally:
+                        if changelog is not None and not args.keep_topics:
+                            delete_run_topics(admin, [changelog])
+            for arm in engine_arms:
+                runs.setdefault(arm.label, []).append(
+                    _run_floor_arm(args, arm, records, show_topology=(rep == 0)))
+    finally:
+        if not args.keep_topics:
+            delete_run_topics(admin, [h_topic])
+
+    _print_floor_table(engine_arms, runs)
+
+    print("\n  THE LADDER - arm H with one feature added back, per specification")
+    print(f"  {'arm':14s} {'spec':11s} {'rec/s (min-max)':>28s} {'us/rec':>9s} "
+          f"{'changelog recs':>15s} {'durable share':>14s}")
+    ladder: dict[tuple[str, str], float] = {}
+    for spec_label in ("tumbling", "hopping-12"):
+        for base_arm in _LADDER_ARMS:
+            got = [h for h in host_runs if h.arm == base_arm.label and h.spec == spec_label]
+            if not got:
+                continue
+            rates = [h.rate for h in got]
+            median = statistics.median(rates)
+            ladder[(base_arm.label, spec_label)] = median
+            share = statistics.median(
+                (h.durable_s / h.window_s if h.window_s else 0.0) for h in got)
+            print(f"  {base_arm.label:14s} {spec_label:11s} "
+                  f"{median:11,.0f} ({min(rates):,.0f}-{max(rates):,.0f}) "
+                  f"{1e6 / median:9.1f} "
+                  f"{statistics.median(h.changelog_records for h in got):15,.0f} "
+                  f"{share:13.0%}")
+
+    print("\n  WHERE DURABILITY PUTS THE CROSSOVER - wrapper best case against each rung, same "
+          "session, interleaved:")
+    for spec_label, wrapper in (("tumbling", "T0-cache"), ("hopping-12", "D-cache")):
+        wrapper_rate = statistics.median(r.rate for r in runs[wrapper])
+        print(f"    {spec_label}: wrapper {wrapper} {wrapper_rate:,.0f} rec/s "
+              "(cache on, changelog ON, so it is durable too)")
+        for base_arm in _LADDER_ARMS:
+            rate = ladder.get((base_arm.label, spec_label))
+            if rate is None:
+                continue
+            ratio = rate / wrapper_rate
+            side = "reimplementation ahead" if ratio >= 1 else "WRAPPER AHEAD"
+            print(f"      {base_arm.label:14s} {rate:11,.0f} rec/s   "
+                  f"H/wrapper = {ratio:6.2f}x   {side}")
+
+    if restores:
+        print("\n  RESTORE - rebuilding the dict from the changelog, its own figure:")
+        print(f"  {'arm':14s} {'spec':11s} {'backoff':>9s} {'seconds (min-max)':>26s} "
+              f"{'changelog recs':>15s} {'entries':>9s} {'>100ms polls':>13s}")
+        seen_keys = []
+        for restore in restores:
+            probe_key = (restore.arm, restore.spec, restore.backoff_ms)
+            if probe_key in seen_keys:
+                continue
+            seen_keys.append(probe_key)
+            matching = [r for r in restores
+                        if (r.arm, r.spec, r.backoff_ms) == probe_key]
+            seconds = [r.seconds for r in matching]
+            print(f"  {restore.arm:14s} {restore.spec:11s} "
+                  f"{'default' if restore.backoff_ms is None else f'{restore.backoff_ms}ms':>9s} "
+                  f"{statistics.median(seconds):9.3f} ({min(seconds):.3f}-{max(seconds):.3f}) "
+                  f"{restore.records:15,} {restore.entries:9,} "
+                  f"{max(r.long_polls for r in matching):13d}")
+
+    print("\n  INSTRUMENT CHECK - the durability term must be visible on the broker, not just "
+          "claimed by the producer:")
+    for spec_label in ("tumbling", "hopping-12"):
+        for base_arm in _LADDER_ARMS:
+            got = [h for h in host_runs if h.arm == base_arm.label and h.spec == spec_label
+                   and h.changelog_records]
+            if not got:
+                continue
+            produced = [h.changelog_records for h in got]
+            landed = [h.changelog_end for h in got]
+            lost = [h.changelog_records - h.changelog_end for h in got]
+            print(f"    {base_arm.label:14s} {spec_label:11s} n={len(got)}  produced "
+                  f"{min(produced):,}-{max(produced):,} changelog records/run; broker end "
+                  f"offsets {min(landed):,}-{max(landed):,}; MISSING {min(lost):,}-"
+                  f"{max(lost):,} -> "
+                  f"{'MATCH' if max(lost) == 0 else 'SHORTFALL - this arm is NOT durable'}")
+
+    print("\n  ANCHORS - the two cache-off arms against their 2026-08-25 medians:")
+    for label, then in _F2_ANCHOR_RATES.items():
+        if label not in runs:
+            continue
+        now = statistics.median(r.rate for r in runs[label])
+        print(f"    {label:9s} this session {now:9,.0f} rec/s   2026-08-25 {then:9,.0f} rec/s   "
+              f"-> {now / then:.2f}x")
+
+    loads = ([r.load1 for arm_runs in runs.values() for r in arm_runs]
+             + [h.load1 for h in host_runs] + [r.load1 for r in restores])
+    print(f"\n  1-minute load beside the {len(loads)} runs: {min(loads):.2f}-{max(loads):.2f} "
+          f"(median {statistics.median(loads):.2f}, limit {args.load_limit:g})")
+    return 0
+
+
+def run_ladder_kill_child(args: argparse.Namespace) -> int:
+    """One durable arm-H run, as a CHILD process the parent is about to SIGKILL.
+
+    A separate entry point rather than a fork, because forking a process that already holds
+    librdkafka handles is not safe; the child builds its own clients from the flags it was
+    given. It runs until it is killed - which is the point - so a clean exit means the parent
+    was too slow and the parent says so.
+    """
+    arm = dataclasses.replace(
+        next(a for a in _LADDER_ARMS if a.label == args.ladder_child_arm),
+        spec=args.ladder_child_spec)
+    window = _TUMBLE if args.ladder_child_spec == "tumbling" else _HOP5
+    measure_host(args, args.ladder_child_source, args.floor_records, args.keys, window,
+                 args.ladder_child_spec, arm=arm, verbose=True,
+                 changelog_topic=args.ladder_child_changelog)
+    return 0
+
+
+def run_ladder_kill(args: argparse.Namespace) -> int:
+    """KILL AND REBUILD, literally: SIGKILL a durable arm mid-run, restore from its changelog.
+
+    ``restore_host`` on a complete changelog already measures the rebuild, but it never proves
+    the thing durability is FOR - that state written before an uncontrolled death is still there
+    afterwards. Here the writer is a separate process, killed with SIGKILL so nothing flushes,
+    nothing closes and no ``finally`` runs; the parent then rebuilds from whatever reached the
+    broker and reports how much state survived and how long it took to get back.
+    """
+    print("ladder-kill - SIGKILL a durable arm-H writer mid-run, then rebuild from its changelog")
+    print(f"  arm {args.ladder_child_arm} {args.ladder_child_spec}, {args.floor_records:,} "
+          f"records, {args.keys:,} keys, kill after {args.ladder_kill_after_ms} ms")
+    source = _seed_host_topic(args, args.floor_records, args.keys, "kill")
+    admin = AdminClient({"bootstrap.servers": args.bootstrap})
+    multiplier = 1 if args.ladder_child_spec == "tumbling" else 12
+    try:
+        for rep in range(args.reps):
+            changelog = _new_changelog_topic(args, f"kill-{rep}")
+            try:
+                command = [sys.executable, str(pathlib.Path(__file__).resolve()),
+                           "ladder-kill-child",
+                           "--bootstrap", args.bootstrap,
+                           "--keys", str(args.keys),
+                           "--partitions", str(args.partitions),
+                           "--payload-bytes", str(args.payload_bytes),
+                           "--commit-interval-ms", str(args.commit_interval_ms),
+                           "--floor-records", str(args.floor_records),
+                           "--load-limit", str(args.load_limit),
+                           "--ladder-child-arm", args.ladder_child_arm,
+                           "--ladder-child-spec", args.ladder_child_spec,
+                           "--ladder-child-source", source,
+                           "--ladder-child-changelog", changelog]
+                child = subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+                time.sleep(args.ladder_kill_after_ms / 1000.0)
+                if child.poll() is not None:
+                    raise RuntimeError(
+                        f"the writer finished before it could be killed (exit {child.returncode})"
+                        " - lower --ladder-kill-after-ms; a clean exit proves nothing about "
+                        "surviving a kill")
+                child.kill()
+                # SIGKILL, so nothing flushed, nothing closed and no finally ran. Everything on
+                # the broker got there through a boundary the writer had already awaited.
+                child.wait(timeout=30)
+                restored = restore_host(args, changelog, None, arm="kill-rebuild",
+                                        spec=args.ladder_child_spec)
+                full = args.keys * multiplier
+                print(f"    rep {rep + 1}: writer SIGKILLed after "
+                      f"{args.ladder_kill_after_ms} ms; {restored.records:,} changelog records "
+                      f"survived and rebuilt {restored.entries:,} of the {full:,} entries a "
+                      f"complete run holds ({restored.entries / full:.0%}) in "
+                      f"{restored.seconds:.3f}s")
+                if restored.entries == 0:
+                    raise RuntimeError(
+                        "nothing survived the kill - the arm was not durable at any point, "
+                        "which makes every steady-state figure it produced meaningless")
+            finally:
+                if not args.keep_topics:
+                    delete_run_topics(admin, [changelog])
+    finally:
+        if not args.keep_topics:
+            delete_run_topics(admin, [source])
+    return 0
+
+
 EXPERIMENTS = {
     "hot-key": run_hot_key,
     "placement": run_placement,
@@ -2232,6 +2827,9 @@ EXPERIMENTS = {
     "engine-floor": run_engine_floor,
     "f2-rerun": run_f2_rerun,
     "host-bimodal": run_host_bimodal,
+    "crossing-ladder": run_crossing_ladder,
+    "ladder-kill": run_ladder_kill,
+    "ladder-kill-child": run_ladder_kill_child,
 }
 
 
