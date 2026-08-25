@@ -81,6 +81,12 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
                 .batchSize(batchSize)
                 .maxConcurrency(concurrency)
                 .consumer(consumer)
+                // The multiplication asserted below is specific to the pre-loaded-queue engine: the load factor
+                // sizes the executor's QUEUE, so a factor of 2 means twice as many records buffered, not twice as
+                // many running. A virtual-thread pool has no queue, so it deliberately does not multiply, and this
+                // assertion would be asserting a defect there. The virtual-thread half of the contract is pinned
+                // in VirtualThreadExecutionModeTest#theInFlightTargetIsNotMultipliedByTheLoadFactorInThisMode.
+                .useVirtualThreads(false)
                 .build();
         try (final TestParallelEoSStreamProcessor<String, String> testInstance = new TestParallelEoSStreamProcessor<>(testOptions)) {
             final int defaultLoad = 2;
@@ -209,7 +215,10 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
         try (var testInstance = new TestParallelEoSStreamProcessor<String, String>(testOptions) {
             @Override
             protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
-                var pool = super.setupWorkerPool(poolSize);
+                // Cast is safe and stays narrow on purpose: the base widened its return to ExecutorService for
+                // the virtual-thread pool, but these assertions are about a ThreadPoolExecutor's rejected
+                // execution handler, and this instance does not enable virtual threads.
+                var pool = (ThreadPoolExecutor) super.setupWorkerPool(poolSize);
                 built.set(pool);
                 return pool;
             }
@@ -240,7 +249,7 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
             @Override
             protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
                 landmarkWhenPoolWasBuilt.set(getWm());
-                return super.setupWorkerPool(poolSize);
+                return (ThreadPoolExecutor) super.setupWorkerPool(poolSize);
             }
         }) {
             assertThat(landmarkWhenPoolWasBuilt.get())

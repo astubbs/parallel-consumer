@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # Cut a release (tag-as-truth, dispatch-triggered).
 #
 # maven-release-plugin's release:prepare bumps poms, makes the two release commits, tags vX,

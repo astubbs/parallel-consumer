@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client C++</name>
+    <artifactId>parallel-consumer-proxy-client-cpp</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over bin/build-client.sh, which builds this module IN A CONTAINER: C++ is
+        one of the two languages mise cannot serve here, because gRPC and protobuf arrive as system
+        dev packages rather than as a versioned toolchain (astubbs#242,
+        docs/inflight/parked-containerised-toolchains-and-runtime.md). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing - so an ordinary scoped build of this module starts no container at
+        all.
+
+        It calls the script rather than `cmake` directly because a host cmake would need
+        libgrpc++-dev, libprotobuf-dev and protobuf-compiler-grpc installed, which is the problem the
+        image solves. The script owns which route a language takes; this pom only names the language.
+        The test-phase invocation runs the EXTRACTED artifact on the host, which is what asserts the
+        static link - see the script's header. (Its flag cannot be written in an XML comment: two
+        consecutive hyphens end one.)
+
+        The path is relative to this module rather than ${maven.multiModuleProjectDirectory}: that
+        property is set by the mvn launcher and is empty when the build is driven by an IDE or an
+        embedder, which would silently invoke "/bin/build-client.sh".
+
+        THIS MODULE CONFIGURES NO maven-clean-plugin FILESET, AND THAT IS THE ANSWER RATHER THAN AN
+        OMISSION. Every other foreign client declares one, because its native toolchain writes
+        somewhere Maven has never heard of; the container route writes exactly ONE host-side path,
+        the export directory bin/build-client.sh computes as <module>/target/container (grep
+        `out_dir` in that script). That is inside ${project.build.directory}, so the default clean
+        already deletes the extracted binaries, the dynamic control and link-report.txt - by the
+        same mechanism that keeps the promise for a Java module, with nothing added. Measured on
+        this module: build, `target/container/pc-cpp-selftest` present, `mvn clean`, gone, rebuild
+        green.
+
+        WHAT MUST NOT BE ADDED HERE. Everything else this build produces is SHARED: the
+        debian:trixie base image, the BuildKit layer cache, and the apt cache mounts. Several agents
+        and worktrees run against this machine at once, so deleting any of them would throw away
+        output nobody asked this module to rebuild, and would turn a colleague's 1-second cached
+        build into a minutes-long one. bin/build-client.sh's `build_natively` records the same
+        reasoning for the native route. They are this language's ~/.m2, and `mvn clean` does not
+        empty ~/.m2.
+
+        And nothing here may list `target/container` explicitly either: that would be a second copy
+        of the script's `out_dir`, free to drift from it, deleting something already deleted.
+
+        Skeleton until the C++ wave of the language-proxy plan starts; that wave owns everything in
+        this directory except the build environment (Dockerfile, toolchain-smoke/), and may replace
+        the smoke target once it has one of its own.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.build.executable>
+        <pc.foreign.build.args>cpp</pc.foreign.build.args>
+        <pc.foreign.test.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.test.executable>
+        <pc.foreign.test.args>cpp --test</pc.foreign.test.args>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

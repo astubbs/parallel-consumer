@@ -1,0 +1,11 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Codegen template for buf-based workflows. The Java stubs this module ships are NOT generated
+# through buf - the Maven build owns that (pom.xml, io.github.ascopes:protobuf-maven-plugin) so the
+# generated code always matches the protobuf-java runtime on the module's classpath. This template
+# exists for non-JVM client work, which generates from src/main/proto by path with no Maven
+# dependency; each language's own generator wiring is that client unit's work and gets added here
+# (or in its own module) when that unit lands, not speculatively before it.
+version: v2
+# No plugins yet, deliberately: an unexercised codegen target is a claim nothing tests.
+plugins: []

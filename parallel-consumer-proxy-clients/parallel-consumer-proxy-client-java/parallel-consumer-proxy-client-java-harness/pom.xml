@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-client-java</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java Harness Lane</name>
+    <artifactId>parallel-consumer-proxy-client-java-harness</artifactId>
+
+    <!--
+        THE ONE PLACE ON THE JVM SIDE THAT DEPENDS ON THE ENGINE, AND THE REASON IT IS A MODULE
+        RATHER THAN A SCOPE (astubbs#242).
+
+        THE HAZARD IT REMOVES. A test-scope dependency is not transitive on the CLASSPATH, but it
+        IS an edge in the Maven REACTOR: `-pl <anything that depends on java-grpc> -am` walks the
+        declared dependencies of every module it reaches, test scope included. While java-grpc
+        test-depended on parallel-consumer-proxy, any client wrapping it - the Kotlin client today,
+        Scala next - dragged the engine into an ordinary build, and `bin/build.sh` opens with
+        `clean`, so the routine build of a wrapper deleted the sidecar jar every other language's
+        conformance test spawns. The measurement that says the hazard is gone is a reactor list,
+        not an assertion:
+
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        must not print parallel-consumer-proxy. Rerun it before adding any dependency here or in a
+        client module.
+
+        WHY NOT A PROFILE, which is how the non-JVM clients answer the same question. Their harness
+        lane is opt-in because their tests need a foreign toolchain anyway. Here the conformance
+        suite is the Java client's primary evidence and must run in every ordinary build; a profile
+        would take it out of the default lane, and a test that does not run is not a passing test.
+        A module keeps it running while confining the engine edge to a leaf nothing depends on.
+
+        WHAT IS IN IT. Two things, and they are the same thing seen from two sides:
+
+          1. Its COMPILE-scope dependencies are the harness classpath - the engine, the proxy
+             test-jar that holds ProxyHarness and TestModeMain, and core's test-jar underneath.
+             Compile scope so they flow transitively: a JVM client that needs to spawn the sidecar
+             declares this ONE module at test scope in its own opt-in profile and gets the set,
+             instead of restating three dependencies and drifting from them. The Kotlin client's
+             kotlin-e2e-harness profile is the first consumer; Scala is the next.
+          2. Its TEST tree runs the gRPC transport's harness-backed conformance suite - the api
+             module's shared test-jar suite, driven against a real gRPC server over mock Kafka
+             clients. It moved here from java-grpc unchanged; the transport module keeps only the
+             tests that need no engine.
+
+        This module publishes nothing (the clients aggregator skips deploy and install for the
+        whole tree) and has no main sources: it is a classpath and a test tree, deliberately.
+    -->
+
+    <properties>
+        <!-- the engine and the gRPC transport both require it; see java-grpc's pom for the full reasoning -->
+        <release.target>17</release.target>
+    </properties>
+
+    <!--
+        The parent's SpotBugs gate is inherited and NOT switched off, even though this module has no
+        main sources for it to read: the plugin says "No files found to run spotbugs" and exits
+        clean (verified), so the opt-out would buy nothing today and would silently exempt the first
+        main source anyone adds here.
+    -->
+
+    <dependencies>
+        <!--
+            THE HARNESS CLASSPATH, at compile scope so it is transitive for the JVM clients that
+            spawn the sidecar as a child process. Whoever consumes it hands these to that child
+            process, not to its own test JVM - see the surefire classpathDependencyExcludes note in
+            the Kotlin module's harness profile for what happens when a reactor-resolved test-jar
+            lands on the consuming JVM's own classpath.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <!-- ProxyHarness (the in-process engine lane) and TestModeMain (the spawnable sidecar) -->
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+        </dependency>
+        <dependency>
+            <!-- LongPollingMockConsumer and friends, which the harness stands on -->
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+        </dependency>
+        <dependency>
+            <!--
+                Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+                commons-lang3, and test scope is not transitive, so relying on core to supply it
+                would break the moment core stopped using it.
+            -->
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+        </dependency>
+
+        <!-- the transport under test, and the shared suite that drives it (KTD20) -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

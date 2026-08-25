@@ -1,0 +1,17 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Python build artefacts. The repository's root .gitignore covers `target/` (Maven's, and where
+# this module's sidecar classpath lands); everything below is this language's own.
+#
+# NOTE: src/parallel_consumer/_generated/ is NOT ignored. The stubs are committed deliberately -
+# `make proto` regenerates them and `make proto-check` fails when the committed copy has drifted -
+# so that installing this package needs neither protoc nor the .proto file.
+
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/

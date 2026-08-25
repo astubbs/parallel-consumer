@@ -61,6 +61,12 @@
 #       misjudged as fork-original, turning their required upstream headers into violations. The
 #       ordering constraint is therefore measured, not asserted in a comment
 #
+# Fixture E (cases 27-29) is the per-language red arm, GENERATED FROM the scanner's ENFORCED_TYPES
+# table so a language cannot be added there without being exercised here. Fixture F (cases 30-38)
+# covers the rules that are not about a language: the unclassified-file failure, exemptions,
+# grandfathering and its limit, and the three ways a header can be present and still wrong. Both
+# carry their own case lists where they are built.
+#
 # Run: bin/test-check-copyright-headers.sh   (CI runs it before the real scan)
 
 set -euo pipefail
@@ -279,7 +285,7 @@ assert_contains "rename entry left in the OLD spelling still resolves (half-rena
 assert_contains "fork-original file under the NEW package still may not claim Confluent" \
     "fork-original file claims Confluent copyright): parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ForkClaimsConfluent.java" "$out"
 assert_contains "renamed-package repo reports exactly 5 violations" "5 violation(s)" "$out"
-assert_contains "the move does not shrink the checked set" "Checked 10 java files" "$out"
+assert_contains "the move does not shrink the checked set" "Checked 10 file(s)" "$out"
 # The conformant half. Under the OLD path-equality model every one of these was reported as a
 # fork-original file claiming Confluent copyright, so this case is the negative control: it goes
 # red against the model this replaced.
@@ -339,6 +345,162 @@ else
     assert_contains "CONTROL ARM: the second nested rule's file is misjudged as fork-original" \
         "fork-original file claims Confluent copyright): parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/testcontainers/MovedCsidGeneral.java" "$out"
 fi
+
+# --- Fixture E: EVERY ENFORCED LANGUAGE, RED AND GREEN (rules 27-29) ------------------
+# The scan grew from `.java` to the whole tree, and "it also handles Go now" is a claim nothing
+# tested: a checker that has never REJECTED a file in language X is not evidence about language X.
+#
+# THE FIXTURE IS GENERATED FROM THE SCANNER'S OWN ENFORCED_TYPES TABLE, which is the part that
+# matters. A hand-written list of languages here would be a second copy that drifts, and it would
+# drift in the one direction nobody notices: someone adds `*.zig|slash` to the scanner, no case is
+# added here, and the suite reports a pass having tested nothing about zig. Reading the table means
+# a language cannot be added to the scanner without being exercised on the next run.
+#
+#   27. every enforced type, with a correct header in its own comment syntax  -> pass
+#   28. the same types with NO header                                         -> one FAIL each,
+#       naming that file - which is the per-language red arm
+#   29. the violation count equals the number of enforced types, so a type that silently stopped
+#       being scanned shows up as a MISSING failure rather than as a quiet pass
+repoE="$WORK/e"
+new_repo "$repoE"
+mkdir -p "$repoE/good" "$repoE/bad"
+
+# Read the table out of the scanner rather than restating it. Entries sit flush against the
+# opening quote, and the block ends at the lone closing quote - same shape as PACKAGE_MOVES.
+enforced_types=$(awk '/^ENFORCED_TYPES="$/ { inblock = 1; next }
+                      inblock && /^"$/     { inblock = 0; next }
+                      inblock              { print }' "$SCANNER")
+
+typed_file() { # <path> <style> <"header"|"bare">
+    case "$2" in
+        slash) [ "$3" = header ] && printf '// Copyright (C) 2026 Antony Stubbs and contributors\n\n' > "$1" || : > "$1"
+               printf 'int x = 1;\n' >> "$1" ;;
+        hash)  [ "$3" = header ] && printf '# Copyright (C) 2026 Antony Stubbs and contributors\n\n' > "$1" || : > "$1"
+               printf 'x = 1\n' >> "$1" ;;
+        xml)   printf '<?xml version="1.0" encoding="UTF-8"?>\n' > "$1"
+               [ "$3" = header ] && printf '<!-- Copyright (C) 2026 Antony Stubbs and contributors -->\n' >> "$1"
+               printf '<root/>\n' >> "$1" ;;
+        cmd)   [ "$3" = header ] && printf '@REM Copyright (C) 2026 Antony Stubbs and contributors\n' > "$1" || : > "$1"
+               printf '@echo off\n' >> "$1" ;;
+        *)     echo "FAIL: fixture generator has no case for comment style '$2' - add one, or the type it belongs to is untested"
+               failures=$((failures + 1)); return 1 ;;
+    esac
+}
+
+n_types=0
+lang_names=""
+while IFS='|' read -r glob style; do
+    [ -n "$glob" ] || continue
+    # A filename that matches the glob: every `*` becomes a fixed token, so `*.java` -> `X.java`,
+    # `Dockerfile.*` -> `Dockerfile.X`, and an exact name stays itself. Good and bad copies share
+    # the name and differ by directory, which is what lets exact-name globs be covered at all.
+    name="${glob//\*/X}"
+    typed_file "$repoE/good/$name" "$style" header || continue
+    typed_file "$repoE/bad/$name"  "$style" bare   || continue
+    n_types=$((n_types + 1))
+    lang_names="${lang_names}${glob} "
+done <<EOF
+$enforced_types
+EOF
+git -C "$repoE" add -A && git -C "$repoE" commit -qm upstream
+# Everything is fork-original: the fixture's fork point is the EMPTY tree that precedes this commit,
+# so no file has a fork-point blob and the fork-header rule is the one under test.
+fork_point_e=$(git -C "$repoE" commit-tree -m base "$(git -C "$repoE" hash-object -t tree -w /dev/null)")
+
+out=$( (cd "$repoE" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_e" bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
+assert "per-language fixture exits 1" 1 "$rc"
+if [ "$n_types" -lt 20 ]; then
+    echo "FAIL: only $n_types enforced type(s) were read out of the scanner - the table parse is broken, so this whole fixture proves nothing"
+    failures=$((failures + 1))
+else
+    echo "ok:   generated red+green cases for all $n_types enforced type(s): $lang_names"
+fi
+assert_contains "one violation per enforced type, no more and no fewer" "$n_types violation(s)" "$out"
+
+missing=""; leaked=""
+while IFS='|' read -r glob style; do
+    [ -n "$glob" ] || continue
+    name="${glob//\*/X}"
+    case "$out" in *"header): bad/$name"*) ;; *) missing="$missing $glob" ;; esac
+    case "$out" in *"good/$name"*) leaked="$leaked $glob" ;; *) ;; esac
+done <<EOF
+$enforced_types
+EOF
+if [ -n "$missing" ]; then
+    echo "FAIL: headerless file NOT rejected for:$missing (the checker has never failed on these types)"
+    failures=$((failures + 1))
+else
+    echo "ok:   a headerless file is rejected in EVERY enforced language"
+fi
+if [ -n "$leaked" ]; then
+    echo "FAIL: correctly-headered file WAS rejected for:$leaked"
+    failures=$((failures + 1))
+else
+    echo "ok:   a correctly-headered file passes in EVERY enforced language"
+fi
+
+# --- Fixture F: the rules that are not about a language (rules 30-38) -----------------
+#   30. a tracked file matching NEITHER table                     -> FAIL (no quiet skip)
+#   31. an exempt path with no header                             -> not scanned, not reported
+#   32. upstream file with NO notice at the fork point             -> grandfathered, passes
+#   33. the same file, MODIFIED since                              -> still grandfathered
+#   34. upstream file that HAD a notice and lost it                -> still FAILS (grandfathering
+#       is not an amnesty for files that were marked)
+#   35. fork-original file mentioning Confluent in PROSE           -> pass (the claim test is
+#       same-line; this is the regression that extending past .java exposed)
+#   36. notice present but NOT inside a comment                    -> FAIL
+#   37. header placed ABOVE a #! shebang                           -> FAIL
+#   38. header placed ABOVE the <?xml ...?> declaration            -> FAIL
+repoF="$WORK/f"
+new_repo "$repoF"
+printf 'workflow: yes\n'                                                      > "$repoF/bare-upstream.yml"      # 32
+printf 'workflow: yes\n'                                                      > "$repoF/bare-upstream-edited.yml" # 33
+printf '/*-\n * Copyright (C) 2020-2022 Confluent, Inc.\n */\nclass X {}\n'    > "$repoF/WasMarked.java"         # 34
+git -C "$repoF" add -A && git -C "$repoF" commit -qm upstream
+fork_point_f=$(git -C "$repoF" rev-parse HEAD)
+
+printf 'workflow: yes\nextra: true\n'                                         > "$repoF/bare-upstream-edited.yml"
+headerless_file "$repoF/WasMarked.java"
+printf 'nothing here\n'                                                       > "$repoF/mystery.zig"            # 30
+mkdir -p "$repoF/docs"
+printf '# just prose\n'                                                       > "$repoF/docs/notes.md"          # 31
+printf '# Copyright (C) 2026 Antony Stubbs and contributors\n#\n# Retains the Confluent header, says this doc.\nname: x\n' \
+                                                                              > "$repoF/prose.yml"             # 35
+printf 'BANNER = "Copyright (C) 2026 Antony Stubbs and contributors"\n'        > "$repoF/instring.py"           # 36
+printf '# Copyright (C) 2026 Antony Stubbs and contributors\n#\n#!/usr/bin/env bash\necho hi\n' \
+                                                                              > "$repoF/aboveshebang.sh"       # 37
+printf '<!-- Copyright (C) 2026 Antony Stubbs and contributors -->\n<?xml version="1.0"?>\n<root/>\n' \
+                                                                              > "$repoF/abovedecl.xml"         # 38
+git -C "$repoF" add -A && git -C "$repoF" commit -qm fork
+
+out=$( (cd "$repoF" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_f" bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
+assert          "structural fixture exits 1"                        1 "$rc"
+assert_contains "a file in NEITHER table is a violation, not a skip" \
+    "unclassified file type - add it to ENFORCED_TYPES or EXEMPT_PATHS" "$out"
+assert_contains "the unclassified violation names the file"         "): mystery.zig" "$out"
+assert_contains "an upstream file that HAD a notice and lost it still fails" \
+    "upstream-derived file has no copyright header): WasMarked.java" "$out"
+assert_contains "a notice outside a comment is rejected"            "notice is not in a # comment): instring.py" "$out"
+assert_contains "a header above the shebang is rejected"            "header sits above the #! shebang" "$out"
+assert_contains "a header above the XML declaration is rejected"    "header sits above the <?xml ...?> declaration" "$out"
+assert_contains "grandfathered upstream files are counted, not silently skipped" \
+    "2 upstream file(s) grandfathered" "$out"
+assert_contains "structural fixture reports exactly 5 violations"   "5 violation(s)" "$out"
+case "$out" in
+    *"bare-upstream.yml"*|*"bare-upstream-edited.yml"*)
+        echo "FAIL: an upstream file that never carried a notice was told to grow one"; failures=$((failures + 1)) ;;
+    *) echo "ok:   upstream files unmarked at the fork point are grandfathered, edited or not" ;;
+esac
+case "$out" in
+    *"notes.md"*) echo "FAIL: an exempt path was scanned"; failures=$((failures + 1)) ;;
+    *) echo "ok:   an exempt path is not scanned" ;;
+esac
+case "$out" in
+    *"prose.yml"*)
+        echo "FAIL: the word Confluent in PROSE was read as a copyright claim - the test must be same-line"
+        failures=$((failures + 1)) ;;
+    *) echo "ok:   a fork-original file may discuss Confluent without claiming its copyright" ;;
+esac
 
 # --- Drift guard: PACKAGE_MOVES vs bin/rename-packages.sh's PKG_MAP (rule 25) --------
 # The two tables are deliberately NOT shared: the rename script is a migration tool and gets

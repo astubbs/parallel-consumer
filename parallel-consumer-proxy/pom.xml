@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Language Proxy</name>
+    <artifactId>parallel-consumer-proxy</artifactId>
+
+    <properties>
+        <!--
+            This module's real runtime floor is Java 17, and it must say so.
+
+            The project-wide release.target is 8: the build compiles Java 17 source down to Java 8
+            bytecode via Jabel, so anything the Java 8 platform API does not expose is invisible to
+            this module even though the source language allows it. A wire-protocol module cannot live
+            there - the transport stack and the modern networking API surface it needs are Java 9+.
+
+            The failure mode this override prevents is not a compile error, which is why it has to be
+            deliberate. The release level constrains the platform API, not what javac will read off the
+            classpath, so a module set too low compiles happily and ships bytecode claiming a JVM it
+            does not actually run on - the mistake surfaces as an UnsupportedClassVersionError on first
+            use, in the downstream consumer's runtime rather than in our build.
+            parallel-consumer-mutiny records the same trap after paying for it.
+
+            Only this module and mutiny are affected - core, vertx and reactor remain Java 8 (major 52).
+        -->
+        <release.target>17</release.target>
+
+        <!-- ${grpc.version} is NOT declared here. The generated stubs this module serves and the
+             transport runtime must agree on one gRPC version, and the root pom owns that single
+             property for every module that speaks the protocol - a comment asking three poms to
+             stay equal is not a guard. -->
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
+            The protocol module: proxy.proto's generated messages and gRPC stubs. Per the
+            language-proxy plan's KTD34, the dependency arrow runs engine -> protocol and never
+            the reverse - the protocol module must stay consumable by codegen alone, with no
+            engine on the classpath.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
+            The transport's server stack, U1's cleared gate: grpc-netty-shaded is the artifact the
+            feasibility probe proved end to end (loopback bind, :authority interception before the
+            service method, native-image build), so the transport uses it rather than unshaded
+            grpc-netty. It also serves as the client stack in this module's own transport tests.
+        -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+            commons-lang3, and test scope is not transitive, so relying on core to supply it here
+            would break the moment core stopped using it.
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

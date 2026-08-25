@@ -119,9 +119,15 @@ abstract class MockConsumerTestBase {
         // MockConsumer is not a correct implementation of the Consumer contract - subscribing alone assigns
         // nothing, so the partition must be rebalanced in by hand, and PC told about it separately. This is the
         // difficulty LongPollingMockConsumer exists to remove.
+        //
+        // The beginning offset is recorded BEFORE the partition is assigned, for the reason
+        // LongPollingMockConsumer#subscribeWithRebalanceAndAssignment sets out at length: rebalance() assigns
+        // and fires the rebalance listener, so PC's broker-poll thread can poll this partition from inside that
+        // call - and a poll of an assigned partition with no beginning offset kills the poll thread with
+        // IllegalStateException, taking the engine down. Here the window was two calls wide.
+        mockConsumer.updateBeginningOffsets(Collections.singletonMap(topicPartition, 0L));
         mockConsumer.rebalance(Collections.singletonList(topicPartition));
         parallelConsumer.onPartitionsAssigned(of(topicPartition));
-        mockConsumer.updateBeginningOffsets(Collections.singletonMap(topicPartition, 0L));
     }
 
     // The class-level @Timeout does NOT cover lifecycle methods - only a @Timeout on the method itself

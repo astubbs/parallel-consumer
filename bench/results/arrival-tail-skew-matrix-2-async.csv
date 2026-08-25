@@ -1,0 +1,7 @@
+workload,utilisation_pct_of_flat_capacity,pc_version,pc_build,client_pin,mode,callee,ordering,key_dist,records,partitions,max_poll_records,buffer,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,inflight_p50,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms,e2e_p50_ms,e2e_p99_ms,e2e_p999_ms,e2e_max_ms,arrival_requested,arrival_achieved,feed_lag_p99_ms,backlog_p99,backlog_max,injected_failures
+flat,50,LOCAL,2266159329,NATIVE,reactor,timer,KEY,zipf,5250,24,500,20000,10,24,1,165.9,8,2,5.04,12,24,33,63,17710,31619,31878,31911,15,28,36,41,185.0,185.0,3,4,6,0
+flat,50,LOCAL,2266159329,NATIVE,reactor,timer,KEY,zipf,5250,24,500,20000,10,24,2,165.8,7,2,4.84,12,23,31,82,17745,31654,31912,31951,15,26,35,38,185.0,185.0,3,4,7,0
+flat,70,LOCAL,2266159329,NATIVE,reactor,timer,KEY,zipf,5250,24,500,20000,10,24,1,223.2,6,3,5.70,12,28,44,64,13651,23586,23769,23801,14,30,40,54,259.0,259.0,2,5,6,0
+flat,70,LOCAL,2266159329,NATIVE,reactor,timer,KEY,zipf,5250,24,500,20000,10,24,2,223.2,8,3,4.84,12,28,37,64,13661,23596,23779,23816,14,31,39,45,259.0,259.0,2,6,7,0
+flat,90,LOCAL,2266159329,NATIVE,reactor,timer,KEY,zipf,5250,24,500,20000,10,24,1,276.6,7,4,4.98,12,37,62,73,11378,19082,19223,19255,14,38,60,73,334.0,334.0,2,8,11,0
+flat,90,LOCAL,2266159329,NATIVE,reactor,timer,KEY,zipf,5250,24,500,20000,10,24,2,276.9,11,4,4.69,12,37,64,76,11378,19083,19224,19255,14,38,65,79,334.0,334.0,2,8,9,0

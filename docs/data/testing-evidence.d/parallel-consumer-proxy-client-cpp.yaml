@@ -1,0 +1,53 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the C++ client wave ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-client-cpp
+    artifact: parallel-consumer-proxy-client-cpp
+    coverage: >-
+      All five conformance scenarios the harness serves today, run end to end over real gRPC against
+      the test-mode sidecar through the shared cross-language suite: the processed record advancing
+      the committed offset, the unreported record holding the commit back, the failure redelivered
+      with attempt=2 and the reason verbatim, a held record admitting a concurrent delivery on
+      another key, and the in-flight ceiling holding this client to exactly two unresolved records
+      at once. In each, the sidecar is spawned as a child process with execv and never through a
+      shell, its port read by scanning the lifecycle channel, the fresh-session handshake completed,
+      a dispatch wave queued and handed to a std::thread executor, the user function run, the outcome
+      reported with the token echoed verbatim, and - except in the negative control - the session
+      closed by half-close and the lifecycle pipe.
+      The fifth, the in-flight ceiling, was proven able to fail once for every language rather than here - in Go and in Kotlin, by declaring double the ceiling the scenario prescribed - and the conformance module's own evidence records it.
+      EACH OF THE FIRST FOUR WAS PROVEN ABLE TO FAIL, by sabotaging the runner and watching the suite go
+      red for the right reason: reporting a failure where success was prescribed left the offset
+      uncommitted; reporting success where silence was prescribed advanced an offset the assertion
+      forbids advancing, which also demonstrates that the contract's three-second hold is what lets
+      that control control anything; changing the prescribed failure reason broke the verbatim-echo
+      assertion; and a lock around the whole processor - the only sabotage that works on the ordering
+      scenario, since the engine dispatches both shards in one wave regardless - made the runner
+      exceed its budget and exit 1.
+      Beside that, and not replacing it, thirteen of the module's own tests run under ctest inside
+      the build image, covering what a live session cannot reach: the in-flight ceiling counted as
+      unresolved records (queued plus executing) including the authoring guide's own worked example,
+      that only a verdict frees a slot, FIFO hand-out within a wave, the overflow protocol violation
+      naming both counts and the token, that discarding at shutdown settles what it drops, that
+      stopping hand-out is not a verdict, credential redaction in the options rendering, payload
+      redaction in both record renderings, the declared capability set being exactly ["dispatch"],
+      option validation, a Configured missing its ceiling or executor count, and the port-line scan.
+      The image also runs cppcheck over src/ with findings as errors.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-cpp/src/conformance_runner.cpp
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-cpp/tests/dispatch_queue_test.cpp
+    limitation: >-
+      Four scenarios of eleven, and the harness negotiates only the dispatch capability, so every
+      liveness, reconnect, worker-death, terminal and drain duty is untested because it is
+      un-negotiated rather than because it passed. Subscription is not a live variable either: the
+      mock harness seeds its records regardless of the topic a client subscribes to, so a wrong-topic
+      run still passes and cannot be used as a control - what is asserted instead is the echo in
+      Configured. The overflow path is covered only by unit tests over the queue, never over a live
+      session, because a correct proxy never produces it. There is no test of the sidecar's stdout
+      drain under a chatty child, which is the failure mode section 10.1 of the authoring guide
+      exists to prevent, and none of the portability claim beyond bin/build-client.sh running the
+      extracted static artifact and its dynamic control on this one host.

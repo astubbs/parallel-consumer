@@ -48,6 +48,7 @@ import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUT
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static lombok.AccessLevel.PACKAGE;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
 
@@ -114,12 +115,34 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final org.apache.kafka.clients.consumer.Consumer<K, V> consumer;
 
     /**
-     * The pool which is used for running the users' supplied function
+     * The pool which is used for running the users' supplied function.
+     * <p>
+     * Typed as {@link ExecutorService} rather than {@link ThreadPoolExecutor} because
+     * {@link ParallelConsumerOptions#isUseVirtualThreads()} selects a virtual-thread-per-task executor, which is not
+     * one. Nothing outside {@link #innerDoClose(Duration)} needs the wider type: the pool's queue depth and active
+     * count - the two figures the pressure system and the shutdown diagnostics used to read off
+     * {@link ThreadPoolExecutor} - are now counted by {@link #userFunctionTaskAccounting}.
      */
     @Getter(PROTECTED)
-    protected final Supplier<ThreadPoolExecutor> workerThreadPool;
+    protected final Supplier<ExecutorService> workerThreadPool;
+
+    /**
+     * Replaces {@code workerThreadPool.getQueue().size()} and {@code workerThreadPool.getActiveCount()}, which a
+     * virtual-thread-per-task executor does not have.
+     *
+     * @see UserFunctionTaskAccounting
+     */
+    private final UserFunctionTaskAccounting userFunctionTaskAccounting = new UserFunctionTaskAccounting();
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
+
+    /**
+     * MEASUREMENT ONLY. Present when {@link ParallelConsumerOptions#isDirectPullEngine()} selects the direct-pull
+     * engine, in which case the control loop stops distributing work altogether: the workers take it themselves.
+     *
+     * @see DirectPullWorkerPool
+     */
+    private Optional<DirectPullWorkerPool<K, V>> directPullPool = Optional.empty();
 
     // todo make package level
     @Getter(AccessLevel.PUBLIC)
@@ -129,7 +152,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Collection of work waiting to be
      */
     @Getter(PROTECTED)
-    private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non blocking
+    // EXPERIMENT: CountedTransferQueue instead of LinkedBlockingQueue.
+    //
+    // Profiling put 17,785 of ~39,000 parks in five seconds right here - workers calling offer() and
+    // taking LinkedBlockingQueue's putLock to report a completed record. It is the largest single park
+    // site and the only one that is PC's own code; the rest are workers idle in getTask, which is the
+    // pool working correctly.
+    //
+    // The shape suits a lock-free queue and, unlike the worker pool's queue, it suits THIS one:
+    // LinkedTransferQueue spins before parking, which was catastrophic where a thousand threads
+    // CONSUME, but here a thousand threads PRODUCE - and offer() on an unbounded transfer queue is a
+    // CAS append that never spins. One consumer, the control loop, does the waiting.
+    //
+    // Counted, so size() stays O(1): the previous experiment changed the structure and its size()
+    // behaviour together and could not be interpreted.
+    private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new CountedTransferQueue<>();
 
     private final AtomicBoolean isRebalanceInProgress = new AtomicBoolean(false);
 
@@ -267,6 +304,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private final RateLimiter queueStatsLimiter = new RateLimiter();
 
+    /**
+     * Limits how often {@link #maybeReportLoadFactorCeiling()} speaks. Matches the interval used for the equivalent
+     * steady-state warning in {@code ProcessingShard}'s slow-work check.
+     */
+    private final RateLimiter loadFactorCeilingLimiter = new RateLimiter(5);
+
     @Getter(PROTECTED)
     PCModule<K, V> module;
 
@@ -274,7 +317,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
+     * <p>
+     * Package-private setter so that pipeline-pressure tests can drive {@link #checkPipelinePressure()} directly,
+     * without having to run a whole control loop to get the flag set.
      */
+    @Setter(PACKAGE)
     private boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
@@ -349,9 +396,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.loadFactorGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.DYNAMIC_EXTRA_LOAD_FACTOR,
                 dynamicExtraLoadFactor, DynamicLoadFactor::getCurrentFactor);
         this.statusGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.PC_STATUS, this, pc -> pc.state.getValue());
-        new ExecutorServiceMetrics(this.getWorkerThreadPool().get(), "pc-user-function-executor",
-                USER_FUNCTION_EXECUTOR_PREFIX,
-                pcMetrics.getCommonTags()).bindTo(pcMetrics.getMeterRegistry());
+        // Micrometer's ExecutorServiceMetrics only knows how to read a ThreadPoolExecutor (and a ForkJoinPool).
+        // Handed a virtual-thread-per-task executor it binds no meters and reports nothing - a gauge set that
+        // silently measures nothing is worse than an absent one, because a dashboard showing a flat zero reads as
+        // "no work" rather than "not instrumented". Say so once, at INFO, and leave the meters unregistered.
+        ExecutorService pool = this.getWorkerThreadPool().get();
+        if (pool instanceof ThreadPoolExecutor || pool instanceof ForkJoinPool) {
+            new ExecutorServiceMetrics(pool, "pc-user-function-executor",
+                    USER_FUNCTION_EXECUTOR_PREFIX,
+                    pcMetrics.getCommonTags()).bindTo(pcMetrics.getMeterRegistry());
+        } else {
+            log.info("Worker pool is a {}, which Micrometer's ExecutorServiceMetrics cannot introspect, so the " +
+                            "{} meters are not registered. Parallel Consumer's own in-flight and queued figures are " +
+                            "unaffected.",
+                    pool.getClass().getName(), USER_FUNCTION_EXECUTOR_PREFIX);
+        }
     }
 
     private void validateConfiguration() {
@@ -371,7 +430,44 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
     }
 
-    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+    /**
+     * MEASUREMENT ONLY. Whether this engine can hand work selection over to the workers themselves.
+     * <p>
+     * {@link ExternalEngine} cannot: its "worker pool" is a single thread that only starts the asynchronous work,
+     * with the concurrency living in the external runtime, so there are no worker threads to give the shards to.
+     *
+     * @see DirectPullWorkerPool
+     */
+    protected boolean supportsDirectPull() {
+        return true;
+    }
+
+    /**
+     * Whether this engine can run the user's function on virtual threads.
+     * <p>
+     * False for {@link ExternalEngine}, for the same reason {@link #supportsDirectPull()} is: its worker "pool" is
+     * one thread that dispatches into an external runtime, and the concurrency lives out there. Replacing that one
+     * thread with an unbounded virtual-thread executor would silently make the dispatch itself concurrent, which is
+     * not what any of those engines are built on.
+     *
+     * @see ParallelConsumerOptions#isUseVirtualThreads()
+     */
+    protected boolean supportsVirtualThreads() {
+        return true;
+    }
+
+    protected ExecutorService setupWorkerPool(int poolSize) {
+        if (options.isUseVirtualThreads()) {
+            if (supportsVirtualThreads()) {
+                return setupVirtualThreadWorkerPool();
+            }
+            log.warn("useVirtualThreads is set, but {} dispatches into an external runtime rather than running the " +
+                            "user's function on its own pool, so virtual threads have nothing to do here. Using the " +
+                            "usual single dispatch thread. Concurrency for this engine is configured in the runtime " +
+                            "it dispatches to.",
+                    this.getClass().getSimpleName());
+        }
+
         ThreadFactory defaultFactory;
         try {
             defaultFactory = InitialContext.doLookup(options.getManagedThreadFactory());
@@ -391,6 +487,49 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>();
         return new ThreadPoolExecutor(poolSize, poolSize, 0L, MILLISECONDS, workQueue,
                 namingThreadFactory, rejectionHandler);
+    }
+
+    /**
+     * DO NOT "SIMPLIFY" THIS INTO DIRECT CALLS. Every JDK 21 symbol here is reached reflectively on purpose: this
+     * module compiles with {@code release.target=8} (see {@code pom.xml} and
+     * {@code docs/features/java-compatibility.yaml}), so {@code Thread.ofVirtual()} and
+     * {@code Executors.newThreadPerTaskExecutor(...)} are not on the compile-time API surface at all. Writing them
+     * directly does not fail at review time - it fails the Java 8 build, for everyone, for a capability that is
+     * opt-in and off by default.
+     * <p>
+     * {@link ParallelConsumerOptions#validate()} has already probed these same two methods, so reaching here on a
+     * JVM without them means the runtime changed underneath a constructed instance. That is a bug, not a
+     * configuration error, which is why it throws {@link IllegalStateException} rather than the
+     * {@link UnsupportedOperationException} validation raises.
+     * <p>
+     * The threads are named rather than left anonymous: at a {@code maxConcurrency} where virtual threads are worth
+     * having, a thread dump holds thousands of them, and unnamed ones make it unreadable.
+     *
+     * @see bz.stub.parallelconsumer.ParallelConsumerOptions#isUseVirtualThreads()
+     */
+    private ExecutorService setupVirtualThreadWorkerPool() {
+        try {
+            // Thread.ofVirtual().name("pc-vt-", 0).factory()
+            Object builder = Class.forName("java.lang.Thread").getMethod("ofVirtual").invoke(null);
+            Class<?> builderClass = Class.forName("java.lang.Thread$Builder");
+            String prefix = getMyId().map(id -> "pc-vt-" + id + "-").orElse("pc-vt-");
+            builderClass.getMethod("name", String.class, long.class).invoke(builder, prefix, 0L);
+            ThreadFactory factory = (ThreadFactory) builderClass.getMethod("factory").invoke(builder);
+
+            // Executors.newThreadPerTaskExecutor(factory)
+            ExecutorService executor = (ExecutorService) Executors.class
+                    .getMethod("newThreadPerTaskExecutor", ThreadFactory.class)
+                    .invoke(null, factory);
+            log.info("Running the user function on virtual threads. maxConcurrency ({}) is a target the control " +
+                            "loop aims at, not a cap the pool enforces - the pool is unbounded.",
+                    options.getMaxConcurrency());
+            return executor;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(msg(
+                    "useVirtualThreads passed validation but this JVM ({} {}) cannot create a virtual-thread " +
+                            "executor - report a bug.",
+                    System.getProperty("java.vm.name"), System.getProperty("java.version")), e);
+        }
     }
 
     /**
@@ -432,12 +571,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * {@code submitWorkToPoolInner}'s catch of {@link RejectedExecutionException} alone from unsound to
      * unsound-only-under-deliberate-misuse; it does not make it total.
      *
+     * <p>
+     * ONLY A {@link ThreadPoolExecutor} CAN BE CHECKED, and that is not a gap. A rejected-execution handler is a
+     * {@code ThreadPoolExecutor} feature; the virtual-thread executor {@link #setupVirtualThreadWorkerPool} builds has
+     * no handler to misconfigure, and rejects only after shutdown - by throwing, which is the behaviour this method
+     * exists to require. Anything else passes through untouched, the same way {@link #discardQueuedWork()} narrows to
+     * the pool type whose queue it can actually reach.
+     *
      * @return the pool, unaltered - this is a precondition on what {@link #setupWorkerPool} returned, not a chance to
      *         substitute something else
      * @throws IllegalArgumentException if the pool would swallow a rejection
      */
-    private ThreadPoolExecutor requireRejectionIsVisible(ThreadPoolExecutor pool) {
-        RejectedExecutionHandler handler = pool.getRejectedExecutionHandler();
+    private ExecutorService requireRejectionIsVisible(ExecutorService pool) {
+        if (!(pool instanceof ThreadPoolExecutor)) {
+            return pool;
+        }
+        RejectedExecutionHandler handler = ((ThreadPoolExecutor) pool).getRejectedExecutionHandler();
         if (!(handler instanceof ThreadPoolExecutor.AbortPolicy)) {
             throw new IllegalArgumentException(msg(
                     "Unsupported worker pool returned by {}#setupWorkerPool: its rejected execution handler is {}, " +
@@ -770,12 +919,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         brokerPollSubsystem.drain();
 
         log.debug("Shutting down execution pool...");
+        // Direct-pull workers occupy their threads in a loop rather than sitting in the pool's queue, so
+        // shutdown() alone would never terminate the pool - it only stops NEW tasks being accepted.
+        directPullPool.ifPresent(DirectPullWorkerPool::stop);
         //Clear scheduled but not started work in execution pool
-        workerThreadPool.get().getQueue().clear();
+        discardQueuedWork();
         //request graceful shutdown
         workerThreadPool.get().shutdown();
-        if (workerThreadPool.get().getActiveCount() > 0) {
-            log.info("Inflight work in execution pool: {}, letting to finish on shutdown with timeout: {}", workerThreadPool.get().getActiveCount(), timeout);
+        if (userFunctionTaskAccounting.getActive() > 0) {
+            log.info("Inflight work in execution pool: {}, letting to finish on shutdown with timeout: {}", userFunctionTaskAccounting.getActive(), timeout);
         }
 
         log.debug("Awaiting worker pool termination...");
@@ -789,7 +941,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 if (!terminationFinishedWithoutTimeout) {
                     log.warn("Thread execution pool termination await timeout ({})! Were any processing jobs dead locked (test latch locks?) or otherwise stuck? Forcing shutdown of workers.", timeout);
                     //Requesting threads shutdown immediately - inflight threads will be interrupted at this point.
-                    workerThreadPool.get().shutdownNow();
+                    // shutdownNow() hands back tasks it accepted but never ran; they have to be accounted for or
+                    // the derived queue depth never returns to zero - see UserFunctionTaskAccounting.
+                    userFunctionTaskAccounting.onTasksDiscarded(workerThreadPool.get().shutdownNow().size());
                     //Give a second for any interrupt handling / resource cleanup in user functions
                     workerThreadPool.get().awaitTermination(toSeconds(Duration.ofSeconds(1)), SECONDS);
                 }
@@ -800,8 +954,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         awaitingInflightProcessingCompletionOnShutdown.getAndSet(false);
 
-        if (workerThreadPool.get().getActiveCount() > 0) {
-            log.warn("Clean execution pool termination failed - some threads still active despite await and interrupt - is user function swallowing interrupted exception? Threads still not done count: {}", workerThreadPool.get().getActiveCount());
+        if (userFunctionTaskAccounting.getActive() > 0) {
+            log.warn("Clean execution pool termination failed - some threads still active despite await and interrupt - is user function swallowing interrupted exception? Threads still not done count: {}", userFunctionTaskAccounting.getActive());
         }
         log.debug("Worker pool terminated.");
 
@@ -913,6 +1067,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
+        // MEASUREMENT ONLY: hand the worker pool over to direct pull, so nothing is ever submitted to its queue and
+        // the pressure system that sizes that queue never runs.
+        if (options.isDirectPullEngine() && supportsDirectPull()) {
+            var pool = new DirectPullWorkerPool<K, V>(wm,
+                    options.getBatchSize(),
+                    () -> state == RUNNING || state == State.DRAINING,
+                    batch -> {
+                        addInstanceMDC();
+                        runUserFunction(userFunctionWrapped, callback, batch);
+                    });
+            this.directPullPool = Optional.of(pool);
+            pool.start(workerThreadPool.get(), options.getMaxConcurrency());
+        }
+
         ExecutorService executorService;
         try {
             executorService = InitialContext.doLookup(options.getManagedExecutorService());
@@ -981,8 +1149,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             commitOffsetsReportingPollerDeath();
         }
 
-        // distribute more work
-        retrieveAndDistributeNewWork(userFunction, callback);
+        // distribute more work - or, under direct pull, tell the workers there may be some and let them take it
+        // themselves. The mailbox drain above is where new records are registered and where returned records become
+        // selectable again, so one announcement per pass covers every way work appears.
+        if (directPullPool.isPresent()) {
+            var pool = directPullPool.get();
+            // The direct-pull replacement for checkPipelinePressure(): a worker that was allowed to work and found
+            // nothing means the buffer feeding the shards is too shallow, which is the same conclusion
+            // isPoolQueueLow() reaches by reading the executor's queue depth. What has gone is the ThreadPoolExecutor
+            // reading, not the load factor - see DirectPullWorkerPool#starvedSinceLastCheck.
+            if (pool.consumeStarvationSignal()) {
+                dynamicExtraLoadFactor.maybeStepUp();
+            }
+            pool.onWorkMaybeAvailable((int) Math.min(Integer.MAX_VALUE, wm.getUpperBoundOnSelectableWork()));
+        } else {
+            retrieveAndDistributeNewWork(userFunction, callback);
+        }
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -1139,7 +1321,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         queueStatsLimiter.performIfNotLimited(() -> {
             int queueSize = getNumberOfUserFunctionsQueued();
             log.debug("Stats: \n- pool active: {} queued:{} \n- queue size: {} target: {} loading factor: {}",
-                    workerThreadPool.get().getActiveCount(), queueSize, queueSize, getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
+                    userFunctionTaskAccounting.getActive(), queueSize, queueSize, getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
         });
 
         return gotWorkCount;
@@ -1216,11 +1398,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                         Consumer<R> callback,
                                         List<WorkContainer<K, V>> workToProcess) {
         if (state.equals(CLOSING) || state.equals(CLOSED)) {
-            log.debug("Not submitting new work as Parallel Consumer is in {} state, incoming work: {}, Pool stats: {}", state, workToProcess.size(), workerThreadPool.get());
+            log.debug("Not submitting new work as Parallel Consumer is in {} state, incoming work: {}, Pool stats: {}", state, workToProcess.size(), userFunctionTaskAccounting);
             return;
         }
         if (!workToProcess.isEmpty()) {
-            log.debug("New work incoming: {}, Pool stats: {}", workToProcess.size(), workerThreadPool.get());
+            log.debug("New work incoming: {}, Pool stats: {}", workToProcess.size(), userFunctionTaskAccounting);
 
             // perf: could inline makeBatches
             var batches = makeBatches(workToProcess);
@@ -1257,15 +1439,29 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                               final List<WorkContainer<K, V>> batch) {
         // for each record, construct dispatch to the executor and capture a Future
         log.trace("Sending work ({}) to pool", batch);
+        // Counted BEFORE the submit, not after. A virtual thread can be running the task before submit() has
+        // returned, and an increment placed after the call would let the task's own onTaskStarted() land first -
+        // making the derived queue depth transiently negative. See UserFunctionTaskAccounting.
+        userFunctionTaskAccounting.onSubmitting();
         Future outputRecordFuture;
         try {
             outputRecordFuture = workerThreadPool.get().submit(() -> {
-                addInstanceMDC();
-                return runUserFunction(usersFunction, callback, batch);
+                userFunctionTaskAccounting.onTaskStarted();
+                try {
+                    addInstanceMDC();
+                    return runUserFunction(usersFunction, callback, batch);
+                } finally {
+                    // Outermost, so it also covers an interrupt delivered by shutdownNow() and anything thrown
+                    // out of addInstanceMDC(). finally runs for Error too; only JVM exit skips it.
+                    userFunctionTaskAccounting.onTaskFinished();
+                }
             });
         } catch (RejectedExecutionException e) {
-            // Narrow on purpose, and safe to be: #requireRejectionIsVisible refuses any pool whose handler is not an
-            // AbortPolicy, so RejectedExecutionException is the only thing a rejection here can throw.
+            // The submitted task will never run, so nothing downstream will ever account for it.
+            userFunctionTaskAccounting.onSubmitRejected();
+            // Narrow on purpose, and safe to be: #requireRejectionIsVisible refuses any ThreadPoolExecutor whose
+            // handler is not an AbortPolicy, and the virtual-thread executor has no handler to misconfigure - so
+            // RejectedExecutionException is the only thing a rejection here can throw.
             if (!isWorkerPoolShutDown()) {
                 // A live pool rejected, which means saturation rather than shutdown - #setupWorkerPool's queue is
                 // unbounded, so this takes a subclass that bounds it. Absorbing that would drop work under healthy
@@ -1282,6 +1478,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.warn("Worker pool is shut down, not submitting work ({} record(s), first {}:{}). Records will be redelivered.",
                     batch.size(), first.getTopicPartition(), first.offset(), e);
             return false;
+        } catch (RuntimeException e) {
+            // Everything else that stops the task reaching a worker. Kept alongside the narrow catch above rather
+            // than folded into it: the accounting increment happened before the submit, so ANY throw from here
+            // leaves the derived queue depth permanently inflated if it goes uncounted, and that is a stronger
+            // requirement than the rejection contract the narrow catch relies on.
+            userFunctionTaskAccounting.onSubmitRejected();
+            throw e;
         }
         // for a batch, each message in the batch shares the same result
         for (final WorkContainer<K, V> workContainer : batch) {
@@ -1352,13 +1555,54 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return getQueueTargetLoaded();
     }
 
+    /**
+     * How many records to hold out for processing.
+     * <p>
+     * <b>The load factor multiplies this only when there is an executor queue for the surplus to sit in.</b> Under
+     * the default engine, everything past {@code maxConcurrency} waits in the {@link ThreadPoolExecutor}'s queue, so
+     * a factor of N means "keep the workers N deep in queued work" - more records buffered, never more records
+     * running. A virtual-thread executor has no queue: every task it accepts gets a thread immediately, so the same
+     * multiplication would mean N times {@code maxConcurrency} records <em>running at once</em>, up to
+     * {@link DynamicLoadFactor#DEFAULT_MAX_LOADING_FACTOR}. That is not a deeper buffer, it is a hundredfold breach
+     * of the concurrency the user configured.
+     * <p>
+     * The factor is <em>not</em> disabled in this mode - it is still doing its other job. See
+     * {@link #isVirtualThreadPool()}.
+     */
     protected int getQueueTargetLoaded() {
+        if (isVirtualThreadPool()) {
+            return getPoolLoadTarget();
+        }
         //noinspection unchecked
         return getPoolLoadTarget() * dynamicExtraLoadFactor.getCurrentFactor();
     }
 
     /**
+     * Whether the worker pool hands every accepted task a thread at once, rather than queueing it.
+     * <p>
+     * Asked of the pool rather than of {@link ParallelConsumerOptions#isUseVirtualThreads()} because the two can
+     * disagree: {@link ExternalEngine} declines virtual threads via {@link #supportsVirtualThreads()} and keeps its
+     * platform dispatch thread even when the option is set.
+     */
+    private boolean isVirtualThreadPool() {
+        return !(workerThreadPool.get() instanceof ThreadPoolExecutor);
+    }
+
+    /**
      * Checks the system has enough pressure in the pipeline of work, if not attempts to step up the load factor.
+     * <p>
+     * <b>This still runs under virtual threads, deliberately.</b> The obvious move when the executor queue goes away
+     * is to no-op the pressure system with it, and that move has a measured price: {@link ExternalEngine} does
+     * exactly that, and it is the identified cause of that family's throughput regression
+     * ({@code docs/inflight/next-core-async-user-function.md}). The load factor has two jobs and only one of them is
+     * about the executor's queue. The other is sizing the buffer of records polled from the broker and held in the
+     * shards - {@code WorkManager#isSufficientlyLoaded()}, which pauses the poller when that buffer is full - and
+     * virtual threads do not remove that buffer. Left unstepped, a virtual-thread run would be fed from a buffer two
+     * deep while the default engine ran with one up to a hundred deep, and any comparison between them would be of
+     * buffer depths rather than of thread types.
+     * <p>
+     * What the mode does change is where the surplus goes, which is {@link #getQueueTargetLoaded()}'s problem, not
+     * this method's.
      */
     protected void checkPipelinePressure() {
         if (log.isTraceEnabled())
@@ -1376,9 +1620,48 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 log.debug("isPoolQueueLow(): Executor pool queue is not loaded with enough work (queue: {} vs target: {}), stepped up loading factor to {}",
                         getNumberOfUserFunctionsQueued(), getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
             } else if (dynamicExtraLoadFactor.isMaxReached()) {
-                log.warn("isPoolQueueLow(): Max loading factor steps reached: {}/{}", dynamicExtraLoadFactor.getCurrentFactor(), dynamicExtraLoadFactor.getMaxFactor());
+                maybeReportLoadFactorCeiling();
             }
         }
+    }
+
+    /**
+     * Reports that the extra load factor has nothing left to give: the pool queue is running dry, but the factor is
+     * already at its ceiling, so PC will not queue any more work than it already is.
+     * <p>
+     * Rate limited, because the calling {@link #checkPipelinePressure()} runs once per control-loop pass and the
+     * condition it describes is a steady state, not an event - unlimited, it repeats for as long as the pipeline stays
+     * hungry.
+     */
+    private void maybeReportLoadFactorCeiling() {
+        if (isVirtualThreadPool()) {
+            // There is no dispatch queue to run dry, so "the queue is low" is this pool's permanent resting state
+            // rather than a symptom - the factor reaches its ceiling immediately and stays there. The advice the
+            // WARN gives would be actively wrong here: raising maximumLoadFactor buys a deeper record buffer, not
+            // more concurrency, because getQueueTargetLoaded() deliberately stops multiplying in this mode. An
+            // operator whose throughput is short under virtual threads should raise maxConcurrency.
+            return;
+        }
+        loadFactorCeilingLimiter.performIfNotLimited(() -> {
+            int factor = dynamicExtraLoadFactor.getCurrentFactor();
+            if (dynamicExtraLoadFactor.isStatic()) {
+                // Demoted rather than suppressed. There is nothing here for an operator to act on - they pinned the
+                // buffer themselves, and the factor has been "at its maximum" since startup - so it must not be a
+                // WARN. It is not deleted, because it is still the direct answer to "why isn't PC fetching more?",
+                // which is a question people turn debug logging on to answer.
+                log.debug("Work queue is running low, but the load factor is pinned at {} by the configured " +
+                                "messageBufferSize, so PC won't queue more than {} records. This is the requested " +
+                                "behaviour - raise ParallelConsumerOptions#messageBufferSize to hold more in flight.",
+                        factor, getQueueTargetLoaded());
+            } else {
+                log.warn("Work queue is running low, but the extra load factor has reached its ceiling ({} of a " +
+                                "maximum {}), so PC won't queue more than {} records ({} in-flight target x {}). " +
+                                "Processing is keeping up with everything PC is allowed to buffer; if you want more " +
+                                "in flight, raise ParallelConsumerOptions#maximumLoadFactor, or the concurrency and " +
+                                "batch size that set the in-flight target.",
+                        factor, dynamicExtraLoadFactor.getMaxFactor(), getQueueTargetLoaded(), getPoolLoadTarget(), factor);
+            }
+        });
     }
 
     /**
@@ -1432,7 +1715,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             currentlyPollingWorkCompleteMailBox.getAndSet(true);
             if (log.isDebugEnabled()) {
                 log.debug("Blocking poll on work until next scheduled offset commit attempt for {}. active threads: {}, queue: {}",
-                        timeToBlockFor, workerThreadPool.get().getActiveCount(), getNumberOfUserFunctionsQueued());
+                        timeToBlockFor, userFunctionTaskAccounting.getActive(), getNumberOfUserFunctionsQueued());
             }
             // wait for work, with a timeToBlockFor for sanity
             log.trace("Blocking poll {}", timeToBlockFor);
@@ -1527,7 +1810,43 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private int getNumberOfUserFunctionsQueued() {
-        return workerThreadPool.get().getQueue().size();
+        return userFunctionTaskAccounting.getQueued();
+    }
+
+    /**
+     * Package-private so tests can assert the derived figures against the executor's own, which is the only
+     * independent oracle they have - and only on the platform path, because that is the only path where the
+     * executor knows.
+     * <p>
+     * Deliberately not {@code getUserFunctionTaskAccounting()}: the Truth subject generator treats any
+     * {@code get}-prefixed method as a property and emits an assertion calling it from
+     * {@code bz.stub.parallelconsumer}, where a package-private member of {@code ...parallelconsumer.internal} is
+     * not visible - which fails test compilation, not main compilation. The no-prefix form also matches
+     * {@link PCModule}'s accessors.
+     */
+    UserFunctionTaskAccounting userFunctionTaskAccounting() {
+        return userFunctionTaskAccounting;
+    }
+
+    /**
+     * Drops tasks the executor accepted but has not begun, on the way down.
+     * <p>
+     * The only place left that needs the concrete {@link ThreadPoolExecutor}: draining a pending-task queue has no
+     * {@link ExecutorService} equivalent. It is a shutdown path rather than a hot one, and a virtual-thread
+     * executor has no such queue to drain - every task it accepted already has a thread.
+     * <p>
+     * Package-private for the same reason {@link #setLastWorkRequestWasFulfilled(boolean)} is: its only caller is
+     * {@link #innerDoClose(Duration)}, which a never-started processor never reaches (an UNUSED instance goes
+     * straight to CLOSED), so a test could not otherwise drive it without standing up a whole control loop. It has
+     * to be driveable, because removing the accounting call inside it left the entire suite green.
+     */
+    void discardQueuedWork() {
+        ExecutorService pool = workerThreadPool.get();
+        if (pool instanceof ThreadPoolExecutor) {
+            List<Runnable> discarded = new ArrayList<>();
+            ((ThreadPoolExecutor) pool).getQueue().drainTo(discarded);
+            userFunctionTaskAccounting.onTasksDiscarded(discarded.size());
+        }
     }
 
 
@@ -1554,6 +1873,23 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Visible for testing
      */
     protected void commitOffsetsThatAreReady() throws TimeoutException, InterruptedException {
+        // DELIBERATELY STILL `synchronized`, and not migrated with the other monitors on the virtual-thread path.
+        //
+        // This one is held across retrieveOffsetsAndCommit() - a network commit - so on a JDK before 24 (JEP 491) it
+        // is the textbook pinning site, and converting it to a plain ReentrantLock is a two-line change that would
+        // look like an improvement.
+        //
+        // It is also the exact monitor in the AB-BA deadlock between the poll thread's onPartitionsRevoked and this
+        // method, diagnosed but NOT yet fixed - astubbs#29, and
+        // docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md. That fix
+        // needs a specific lock POLICY (tryLock with a timeout, so the cycle cannot close), not merely a lock. A
+        // plain lock() migration landing first either silently forecloses that fix or, worse, makes the file look
+        // as though it already has it.
+        //
+        // The cost of waiting is bounded: pinning here only bites on JDK 21-23, only with virtual threads enabled,
+        // and only on the control thread - which is one thread, not one per record. Whoever takes astubbs#29 should
+        // make it a ReentrantLock with the tryLock policy, and note that clearCommitCommand() is called from
+        // INSIDE this block, so reentrancy is load-bearing.
         log.trace("Synchronizing on commitCommand...");
         synchronized (commitCommand) {
             log.debug("Committing offsets that are ready...");

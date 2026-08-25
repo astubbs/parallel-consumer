@@ -1,0 +1,34 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the Rust client wave ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-client-rust
+    maturity: alpha
+    minimum_java: 17
+    package_ecosystem: crates.io
+    package_coordinate: parallel-consumer-proxy-client
+    reliability_confidence: >-
+      Wave one only: one record carried end to end over the real wire against the test-mode
+      sidecar. The connect, configure, dispatch, invoke, report and clean-shutdown path works; the
+      liveness lease, heartbeats, the manifest reconnect, worker-death reporting, terminal outcomes
+      and the shutdown drain are not implemented at all, so nothing about a session that loses its
+      connection or outlives a lease has been exercised.
+    api_expectation: >-
+      PROVISIONAL. The surface (connect/poll/shutdown, a processor returning Result whose Err is
+      the failure outcome) has not yet had its idiomatic-Rust review, and the reference wrapper
+      surface it mirrors may itself move when the fan-out's wave syncs resolve divergences.
+    support_posture: >-
+      Not supported for external use, and not published to crates.io. It exists to falsify the
+      frozen protocol documents - whether an author with no access to the proxy's Java can build a
+      working client from them - and the answer to that, in docs/inflight/clients/rust.md, is its
+      real output.
+    evidence_id: proxy-client-rust
+    tracking: astubbs#242
+    use_this_if: >-
+      You are working on the language-proxy fan-out itself and want to see how the surface lands in
+      a language with no exceptions, where the failure outcome is a returned value. Nobody should
+      consume it from an application yet.

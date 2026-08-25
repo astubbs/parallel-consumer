@@ -2,6 +2,7 @@
 <!--
 
     Copyright (C) 2020-2026 Confluent, Inc. and contributors
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -37,6 +38,9 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
+        <module>parallel-consumer-proxy</module>
+        <module>parallel-consumer-proxy-protocol</module>
+        <module>parallel-consumer-proxy-clients</module>
         <module>parallel-consumer-examples</module>
     </modules>
 
@@ -60,6 +64,8 @@
     </scm>
 
     <properties>
+        <!-- Set true by the foreign-clients profile; the notice only fires when they are absent. -->
+        <pc.foreign.notice.skip>false</pc.foreign.notice.skip>
         <source.version>17</source.version>
         <release.target>8</release.target>
 
@@ -101,6 +107,28 @@
         <included.groups></included.groups>
         <excluded.groups>performance,chaos,quarantined</excluded.groups>
 
+        <!-- EXECUTION-MODE AXIS. Parallel Consumer has opt-in execution paths that are meant to be
+             BEHAVIOURALLY EQUIVALENT to the default engine, and the thing worth asserting is not that each
+             one works but that each one AGREES with the default - on ordering, commits, retries, rebalance and
+             shutdown. That is the existing suite, run again with a different selector, so these are a matrix
+             axis over one suite rather than a suite each.
+
+             Each is a plain system property (rather than only a builder option) because the option has to be
+             selectable without editing source: bench/Bench.java.template compiles against every released
+             version in a sweep and cannot reference an option that did not exist in 0.3.0.2, and a CI matrix
+             entry should be a line of config.
+
+             Surefire forks a JVM, and a -D on the Maven command line does NOT reach that fork - it has to be
+             forwarded, which is what the systemPropertyVariables block below does. Without the forwarding,
+             `mvn test -Dpc.virtualThreads=true` runs the entire suite on the DEFAULT engine and reports
+             green: the silent-green shape in
+             docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md.
+
+             ADDING THE NEXT MODE IS A LINE HERE PLUS A LINE IN THE FORWARDING BLOCK - not a second job.
+             docs/inflight/test-opt-in-engine-paths-are-unexercised.md is why that matters. -->
+        <pc.virtualThreads>false</pc.virtualThreads>
+        <pc.directPull>false</pc.directPull>
+
         <!-- version numbers -->
         <!-- plugins -->
         <lombok.version>1.18.46</lombok.version>
@@ -116,6 +144,26 @@
         <slf4j.version>2.0.18</slf4j.version>
         <kafka.version>3.9.2</kafka.version>
         <version.unij>0.1.3</version.unij>
+
+        <!-- language proxy (astubbs#242) -->
+        <!-- ONE PIN FOR THREE MODULES, AND IT HAS TO BE ONE. The generated stubs
+             (parallel-consumer-proxy-protocol), the server transport (parallel-consumer-proxy) and
+             the Java client channel (parallel-consumer-proxy-client-java-grpc) all speak the same
+             gRPC runtime, so a version they disagree on is a runtime failure in a downstream
+             consumer rather than a build failure here.
+
+             It was declared separately in all three, each with a comment saying "must match the
+             protocol module's pin" - three places to bump, and a bump that updated two of them
+             looked green. That is not hypothetical: a CVE fix on this branch had to find and edit
+             all three by hand. Inheriting one property from this pom is what the three comments
+             were asking for; Maven properties do not flow between siblings, but they do flow down.
+
+             NOT protobuf.version, which stays in parallel-consumer-proxy-protocol/pom.xml: it is
+             declared exactly once, it pairs with the protoc binary that module downloads
+             (proxy.protoc), and .github/workflows/clients.yml reads `<protobuf.version>` out of
+             that pom BY PATH to provision protoc for the Rust row. Moving it would be a rename with
+             a reader that hard-errors, for no drift being fixed. -->
+        <grpc.version>1.75.0</grpc.version>
 
         <!-- tests -->
         <parallel-tests>true</parallel-tests>
@@ -152,6 +200,46 @@
     </properties>
 
     <profiles>
+
+        <!--
+            SAY WHAT IS MISSING, AND ONLY WHEN SOMETHING IS. There is one notice, not a pair: a
+            build that includes the foreign clients needs no announcement that it did, so this
+            profile fires only when they are absent and is silent otherwise.
+
+            parallel-consumer-proxy-clients/pom.xml OWNS the exclusion; this only decides what the
+            root module says about it. Adding a language means editing the text here.
+        -->
+        <!--
+            ONE PROFILE ID, ONE SWITCH. `foreign-clients` exists in this pom and in
+            parallel-consumer-proxy-clients/pom.xml, which OWNS the module exclusion. Sharing the id
+            means every way of turning it on turns all of it on:
+
+                ./mvnw -Dpc.foreignClients ...   the switch
+                ~/.m2/settings.xml, a profile that SETS that property, for a machine that
+                always wants them - verified to activate everything the flag does
+
+            NOT -P foreign-clients. It activates this profile and the aggregator's by id, but the
+            eight per-language e2e-harness profiles activate on the PROPERTY, which -P never sets -
+            so the clients build with the engine missing from the reactor. Measured: 6 modules
+            under -P against 12 under -D.
+
+            The notice is therefore NOT gated on `!pc.foreignClients`: a negated-property profile
+            cannot be switched off by activating something by id, so `-P foreign-clients` would have
+            built the clients while the notice still said they were absent. It is always declared and
+            this profile silences it instead, which every activation route reaches.
+        -->
+        <profile>
+            <id>foreign-clients</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <properties>
+                <pc.foreign.notice.skip>true</pc.foreign.notice.skip>
+            </properties>
+        </profile>
+
         <profile>
             <!-- override source and target when working from IDE -->
             <id>intellij-idea-only</id>
@@ -593,20 +681,6 @@
         </testResources>
         <plugins>
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-help-plugin</artifactId>
-                <version>3.5.2</version>
-                <executions>
-                    <execution>
-                        <id>show-profiles</id>
-                        <phase>compile</phase>
-                        <goals>
-                            <goal>active-profiles</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
                 <groupId>org.sonatype.ossindex.maven</groupId>
                 <artifactId>ossindex-maven-plugin</artifactId>
                 <version>3.2.0</version>
@@ -701,6 +775,26 @@
                              exclusion). -->
                         <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
 
+                        <!-- com.google.code.gson:gson (via grpc-java, into parallel-consumer-proxy
+                             and parallel-consumer-proxy-client-java-grpc). Misattributed, and the
+                             CVE record says so itself: CVE-2025-53864 is assigned to Connect2id
+                             Nimbus JOSE + JWT (10.0.x before 10.0.2, 9.37.x before 9.37.4), and its
+                             own description ends "NOTE: this is independent of the Gson 2.11.0
+                             issue because the Connect2id product could have checked the JSON object
+                             nesting depth, regardless of what limits (if any) were imposed by
+                             Gson." Nimbus JOSE + JWT is not in this tree at any scope.
+
+                             OSV returns NO advisory for com.google.code.gson:gson at 2.11.0, so
+                             GHSA does not consider gson affected either and no Dependabot alert
+                             exists to chase. Sonatype is again the only source, as with
+                             netty-codec-http above. Not bumped instead: OSS Index's affected range
+                             for gson cannot be read without credentials, so a version bump would be
+                             a guess at clearing the finding rather than a fix, and gson is a
+                             transitive of grpc-java that no pom here declares.
+                             RETIRE WHEN: OSS Index corrects the attribution, or the proxy modules
+                             stop resolving gson through grpc-java. -->
+                        <excludeVulnerabilityId>CVE-2025-53864</excludeVulnerabilityId>
+
                         <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
 
                              The date is machine-read by bin/check-cve-exclusions.sh, which fails the
@@ -762,15 +856,28 @@
                 </executions>
             </plugin>
             <plugin>
-                <groupId>com.soebes.maven.plugins</groupId>
-                <artifactId>echo-maven-plugin</artifactId>
-                <version>0.5.0</version>
-                <!-- very useful for debugging maven runtime state -->
-                <!--                <configuration>-->
-                <!--                    <echos>-->
-                <!--                        <echo>vars: ${JAVA_HOME} ${java.home} ${jvm.location}</echo>-->
-                <!--                    </echos>-->
-                <!--                </configuration>-->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <inherited>false</inherited>
+                <executions>
+                    <execution>
+                        <id>foreign-clients-notice</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${pc.foreign.notice.skip}</skip>
+                            <target>
+                                <echo level="info">Parallel Consumer - JVM modules only.</echo>
+                                <echo level="info">- NOT in this build: the 8 foreign-language clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</echo>
+                                <echo level="info">- Add -Dpc.foreignClients to build and test them.</echo>
+                                <echo level="info">- That needs go, node, cargo, dotnet and ruby on PATH, plus Docker for cpp and swift.</echo>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>io.whelk.asciidoc</groupId>
@@ -897,6 +1004,11 @@
                     </excludes>
                     <jvm>${jvm.location}/bin/java</jvm>
                     <skipTests>${skipUTs}</skipTests>
+                    <!-- Execution-mode axis - see the pc.* properties above. -->
+                    <systemPropertyVariables>
+                        <pc.virtualThreads>${pc.virtualThreads}</pc.virtualThreads>
+                        <pc.directPull>${pc.directPull}</pc.directPull>
+                    </systemPropertyVariables>
                     <!-- Same group filtering as failsafe below - without this binding, surefire ignores
                          the quarantine/performance tags entirely and a @Quarantined UNIT test would
                          still run (and fail) in the gating Unit Tests lane (ce-review P1 finding). -->

@@ -1,0 +1,46 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the proxy work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-engine
+    artifact: parallel-consumer-proxy
+    coverage: >-
+      118 tests over the engine seam, the transport and the configuration handler. The engine's
+      hardest behaviour is covered by its own classes rather than inferred from the clients:
+      LivenessLeaseTest and ProxyProcessorLivenessTest for the session lease and its expiry,
+      ReconnectWindowTest for the three-state window that holds a dropped session's records rather
+      than returning them, ManifestReconcilerTest for what a reconnecting client reclaims, and
+      ProxyProcessorProduceTest for the produce path.
+      This module also supplies the harness the whole cross-language suite runs on. ProxyHarness
+      drives two lanes - the engine held in-process, and the same fixture reached by spawning the
+      test-mode sidecar and speaking the production gRPC protocol at it - so a foreign client
+      exercises the real transport rather than a test-only bridge. All thirteen conformance
+      bindings, and therefore every language, assert against this module's fixture.
+      Behaviour is established able to fail rather than assumed: each conformance scenario was
+      proven by a mutation that turns exactly its own row red while the others stay green, and the
+      thread confinement in the engine was proven by un-confining one field at a time.
+    inspect:
+      - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/harness/ProxyHarness.java
+      - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/engine/ProxyProcessorLivenessTest.java
+      - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/engine/ReconnectWindowTest.java
+    limitation: >-
+      Nothing here runs against a real Kafka broker. The module has no src/test-integration at all -
+      core and vertx are the only modules that do - so every test reaches Kafka through
+      LongPollingMockConsumer. Real rebalance, real commit round-trips, real partition revocation
+      and real broker latency are therefore unexercised, and the ambient-probe machinery that guards
+      the broker suites does not apply here.
+      There is no production entry point yet. The only main is TestModeMain, which lives in
+      src/test and boots the engine with mock Kafka clients; the pom declares no mainClass. The
+      sidecar's lifecycle - startup, drain, operator stop and the parent-death watchdog - is U10 in
+      the language-proxy plan and is unlanded, with its mechanism already settled by KTD19. So
+      questions about when the sidecar exits have no answer in the code yet, by design rather than
+      by oversight.
+      Exactly-once is unreachable through this module: ExternalEngine throws on transactional commit
+      mode, which is why the interaction model keeps produce on the engine side.
+      The liveness lease, the reconnect window and manifest reconciliation are proven engine-side
+      only. No client is asked to demonstrate any of them, so a client that never heartbeats would
+      pass every shared scenario today.

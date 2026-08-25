@@ -647,6 +647,17 @@ passed all seven chaos scenarios. Two adjacent commits, a prose-only diff betwee
 green: whatever draws this signature is drawn per seed, and no tree-content explanation survives that
 pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
 
+<<<<<<< HEAD
+## A technique with a named target here (2026-08-21)
+
+A competitor's TLA+ verification reports finding, by exhaustive state exploration, **a race between
+offset commit and partition revocation** - a commit tick executing inside a revoked window before
+revocation completed, producing silent duplicates under specific rebalance interleavings. That is the
+shape of this family, found by construction rather than by seeded replay.
+[`next-formal-verification-and-correctness-methods.md`](next-formal-verification-and-correctness-methods.md)
+argues the case and scopes it: model the commit-advancement and drain/revoke paths only, not the
+whole system.
+=======
 **Thirteenth sighting, 2026-08-20 - the first chaos run with the new detectors, and none of them
 fired.** `Chaos Pain Suite` on astubbs/parallel-consumer#325's merged head `283202eb5`
 ([run 32334089543](https://github.com/astubbs/parallel-consumer/actions/runs/32334089543)), 8 of 9
@@ -674,3 +685,4 @@ and per the table in
 [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
+>>>>>>> origin/master

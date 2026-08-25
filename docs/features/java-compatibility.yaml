@@ -18,7 +18,10 @@ availability:
     - release: 0.3.0.2
       basis: GitHub CI began exercising the Java 8 build.
 readme_anchor: java-version-per-module
-summary: Choose an artifact whose bytecode and dependencies support the Java runtime used by the application.
+summary: >-
+  Runs on Java 8 and up. Each module publishes bytecode for the oldest Java runtime its dependencies
+  allow, so an application on an older JVM can adopt Parallel Consumer without upgrading its runtime
+  first - choose the artifact whose bytecode and dependencies match the Java version already in use.
 use_this_when:
   - You need to select a Parallel Consumer module for a Java 8, 11 or 17 deployment.
 setup:

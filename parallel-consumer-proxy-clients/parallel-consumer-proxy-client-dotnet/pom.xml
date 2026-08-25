@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client .NET</name>
+    <artifactId>parallel-consumer-proxy-client-dotnet</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over the .NET SDK. The commands below run ONLY under
+        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this pom and runs
+        no .NET toolchain at all.
+
+        The bare `build` and `test` arguments resolve because this directory holds exactly one
+        solution file, Bz.Stub.ParallelConsumer.Proxy.Client.sln, which names both the library
+        (src/) and its tests (tests/). Keep it that way: a second solution or a stray project file
+        at this level makes every `dotnet` command here ambiguous, including the CI row's
+        `dotnet format analyzers` verification, which also takes no project argument.
+
+        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, AND THE PROFILE BELOW IS HOW MAVEN ORDERS IT.
+        `dotnet test` here spawns the conformance harness (TestModeMain, in
+        parallel-consumer-proxy's test jar). An earlier note in this place said Maven could not
+        order that for us and told the reader to build the proxy by hand first; it can, the same
+        way the Go, Python and TypeScript modules already do it, and the clients matrix row - which
+        cannot run a hand command - was red on exactly this. Locally the hand command still works
+        and is still the fastest way:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The test fails with that command in its message rather than skipping, because a test that
+        quietly does not run is not a passing test. Recorded as a wave finding in
+        docs/inflight/clients/dotnet.md (astubbs#242).
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>dotnet</pc.foreign.build.executable>
+        <pc.foreign.build.args>build</pc.foreign.build.args>
+        <pc.foreign.test.executable>dotnet</pc.foreign.test.executable>
+        <pc.foreign.test.args>test</pc.foreign.test.args>
+    </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE CONFORMANCE TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            tests/.../ConformanceHarness.cs spawns the real test-mode sidecar over the real wire,
+            which needs the proxy module's test jar (TestModeMain and the harness) and its main
+            jar. Declaring them here is what makes the CI row's own command build the proxy before
+            this module's test phase; the row runs `package` rather than `test` for the other half
+            of it, because the harness looks for jar FILES and `test` stops one phase short of
+            producing them.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all, so a
+            scoped build still runs no .NET toolchain and never reaches the engine. Modelled on the
+            go-e2e-harness profile, which was written when the Go row failed this same way.
+        -->
+        <profile>
+            <id>dotnet-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml. Test scope does
+                         not travel transitively, so the proxy's own test dependencies are not ours
+                         unless named - and the sidecar starts, then dies without them. -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <!--
+                                    THE HARNESS ASKS MAVEN FOR THIS LIST ITSELF IF IT IS NOT HERE,
+                                    AND IN CI THAT SECOND ASK FAILS. Its fallback runs a nested
+                                    `./mvnw -pl :parallel-consumer-proxy dependency:build-classpath`
+                                    with no -am, so parallel-consumer-core has to come from the
+                                    local repository - which a CI job never installs into, since
+                                    the reactor stops at `package`. Writing the file here, from the
+                                    reactor that already has every module resolved, means the
+                                    fallback is only ever the developer's path. Same arrangement as
+                                    the Go module's sidecar-classpath.txt, one filename apart
+                                    because each harness chose its own.
+                                -->
+                                <id>proxy-test-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the foreign suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/proxy-test-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                `mvn clean` MUST REMOVE WHAT `mvn compile -Dpc.foreignClients` BUILT, and for .NET
+                that is not under target/. MSBuild writes bin/ (the assemblies) and obj/ (the
+                intermediate output, which here also holds the protobuf and gRPC stubs Grpc.Tools
+                generates on every build) beside each .csproj - three of them, src/ plus the two
+                under tests/. Nothing else in the reactor would ever delete those, so without this
+                block a clean tree still carries a full build of the conformance runner - Debug here,
+                since `dotnet build` defaults to it and nothing in this module asks for Release.
+
+                DELETED BY DIRECTORY PATTERN RATHER THAN BY PATH, to match this module's own
+                .gitignore (`bin/`, `obj/`, `target/`) - that file is the module's existing
+                statement of what is output, and a fourth project added to the solution would
+                otherwise be missed here in silence.
+
+                BOTH PATTERNS PER DIRECTORY ARE REQUIRED, and the shorter one alone is the trap:
+                maven-clean-plugin removes a directory only once it is empty, so `**/bin` selects
+                bin/ but nothing inside it and deletes NOTHING. Measured in a control before this
+                was written (astubbs#242): `**/bin` alone left bin/Debug/net8.0/*.dll standing;
+                adding `**/bin/**` removed the tree.
+
+                WHAT IS DELIBERATELY NOT HERE: ~/.nuget/packages. The restored packages are this
+                language's ~/.m2 - fetched dependencies, not build output - and `mvn clean` does not
+                empty ~/.m2. `dotnet clean` is not used either: it needs the SDK present to delete
+                files, and the whole premise of the foreign-clients profile is that the toolchain is
+                absent on an ordinary machine. The clients aggregator's pom carries the full
+                argument, including why no exec-driven clean can work at all.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}</directory>
+                            <includes>
+                                <include>**/bin</include>
+                                <include>**/bin/**</include>
+                                <include>**/obj</include>
+                                <include>**/obj/**</include>
+                                <include>**/TestResults</include>
+                                <include>**/TestResults/**</include>
+                            </includes>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

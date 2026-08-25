@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Scala</name>
+    <artifactId>parallel-consumer-proxy-client-scala</artifactId>
+
+    <!--
+        The Scala client: a Future-native client for the frozen v1 protocol, and the second client
+        with NO foreign-toolchain wrapper - Scala is a JVM language and builds with
+        scala-maven-plugin from Central like any other plugin, so it needs nothing installed that
+        the JVM reactor does not already have.
+
+        sbt is the ecosystem's usual build tool and is deliberately NOT used. It would be a second
+        build system inside a Maven reactor - a second dependency graph, a second place a version is
+        pinned, and a second thing every `-pl` invocation in this repository would have to know
+        about. The bar for reaching for it was "the Maven plugin genuinely cannot express what Scala
+        needs", and nothing in this module got near it: one compiler, one set of flags, two source
+        roots, the ordinary surefire lane. Revisit only with a concrete thing Maven cannot say.
+
+        IT WRAPS THE JAVA gRPC TRANSPORT, and that decision was made and paid for by the Kotlin
+        wave rather than re-argued here (docs/inflight/clients/kotlin.md has the measurements). The
+        JVM was heading for three session implementations - java-grpc, Kotlin, Scala - so every
+        session defect would have needed fixing three times; it is one. The two things that once
+        made wrapping unattractive are fixed at source: the transport module no longer drags the
+        engine into a wrapper's build, and the reference API now takes an AsyncRecordProcessor
+        returning a CompletionStage, which a Scala Promise completes with no thread parked per
+        record. Verify the first rather than trusting it, before and after any dependency change:
+
+            ./mvnw -pl :parallel-consumer-proxy-client-scala -am validate
+
+        which must not print parallel-consumer-proxy. `bin/build.sh` opens with `clean`, so a
+        reactor edge to the engine here would delete the sidecar jar every other language's
+        conformance test spawns.
+
+        What is left is what is genuinely Scala: scala.concurrent.Future as the verdict channel,
+        Option instead of Optional, a sealed Outcome, case classes with defaults instead of a
+        builder, and an implicit ExecutionContext instead of an injected thread pool. That boundary
+        is one file, Bridge.scala, so the cost of being a Scala client stays visible and countable.
+
+        It therefore depends on parallel-consumer-proxy-client-java-grpc and on nothing else of its
+        own: protobuf, gRPC and the protocol module all arrive transitively through the transport,
+        and no code in this module names any of them.
+    -->
+
+    <properties>
+        <!--
+            This module's real runtime floor is Java 17: the gRPC channel stack requires it, as the
+            java-grpc module's pom explains at length. The Scala compiler's -release below is set to
+            match, so bytecode and claim agree.
+        -->
+        <release.target>17</release.target>
+
+        <!--
+            SCALA 2.13, NOT 3.x, AND IT IS AN AUDIENCE DECISION RATHER THAN A TASTE ONE.
+
+            Who this client is for is Kafka-adjacent Scala, and that population is still
+            overwhelmingly on 2.13: Kafka's own Scala surface (kafka-streams-scala) publishes _2.13,
+            Spark's Scala API is 2.12/2.13, and Flink's is 2.12. A Scala 3 application can depend on
+            a 2.13 library - that is what the TASTY/2.13 interoperability was built for - while a
+            2.13 application cannot depend on a Scala 3 one. So 2.13 serves both populations and 3.x
+            serves one of them, which settles it without anyone having to like 2.13 better.
+
+            The cost is named rather than hidden: this module gives up Scala 3's syntax and its
+            enums. Nothing in the surface below needs either - a sealed trait with two case classes
+            is the same shape in both - so the cost is presently zero, and the day it stops being
+            zero is the day to revisit. A cross-build is deliberately NOT set up: two artefacts to
+            test, publish and keep in step is real recurring work for an experimental client, and
+            the 2.13 artefact already reaches Scala 3 users.
+        -->
+        <scala.version>2.13.18</scala.version>
+        <scala.compat.version>2.13</scala.compat.version>
+        <scala-maven-plugin.version>4.9.10</scala-maven-plugin.version>
+
+        <!--
+            THE ONE TEST THAT NEEDS THE JVM-SIDE HARNESS, and the switch that lets it exist without
+            a permanent reactor edge to the engine. Excluded by name in an ordinary build; the
+            scala-e2e-harness profile below flips this to a pattern matching nothing, so
+            -Dpc.foreignClients (which the module's CI row passes) runs it. The exclusion is by
+            CLASS NAME, so renaming the test silently re-enables it in a lane with no classpath
+            file - and the test fails rather than skips when that file is missing, so the mistake is
+            loud rather than quiet.
+        -->
+        <pc.scala.sidecar.test.exclude>**/OneRecordThroughTheSidecarTest.*</pc.scala.sidecar.test.exclude>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>${scala.version}</version>
+        </dependency>
+        <!--
+            The session, shared with every other JVM client: the stream, the handshake, the dispatch
+            queue and its overflow rule, the verbatim token echo, and the session end with its
+            cause. The protocol module, protobuf and the gRPC channel stack all arrive through it,
+            and nothing in this module names them - which is the check that this really is a wrapper
+            and not a fork.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A PROFILE.
+
+            The one end-to-end test spawns the real test-mode sidecar (TestModeMain, in the proxy
+            module's TEST jar - it must never reach a client package) over the real wire, so it
+            needs that jar, the proxy's main jar, and core's test jar underneath, plus a classpath
+            file naming them. Declaring those OUTSIDE a profile would give this module a permanent
+            reactor edge to the engine, and `bin/build.sh` would then `clean` the very jar every
+            other language's conformance test spawns. Scoped here, the edge exists only in the
+            opt-in lane. The three jars arrive through ONE dependency, the java-harness module,
+            which holds them at compile scope for exactly this purpose - the Kotlin wave's pom
+            explains why restating them would be a second copy of a set that has already drifted.
+        -->
+        <profile>
+            <id>scala-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <properties>
+                <!-- matches no test class: the sidecar test runs in this lane -->
+                <pc.scala.sidecar.test.exclude>**/NoTestIsExcludedInTheHarnessLane.*</pc.scala.sidecar.test.exclude>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy-client-java-harness</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- after the dependencies above resolve, before the test phase
+                                     that reads the file -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <!-- version from the root pom -->
+                        <configuration>
+                            <!--
+                                THE ENGINE IS THE SIDECAR'S CLASSPATH, NOT THIS TEST'S. The
+                                dependencies above exist to be handed to a CHILD PROCESS; this JVM
+                                needs none of them, and having them costs rather than helps. In a
+                                reactor run (`-pl <this> -am`, which is what the CI row does) a
+                                `test-jar` dependency on a module that has not reached the package
+                                phase resolves to a class directory that is not the one holding its
+                                test classes - so core's JUnit `TestExecutionListener` service file
+                                arrives without the listener it names, and the fork dies before any
+                                test runs with `ServiceConfigurationError: Provider ...
+                                MyRunListener not found`. The Kotlin wave verified this both ways;
+                                this module inherits the arrangement rather than rediscovering it.
+                            -->
+                            <classpathDependencyExcludes>
+                                <classpathDependencyExclude>
+                                    bz.stub.parallelconsumer:parallel-consumer-core
+                                </classpathDependencyExclude>
+                                <classpathDependencyExclude>
+                                    bz.stub.parallelconsumer:parallel-consumer-proxy
+                                </classpathDependencyExclude>
+                            </classpathDependencyExcludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <executions>
+                    <execution>
+                        <!--
+                            THE CONFORMANCE RUNNER'S CLASSPATH, in the DEFAULT build rather than a
+                            profile - the same arrangement, and for the same reasons, as the Kotlin
+                            module's execution of this name.
+
+                            scripts/conformance-runner is the executable the shared suite's registry
+                            names, and a JVM client's "binary" is a JVM plus a resolved classpath, so
+                            this file is what makes that wrapper a runnable thing. It is not in the
+                            harness profile because the runner needs no engine: it spawns the SIDECAR
+                            SHIM the suite hands it, which is the client library's real spawn path,
+                            and the engine lives in the suite's own JVM.
+
+                            Written at generate-test-resources, before test-compile emits the runner
+                            beside it, so an ordinary `test-compile` of this module leaves both
+                            halves current. NOTHING REGENERATES IT AT RUN TIME, deliberately, which
+                            is why the registry entry for this client carries no build command: the
+                            reactor that runs the suite builds this module, and a nested `mvn` would
+                            rewrite class directories under the JVM executing the suite.
+                        -->
+                        <id>conformance-classpath</id>
+                        <phase>generate-test-resources</phase>
+                        <goals>
+                            <goal>build-classpath</goal>
+                        </goals>
+                        <configuration>
+                            <outputFile>${project.build.directory}/conformance-classpath.txt</outputFile>
+                            <!-- test scope, so the runner's own JVM gets logback and the diagnostics
+                                 the suite attaches to a failure are readable -->
+                            <includeScope>test</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>${scala-maven-plugin.version}</version>
+                <configuration>
+                    <scalaVersion>${scala.version}</scalaVersion>
+                    <args>
+                        <!--
+                            STATIC ANALYSIS IS THE COMPILER, AND THAT IS THE MATURE OPTION RATHER
+                            THAN A SHORTCUT. Scala's standalone analysers were weighed against the
+                            "only if mature, and it must run locally" filter every other client
+                            applied: scapegoat and WartRemover are both compiler plugins that must
+                            be published for the exact Scala patch version in use, and neither
+                            tracks releases reliably enough to gate a build on. Scalafix is a
+                            rewriter whose rule set for a codebase this size is mostly formatting.
+                            The compiler's own lint is what remains, it is maintained by definition,
+                            and -Werror is what turns it from advice into a gate.
+                            docs/client-static-analysis.md carries the cross-language policy.
+
+                            Proven able to fail rather than assumed: an unused private method and an
+                            unused import were each added and each turned this build red
+                            (-Wunused), and removing them turned it green.
+                        -->
+                        <arg>-Xlint</arg>
+                        <arg>-Wunused:imports,privates,locals,explicits,implicits,params</arg>
+                        <arg>-Wvalue-discard</arg>
+                        <arg>-Werror</arg>
+                        <arg>-deprecation</arg>
+                        <arg>-feature</arg>
+                        <!-- bytecode and the module's stated floor agree, the same way the Kotlin
+                             module's jvmTarget does -->
+                        <arg>-release</arg>
+                        <arg>${release.target}</arg>
+                    </args>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>scala-compile</id>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>scala-test-compile</id>
+                        <goals>
+                            <goal>testCompile</goal>
+                        </goals>
+                        <configuration>
+                            <args combine.self="override">
+                                <!--
+                                    Tests keep the lint and lose -Werror and -Wvalue-discard: a test
+                                    that discards a value on purpose (asserting a call returns at
+                                    all) is not a defect, and a warning that fails a build is a
+                                    reason to write a worse test. The main surface is where the
+                                    gate belongs.
+                                -->
+                                <arg>-Xlint</arg>
+                                <arg>-deprecation</arg>
+                                <arg>-feature</arg>
+                                <arg>-release</arg>
+                                <arg>${release.target}</arg>
+                            </args>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <!-- version from the root pom -->
+                <configuration>
+                    <includes>
+                        <!--
+                            Scala test classes compile to ordinary JUnit 5 classes, but surefire's
+                            default includes are Java-shaped (*Test.java); naming the class pattern
+                            is what makes it look at the compiled Scala ones at all.
+                        -->
+                        <include>**/*Test.class</include>
+                    </includes>
+                    <excludes>
+                        <!-- the root pom's own exclusions, restated: a child <excludes> replaces
+                             the parent's list rather than adding to it -->
+                        <exclude>**/integrationTest*/**/*.java</exclude>
+                        <exclude>**/*IT.java</exclude>
+                        <exclude>${pc.scala.sidecar.test.exclude}</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-parent</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Language Proxy Protocol</name>
+    <artifactId>parallel-consumer-proxy-protocol</artifactId>
+
+    <!--
+        This module owns proxy.proto, its generated Java, and the hand-written classes that bridge a
+        well-known type to a JVM type for every JVM speaker of the protocol (WireDurations,
+        WireTimestamps - their javadoc and the README say why the bridges live here rather than in
+        each caller). The engine depends on it, the gRPC
+        transport depends on it, and the direct transport must NEVER depend on it - that arrow is
+        enforced by bannedDependencies in parallel-consumer-proxy-client-java-direct. Non-JVM
+        clients generate from src/main/proto/parallelconsumer/proxy/v1/proxy.proto by path, with no
+        Maven dependency at all.
+
+        The schema is FROZEN (the language-proxy plan's freeze unit, astubbs#242): the wire may
+        only gain, never change. The banner at the top of proxy.proto is the authority on what
+        that means, and bin/check-proto-breaking.sh (buf breaking, FILE category) enforces it.
+    -->
+
+    <properties>
+        <!--
+            This module's real runtime floor is Java 17, and it must say so.
+
+            The project-wide release.target is 8 (Jabel compiles Java 17 source to Java 8
+            bytecode), but this module exists solely for the proxy family - the engine and the
+            gRPC transport - whose floor is 17 (parallel-consumer-proxy/pom.xml carries the full
+            reasoning, including why the build cannot detect a wrong claim). Publishing Java 8
+            bytecode here would claim a runtime floor the family never supports, and would route
+            the entire generated message surface through Jabel for the benefit of no consumer.
+        -->
+        <release.target>17</release.target>
+
+        <!--
+            protobuf-java 3.25.5 pairs with the gRPC version, and the generated code and the runtime
+            must agree. ${grpc.version} is inherited from the root pom, which owns it for all three
+            modules that speak the protocol - see its comment for why it is not declared here.
+
+            protobuf.version stays here, and deliberately: this module is its only consumer, it
+            selects the protoc binary below, and .github/workflows/clients.yml reads it out of THIS
+            pom by path to provision protoc for the Rust row. Bump the pair together.
+        -->
+        <protobuf.version>3.25.5</protobuf.version>
+
+        <!--
+            Which protoc compiles the schema. The default downloads the platform binary for
+            exactly ${protobuf.version} from Maven Central, so generated code always matches the
+            protobuf-java runtime. For an offline build, -Dproxy.protoc=PATH switches to a protoc
+            found on the system PATH - at whatever version that binary happens to be, so the
+            default is what CI and releases must use.
+
+            src/test/scripts/verify-offline-protoc-parity.sh proves the two routes generate
+            byte-identical output - run it after touching this wiring.
+        -->
+        <proxy.protoc>${protobuf.version}</proxy.protoc>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>${protobuf.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <!-- The generated ProxyServiceGrpc carries @javax.annotation.Generated, which the JDK
+             stopped shipping at Java 9. This is grpc-java's own prescription for that (see its
+             README's "Download" section): compile-time only, so provided scope - nothing needs it
+             at runtime, and it must not leak onto consumers' classpaths. -->
+        <dependency>
+            <groupId>org.apache.tomcat</groupId>
+            <artifactId>annotations-api</artifactId>
+            <version>6.0.53</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Shared test conventions (TestConventionsArchTest) live in core's test-jar. This is
+             test scope only: the production dependency arrow runs engine -> protocol, never
+             protocol -> core. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!-- Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+             commons-lang3, and test scope is not transitive. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                io.github.ascopes, not the long-standard org.xolstice plugin: xolstice was archived
+                read-only in April 2025 (last release 2018), and needed the os-maven-plugin
+                classifier dance to find a platform protoc. The ascopes plugin is maintained and
+                resolves platform-correct protoc and protoc plugin binaries itself.
+
+                3.10.3 is the newest line this build can run, not the newest release: every 4.x and
+                5.x release declares a Maven 3.9.6 prerequisite ("versions before 3.9.6 cannot
+                handle Java 17 bytecode in Eclipse Sisu") and the wrapper pins Maven 3.9.0, which
+                fails the build with PluginIncompatibleException - measured here, not assumed. If
+                the wrapper ever moves past 3.9.6, upgrade this plugin with it; the 4.x rename to
+                watch is binaryMavenPlugins -> plugins kind="binary-maven" and protocVersion ->
+                protoc.
+            -->
+            <plugin>
+                <groupId>io.github.ascopes</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+                <version>3.10.3</version>
+                <configuration>
+                    <protocVersion>${proxy.protoc}</protocVersion>
+                    <!--
+                        NOT the plugin's default of target/generated-sources/protobuf, and the
+                        difference is load-bearing: the root pom's build-helper-maven-plugin adds
+                        target/generated-sources as a TEST source root in every module, and a source
+                        root sweeps its whole subtree - so anything generated beneath that path is
+                        compiled twice, once as a main source (this plugin registers its output as a
+                        main root) and again by testCompile into test-classes. Measured on this
+                        module: the default path duplicated every generated class into
+                        target/test-classes. Keeping the output outside generated-sources entirely
+                        is what makes the generated code appear exactly once on the compile path.
+                    -->
+                    <outputDirectory>${project.build.directory}/generated-protobuf</outputDirectory>
+                    <binaryMavenPlugins>
+                        <binaryMavenPlugin>
+                            <groupId>io.grpc</groupId>
+                            <artifactId>protoc-gen-grpc-java</artifactId>
+                            <version>${grpc.version}</version>
+                        </binaryMavenPlugin>
+                    </binaryMavenPlugins>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- The root pom filters test resources (property substitution), and filtering a binary
+                 corrupts it - or, as measured here, fails the build outright on a byte sequence that
+                 is not valid UTF-8. The golden wire fixtures (golden-*.bin) are protobuf bytes whose
+                 EXACT content is the point, so .bin is excluded from filtering rather than the
+                 fixtures moved out of resources. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <configuration>
+                    <nonFilteredFileExtensions>
+                        <nonFilteredFileExtension>bin</nonFilteredFileExtension>
+                    </nonFilteredFileExtensions>
+                </configuration>
+            </plugin>
+            <!-- Generated code is not coverage-bearing, and jacoco's @Generated annotation filter
+                 does not fire for protobuf gencode - the exclusion must be explicit. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>bz/stub/parallelconsumer/proxy/protocol/v1/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <!-- Same reason as the jacoco exclusion: generated code is not documentation-bearing. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <configuration>
+                    <excludePackageNames>bz.stub.parallelconsumer.proxy.protocol.v1</excludePackageNames>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

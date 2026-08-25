@@ -9,6 +9,8 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -204,11 +206,14 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         // unlock the user function
         testUserFunction.unlockProcessing();
 
-        // in flight messages + buffered messages should get processed now (exact number is based on dynamic load factor)
+        // Every record that was already out at a worker when the pause landed must finish - that is the
+        // guarantee a user depends on, and it is what both engines owe. How many MORE than that finish is not:
+        // it is however much the engine had pushed into its executor queue ahead of the pause, which the
+        // direct-pull engine (-Dpc.directPull=true) has none of. See the paused-buffer assertion below.
         Awaitility
                 .waitAtMost(defaultTimeout)
-                .alias("at least " + degreeOfParallelism + " records should be processed")
-                .untilAsserted(() -> assertThat(testUserFunction.numProcessedRecords.get()).isGreaterThan(degreeOfParallelism));
+                .alias("the " + degreeOfParallelism + " in-flight records should all complete")
+                .untilAsserted(() -> assertThat(testUserFunction.numProcessedRecords.get()).isAtLeast(degreeOfParallelism));
 
         // overall committed offset should reach the same value
         awaitForCommit(testUserFunction.numProcessedRecords.get());
@@ -216,6 +221,16 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         // shouldn't have anymore in flight records now
         assertThat(testUserFunction.numInFlightRecords.get()).isEqualTo(0);
         assertThat(parallelConsumer.getWm().getNumberRecordsOutForProcessing()).isEqualTo(0);
+
+        // The bound the original assertion never had, and it is the half of "pause works" that matters more:
+        // whatever was already dispatched drains, but the pause stops the rest, so this must be nowhere near
+        // the whole set. Without it, an engine that ignored the pause entirely would satisfy everything above.
+        assertThat(testUserFunction.numProcessedRecords.get())
+                .isLessThan(numTestRecordsPerSet);
+
+        // The "strictly more than maxConcurrency finish" half of the original assertion has moved to
+        // pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords(), which is where it can be skipped
+        // for an engine that has no such queue without aborting everything asserted above.
 
         // resume parallel consumer ->
         parallelConsumer.resumeIfPaused();
@@ -228,6 +243,57 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
 
         // overall committed offset should reach the total number of processed records
         awaitForCommit(numTestRecordsPerSet);
+    }
+
+    /**
+     * The pre-loaded-queue half of what
+     * {@link #testThatInFlightWorkIsFinishedSuccessfullyAndOffsetsAreCommitted} used to assert, kept at its
+     * original strength and given its own method so that skipping it for an engine that has no such queue does
+     * not abort everything that test asserts either side of it.
+     * <p>
+     * The engine PC ships pushes work into a {@link java.util.concurrent.ThreadPoolExecutor}'s queue ahead of
+     * the workers, sized by the dynamic load factor, so by the time a pause lands STRICTLY MORE than
+     * {@code maxConcurrency} records are already committed to running and must be seen through. That is a real
+     * property of the shipped engine and losing it to accommodate a measurement engine would be a regression
+     * in what this class proves.
+     * <p>
+     * The direct-pull engine ({@code -Dpc.directPull=true}) has no intermediate queue: exactly the in-flight
+     * records finish, and the count is exactly {@code maxConcurrency}. A pause there is exact rather than
+     * approximate, which is a behaviour difference this assertion cannot express - so it is skipped, visibly,
+     * rather than loosened for both.
+     * <p>
+     * Not parameterised by commit mode: what is under test is how much work the engine had buffered when the
+     * pause landed, which has nothing to do with how offsets are committed.
+     */
+    @Test
+    @SneakyThrows
+    void pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords() {
+        int degreeOfParallelism = 3;
+        int numTestRecordsPerSet = 1_000;
+
+        TestUserFunction testUserFunction = createTestSetup(CommitMode.PERIODIC_CONSUMER_SYNC, degreeOfParallelism);
+        testUserFunction.lockProcessing();
+
+        addRecordsWithSetKey(numTestRecordsPerSet);
+
+        Awaitility
+                .waitAtMost(defaultTimeout)
+                .alias(degreeOfParallelism + " records should be in flight processed")
+                .untilAsserted(() -> assertThat(testUserFunction.numInFlightRecords.get()).isEqualTo(degreeOfParallelism));
+
+        parallelConsumer.pauseIfRunning();
+        awaitForOneLoopCycle();
+        testUserFunction.unlockProcessing();
+
+        Assumptions.assumeFalse(parallelConsumer.getWm().getOptions().isDirectPullEngine(),
+                "the direct-pull engine has no pre-loaded executor queue, so a pause is exact: "
+                        + "exactly maxConcurrency records finish, never more");
+
+        Awaitility
+                .waitAtMost(defaultTimeout)
+                .alias("more than the " + degreeOfParallelism + " in-flight records should be processed, "
+                        + "because the executor queue was pre-loaded ahead of them")
+                .untilAsserted(() -> assertThat(testUserFunction.numProcessedRecords.get()).isGreaterThan(degreeOfParallelism));
     }
 
 }

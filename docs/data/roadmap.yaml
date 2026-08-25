@@ -224,7 +224,7 @@ entries:
   - id: virtual-threads
     title: Support virtual threads
     serves: [performance, flexibility]
-    horizon: next-0x
+    horizon: "0.6.0.0"
     blocks_1_0: false
     stage: idea
     stage_detail: >-
@@ -382,7 +382,13 @@ entries:
     stage: requirements-drafted
     stage_detail: >-
       The requirements plan landed with the strategy bet (astubbs#308); it decides the what, not
-      the how - no implementation plan yet.
+      the how - no implementation plan yet. Two proof-of-concept branches exist from 2020 and
+      neither reached a working state: features/dynamic-concurrency-control adds a
+      parallel-consumer-core-auto-scale module whose AutoScalingProcessor drives the worker pool
+      from Netflix concurrency-limits (Gradient2Limit, BlockingAdaptiveExecutor) and requests work
+      by limit-minus-inflight; feature/auto-tuning-pressure adds a BackoffAnalyser implementing
+      additive-increase multiplicative-decrease against the last observed failure point. Both are
+      unmerged, so they are evidence the approach has been attempted, not evidence that it works.
     why_now: >-
       Deploy-time configuration guesses runtime-dependent quantities and is wrong in both directions.
       The engine already measures what it needs to decide for itself; STRATEGY.md carries this as the

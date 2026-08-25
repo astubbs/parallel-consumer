@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # Optional, NON-GATING fast feedback on a self-hosted high-CPU runner (many-core Linux, native Docker).
 #
 # Runs the two suites that this runner is genuinely better at - performance and chaos - as separate

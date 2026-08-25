@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Java reference implementation work ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - artifact: parallel-consumer-proxy-client-java
+    deferred:
+      reason: >-
+        No test evidence is claimed for an aggregator packaging pom; the three Java modules beneath it carry their own evidence.
+      lifted_by: >-
+        astubbs#242 - the Java reference implementation wave of the language-proxy plan.

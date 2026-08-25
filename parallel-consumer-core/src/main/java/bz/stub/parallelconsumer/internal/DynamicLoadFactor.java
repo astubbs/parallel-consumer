@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Controls a loading factor. Is used to ensure enough messages in multiples of our target concurrency are queued ready
@@ -68,11 +69,19 @@ public class DynamicLoadFactor {
 
     @Getter
     private int currentFactor;
+
+    /**
+     * The factor this instance started at. Retained (rather than only being written into {@link #currentFactor}) so
+     * that {@link #isStatic()} can answer whether this factor was ever able to move.
+     */
+    private final int initialFactor;
+
     private long lastSteppedFactor = currentFactor;
     private Instant lastStepTime = Instant.MIN;
 
     public DynamicLoadFactor(int initial, int maximum) {
         this.currentFactor = initial;
+        this.initialFactor = initial;
         this.maxFactor = maximum;
     }
 
@@ -88,19 +97,31 @@ public class DynamicLoadFactor {
         return false;
     }
 
-    private synchronized boolean doStep() {
-        if (isMaxReached()) {
-            return false;
-        } else {
-            // compare and set
-            currentFactor = currentFactor + stepUpFactorBy;
-            long delta = currentFactor - lastSteppedFactor;
-            log.debug("Stepped up load factor by {} from {} to {}", delta, lastSteppedFactor, currentFactor);
+    private final ReentrantLock stepLock = new ReentrantLock();
 
-            //
-            lastSteppedFactor = currentFactor;
-            lastStepTime = Instant.now();
-            return true;
+    /**
+     * A {@link ReentrantLock} rather than {@code synchronized} for uniformity with the other monitors on the
+     * virtual-thread path, not because this one pins: nothing inside blocks. Kept as a lock so the whole engine
+     * reads one way.
+     */
+    private boolean doStep() {
+        stepLock.lock();
+        try {
+            if (isMaxReached()) {
+                return false;
+            } else {
+                // compare and set
+                currentFactor = currentFactor + stepUpFactorBy;
+                long delta = currentFactor - lastSteppedFactor;
+                log.debug("Stepped up load factor by {} from {} to {}", delta, lastSteppedFactor, currentFactor);
+
+                //
+                lastSteppedFactor = currentFactor;
+                lastStepTime = Instant.now();
+                return true;
+            }
+        } finally {
+            stepLock.unlock();
         }
     }
 
@@ -140,5 +161,20 @@ public class DynamicLoadFactor {
 
     public boolean isMaxReached() {
         return currentFactor >= maxFactor;
+    }
+
+    /**
+     * Is this factor pinned, i.e. not actually dynamic?
+     * <p>
+     * When the initial factor already equals (or exceeds) the maximum there is nowhere to step up to, so
+     * {@link #isMaxReached()} is true from construction onwards and stays true forever. That is the normal result of a
+     * user setting {@link bz.stub.parallelconsumer.ParallelConsumerOptions#messageBufferSize} - see
+     * {@link PCModule} - and so "the maximum has been reached" is not news about the system, it is a restatement of
+     * the configuration.
+     *
+     * @return true if the factor can never move from where it started
+     */
+    public boolean isStatic() {
+        return initialFactor >= maxFactor;
     }
 }

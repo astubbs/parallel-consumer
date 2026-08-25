@@ -24,7 +24,7 @@ v6_stability_exception:
   # follows: do not copy individual issue state into a document, link readers to the tracker instead.
   # A snapshot of open pull requests is stale the day after it is written and nothing updates it.
   queue: Open v6 product-fix and test-integrity pull requests on astubbs/parallel-consumer are the release inputs.
-  explicit_deferrals: Virtual threads, micro-batching and the dead-letter queue are deferred features, not open defects.
+  explicit_deferrals: Micro-batching and the dead-letter queue are deferred features, not open defects. Virtual threads are no longer deferred - they ship as an opt-in option; see docs/features/virtual-threads.yaml.
 claim_boundaries:
   - The data records known failure modes and their controls; it does not claim that unknown defects cannot exist.
   - A passing test does not replace diagnosis, a control arm or investigation evidence for a concurrency fix.
@@ -118,6 +118,11 @@ test_harness:
     inspect:
       - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java
       - parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ProgressProbe.java
+# Entries may also live as per-module fragments in testing-evidence.d/, one file per module,
+# merged into this corpus by bin/check-docs-data.sh (see 'fragment_collection' in schema.yaml).
+# The streams-alpha and connect-alpha entries below describe modules that are deliberately NOT in
+# the reactor yet: they are the evidence targets the staged maturity rows in staging/ point at,
+# which is why the checker's pom cross-check does not require module_evidence artifacts to resolve.
 module_evidence:
   - id: core
     artifact: parallel-consumer-core

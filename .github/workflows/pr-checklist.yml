@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # PR Checklist gate - makes .github/PULL_REQUEST_TEMPLATE.md's checklist actually binding.
 #
 # The template is only a passive nudge (and `gh --body-file` PRs skip it entirely), so this check

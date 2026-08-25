@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-client-java</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java Direct</name>
+    <artifactId>parallel-consumer-proxy-client-java-direct</artifactId>
+
+    <!--
+        The direct transport: the shared API bound straight to parallel-consumer-core, in-process
+        (astubbs#242, docs/plans/2026-08-14-001-feat-language-proxy-plan.md - U29's spike; U21
+        completes it). It depends on the api module and core, and NEVER on the protocol module,
+        protobuf or gRPC - the ban below is the build-time proof of that absence (AE26). Its tests
+        run the api test-jar's transport-parameterised conformance suite over core's mock Kafka
+        clients (core test-jar), deliberately without the proxy harness, whose test-jar would drag
+        protobuf onto this classpath.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- the shared conformance suite - the same test classes the grpc sibling runs (KTD20) -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!-- LongPollingMockConsumer: core's mock-clients pattern, so the fixture stays broker-free -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+            commons-lang3, and test scope is not transitive, so relying on core to supply it here
+            would break the moment core stopped using it.
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                THE INVARIANT THIS MODULE EXISTS TO HOLD, enforced before any code exists to
+                violate it: the direct transport must compile and pass its tests with no protobuf
+                and no gRPC anywhere on its classpath, and no dependency on the protocol module.
+                If it cannot, transport detail has leaked upward into the shared API surface -
+                which would silently break the API's transport-independence and then propagate the
+                leak to nine languages that mirror that API. The Java reference work adds an
+                ArchUnit rule covering the API SURFACE; this ban covers the CLASSPATH. Do not
+                weaken or remove it to make a build green - a red here means the leak is real.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>ban-transport-dependencies</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <searchTransitive>true</searchTransitive>
+                                    <excludes>
+                                        <exclude>com.google.protobuf:*</exclude>
+                                        <exclude>io.grpc:*</exclude>
+                                        <exclude>bz.stub.parallelconsumer:parallel-consumer-proxy-protocol</exclude>
+                                    </excludes>
+                                    <message>
+                                        The direct transport depends on the shared API module only - never on
+                                        protobuf, gRPC, or the protocol module. If this ban fired, transport detail
+                                        has leaked into the shared client API; fix the leak, do not weaken the ban.
+                                        See the comment on this execution in
+                                        parallel-consumer-proxy-client-java-direct/pom.xml (astubbs#242).
+                                    </message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

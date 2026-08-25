@@ -204,25 +204,27 @@ All four now exist as data. Each keeps its planning note, which holds the reason
 
 What does not exist yet is the rendered documentation an agent generates from all of it.
 
-## 0.5.3.3 was never released, by anyone
+## 0.5.3.3 WAS released - this section said the opposite until 2026-08-22
 
-Worth knowing before writing release copy or triaging a mirror: **`0.5.3.3` exists as a changelog
-section and a tag, and was never published as an artifact.** Upstream's last release on Maven Central
-is `0.5.3.2`; it was abandoned before cutting 0.5.3.3, and this fork has published nothing yet. Check
-with a Maven Central search for `g:io.confluent.parallelconsumer` rather than trusting the changelog,
-which lists 0.5.3.3 like any other section.
+**Corrected, and the correction matters because release copy and mirror triage were both built on the
+wrong version.** This section used to read *"0.5.3.3 exists as a changelog section and a tag, and was
+never published as an artifact"*. It is on Maven Central: the jar resolves (HTTP 200), Central's own
+metadata lists it as both `<latest>` and `<release>`, and `bench/run-bisect.sh` has since measured it
+by resolving `io.confluent.parallelconsumer:parallel-consumer-core:0.5.3.3` like any other version.
 
-Two consequences:
+It shipped in **August 2025**, a year after 0.5.3.2 - later than most summaries of upstream's last
+activity assume, and anything written about that date should use it. See
+[`perf-engine-comparison-2026-08-22.md`](perf-engine-comparison-2026-08-22.md), "The released-upstream
+arm, and what 'last public release' actually means".
 
-- **Anything labelled `fixed-in/0.5.3.3` is unreachable today.** No user can consume those fixes, so
-  0.6.0.0 is their first delivery - which is why astubbs#182, astubbs#184 and astubbs#188 all carry
-  the `0.6.0.0` label despite naming an earlier fix version. That combination looks like a mistake
-  and is not.
-- **A user on `io.confluent...:0.5.3.2` is further behind than the changelog suggests**, by a whole
-  section's worth of fixes they never had access to.
+So the two consequences that used to hang off this are **withdrawn**: `fixed-in/0.5.3.3` names a
+version users can depend on today, and a user on 0.5.3.2 is behind by exactly what the changelog says
+rather than by more. The `0.6.0.0` labels on astubbs#182, astubbs#184 and astubbs#188 need re-checking
+against that, since the reasoning recorded for them here was the unreachability this section asserted.
 
-This is specific to 0.5.3.3. Every other `fixed-in/0.5.x` label names a version that really shipped,
-and those fixes are already in users' hands.
+**What the mistake was**: a Maven Central search for `g:io.confluent.parallelconsumer` was named as
+the check and either was not run or was misread. The durable version of the check is the one the bench
+harness performs by accident - ask Maven to resolve the coordinate, and see whether it does.
 
 ## Do at release: one sweep over the upstream mirrors
 

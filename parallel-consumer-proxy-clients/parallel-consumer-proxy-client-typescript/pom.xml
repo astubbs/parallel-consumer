@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client TypeScript</name>
+    <artifactId>parallel-consumer-proxy-client-typescript</artifactId>
+    <packaging>pom</packaging>
+
+    <!--
+        Thin Maven wrapper over the Node toolchain: package.json beside this file is the real
+        build, and `npm run build` / `npm test` are the one recipe a developer and the CI matrix
+        row both run. The exec bindings fire ONLY under -Dpc.foreignClients (the foreign-clients
+        profile in the clients aggregator), so an ordinary `bin/build.sh -am` builds this module
+        as an empty Maven skeleton and starts no Node at all.
+
+        `npm run build` runs `npm ci` first, deliberately: the exec binding calls a script, not a
+        shell, so there is nowhere else to install dependencies, and `npm ci` from the committed
+        package-lock.json is the reproducible form of it.
+
+        TypeScript wave of the language-proxy plan, astubbs#242.
+    -->
+    <properties>
+        <pc.foreign.skip>false</pc.foreign.skip>
+        <pc.foreign.build.executable>npm</pc.foreign.build.executable>
+        <pc.foreign.build.args>run build</pc.foreign.build.args>
+        <pc.foreign.test.executable>npm</pc.foreign.test.executable>
+        <pc.foreign.test.args>test</pc.foreign.test.args>
+    </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            The suite's end-to-end test spawns the real test-mode sidecar over the real wire, which
+            needs the proxy module's test jar (TestModeMain and the harness), its main jar, and
+            core's test jar underneath. Declaring them here is what makes
+            `./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients` -
+            the CI matrix row's exact command - build those modules first and resolve them;
+            build-classpath below then writes the classpath where the test reads it.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all. The
+            client itself obtains the protocol the way every non-JVM client does, by generating
+            from the .proto by path, with no Maven dependency; this edge is a test-scoped harness
+            dependency in the opt-in lane and nothing this client ships.
+
+            Modelled on the Python client's python-e2e-harness profile, which solved the same
+            problem first. The Go wave recorded the unsolved version of it as a plan defect: `-am`
+            alone cannot order a build this module has no dependency on.
+        -->
+        <profile>
+            <id>typescript-e2e-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <!-- LongPollingMockConsumer and the harness's logback-test.xml -->
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-core</artifactId>
+                    <version>${project.version}</version>
+                    <type>test-jar</type>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the Node suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+            </plugin>
+            <!--
+                WHAT `mvn clean` REMOVES FOR THIS MODULE, AND WHAT IT DELIBERATELY LEAVES.
+
+                `dist/` is the whole of tsc's output: every emitted .js, .d.ts, .js.map and
+                .d.ts.map, plus the incremental build state, which lands at dist/tsconfig.tsbuildinfo
+                because outDir is dist and the project is composite. So one directory is the
+                complete answer, and a plain directory rather than an include pattern avoids the
+                glob subtlety that a pattern selecting a directory does not select the files under
+                it. Measured: after `npm run build`, dist/src/index.js and dist/tsconfig.tsbuildinfo
+                exist and nothing outside dist/ is new.
+
+                node_modules IS NOT LISTED, AND THAT IS THE POINT. It holds fetched dependencies,
+                which makes it this language's local repository, not build output; `mvn clean`
+                deletes target/ and does not empty ~/.m2. Listing it would turn a sub-second clean
+                into a 128-package reinstall.
+
+                NOT IN A PROFILE, matching the rest of this tree: deleting a directory needs no
+                toolchain, so `./mvnw clean` must work on a box with no Node installed. Gating it
+                behind -Dpc.foreignClients would make cleaning require the very toolchain the
+                profile exists to keep optional.
+
+                `npm run clean` in package.json is the developer-facing equivalent and removes the
+                same directory. Two lists that must agree: change one, change the other.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/dist</directory>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

@@ -13,7 +13,11 @@ availability:
     tag: 0.5.2.4
     path: CHANGELOG.adoc
     basis: Added support for compacted topics and commit-offset resetting by reconciling tracked incomplete offsets with polled records.
-summary: Recover completion tracking when compaction or an offset reset means records previously represented in the offset map are no longer present in a poll.
+summary: >-
+  Compacted topics and offset gaps are supported. Completion tracking recovers when compaction or an
+  offset reset means records previously represented in the offset map are no longer present in a poll.
+  Parallel Consumer never assumes offsets are contiguous: completion is tracked only for records actually delivered, so a hole in the log - from
+  compaction, a transaction control record, or an aborted transaction - is not a record it waits for.
 use_this_when:
   - A consumer processes compacted topics.
   - Operations can reset a consumer group's offsets and the library must reconcile its stored completion state.

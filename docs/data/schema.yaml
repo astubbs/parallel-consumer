@@ -13,6 +13,22 @@ kinds:
       - axes
       - release_validation
       - modules
+    # Rows may also live one-per-module in docs/data/module-maturity.d/<artifact>.yaml. A fragment
+    # carries this same kind and exactly one `modules:` entry whose artifact matches its filename;
+    # bin/check-docs-data.sh merges fragments into the root file's corpus. The split exists so that
+    # concurrent client waves never append to a shared file - a YAML list append is the shape git
+    # auto-merges wrongly about as often as it conflicts loudly. The root file keeps the shared
+    # preamble (release, axes, release_validation), which is repo-level and belongs to no wave.
+    fragment_collection: modules
+    # A module that deliberately publishes no row yet carries `deferred:` in its own fragment, in
+    # place of the row fields - never on a shared deferral list, which every deferring wave would
+    # edit. `reason` says why no claim is published; `lifted_by` names the unit, issue or condition
+    # expected to replace the deferral with a real row. The checker names every current deferral in
+    # its output, so a deferral stays visible rather than becoming a quiet omission.
+    deferral:
+      required:
+        - reason
+        - lifted_by
     item_contracts:
       module_required: modules
     module_required:
@@ -29,6 +45,15 @@ kinds:
       - opt_in
       - isolated_from_stable_modules
       - feature
+      # The user-facing install surface for a client whose users do not install from Maven. Every
+      # client is a Maven module, so `artifact` always names the Maven coordinate - but a Python
+      # user installs from PyPI and a Rust user from crates.io. That fact lives HERE on the
+      # maturity row, not in feature records: the row is one-per-module and answers "can I rely on
+      # this and how do I get it", while feature records are many-per-module, so a coordinate
+      # repeated across them drifts. package_ecosystem names the registry (pypi, crates.io, npm,
+      # rubygems, nuget, ...); package_coordinate names the package as that registry knows it.
+      - package_ecosystem
+      - package_coordinate
   roadmap:
     required:
       - reviewed_at_release
@@ -84,6 +109,14 @@ kinds:
       - regression_controls
       - quarantine
       - investigation_records
+    # Same fragment convention as module-maturity: docs/data/testing-evidence.d/<artifact>.yaml
+    # carries exactly one module_evidence entry (or a deferral) for the module named by its
+    # filename, so no two waves ever write the same evidence file.
+    fragment_collection: module_evidence
+    deferral:
+      required:
+        - reason
+        - lifted_by
     item_contracts:
       test_layer_required: test_layers
       module_evidence_required: module_evidence

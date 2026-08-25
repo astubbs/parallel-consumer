@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 #
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
 # upstream-sweep.sh -- check the archived upstream (confluentinc/parallel-consumer)
 # for NEW activity since we last looked, and flag drift on the issues/PRs we track.
 #

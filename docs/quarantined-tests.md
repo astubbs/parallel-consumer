@@ -111,3 +111,18 @@ were hidden by the surefire retry until astubbs#224 removed it.
   failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
   unverified hypothesis and its falsification path are in
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+
+- [ ] `PCMetricsTest.metricsRegisterBinding` - **re-quarantined**, having been released by
+  astubbs#265 on a causal fix that addressed the opposite direction of the failure. That diagnosis was
+  that the metric could be *more* current than the expectation testing it (`expected 203.0 but was
+  207.0`), so the `Thread.sleep(1000)` became an `await().untilAsserted(...)` on the trailing meters.
+  What fails now is the metric *behind* and never converging: `PARTITION_LAST_COMMITTED_OFFSET` for
+  partition 1 stays short of `counterP1 + p1StartingOffset` for the whole 120s budget. Seen twice in a
+  row on one head (astubbs#116, 2026-08-14) as `expected 1213.0 but was 1209.0` then `expected 1207.0
+  but was 1195.0` - a shortfall that varies, so no wait closes it. That is the shape
+  [`assert-the-commit-frontier-not-the-tick-path.md`](solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md)
+  warns against, and it rhymes with the `OffsetEncodingBackPressureTest` entry below, whose committed
+  high-water mark also never reaches its expectation with a different actual each run - worth ruling
+  in or out as one phenomenon rather than two. Whether the un-committed tail is a wrong test
+  assumption or real commit behaviour is undecided and is the open task. No owner yet; diagnosis in
+  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).

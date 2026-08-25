@@ -55,6 +55,73 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
+      # go-offline resolves declared dependencies and plugin JARs, but NOT the platform protoc /
+      # protoc-gen-grpc-java EXECUTABLES that protobuf-maven-plugin resolves for itself at generate
+      # time. Left cold, every downstream job fetches them from Central and inherits the Azure West
+      # US CDN route lottery in docs/solutions/build-errors/ ("Maven Central download timeouts") -
+      # a 240s hang, then a hard NullPointerException out of Aether rather than a retry. Measured on
+      # astubbs/parallel-consumer#293: in one run "Unit Tests" fetched protoc in 272ms while
+      # "Integration Tests" hung the full 240s on the identical URL, and it failed 2 of 6
+      # consecutive runs. The classifier is linux-x86_64 because this job declares ubuntu-latest.
+      - name: Warm plugin-resolved protoc binaries
+        run: |
+          set -euo pipefail
+          evaluate() {
+            ./mvnw -q --batch-mode -pl parallel-consumer-proxy-protocol \
+              -Dexpression="$1" -DforceStdout \
+              org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate 2>/dev/null | tail -1
+          }
+          # A renamed property makes help:evaluate print "null object or invalid expression", which
+          # dependency:get would happily turn into a warm of the wrong coordinate - warming nothing
+          # is indistinguishable from a cache hit until it fails four jobs downstream, so require a
+          # version-shaped answer rather than merely a non-empty one.
+          require_version() {
+            case "$2" in
+              [0-9]*) : ;;
+              *) echo "::error::$1 did not resolve to a version from parallel-consumer-proxy-protocol/pom.xml (got '$2') - the protoc cache warm would be a silent no-op"; exit 1 ;;
+            esac
+          }
+          protoc_version=$(evaluate proxy.protoc)
+          grpc_version=$(evaluate grpc.version)
+          require_version proxy.protoc "$protoc_version"
+          require_version grpc.version "$grpc_version"
+          get() {
+            ./mvnw --batch-mode -ntp \
+              org.apache.maven.plugins:maven-dependency-plugin:3.11.0:get -Dartifact="$1"
+          }
+          get "com.google.protobuf:protoc:${protoc_version}:exe:linux-x86_64"
+          get "io.grpc:protoc-gen-grpc-java:${grpc_version}:exe:linux-x86_64"
+          # Assert the binaries are on disk: the exit code says the goal ran, only the file says the
+          # cache this job exists to populate actually got populated.
+          test -s ~/.m2/repository/com/google/protobuf/protoc/"${protoc_version}"/protoc-"${protoc_version}"-linux-x86_64.exe
+          test -s ~/.m2/repository/io/grpc/protoc-gen-grpc-java/"${grpc_version}"/protoc-gen-grpc-java-"${grpc_version}"-linux-x86_64.exe
+      # The same class of miss as protoc above, in a different plugin: scala-maven-plugin resolves
+      # the Scala COMPILER and the zinc compiler-bridge sources jar for itself at scala:compile time,
+      # so neither is a declared dependency and go-offline leaves both cold. Measured on
+      # astubbs/parallel-consumer#293, run 32008526667: "Unit Tests" spent 4m01s on
+      # scala-compiler-2.13.18.jar before Central gave up and it fell to the mirror, then was still
+      # fetching compiler-bridge_2.13-1.12.0-sources.jar 3m12s later when the lane's 15-minute cap
+      # killed it - the same CDN route lottery documented above, and it cost the whole job.
+      #
+      # Warmed by COMPILING the module rather than by naming coordinates: the bridge version comes
+      # from the plugin's own zinc dependency and no pom property carries it, so a `dependency:get`
+      # would need a literal that rots silently the next time the plugin is bumped - warming the
+      # wrong coordinate being indistinguishable from a cache hit is the defect the block above
+      # exists to prevent. -am keeps this to the scala module's own reactor chain.
+      - name: Warm scala-maven-plugin's compiler and zinc bridge
+        run: |
+          set -euo pipefail
+          # `package`, not `compile`: the scala module's -am chain includes
+          # parallel-consumer-proxy-protocol, which depends on parallel-consumer-core's TEST-JAR, and
+          # that artifact does not exist until core is packaged - a compile-only run resolves it
+          # against Central and 404s. The root pom's maven-release-plugin comment records the same
+          # trap for the same reason.
+          ./mvnw --batch-mode -ntp -Pci -pl :parallel-consumer-proxy-client-scala -am -DskipTests package
+          # Assert by glob, not by version, for the same reason the compile is version-free: the
+          # point is that the cache got populated, and a run that resolved nothing must go red here
+          # rather than four minutes into a downstream lane.
+          test -n "$(find ~/.m2/repository/org/scala-lang/scala-compiler -name 'scala-compiler-*.jar' -print -quit 2>/dev/null)"
+          test -n "$(find ~/.m2/repository/org/scala-sbt -name 'compiler-bridge_*-sources.jar' -print -quit 2>/dev/null)"
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
@@ -66,6 +133,37 @@ jobs:
 
   # Default Kafka version: split suites for fast, parallel feedback.
   # Uses the same scripts as local development (ci-unit-test.sh, etc.)
+  #
+  # EXECUTION-MODE AXIS. The last entry is not a fourth suite - it is the FIRST suite again, run with a
+  # different execution mode selected. Parallel Consumer has opt-in execution paths that are meant to be
+  # BEHAVIOURALLY EQUIVALENT to the default engine, and what needs asserting is not that each one works
+  # but that each one AGREES with the default, on ordering, commits, retries, rebalance and shutdown.
+  # That is the suite we already have, run again with a different selector - so it is a matrix axis over
+  # one suite, not a suite per path. See docs/inflight/test-opt-in-engine-paths-are-unexercised.md.
+  #
+  # ADDING THE NEXT MODE IS A MATRIX ENTRY, not another job. Direct pull is the next one:
+  #     - suite: unit
+  #       name: "Unit Tests (direct pull)"
+  #       cmd: "bin/ci-unit-test.sh -Dpc.directPull=true"
+  #       mode: direct-pull
+  #       java: '17'
+  #       timeout: 20
+  # It needs a row in bin/check-execution-mode.sh's mode_marker()/mode_selector() too, and it is
+  # deliberately NOT added here - that is separate work.
+  #
+  # WHY THE VIRTUAL-THREAD ENTRY BUILDS ON 17 AND TESTS ON 21. Virtual threads are a RUNTIME capability
+  # and PC reaches them reflectively, so nothing has to compile against JDK 21 - and nothing can: Jabel
+  # 1.0.0, which is what lets this project emit Java 8 bytecode from Java 17 source, does not run on JDK
+  # 21 at all (it rewrites javac internals with a Byte Buddy that predates it, and strips
+  # Source$Feature.LAMBDA in the attempt). Surefire's fork is a separate JVM, and the pom already
+  # parameterises it as ${jvm.location}, so the lane tests the SHIPPED Java 8 bytecode on a JDK 21
+  # runtime - which is exactly what a user with this option enabled does.
+  #
+  # THE JOB IS ADVISORY AND ITS NAME IS NEW. Required status checks are matched BY NAME in the master
+  # ruleset, and a required context that no run has ever produced blocks every PR whose base predates it
+  # - so making this one required is a separate, deliberate act, after it has run on master. Note also
+  # that a JDK axis existed here once (JDK 8 and 13) and was removed for cost; re-adding one re-opens
+  # that decision (astubbs#128), and this entry is scoped to the unit suite only to keep it cheap.
   test:
     if: github.event_name == 'pull_request'
     needs: prepare-deps
@@ -89,15 +187,30 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # First non-default entry on the execution-mode axis - see the header comment above.
+          - suite: unit
+            name: "Unit Tests (virtual threads)"
+            cmd: "bin/ci-unit-test.sh -Dpc.virtualThreads=true -Djvm.location=$JAVA_HOME_21_X64"
+            mode: virtual-threads
+            advisory: true
+            timeout: 20
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
+    # Advisory entries never gate merge - see the execution-mode note in this job's header comment.
+    continue-on-error: ${{ matrix.advisory == true }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
+      # 17 is LAST so it wins JAVA_HOME and stays the BUILD JDK for every entry. setup-java also
+      # exports JAVA_HOME_21_X64, which is how the virtual-thread entry points surefire's fork at a
+      # JDK 21 runtime without moving the compiler - Jabel cannot run on 21. Listing 21 is a no-op
+      # for every other entry.
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: |
+            21
+            17
       - name: Restore Maven cache
         uses: actions/cache/restore@v4
         with:
@@ -107,12 +220,28 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: ${{ matrix.name }}
         run: ${{ matrix.cmd }}
+      # A suite that SKIPPED the mode it was asked for and reported green is the failure this axis
+      # exists to prevent, and it is the shape this repo has already shipped once. The guard reads the
+      # surefire XML - structural evidence, not a log string - and refuses a green verdict when the
+      # mode-proving tests did not execute. always(), so it still speaks when the suite went red.
+      - name: "Was the execution mode actually exercised?"
+        if: always() && matrix.mode != ''
+        # pipefail is NOT the default for a run: step (GitHub uses "bash -e {0}"), so a bare
+        # "guard | tee" would report tee's status and the step would be green however the guard
+        # exited - this step silently doing the exact thing it was written to catch. Explicit shell,
+        # explicit pipefail.
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash bin/check-execution-mode.sh "${{ matrix.mode }}" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
           files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
-          flags: ${{ matrix.suite }}
+          # Distinct per matrix entry, not per suite: two entries now share the "unit" suite, and one
+          # flag for both would average the default engine's coverage with the virtual-thread run's.
+          flags: ${{ matrix.mode && format('{0}-{1}', matrix.suite, matrix.mode) || matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
@@ -185,6 +314,45 @@ jobs:
         run: bash bin/test-check-docs-data.sh
       - name: Validate release-documentation data structure
         run: bin/check-docs-data.sh
+
+  # Protocol freeze gate: the proxy wire schema may only GAIN, never change (the language-proxy
+  # plan's freeze, astubbs#242). `buf breaking` in the FILE category - configured in
+  # parallel-consumer-proxy-protocol/buf.yaml, FILE because WIRE would tolerate source-breaking
+  # renames the compatibility promise forbids - compares the PR's schema against the frozen one on
+  # origin/master. bin/check-proto-breaking.sh passes with a notice while master has no frozen
+  # schema yet, so the job arms itself the moment the freeze lands.
+  #
+  # It also carries the schema's STATIC ANALYSIS - `buf lint`, via bin/check-proto-lint.sh - because
+  # the two share a toolchain install and a checkout, and splitting them would buy a second job for
+  # one binary. The job's NAME is deliberately unchanged: it is a required check, and renaming a
+  # required check silently un-gates every open PR. The lint runs FIRST: a schema that does not lint
+  # is a schema whose breaking-change comparison is answering a question nobody asked yet. The
+  # protocol earns its own analysis because it is the artifact all eleven clients are generated
+  # from - one defect there arrives in every language at once (docs/client-static-analysis.md).
+  proto-breaking:
+    if: github.event_name == 'pull_request'
+    name: "proto: breaking"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # the baseline is origin/master, which a shallow clone lacks
+      - name: Install buf
+        uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+      - name: Lint the schema (buf lint)
+        run: bin/check-proto-lint.sh
+      # Self-test first, the same order as the docs-data and copyright scanners: this gate's
+      # ability to say no was demonstrated once, by hand, and never since - so the cases that pin
+      # it (a deletion, a renumber, a rename, and a renamed module that must not re-enter the
+      # "nothing frozen yet" branch) run here, where a regression is visible. It mutates the schema
+      # one way at a time and restores it, so the gate below still sees an untouched tree.
+      - name: Self-test the gate (prove it can still say no)
+        run: bash bin/test-check-proto-breaking.sh
+      - name: Enforce the frozen schema (additions only)
+        run: bin/check-proto-breaking.sh
 
   # Experimental Kafka 4.x compatibility check. Non-blocking.
   # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds

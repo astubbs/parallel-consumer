@@ -1,0 +1,22 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Buf configuration for the proxy protocol. Java codegen is Maven's job (see pom.xml); buf exists
+# here for schema hygiene and, once the schema is frozen by the language-proxy plan's freeze unit
+# (astubbs#242), for the breaking-change gate in CI. FILE is the category that actually forbids
+# field deletion and type change; WIRE is weaker than the compatibility promise requires.
+version: v2
+modules:
+  - path: src/main/proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # The one bidirectional stream deliberately reuses the session envelopes as its request and
+    # response types - ClientMessage/ProxyMessage ARE the protocol, and a SessionRequest wrapper
+    # would be one more message ten languages must name for zero information. Frozen with the
+    # schema; renaming is now a breaking change anyway.
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE

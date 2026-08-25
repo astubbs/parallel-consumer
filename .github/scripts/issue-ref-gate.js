@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+//
 // Flags an UNQUALIFIED `#NN` on ADDED lines, where the number is low enough to be ambiguous.
 //
 // House convention (AGENTS.md -> Issue references): below #1000 a reference must say which repo it
