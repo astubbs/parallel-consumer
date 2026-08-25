@@ -41,8 +41,8 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * The scenarios pin, in order: the default is byte-compatible with the pre-seam world (shut down, cause recorded);
  * the handler sees an accurate history (attempts, elapsed, consecutive exhaustions); both decisions work end to
  * end, including recovery after CONTINUE; the handler is fail-safe - throwing or hanging converts to shut-down
- * rather than a wedged instance; a deciding handler holds no PC monitor, so rebalance-path callers of the
- * {@code commitCommand} monitor are never blocked by user code; the SASL budget lane feeds the same event; the
+ * rather than a wedged instance; a deciding handler holds no PC lock, so callers of the commit cycle lock are
+ * never blocked by user code; the SASL budget lane feeds the same event; the
  * waiter in {@code ConsumerOffsetCommitter#commitAndWait} no longer carries its own {@code offsetCommitTimeout}
  * deadline, which is the precondition for the seam being reachable at all; a CONTINUE consumes any pending commit
  * command rather than hot-looping on it; and a reassignment scopes the history it reports.
@@ -176,7 +176,7 @@ class MockConsumerCommitFailureDecisionTest extends MockConsumerCommitFailureSea
      * <p>
      * The bound is an internal constant (default 30s, deliberately not a user option); it is shortened here through
      * the same static test seam {@code BrokerPollSystem.longPollTimeout} uses. The {@link ResourceLock} serialises
-     * this test against {@link #aSlowHandlerDoesNotBlockTheCommitCommandMonitor}, the other test whose handler is
+     * this test against {@link #aSlowHandlerDoesNotBlockTheCommitCycleLock}, the other test whose handler is
      * deliberately in flight for a while - a shortened bound leaking into that test would convert its held-open
      * decision into a spurious timeout.
      */
@@ -211,14 +211,19 @@ class MockConsumerCommitFailureDecisionTest extends MockConsumerCommitFailureSea
     }
 
     /**
-     * Monitor-free invocation: while a slow handler is still deciding, the {@code commitCommand} monitor is
-     * free - so a rebalance-path caller (the revocation commit synchronizes on it) is never blocked behind user
-     * code. Probed directly through {@link AbstractParallelEoSStreamProcessor#requestCommitAsap()}, which takes
-     * exactly that monitor.
+     * Lock-free invocation: while a slow handler is still deciding, the commit cycle lock is free - so no caller
+     * of it waits behind user code. Probed directly through
+     * {@link AbstractParallelEoSStreamProcessor#requestCommitAsap()}, which takes exactly that lock.
+     * <p>
+     * Distinct from the revocation path's protection, which does not rely on this at all: that callback declines
+     * the lock rather than waiting for it, whatever is holding it and for however long (see
+     * {@code MockConsumerCommitFailureHandlerFreeExitsTest}'s
+     * {@code aRevocationCommitDeclinesRatherThanBlockingBehindACommitInFlight}). What this pins is that ordinary
+     * callers - a user's {@code requestCommitAsap}, the close sequence - are not stalled by a slow handler.
      */
     @Test
     @ResourceLock(value = "commitFailureHandlerTimeBound", mode = READ_WRITE)
-    void aSlowHandlerDoesNotBlockTheCommitCommandMonitor() throws InterruptedException {
+    void aSlowHandlerDoesNotBlockTheCommitCycleLock() throws InterruptedException {
         var handlerEntered = new CountDownLatch(1);
         var handlerRelease = new CountDownLatch(1);
         var healed = new AtomicBoolean(false);
@@ -228,7 +233,7 @@ class MockConsumerCommitFailureDecisionTest extends MockConsumerCommitFailureSea
             public CommitFailureDecision onCommitFailure(CommitFailureContext context) {
                 handlerEntered.countDown();
                 try {
-                    // held open only while the monitor probe below runs; bounded so a failure cannot wedge
+                    // held open only while the lock probe below runs; bounded so a failure cannot wedge
                     handlerRelease.await(20, SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -242,14 +247,14 @@ class MockConsumerCommitFailureDecisionTest extends MockConsumerCommitFailureSea
         assertWithMessage("the handler was never invoked")
                 .that(handlerEntered.await(30, SECONDS)).isTrue();
 
-        // while the handler is deciding, the commitCommand monitor must be acquirable by another thread
-        var monitorProbe = new Thread(() -> parallelConsumer.requestCommitAsap(), TOPIC + "-monitor-probe");
-        monitorProbe.start();
-        monitorProbe.join(Duration.ofSeconds(10).toMillis());
-        boolean probeCompleted = !monitorProbe.isAlive();
+        // while the handler is deciding, the commit cycle lock must be acquirable by another thread
+        var lockProbe = new Thread(() -> parallelConsumer.requestCommitAsap(), TOPIC + "-lock-probe");
+        lockProbe.start();
+        lockProbe.join(Duration.ofSeconds(10).toMillis());
+        boolean probeCompleted = !lockProbe.isAlive();
         handlerRelease.countDown();
-        assertWithMessage("acquiring the commitCommand monitor must not block while the handler is deciding "
-                + "- the decision must run monitor-free")
+        assertWithMessage("acquiring the commit cycle lock must not block while the handler is deciding "
+                + "- the decision must run lock-free")
                 .that(probeCompleted).isTrue();
 
         awaitAsserted(() -> assertThat(handler.contexts).isNotEmpty());
@@ -360,9 +365,10 @@ class MockConsumerCommitFailureDecisionTest extends MockConsumerCommitFailureSea
      * the cadence retry.
      * <p>
      * Determinism note: the command cannot be placed while a commit is in flight - the control thread holds the
-     * {@code commitCommand} monitor for the whole commit, so a concurrent {@code requestCommitAsap} just blocks
-     * until the decision is done (the monitor-free guarantee covers the handler <em>decision</em>, not the
-     * commit itself). Between attempts, with a 30s cadence, the control thread is idle and the placement is
+     * commit cycle lock for the whole commit, so a concurrent {@code requestCommitAsap} just blocks
+     * until the decision is done (the lock-free guarantee covers the handler <em>decision</em>, not the
+     * commit itself; and the one caller that may not block, the revocation callback, declines instead of
+     * waiting). Between attempts, with a 30s cadence, the control thread is idle and the placement is
      * race-free.
      */
     @Test

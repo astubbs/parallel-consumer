@@ -36,6 +36,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -219,6 +220,31 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Used to request a commit asap
      */
     private final AtomicBoolean commitCommand = new AtomicBoolean(false);
+
+    /**
+     * Guards a commit cycle and the {@link #commitCommand} flag together - what {@code synchronized
+     * (commitCommand)} used to do, as a lock that can be declined instead of a monitor that cannot.
+     * <p>
+     * <b>Why a {@link ReentrantLock}: a rebalance callback may only ever {@code tryLock}.</b> A monitor has no
+     * such thing, and that is the whole AB-BA deadlock of astubbs#29 / confluentinc#857 - the control thread
+     * holds this while blocked inside {@code ConsumerOffsetCommitter.commitAndWait()}, which only the
+     * broker-poll thread can answer, while that same poll thread sits in {@link #onPartitionsRevoked} waiting
+     * to enter. Neither can move, and the member stops answering the group. See
+     * {@code docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md},
+     * which owns the diagnosis; {@link #tryCommitOffsetsOnRevoke()} is the declining side.
+     * <p>
+     * <b>Why it still guards the flag as well</b>, which that write-up argues against ("do not overload a
+     * lock's identity", proposing a separate lock for the flag). Since it was written, the serialization
+     * became load-bearing: the seam's hot-loop fix relies on a commit command being placeable only
+     * <em>between</em> commit cycles, never during one, so that a CONTINUE decision consuming the command
+     * cannot race a request placed mid-commit (see {@link #decideCommitFailureOutcome} and
+     * {@code MockConsumerCommitFailureDecisionTest#pendingCommitCommandDoesNotHotLoopAfterContinue}, whose
+     * determinism note states it). Splitting the two would silently drop such a request. What the write-up
+     * actually warns against - a blocking acquisition on a callback path - is fixed by the {@code tryLock},
+     * not by the split. Its other warning is taken: this is deliberately NOT called {@code commitLock},
+     * because {@link #maybeAcquireCommitLock()} already means the producer's transaction lock.
+     */
+    private final ReentrantLock commitCycleLock = new ReentrantLock();
 
     /**
      * Multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} to have in our processing queue, in order to make
@@ -655,17 +681,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            // commit any offsets from revoked partitions BEFORE truncation
+            // commit any offsets from revoked partitions BEFORE truncation - declining to, rather than
+            // blocking, if the control thread is mid-commit
             try {
-                commitOffsetsThatAreReady();
+                tryCommitOffsetsOnRevoke();
             } catch (OffsetCommitBudgetExceededException revocationTimeExhaustion) {
                 // The rebalance lane's fourth handler-free exit (astubbs#317): a commit whose budget - sync
                 // or transactional - exhausts DURING revocation is a DEFERRAL, not a decision point. This runs
                 // inside the rebalance callback, so there is no waiter to act on a handler's answer, and failing
                 // the callback would turn one slow commit into a failed rebalance and a dead instance. So: no
                 // handler, no kill - the offsets were never marked committed, the truncation below hands them to
-                // the new assignee to resolve by reprocessing, and this thread carries on. Deliberately
-                // adds no locking of any kind here - a rebalance callback may only ever tryLock.
+                // the new assignee to resolve by reprocessing, and this thread carries on. Adds no locking of
+                // any kind here: a rebalance callback may only ever tryLock, which is the caller's job
+                // (tryCommitOffsetsOnRevoke) and takes the same deferral disposition when it declines.
                 log.warn("Offset commit budget exhausted during partition revocation - deferring (postponed, not " +
                         "dropped): the revoked partitions' uncommitted offsets fall to their new assignee to " +
                         "reprocess. The commit-failure handler is not consulted for revocation-time failures - " +
@@ -685,6 +713,42 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             usersConsumerRebalanceListener.ifPresent(listener -> listener.onPartitionsRevoked(partitions));
         } catch (Exception e) {
             throw new ExceptionInUserFunctionException("Error from rebalance listener function after #onPartitionsRevoked", e);
+        }
+    }
+
+    /**
+     * The revocation-time commit, which <b>declines rather than waits</b> when a commit is already running.
+     * <p>
+     * This is the callback half of the astubbs#29 / confluentinc#857 deadlock cut (the lock's javadoc,
+     * {@link #commitCycleLock}, holds the cycle). It runs on the broker-poll thread inside {@code poll()}, which
+     * is the only thread that can ever answer the commit the control thread may already be blocked on. So if the
+     * control thread holds the lock, waiting for it here is not slow - it is <em>permanent</em>: neither thread
+     * can proceed, and the member silently stops answering the group coordinator. A rebalance callback may
+     * therefore only ever {@code tryLock}.
+     * <p>
+     * Declining costs nothing that is not already recoverable, and it is the same disposition the
+     * revocation-time budget exhaustion beside it takes: the offsets were never marked committed, so they stay
+     * dirty and travel to whoever ends up owning the partitions, who reprocesses from where the broker actually
+     * is. That is PC's at-least-once contract doing its ordinary job, traded for the rebalance completing.
+     * <p>
+     * WARN rather than INFO, and it names the contention: this branch is the one that only fires in the window
+     * that used to deadlock, so a run that never logs it has never exercised the fix
+     * (docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md records a
+     * CI run where the fix's own branch was never reached and the log said so, by saying nothing).
+     */
+    private void tryCommitOffsetsOnRevoke() throws TimeoutException, InterruptedException {
+        if (!commitCycleLock.tryLock()) {
+            log.warn("Offset commit SKIPPED during partition revocation - deferring (postponed, not dropped): a " +
+                    "commit is already in progress on the control thread and this callback runs on the " +
+                    "broker-poll thread, the only thread that can answer it. Blocking here would deadlock the " +
+                    "pair permanently (astubbs/parallel-consumer#29, confluentinc/parallel-consumer#857), so the " +
+                    "revoked partitions' uncommitted offsets are left dirty for their new assignee to reprocess.");
+            return;
+        }
+        try {
+            commitOffsetsThatAreReady();
+        } finally {
+            commitCycleLock.unlock();
         }
     }
 
@@ -1259,10 +1323,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * publishes when a commit's retry budget is exhausted (see {@code ConsumerOffsetCommitter#maybeDoCommit} - the
      * poll thread stays alive, which is what makes CONTINUE possible at all).
      * <p>
-     * The catch is deliberately OUTSIDE {@link #commitOffsetsThatAreReady()}'s {@code synchronized (commitCommand)}
-     * block: the failure propagates out of the monitor as an exception, so everything below - above all the user's
-     * {@link CommitFailureHandler} - runs monitor-free, and a slow handler can never stall a rebalance callback
-     * contending for that monitor.
+     * The catch is deliberately OUTSIDE {@link #commitOffsetsThatAreReady()}'s {@link #commitCycleLock} block: the
+     * failure propagates out of the lock as an exception, so everything below - above all the user's
+     * {@link CommitFailureHandler} - runs lock-free. A rebalance callback contending for that lock now declines
+     * rather than waits ({@link #tryCommitOffsetsOnRevoke()}), so this is no longer what keeps a slow handler from
+     * stalling a rebalance - but holding the lock across arbitrary user code would still be wrong, and every other
+     * caller (a user's {@code requestCommitAsap}, the close sequence) does still block on it.
      * <p>
      * Everything else stays handler-free by construction: genuine poller death and non-retriable commit failures
      * arrive as other exception types and keep their fatal route through
@@ -1342,7 +1408,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return CommitFailureContext.builder()
                 .failure(commitFailure)
                 .offsets(commitFailure.getOffsets())
-                .attemptsMade((int) Math.min(Integer.MAX_VALUE, commitFailure.getAttemptsMade()))
+                .attemptsMade(commitFailure.getAttemptsMade())
                 .elapsed(commitFailure.getElapsed())
                 .consecutiveExhaustedBudgets(accounting.getConsecutiveExhaustedBudgets())
                 .timeSinceLastSuccessfulCommit(accounting.timeSinceLastSuccessfulCommit(Instant.now()))
@@ -1962,8 +2028,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Visible for testing
      */
     protected void commitOffsetsThatAreReady() throws TimeoutException, InterruptedException {
-        log.trace("Synchronizing on commitCommand...");
-        synchronized (commitCommand) {
+        log.trace("Acquiring the commit cycle lock...");
+        // blocking, as it always was, for every control-thread path. The ONE caller that may not block is the
+        // revocation callback, which reaches this through tryCommitOffsetsOnRevoke() - reentrantly, so the
+        // acquisition here is free once that one has the lock, and this method stays the single observable
+        // commit-cycle entry point (RebalanceEoSDeadlockTest overrides exactly this to see the revoke-time commit)
+        commitCycleLock.lock();
+        try {
             log.debug("Committing offsets that are ready...");
             committer.retrieveOffsetsAndCommit();
             clearCommitCommand();
@@ -1975,7 +2046,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // time-since-last-successful-commit story while nothing commits; wipe the consecutive count
                 // mid-streak; and release the seam pause on the strength of a commit that never happened. The
                 // deferral's own accounting - and its escalation to the handler once a streak outlives the
-                // offsetCommitTimeout quantum - lives with the observer of the deferrals,
+                // rebalance-scale deferral escalation bound - lives with the observer of the deferrals,
                 // ConsumerOffsetCommitter#commitDeferringOnRebalance.
                 log.debug("Commit cycle was deferred - commit cadence advances, but the commit-failure seam's " +
                         "success accounting deliberately does not");
@@ -1989,6 +2060,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                         commitFailureAccounting.updateAndGet(previous -> previous.commitSucceeded(succeededAt));
                 releaseCommitFailurePauseIfActive("a commit succeeded");
             }
+        } finally {
+            commitCycleLock.unlock();
         }
     }
 
@@ -2161,8 +2234,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     public void requestCommitAsap() {
         log.debug("Registering command to commit next chance");
-        synchronized (commitCommand) {
+        // takes the commit cycle lock, so a request placed while a commit is running waits for it - unchanged
+        // from the monitor this replaced, and relied upon: see the lock's javadoc
+        commitCycleLock.lock();
+        try {
             this.commitCommand.set(true);
+        } finally {
+            commitCycleLock.unlock();
         }
         notifySomethingToDo();
     }
@@ -2195,17 +2273,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private boolean isCommandedToCommit() {
-        synchronized (commitCommand) {
+        commitCycleLock.lock();
+        try {
             return this.commitCommand.get();
+        } finally {
+            commitCycleLock.unlock();
         }
     }
 
     private void clearCommitCommand() {
-        synchronized (commitCommand) {
+        // reentrant: the commit cycle calls this while already holding the lock
+        commitCycleLock.lock();
+        try {
             if (commitCommand.get()) {
                 log.debug("Command to commit asap received, clearing");
                 this.commitCommand.set(false);
             }
+        } finally {
+            commitCycleLock.unlock();
         }
     }
 

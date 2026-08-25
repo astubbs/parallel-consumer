@@ -19,6 +19,18 @@ with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadloc
 under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is explicitly *not* a
 member). astubbs#29 needs a rebase and a retarget first - see `pr-blockers-and-collisions.md`.
 
+**Update, 2026-08-25: the monitor half is cut on the commit-failure-seam branch (astubbs#317's PR), not by
+astubbs#29.** `synchronized (commitCommand)` is now a `ReentrantLock`, and the revocation callback reaches it
+through `AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke`, which declines when a commit is in
+flight. Two differences from astubbs#29 matter: the declining path still calls `commitOffsetsThatAreReady()`,
+so `RebalanceEoSDeadlockTest`'s subclass hook is not disconnected (the structural defect recorded in the
+solution write-up); and it is pinned by a unit-level regression test that drives the interleaving directly -
+`MockConsumerCommitFailureHandlerFreeExitsTest#aRevocationCommitDeclinesRatherThanBlockingBehindACommitInFlight`
+- rather than depending on a contended broker to produce it. **Two things are NOT addressed**, and this file
+stays open for them: the transactional-mode `while (isTransactionCommittingInProgress()) Thread.sleep(100)`
+block on the same revoke path, which is the only blocking edge the reproducer's own mode can reach; and every
+sighting below, none of which has been re-run against the change.
+
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
 fail-fast by `ProgressProbe` with five simultaneous violations, on

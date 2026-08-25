@@ -5,8 +5,10 @@ package bz.stub.parallelconsumer;
  */
 
 
+import bz.stub.parallelconsumer.internal.ConsumerOffsetCommitter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
@@ -17,6 +19,8 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -26,11 +30,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static bz.stub.parallelconsumer.internal.utils.ThreadUtils.sleepOrFail;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.junit.jupiter.api.parallel.ResourceAccessMode.READ_WRITE;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
@@ -50,7 +59,11 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *     <li>and when the poll thread is merely <em>slow</em>, it must be waited on rather than declared
  *         failed, because a slow poller and a dead one produce the same observable for the waiter and
  *         only the dead one is unrecoverable
- *         ({@link #aLivePollThreadThatIsMerelySlowIsWaitedOutRatherThanDeclaredDead()}).</li>
+ *         ({@link #aLivePollThreadThatIsMerelySlowIsWaitedOutRatherThanDeclaredDead()});</li>
+ *     <li>and the fourth case the other three leave: a poll thread that is alive, has not died, and is
+ *         <em>not</em> working towards the commit either, because it is wedged somewhere outside the
+ *         commit path. No affirmative event can arrive, so a last-resort backstop ends the wait fatally
+ *         rather than never ({@link #aPollThreadWedgedOutsideTheCommitPathIsFatalAtTheBackstop()}).</li>
  * </ol>
  * The second is the part the fixes for the known triggers could never cover: they removed two ways to
  * kill that thread, and every remaining way still produced the same uninformative message. The third
@@ -335,6 +348,129 @@ class CommitResponseTimeoutSymptomTest {
         // slow is not dead: no failure was declared and the instance is still running
         assertThat(parallelConsumer.getFailureCause()).isNull();
         assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+    }
+
+    /**
+     * The poll thread is alive, healthy, and wedged <b>outside</b> the commit path - so it will never service the
+     * commit request, and neither affirmative exit exists: it publishes no death (it has not died) and no typed
+     * response (it is not in the commit path to produce one). Waiting is then not patience but a permanent hang,
+     * with PC neither committing nor reporting, so a last-resort backstop ends it fatally.
+     * <p>
+     * <b>This is the case removing the waiter's deadline reopened.</b> The deadline used to break exactly this
+     * cycle - crudely, and at a length that also killed healthy slow commits, which is why it went - so the
+     * replacement is deliberately generous: four commit budgets plus a fixed floor, minutes rather than seconds.
+     * The scenario above ({@link #aLivePollThreadThatIsMerelySlowIsWaitedOutRatherThanDeclaredDead()}) is the
+     * control arm that the two are not conflated: it blocks a commit for five times {@code offsetCommitTimeout}
+     * and must still complete, which it does because the backstop is nowhere near it.
+     * <p>
+     * The AB-BA deadlock of astubbs#29 / confluentinc#857 is the real-world shape of a poll thread wedged this
+     * way (its callback half is cut in {@code AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke}, and
+     * pinned in {@code MockConsumerCommitFailureHandlerFreeExitsTest}); a {@code poll()} that never returns is
+     * the same thing without the lock, and is what this drives.
+     * <p>
+     * The floor is shortened through its test seam, the same shape as {@code BrokerPollSystem.longPollTimeout} -
+     * a test cannot outlive the real one.
+     * <p>
+     * Discriminating: remove the backstop and this hangs until the class {@code @Timeout}, having reported
+     * nothing. Report it as the seam's budget exhaustion instead, and the type assertion below fails - the two
+     * are opposite claims, one saying a commit failed and the other that no commit is being attempted at all.
+     */
+    @Test
+    // GLOBAL, not a named resource: the backstop floor is a JVM-wide static, so shortening it shortens the
+    // backstop of every PC alive in this JVM. Measured: with a named lock, the merely-slow scenario above ran
+    // concurrently, inherited a 5s backstop against its deliberate 5s commit block, and died. A named lock only
+    // excludes tests that name the same resource - and the whole point of that scenario is that it does not
+    // know this static exists.
+    @ResourceLock(value = Resources.GLOBAL, mode = READ_WRITE)
+    void aPollThreadWedgedOutsideTheCommitPathIsFatalAtTheBackstop() {
+        final Duration commitTimeout = Duration.ofMillis(250);
+        // backstop = 4 x 250ms + 1s = 2s, so the whole scenario runs in seconds rather than the real minute-plus
+        final Duration backstopFloor = Duration.ofSeconds(1);
+        Duration originalFloor = ConsumerOffsetCommitter.getPollerWedgedBackstopFloor();
+        ConsumerOffsetCommitter.setPollerWedgedBackstopFloor(backstopFloor);
+
+        var wedgePoll = new AtomicBoolean(false);
+        var pollWedged = new CountDownLatch(1);
+        var releasePoll = new CountDownLatch(1);
+        var mockConsumer = new MockConsumer<String, String>(OffsetResetStrategy.EARLIEST) {
+            @Override
+            // deliberately NOT synchronized - see the sibling scenario above for why parking under the
+            // MockConsumer monitor takes the teardown path down with it
+            public ConsumerRecords<String, String> poll(Duration timeout) {
+                if (wedgePoll.get()) {
+                    pollWedged.countDown();
+                    try {
+                        // bounded only so a test failure cannot wedge the JVM; nothing here releases it in time
+                        if (!releasePoll.await(120, SECONDS)) {
+                            throw new FakeRuntimeException("the wedged poll was never released - test failure");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    wedgePoll.set(false);
+                }
+                return super.poll(timeout);
+            }
+        };
+
+        try {
+            // one record is held in flight, because a commit cycle only runs when something is dirty - its
+            // completion is what sends the control thread into a commit AFTER the poll thread is wedged, and a
+            // wedged poller can deliver no new work to dirty anything with
+            var heldRecordEntered = new CountDownLatch(1);
+            var heldRecordRelease = new CountDownLatch(1);
+            final String heldKey = "key-0";
+            parallelConsumer = startPc(mockConsumer, commitTimeout);
+            assignPartitions(mockConsumer, parallelConsumer);
+            addRecords(mockConsumer, 0, PARTITIONS); // enough to make PC want to commit
+            parallelConsumer.poll(context -> context.forEach(record -> {
+                if (heldKey.equals(record.key())) {
+                    heldRecordEntered.countDown();
+                    try {
+                        if (!heldRecordRelease.await(120, SECONDS)) {
+                            throw new FakeRuntimeException("the held record was never released - test failure");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                log.trace("Processing {}", record.key());
+            }));
+
+            // wedge the poller once it has delivered the work, with one record still in flight
+            assertWithMessage("the held record was never reached")
+                    .that(heldRecordEntered.await(30, SECONDS)).isTrue();
+            wedgePoll.set(true);
+            assertWithMessage("the poll thread never wedged").that(pollWedged.await(30, SECONDS)).isTrue();
+            heldRecordRelease.countDown(); // dirty, so a commit cycle runs - and can never be answered
+
+            // generous against the 2s backstop, and it is the backstop that must end this, not this deadline:
+            // see the class note on awaiting isClosedOrFailed() rather than the cause
+            Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
+                    assertThat(parallelConsumer.isClosedOrFailed()).isTrue());
+
+            Exception failureCause = parallelConsumer.getFailureCause();
+            assertThat(failureCause).isNotNull();
+            var chain = causeChain(failureCause);
+            var everyMessage = chain.stream()
+                    .map(t -> String.valueOf(t.getMessage()))
+                    .collect(java.util.stream.Collectors.toList());
+
+            assertWithMessage("the report must name the wedged poller, not a generic timeout")
+                    .that(everyMessage.stream().anyMatch(m -> m.contains("has not serviced or answered commit "
+                            + "request"))).isTrue();
+            assertWithMessage("...and must say plainly that it is not the commit-failure seam's budget exhaustion")
+                    .that(everyMessage.stream().anyMatch(m -> m.contains("NOT the commit-failure seam's budget "
+                            + "exhaustion"))).isTrue();
+            assertWithMessage("a wedged poller is not a commit failure - no handler decision could answer it")
+                    .that(chain.stream().anyMatch(t -> t instanceof OffsetCommitBudgetExceededException)).isFalse();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new FakeRuntimeException("interrupted waiting for the poll thread to wedge");
+        } finally {
+            releasePoll.countDown();
+            ConsumerOffsetCommitter.setPollerWedgedBackstopFloor(originalFloor);
+        }
     }
 
     private boolean shouldFail(String key) {

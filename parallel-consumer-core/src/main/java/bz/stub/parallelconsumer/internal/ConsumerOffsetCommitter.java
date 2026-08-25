@@ -9,6 +9,8 @@ import bz.stub.parallelconsumer.OffsetCommitBudgetExceededException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.state.WorkManager;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.CommitFailedException;
@@ -44,6 +46,53 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * Chosen arbitrarily - retries should never be needed, if they are it's an invalid state
      */
     private static final int ARBITRARY_RETRY_LIMIT = 50;
+
+    /**
+     * How long an uncleared deferral streak may run before it escalates to the commit-failure seam
+     * (astubbs#317) - see {@link #recordDeferralAndMaybeEscalate}.
+     * <p>
+     * <b>Rebalance-scale, deliberately: five minutes is parity with Kafka's own
+     * {@code max.poll.interval.ms} default</b>, which is the longest an eager rebalance may legitimately wait
+     * for a slow member before the group evicts it. A deferral streak is precisely what a healthy consumer
+     * shows while that wait runs, so any bound shorter than one full rebalance calls a healthy consumer broken.
+     * <p>
+     * <b>This overrides the plan document</b>
+     * ({@code docs/plans/2026-08-24-001-feat-commit-failure-seam-plan.md}, KTD9 / U5 - "deferrals persisting
+     * past the bound clock"), which took that bound to be the {@code offsetCommitTimeout} quantum the retry
+     * budget uses. Code review found that quantum breaks the seam's own default-behaviour-unchanged
+     * invariant: at its 10s default, an ordinary slow-but-healthy rebalance escalates, and the DEFAULT
+     * handler is {@code shutDown()} - so PC would close instances that pre-seam merely WARNed and survived,
+     * and each close triggers another group rebalance, cascading. A rebalance-scale clock keeps the feature
+     * the escalation exists for (a deferral streak can no longer loop silently at WARN forever) while an
+     * ordinary rebalance stays inside it.
+     * <p>
+     * Static and settable only as a test seam - a streak this long cannot be produced inside a unit test's
+     * lifetime - the same shape as {@link BrokerPollSystem#getLongPollTimeout()}.
+     */
+    @Setter
+    @Getter
+    private static Duration deferralEscalationBound = Duration.ofMinutes(5);
+
+    /**
+     * The fixed part of {@link #commitAndWait()}'s poller-wedged backstop; the whole bound is this plus
+     * {@link #POLLER_WEDGED_BACKSTOP_BUDGET_MULTIPLE} times the configured {@code offsetCommitTimeout}.
+     * <p>
+     * Generous on purpose, because it is a <em>last resort</em> and not a deadline: the affirmative events
+     * (a typed response, or the poller's death) are what normally end that wait, and this exists only for
+     * the case where neither can arrive because the poll thread is wedged somewhere outside the commit path.
+     * Deriving it from the budget keeps it above any legitimately slow commit - the poll side cannot spend
+     * more than its own budget plus one broker call - and the floor keeps it well clear of a small budget.
+     * <p>
+     * Static and settable only as a test seam, the same shape as {@link BrokerPollSystem#getLongPollTimeout()}.
+     */
+    @Setter
+    @Getter
+    private static Duration pollerWedgedBackstopFloor = Duration.ofSeconds(60);
+
+    /**
+     * @see #pollerWedgedBackstopFloor
+     */
+    private static final int POLLER_WEDGED_BACKSTOP_BUDGET_MULTIPLE = 4;
 
     private final CommitMode commitMode;
 
@@ -98,8 +147,8 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     /**
      * One coherent generation of {@link #deferralStreak}: when the streak began - {@code null} while no deferral is
      * outstanding - and how many deferrals it has taken. The start is the escalation's bound clock: once
-     * {@code Instant.now() - firstDeferral} crosses {@link ConsumerOffsetCommitter#commitTimeout}, the streak stops
-     * being silent - see {@link ConsumerOffsetCommitter#commitDeferringOnRebalance()}.
+     * {@code Instant.now() - firstDeferral} crosses {@link ConsumerOffsetCommitter#getDeferralEscalationBound()},
+     * the streak stops being silent - see {@link ConsumerOffsetCommitter#commitDeferringOnRebalance()}.
      */
     @Value
     static class DeferralStreak {
@@ -113,9 +162,9 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         }
 
         /**
-         * A fresh quantum on the same running streak: the clock restarts, so a CONTINUE decision buys another
-         * whole {@link ConsumerOffsetCommitter#commitTimeout} rather than an escalation every cycle, and the count
-         * starts again from the deferrals that follow.
+         * A fresh window on the same running streak: the clock restarts, so a CONTINUE decision buys another
+         * whole {@link ConsumerOffsetCommitter#getDeferralEscalationBound()} rather than an escalation every
+         * cycle, and the count starts again from the deferrals that follow.
          */
         static DeferralStreak restartedAt(Instant now) {
             return new DeferralStreak(now, 0);
@@ -255,6 +304,19 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
             this(request, null);
         }
 
+        /**
+         * Stores {@code commitFailure} directly rather than copying it, which SpotBugs reports as
+         * {@code EI_EXPOSE_REP2}. Intentional and safe here on both counts: the payload is effectively
+         * immutable - {@link OffsetCommitBudgetExceededException}'s attempts, elapsed and message are final,
+         * and its offsets map is an unmodifiable copy made in its own constructor - and the type is a
+         * package-internal message on a queue with exactly one producer and one consumer, so there is no
+         * caller to alias it from. An exception is not copyable in any case; the alternative to storing it is
+         * losing its stack trace. Left as a comment rather than {@code @SuppressFBWarnings} because
+         * {@code spotbugs-annotations} is not a dependency of this project (only the reporting plugin is) and
+         * this finding is not worth adding one - the whole {@code EI_EXPOSE_REP2} group is already recorded
+         * as noise in this codebase's composition style, in
+         * {@code docs/inflight/static-spotbugs-latent-findings.md}.
+         */
         public CommitResponse(CommitRequest request, OffsetCommitBudgetExceededException commitFailure) {
             this.request = request;
             this.commitFailure = commitFailure;
@@ -283,6 +345,18 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * <p>
      * The {@link #ARBITRARY_RETRY_LIMIT} backstop remains what it always was: a bound on <em>draining</em> foreign
      * responses, which should never be needed.
+     * <p>
+     * <b>The one bound that remains, and why it is not the deadline that was removed.</b> Both affirmative events
+     * are published by the poll thread <em>from the commit path</em>, so neither can arrive while that thread is
+     * alive but wedged somewhere else entirely - a rebalance callback that blocks, say, which is the AB-BA cycle
+     * of astubbs#29 (docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md;
+     * the callback half is cut in {@code AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke}). With
+     * nothing to wait for and nobody to say so, this loop would otherwise wait forever, and PC would neither
+     * commit nor report. So a last-resort backstop - {@link #pollerWedgedBackstopFloor} plus
+     * {@link #POLLER_WEDGED_BACKSTOP_BUDGET_MULTIPLE} budgets, minutes rather than seconds - ends it fatally.
+     * It asserts only what it can: that nothing serviced this request for the whole window. A commit that is
+     * merely slow answers long before it, and budget exhaustion answers as a typed response, so this firing
+     * means <em>no commit cycle is running at all</em>.
      */
     private void commitAndWait() {
         throwIfPollerDied(null);
@@ -290,10 +364,29 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         // request
         CommitRequest commitRequest = requestCommitInternal();
 
-        // wait - the only ways out are our own typed response (committed, deferred, or terminally failed) and the
-        // poller's death
+        // wait - the only ways out are our own typed response (committed, deferred, or terminally failed), the
+        // poller's death, and the wedged-poller backstop below
         int foreignResponsesDrained = 0;
+        final long startedWaitingAtNanos = System.nanoTime();
+        final Duration backstop = pollerWedgedBackstop();
         while (true) {
+            // checked at the top of every pass, so an interrupt storm (a routine wake-up here, see below)
+            // cannot starve it
+            Duration waited = waitedSince(startedWaitingAtNanos);
+            if (isGreaterThan(waited, backstop)) {
+                throw new InternalRuntimeException(msg(
+                        "The broker poll thread is ALIVE but has not serviced or answered commit request {} for " +
+                                "{} - the whole wedged-poller backstop window ({}). That thread is the only " +
+                                "producer of commit responses, so it is stuck somewhere OUTSIDE the commit path " +
+                                "(a blocked rebalance callback, or a poll that never returns) and no affirmative " +
+                                "outcome can ever be published for this request. PC cannot establish whether " +
+                                "these offsets committed, so this is fatal. NOTE: this is NOT the commit-failure " +
+                                "seam's budget exhaustion (astubbs/parallel-consumer#317) - an exhausted budget " +
+                                "arrives as a typed response and consults the configured commitFailureHandler. " +
+                                "This backstop firing means nothing is being serviced at all, which no handler " +
+                                "decision can answer.",
+                        commitRequest, waited, backstop));
+            }
             try {
                 log.debug("Waiting on a commit response");
                 CommitResponse take = commitResponseQueue.poll(commitTimeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
@@ -319,10 +412,12 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 if (take == null) {
                     // a heartbeat, not a deadline - see the method javadoc for why waiting longer than
                     // offsetCommitTimeout here is correct
-                    log.warn("Commit response still pending after {} - the broker poll thread has not died with an " +
-                                    "exception, so it is still working on (or towards) this commit; continuing to " +
-                                    "wait on it, bounded by its own commit retry budget rather than a local deadline",
-                            commitTimeout);
+                    // recomputed: `waited` above was read before this pass blocked for a whole heartbeat interval
+                    log.warn("Commit response still pending after {} waited - the broker poll thread has not died " +
+                                    "with an exception, so it is still working on (or towards) this commit; " +
+                                    "continuing to wait on it, bounded by its own commit retry budget rather than " +
+                                    "a local deadline (last-resort wedged-poller backstop at {})",
+                            waitedSince(startedWaitingAtNanos), backstop);
                 } else {
                     // an older request's response, or the wake-up token: keep draining until ours arrives
                     foreignResponsesDrained++;
@@ -334,6 +429,20 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 log.debug("Interrupted waiting for commit response", e);
             }
         }
+    }
+
+    /**
+     * The whole wedged-poller backstop for one wait: {@link #POLLER_WEDGED_BACKSTOP_BUDGET_MULTIPLE} of the
+     * configured budget, plus {@link #pollerWedgedBackstopFloor}. Derived per wait rather than cached, so a test
+     * that shrinks the floor takes effect on the next commit.
+     */
+    private static Duration waitedSince(long startedWaitingAtNanos) {
+        return Duration.ofNanos(System.nanoTime() - startedWaitingAtNanos);
+    }
+
+    private Duration pollerWedgedBackstop() {
+        return commitTimeout.multipliedBy(POLLER_WEDGED_BACKSTOP_BUDGET_MULTIPLE)
+                .plus(getPollerWedgedBackstopFloor());
     }
 
     /**
@@ -452,14 +561,15 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * ({@link #deferralStreak}), cleared by a commit cycle that completes - commit or nothing-to-commit - and by a
      * completed rebalance ({@link #onPartitionsAssigned()}: after reassignment the streak belonged to an assignment
      * this consumer may no longer hold). While the streak is
-     * younger than {@link #commitTimeout} - the same {@code offsetCommitTimeout} quantum the retry budget uses -
-     * deferral stays a WARN, so the one-or-two-cycle deferral of a healthy rebalance never escalates. A streak
-     * that outlives the quantum has stopped being "not yet": it escalates as an
+     * younger than {@link #getDeferralEscalationBound()} - rebalance-scale, and deliberately NOT the shorter
+     * {@code offsetCommitTimeout} the retry budget spends; that field states why -
+     * deferral stays a WARN, so the deferrals of a healthy rebalance never escalate however long that
+     * rebalance legitimately takes. A streak that outlives the bound has stopped being "not yet": it escalates as an
      * {@link OffsetCommitBudgetExceededException} naming the deferral cause, thrown here so it travels the seam's
      * ordinary route - {@link #maybeDoCommit()} answers the waiter with it as a typed response, and the control
      * thread's {@code CommitFailureHandler} decision loop runs (never a new interrupt or flag). Escalating starts
-     * a fresh quantum, so a CONTINUE decision is re-consulted once per {@code offsetCommitTimeout}, matching the
-     * budget lane's cadence. A revocation-time cycle can escalate too - on that path the exception surfaces inside
+     * a fresh window, so a CONTINUE decision is re-consulted once per bound rather than on every deferred
+     * cycle. A revocation-time cycle can escalate too - on that path the exception surfaces inside
      * the rebalance callback, where the controller's revocation catch treats it as this same deferral (no
      * waiter there, no handler, poller stays alive).
      */
@@ -487,7 +597,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
 
     /**
      * The accounting half of {@link #commitDeferringOnRebalance()}'s deferral bound: joins this deferral to the
-     * streak, and escalates the streak once it has outlived {@link #commitTimeout}.
+     * streak, and escalates the streak once it has outlived {@link #getDeferralEscalationBound()}.
      */
     private void recordDeferralAndMaybeEscalate(RuntimeException deferralCause, String causeDescription) {
         lastCommitCycleDeferred = true;
@@ -496,8 +606,10 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         // thread can no longer leave the start and the count disagreeing (see the field's javadoc)
         DeferralStreak streak = deferralStreak.updateAndGet(previous -> previous.plusDeferral(now));
         Duration elapsed = streak.age(now);
-        if (!isGreaterThan(elapsed, commitTimeout)) {
-            // inside the quantum: the healthy-rebalance case, deferral stays a WARN
+        Duration escalationBound = getDeferralEscalationBound();
+        if (!isGreaterThan(elapsed, escalationBound)) {
+            // inside the bound: the healthy-rebalance case - which legitimately lasts as long as a rebalance -
+            // so deferral stays a WARN
             return;
         }
         if (!isSync()) {
@@ -506,20 +618,22 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
             // WARN-and-carry-on disposition rather than inventing a new fatal route for it
             return;
         }
-        // one whole quantum of uninterrupted deferrals: surface it to the decision loop, and restart the clock so
-        // a CONTINUE decision buys another full quantum rather than an escalation every cycle
-        int deferralsThisQuantum = streak.getDeferrals();
+        // one whole bound of uninterrupted deferrals: surface it to the decision loop, and restart the clock so
+        // a CONTINUE decision buys another full bound rather than an escalation every cycle
+        int deferralsThisWindow = streak.getDeferrals();
         deferralStreak.set(DeferralStreak.restartedAt(now));
         throw new OffsetCommitBudgetExceededException(msg(
-                "Offset commit DEFERRED continuously for {} - longer than the offsetCommitTimeout of {} - across " +
-                        "{} consecutive deferral(s), because {}. A deferral is postponement, not failure, and " +
-                        "one or two are normal during a rebalance - but a streak outliving the whole budget is " +
-                        "not healing on its own, so it stops being silent. The offsets are still marked as " +
-                        "needing a commit. What happens next is the configured commitFailureHandler's decision " +
-                        "(astubbs/parallel-consumer#317) - the default policy shuts PC down (fail fast), and " +
-                        "CommitFailurePolicies has canned alternatives.",
-                elapsed, commitTimeout, deferralsThisQuantum, causeDescription),
-                deferralCause, deferralsThisQuantum, elapsed, lastAttemptedOffsets);
+                "Offset commit DEFERRED continuously for {} - longer than the rebalance-scale deferral " +
+                        "escalation bound of {} - across {} consecutive deferral(s), because {}. A deferral is " +
+                        "postponement, not failure, and a rebalance's worth of them is normal, which is why the " +
+                        "bound is a whole rebalance long (the default matches Kafka's max.poll.interval.ms " +
+                        "default, NOT the shorter offsetCommitTimeout the retry budget spends) - but a streak " +
+                        "outliving even that is not healing on its own, so it stops being silent. The offsets " +
+                        "are still marked as needing a commit. What happens next is the configured " +
+                        "commitFailureHandler's decision (astubbs/parallel-consumer#317) - the default policy " +
+                        "shuts PC down (fail fast), and CommitFailurePolicies has canned alternatives.",
+                elapsed, escalationBound, deferralsThisWindow, causeDescription),
+                deferralCause, deferralsThisWindow, elapsed, lastAttemptedOffsets);
     }
 
     private void clearDeferralAccounting(String reason) {
