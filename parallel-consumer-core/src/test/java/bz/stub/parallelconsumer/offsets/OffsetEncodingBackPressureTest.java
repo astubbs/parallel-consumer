@@ -203,9 +203,8 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                 // registered - so every extra record IS seen, even though the partition is blocked.
                 long lastOffsetSent = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1;
                 waitAtMost(defaultTimeout).untilAsserted(() ->
-                        assertThat(wm.getPm().getHighestSeenOffset(topicPartition))
-                                .as("every extra record was polled and registered, even while blocked")
-                                .isEqualTo(lastOffsetSent));
+                        assertWithMessage("every extra record was polled and registered, even while blocked")
+                                .that(partitionState).getOffsetHighestSeen().isEqualTo(lastOffsetSent));
 
                 // Wait for the succeeded frontier to settle before reading it. Once the partition is
                 // blocked, PartitionState#couldBeTakenAsWork refuses every record at or above the
@@ -213,19 +212,16 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                 // are deliberately holding remain in flight. That makes this a quiescent state, not
                 // a moving one, so the frontier read below cannot race the assertion that uses it.
                 await().untilAsserted(() ->
-                        assertThat(wm.getNumberRecordsOutForProcessing())
-                                .as("nothing left in flight but the records this test holds")
-                                .isEqualTo(numberOfBlockedMessages));
+                        assertWithMessage("nothing left in flight but the records this test holds")
+                                .that(wm).getNumberRecordsOutForProcessing().isEqualTo(numberOfBlockedMessages));
 
                 // The encoded high-water mark is the highest SUCCEEDED offset, not the highest polled
                 // one - see `use offsetHighestSucceeded instead of offsetHighestSeen` in PartitionState.
-                // Back pressure therefore freezes it wherever the encoding crossed the size threshold,
-                // which for this configuration is measured at offset 136 of the 100..139 batch. Asserting
-                // the last polled offset here only passed when the control loop happened to claim the
-                // whole extra batch as work before that commit tick - a race the test does not control,
-                // and this class's most frequent CI flake (astubbs#286, astubbs#288). Assert instead that
-                // the payload records the frontier exactly, having established above that the frontier
-                // did move past the primed batch.
+                // Back pressure therefore freezes that frontier wherever the encoding crossed the size
+                // threshold, which makes the last polled offset unreachable here rather than late.
+                // Asserting it only passed when the control loop happened to claim the whole extra batch
+                // as work before the block fired. Diagnosis, measurements and control arms:
+                // docs/solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md
                 long settledHighestSucceeded = partitionState.getOffsetHighestSucceeded();
                 assertThat(settledHighestSucceeded)
                         .as("the extra records advanced the succeeded frontier past the primed batch")
