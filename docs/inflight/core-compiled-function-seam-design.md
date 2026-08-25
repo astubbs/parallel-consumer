@@ -148,4 +148,10 @@ is `fold_wasm.rs`, because no C-to-wasm toolchain was reachable.
    the sandboxed mode means shipping a startup assertion that runtime compilation is on.
 5. **Which slice ships first.** The one-C-ABI-seam refinement re-admits Python at full speed through
    Numba, while the coverage direction scopes the first slice to to-WASM-mature bindings. They do
-   not disagree about the architecture, only about who gets it first. Owner's call.
+   not disagree about the architecture, only about who gets it first. **Owner's call, 2026-08-25:
+   spike BOTH in parallel to spike depth - one function shape end to end per path, measured - then
+   reassess together before anything is fleshed out.** The two spikes also test the fork's hidden
+   asymmetry: a WASM artifact is bytes that ship over the wire to today's sidecar unchanged, while
+   a Numba pointer is meaningful only in-process and therefore forces the embedded (`--shared`)
+   engine shape. Branches `spike/242-fastpath-wasm` and `spike/242-fastpath-numba`, each with its
+   own branch note.
