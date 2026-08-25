@@ -30,6 +30,40 @@ seen before those land is odds-on one of them, so hunting it as a new unknown sp
 already-solved bug. Land the backlog, then re-run. That also qualifies the neighbouring "0 hits in a
 9-seed sweep" claim, which was measured against the same incomplete tree.
 
+## 2026-08-25: the sharing is no longer two jobs, it is six chaos suites at once
+
+The note above describes `Performance` and `Chaos Pain Suite` overlapping. Measured on 2026-08-25,
+with several agent sessions each pushing to their own PR, the self-hosted box ran **`Chaos Pain
+Suite` on all six runner slots simultaneously** - `highcpu-1` through `highcpu-6`, each starting
+twenty-plus PC instances against its own broker. In one such window, four of six chaos jobs went RED
+and two went green; in a second, the same.
+
+Both reds carried the same shape and neither is a family occurrence:
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| Seed | 448419844179865643 | 6503419202924860861 / 7513114916229855417 |
+| Peak `lagStagnation` | 154223ms | 154194ms / 154296ms |
+| Bound | 150000ms | 150000ms |
+| Ambient probe | **0 violations** crossed its calibrated bounds | same |
+
+**A 2.8% overshoot on a 150s bound, twice, on different seeds, is the bound meeting the load - not a
+schedule.** Both runs were of a branch touching **no Java at all** (agent-harness shell and docs
+only), which is what makes this a clean attribution rather than an inference: the code under test
+was byte-identical to master's on both sides of the red.
+
+**What this changes about the open decision above.** The note leans toward stopping the two jobs
+sharing the box rather than widening the bound, and that lean gets stronger, not weaker: the
+contention it measured at roughly 27% inflation was two jobs, and the routine load is now six. It
+also means **a chaos RED on any PR while sibling agents are pushing is uninformative by default** -
+check the runner slots before reaching for the seed, because the replay the table below prescribes
+costs minutes and the slot check costs one `gh api` call:
+
+```
+gh api repos/astubbs/parallel-consumer/actions/runs/<run-id>/jobs \
+  --jq '.jobs[]|[.name,.conclusion,.runner_name,.started_at,.completed_at]|@tsv'
+```
+
 ## Reconciled with the family ledger: the same signature has TWO causes
 
 [`bug-857-family.md`](bug-857-family.md) records a `CLASS2_STALL` whose seed
