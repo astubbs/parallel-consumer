@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.AdaptiveConcurrencyMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
+import bz.stub.parallelconsumer.integrationTests.utils.SyntheticCongestionCurve;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
 import lombok.extern.slf4j.Slf4j;
@@ -40,10 +41,10 @@ import static org.awaitility.Awaitility.await;
  * chose.</b> Its sibling {@link AdaptiveConcurrencyEnforceIT} runs an <em>open</em> loop - a fixed-latency handler
  * that never answers back, so the controller's own actions never return to it as measurement and the only claim
  * available is liveness. Here the downstream pushes back: every extra slot the controller admits makes every
- * invocation slower, so the target the law picks is the input to the latency it then measures. The whole arc the
- * feature exists for happens inside one run - ramp up, cross the elbow, latency degrades, the law contracts,
- * concurrency falls back below the elbow, latency recovers - and where it lands is a property of the control law,
- * not of the test.
+ * invocation slower, so the target the law picks is the input to the throughput it then measures. The whole arc
+ * the feature exists for happens inside one run - ramp up, cross the elbow, throughput sags as latency degrades,
+ * the law contracts, concurrency falls back to the elbow, throughput recovers - and where it lands is a property
+ * of the control law, not of the test.
  *
  * <h2>Run it, and watch the target ramp, break, and hunt</h2>
  * <pre>{@code
@@ -70,76 +71,87 @@ import static org.awaitility.Awaitility.await;
  * and decremented in a {@code finally} - never by {@link AdmissionController#currentTarget()}. That is the whole
  * point: a real downstream does not know what the controller decided, it only feels how many callers arrived.
  * <p>
- * The curve is the textbook quadratic queueing shape, flat below a knee and rising as the square above it:
+ * The curve is the shared {@link SyntheticCongestionCurve#quadratic quadratic} congestion-collapse shape, flat
+ * below a knee and rising as the square above it:
  * <pre>
  *     latency = BASE * max(1, inflight / KNEE)^2
  * </pre>
  * With {@value #BASE_LATENCY_MS}ms and a knee of {@value #KNEE_INFLIGHT}, that is:
  * <pre>
- *     in-flight :   6     12     14     15     16     18     20     24     32
- *     latency   :  80ms   80ms  109ms  125ms  142ms  180ms  222ms  320ms  569ms
- *     vs base   : 1.00x  1.00x  1.36x  1.56x  1.78x  2.25x  2.78x  4.00x  7.11x
+ *     in-flight  :   6     12     14     15     16     18     20     24     32
+ *     latency    :  80ms   80ms  109ms  125ms  142ms  180ms  222ms  320ms  569ms
+ *     throughput : 75/s  150/s  128/s  120/s  113/s  100/s   90/s   75/s   56/s
  * </pre>
- * A quadratic rather than a kink because the law does not react to a slope, it reacts to a RATIO - see below - and
- * a linear ramp reaches that ratio so far out that the ceiling arrives first.
+ * Quadratic rather than linear because the law is throughput-steered: above a quadratic knee, total throughput
+ * {@code inflight / latency} FALLS as {@code knee^2 / (BASE * inflight)}, which is what the FALL band's negative
+ * elasticity reads. A linear curve's throughput plateaus exactly flat above the knee - the correct response there
+ * is HOLD plus the descent probe, which is a different experiment (the falsifier suite's plateau scenario, and
+ * {@link AdaptiveConcurrencyComparisonIT}'s phase 5).
  *
- * <h2>The arithmetic the model was designed against, before any {@code await} was written</h2>
- * <b>What actually makes the law contract.</b> The gradient is
- * {@code clamp(TOLERANCE * long / short, 0.5, 1.0)} with a tolerance of
- * {@code AdmissionControlLaw.DEFAULT_SERVICE_TIME_TOLERANCE} = 1.5, so short-term latency must exceed the long-term
- * baseline by more than <b>1.5x</b> before the gradient leaves 1.0 at all. That alone is not enough to move the
- * target down, because growth is additive: one window computes
- * {@code limit*(1-s) + (limit*g + headroom)*s} with smoothing 0.2 and headroom 4, so the target only DECREASES when
- * {@code limit * (1 - g) > 4}. At a limit of 17 that needs {@code g < 0.76}, i.e. a measured
- * <b>short/long ratio above about 2.0</b>. The curve above delivers 2.25x at 18 in-flight and 2.78x at 20, so
- * crossing the elbow clears the bar with margin. A gentle 20% rise would never trigger anything, and this test
- * would pass while proving nothing - which is why {@link #observedMaxLatencyMillis} is asserted directly.
+ * <h2>The arithmetic the model was designed against (the 2026-08-24-003 band machine)</h2>
+ * <b>What actually makes the law contract.</b> The elasticity estimator regresses log useful-throughput on log
+ * in-flight over its short horizon. Below the knee the slope is +1 (throughput is {@code inflight / BASE}); above
+ * it the slope is -1 (throughput is {@code KNEE^2 / (BASE * inflight)}). The RISE band needs slope above 0.25,
+ * FALL needs it below zero - so crossing the elbow flips the verdict from RISE through HOLD to FALL with margin,
+ * no latency reference anywhere. Growth is also <em>provisional</em>: each RISE step remembers its pre-growth
+ * baseline, and the first post-settle verdict that says the step did not pay RETRACTS it - so the law converges
+ * to the last level that paid, which this plant makes the knee itself.
  * <p>
- * <b>How long the ramp takes.</b> While the gradient is pinned at 1.0 the target grows by a constant 0.8 slots per
- * one-second window, so seed {@value #INITIAL_TARGET} to knee {@value #KNEE_INFLIGHT} is
- * {@code (12 - 2) / 0.8 = 13} windows, and the first genuine contraction lands a further ~25 windows out (a
- * simulation of the law against this exact curve put it at window 41). {@link #SETTLE_OBSERVATION_SECONDS} of
- * further watching is then bought outright, so the run has a chance to show what it does after the first break.
+ * <b>How long the ramp takes.</b> The warmup band grants {@code sqrt(limit)} per window up to its 4-slot
+ * episode allowance ({@value #INITIAL_TARGET} to ~6 in about three windows), then each further step waits out
+ * the settle cadence of 8 offered one-second windows: 6 -&gt; 8.4 -&gt; 11.4 -&gt; 14.8, crossing the knee of
+ * {@value #KNEE_INFLIGHT} thirty-to-forty seconds in. The first contraction is the verdict on that overshoot
+ * step - at ~15 in-flight the plant serves 125ms and ~120/s against ~142/s at 11.4, an unambiguous "did not
+ * pay" - so it lands within one further settle period. {@link #SETTLE_OBSERVATION_SECONDS} of watching is then
+ * bought outright, so the run shows what the law does after the first break.
  * <p>
- * <b>Records needed.</b> Throughput is {@code concurrency / latency}, so this workload's own arithmetic bounds it:
- * ~90/s while ramping under the knee, ~105/s through the elbow, ~100/s once hunting - call it 10,000 records for a
- * two-minute run. A workload that runs dry looks EXACTLY like a controller that stopped adapting (the window goes
- * app-limited and the law correctly holds), so rather than guessing a total up front, {@link #startBacklogFeeder}
- * tops the topic up whenever the un-processed backlog falls below {@value #BACKLOG_LOW_WATER}. The backlog is
- * therefore never smaller than three times the {@value #MAX_CONCURRENCY}-slot ceiling, and never so large that the
- * final drain dominates the run.
+ * <b>Records needed.</b> Throughput is {@code concurrency / latency}, bounded by the knee capacity of ~150/s -
+ * call it 15,000 records for a two-minute run. A workload that runs dry looks EXACTLY like a controller that
+ * stopped adapting (the window goes app-limited and the law correctly holds), so rather than guessing a total up
+ * front, {@link #startBacklogFeeder} tops the topic up whenever the un-processed backlog falls below
+ * {@value #BACKLOG_LOW_WATER}. The backlog is therefore never smaller than three times the
+ * {@value #MAX_CONCURRENCY}-slot ceiling, and never so large that the final drain dominates the run.
  * <p>
  * <b>{@code UNORDERED}, deliberately.</b> Under key or partition ordering, in-flight concurrency is capped by the
  * key/partition count rather than by admission, the law correctly reports an application-limited workload, and the
  * experiment measures the shard model instead of the controller.
  *
- * <h2>What a run of this actually shows - and the one thing it shows that is not good news</h2>
- * Three consecutive runs on the same machine agreed to within about a second on every movement, and landed on
- * identical max/final targets and an identical worst observed latency (222ms). The target ramps
- * cleanly 2 -&gt; 12 in ~14s, keeps climbing to 17 by ~21s, and the elbow then bites: the first DOWN movement lands
- * at ~28s, 18 -&gt; 17, at a measured 180ms against an ~80ms baseline. From there it does not converge on a value -
- * it <b>hunts between two adjacent slots</b>, 17 and 18, taking each in turn as the latency it just caused flips
- * the gradient back and forth. That much is a control loop working: the elbow is found, respected, and defended
- * without ever touching the floor or the cap.
+ * <h2>What a run shows now - and the walk this test used to document, which is fixed</h2>
+ * Under the previous law (the Gradient2 port this repo shipped first), this test's headline finding was a
+ * RATCHET: the hunting band did not stay put - {@code 17..18}, then {@code 18..19}, then a step to 20 - because
+ * the long-term latency baseline absorbed the very degradation it was the reference for; simulated for 400
+ * windows the target walked 17 -&gt; 27 with no fixed point below the ceiling. That finding (recorded in
+ * {@code docs/inflight/pr-333-adaptive-concurrency-outstanding.md} and this file's history) is what forced the
+ * law's replacement by the 2026-08-24-003 band machine, whose HOLD band never converts a plateau into growth and
+ * whose learned-latency state no longer exists to drift.
  * <p>
- * The unflattering part is what the {@code Hunting band by 20s slice} line exposes. The band does not stay put:
- * <pre>
- *     [  0- 20s]=2..16   [ 20- 40s]=17..18   [ 40- 60s]=17..18   [ 60- 80s]=18..19   [ 80-100s]=18..19
- * </pre>
- * The pair walks UPWARD - 17/18, then 18/19, then a step to 20 - because the long-term baseline is an EWMA over
- * {@code AdmissionControlLaw.DEFAULT_LONG_BASELINE_WINDOW} = 600 windows and it slowly absorbs the very
- * degradation it is supposed to be the reference for. As the baseline creeps toward the operating latency, the
- * short/long ratio falls, the gradient relaxes, and the additive headroom wins another slot - which raises latency
- * again. The PR-88 anti-drift decay in the law only pulls a STALE-HIGH baseline down; nothing pulls a
- * slowly-inflating one back. Simulating this same curve against the law for 400 windows walks the target from 17
- * to 27 and still climbing, so this is a ratchet with no fixed point below the ceiling, not a slow approach to
- * one.
- * <p>
- * Hence <b>no band is asserted here.</b> A band is genuinely observed, but it drifts, so any bound would be a
- * number fitted to one run length and would go red the day someone lengthened the run - the failure mode this
- * repo's hypothesis register exists to record. The band is printed and left for a reader; the assertions below
- * claim only what is stable across runs. The finding itself is tracked in
- * {@code docs/inflight/pr-333-adaptive-concurrency-outstanding.md}.
+ * So <b>a settled band IS asserted here now</b> - the modest, run-length-independent form: over the final third
+ * of the observation window the target's range must be no wider than two accelerator steps ({@code sqrt} of the
+ * median - one provisional RISE step above the paid level, one descent-probe dip below it, both transient by
+ * design), and its time-weighted median must sit within one accelerator step of the plant's actual knee. The old
+ * law fails both at any run length (its band's median walks); a law that parks at the cap or the floor fails the
+ * median bound outright. Expected excursions inside the band: a RISE overshoot to ~15 retracted by the next
+ * verdict, and rare 4-window descent probes to ~9 restored when the lower level does not pay.
+ *
+ * <h2>Local run record, 2026-08-25 - GREEN (113.2s)</h2>
+ * Green on the law as shipped - the p90 active-task binding evidence, the stagnation probe, the U12
+ * fast-FALL contraction lane and the U13 recovery re-ask probe all in place: the ramp crossed the elbow, the
+ * first contraction landed, and the settled-band assertions (final-third range within two accelerator steps,
+ * time-weighted median within one step of the knee) held with the recovery re-ask's bounded half-step
+ * excursions inside the band. Nothing was weakened.
+ *
+ * <h2>History: the first band-machine run (2026-08-25, earlier) - RED, deliberately left red at the time</h2>
+ * First run against the band-machine law: the target moved {@code 2 -> 3 -> 5} on warmup grants in the first
+ * ten seconds and then froze at 5 for the rest of the run; the elbow await (knee 12) timed out at 120s. The
+ * window boundary classified most windows {@code SELF_THROTTLED} (22 of 27 held-lines), so the estimator never
+ * accumulated the 8-entry, spread-&gt;=1 history its FIRST verdict needs, the warmup allowance exhausted below
+ * the knee, and no probe could arm above the floor. The same freeze, byte-identical trajectory included,
+ * appeared on {@link AdaptiveConcurrencyEnforceIT}'s open-loop plant and on
+ * {@link AdaptiveConcurrencyComparisonIT}'s arrival-controlled plant - <b>that class's history record owns
+ * the full mechanism write-up</b>. The deterministic falsifier suite could not see it until its plant learned
+ * broker-fidelity boundaries (the saturated-flicker scenario, which now reproduces this freeze exactly).
+ * Nothing was weakened - the assertions above describe the law working, this red was the broker-scope
+ * evidence that it did not yet, and the green record above is the evidence that it now does.
  *
  * @see AdaptiveConcurrencyEnforceIT
  * @see AdmissionController
@@ -183,9 +195,10 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
 
     /**
      * How long to keep watching after the first downward movement. Bought outright rather than derived from a
-     * convergence condition, because whether this law converges at all is the open question - an await that waited
-     * for a band would either pass on the first accident or hang on a law that hunts forever, and neither reports
-     * what happened.
+     * convergence condition: an await that waited for a band would pass on the first accident, whereas a fixed
+     * window makes the settled-band assertion below read a period the law had no say over. Sized to several
+     * settle cadences (8 offered windows each) plus at least one descent-probe cycle, so the final third is
+     * genuinely post-transient.
      */
     private static final int SETTLE_OBSERVATION_SECONDS = 60;
 
@@ -302,16 +315,18 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
                             .that(controller.currentTarget()).isAtLeast(ELBOW_WATERMARK));
             log.info("Crossed the elbow watermark of {} - trajectory so far: {}", ELBOW_WATERMARK, renderTrace(snapshotTrajectory()));
 
-            // ---- 2) the downstream pushes back, and the law CONTRACTS. The predicted window is ~25 further
-            // windows out; the bound is generous because the claim is that it happens, not when.
+            // ---- 2) the downstream pushes back, and the law CONTRACTS. The overshoot step past the knee is
+            // adjudicated by the first post-settle verdict (~8 offered windows); the bound is generous because
+            // the claim is that it happens, not when.
             await().alias("the admission target is moved DOWN by the degradation it caused")
                     .atMost(180, SECONDS)
                     .failFast(pc::isClosedOrFailed)
                     .untilAsserted(() -> assertWithMessage(
-                            "at least one window must move the target DOWN - the elbow makes latency %sx base at "
-                                    + "18 in-flight, well past the law's 1.5x tolerance, so a run that only ever "
-                                    + "grows means the law absorbed the degradation instead of reacting to it. "
-                                    + "Trajectory: %s", "2.25", renderTrace(snapshotTrajectory()))
+                            "at least one window must move the target DOWN - above the knee more concurrency "
+                                    + "buys strictly less throughput (knee^2/(base*inflight)), so the elasticity "
+                                    + "verdict must go FALL or retract the unpaid step; a run that only ever "
+                                    + "grows means the law absorbed the collapse instead of reacting to it. "
+                                    + "Trajectory: %s", renderTrace(snapshotTrajectory()))
                             .that(downwardMoveCount()).isAtLeast(1));
             log.info("First contraction seen - trajectory so far: {}", renderTrace(snapshotTrajectory()));
 
@@ -323,10 +338,11 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
                     .that(pc.isClosedOrFailed()).isFalse();
 
             int finalTarget = controller.currentTarget();
+            double observedEndSeconds = (System.nanoTime() - startedAt) / 1_000_000_000d;
             List<TargetChange> observed = snapshotTrajectory();
             List<Integer> targets = targetsOf(observed);
 
-            // ---- 4) correctness throughout: stop feeding, then everything produced must be processed.
+            // ---- correctness throughout: stop feeding, then everything produced must be processed.
             stopFeeding.countDown();
             feeder.join(SECONDS.toMillis(60));
             await().alias("the whole workload drains")
@@ -341,10 +357,10 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
                     producedKeys.size(), processedKeys.size(), INITIAL_TARGET, Collections.max(targets),
                     minAfterPeak(targets), finalTarget, observedMaxInFlight.get(),
                     observedMaxLatencyMillis.get(), BASE_LATENCY_MS, KNEE_INFLIGHT);
-            // The hunting band, sliced by time. NOT asserted - see the class javadoc's "what a run of this
-            // actually shows": the band is real but it RATCHETS, so any fixed bound would be a number tuned to one
-            // run length. Printed because the drift is the finding.
-            log.info("Hunting band by {}s slice (knee is {}): {}", BAND_SLICE_SECONDS, KNEE_INFLIGHT,
+            // The band, sliced by time. Under the old law this line was the evidence of the ratchet (the band
+            // walked upward slice by slice); under the band machine it is the evidence of settling, and the
+            // final third IS asserted below.
+            log.info("Band by {}s slice (knee is {}): {}", BAND_SLICE_SECONDS, KNEE_INFLIGHT,
                     String.join("  ", bandsBySlice(observed)));
 
             // ---- assertions, in descending order of confidence
@@ -365,12 +381,36 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
                     .that(finalTarget).isLessThan(MAX_CONCURRENCY);
 
             assertWithMessage("the elbow must actually have been CROSSED in measurement, not merely in target: "
-                    + "the law contracts only above a %sx short/long ratio, so a worst observed latency below "
-                    + "that of %sms would mean this run never presented the law with a reason to back off",
-                    "1.5", (long) (BASE_LATENCY_MS * 1.5))
+                    + "one accelerator step past the knee serves (15.5/12)^2 = 1.67x base, so a worst observed "
+                    + "latency below %sms (1.5x base) would mean this run never drove the downstream into the "
+                    + "collapsing region and the contraction above was measured off nothing",
+                    (long) (BASE_LATENCY_MS * 1.5))
                     .that(observedMaxLatencyMillis.get()).isAtLeast((long) (BASE_LATENCY_MS * 1.5));
 
-            assertWithMessage("4) exactly the produced records were processed - no loss, and nothing invented")
+            // ---- 5) it SETTLES: the final third of the observation window is a band, not a walk. Two bounds,
+            // both run-length independent (see the class javadoc's settled-band section): the range is at most
+            // two accelerator steps (one provisional RISE step up, one descent-probe dip down - both transient
+            // by design), and the time-weighted median sits within one accelerator step of the plant's actual
+            // knee - which is the bound the old ratcheting law fails at any run length, because its band's
+            // median walked away from the knee it had already found.
+            BandStats finalThird = bandOver(observed, observedEndSeconds * 2.0 / 3.0, observedEndSeconds);
+            double acceleratorStep = Math.ceil(Math.sqrt(finalThird.medianTarget));
+            log.info("Final-third band [{}..{}], time-weighted median {} (knee {}, accelerator step {})",
+                    finalThird.minTarget, finalThird.maxTarget, finalThird.medianTarget, KNEE_INFLIGHT,
+                    acceleratorStep);
+            assertWithMessage("5a) SETTLED range: over the final third of the observation window the target "
+                    + "must stay within two accelerator steps of width - band was [%s..%s], median %s. "
+                    + "Trajectory: %s", finalThird.minTarget, finalThird.maxTarget, finalThird.medianTarget,
+                    targets)
+                    .that((double) (finalThird.maxTarget - finalThird.minTarget))
+                    .isAtMost(2 * acceleratorStep);
+            assertWithMessage("5b) SETTLED level: the final-third time-weighted median must sit within one "
+                    + "accelerator step of the knee of %s - a median that has walked away from a knee the law "
+                    + "already found is the ratchet this law was rewritten to kill. Trajectory: %s",
+                    KNEE_INFLIGHT, targets)
+                    .that((double) Math.abs(finalThird.medianTarget - KNEE_INFLIGHT)).isAtMost(acceleratorStep);
+
+            assertWithMessage("6) exactly the produced records were processed - no loss, and nothing invented")
                     .that(processedKeys).containsExactlyElementsIn(producedKeys);
         } finally {
             stopFeeding.countDown();
@@ -380,14 +420,16 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
     }
 
     /**
-     * The synthetic downstream's service-time curve - {@code BASE * max(1, inflight/KNEE)^2}, the quadratic
-     * queueing shape whose worked table is in the class javadoc. Flat below the knee so the law's long-term
-     * baseline has something clean to warm up on; square above it so crossing the elbow clears the law's 1.5x
-     * tolerance quickly rather than asymptotically.
+     * The synthetic downstream - the shared {@link SyntheticCongestionCurve#quadratic quadratic}
+     * congestion-collapse curve whose worked table is in the class javadoc. Flat below the knee so climbing
+     * windows show clean positive elasticity; collapsing above it so crossing the elbow reads as negative
+     * elasticity within one estimator horizon rather than asymptotically.
      */
+    private static final SyntheticCongestionCurve DOWNSTREAM_CURVE =
+            SyntheticCongestionCurve.quadratic(BASE_LATENCY_MS, KNEE_INFLIGHT);
+
     private static long latencyForInFlight(int concurrent) {
-        double overshoot = Math.max(1.0, concurrent / (double) KNEE_INFLIGHT);
-        return Math.round(BASE_LATENCY_MS * overshoot * overshoot);
+        return DOWNSTREAM_CURVE.serviceTimeMillis(concurrent);
     }
 
     /**
@@ -461,6 +503,66 @@ class AdaptiveConcurrencyClosedLoopIT extends BrokerIntegrationTest<String, Stri
             }
         }
         return downs;
+    }
+
+    /** Min, max and time-weighted median of the target's step function over one time window. */
+    private static final class BandStats {
+        final int minTarget;
+        final int maxTarget;
+        final int medianTarget;
+
+        BandStats(int minTarget, int maxTarget, int medianTarget) {
+            this.minTarget = minTarget;
+            this.maxTarget = maxTarget;
+            this.medianTarget = medianTarget;
+        }
+    }
+
+    /**
+     * The target's band over {@code [fromSeconds, toSeconds)}, read off the step function the trajectory's
+     * change-points define. Time-weighted, because the trajectory records CHANGES: a probe dip that lasted four
+     * seconds must not count the same as the level the law held for twenty - the median is the level the law
+     * actually occupied, which is what "settled" means.
+     */
+    private static BandStats bandOver(List<TargetChange> changes, double fromSeconds, double toSeconds) {
+        List<double[]> segments = new ArrayList<>(); // {target, durationSeconds}
+        int current = INITIAL_TARGET;
+        double segmentStart = fromSeconds;
+        for (TargetChange change : changes) {
+            if (change.atSeconds <= fromSeconds) {
+                current = change.to; // still before the window: just track the level in force at its start
+                continue;
+            }
+            if (change.atSeconds >= toSeconds) {
+                break;
+            }
+            segments.add(new double[]{current, change.atSeconds - segmentStart});
+            current = change.to;
+            segmentStart = change.atSeconds;
+        }
+        segments.add(new double[]{current, toSeconds - segmentStart});
+        int min = Integer.MAX_VALUE;
+        int max = Integer.MIN_VALUE;
+        double total = 0;
+        for (double[] segment : segments) {
+            if (segment[1] <= 0) {
+                continue;
+            }
+            min = Math.min(min, (int) segment[0]);
+            max = Math.max(max, (int) segment[0]);
+            total += segment[1];
+        }
+        segments.sort((a, b) -> Double.compare(a[0], b[0]));
+        double cumulative = 0;
+        int median = min;
+        for (double[] segment : segments) {
+            cumulative += segment[1];
+            if (cumulative >= total / 2) {
+                median = (int) segment[0];
+                break;
+            }
+        }
+        return new BandStats(min, max, median);
     }
 
     /** The lowest target reached AFTER the peak - how far the contraction actually walked it back. */

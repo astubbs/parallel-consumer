@@ -92,6 +92,21 @@ import static org.awaitility.Awaitility.await;
  * run. Growth is a constant additive step of roughly 0.8 slots per window, so the distance from seed to ceiling
  * is what buys wall-clock time here, not the record count.
  *
+ * <h2>Local run record, 2026-08-25 - GREEN (33.0s)</h2>
+ * Green on the law as shipped - the p90 active-task binding evidence, the stagnation probe, the U12
+ * fast-FALL contraction lane and the U13 recovery re-ask probe all in place: the ramp reached its watermark
+ * and the rebalance froze and restored as asserted. The watermark was never weakened.
+ *
+ * <h2>History: the first band-machine run (2026-08-25, earlier) - RED, deliberately left red at the time</h2>
+ * The target warmed {@code 2 -> 3 -> 5} and froze at 5; the 90s ramp await to the watermark of 8 timed out.
+ * Not a stale expectation - liveness is exactly the claim - but a law defect this test caught at broker scope:
+ * under a deep backlog most window boundaries classified {@code SELF_THROTTLED}, the elasticity estimator never
+ * got a first verdict (8 entries within its horizon with in-flight spread), the warmup allowance exhausted, and
+ * no probe armed above the floor. {@link AdaptiveConcurrencyComparisonIT}'s history record <b>owns the full
+ * mechanism write-up</b>; {@link AdaptiveConcurrencyClosedLoopIT} reproduced the same freeze on its elbow
+ * plant. The fixes named in the green record above resolved it; the deterministic reproduction lives in
+ * {@code FalsifierScenarios}' saturated-flicker scenario.
+ *
  * @see AdmissionController
  */
 @Timeout(300)
