@@ -676,10 +676,13 @@ the GREEN side needs two or three replays before it settles anything. **Nobody h
 Recorded as unresolved.
 
 <!-- post-merge: checked-begin -->
-**Fourteenth sighting, 2026-08-25 - two reds on a docs-and-comments branch, and the contention
-explanation does NOT fit this one.** `Chaos Pain Suite` failed twice while astubbs#347 was in review:
-in run `32803999735` at head `5f9fa4088`, and again at `22826761a`. It passed at `257c4173a`, an
-earlier head of the same work. Both failing arms are timing bounds, tripped by margins of 2.7% and 0%:
+**Fourteenth sighting, 2026-08-25 - THREE reds on a docs-and-comments branch, fresh seeds each time,
+and the contention explanation does NOT fit.** `Chaos Pain Suite` failed at three consecutive heads
+while astubbs#347 was in review - `22826761a`, `5f9fa4088` (run `32803999735`) and `7753777c3` (run
+`32805270339`) - having passed at `257c4173a`, an earlier head of the same work. Three of the four
+chaos runs on that branch were red. The harness randomises its seeds per run, so these are three
+independent seed sets rather than one bad seed replaying. The first two runs' arms are timing bounds
+tripped by margins of 2.7% and 0%:
 <!-- post-merge: checked-end -->
 
 | Test | Probe | Margin | Seed |
@@ -699,6 +702,15 @@ thirteenth sighting names `Performance (optional)` overlapping the chaos job as 
 ran here too - but on `highcpu-2`, finishing **03:10:36**, while the first failing test did not start
 until **03:15:05** and the second failed at 03:19:37 on `highcpu-6`. There is no overlap, so whatever
 produced these two, it was not that pairing.
+
+**The third run repeated `CLASS2_STALL` on the same test and added a second arm.**
+`ChaosRevokeUnderWorkDrainIT` tripped `CLASS2_STALL` again on seed `7325551558538345707`, and
+`ChaosKeyOrderIT.perKeyOrderSurvivesChurn` tripped `ZOMBIE_MEMBER` on seed `4984003374538738324` -
+the arm the fourth and eighth sightings describe. So the pattern is not one arm on one seed: it is
+this suite going red at a high rate right now, against a branch that provably cannot influence it.
+**That points at the box or at master, and it is worth someone's attention independent of this PR** -
+`Integration Tests` on the same box also failed in this window with the Kafka broker container
+exiting 126 (it never started), and passed on a straight re-run.
 
 **Still unresolved, and by the same missing step as every prior entry: nobody has replayed the
 seeds.** Recorded rather than diagnosed. The `CLASS2_STALL` arm is the one
