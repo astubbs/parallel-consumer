@@ -716,3 +716,29 @@ contradicted it. That is the third recorded instance of the trap in
 [`gh-run-view-log-truncation.md`](../solutions/workflow-issues/gh-run-view-log-truncation.md), whose
 own remedy - fixing `docs/ci.md`, which still recommended the failing route - had never been applied.
 It has been now.
+
+<!-- post-merge: checked-begin -->
+**Fifteenth sighting, 2026-08-25 - the eager arm, on the same branch as the fourteenth, with a
+different test and a different seed.** `Chaos Pain Suite` on astubbs/parallel-consumer#357
+([run 32814417900](https://github.com/astubbs/parallel-consumer/actions/runs/32814417900)), 8 of 9
+chaos ITs green, `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` red at 169.6s on
+`probe violation`. **17 violations, all `CLASS2_STALL/LAG_STAGNATION`** - the timing bound again, not
+a correctness verdict. Both cooperative arms green in the same run.
+
+**Seed `567232329738342203`:**
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=567232329738342203
+
+**What the pair is worth, which neither red is worth alone.** Two runs on the same branch, minutes
+apart, failed **different tests on different seeds** - `ChaosChurnStormIT` on `7852140587594987229`,
+then the eager `ChaosRevokeUnderWorkIT` on `567232329738342203` - while the branch changes no product
+code at all (agent hooks, shell gates, documentation). That is the seed-dependence this ledger has
+asserted since the second sighting, observed directly rather than inferred from other branches
+passing: the same tree draws a different interleaving each run, and which test goes red follows the
+seed rather than the diff.
+
+It also puts the fourteenth sighting's `INSTANCE_STALL` in relief. This run produced none - 17
+violations of one kind, the pre-existing timing bound - so that detector is not firing on every
+chaos run, which is what an over-eager new detector would look like.
+<!-- post-merge: checked-end -->
