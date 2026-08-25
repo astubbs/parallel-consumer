@@ -132,6 +132,12 @@ else
   echo "PIT: no resolvable base ref - full sweep of ${TARGET_CLASSES}"
 fi
 
+# The Lincheck lane is excluded BY NAME in -DexcludedTestClasses below, not by tag, for the reason the
+# next note gives:
+# whether pitest honours excluded.groups is unverified, and being wrong is expensive here rather than
+# merely inaccurate. Each Lincheck class runs a scheduler-controlled search taking seconds, and pitest
+# re-runs its covering tests once per mutant.
+#
 # NB: pitest does not honour excluded.groups - @Quarantined (and chaos/performance) tests are only
 # excluded here coincidentally, via the integrationTests source-dir glob. If a quarantined UNIT test
 # ever exists when this runs, wire excludedGroups into pitest explicitly (ce-review P3 finding).
@@ -148,7 +154,7 @@ set +e
   -Djacoco.skip=true \
   -DtargetClasses="${TARGET_CLASSES}" \
   -DtargetTests="${TARGET_TESTS}" \
-  -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*" \
+  -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.state.*Lincheck*" \
   -DjvmArgs=-Xmx2g \
   -DoutputFormats=XML,HTML \
   -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
