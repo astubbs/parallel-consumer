@@ -44,6 +44,9 @@ class FakeEngine:
         self._get_answer = pb.GetResult(found=False, value_type=pb.DATA_TYPE_BYTES)
         self._forced_type: pb.HandleType | None = None
         self._answer_bare = False
+        #: The type each mint answered with, keyed by handle - what lets an ``aggregate`` answer
+        #: carry the window of the windowed handle it names, as the real engine's handle store does.
+        self._minted_types: dict[int, pb.HandleType] = {}
         self._lock = threading.Lock()
 
     # -- the transport surface the session uses --
@@ -89,8 +92,9 @@ class FakeEngine:
                 return
             answered_type = self._forced_type
             if answered_type is None:
-                answered_type = self._type_of(method)
+                answered_type = self._type_of(method, message.builder_call)
             self._forced_type = None
+            self._minted_types[self._next_handle] = answered_type
             self._outbound.put(pb.StreamsServerMessage(
                 handle_assigned=pb.HandleAssigned(
                     call_id=call_id, handle=self._next_handle, type=answered_type)))
@@ -107,9 +111,16 @@ class FakeEngine:
         stamped.call_id = call_id
         return stamped
 
-    @staticmethod
-    def _type_of(method: str | None) -> pb.HandleType:
-        """The type the real engine records for each minting method."""
+    def _type_of(self, method: str | None, call: pb.BuilderCall) -> pb.HandleType:
+        """The type the real engine records for each minting method.
+
+        ``windowed_by`` echoes the window the CALL carried, and ``aggregate`` carries the window
+        of the handle it names - looked up from what that handle's mint answered, exactly as the
+        engine reads its handle store. Instrument-checked (R4): with this method transposing
+        size_ms and advance_ms into the echoed window, the round-trip assertion in
+        test_streams_windowing.py fails naming the transposed fields - so a fake that invents its
+        own window cannot pass.
+        """
         if method == "group_by_key":
             return pb.HandleType(
                 kind=pb.HANDLE_KIND_GROUPED_STREAM,
@@ -118,6 +129,19 @@ class FakeEngine:
             return pb.HandleType(
                 kind=pb.HANDLE_KIND_TABLE,
                 key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_LONG)
+        if method == "windowed_by":
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_TIME_WINDOWED_STREAM,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES,
+                window=call.windowed_by.window)
+        if method == "aggregate":
+            aggregated = self._minted_types.get(call.aggregate.handle, pb.HandleType())
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_TABLE,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES,
+                window=aggregated.window if aggregated.HasField("window") else None)
+        # source, map_values and to_stream all mint plain byte streams - to_stream DROPS the
+        # window at the re-key, which is its whole job.
         return pb.HandleType(
             kind=pb.HANDLE_KIND_STREAM,
             key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES)
@@ -156,6 +180,15 @@ class FakeEngine:
             invocation=pb.Invocation(
                 correlation=correlation, function_token=token, value=stream_value,
                 right=table_value, kind=pb.INVOCATION_KIND_JOIN)))
+
+    def aggregate_invoke(
+        self, correlation: int, token: int, key: bytes, value: bytes, aggregate: bytes,
+    ) -> None:
+        """An aggregation step: key, value AND aggregate all travel - the first 3-field shape."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, key=key, value=value,
+                aggregate=aggregate, kind=pb.INVOCATION_KIND_AGGREGATE)))
 
     def invoke(self, correlation: int, token: int, key: bytes, value: bytes) -> None:
         self._outbound.put(pb.StreamsServerMessage(

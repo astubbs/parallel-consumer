@@ -84,7 +84,8 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
             this.assembler = new TopologyAssembler(
                     token -> new ForeignValueMapper(registry, sink, token, INVOCATION_TIMEOUT),
                     token -> new ForeignReducer(registry, sink, token, INVOCATION_TIMEOUT),
-                    token -> new ForeignJoiner(registry, sink, token, INVOCATION_TIMEOUT));
+                    token -> new ForeignJoiner(registry, sink, token, INVOCATION_TIMEOUT),
+                    token -> new ForeignAggregator(registry, sink, token, INVOCATION_TIMEOUT));
         }
 
         @Override
@@ -157,17 +158,23 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                         call.getReduce().getStoreName()));
                 case COUNT -> minted(callId,
                         assembler.count(call.getCount().getHandle(), call.getCount().getStoreName()));
+                case WINDOWED_BY -> minted(callId, assembler.windowedBy(
+                        call.getWindowedBy().getHandle(), call.getWindowedBy().getWindow()));
+                case AGGREGATE -> minted(callId, assembler.aggregate(
+                        call.getAggregate().getHandle(), call.getAggregate().getInitial().toByteArray(),
+                        call.getAggregate().getFunctionToken(), call.getAggregate().getStoreName()));
+                case TO_STREAM -> minted(callId, assembler.toStream(call.getToStream().getHandle()));
                 case SINK -> {
                     assembler.sink(call.getSink().getHandle(), call.getSink().getTopic());
                     yield HandleAssigned.newBuilder().setCallId(callId).build();
                 }
-                // The five-method set is the contract. A sixth is the increment that tests whether the wire
-                // generalises, and until it exists the refusal has to name what was asked for.
+                // The implemented set is the contract. The next operator is the increment that tests whether the
+                // wire generalises, and until it exists the refusal has to name what was asked for.
                 case CALL_NOT_SET -> throw new TopologyDescriptionException(
                         "builder call " + callId + " names no method");
                 default -> throw new TopologyDescriptionException(
                         "builder call " + callId + " names " + call.getCallCase()
-                                + ", which is outside this engine's five-method set");
+                                + ", which is outside this engine's builder-call set");
             };
             send(StreamsServerMessage.newBuilder().setHandleAssigned(answer).build());
         }

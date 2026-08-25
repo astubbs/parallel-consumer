@@ -6,11 +6,14 @@ package bz.stub.parallelconsumer.streams;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.TimeWindowSpec;
 import com.github.bsideup.jabel.Desugar;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.kstream.Aggregator;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
 import org.apache.kafka.streams.kstream.KGroupedStream;
@@ -18,11 +21,16 @@ import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Reducer;
+import org.apache.kafka.streams.kstream.TimeWindowedKStream;
+import org.apache.kafka.streams.kstream.TimeWindows;
 import org.apache.kafka.streams.kstream.ValueJoiner;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.kstream.ValueMapperWithKey;
+import org.apache.kafka.streams.kstream.Windowed;
 import org.apache.kafka.streams.state.Stores;
+import org.apache.kafka.streams.state.WindowStore;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -67,6 +75,16 @@ public class TopologyAssembler {
     }
 
     /**
+     * The windowed-aggregation quarter of the same seam: resolves a token to an aggregator whose step runs in the
+     * host's language. A fourth interface for the same reason {@link ReducerFactory} is a second one - one
+     * interface per Kafka functional shape keeps every factory lambda-shaped at every call site.
+     */
+    @FunctionalInterface
+    public interface AggregatorFactory {
+        Aggregator<byte[], byte[], byte[]> forToken(long functionToken);
+    }
+
+    /**
      * A minted handle: the builder node and the recorded type it carries on the wire.
      *
      * <p>The constructor validates that the recorded kind matches what the node actually is, so a future operator
@@ -82,6 +100,7 @@ public class TopologyAssembler {
                 case HANDLE_KIND_STREAM -> KStream.class;
                 case HANDLE_KIND_GROUPED_STREAM -> KGroupedStream.class;
                 case HANDLE_KIND_TABLE -> KTable.class;
+                case HANDLE_KIND_TIME_WINDOWED_STREAM -> TimeWindowedKStream.class;
                 default -> throw new IllegalArgumentException(
                         "engine bug: a mint must record a known kind, got " + type.getKind());
             };
@@ -108,13 +127,16 @@ public class TopologyAssembler {
     private final MapperFactory mappers;
     private final ReducerFactory reducers;
     private final JoinerFactory joiners;
+    private final AggregatorFactory aggregators;
     private boolean built;
     private Topology topology;
 
-    public TopologyAssembler(MapperFactory mappers, ReducerFactory reducers, JoinerFactory joiners) {
+    public TopologyAssembler(MapperFactory mappers, ReducerFactory reducers, JoinerFactory joiners,
+                             AggregatorFactory aggregators) {
         this.mappers = mappers;
         this.reducers = java.util.Objects.requireNonNull(reducers, "reducers");
         this.joiners = java.util.Objects.requireNonNull(joiners, "joiners");
+        this.aggregators = java.util.Objects.requireNonNull(aggregators, "aggregators");
     }
 
     public long source(String topic) {
@@ -216,12 +238,107 @@ public class TopologyAssembler {
         return mint(stream.join(table, joiners.forToken(functionToken)), STREAM_OF_BYTES);
     }
 
+    /**
+     * Windows a grouped stream by time, minting a time-windowed stream that records the specification on its
+     * {@link HandleType} - the one place the store, the read path and the sink refusal can all read it back from.
+     *
+     * <p>Constructed with {@code TimeWindows.ofSizeAndGrace} only. The deprecated {@code TimeWindows.of} plus
+     * {@code .grace} path silently carries {@code max(24h - size, 0)} grace where the new path carries zero, so
+     * the two differ in behaviour and not only in style - it is banned here outright.
+     *
+     * <p>All four window fields must be present, and each default is a trap the refusals below name: a defaulted
+     * retention is Kafka's own {@code size + grace}, under which a one-hour window retains roughly the currently
+     * open window and nothing else.
+     */
+    public long windowedBy(long handle, TimeWindowSpec window) {
+        requireNotBuilt("windowed_by");
+        requireWindowField(window.hasSizeMs(), "size_ms");
+        requireWindowField(window.hasAdvanceMs(), "advance_ms");
+        requireWindowField(window.hasGraceMs(), "grace_ms");
+        requireWindowField(window.hasRetentionMs(), "retention_ms");
+        long minimumRetention = window.getSizeMs() + window.getGraceMs();
+        require(window.getRetentionMs() >= minimumRetention,
+                "windowed_by names retention_ms " + window.getRetentionMs() + ", below the minimum "
+                        + minimumRetention + " (size_ms + grace_ms): a store retaining less than a window's whole"
+                        + " life cannot serve it");
+        KGroupedStream<byte[], byte[]> upstream = resolve(
+                handle, HandleKind.HANDLE_KIND_GROUPED_STREAM, "windowed_by");
+        TimeWindows windows = TimeWindows.ofSizeAndGrace(
+                        Duration.ofMillis(window.getSizeMs()), Duration.ofMillis(window.getGraceMs()))
+                .advanceBy(Duration.ofMillis(window.getAdvanceMs()));
+        return mint(upstream.windowedBy(windows), windowedType(
+                HandleKind.HANDLE_KIND_TIME_WINDOWED_STREAM, window));
+    }
+
+    /**
+     * The windowed aggregation, whose accumulator passes through the host - the operator {@code reduce} cannot
+     * stand in for, because Kafka never calls a reducer for a key's first value. Here the engine supplies the
+     * initializer's bytes itself, so the host's function sees every record.
+     *
+     * <p>The initializer hands out a DEFENSIVE COPY of the captured bytes on every call. It runs once per new
+     * window per key, and a shared array would alias: the first key's in-place mutations would become the second
+     * key's starting accumulator.
+     *
+     * <p>The store serdes come from the recorded type exactly as {@link #count} and {@link #reduce} select
+     * theirs, and {@code Materialized.withRetention} carries the specification's {@code retention_ms}.
+     */
+    public long aggregate(long handle, byte[] initial, long functionToken, String storeName) {
+        requireNotBuilt("aggregate");
+        require(storeName != null && !storeName.isEmpty(), "aggregate names no store");
+        TimeWindowedKStream<byte[], byte[]> upstream = resolve(
+                handle, HandleKind.HANDLE_KIND_TIME_WINDOWED_STREAM, "aggregate");
+        TimeWindowSpec window = handles.get(handle).type().getWindow();
+        HandleType resultType = windowedType(HandleKind.HANDLE_KIND_TABLE, window);
+        storeValueTypes.put(storeName, resultType.getValueType());
+        byte[] captured = initial.clone();
+        return mint(upstream.aggregate(
+                captured::clone,
+                aggregators.forToken(functionToken),
+                Materialized.<byte[], byte[], WindowStore<Bytes, byte[]>>as(storeName)
+                        .withStoreType(Materialized.StoreType.IN_MEMORY)
+                        .withRetention(Duration.ofMillis(window.getRetentionMs()))
+                        .withKeySerde(operatorSerde(resultType.getKeyType()))
+                        .withValueSerde(operatorSerde(resultType.getValueType()))), resultType);
+    }
+
+    /**
+     * Re-keys a windowed table to its INNER key, minting a plain byte-keyed stream - the one call that makes a
+     * windowed table consumable. The window is dropped, not encoded: no internal windowed-key layout reaches a
+     * topic, and {@code map_values} and {@code sink} accept the result unchanged.
+     *
+     * <p>The cost lands on the reader rather than the wire: the sunk topic carries one record per emit per window
+     * under colliding inner keys, so last-value-per-key stops meaning "final aggregate" over it.
+     */
+    public long toStream(long handle) {
+        requireNotBuilt("to_stream");
+        Minted minted = handles.get(handle);
+        if (minted == null) {
+            throw unknownHandle(handle, "to_stream");
+        }
+        HandleType type = minted.type();
+        if (type.getKind() != HandleKind.HANDLE_KIND_TABLE || !type.hasWindow()) {
+            throw new TopologyDescriptionException("to_stream cannot be applied to handle " + handle
+                    + ": it names a " + describedKind(type) + ", and to_stream needs a windowed table");
+        }
+        @SuppressWarnings("unchecked")
+        KTable<Windowed<byte[]>, byte[]> table = (KTable<Windowed<byte[]>, byte[]>) minted.node();
+        return mint(table.toStream((windowedKey, value) -> windowedKey.key()), STREAM_OF_BYTES);
+    }
+
     public void sink(long handle, String topic) {
         requireNotBuilt("sink");
         require(topic != null && !topic.isEmpty(), "sink names no topic");
         Minted minted = handles.get(handle);
         if (minted == null) {
             throw unknownHandle(handle, "sink");
+        }
+        // The refusal is on the windowed KEY, not on the table: writing one means either shipping Kafka's internal
+        // window layout to a topic or inventing an encoding no other Kafka Streams consumer could read. The way
+        // out is named, in protocol vocabulary.
+        if (minted.type().hasWindow() && minted.type().getKind() == HandleKind.HANDLE_KIND_TABLE) {
+            throw new TopologyDescriptionException("sink cannot be applied to handle " + handle
+                    + ": it names a windowed table, whose keys carry a window this wire does not encode onto a"
+                    + " topic; call to_stream first to re-key it to its inner key");
         }
         // The kind is checked before any serde is selected: a host that sinks the wrong kind of handle is told
         // about the kind, not about a serde it would never have reached - the actionable refusal comes first.
@@ -374,8 +491,34 @@ public class TopologyAssembler {
             case HANDLE_KIND_STREAM -> "stream";
             case HANDLE_KIND_GROUPED_STREAM -> "grouped stream";
             case HANDLE_KIND_TABLE -> "table";
+            case HANDLE_KIND_TIME_WINDOWED_STREAM -> "time-windowed stream";
             default -> "handle of unspecified kind";
         };
+    }
+
+    /** The kind plus its parameterisation: a table whose type carries a window is a "windowed table" to the host. */
+    private static String describedKind(HandleType type) {
+        if (type.hasWindow() && type.getKind() == HandleKind.HANDLE_KIND_TABLE) {
+            return "windowed table";
+        }
+        return kindName(type.getKind());
+    }
+
+    /** A windowed mint's recorded type: bytes on both axes, with the specification riding on the type itself. */
+    private static HandleType windowedType(HandleKind kind, TimeWindowSpec window) {
+        return HandleType.newBuilder()
+                .setKind(kind)
+                .setKeyType(DataType.DATA_TYPE_BYTES)
+                .setValueType(DataType.DATA_TYPE_BYTES)
+                .setWindow(window)
+                .build();
+    }
+
+    /** All four window fields are always present (tumbling is advance equal to size); a missing one is refused
+     * by name rather than silently defaulted, because each proto3 default here means something wrong. */
+    private static void requireWindowField(boolean present, String field) {
+        require(present, "windowed_by carries a window specification missing " + field
+                + "; size_ms, advance_ms, grace_ms and retention_ms must all be present");
     }
 
     private static String typeName(DataType type) {

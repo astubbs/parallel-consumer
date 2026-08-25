@@ -15,6 +15,7 @@ class HandleKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     HANDLE_KIND_STREAM: _ClassVar[HandleKind]
     HANDLE_KIND_GROUPED_STREAM: _ClassVar[HandleKind]
     HANDLE_KIND_TABLE: _ClassVar[HandleKind]
+    HANDLE_KIND_TIME_WINDOWED_STREAM: _ClassVar[HandleKind]
 
 class DataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -35,10 +36,12 @@ class InvocationKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INVOCATION_KIND_MAP: _ClassVar[InvocationKind]
     INVOCATION_KIND_REDUCE: _ClassVar[InvocationKind]
     INVOCATION_KIND_JOIN: _ClassVar[InvocationKind]
+    INVOCATION_KIND_AGGREGATE: _ClassVar[InvocationKind]
 HANDLE_KIND_UNSPECIFIED: HandleKind
 HANDLE_KIND_STREAM: HandleKind
 HANDLE_KIND_GROUPED_STREAM: HandleKind
 HANDLE_KIND_TABLE: HandleKind
+HANDLE_KIND_TIME_WINDOWED_STREAM: HandleKind
 DATA_TYPE_UNSPECIFIED: DataType
 DATA_TYPE_BYTES: DataType
 DATA_TYPE_LONG: DataType
@@ -50,6 +53,7 @@ INVOCATION_KIND_UNSPECIFIED: InvocationKind
 INVOCATION_KIND_MAP: InvocationKind
 INVOCATION_KIND_REDUCE: InvocationKind
 INVOCATION_KIND_JOIN: InvocationKind
+INVOCATION_KIND_AGGREGATE: InvocationKind
 
 class StreamsClientMessage(_message.Message):
     __slots__ = ("open", "builder_call", "register_function", "describe_complete", "invocation_result", "describe", "get")
@@ -107,7 +111,7 @@ class Ready(_message.Message):
     def __init__(self, application_id: _Optional[str] = ...) -> None: ...
 
 class BuilderCall(_message.Message):
-    __slots__ = ("call_id", "source", "map_values", "group_by_key", "count", "sink", "reduce", "join")
+    __slots__ = ("call_id", "source", "map_values", "group_by_key", "count", "sink", "reduce", "join", "windowed_by", "aggregate", "to_stream")
     CALL_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     MAP_VALUES_FIELD_NUMBER: _ClassVar[int]
@@ -116,6 +120,9 @@ class BuilderCall(_message.Message):
     SINK_FIELD_NUMBER: _ClassVar[int]
     REDUCE_FIELD_NUMBER: _ClassVar[int]
     JOIN_FIELD_NUMBER: _ClassVar[int]
+    WINDOWED_BY_FIELD_NUMBER: _ClassVar[int]
+    AGGREGATE_FIELD_NUMBER: _ClassVar[int]
+    TO_STREAM_FIELD_NUMBER: _ClassVar[int]
     call_id: int
     source: Source
     map_values: MapValues
@@ -124,7 +131,10 @@ class BuilderCall(_message.Message):
     sink: Sink
     reduce: Reduce
     join: Join
-    def __init__(self, call_id: _Optional[int] = ..., source: _Optional[_Union[Source, _Mapping]] = ..., map_values: _Optional[_Union[MapValues, _Mapping]] = ..., group_by_key: _Optional[_Union[GroupByKey, _Mapping]] = ..., count: _Optional[_Union[Count, _Mapping]] = ..., sink: _Optional[_Union[Sink, _Mapping]] = ..., reduce: _Optional[_Union[Reduce, _Mapping]] = ..., join: _Optional[_Union[Join, _Mapping]] = ...) -> None: ...
+    windowed_by: WindowedBy
+    aggregate: Aggregate
+    to_stream: ToStream
+    def __init__(self, call_id: _Optional[int] = ..., source: _Optional[_Union[Source, _Mapping]] = ..., map_values: _Optional[_Union[MapValues, _Mapping]] = ..., group_by_key: _Optional[_Union[GroupByKey, _Mapping]] = ..., count: _Optional[_Union[Count, _Mapping]] = ..., sink: _Optional[_Union[Sink, _Mapping]] = ..., reduce: _Optional[_Union[Reduce, _Mapping]] = ..., join: _Optional[_Union[Join, _Mapping]] = ..., windowed_by: _Optional[_Union[WindowedBy, _Mapping]] = ..., aggregate: _Optional[_Union[Aggregate, _Mapping]] = ..., to_stream: _Optional[_Union[ToStream, _Mapping]] = ...) -> None: ...
 
 class Source(_message.Message):
     __slots__ = ("topic",)
@@ -172,6 +182,44 @@ class Sink(_message.Message):
     topic: str
     def __init__(self, handle: _Optional[int] = ..., topic: _Optional[str] = ...) -> None: ...
 
+class WindowedBy(_message.Message):
+    __slots__ = ("handle", "window")
+    HANDLE_FIELD_NUMBER: _ClassVar[int]
+    WINDOW_FIELD_NUMBER: _ClassVar[int]
+    handle: int
+    window: TimeWindowSpec
+    def __init__(self, handle: _Optional[int] = ..., window: _Optional[_Union[TimeWindowSpec, _Mapping]] = ...) -> None: ...
+
+class TimeWindowSpec(_message.Message):
+    __slots__ = ("size_ms", "advance_ms", "grace_ms", "retention_ms")
+    SIZE_MS_FIELD_NUMBER: _ClassVar[int]
+    ADVANCE_MS_FIELD_NUMBER: _ClassVar[int]
+    GRACE_MS_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_MS_FIELD_NUMBER: _ClassVar[int]
+    size_ms: int
+    advance_ms: int
+    grace_ms: int
+    retention_ms: int
+    def __init__(self, size_ms: _Optional[int] = ..., advance_ms: _Optional[int] = ..., grace_ms: _Optional[int] = ..., retention_ms: _Optional[int] = ...) -> None: ...
+
+class Aggregate(_message.Message):
+    __slots__ = ("handle", "initial", "function_token", "store_name")
+    HANDLE_FIELD_NUMBER: _ClassVar[int]
+    INITIAL_FIELD_NUMBER: _ClassVar[int]
+    FUNCTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    STORE_NAME_FIELD_NUMBER: _ClassVar[int]
+    handle: int
+    initial: bytes
+    function_token: int
+    store_name: str
+    def __init__(self, handle: _Optional[int] = ..., initial: _Optional[bytes] = ..., function_token: _Optional[int] = ..., store_name: _Optional[str] = ...) -> None: ...
+
+class ToStream(_message.Message):
+    __slots__ = ("handle",)
+    HANDLE_FIELD_NUMBER: _ClassVar[int]
+    handle: int
+    def __init__(self, handle: _Optional[int] = ...) -> None: ...
+
 class HandleAssigned(_message.Message):
     __slots__ = ("call_id", "handle", "type")
     CALL_ID_FIELD_NUMBER: _ClassVar[int]
@@ -183,14 +231,16 @@ class HandleAssigned(_message.Message):
     def __init__(self, call_id: _Optional[int] = ..., handle: _Optional[int] = ..., type: _Optional[_Union[HandleType, _Mapping]] = ...) -> None: ...
 
 class HandleType(_message.Message):
-    __slots__ = ("kind", "key_type", "value_type")
+    __slots__ = ("kind", "key_type", "value_type", "window")
     KIND_FIELD_NUMBER: _ClassVar[int]
     KEY_TYPE_FIELD_NUMBER: _ClassVar[int]
     VALUE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    WINDOW_FIELD_NUMBER: _ClassVar[int]
     kind: HandleKind
     key_type: DataType
     value_type: DataType
-    def __init__(self, kind: _Optional[_Union[HandleKind, str]] = ..., key_type: _Optional[_Union[DataType, str]] = ..., value_type: _Optional[_Union[DataType, str]] = ...) -> None: ...
+    window: TimeWindowSpec
+    def __init__(self, kind: _Optional[_Union[HandleKind, str]] = ..., key_type: _Optional[_Union[DataType, str]] = ..., value_type: _Optional[_Union[DataType, str]] = ..., window: _Optional[_Union[TimeWindowSpec, _Mapping]] = ...) -> None: ...
 
 class RegisterFunction(_message.Message):
     __slots__ = ("token", "description")

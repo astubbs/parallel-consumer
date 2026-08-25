@@ -211,6 +211,51 @@ class StreamsSessionServiceTest {
         assertThat(recorder.sent.get(1).getFault().getReason()).ignoringCase().contains("already open");
     }
 
+    /**
+     * The session-level half of the windowed aggregation (U4 scenario 10): the aggregate's answer carries the
+     * type INCLUDING the window, and the sink answer still carries neither type nor handle - one presence signal,
+     * unchanged by the new operators.
+     */
+    @Test
+    void anAggregateAnswerCarriesTheWindowAndASinkAnswerStillCarriesNeither() {
+        StreamObserver<StreamsClientMessage> toEngine = service.session(recorder);
+        toEngine.onNext(open("windows"));
+        bz.stub.parallelconsumer.streams.protocol.v1alpha1.TimeWindowSpec spec =
+                bz.stub.parallelconsumer.streams.protocol.v1alpha1.TimeWindowSpec.newBuilder()
+                        .setSizeMs(3_600_000L).setAdvanceMs(3_600_000L).setGraceMs(0).setRetentionMs(7_200_000L)
+                        .build();
+
+        toEngine.onNext(builderCall(1, b -> b.setSource(Source.newBuilder().setTopic("in"))));
+        long source = recorder.sent.get(1).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(2, b -> b.setGroupByKey(GroupByKey.newBuilder().setHandle(source))));
+        long grouped = recorder.sent.get(2).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(3, b -> b.setWindowedBy(
+                bz.stub.parallelconsumer.streams.protocol.v1alpha1.WindowedBy.newBuilder()
+                        .setHandle(grouped).setWindow(spec))));
+        long windowed = recorder.sent.get(3).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(4, b -> b.setAggregate(
+                bz.stub.parallelconsumer.streams.protocol.v1alpha1.Aggregate.newBuilder()
+                        .setHandle(windowed).setInitial(com.google.protobuf.ByteString.copyFromUtf8("seed"))
+                        .setFunctionToken(7).setStoreName("agg-store"))));
+        long table = recorder.sent.get(4).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(5, b -> b.setToStream(
+                bz.stub.parallelconsumer.streams.protocol.v1alpha1.ToStream.newBuilder().setHandle(table))));
+        long restreamed = recorder.sent.get(5).getHandleAssigned().getHandle();
+        toEngine.onNext(builderCall(6, b -> b.setSink(Sink.newBuilder().setHandle(restreamed).setTopic("out"))));
+
+        HandleAssigned windowedAnswer = recorder.sent.get(3).getHandleAssigned();
+        assertThat(windowedAnswer.getType().getKind()).isEqualTo(HandleKind.HANDLE_KIND_TIME_WINDOWED_STREAM);
+        assertThat(windowedAnswer.getType().getWindow()).isEqualTo(spec);
+        HandleAssigned aggregateAnswer = recorder.sent.get(4).getHandleAssigned();
+        assertThat(aggregateAnswer.getCallId()).isEqualTo(4);
+        assertThat(aggregateAnswer.getType().getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
+        assertThat(aggregateAnswer.getType().hasWindow()).isTrue();
+        assertThat(aggregateAnswer.getType().getWindow()).isEqualTo(spec);
+        HandleAssigned sinkAnswer = recorder.sent.get(6).getHandleAssigned();
+        assertThat(sinkAnswer.hasHandle()).isFalse();
+        assertThat(sinkAnswer.hasType()).isFalse();
+    }
+
     private static StreamsClientMessage open(String applicationId) {
         return StreamsClientMessage.newBuilder()
                 .setOpen(Open.newBuilder().setApplicationId(applicationId))

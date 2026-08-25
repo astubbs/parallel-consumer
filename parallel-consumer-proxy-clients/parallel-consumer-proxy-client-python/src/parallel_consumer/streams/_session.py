@@ -9,6 +9,7 @@ engine names the token when it wants an answer. The host calls the host's own fu
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import itertools
 import logging
@@ -44,11 +45,17 @@ ReducerFunction = Callable[[bytes, bytes], bytes]
 #: is exactly why the wire names the kind rather than leaving it to be inferred.
 JoinerFunction = Callable[[bytes, bytes], bytes]
 
+#: A windowed-aggregation step: (key, value, accumulator) -> accumulator - the first THREE-argument
+#: shape, mirroring Kafka's ``Aggregator`` exactly. Unlike :data:`ReducerFunction` the key travels,
+#: and the accumulator is present on a key's first value too: the engine hands out the initializer's
+#: bytes itself, so this function sees every record where a reducer silently skips the first.
+AggregatorFunction = Callable[[bytes, bytes, bytes], bytes]
+
 
 class FunctionKind(enum.IntEnum):
     """Which foreign shape a registered function is. Mirrors the wire's ``InvocationKind``.
 
-    Three shapes now arrive as two byte strings each, so what a function IS can no longer be
+    Three of the shapes arrive as two byte strings each, so what a function IS can no longer be
     inferred from what the invocation carries. A reducer's ``(aggregate, value)`` and a joiner's
     ``(stream_value, table_value)`` are indistinguishable on the wire without this.
     """
@@ -57,6 +64,7 @@ class FunctionKind(enum.IntEnum):
     MAP = 1
     REDUCE = 2
     JOIN = 3
+    AGGREGATE = 4
 
 
 class HandleKind(enum.IntEnum):
@@ -72,6 +80,7 @@ class HandleKind(enum.IntEnum):
     STREAM = 1
     GROUPED_STREAM = 2
     TABLE = 3
+    TIME_WINDOWED_STREAM = 4
 
     @classmethod
     def _missing_(cls, value: object) -> HandleKind:
@@ -120,6 +129,22 @@ class DataType(enum.IntEnum):
             f"cannot decode a value of type {self.name}: this client has no decoder for it")
 
 
+@dataclasses.dataclass(frozen=True)
+class TimeWindow:
+    """A time window in milliseconds, exactly as the wire carries it. Tumbling is advance == size.
+
+    All four fields always travel - the engine refuses a specification missing any of them by
+    name, because every proto3 default here means something wrong. Retention included: Kafka's own
+    default is ``size + grace``, under which a one-hour window retains roughly the currently-open
+    window and nothing else, and the engine refuses a retention below that minimum outright.
+    """
+
+    size_ms: int
+    advance_ms: int
+    grace_ms: int
+    retention_ms: int
+
+
 class Handle(int):
     """A minted handle: the engine's integer, carrying what the engine says it is.
 
@@ -131,20 +156,27 @@ class Handle(int):
     kind: HandleKind
     key_type: DataType
     value_type: DataType
+    #: The window a windowed handle carries, or None. Rides on the handle because the engine
+    #: records it on the HandleType at the mint - there is no second lookup keyed by handle.
+    window: TimeWindow | None
 
     def __new__(
         cls, value: int, kind: HandleKind, key_type: DataType, value_type: DataType,
+        window: TimeWindow | None = None,
     ) -> Handle:
         handle = super().__new__(cls, value)
         handle.kind = kind
         handle.key_type = key_type
         handle.value_type = value_type
+        handle.window = window
         return handle
 
     # The override "narrows" int's declared tuple[int] shape, which mypy flags as an LSP breach -
     # but pickle and copy read this hook dynamically from the concrete class, never through an
     # int-typed reference, so the wider tuple is exactly what makes reconstruction correct here.
-    def __getnewargs__(self) -> tuple[int, HandleKind, DataType, DataType]:  # type: ignore[override]
+    def __getnewargs__(  # type: ignore[override]
+        self,
+    ) -> tuple[int, HandleKind, DataType, DataType, TimeWindow | None]:
         """What copy and pickle rebuild this handle from.
 
         An int subclass with required constructor arguments breaks the default int
@@ -152,7 +184,7 @@ class Handle(int):
         type attributes at all. This closes both, so a handle survives a host's cache or worker
         boundary intact.
         """
-        return (int(self), self.kind, self.key_type, self.value_type)
+        return (int(self), self.kind, self.key_type, self.value_type, self.window)
 
     @classmethod
     def from_assigned(cls, assigned: pb.HandleAssigned) -> Handle:
@@ -167,11 +199,18 @@ class Handle(int):
         UNKNOWN much later, with nothing pointing at the cause.
         """
         if assigned.HasField("type"):
+            window: TimeWindow | None = None
+            if assigned.type.HasField("window"):
+                spec = assigned.type.window
+                window = TimeWindow(
+                    size_ms=spec.size_ms, advance_ms=spec.advance_ms,
+                    grace_ms=spec.grace_ms, retention_ms=spec.retention_ms)
             return cls(
                 assigned.handle,
                 HandleKind(assigned.type.kind),
                 DataType(assigned.type.key_type),
                 DataType(assigned.type.value_type),
+                window=window,
             )
         if assigned.HasField("handle"):
             log.warning(
@@ -252,21 +291,68 @@ class TopologyBuilder:
         return self._session._call(pb.BuilderCall(join=pb.Join(
             stream_handle=stream_handle, table_handle=table_handle, function_token=token)))
 
+    def windowed_by(self, handle: int, window: TimeWindow) -> Handle:
+        """Window a grouped stream by time, minting a time-windowed stream.
+
+        Half of the aggregation pair: :meth:`aggregate` consumes the handle this mints, and
+        nothing else does. The specification travels whole - all four fields - and the returned
+        handle reports it back through ``handle.window``, read from what the engine recorded at
+        the mint.
+        """
+        return self._session._call(pb.BuilderCall(windowed_by=pb.WindowedBy(
+            handle=handle,
+            window=pb.TimeWindowSpec(
+                size_ms=window.size_ms, advance_ms=window.advance_ms,
+                grace_ms=window.grace_ms, retention_ms=window.retention_ms))))
+
+    def aggregate(
+        self, handle: int, function: AggregatorFunction, initial: bytes, store_name: str,
+    ) -> Handle:
+        """Aggregate a time-windowed stream with a function that runs here, in this process.
+
+        The windowed sibling of :meth:`reduce`, with the difference that makes it the windowed
+        operator of choice: ``function`` sees EVERY record, first value included. ``initial`` is
+        the initializer's result, sent once as bytes - it never crosses per record, and the engine
+        hands out a fresh copy each time a key opens a new window.
+
+        The returned handle is a windowed table: :meth:`sink` refuses it, and :meth:`to_stream`
+        is the sanctioned way to make it consumable.
+        """
+        token = self._session.register(function, kind=FunctionKind.AGGREGATE)
+        return self._session._call(pb.BuilderCall(aggregate=pb.Aggregate(
+            handle=handle, initial=initial, function_token=token, store_name=store_name)))
+
+    def to_stream(self, handle: int) -> Handle:
+        """Re-key a windowed table to its inner key, minting a plain byte-keyed stream.
+
+        The one call that makes a windowed table consumable: :meth:`map_values` and :meth:`sink`
+        accept the result unchanged, and no window bytes ever reach a topic. The cost lands on
+        the reader - the sunk topic carries one record per emit per window under COLLIDING inner
+        keys, so last-value-per-key stops meaning "final aggregate" over it.
+        """
+        return self._session._call(pb.BuilderCall(to_stream=pb.ToStream(handle=handle)))
+
     def sink(self, handle: int, topic: str) -> None:
         self._session._call(pb.BuilderCall(sink=pb.Sink(handle=handle, topic=topic)))
 
 
-def _leading_argument(kind: FunctionKind, invocation: pb.Invocation) -> bytes:
-    """What goes first when calling a function of this kind.
+def _arguments(kind: FunctionKind, invocation: pb.Invocation) -> tuple[bytes, ...]:
+    """The whole argument tuple for a function of this kind, in call order.
 
-    One table rather than three call sites, because the whole risk in this area is that every
-    shape is ``(bytes, bytes)`` and any pairing type-checks.
+    One table for ordering AND arity, because the whole risk in this area is that every shape is
+    bytes and any pairing type-checks. Its predecessor returned only the leading argument while
+    the call site hardcoded a second - an arrangement a three-argument aggregator could not be
+    added to without a second call site to drift from this one.
     """
     if kind is FunctionKind.REDUCE:
-        return invocation.aggregate
+        return (invocation.aggregate, invocation.value)
     if kind is FunctionKind.JOIN:
-        return invocation.value
-    return invocation.key
+        return (invocation.value, invocation.right)
+    if kind is FunctionKind.AGGREGATE:
+        # Key, value, accumulator - the order Kafka's Aggregator declares, which is the order a
+        # host writing against the framework's own docs will assume.
+        return (invocation.key, invocation.value, invocation.aggregate)
+    return (invocation.key, invocation.value)
 
 
 class StreamsSession:
@@ -296,7 +382,10 @@ class StreamsSession:
 
     def __init__(self, transport: StreamsTransport, *, max_workers: int | None = None) -> None:
         self._transport = transport
-        self._functions: dict[int, tuple[FunctionKind, RecordFunction]] = {}
+        #: Callable[..., bytes] rather than a union of the four shapes: the kind beside it is what
+        #: says which arity ``_arguments`` builds, and the invocation-kind check is what keeps a
+        #: mismatched call from ever being made.
+        self._functions: dict[int, tuple[FunctionKind, Callable[..., bytes]]] = {}
         self._tokens = itertools.count(1)
         self._call_ids = itertools.count(1)
         #: One waiter per outstanding call, and one answer slot per outstanding call - never one
@@ -408,7 +497,8 @@ class StreamsSession:
     # ---- function registry -------------------------------------------------------
 
     def register(
-        self, function: RecordFunction, *, kind: FunctionKind = FunctionKind.MAP,
+        self, function: RecordFunction | AggregatorFunction, *,
+        kind: FunctionKind = FunctionKind.MAP,
     ) -> int:
         """Registers a function under a token. The token crosses; the function never does.
 
@@ -574,9 +664,7 @@ class StreamsSession:
             return
 
         try:
-            first = _leading_argument(arrived, invocation)
-            second = invocation.right if arrived is FunctionKind.JOIN else invocation.value
-            value = function(first, second)
+            value = function(*_arguments(arrived, invocation))
         except Exception as failed:
             self._answer(invocation.correlation, error=repr(failed))
             return

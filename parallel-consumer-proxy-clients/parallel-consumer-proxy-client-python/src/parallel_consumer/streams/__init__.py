@@ -15,6 +15,7 @@ or a builder call from inside a mapper - which hung while the reader thread ran 
 """
 
 from ._session import (
+    AggregatorFunction,
     DataType,
     FunctionKind,
     Handle,
@@ -25,11 +26,13 @@ from ._session import (
     StreamsError,
     StreamsSession,
     StreamsTransport,
+    TimeWindow,
     TopologyBuilder,
 )
 from ._transport import GrpcStreamsTransport
 
 __all__ = [
+    "AggregatorFunction",
     "DataType",
     "FunctionKind",
     "GrpcStreamsTransport",
@@ -41,5 +44,6 @@ __all__ = [
     "StreamsError",
     "StreamsSession",
     "StreamsTransport",
+    "TimeWindow",
     "TopologyBuilder",
 ]

@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.streams;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.TimeWindowSpec;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.LongDeserializer;
@@ -14,6 +15,8 @@ import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.state.WindowStore;
+import org.apache.kafka.streams.state.WindowStoreIterator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -21,6 +24,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
@@ -57,9 +63,17 @@ class TopologyAssemblerTest {
             token -> (streamValue, tableValue) -> bytes(new String(streamValue, StandardCharsets.UTF_8) + ">"
                     + new String(tableValue, StandardCharsets.UTF_8));
 
+    /** Appends each value to the accumulator, so the initializer's bytes and every crossing show in the result. */
+    private final TopologyAssembler.AggregatorFactory appending = token -> (key, value, aggregate) -> {
+        byte[] joined = new byte[aggregate.length + value.length];
+        System.arraycopy(aggregate, 0, joined, 0, aggregate.length);
+        System.arraycopy(value, 0, joined, aggregate.length, value.length);
+        return joined;
+    };
+
     @Test
     void eachCallReturnsAHandleTheNextCallCanName() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
 
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
@@ -72,7 +86,7 @@ class TopologyAssemblerTest {
 
     @Test
     void aCallNamingAnUnknownHandleIsRefusedAndTheErrorNamesIt() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         assembler.source("in");
 
         TopologyDescriptionException thrown =
@@ -84,7 +98,7 @@ class TopologyAssemblerTest {
 
     @Test
     void aCallAppliedToTheWrongKindOfHandleIsRefusedInProtocolVocabulary() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long source = assembler.source("in");
 
         // count needs a grouped stream; a source is not one. The refusal speaks the protocol's vocabulary -
@@ -101,7 +115,7 @@ class TopologyAssemblerTest {
 
     @Test
     void eachMintRecordsItsKindAndItsKeyAndValueTypes() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
 
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
@@ -126,7 +140,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void everyMethodRefusesEveryWrongKindByItsRecordedName() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long stream = assembler.source("in");
         long grouped = assembler.groupByKey(stream);
         long table = assembler.count(grouped, "counts");
@@ -147,7 +161,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void sinkingAGroupedStreamIsRefusedByItsKindNotAsUnknown() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long grouped = assembler.groupByKey(assembler.source("in"));
 
         TopologyDescriptionException thrown =
@@ -205,7 +219,7 @@ class TopologyAssemblerTest {
      */
     @Test
     void aByteStreamSinksItsBytesUnchanged(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long source = assembler.source("in");
         assembler.sink(assembler.mapValues(source, 42), "out");
 
@@ -240,7 +254,7 @@ class TopologyAssemblerTest {
 
     @Test
     void describingAfterTheTopologyIsBuiltIsRefused() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long source = assembler.source("in");
         assembler.sink(source, "out");
         assembler.build();
@@ -253,7 +267,7 @@ class TopologyAssemblerTest {
 
     @Test
     void theDescribedTopologyCountsPerKeyAndTheSinkCarriesTheCounts(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long source = assembler.source("in");
         long mapped = assembler.mapValues(source, 42);
         long grouped = assembler.groupByKey(mapped);
@@ -283,7 +297,7 @@ class TopologyAssemblerTest {
 
     @Test
     void theAggregationUsesNoRocksDb(@TempDir Path stateDir) throws IOException {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long grouped = assembler.groupByKey(assembler.source("in"));
         assembler.sink(assembler.count(grouped, "counts"), "out");
 
@@ -320,7 +334,7 @@ class TopologyAssemblerTest {
 
     @Test
     void reduceCombinesEachKeysValuesThroughTheForeignFunction(@TempDir Path stateDir) {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long grouped = assembler.groupByKey(assembler.source("in"));
         assembler.sink(assembler.reduce(grouped, 7, "reduced"), "out");
 
@@ -358,7 +372,7 @@ class TopologyAssemblerTest {
             aggregatesSeen.add(new String(aggregate, StandardCharsets.UTF_8));
             return value;
         };
-        TopologyAssembler assembler = new TopologyAssembler(echo, recording, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, recording, joining, appending);
         long grouped = assembler.groupByKey(assembler.source("in"));
         assembler.sink(assembler.reduce(grouped, 7, "reduced"), "out");
 
@@ -374,7 +388,7 @@ class TopologyAssemblerTest {
 
     @Test
     void reduceMintsATableOfBytesWhereCountMintsLongs() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long grouped = assembler.groupByKey(assembler.source("in"));
         long counted = assembler.count(grouped, "counted");
         long reduced = assembler.reduce(grouped, 7, "reduced");
@@ -407,7 +421,7 @@ class TopologyAssemblerTest {
             return joined;
         };
 
-        TopologyAssembler assembler = new TopologyAssembler(upper, join, joining);
+        TopologyAssembler assembler = new TopologyAssembler(upper, join, joining, appending);
         long source = assembler.source("in");
         long transformed = assembler.mapValues(source, 1);
         long grouped = assembler.groupByKey(transformed);
@@ -453,7 +467,7 @@ class TopologyAssemblerTest {
                             + new String(tableValue, StandardCharsets.UTF_8));
                 };
 
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, recording);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, recording, appending);
         long facts = assembler.source("facts");
         long table = assembler.reduce(assembler.groupByKey(facts), 1, "facts-store");
         long events = assembler.source("events");
@@ -483,7 +497,7 @@ class TopologyAssemblerTest {
 
     @Test
     void aJoinAgainstACountsTableIsRefusedAtTheCallThatDescribedIt() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long facts = assembler.source("facts");
         long counts = assembler.count(assembler.groupByKey(facts), "counts-store");
         long events = assembler.source("events");
@@ -497,13 +511,259 @@ class TopologyAssemblerTest {
 
     @Test
     void aJoinNamingAGroupedStreamAsItsTableIsRefused() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long events = assembler.source("events");
         long grouped = assembler.groupByKey(assembler.source("facts"));
 
         TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
                 () -> assembler.join(events, grouped, 1));
         assertThat(refused).hasMessageThat().contains("needs a table");
+    }
+
+    // ---- the windowed aggregation: windowed_by, aggregate, to_stream ----
+
+    private static final long ONE_HOUR_MS = 3_600_000L;
+    private static final long TWO_HOURS_MS = 7_200_000L;
+
+    /** A base timestamp well past the epoch, so no window under test brushes against time zero. */
+    private static final Instant BASE = Instant.parse("2026-01-01T00:00:00Z");
+
+    private static TimeWindowSpec window(long sizeMs, long advanceMs, long graceMs, long retentionMs) {
+        return TimeWindowSpec.newBuilder()
+                .setSizeMs(sizeMs).setAdvanceMs(advanceMs).setGraceMs(graceMs).setRetentionMs(retentionMs)
+                .build();
+    }
+
+    /** A one-hour tumbling window: advance equals size, zero grace, retention comfortably above the minimum. */
+    private static TimeWindowSpec tumblingHour() {
+        return window(ONE_HOUR_MS, ONE_HOUR_MS, 0, TWO_HOURS_MS);
+    }
+
+    @Test
+    void windowedByMintsATimeWindowedStreamWhoseRecordedTypeCarriesTheSpecification() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+
+        long windowed = assembler.windowedBy(grouped, tumblingHour());
+
+        HandleType recorded = assembler.typeOf(windowed);
+        assertThat(recorded.getKind()).isEqualTo(HandleKind.HANDLE_KIND_TIME_WINDOWED_STREAM);
+        assertThat(recorded.getKeyType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(recorded.getValueType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(recorded.hasWindow()).isTrue();
+        assertThat(recorded.getWindow()).isEqualTo(tumblingHour());
+    }
+
+    @Test
+    void aggregateMintsAWindowedTableOfBytesCarryingTheWindow() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+
+        long table = assembler.aggregate(windowed, bytes("init"), 7, "agg-store");
+
+        HandleType recorded = assembler.typeOf(table);
+        assertThat(recorded.getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
+        assertThat(recorded.getValueType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(recorded.hasWindow()).isTrue();
+        assertThat(recorded.getWindow()).isEqualTo(tumblingHour());
+    }
+
+    @Test
+    void windowedByOnAStreamOrATableIsRefusedInProtocolVocabulary() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long stream = assembler.source("in");
+        long table = assembler.count(assembler.groupByKey(stream), "counts");
+
+        assertRefusedNaming(() -> assembler.windowedBy(stream, tumblingHour()),
+                "windowed_by", "stream", "grouped stream");
+        assertRefusedNaming(() -> assembler.windowedBy(table, tumblingHour()),
+                "windowed_by", "table", "grouped stream");
+        // Protocol vocabulary only: never a Kafka Streams implementation class name, which means nothing to a
+        // host that has never seen a JVM.
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(stream, tumblingHour()));
+        assertThat(refused).hasMessageThat().doesNotContain("KStream");
+        assertThat(refused).hasMessageThat().doesNotContain("KGroupedStream");
+    }
+
+    /**
+     * R17: the refusal is on the windowed KEY, not on the table, and it names the sanctioned way out. Without the
+     * to_stream pointer a host is told only what it cannot do, when one call would have unblocked it.
+     */
+    @Test
+    void sinkingAWindowedTableIsRefusedNamingTheWindowedKeyAndToStreamAsTheWayOut() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        long table = assembler.aggregate(windowed, bytes("i"), 7, "agg-store");
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.sink(table, "out"));
+
+        assertThat(refused).hasMessageThat().contains("handle " + table);
+        assertThat(refused).hasMessageThat().contains("windowed table");
+        assertThat(refused).hasMessageThat().contains("window");
+        assertThat(refused).hasMessageThat().contains("to_stream");
+    }
+
+    /**
+     * The behaviour {@code reduce} can never give (R15): Kafka skips a reducer for a key's first value, but an
+     * aggregator is called for every record because the engine supplies the initializer's bytes itself. The window
+     * store is read while the driver is OPEN - closing it deletes the state directory, which has produced a green
+     * test asserting nothing in this module before.
+     */
+    @Test
+    void theFirstValueForAKeyReachesTheHostAggregator(@TempDir Path stateDir) {
+        List<String> crossings = new ArrayList<>();
+        TopologyAssembler.AggregatorFactory recording = token -> (key, value, aggregate) -> {
+            crossings.add(new String(aggregate, StandardCharsets.UTF_8) + "+"
+                    + new String(value, StandardCharsets.UTF_8));
+            byte[] joined = new byte[aggregate.length + value.length];
+            System.arraycopy(aggregate, 0, joined, 0, aggregate.length);
+            System.arraycopy(value, 0, joined, aggregate.length, value.length);
+            return joined;
+        };
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, recording);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        assembler.aggregate(windowed, bytes("i"), 7, "agg-store");
+
+        String stored;
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer(), BASE, Duration.ZERO);
+            in.pipeInput(bytes("a"), bytes("x"));
+            in.pipeInput(bytes("a"), bytes("y"));
+            in.pipeInput(bytes("a"), bytes("z"));
+
+            WindowStore<byte[], byte[]> store = driver.getWindowStore("agg-store");
+            try (WindowStoreIterator<byte[]> iterator = store.fetch(
+                    bytes("a"), BASE.minusMillis(ONE_HOUR_MS), BASE.plusMillis(ONE_HOUR_MS))) {
+                assertThat(iterator.hasNext()).isTrue();
+                stored = new String(iterator.next().value, StandardCharsets.UTF_8);
+                assertThat(iterator.hasNext()).isFalse();
+            }
+        }
+
+        // "i+x" is the whole point: the FIRST value for the key crossed, with the initializer's bytes as its
+        // accumulator - the record a reduce silently swallows.
+        assertThat(crossings).containsExactly("i+x", "ix+y", "ixy+z").inOrder();
+        assertThat(stored).isEqualTo("ixyz");
+    }
+
+    /**
+     * KTD8: the initializer runs once per new window per key, and hands out a DEFENSIVE COPY each time. The host
+     * aggregator here vandalises the accumulator array in place; with one shared array the second key's initial
+     * accumulator would arrive as "###" instead of "id-". Red-proofed (R4): with the per-call copy in
+     * {@code TopologyAssembler.aggregate} changed to hand out the captured array itself, this test fails with
+     * {@code initials: ["id-", "###"]} - so it can see the defect it guards against.
+     */
+    @Test
+    void eachKeyOpeningAWindowGetsItsOwnCopyOfTheInitializerBytes(@TempDir Path stateDir) {
+        List<String> initials = new ArrayList<>();
+        TopologyAssembler.AggregatorFactory vandalising = token -> (key, value, aggregate) -> {
+            initials.add(new String(aggregate, StandardCharsets.UTF_8));
+            Arrays.fill(aggregate, (byte) '#');
+            return value;
+        };
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, vandalising);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        assembler.aggregate(windowed, bytes("id-"), 7, "agg-store");
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer(), BASE, Duration.ZERO);
+            in.pipeInput(bytes("a"), bytes("1"));
+            in.pipeInput(bytes("b"), bytes("2"));
+        }
+
+        assertThat(initials).containsExactly("id-", "id-").inOrder();
+    }
+
+    @Test
+    void aWindowSpecificationMissingAFieldIsRefusedByName() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        TimeWindowSpec noAdvance = TimeWindowSpec.newBuilder()
+                .setSizeMs(ONE_HOUR_MS).setGraceMs(0).setRetentionMs(TWO_HOURS_MS).build();
+        TimeWindowSpec noRetention = TimeWindowSpec.newBuilder()
+                .setSizeMs(ONE_HOUR_MS).setAdvanceMs(ONE_HOUR_MS).setGraceMs(0).build();
+
+        TopologyDescriptionException missingAdvance = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, noAdvance));
+        TopologyDescriptionException missingRetention = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, noRetention));
+
+        // Refused by NAME, never defaulted: proto3's zero would silently turn a tumbling window into a point
+        // (advance) or hand the store Kafka's own size+grace default (retention), each wrong in a different way.
+        assertThat(missingAdvance).hasMessageThat().contains("advance_ms");
+        assertThat(missingRetention).hasMessageThat().contains("retention_ms");
+    }
+
+    @Test
+    void aRetentionBelowSizePlusGraceIsRefusedNamingTheMinimum() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        long graceMs = 1_800_000L;
+        TimeWindowSpec tooShort = window(ONE_HOUR_MS, ONE_HOUR_MS, graceMs, ONE_HOUR_MS);
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, tooShort));
+
+        // The minimum is named (R20), rather than left to surface as Kafka's own exception from inside the
+        // engine one build step later.
+        assertThat(refused).hasMessageThat().contains(String.valueOf(ONE_HOUR_MS + graceMs));
+        assertThat(refused).hasMessageThat().contains("size_ms + grace_ms");
+    }
+
+    /**
+     * The chain every arm in U6 runs through, asserted here rather than discovered there (R29, KTD19): to_stream
+     * re-keys the windowed table to its INNER key, so map_values and sink accept the result unchanged and no
+     * window bytes ever reach the topic.
+     */
+    @Test
+    void toStreamThenMapValuesThenSinkCarriesTheInnerKeyWithNoWindowBytes(@TempDir Path stateDir) {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        long table = assembler.aggregate(windowed, bytes(""), 7, "agg-store");
+
+        long restreamed = assembler.toStream(table);
+        HandleType recorded = assembler.typeOf(restreamed);
+        assertThat(recorded.getKind()).isEqualTo(HandleKind.HANDLE_KIND_STREAM);
+        assertThat(recorded.getKeyType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(recorded.getValueType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        // The window is DROPPED at the re-key, not carried: a windowed type here would send the next operator
+        // hunting for window bytes that no longer exist.
+        assertThat(recorded.hasWindow()).isFalse();
+
+        assembler.sink(assembler.mapValues(restreamed, 42), "out");
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer(), BASE, Duration.ZERO);
+            TestOutputTopic<byte[], byte[]> out = driver.createOutputTopic(
+                    "out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+
+            in.pipeInput(bytes("k"), bytes("v"));
+
+            var record = out.readKeyValue();
+            // The INNER key, byte for byte: a windowed key would carry an 8-byte big-endian start suffix, so
+            // length alone would betray it. Asserting the exact bytes covers both the value and the length.
+            assertThat(record.key).isEqualTo(bytes("k"));
+            assertThat(new String(record.value, StandardCharsets.UTF_8)).isEqualTo("v");
+        }
+    }
+
+    @Test
+    void toStreamOnANonWindowedHandleIsRefusedByName() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long stream = assembler.source("in");
+        long grouped = assembler.groupByKey(stream);
+        long plainTable = assembler.count(grouped, "counts");
+
+        assertRefusedNaming(() -> assembler.toStream(stream), "to_stream", "stream", "windowed table");
+        assertRefusedNaming(() -> assembler.toStream(grouped), "to_stream", "grouped stream", "windowed table");
+        // A plain table is the near-miss worth naming separately: it IS a table, just not a windowed one, and
+        // Kafka's own KTable.toStream would happily take it - the refusal is this wire's scope choice.
+        assertRefusedNaming(() -> assembler.toStream(plainTable), "to_stream", "table", "windowed table");
     }
 
     private static byte[] bytes(String s) {

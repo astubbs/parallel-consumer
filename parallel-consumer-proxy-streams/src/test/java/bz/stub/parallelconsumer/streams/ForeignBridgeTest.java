@@ -27,9 +27,10 @@ class ForeignBridgeTest {
 
     private static final Duration GENEROUS = Duration.ofSeconds(5);
 
-    /** Captures what was emitted and answers immediately, so neither bridge blocks. */
+    /** Captures what was emitted and answers immediately, so no bridge blocks. */
     private static final class CapturingSink implements InvocationSink {
         private final InvocationRegistry registry;
+        private final List<String> keys = new ArrayList<>();
         private final List<String> aggregates = new ArrayList<>();
         private final List<String> values = new ArrayList<>();
         private final List<String> rights = new ArrayList<>();
@@ -43,6 +44,7 @@ class ForeignBridgeTest {
         @Override
         public void emit(long correlation, long functionToken, ForeignCall call) {
             kinds.add(call.kind().name());
+            keys.add(call.key() == null ? "<absent>" : new String(call.key(), StandardCharsets.UTF_8));
             aggregates.add(call.aggregate() == null
                     ? "<absent>" : new String(call.aggregate(), StandardCharsets.UTF_8));
             values.add(call.value() == null ? "<absent>" : new String(call.value(), StandardCharsets.UTF_8));
@@ -117,6 +119,42 @@ class ForeignBridgeTest {
         // Field presence alone stopped being enough the moment a third shape arrived: a reducer's pair and a
         // joiner's pair are the same two byte arrays. The kind is what the host dispatches on.
         assertThat(sink.kinds).containsExactly("INVOCATION_KIND_REDUCE", "INVOCATION_KIND_JOIN").inOrder();
+    }
+
+    /**
+     * The fourth bridge, and the first three-argument one. The key travels - Kafka's Aggregator receives one where
+     * its Reducer does not - and the aggregate is present on every call, first value included, because the engine
+     * supplies the initializer's bytes itself. All three arguments are bytes, so only an assertion on which one
+     * landed where can tell a transposition from a pass.
+     */
+    @Test
+    void theAggregatorSendsKeyValueAndAccumulatorAndNamesItsKind() {
+        InvocationRegistry registry = new InvocationRegistry();
+        CapturingSink sink = new CapturingSink(registry);
+
+        new ForeignAggregator(registry, sink, 7, GENEROUS).apply(
+                "k".getBytes(StandardCharsets.UTF_8),
+                "v".getBytes(StandardCharsets.UTF_8),
+                "acc".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(sink.kinds).containsExactly("INVOCATION_KIND_AGGREGATE");
+        assertThat(sink.keys).containsExactly("k");
+        assertThat(sink.values).containsExactly("v");
+        assertThat(sink.aggregates).containsExactly("acc");
+        assertThat(sink.rights).containsExactly("<absent>");
+    }
+
+    @Test
+    void theAggregatorReturnsWhatTheHostAnswered() {
+        InvocationRegistry registry = new InvocationRegistry();
+        CapturingSink sink = new CapturingSink(registry);
+
+        byte[] result = new ForeignAggregator(registry, sink, 7, GENEROUS).apply(
+                "k".getBytes(StandardCharsets.UTF_8),
+                "v".getBytes(StandardCharsets.UTF_8),
+                "acc".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(new String(result, StandardCharsets.UTF_8)).isEqualTo("answered");
     }
 
     @Test

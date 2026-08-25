@@ -42,4 +42,15 @@ public record ForeignCall(InvocationKind kind, byte[] key, byte[] value, byte[] 
     public static ForeignCall join(byte[] value, byte[] right) {
         return new ForeignCall(InvocationKind.INVOCATION_KIND_JOIN, null, value, null, right);
     }
+
+    /**
+     * A windowed aggregation step: the record's key and value, and the current accumulator.
+     *
+     * <p>The first three-field shape. Unlike {@link #reduce} the key travels - Kafka's {@code Aggregator} receives
+     * it - and the aggregate is present on a key's FIRST value too, because the engine hands the initializer's
+     * bytes out itself rather than skipping the call the way a reduction does.
+     */
+    public static ForeignCall aggregate(byte[] key, byte[] value, byte[] aggregate) {
+        return new ForeignCall(InvocationKind.INVOCATION_KIND_AGGREGATE, key, value, aggregate, null);
+    }
 }

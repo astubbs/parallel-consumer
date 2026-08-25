@@ -35,9 +35,12 @@ class TopologyDescriberTest {
         return joined;
     };
 
+    /** Never reached here - no test describes a windowed aggregation - but the assembler requires all four seams. */
+    private final TopologyAssembler.AggregatorFactory appending = token -> (key, value, aggregate) -> value;
+
     /** The five-call chain the demo runs, which is also the widest topology this protocol can currently express. */
     private Topology countingTopology() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long source = assembler.source("input");
         long mapped = assembler.mapValues(source, 1L);
         long grouped = assembler.groupByKey(mapped);
@@ -136,7 +139,7 @@ class TopologyDescriberTest {
 
     @Test
     void describingATopologyDoesNotConsumeTheRightToStartIt() {
-        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining);
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long source = assembler.source("input");
         assembler.sink(source, "output");
 

@@ -80,6 +80,9 @@ message BuilderCall {
     Sink sink = 6;
     Reduce reduce = 7;
     Join join = 8;
+    WindowedBy windowed_by = 9;
+    Aggregate aggregate = 10;
+    ToStream to_stream = 11;
   }
 }
 
@@ -120,6 +123,52 @@ message Sink {
   optional string topic = 2;
 }
 
+// Windows a grouped stream by time, minting a time-windowed stream. Half of the aggregation pair -
+// two calls rather than one fused call, so the window specification lives in exactly one place
+// where the store, the read path and the sink refusal can all read it back.
+message WindowedBy {
+  optional int64 handle = 1;
+  optional TimeWindowSpec window = 2;
+}
+
+// A time window, in milliseconds. ALL FOUR fields are always present - a specification with a
+// field missing is refused by name, never defaulted, because every default here is a trap:
+// a defaulted advance silently turns a hopping window into a point, and a defaulted retention is
+// Kafka's own `size + grace`, under which a one-hour window retains roughly the currently-open
+// window and nothing else - so a host that later range-reads coexisting windows would find them
+// gone for a reason with nothing to do with its own code. Tumbling is advance equal to size.
+message TimeWindowSpec {
+  optional int64 size_ms = 1;
+  optional int64 advance_ms = 2;
+  optional int64 grace_ms = 3;
+  // Applied to the window store. Must be at least size_ms + grace_ms; below that the builder call
+  // is refused with the minimum named, rather than surfacing as Kafka's own exception later.
+  optional int64 retention_ms = 4;
+}
+
+// The windowed aggregation, and the first operator that carries a VALUE on a builder call:
+// `initial` is the initializer's result, captured once as bytes. It never crosses per record -
+// Kafka's Initializer is zero-argument and pure, so the host supplies its value at build time and
+// the engine hands out a fresh copy each time a key opens a new window. The per-record function is
+// named by token exactly as map_values and reduce name theirs.
+message Aggregate {
+  optional int64 handle = 1;
+  optional bytes initial = 2;
+  optional int64 function_token = 3;
+  optional string store_name = 4;
+}
+
+// Re-keys a windowed table to its INNER key, minting a plain byte-keyed stream - the one call that
+// makes a windowed table consumable. Nothing else on this wire accepts a windowed handle:
+// map_values takes a stream, and sink refuses a windowed key because no topic encoding exists for
+// one that other Kafka Streams consumers could read. The window is dropped here, not encoded, so
+// no internal layout reaches a topic. The cost lands on the reader: the sunk topic carries one
+// record per emit per window under colliding inner keys, so last-value-per-key stops meaning
+// "final aggregate" over it.
+message ToStream {
+  optional int64 handle = 1;
+}
+
 // Handles are server-minted and opaque to the client, which may only name them back.
 //
 // Delivery contract: `handle` and `type` are present exactly when the call minted a handle. A
@@ -142,6 +191,14 @@ message HandleType {
   optional HandleKind kind = 1;
   optional DataType key_type = 2;
   optional DataType value_type = 3;
+
+  // Present exactly when the handle is windowed: a time-windowed stream, and the windowed table
+  // its aggregate mints. This is the growth path the DataType comment below promised - a
+  // parameterised type arrives as an additive STRUCTURED field beside the flat enums, not as a
+  // recursive type or a new enum member. It rides on the type, never on a second map keyed by
+  // handle: the handle store already records one fact per handle, and a parallel map would be a
+  // second copy of the same fact, waiting to drift.
+  optional TimeWindowSpec window = 4;
 }
 
 enum HandleKind {
@@ -149,6 +206,10 @@ enum HandleKind {
   HANDLE_KIND_STREAM = 1;
   HANDLE_KIND_GROUPED_STREAM = 2;
   HANDLE_KIND_TABLE = 3;
+  // Minted by windowed_by, consumed by aggregate and nothing else. The windowed TABLE the
+  // aggregate mints is HANDLE_KIND_TABLE with `window` present on its HandleType - the kind
+  // vocabulary grows by one member per operator family, not one per parameterisation.
+  HANDLE_KIND_TIME_WINDOWED_STREAM = 4;
 }
 
 // The value vocabulary. Growth path: a new mintable type is a new member here (additive), plus
@@ -316,14 +377,19 @@ message Invocation {
 }
 
 // Which foreign function shape an invocation is asking for, and hence what it carries:
-//   MAP    - key and value
-//   REDUCE - aggregate and value
-//   JOIN   - value (the stream side) and right (the table side)
+//   MAP       - key and value
+//   REDUCE    - aggregate and value
+//   JOIN      - value (the stream side) and right (the table side)
+//   AGGREGATE - key, value and aggregate: Kafka's Aggregator receives all three, and unlike
+//               REDUCE the aggregate is present on a key's FIRST value too - the initializer's
+//               bytes, handed out engine-side - so the first value reaches the host, which a
+//               reduction can never give. No new field: the three it carries already travel.
 enum InvocationKind {
   INVOCATION_KIND_UNSPECIFIED = 0;
   INVOCATION_KIND_MAP = 1;
   INVOCATION_KIND_REDUCE = 2;
   INVOCATION_KIND_JOIN = 3;
+  INVOCATION_KIND_AGGREGATE = 4;
 }
 
 message InvocationResult {
