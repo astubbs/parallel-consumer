@@ -11,6 +11,8 @@ import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.junit.jupiter.api.Test;
 
+import java.util.function.UnaryOperator;
+
 import static com.google.common.truth.Truth.assertThat;
 import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -83,12 +85,16 @@ class ParallelConsumerOptionsCommitFailureTest {
         assertThat(options.getCommitFailureContinueMode()).isEqualTo(CommitFailureContinueMode.PAUSE_INTAKE);
     }
 
-    @Test
-    void asyncCommitModeRejectsNonDefaultHandler() {
-        var options = base()
-                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
-                .commitFailureHandler(CommitFailurePolicies.continueBounded())
-                .build();
+    /**
+     * The rejection both non-default commit-failure settings get under the async commit mode: {@code validate()}
+     * throws, and the message names the two commit modes that DO support the seam, plus the tracking issue - so
+     * the reader is told where to go, not merely that they are wrong.
+     *
+     * @param nonDefaultSetting the one builder call that takes the options away from the default
+     */
+    private void assertAsyncRejects(
+            UnaryOperator<ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String>> nonDefaultSetting) {
+        var options = nonDefaultSetting.apply(base().commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)).build();
 
         var failure = assertThrows(IllegalArgumentException.class, options::validate);
 
@@ -98,17 +104,13 @@ class ParallelConsumerOptionsCommitFailureTest {
     }
 
     @Test
+    void asyncCommitModeRejectsNonDefaultHandler() {
+        assertAsyncRejects(builder -> builder.commitFailureHandler(CommitFailurePolicies.continueBounded()));
+    }
+
+    @Test
     void asyncCommitModeRejectsNonDefaultContinueMode() {
-        var options = base()
-                .commitMode(CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS)
-                .commitFailureContinueMode(CommitFailureContinueMode.PAUSE_INTAKE)
-                .build();
-
-        var failure = assertThrows(IllegalArgumentException.class, options::validate);
-
-        assertThat(failure).hasMessageThat().contains(CommitMode.PERIODIC_CONSUMER_SYNC.toString());
-        assertThat(failure).hasMessageThat().contains(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER.toString());
-        assertThat(failure).hasMessageThat().contains("astubbs/parallel-consumer#317");
+        assertAsyncRejects(builder -> builder.commitFailureContinueMode(CommitFailureContinueMode.PAUSE_INTAKE));
     }
 
     /**

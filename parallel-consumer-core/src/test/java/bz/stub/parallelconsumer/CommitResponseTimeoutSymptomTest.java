@@ -291,7 +291,7 @@ class CommitResponseTimeoutSymptomTest {
      * budget's terminal outcome - the event the seam hands to the {@link CommitFailureHandler} - could
      * never be delivered. The rework that removed it is pinned here from the waiter's side; the
      * seam-side half (a held-open commit attempt still reaching the handler) lives in
-     * {@link MockConsumerCommitFailureSeamTest}.
+     * {@link MockConsumerCommitFailureDecisionTest#theWaiterOutlivesACommitAttemptHeldOpenPastTheOldDeadline()}.
      * <p>
      * Discriminating: reintroduce any waiter-side deadline at or below {@code offsetCommitTimeout} and
      * this fails - the instance dies at 1s where the commit answers, successfully, at 5s.
