@@ -679,22 +679,35 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * where a timing regression has to be noticed: nothing turns red to point at it.
      */
     private void observe(String message) {
-        observations.add(message);
-        if (isObserverMode()) {
-            log.debug("[{}] observation recorded: {}", mode.logTag, message);
-        } else {
-            log.warn("[{}] OBSERVATION (does not fail the run): {}", mode.logTag, message);
-        }
+        record(observations, message, /* gating */ false);
     }
 
     private void violate(String message) {
-        violations.add(message);
+        record(violations, message, /* gating */ true);
+    }
+
+    /**
+     * The one place a finding is stored and announced, shared by {@link #violate} and
+     * {@link #observe} so the mode rule below cannot drift between them.
+     * <p>
+     * <b>Silent-on-green contract.</b> In observer mode a finding can occur during a PASSING test, so
+     * the failure-time autopsy is the reporting surface and the live log stays at DEBUG. Outside it
+     * the finding is announced as it happens: gating findings at ERROR because they will fail the
+     * run, non-gating ones at WARN because nothing else will ever point at them.
+     * <p>
+     * <b>The non-gating text is load-bearing beyond this file.</b> {@code bin/chaos-test.sh} counts
+     * observations per scenario by matching {@code OBSERVATION (does not fail the run)} literally, so
+     * changing that string silently reports zero observations in the CI job summary. Its
+     * {@code OBSERVATION_MARKER} is the other half of the pair - change both or neither.
+     */
+    private void record(List<String> sink, String message, boolean gating) {
+        sink.add(message);
         if (isObserverMode()) {
-            // silent-on-green contract: an ambient violation can occur during a PASSING test, so the
-            // failure-time autopsy is the reporting surface - DEBUG matches the green-path precedent
-            log.debug("[{}] violation recorded: {}", mode.logTag, message);
-        } else {
+            log.debug("[{}] {} recorded: {}", mode.logTag, gating ? "violation" : "observation", message);
+        } else if (gating) {
             log.error("[{}] VIOLATION: {}", mode.logTag, message);
+        } else {
+            log.warn("[{}] OBSERVATION (does not fail the run): {}", mode.logTag, message);
         }
     }
 

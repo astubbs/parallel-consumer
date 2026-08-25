@@ -43,8 +43,9 @@ summary() {
         # docs/inflight/test-class2-probe-asserts-timing-not-correctness.md), so a green run is the
         # only place its findings can ever appear. Printing them here is what stops "does not gate"
         # from meaning "nobody reads it" - the peak is the number a timing regression moves.
-        # grep -m1 rather than `| head -1`: an early-exiting reader closes the pipe and pipefail
-        # promotes the writer's EPIPE to a failure - see bin/AGENTS.md.
+        # Every read here uses a whole-file `grep` with no early-exiting reader downstream: `| head`
+        # would close the pipe and pipefail would promote the writer's EPIPE to a failure, which
+        # bin/AGENTS.md bans and bin/check-shell-sigpipe.sh enforces.
         # One pass over the reports, feeding the loop by process substitution rather than a pipe:
         # `find | while` runs the loop in a SUBSHELL, so per-file counts cannot accumulate and a
         # second full scan was needed to answer "did anything observe?". These XMLs embed captured

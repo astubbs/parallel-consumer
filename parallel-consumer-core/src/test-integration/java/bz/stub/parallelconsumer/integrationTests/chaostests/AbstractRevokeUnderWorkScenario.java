@@ -65,20 +65,27 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
 
     /**
      * <b>Diagnostic only - never a way to make this test pass.</b> Set {@code -Dchaos.diagnoseStallRecovery=true}
-     * to answer the one question the gating configuration structurally cannot: when a Class 2 stall
+     * to answer the one question the gating configuration structurally cannot: when a Class 2 finding
      * fires, does the frozen partition <b>ever</b> recover, or is it wedged forever?
      * <p>
-     * The scenario's own arithmetic above asserts that "a REAL Class 2 stall is unbounded", and the
-     * probe's javadoc records RED calibration as still open. Neither has been tested, because the
-     * gating run destroys the evidence at the moment of detection: {@code failFast} aborts the wait on
-     * the first violation and {@code QUIET_CAP} gives up at 5 minutes, so every observation to date
-     * ends the instant the stall is confirmed. Unbounded and merely-slow are indistinguishable from
-     * that data.
+     * The scenario's own arithmetic above asserts that "a REAL Class 2 stall is unbounded". Until
+     * 2026-08-25 that had never been tested, because the gating run destroyed the evidence at the
+     * moment of detection: {@code failFast} aborted the wait on the first violation and
+     * {@code QUIET_CAP} gave up at 5 minutes, so every observation ended the instant the finding was
+     * confirmed. Unbounded and merely-slow were indistinguishable from that data.
      * <p>
-     * In this mode the quiet phase does not bail on a violation and waits {@link #DIAGNOSTIC_QUIET_CAP}
-     * instead, logging consumption progress each poll. The discriminator is which way the wait ends:
-     * the backlog drains (the stall was bounded - a starvation or fairness defect) or it times out with
-     * consumption flat (unbounded - lost state, a partition paused and never resumed, or a lost wakeup).
+     * <b>It has now been run, and the answer was "it recovers".</b> Two replays of the seeds the
+     * sightings ledger nominated as its strongest evidence both crossed the bound and then drained to
+     * {@code inFlight=0} with full key coverage - which is why the Class 2 bound is a non-gating
+     * observation today rather than a violation. Numbers in
+     * {@code docs/inflight/bug-857-family.md}'s 2026-08-25 entry. The mode stays because the question
+     * recurs per seed, not because it is unanswered.
+     * <p>
+     * In this mode the quiet phase does not bail on a violation and waits
+     * {@link #effectiveDiagnosticQuietCap} instead, logging consumption progress each poll. The
+     * discriminator is which way the wait ends: the backlog drains (the finding was bounded - a
+     * starvation or fairness defect) or it times out with consumption flat (unbounded - lost state, a
+     * partition paused and never resumed, or a lost wakeup).
      * <p>
      * <b>It cannot turn a red run green.</b> {@code assertScenarioSlos} still asserts the probe's
      * violations are empty after the wait, whichever way the wait ended, so a run that trips the probe
@@ -112,13 +119,22 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
      * wait into the teardown.
      * <p>
      * <b>90s is a typical-case figure, NOT a derivation, and the worst case escapes it - stated here
-     * because a bare constant in this file reads as calculated.</b> The bounded part is the 10s
-     * producer join; the unbounded part is {@code settleFleet}, which waits up to 15s per
-     * close-pending instance SEQUENTIALLY, so a 10-14 instance fleet with most instances still
-     * closing can reach 150-210s on its own. When that happens the JUnit kill lands in teardown -
-     * which is acceptable only because it is after the watch has already produced its answer, and
-     * only in this diagnostic mode. If teardown is ever made to matter, derive this properly rather
-     * than raising it.
+     * because a bare constant in this file reads as calculated.</b> The bounded parts are the 10s
+     * producer join and {@code joinDrainers}' shared 60s budget; the unbounded part is
+     * {@code settleFleet}, which waits up to 15s per close-pending instance SEQUENTIALLY, so a 10-14
+     * instance fleet with most instances still closing can reach 150-210s on its own - and with the
+     * drain budget on top, worst case exceeds this reserve by more than 2x.
+     * <p>
+     * <b>Why it is not simply raised to the worst case.</b> The reserve is subtracted from the watch,
+     * so a worst-case-sized reserve would spend the diagnostic's entire budget defending against a
+     * teardown that is itself an extreme. The consequence when it is exceeded is bounded and
+     * acceptable: the JUnit kill lands in teardown, AFTER the watch has produced the drained /
+     * did-not-drain answer the run exists for, and only in this opt-in diagnostic mode. What is lost
+     * is the run summary, not the result.
+     * <p>
+     * <b>Do not raise this number to fix a teardown that got slower</b> - bound the teardown instead
+     * ({@code settleFleet}'s per-instance wait is sequential and could be concurrent), or the
+     * diagnostic quietly gets shorter every time the fleet does.
      */
     private static final Duration DIAGNOSTIC_TEARDOWN_RESERVE = Duration.ofSeconds(90);
     /** Low eviction horizon: a storm-wedged (deadlocked) member stops polling and gets evicted ~30s
@@ -235,7 +251,9 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
      * here delegates straight to this method - but a method-level override would restore the silent
      * kill this guard exists to prevent. An absent annotation means no ceiling, so the request stands.
      */
-    private Duration effectiveDiagnosticQuietCap(Instant methodStart) {
+    // package-private for DiagnosticQuietCapIT, which drives this arithmetic broker-free - the same
+    // seam rationale as ProgressProbe#recordLagStagnation.
+    Duration effectiveDiagnosticQuietCap(Instant methodStart) {
         Optional<Timeout> timeout = AnnotationSupport.findAnnotation(getClass(), Timeout.class);
         if (!timeout.isPresent()) {
             log.warn("=== no @Timeout on {} - nothing to fit inside, so the full {} watch stands ===",
