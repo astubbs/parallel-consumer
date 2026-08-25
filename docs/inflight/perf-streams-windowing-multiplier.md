@@ -145,3 +145,156 @@ window-count-shaped. P2 under a close-only emit rule (suppress or onWindowClose)
 closed (key, window) pair - independent of the record count - which is the collapse P2's value
 rests on; the record-rate-driven half of P2's count (unsuppressed, cache-flush-driven) cannot be
 distinguished from P1 in TTD and waits on U6's broker arms.
+
+### U8 - sources and protocol findings, 2026-08-25
+
+Source-read unit, the practice `streams-verify-against-the-kafka-sources.md` owns applied as a
+unit. Sources: the Kafka Streams **3.9.2** sources jar
+(`~/.m2/repository/org/apache/kafka/kafka-streams/3.9.2/kafka-streams-3.9.2-sources.jar`; paths
+below are within it) and this branch's own
+`parallel-consumer-proxy-streams/src/main/proto/parallelconsumer/streams/v1alpha1/streams.proto`.
+Each claim was stated as a prediction before the read; every one below is marked confirmed or
+refuted against the named file.
+
+#### A. Suppression - a confirmation exercise
+
+All four claims were already checked during the plan's review and held; this is the written
+finding, the version pin and the consequence, not an open question.
+
+1. **`suppress(untilWindowCloses(...))` statically requires a `StrictBufferConfig`** - **confirmed**.
+   `org/apache/kafka/streams/kstream/Suppressed.java`:
+   `static Suppressed<Windowed> untilWindowCloses(final StrictBufferConfig bufferConfig)`. A
+   lenient (`EagerBufferConfig`) configuration is a compile error, not a runtime refusal.
+2. **`Suppressed.BufferConfig.unbounded()` grows until the JVM dies rather than shedding** -
+   **confirmed**. `unbounded()` returns `new StrictBufferConfigImpl()`
+   (`Suppressed.java`), whose no-arg constructor sets `maxRecords = Long.MAX_VALUE`,
+   `maxBytes = Long.MAX_VALUE`, `bufferFullStrategy = SHUT_DOWN`
+   (`org/apache/kafka/streams/kstream/internals/suppress/StrictBufferConfigImpl.java`). In
+   `KTableSuppressProcessorSupplier.java`'s `enforceConstraints`, `overCapacity()` compares against
+   those bounds, so at `MAX_VALUE` neither the `EMIT` shed path (strict configs never carry it) nor
+   the `SHUT_DOWN` throw is reachable - heap exhaustion arrives first.
+3. **The suppress processor schedules no punctuator** - **confirmed**.
+   `KTableSuppressProcessorSupplier.java` contains no `schedule(` call and no punctuator; the whole
+   emission path is `process()` -> `buffer(record)` -> `enforceConstraints()`, and
+   `enforceConstraints` evicts against `observedStreamTime`, which moves only in `process()` via
+   `Math.max(observedStreamTime, record.timestamp())`. Emission is driven solely by records
+   arriving and raising stream time.
+4. **Consequence** - a quiet partition never emits its final window, and the host cannot tell that
+   from a stuck engine: the wire's server->host message set is `Ready`, `HandleAssigned`,
+   `Invocation`, `Fault`, `TopologyDescription`, `GetResult` (`StreamsServerMessage` in
+   `streams.proto`) - no engine-state, stream-time or liveness signal exists. **P2 inherits this
+   risk unchanged**, because P2's crossings are emits and a close-only emit rule emits nothing on a
+   quiet partition.
+
+#### B. `EmitStrategy.onWindowClose()` - P2's main emit lever
+
+- **Public DSL in 3.9.2** - **confirmed**. `TimeWindowedKStream.emitStrategy(EmitStrategy)`
+  (`org/apache/kafka/streams/kstream/TimeWindowedKStream.java`), `EmitStrategy.onWindowClose()`
+  (`org/apache/kafka/streams/kstream/EmitStrategy.java`). One restriction found:
+  `TimeWindowedKStreamImpl.emitStrategy` throws `IllegalArgumentException` for `UnlimitedWindows`.
+- **Not a suppression buffer** - **confirmed**. In
+  `org/apache/kafka/streams/kstream/internals/AbstractKStreamTimeWindowAggregateProcessor.java`,
+  `maybeForwardUpdate` returns immediately when the strategy is `ON_WINDOW_CLOSE`, and emission
+  happens in `fetchAndEmit`: a `windowStore.fetchAll(emitRangeLowerBound, emitRangeUpperBound)`
+  range fetch over closed windows, called from `maybeForwardFinalResult`, which
+  `KStreamWindowAggregate`'s `process()` calls on record arrival. No buffer exists to grow, and no
+  `StrictBufferConfig` is involved anywhere on the path.
+- **The emit interval: engine default is 1000 ms, wall-clock** - verified. `init` reads
+  `EMIT_INTERVAL_MS_KSTREAMS_WINDOWED_AGGREGATION`
+  (`__emit.interval.ms.kstreams.windowed.aggregation__`, `StreamsConfig.InternalConfig`) with
+  default `1000L`; `shouldEmitFinal` throttles on `internalProcessorContext.currentSystemTimeMs()`
+  (wall clock), then requires the window close time to have progressed.
+- **Correction to the U1 entry above, recorded here rather than edited in place:** the U1
+  observation note says the throttle "defaults to 200ms". **No 200 ms constant exists on this path
+  in 3.9.2** - the engine default is 1000 ms, and `TopologyTestDriver` 3.9.2 additionally does
+  `putIfAbsent(__emit.interval.ms.kstreams.windowed.aggregation__, 0L)` in its own setup, so TTD's
+  *effective* default is zero (verified by `javap -c` over
+  `kafka-streams-test-utils-3.9.2.jar`'s `TopologyTestDriver.class`; no sources jar for test-utils
+  is in `~/.m2`, so this one fact is bytecode-verified rather than source-read). U1's explicit
+  `0L` config is therefore redundant-but-harmless in TTD, and load-bearing only against a broker.
+  The same wrong "default 200ms" figure is in the test's own comment
+  (`WindowedAggregatorCallCountTest.java`, "default 200ms") and should be fixed when that file is
+  next touched; its origin could not be established from the 3.9.2 sources.
+- **Which of suppression's exclusion arguments carry over:** neither buffer argument does - there
+  is no `StrictBufferConfig` requirement and no unbounded buffer. **The quiet-partition hazard
+  carries over in full**, because `maybeForwardFinalResult` runs only inside `process()`: no
+  record, no range fetch, no emit, and (per A.4) nothing on the wire distinguishes that from a
+  stuck engine. Whether `onWindowClose` should be offered on the wire is a deferred surface
+  decision, out of this unit's scope.
+
+#### C. Reverse reads - the correction, verified implementation by implementation
+
+Prediction: the `backward*` methods throw only as defaults on the bare `ReadOnlyWindowStore`
+interface, and every implementation on the interactive-query path overrides them. **Confirmed for
+all five**, in 3.9.2:
+
+| Implementation | All four `backward*` overridden? | Shape of the override |
+|---|---|---|
+| `state/ReadOnlyWindowStore.java` (interface) | n/a - the four `default` methods each `throw new UnsupportedOperationException()` | the origin of the plan's earlier wrong claim |
+| `state/internals/CompositeReadOnlyWindowStore.java` | yes | iterates the per-task stores, delegating `backwardFetch` etc. to each |
+| `state/internals/ReadOnlyWindowStoreFacade.java` | yes | delegates every `backward*` to `inner` - and this is what `StreamThreadStateStoreProvider` wraps a `TimestampedWindowStore` in for `QueryableStoreTypes.WindowStoreType` (`new ReadOnlyWindowStoreFacade<>((TimestampedWindowStore...) store)` in `StreamThreadStateStoreProvider.java`) |
+| `state/internals/MeteredWindowStore.java` | yes | wraps `wrapped().backwardFetch(...)` in metered iterators |
+| `state/internals/RocksDBWindowStore.java` | yes | delegates to `wrapped().backwardFetch(...)` on the segmented bytes store, which implements all four (`AbstractRocksDBSegmentedBytesStore.java`) |
+| `state/internals/InMemoryWindowStore.java` | yes | shared `fetch(key, from, to, forward=false)` path over a navigable map |
+
+No implementation on the path fails to override - none found that does not hold. One documented
+caveat, from the interface's own javadoc: across *multiple local stores* on one instance, forward
+and backward range-key fetches do not interleave ordering between stores (per-store order only).
+That bounds what "reverse order" means for a composite, not whether it exists.
+
+**Conclusion: the plan's R19 refusal of reverse order is a scope choice about response shape,
+never a capability limit.** The capability is implemented all the way down in 3.9.2.
+
+#### D. Invocation identity - the finding that replaces the cut unclean-stop experiment
+
+Read from this branch's `streams.proto` and the engine that speaks it, not from Kafka.
+
+1. **`Invocation` does carry `correlation` and `function_token`** - **confirmed**
+   (`message Invocation`, fields 1 and 2). Its full field set is `correlation`, `function_token`,
+   `key`, `value`, `aggregate`, `kind`, `right`. **`correlation` is minted per call**, not per
+   record: `InvocationRegistry.awaitResult` does `nextCorrelation.getAndIncrement()` for every
+   invocation
+   (`parallel-consumer-proxy-streams/src/main/java/bz/stub/parallelconsumer/streams/InvocationRegistry.java`).
+   Nothing on the wire says which record a call is about - no topic, partition, offset, timestamp
+   or record id travels.
+2. **Therefore a host cannot distinguish a replayed record after an unclean stop from one of
+   twelve legitimate overlapping-window calls with the same key and value.** Both arrive with a
+   fresh correlation - a fresh correlation is exactly what a legitimate second call looks like too.
+   (They are not byte-identical on the wire; the point does not need them to be.)
+3. **Therefore a host aggregator cannot be made idempotent by the host**, whatever contract this
+   plan writes - there is no contract the host can honour without identity. The cures are
+   engine-side (exactly-once) or wire-side (an identity field on `Invocation`), and both are owned
+   by other dimensions of the register, not this spike.
+4. **At P2 the question changes shape rather than disappearing:** the host is called per emit, and
+   P2's planned emit carries decomposed window bounds (KTD2's decomposition is the design; P2 is
+   not built, so this is the plan's shape, not a read fact). A replay then presents as a re-emit of
+   a window the host already folded - at least *distinguishable* by its bounds. A second,
+   unlooked-for argument for the placement.
+
+#### Falsifiers - searched for, honestly, and not found
+
+- **A punctuator in the suppress processor or on the `onWindowClose` emit path** would dissolve the
+  quiet-partition hazard. Searched `KTableSuppressProcessorSupplier.java`,
+  `KStreamWindowAggregate.java` and `AbstractKStreamTimeWindowAggregateProcessor.java` for
+  `schedule`/punctuator: **none exists** in 3.9.2. Both emit paths run only inside `process()`.
+- **A record-identifying field on `Invocation`** would make the idempotency contract writable. The
+  message's seven fields (above) contain none: `key` is shared by every call for that key, and
+  `correlation` identifies the call. **Not found.**
+
+#### The three Scope Boundaries exclusions: all three stand
+
+- **Suppression as built surface: stands.** Both driving facts confirmed at 3.9.2 (A.1-A.3), and
+  the sharpened `onWindowClose` distinction the boundary already records is right: neither buffer
+  argument reaches it, only the quiet-partition hazard does, and it stays unbuilt for want of a
+  question rather than for suppression's reasons.
+- **Reverse reads (R19): stands, as corrected.** The refusal is a scope choice about response
+  shape; the capability exists all the way down (C). The plan's current text already states this;
+  the source read now backs it per implementation.
+- **The cut unclean-stop experiment: stands.** The finding it was reaching for is delivered here by
+  reading (D), boundary-specifically - which the experiment never was - and dimension 5 stays
+  unclaimed by this plan.
+
+**What could not be established by reading, named rather than papered over:** the origin of the
+U1 note's "200ms" figure (no such constant on the 3.9.2 path); and the TTD emit-interval override,
+which was established from bytecode (`javap`) rather than sources because no
+`kafka-streams-test-utils` sources jar is present in `~/.m2`.
