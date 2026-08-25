@@ -382,3 +382,159 @@ Scope: over the current single-session transport, as section 4 requires.
 
 Harness: `streams_windowing_lab.py` (path above), experiment `hot-key` - one lab, an experiment
 selector, later units add a function rather than a sibling script.
+
+### U6 - placement comparison, 2026-08-25
+
+Harness: `streams_windowing_lab.py`, experiments `placement` (arms A-E, phases `shared`/`emit`)
+and `host-reimpl` (arm H standalone). Rates in **records per second** - the floors' unit (R6 names
+U6 as the exception to invocation-normalising, because the multiplier under test IS the
+invocations-per-record ratio). **Both verdicts are BET OFF, decided F2-first**; details, the
+partial arm-E result, and what never ran are all below.
+
+**Conditions (the shared load).** 1 KB payloads, 8,000 keys over eight partitions, eight stream
+threads, `commit.interval.ms=200` and `statestore.cache.max.bytes=0` (both set explicitly and
+printed; cache off makes every put forward, so emit counts are exact), engine Temurin 17.0.20+8
+under the box's ambient `JAVA_TOOL_OPTIONS` (`MaxRAM=48g`, `MaxRAMPercentage=20`,
+`ActiveProcessorCount=8`), compose broker `confluentinc/cp-kafka:7.9.0` on loopback
+(`127.0.0.1:19095`), Python 3.13.5, 32-core Linux box. **Event times: every record carries the
+same producer-assigned constant timestamp (1,750,000,000,000 ms), far past the epoch clamp** - a
+constant keeps each record in exactly `ceil(size/advance)` windows, so crossing counts are exact,
+no window closes, and nothing is late. Sweep in crossings (32,000 / 64,000 / 128,000; each P1
+arm's record count is the point over its multiplier; arm D, having zero crossings, runs at arm
+A's record counts so its windows are measurable), arms interleaved per point, throughput from the
+sink topic's broker log-append clock, completion by **quiescence** (no new sink record for 15
+commit intervals = 3.0 s, printed; emit counts validated post-hoc as bands, never used to stop -
+the inherited last-value-per-key predicate is invalid over `to_stream`'s colliding inner keys).
+Every arm sinks through `to_stream` (R29).
+
+**Contention deviation, named.** The pre-registered quiet-machine gate (start only under
+1-minute load 8) was **disabled for the decisive session** on the orchestrator's instruction: the
+box carried ambient load 6-19 from unrelated agent sessions and the gate stalled a first session
+14 x 30 s with no decay in sight. Per-run 1-minute load is recorded beside every run instead.
+Consequences: the in-session ratios (B/D attribution, B/A, C/A linearity, and every F2 comparison
+- arm H ran interleaved under the same ambient load) are protected by interleaving; **absolute
+rates are biased low against F1**, and any F1 comparison within plausible contention bias would
+be routed to unsettled rather than forced - it never mattered, because both verdicts fell at F2
+by two orders of magnitude, which contention cannot manufacture. An earlier same-day session on a
+quieter box (loads 1.2-8) produced rates inside the spreads reported below; its valid runs are
+pooled into the per-point spreads and its H rates into H's.
+
+**Rates (pooled valid runs at the largest sweep point, n=4: one gate-stalled quiet-box session
+n=2, the decisive gate-off session n=2; fitted figures from the decisive session's 6-run
+regression per arm across all three sweep points, intercept absorbing startup):**
+
+| Arm | Placement / role | Records | Crossings/record | rec/s mean (min-max, n) | Fitted steady-state |
+|---|---|---|---|---|---|
+| A | P1 tumbling 1h, host at aggregator | 128,000 | 1.00 exact | 7,809 (5,787-8,681, 4) | 7,305 rec/s (137us/rec) |
+| B | P1 hopping 1h/5m, host at aggregator | 10,666 | 12.00 exact | 629 (511-707, 4) | 603 rec/s (1,657us/rec) |
+| C | P1 hopping 1h/30m (linearity, no verdict) | 64,000 | 2.00 exact | 3,560 (2,694-4,172, 4) | 3,938 rec/s (254us/rec) |
+| D | crossing-free control (LAST_BYTES, no host fn) | 128,000 | 0.00 measured | 20,767 (18,097-22,695, 4) | 20,062 rec/s (50us/rec) |
+| H | reimpl floor, tumbling (defines F2-tumbling) | 128,000 | n/a (in-process dict) | 723,265 (596,384-1,015,572, 4) | - |
+| H | reimpl floor, hopping-12 (defines F2-hopping) | 128,000 | n/a (12 dict updates/rec) | 89,821 (88,484-91,619, 4) | - |
+
+Crossings counted **client-side**: the host is the invocation target, so the registered function
+counts every crossing exactly; arm D registers no function at all, making its zero a measurement
+- an engine invocation would name an unregistered token, error the answer, and fail the run.
+Emit counts were exact on every valid run (multiplier x records, cache off). Arm H is
+single-threaded `confluent_kafka` batch-consume into a dict via the same `windowsFor` arithmetic
+(dict updates asserted = multiplier x records on every run), stateless and non-durable, run only
+while the engine was idle.
+
+**The two verdicts, F2-first ("clears" = arm min at or above floor max), scoped to the current
+single-session transport, bounded by the untested "windowing is not optional in practice"
+premise (section 5):**
+
+- **Tumbling: BET OFF.** Best (only) arm A: max 8,681 rec/s vs tumbling-H min 596,384 - fails F2
+  by ~69x with non-overlapping spreads. F1 is moot (A clears it; clearing the parity floor while
+  losing to the reimplementation is still a loss - the pre-registered lattice). The plan's
+  contingent tumbling-P2 arm was conditioned on A *missing F1*, which did not happen, so it was
+  not run - and no P2 arm could close a 69x gap whose cause is the crossing itself (D, the same
+  topology with zero crossings, reaches only 20,767). Verdict taken **against a non-durable
+  single-threaded reimplementation** (H's scope, section 1).
+- **Hopping-by-twelve: BET OFF.** Arm B at the shared load (the unconditional verdict carrier):
+  max 725 rec/s vs hopping-H min 88,484 - fails F2 by ~122x, non-overlapping. B also fails F1
+  (max 725 < 1,000; even the quiet-box session's max was 725) - reported for completeness, moot
+  under the F2 fail. Same H scope note. Per the exit criteria, no further measurement for either
+  specification.
+
+**Attribution, B against D (the only pair that isolates the boundary, R5):** ratio **0.0303**
+(pooled largest-point means; the decisive session's in-process figure 0.0320, fitted 0.0301).
+This is **below 1/16, therefore recorded as the pre-registered anomalous band - the mechanism
+neither confirmed nor refuted in magnitude, ratio reported as itself**. The magnitude anomaly
+decomposes cleanly and the multiplier is visible in it: **B/A = 0.0805 = 1/12.4**, almost exactly
+the multiplier - but the band read on D, and D (zero crossings, same operator, same store, same
+emit volume) runs 2.7x above A, because even ONE crossing per record costs more than the whole
+native hopping topology. The band was drawn expecting D near A; D exceeding A by 2.7x pushes B/D
+past 1/16 for a reason that *strengthens* rather than weakens the boundary attribution. Scenario
+4 (arm B, 20 keys, 480 records, cache off vs 64 MB): aggregator calls **5,760 = 5,760
+identical**, emits **5,760 vs 888** - caching dedups emits and never calls, the broker-side half
+of U1's caching question.
+
+**The fitted multiplier (the deliverable meant to outlive the verdict).** Fit over arms A, C, B
+(multipliers 1, 2, 12; per-record cost linear in m): **t(m) = 33us + m x 135us** (decisive
+session, 6 points per arm). The fitted rate crosses **F1 (1,000 rec/s) at multiplier 7.14**
+(per-rep fits span 6.17-8.49): at this load a window specification with `ceil(size/advance)` up
+to ~7 clears F1 at P1, wider does not. It crosses **F2-tumbling (608,612 rec/s in-session) at
+m = 0.05 and F2-hopping (89,590) at m = 0.12** - both below 1, i.e. **no multiplier as low as
+even one crossing per record reaches either F2**; the wrapper loses to the reimplementation
+before windowing enters at all, which relocates the problem from the multiplier to the
+per-crossing cost itself.
+
+**Arm E - PARTIAL, one operating condition only; the swept curve did not run.** The plan's
+0.5-20 records-per-key-per-flush sweep with matched B and H re-runs per point was cut by the
+orchestrator's session time-box under contention, and is additionally non-decisive under the exit
+criteria once both specifications fell at F2 ("no further measurement runs for that
+specification"). What DID run, at one condition (keys=100, records-per-key=8, cache 19,660,800 B
+by the pre-registered 2x end-of-run formula, commit 200 ms, single runs): **E crossings/record
+1.50 against matched-B's exact 12.00** - the collapse is real and E stayed under B (prediction 7
+held where measured) - at naive rho (rate x interval / keys) 6.18, predicting 12/6.18 = 1.94;
+measured 1.50 is consistent with commit-duration stretch (flush rounds longer than the interval
+lower the effective flush rate). **Zero cache evictions asserted** on that run and its matched B.
+The eviction instrument itself was proven able to show a non-zero first: an undersized-cache run
+(1 MB) reported **19,080 evictions** where evictions were forced. Instrument detail worth
+keeping: Kafka Streams 3.9.2 exposes **no eviction metric** (hit-ratio and
+`cache-size-bytes-total` only), so the lab reads `ThreadCache`'s own counters through its TRACE
+logging (slf4j-simple onto the engine classpath for E-family runs, per-run log file, per-put
+"Evicted n entries" sum cross-checked against the flush-stats cumulative `#evicts`), applied
+identically to E and its matched B. E rates at the measured condition: E 3,089 rec/s vs matched
+B 746 rec/s (single runs, scoped to that condition, never the general offer).
+
+**Predictions 1-8 (plan U6), against what ran:**
+
+| # | Prediction | Outcome |
+|---|---|---|
+| 1 | A near the eight-thread plateau (serial-aggregate caveat) | **confirmed with the registered caveat** - 7,809 mean vs 9,501 published (~18% short; different topology shape and hardware, per section 2) |
+| 2 | B near A/12 | **confirmed** - B/A = 0.0805 = 1/12.4 |
+| 3 | C near A/2 (linearity, not threshold) | **confirmed** - C/A = 0.456 = 1/2.19; A, C, B sit on the fitted line above |
+| 4 | D at or above A, flat against the multiplier | **confirmed, beyond its own expectation** - D = 2.7x A while carrying multiplier 12; native hopping with a bounded combine outruns even one-crossing tumbling |
+| 5 | B's counter reads 12x records; D's reads zero | **confirmed exactly, every valid run** |
+| 6 | E crossings/record = 12 / records-per-key-per-flush | **partial** - at the one measured condition, 1.50 measured vs 1.94 naive-rho prediction (direction and order right; shortfall consistent with commit stretch); the sweep that would settle it did not run |
+| 7 | E never exceeds B's crossing count | **held where measured** (1.50 < 12.00); untested across the sweep |
+| 8 | H clears the withdrawn 100 rec/s comfortably | **confirmed, emphatically** - 88,484 minimum, ~900x the withdrawn floor; the old F2 was not accidentally right |
+
+**Instrument checks (R4).** The crossing counter: arm C read exactly two per record and arm D
+exactly zero on every valid run (PASS, printed by the harness); no arm showed a throughput drop
+without a matching crossing-count rise - B's 12.4x drop against A carries its 12x counter. The
+eviction reader: non-zero proven (19,080 where forced) before the zero was believed. The rate
+instrument itself carries U2's +1 ms delay check (198 -> 1,290us/invocation), not repeated here.
+
+**Not run, with reasons:** arm E's rho sweep with matched B and H per point (time-box under
+contention; non-decisive after the F2 verdicts); the contingent tumbling-P2 arm (its
+precondition - A missing F1 - did not occur); resweeps (no floor was straddled - every floor
+comparison was decisive with non-overlapping spreads). **Method trap recorded:** lab records
+carry a constant 2025 event time, and the broker's time-based retention deletes "old" data past
+a 5-minute retention check even from the active segment - a reused topic silently emptied and
+cost one session (arm H read 0 records); every lab topic now sets `retention.ms=-1`, and the
+harness comments say why.
+
+**Consequence, in the plan's terms.** The organising question - where must the host function sit
+- gets an answer neither placement expected: **nowhere**. P1 tumbling loses to the
+reimplementation 69x with only one crossing per record; the fitted line says F2 is unreachable at
+ANY multiplier including m < 1; P2's collapse is real (1.50 vs 12 crossings/record where
+measured) but collapses toward a per-emit crossing cost that is itself the losing term. The
+falsified quantity is the **per-crossing cost against an in-process consumer**, not the window
+multiplier - the multiplier (confirmed, linear, 12x) only multiplies a loss already present at
+one. `STRATEGY.md`'s Kafka Streams claim is falsified for windowed aggregation at both measured
+specifications over the current single-session transport (U10 owns writing that in), against a
+non-durable single-threaded reimplementation, under the untested windowing-is-not-optional
+premise, at the loads named above.
