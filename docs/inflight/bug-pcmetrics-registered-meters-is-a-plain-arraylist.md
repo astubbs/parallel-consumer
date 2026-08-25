@@ -3,6 +3,20 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: crash -->
 
+## Already known, already being fixed - astubbs/parallel-consumer#57
+
+The collection is not a new discovery. astubbs/parallel-consumer#120 (open, the fork mirror of
+confluentinc#859, "Memory leak in PCMetrics class") has reported the same field as a leak since
+before this branch existed, and astubbs/parallel-consumer#57 (open) carries the fix: `registeredMeters`
+becomes a `LinkedHashSet`, and every one of the nine mutation sites moves under a private
+`metersLock` monitor rather than the `synchronized(this)` a review rejected. That closes the race
+described below as well as the leak - the two share one field and one fix.
+
+**What IS new here is the evidence, not the defect.** The leak report reasoned about growth; what the
+Lincheck harness produced is a reproduced `ArrayIndexOutOfBoundsException` out of `ArrayList.add` on
+the commit path, with the interleaving that caused it. So this note's job is to hold the race
+evidence until astubbs/parallel-consumer#57 lands - not to claim an independent finding.
+
 `PCMetrics` keeps every meter it registers in `private List<Meter.Id> registeredMeters = new
 ArrayList<>()`, and adds to it from `getCounterFromMetricDef`, `getTimerFromMetricDef` and their
 siblings. Those are called on the **commit path** - `OffsetMapCodecManager.getCounterMeterForEncoding`
@@ -57,6 +71,11 @@ path.
 
 ## Delete when
 
-`registeredMeters` is a concurrent collection (or its mutation is guarded), with a test that fails
-against the plain `ArrayList`. Worth doing in the same pass as the `HashMap` stragglers - same class,
-same file neighbourhood, one PR.
+astubbs/parallel-consumer#57 lands, which guards every mutation of `registeredMeters` behind
+`metersLock`. Delete this note in that PR, and carry the reproduced stack above into it as the
+regression test's motivation.
+
+The `HashMap` stragglers are NOT covered by it: `gh pr view 57 -R astubbs/parallel-consumer --json
+files` shows `WorkManager.java` untouched, and its `PartitionStateManager.java` edit is about
+re-registration rather than about making `slowWorkCounters` concurrent. They need their own pass -
+same defect class, different fields.

@@ -1,11 +1,14 @@
+<!-- post-merge: checked -->
 # astubbs#347 - the Lincheck lane: what the review left open
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
 
-Findings from the simplify-and-review pass on this branch that astubbs#347 does **not** close. The
-lane's own false-green guard was fixed on the branch; what is below remains. Delete this note when
-these are resolved, not when the PR merges.
+<!-- post-merge: checked-begin -->
+Findings from the simplify-and-review pass that shipped with astubbs#347, which that PR deliberately
+does **not** close. The lane's own false-green guard was fixed before it landed; everything below
+outlived it. Delete this note when these items are resolved - not when any PR merges.
+<!-- post-merge: checked-end -->
 
 ## The committed bound does not reliably find the violation
 
@@ -53,8 +56,18 @@ The claim that core's `<argLine>@{argLine} ${lincheck.jvm.args}</argLine>` feeds
 `SurefireConfigConverter` logs `Replacing properties in argLine` and resolves it. No
 `-DparseSurefireArgLine=false` is warranted.
 
-## Obligation attached to `pr-347-handoff.md`
+## Cross-branch obligation this note now owns
 
-That note must be deleted at merge prep - and its one cross-branch obligation executed or relocated
-first: ticking the Lincheck arm of `test-lincheck-jcstress-evaluation.md`, which lives on
-astubbs#344's branch.
+`test-lincheck-jcstress-evaluation.md` scopes a two-tool evaluation - a Lincheck arm and a jcstress
+arm - and it lives on astubbs#344's branch, not on master, so it could not be updated from here. Its
+**Lincheck arm is executed**: the calibration ran against a pre-fix tree and refound four real races
+unaided, with the verdicts and cost tables in
+[`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](../plans/2026-08-25-001-test-lincheck-poc-plan.md).
+Whoever lands astubbs#344 records that against the evaluation note and leaves the jcstress arm open;
+`test/jcstress-poc-plain-long-visibility` is the branch carrying it.
+
+This paragraph exists because the handoff note that used to carry the obligation was deleted at merge
+prep, as `docs/inflight/AGENTS.md` requires - a "delete this when it merges" marker must never reach
+master. Everything else that note held is already stated where it is looked up: the inversion
+contract and the red control in [`docs/testing.md`](../testing.md), the five exclusion points in
+`bin/lincheck-test.sh`'s own header, and the Jabel and model-checker findings in the plan doc.
