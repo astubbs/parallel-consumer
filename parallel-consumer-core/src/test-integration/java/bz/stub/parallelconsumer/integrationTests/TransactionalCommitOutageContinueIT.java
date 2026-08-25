@@ -37,10 +37,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static pl.tlinkowski.unij.api.UniSets.of;
 
 /**
- * AE3 against a real broker (astubbs#317): in transactional (EOS) commit mode with a CONTINUE handler, an
+ * The acceptance scenario against a real broker (astubbs#317): in transactional (EOS) commit mode with a
+ * CONTINUE handler, an
  * extended commit-phase outage keeps PC alive across repeated exhausted budgets, forces the intake pause
  * (the {@code PAUSE_INTAKE} coercion - EOS CONTINUE always pauses), and once the outage heals the pending
- * transaction is recovered (complete-else-abort, KTD8) so a fresh transaction commits everything - no record
+ * transaction is recovered (complete-else-abort) so a fresh transaction commits everything - no record
  * skipped, no terminal "previous fatal or abortable error" ever reached.
  * <p>
  * The outage is injected in a {@link ProducerWrapper} subclass (the injection seam
@@ -64,7 +65,7 @@ import static pl.tlinkowski.unij.api.UniSets.of;
  * @author Antony Stubbs
  * @see ProducerManager
  * @see CommitFailureHandler
- * @see CommitOutageKeepProcessingBoundedIT the consumer-sync-mode sibling (KTD6)
+ * @see CommitOutageKeepProcessingBoundedIT the consumer-sync-mode sibling
  */
 @Slf4j
 @Tag("transactions")

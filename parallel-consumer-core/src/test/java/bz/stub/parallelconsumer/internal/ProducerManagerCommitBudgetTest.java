@@ -65,7 +65,7 @@ import static pl.tlinkowski.unij.api.UniMaps.of;
  * non-retriable failures stay fatal and handler-free, {@code sendOffsetsToTransaction} failures stay fatal, and
  * the commit-lock acquisition timeout keeps its own fatal {@code java.util.concurrent.TimeoutException} path.
  * <p>
- * The recovery tests pin KTD8 (complete-else-abort): a budget exhausted mid-{@code commitTransaction} leaves
+ * The recovery tests pin the complete-else-abort contract: a budget exhausted mid-{@code commitTransaction} leaves
  * the producer holding an in-flight transaction ({@code sendOffsetsToTransaction} already succeeded), and
  * without recovery the next cycle's {@code beginTransaction}/{@code sendOffsetsToTransaction} meets
  * KafkaProducer's "previous fatal or abortable error" - making the cycle after a CONTINUE decision terminally
@@ -303,7 +303,7 @@ class ProducerManagerCommitBudgetTest {
     /**
      * An outage outlasting many budgets: recovery that cannot finish within its cycle's budget is ITSELF the
      * seam's budget event - so the handler is re-consulted and a CONTINUE decision keeps the recovery pending
-     * for the next cycle, rather than the second cycle turning fatal (AE3's survival property, at mock level).
+     * for the next cycle, rather than the second cycle turning fatal (the outage-survival property, at mock level).
      */
     @Test
     void recoveryThatExhaustsItsOwnBudgetStaysPendingAndResumesNextCycle() throws Exception {
@@ -345,7 +345,7 @@ class ProducerManagerCommitBudgetTest {
         inOrder.verify(producer).commitTransaction(); // and this cycle's own commit lands
     }
 
-    /** R6: a transaction PC can neither complete nor abort is terminal, and deliberately handler-free. */
+    /** A transaction PC can neither complete nor abort is terminal, and deliberately handler-free. */
     @Test
     void recoveryAbortFailureStaysFatalAndHandlerFree() throws Exception {
         buildWithBudget(COMMIT_BUDGET);

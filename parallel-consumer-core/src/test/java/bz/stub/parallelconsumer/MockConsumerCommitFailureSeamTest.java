@@ -56,15 +56,15 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * exhausts its retry budget reaches the configured {@link CommitFailureHandler} as a decision, instead of
  * unconditionally killing the broker-poll thread and with it the instance.
  * <p>
- * The scenarios pin, in order: the default is byte-compatible with the pre-seam world (shut down, cause recorded -
- * AE1); the handler sees an accurate history (attempts, elapsed, consecutive exhaustions); both decisions work end
- * to end, including recovery after CONTINUE (AE2); the handler is fail-safe - throwing (AE5) or hanging converts to
+ * The scenarios pin, in order: the default is byte-compatible with the pre-seam world (shut down, cause
+ * recorded); the handler sees an accurate history (attempts, elapsed, consecutive exhaustions); both decisions
+ * work end to end, including recovery after CONTINUE; the handler is fail-safe - throwing or hanging converts to
  * shut-down rather than a wedged instance; a deciding handler holds no PC monitor, so rebalance-path callers of the
  * {@code commitCommand} monitor are never blocked by user code; and the four handler-free exits stay handler-free:
- * genuine poller death (AE7), non-retriable failures (AE6), and close-time failures. The SASL budget lane feeds the
+ * genuine poller death, non-retriable failures, and close-time failures. The SASL budget lane feeds the
  * same event, and the waiter in {@code ConsumerOffsetCommitter#commitAndWait} no longer carries its own
  * {@code offsetCommitTimeout} deadline - it outlives a commit attempt held open past it, which is the precondition
- * for the seam being reachable at all (KTD2 in the plan).
+ * for the seam being reachable at all.
  * <p>
  * Deliberately not a subclass of {@link MockConsumerTestBase}, for {@link CommitResponseTimeoutSymptomTest}'s
  * reasons: these scenarios need a different consumer, different options and a different handler per test, and
@@ -115,7 +115,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Covers AE1, and is the characterization of the pre-seam behaviour: with default configuration (the canned
+     * The characterization of the pre-seam behaviour: with default configuration (the canned
      * {@link CommitFailurePolicies#shutDown()} handler), budget exhaustion still closes the instance and
      * {@link ParallelEoSStreamProcessor#getFailureCause()} still carries the commit failure - byte-compatible with
      * the world before the seam. What has changed is only the message: it used to say the decision could not be
@@ -183,7 +183,8 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Covers AE2 (the mock half): a CONTINUE decision leaves the offsets dirty, and when the broker heals, the next
+     * CONTINUE recovery, the mock half: a CONTINUE decision leaves the offsets dirty, and when the broker heals, the
+     * next
      * commit cadence commits them with a fresh budget - nothing was lost and nothing was wrongly marked done.
      */
     @Test
@@ -211,7 +212,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Covers AE5: a handler that throws decides nothing - fail-safe SHUT_DOWN - and the reported failure names both
+     * A handler that throws decides nothing - fail-safe SHUT_DOWN - and the reported failure names both
      * the commit failure (as the primary cause chain) and the handler's own exception (travelling with it).
      */
     @Test
@@ -280,7 +281,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * KTD3's monitor-free invocation: while a slow handler is still deciding, the {@code commitCommand} monitor is
+     * Monitor-free invocation: while a slow handler is still deciding, the {@code commitCommand} monitor is
      * free - so a rebalance-path caller (the revocation commit synchronizes on it) is never blocked behind user
      * code. Probed directly through {@link AbstractParallelEoSStreamProcessor#requestCommitAsap()}, which takes
      * exactly that monitor.
@@ -329,7 +330,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Covers AE7: a genuine poller death - the broker-poll thread dying of something that is not budget exhaustion -
+     * A genuine poller death - the broker-poll thread dying of something that is not budget exhaustion -
      * stays fatal and handler-free. No decision can revive the only producer of commit responses.
      */
     @Test
@@ -356,7 +357,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Covers AE6: a non-retriable commit failure (authorization) stays immediately fatal and handler-free - the
+     * A non-retriable commit failure (authorization) stays immediately fatal and handler-free - the
      * seam intercepts only the exhaustion of a retriable budget, never failure classes continuing cannot answer.
      */
     @Test
@@ -383,7 +384,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Both budget lanes are ONE exhaustion event (KTD7): the SASL authentication budget
+     * Both budget lanes are ONE exhaustion event: the SASL authentication budget
      * ({@code saslAuthenticationRetryTimeout}, zero by default so it exhausts on the first failure) reaches the
      * handler exactly as the offset-commit budget does.
      */
@@ -410,7 +411,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * KTD2's affirmative wait, the precondition for the whole seam: the waiter in {@code commitAndWait} no longer
+     * The affirmative wait, the precondition for the whole seam: the waiter in {@code commitAndWait} no longer
      * dies on its own {@code offsetCommitTimeout} clock while the poll side is still legitimately spending the same
      * budget on a later clock. A commit attempt held open well past the budget still ends in the handler firing -
      * never in a {@code "Timeout waiting for commit response"} killing the instance first.
@@ -478,7 +479,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Once close has begun the handler is never consulted (KTD7): a commit failing during the close sequence keeps
+     * Once close has begun the handler is never consulted: a commit failing during the close sequence keeps
      * its historical handler-free disposition, and the close itself completes rather than wedging behind a decision
      * nobody can act on.
      */
@@ -504,7 +505,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Covers AE8, the {@link CommitFailureContinueMode#PAUSE_INTAKE} half of a CONTINUE decision (KTD5): while
+     * The {@link CommitFailureContinueMode#PAUSE_INTAKE} half of a CONTINUE decision: while
      * commits are failing, in-flight work still completes, but no NEW work is drawn - and the pause releases on the
      * next successful commit, without any user action.
      * <p>
@@ -575,7 +576,7 @@ class MockConsumerCommitFailureSeamTest {
     /**
      * The control arm for {@link #pauseIntakeStopsNewWorkCompletesInFlightAndResumesAfterCommitSuccess}: under the
      * default {@link CommitFailureContinueMode#KEEP_PROCESSING}, a CONTINUE decision gates nothing - new work keeps
-     * flowing while commits fail, exactly as U2 left it.
+     * flowing while commits fail.
      */
     @Test
     void keepProcessingModeKeepsDrawingNewWorkWhileCommitsFail() {
@@ -599,7 +600,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Composition with the user's own pause, direction 1 (KTD5): the seam's release must never resume a user
+     * Composition with the user's own pause, direction 1: the seam's release must never resume a user
      * {@code pauseIfRunning()}. After the broker heals and the seam pause releases, intake stays stopped until the
      * user's own {@code resumeIfPaused()} - which then restores flow, proving the seam flag really was released
      * rather than merely masked by the user pause.
@@ -611,7 +612,7 @@ class MockConsumerCommitFailureSeamTest {
         var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
         startPc(SMALL_BUDGET, handler, CommitFailureContinueMode.PAUSE_INTAKE);
         addRecordsAndProcess();
-        awaitCommittedOffset(RECORDS); // opening batch processed and cleanly committed (see the AE8 scenario)
+        awaitCommittedOffset(RECORDS); // opening batch processed and cleanly committed (see the pause-intake scenario)
 
         // break commits and drive one record through: the exhaustion engages the seam pause
         commitsHealthy.set(false);
@@ -640,7 +641,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Composition with the user's own pause, direction 2 (KTD5): the user's {@code resumeIfPaused()} must never
+     * Composition with the user's own pause, direction 2: the user's {@code resumeIfPaused()} must never
      * clear the seam's pause. With the seam pause active and no user pause set, the resume call is a no-op - intake
      * stays stopped until a commit actually succeeds.
      */
@@ -651,7 +652,7 @@ class MockConsumerCommitFailureSeamTest {
         var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
         startPc(SMALL_BUDGET, handler, CommitFailureContinueMode.PAUSE_INTAKE);
         addRecordsAndProcess();
-        awaitCommittedOffset(RECORDS); // opening batch processed and cleanly committed (see the AE8 scenario)
+        awaitCommittedOffset(RECORDS); // opening batch processed and cleanly committed (see the pause-intake scenario)
 
         // break commits and drive one record through: the exhaustion engages the seam pause
         commitsHealthy.set(false);
@@ -680,7 +681,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * During DRAINING the close path wins (KTD5): a seam pause that is active when {@code closeDrainFirst()} is
+     * During DRAINING the close path wins: a seam pause that is active when {@code closeDrainFirst()} is
      * called does not gate the drain - the records it was holding back are drawn, processed and the close completes,
      * rather than the drain deadlocking behind a pause whose release condition (a successful commit) never arrives
      * (commits never heal here). Without the gate's DRAINING exemption this scenario hangs the drain and the close
@@ -722,7 +723,7 @@ class MockConsumerCommitFailureSeamTest {
         // close wins over the seam pause: the drain drew and processed the gated records
         assertWithMessage("the drain must draw the records the seam pause was holding back")
                 .that(processedRecords).hasSize(RECORDS + 4);
-        assertWithMessage("close-time commit failures stay handler-free (KTD7) - no decision during the close")
+        assertWithMessage("close-time commit failures stay handler-free - no decision during the close")
                 .that(handler.contexts).hasSize(exhaustionsBeforeClose);
         assertThat(parallelConsumer.isClosedOrFailed()).isTrue();
     }
@@ -777,7 +778,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * The rebalance-deferral lane joins the seam (R8): a commit deferred because this consumer is no longer a group
+     * The rebalance-deferral lane joins the seam: a commit deferred because this consumer is no longer a group
      * member ({@link CommitFailedException} - usually eviction) used to loop at WARN forever, uncounted. Once
      * consecutive deferrals have persisted longer than {@code offsetCommitTimeout} - the same quantum the budget
      * lane uses - the streak escalates to the handler as the seam's one typed event, and a CONTINUE decision keeps
@@ -889,7 +890,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * Covers AE9 and R13's history scoping: a CONTINUE period that ends in revocation and reassignment starts a
+     * History scoping across reassignment: a CONTINUE period that ends in revocation and reassignment starts a
      * fresh handler history - the next exhaustion in the new assignment reports {@code consecutive == 1}, a bumped
      * assignment epoch, and a time-since-last-successful-commit measured from the new assignment, not the old
      * failing one. The dirty offsets of the old assignment resolve by the new assignee's reprocessing (here: they
@@ -952,7 +953,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * R13 and KTD7's fourth exit, pinned in isolation: a commit whose budget exhausts DURING partition revocation -
+     * The fourth handler-free exit, pinned in isolation: a commit whose budget exhausts DURING partition revocation -
      * inside the rebalance callback, where there is no waiter to hand a decision to - is a DEFERRAL. The poller
      * stays alive, the instance stays open, the handler is not consulted, and the offsets are not recorded as
      * committed; they are the new assignee's to resolve by reprocessing.
@@ -1060,7 +1061,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * The deferral accounting clears on a completed rebalance (R13): deferrals accumulated before a revocation
+     * The deferral accounting clears on a completed rebalance: deferrals accumulated before a revocation
      * belong to the OLD assignment, so after reassignment a new streak gets the full bound on a fresh clock -
      * pinned with the same stale-clock trap as {@link #deferralAccountingClearsOnASuccessfulCommit()}, but with the
      * clearing done by the reassignment (no commit ever succeeds here until the very end).
@@ -1119,7 +1120,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * U6's registration pin (KTD10): the seam's four meters register under the names the plan fixed, in the
+     * The registration pin: the seam's four meters register under their declared public names, in the
      * {@code committer} subsystem. The names are asserted as string literals, not via the enum's own getters, so a
      * rename of the public metric name cannot slip through by staying self-consistent.
      */
@@ -1153,7 +1154,7 @@ class MockConsumerCommitFailureSeamTest {
     }
 
     /**
-     * The loudness guarantee under CONTINUE (R16): while commits fail and the handler keeps deciding CONTINUE, the
+     * The loudness guarantee under CONTINUE: while commits fail and the handler keeps deciding CONTINUE, the
      * exhaustions counter counts every exhaustion, the consecutive gauge tracks the streak, the seam-state gauge
      * reports FAILING_CONTINUING (the KEEP_PROCESSING half of the transition set - the PAUSE_INTAKE half is
      * {@link #seamStateGaugeReportsPauseEngageAndRelease()}), the time-since-last-success gauge spans the whole
@@ -1228,7 +1229,8 @@ class MockConsumerCommitFailureSeamTest {
     /**
      * The PAUSE_INTAKE half of the seam-state transitions: HEALTHY while commits succeed, FAILING_PAUSED once a
      * CONTINUE decision engages the intake pause, HEALTHY again when a successful commit releases it. Structure per
-     * the AE8 scenario: a clean opening commit first, so the exhaustion lands deterministically after HEALTHY was
+     * the pause-intake scenario: a clean opening commit first, so the exhaustion lands deterministically after
+     * HEALTHY was
      * observed.
      */
     @Test

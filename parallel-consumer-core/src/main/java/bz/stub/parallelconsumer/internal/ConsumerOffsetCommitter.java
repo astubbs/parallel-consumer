@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.internal.utils.JavaUtils.isGreaterThan;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
@@ -79,7 +80,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      */
     private static final CommitResponse POLLER_DIED = new CommitResponse(new CommitRequest());
 
-    // --- rebalance-deferral accounting (astubbs#317, R8) --------------------------------------------------------
+    // --- rebalance-deferral accounting (astubbs#317) ------------------------------------------------------------
     // Written by the broker-poll thread, which runs every deferral (both commitDeferringOnRebalance call paths
     // execute there in production); volatile because the clearing side can run on another thread - the controller's
     // onPartitionsAssigned callback forwards a completed rebalance here, and in test harnesses the callbacks are
@@ -409,7 +410,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * response, so a waiting committer is released immediately instead of blocking for a commit that
      * is not coming. It simply asks again on the next cycle.
      * <p>
-     * <b>Deferring is accounted and bounded, not free forever</b> (astubbs#317, R8). Each deferral joins a streak
+     * <b>Deferring is accounted and bounded, not free forever</b> (astubbs#317). Each deferral joins a streak
      * ({@link #firstUnclearedDeferral}, {@link #consecutiveDeferrals}), cleared by a commit cycle that completes -
      * commit or nothing-to-commit - and by a completed rebalance ({@link #onPartitionsAssigned()}: after
      * reassignment the streak belonged to an assignment this consumer may no longer hold). While the streak is
@@ -421,7 +422,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * thread's {@code CommitFailureHandler} decision loop runs (never a new interrupt or flag). Escalating starts
      * a fresh quantum, so a CONTINUE decision is re-consulted once per {@code offsetCommitTimeout}, matching the
      * budget lane's cadence. A revocation-time cycle can escalate too - on that path the exception surfaces inside
-     * the rebalance callback, where the controller's revocation catch treats it as this same deferral (R13: no
+     * the rebalance callback, where the controller's revocation catch treats it as this same deferral (no
      * waiter there, no handler, poller stays alive).
      */
     private void commitDeferringOnRebalance() throws TimeoutException, InterruptedException {
@@ -458,7 +459,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         }
         consecutiveDeferrals++;
         Duration elapsed = Duration.between(firstUnclearedDeferral, now);
-        if (elapsed.toMillis() <= commitTimeout.toMillis()) {
+        if (!isGreaterThan(elapsed, commitTimeout)) {
             // inside the quantum: the healthy-rebalance case, deferral stays a WARN
             return;
         }
@@ -495,7 +496,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
 
     /**
      * A completed rebalance - partitions reassigned - scopes the deferral streak to the assignment it belonged to
-     * (astubbs#317, R13): whatever was blocking commits for the OLD assignment is history the new one must not
+     * (astubbs#317): whatever was blocking commits for the OLD assignment is history the new one must not
      * inherit, so the next streak gets the full escalation quantum on a fresh clock. Forwarded by the controller's
      * own {@code onPartitionsAssigned} through {@link BrokerPollSystem#onPartitionsAssigned()}.
      */

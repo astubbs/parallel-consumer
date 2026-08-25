@@ -33,6 +33,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static bz.stub.parallelconsumer.internal.utils.JavaUtils.isGreaterThan;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
@@ -350,10 +351,10 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 // semantics (a real attempt blocks up to max.block.ms, so 200 of them is hours), and its
                 // give-up type, InternalRuntimeException, was invisible to the commit-failure seam.
                 Duration elapsed = Duration.between(commitCycleStarted, Instant.now());
-                boolean budgetRemains = elapsed.toMillis() <= offsetCommitTimeout.toMillis();
+                boolean budgetRemains = !isGreaterThan(elapsed, offsetCommitTimeout);
                 if (!budgetRemains) {
                     // the producer is left holding an in-flight transaction - the NEXT cycle must
-                    // complete-else-abort it before beginning a fresh one (KTD8)
+                    // complete-else-abort it before beginning a fresh one
                     exhaustedTransactionAwaitingRecovery = true;
                     log.error("Transactional offset commit took too long (tried {} times over {})", attemptsMade, elapsed, e);
                     throw new OffsetCommitBudgetExceededException(msg(
@@ -386,8 +387,8 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     private volatile boolean exhaustedTransactionAwaitingRecovery = false;
 
     /**
-     * Complete-else-abort recovery of a transaction whose commit exhausted a previous cycle's budget (KTD8,
-     * astubbs#317).
+     * Complete-else-abort recovery of a transaction whose commit exhausted a previous cycle's budget
+     * (astubbs#317).
      * <p>
      * Without this, the cycle after a CONTINUE decision would call
      * {@link #lazyMaybeBeginTransaction()}/{@code sendOffsetsToTransaction} against a producer still mid-commit
@@ -440,7 +441,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 return;
             } catch (TimeoutException | InterruptException e) {
                 Duration elapsed = Duration.between(commitCycleStarted, Instant.now());
-                boolean budgetRemains = elapsed.toMillis() <= offsetCommitTimeout.toMillis();
+                boolean budgetRemains = !isGreaterThan(elapsed, offsetCommitTimeout);
                 if (!budgetRemains) {
                     // deliberately NOT clearing exhaustedTransactionAwaitingRecovery: the next cycle resumes
                     throw new OffsetCommitBudgetExceededException(msg(

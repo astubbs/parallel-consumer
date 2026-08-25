@@ -399,7 +399,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     /**
      * A completed rebalance, forwarded by the controller's {@code onPartitionsAssigned} callback so the wrapped
-     * committer can scope its rebalance-deferral accounting to the new assignment (astubbs#317, R13). No-op in
+     * committer can scope its rebalance-deferral accounting to the new assignment (astubbs#317). No-op in
      * modes without a consumer-side committer.
      *
      * @see ConsumerOffsetCommitter#onPartitionsAssigned()

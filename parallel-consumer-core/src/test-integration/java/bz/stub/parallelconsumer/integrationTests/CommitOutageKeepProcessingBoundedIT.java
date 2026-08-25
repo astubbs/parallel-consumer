@@ -37,7 +37,7 @@ import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static pl.tlinkowski.unij.api.UniSets.of;
 
 /**
- * KTD6 against a real broker (astubbs#317): with the commit-failure seam in
+ * The bounded-accumulation scenario against a real broker (astubbs#317): with the commit-failure seam in
  * {@code KEEP_PROCESSING} mode and a CONTINUE handler, an extended broker-commit outage does NOT
  * accumulate unbounded processed-but-uncommitted state - the existing offset-map payload
  * back-pressure bounds it - and once the outage heals, the accumulated offsets commit within the
@@ -52,7 +52,7 @@ import static pl.tlinkowski.unij.api.UniSets.of;
  * offset (records below it stay eligible, because completing them SHRINKS the payload). So the
  * bound engages during the outage precisely because failing commits still encode.
  * <p>
- * The workload is designed so the offset map genuinely grows (the plan's trap: run-length encoding
+ * The workload is designed so the offset map genuinely grows (the trap: run-length encoding
  * compresses cleanly-completed runs to near nothing, so a "nothing grew" pass would be vacuous):
  * KEY ordering with a stuck subset of keys - their records fail and retry for the whole outage -
  * leaves incomplete offsets sprinkled through the completed range, the sparse-completion shape of
@@ -64,7 +64,7 @@ import static pl.tlinkowski.unij.api.UniSets.of;
  * {@code commitSync} throws the retriable {@link TimeoutException} while the outage flag is up, so
  * every commit budget exhausts and reaches the handler, while polling - and so group membership -
  * runs against the real broker throughout. The heal assertions therefore accept either end of a
- * real outage (the plan's review residual): a clean recommit, or a rebalance having intervened -
+ * real outage: a clean recommit, or a rebalance having intervened -
  * asserting the invariant that holds in both lanes: no record is lost (every offset processes
  * successfully at least once) and the dirty offsets eventually all commit.
  *
@@ -160,7 +160,7 @@ class CommitOutageKeepProcessingBoundedIT extends BrokerIntegrationTest<String, 
         assertWithMessage("processing must have been running while commits failed - KEEP_PROCESSING")
                 .that(succeededOffsets.size()).isAtLeast(1);
 
-        // KTD6(a), the plateau: once the encoded map crosses the threshold the partition is blocked for the REST
+        // The plateau: once the encoded map crosses the threshold the partition is blocked for the REST
         // of the outage - the committed base cannot advance while commits fail, so the encoded range (and with it
         // the payload) can never shrink back under the threshold. Successes converge rather than snap frozen:
         // records below the highest-succeeded offset stay legitimately takeable (completing them shrinks the map),
@@ -183,10 +183,10 @@ class CommitOutageKeepProcessingBoundedIT extends BrokerIntegrationTest<String, 
         }
 
         int nonStuckTotal = TOTAL_RECORDS - countRecordsWithKeys(producedKeys, stuckKeys);
-        assertWithMessage("KTD6(a): payload back-pressure must throttle intake to a standstill - successes must " +
+        assertWithMessage("payload back-pressure must throttle intake to a standstill - successes must " +
                 "stop growing across failing commit cycles once the encoded map crossed the threshold")
                 .that(froze).isTrue();
-        assertWithMessage("KTD6(a): the plateau must be back-pressure, not workload exhaustion - plenty of " +
+        assertWithMessage("the plateau must be back-pressure, not workload exhaustion - plenty of " +
                 "processable records must remain untaken")
                 .that(plateau).isLessThan(nonStuckTotal);
 
@@ -195,7 +195,7 @@ class CommitOutageKeepProcessingBoundedIT extends BrokerIntegrationTest<String, 
         stuckKeysReleased.set(true);
         commitOutage.set(false);
 
-        // KTD6(b) plus the either-lane invariant: whether the recovery was a clean recommit or a rebalance
+        // The heal half plus the either-lane invariant: whether the recovery was a clean recommit or a rebalance
         // intervened, no record may be lost - every offset eventually processes successfully - and the dirty
         // offsets must all reach the broker, which also proves the healing commit's metadata fit its limit
         Awaitility.await().atMost(Duration.ofSeconds(120)).untilAsserted(() ->

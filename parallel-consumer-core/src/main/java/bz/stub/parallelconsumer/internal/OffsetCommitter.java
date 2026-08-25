@@ -18,7 +18,7 @@ public interface OffsetCommitter {
 
     /**
      * Whether the commit cycle that just returned on this thread ended in a rebalance-class DEFERRAL - postponed to
-     * the next cycle, offsets still dirty - rather than reaching the broker (astubbs#317, R8). A caller's success
+     * the next cycle, offsets still dirty - rather than reaching the broker (astubbs#317). A caller's success
      * accounting must not treat such a cycle as a success: the commit-failure seam's
      * time-since-last-successful-commit story, consecutive-failure count and pause release all key off genuine
      * successes only.

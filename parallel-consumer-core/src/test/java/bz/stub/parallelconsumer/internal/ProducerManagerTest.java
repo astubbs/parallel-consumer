@@ -432,7 +432,7 @@ class ProducerManagerTest {
     }
 
     /**
-     * The commit-failure seam's rebalance lane, transactional half (astubbs#317 R13): a transactional commit whose
+     * The commit-failure seam's rebalance lane, transactional half (astubbs#317): a transactional commit whose
      * {@code offsetCommitTimeout} budget exhausts DURING partition revocation is a DEFERRAL - the callback carries
      * on to truncation, the {@link bz.stub.parallelconsumer.CommitFailureHandler} is NOT consulted (there is no
      * waiter inside a rebalance callback to act on a decision), and the instance records no failure. The dirty
