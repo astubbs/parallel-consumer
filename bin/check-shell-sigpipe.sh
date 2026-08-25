@@ -42,7 +42,11 @@ SCAN_DIR="${1:-}"
 # pipe buffer that triggers the inversion.
 if [ -z "$SCAN_DIR" ]; then
     cd "$(dirname "$0")/.."
-    SCAN_DIRS="bin .claude/hooks"
+    # THE `lib/` DIRECTORIES COUNT TOO. `ls "$d"/*.sh` does not recurse, so bin/lib/ and
+    # .claude/hooks/lib/ were unscanned - and a shared helper is the worst place for this bug,
+    # because every caller inherits it. Named explicitly rather than made recursive: the scan is a
+    # list of directories whose contents are shell, and a `find` would start reading fixtures.
+    SCAN_DIRS="bin bin/lib .claude/hooks .claude/hooks/lib"
 else
     SCAN_DIRS="$SCAN_DIR"
 fi

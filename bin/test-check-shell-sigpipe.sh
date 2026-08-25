@@ -19,6 +19,7 @@
 #   11. the guard skips its OWN self-test, same reason           -> pass (0)
 #   12. the NO-ARG form CI runs exits clean on the real tree     -> pass (0)
 #   13. ...and its default scan set names .claude/hooks          -> pass (0)
+#   14. ...and both lib/ directories, which `ls */*.sh` does not reach -> pass (0)
 #
 # Cases 4 and 5 are the ones worth keeping: the first version of the guard matched
 # `grep -[a-zA-Z]*q`, which a space defeats, so `grep -v -q` slipped through. Case 9 guards the
@@ -110,6 +111,20 @@ case "$no_arg_out" in
     *)                 got="hooks_not_in_scan_set" ;;
 esac
 assert "the default scan set includes .claude/hooks" scans_hooks "$got"
+
+# ...AND THE `lib/` DIRECTORIES. `ls "$d"/*.sh` does not recurse, so the shared helpers under
+# bin/lib/ and .claude/hooks/lib/ were unscanned - the worst place for this bug, since every caller
+# inherits it. Pinned the same way: dropping either from the default set changes the report line.
+case "$no_arg_out" in
+    *"bin/lib"*) got=scans_bin_lib ;;
+    *)           got="bin_lib_not_in_scan_set" ;;
+esac
+assert "the default scan set includes bin/lib" scans_bin_lib "$got"
+case "$no_arg_out" in
+    *".claude/hooks/lib"*) got=scans_hook_lib ;;
+    *)                     got="hook_lib_not_in_scan_set" ;;
+esac
+assert "the default scan set includes .claude/hooks/lib" scans_hook_lib "$got"
 
 echo
 if [ "$failures" -eq 0 ]; then
