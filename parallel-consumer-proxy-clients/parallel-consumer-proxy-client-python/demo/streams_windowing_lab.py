@@ -10,6 +10,13 @@ rather than copying them - sibling scripts drift (the plan's KTD14).
 
 Experiments are named and selected, so later units add a function here instead of a sibling file.
 
+Experiment ``f2-rerun``: the F2 comparison (wrapper against the reimplementation floor) retaken
+in ONE session with arm H interleaved against the cache-on crossing-free arms, because the
+engine-floor spike's F2 reading paired arms measured in two different sessions - which KTD18
+forbids. It reuses ``engine-floor``'s ``FloorArm`` definitions and ``measure_placement`` rather
+than restating the toggles, and drives arm H from ``--floor-records`` so both sides run at one
+load. See ``run_f2_rerun``.
+
 Experiment ``hot-key`` (U2): whether an aggregation over ONE hot key can be rescued by anything the
 parked bundling work offers. An aggregation is a serial dependency per key - accumulator n+1 needs
 accumulator n - so it cannot be batched across a hot key. It uses the EXISTING ``reduce`` operator,
@@ -196,7 +203,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "time (default 24000)")
     # --- engine-floor ---
     parser.add_argument("--floor-records", type=int, default=32_000,
-                        help="engine-floor: records per run, every arm the same (default 32000). "
+                        help="engine-floor/f2-rerun: records per run, every arm the same - and "
+                             "in f2-rerun arm H too, so the two sides of the comparison are at "
+                             "one load (default 32000). "
                              "Not a crossings sweep - the arms are crossing-free, so there is no "
                              "invocation count to normalise on and the term under test is the "
                              "record")
@@ -207,9 +216,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--floor-arms", default="",
                         help="engine-floor: comma-separated arm labels to run instead of all "
                              "(e.g. D0), for the profiled capture and for re-running one arm")
+    parser.add_argument("--f2-host-control-keys", type=int, default=8_000,
+                        help="f2-rerun: ALSO run arm H at this second key count in each rep, as "
+                             "the control that attributes any disagreement with U6's arm-H "
+                             "figures to the key count rather than to the session (default 8000, "
+                             "U6's; 0 skips it)")
     parser.add_argument("--floor-instrument", action="store_true",
                         help="engine-floor: also run the I0/I100 instrument-check pair, which "
-                             "costs two host-function arms (slow) and proves the figure can move")
+                             "costs two host-function arms (slow) and proves the figure can "
+                             "move. f2-rerun runs I0/I1000 instead - 0.1 ms was refuted as too "
+                             "small for the client's thread pool to expose")
     return parser.parse_args(argv)
 
 
@@ -1078,6 +1094,7 @@ class HostRun:
     keys: int
     updates: int              # dict updates; must equal multiplier x records
     window_s: float           # wall clock, first message to last - H produces nothing to stamp
+    load1: float = 0.0        # 1-minute load read immediately before the run
 
     @property
     def rate(self) -> float:
@@ -1149,7 +1166,7 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
         consumer.close()
     window_s = (ended - started) if started is not None else 0.0
     result = HostRun(spec=spec_label, records=seen, keys=keys, updates=updates,
-                     window_s=window_s)
+                     window_s=window_s, load1=load1)
     ok = seen == records and updates == multiplier * records
     print(f"  arm=H {spec_label:<10s} records={seen:>7,} keys={keys:>5,} "
           f"window={window_s:7.2f}s rec/s={result.rate:8,.0f} dict-updates={updates:>9,} "
@@ -1541,6 +1558,47 @@ _INSTRUMENT_ARMS: tuple[FloorArm, ...] = (
 )
 
 
+def _run_floor_arm(args: argparse.Namespace, arm: FloorArm, records: int,
+                   show_topology: bool = False) -> PlacementRun:
+    """One engine-floor arm, run through the shared ``measure_placement`` machinery.
+
+    Extracted from ``run_engine_floor`` when the in-session F2 re-run needed the SAME arm
+    definitions in a different order beside arm H. A second copy of the toggle plumbing would
+    have drifted from this one the first time an arm learned a new term - the lab's KTD14, the
+    reason every experiment here is a function rather than a sibling file.
+
+    ``arm.arm`` names a row of ``_ARMS``: "D" is the hopping-12 crossing-free topology and
+    "A-free" the tumbling one, both with NO host function registered, so their zero crossings are
+    measured (an engine-side invocation would name an unregistered token and fail the run).
+    """
+    return measure_placement(
+        args, arm.arm, records, args.keys, arm.cache_bytes,
+        show_topology=show_topology, commit_ms=arm.commit_ms, threads=arm.threads,
+        sink_on=arm.sink_on, changelog_on=arm.changelog_on, delay_ms=arm.delay_ms)
+
+
+def _print_floor_table(arms: tuple[FloorArm, ...], runs: dict[str, list[PlacementRun]],
+                       baseline_label: str = "D0") -> None:
+    """The per-arm table: median over reps, min-max beside, ratio against the baseline arm."""
+    print("\n  results - rec/s on the sink's log-append clock (committed-offset clock beside it)")
+    print(f"  {'arm':10s} {'toggle':46s} {'rec/s (min-max)':>26s} {'us/rec':>9s} "
+          f"{'us/rec/window':>14s} {'emits':>10s}")
+    baseline = statistics.median(r.rate or r.committed_rate
+                                 for r in runs.get(baseline_label, next(iter(runs.values()))))
+    for arm in arms:
+        got = runs.get(arm.label)
+        if not got:
+            continue
+        rates = [r.rate or r.committed_rate for r in got]
+        median = statistics.median(rates)
+        multiplier = got[0].multiplier
+        print(f"  {arm.label:10s} {arm.toggle:46s} "
+              f"{median:9,.0f} ({min(rates):,.0f}-{max(rates):,.0f}) "
+              f"{1e6 / median:9.1f} {1e6 / median / multiplier:14.1f} "
+              f"{statistics.median(r.emits for r in got):10,.0f}"
+              f"   x{median / baseline:.2f} vs {baseline_label}")
+
+
 def run_engine_floor(args: argparse.Namespace) -> int:
     """The engine-floor decomposition: U6 arm D's crossing-free run, one term moved per arm.
 
@@ -1565,30 +1623,9 @@ def run_engine_floor(args: argparse.Namespace) -> int:
     for rep in range(args.reps):
         print(f"\n  rep {rep + 1}/{args.reps}")
         for arm in arms:
-            # T0 is arm A's tumbling window with arm D's crossing-free combine; the lab's arm
-            # table has "A" as the host-function tumbling arm, so the free variant is minted here
-            # rather than by editing a table U6's results are reported against.
-            spec_arm = "A-free" if arm.arm == "A-free" else arm.arm
-            run = measure_placement(
-                args, spec_arm, records, args.keys, arm.cache_bytes,
-                show_topology=(rep == 0), commit_ms=arm.commit_ms, threads=arm.threads,
-                sink_on=arm.sink_on, changelog_on=arm.changelog_on, delay_ms=arm.delay_ms)
-            runs.setdefault(arm.label, []).append(run)
-    print("\n  results - rec/s on the sink's log-append clock (committed-offset clock beside it)")
-    print(f"  {'arm':10s} {'toggle':46s} {'rec/s (min-max)':>26s} {'us/rec':>9s} "
-          f"{'us/rec/window':>14s} {'emits':>10s}")
-    baseline = statistics.median(r.rate or r.committed_rate
-                                 for r in runs.get("D0", next(iter(runs.values()))))
-    for arm in arms:
-        got = runs[arm.label]
-        rates = [r.rate or r.committed_rate for r in got]
-        median = statistics.median(rates)
-        multiplier = got[0].multiplier
-        print(f"  {arm.label:10s} {arm.toggle:46s} "
-              f"{median:9,.0f} ({min(rates):,.0f}-{max(rates):,.0f}) "
-              f"{1e6 / median:9.1f} {1e6 / median / multiplier:14.1f} "
-              f"{statistics.median(r.emits for r in got):10,.0f}"
-              f"   x{median / baseline:.2f} vs D0")
+            runs.setdefault(arm.label, []).append(
+                _run_floor_arm(args, arm, records, show_topology=(rep == 0)))
+    _print_floor_table(arms, runs)
     if args.floor_instrument:
         control = statistics.median(r.rate for r in runs["I0"])
         slowed = statistics.median(r.rate for r in runs["I100"])
@@ -1599,11 +1636,187 @@ def run_engine_floor(args: argparse.Namespace) -> int:
     return 0
 
 
+_F2_ANCHOR_RATES: dict[str, float] = {"D0": 16_758.0, "T0": 81_946.0}
+"""The 2026-08-25 medians of the two CACHE-OFF arms, at exactly these conditions (1,000 keys,
+64,000 records, 8 partitions, 8 stream threads, commit 200 ms, 1 KB payloads).
+
+They are re-run here as ANCHORS, not as filler. Nothing else ties this session's box to that one:
+the cache-on arms and arm H are being compared for the first time in a single session, and their
+ratio is only readable against a decomposition taken on a different day if the two arms both days
+share land in the same place. A disagreeing anchor is a finding about the box - it is reported,
+never tuned away. Source: docs/inflight/perf-streams-engine-floor.md, section
+"The decomposition, measured 2026-08-25"."""
+
+_F2_HOST_CONTROL_LABEL = "H@{keys}k"
+"""How the arm-H key-count control is labelled in the summary - it is arm H with exactly one term
+moved (the key count), so it reads as an arm rather than as a footnote."""
+
+_F2_ENGINE_ORDER: tuple[str, ...] = ("T0-cache", "D-cache", "D0", "T0")
+"""The engine arms of the F2 re-run, in the order they run WITHIN each repetition - after arm H,
+which goes first while no sidecar is up (``_shared_phase``'s rule, inherited: the engine is idle
+there, and a broken H arm surfaces before the rep's engine runs rather than after them). The two
+cache-on arms lead because they carry the verdict; the two cache-off anchors follow."""
+
+
+def run_f2_rerun(args: argparse.Namespace) -> int:
+    """F2 retaken IN ONE SESSION: arm H interleaved with the cache-on crossing-free arms.
+
+    The engine-floor decomposition established that ~75 percent of the measured floor was an
+    instrument choice (``statestore.cache.max.bytes=0``) and reported the consequence for F2 -
+    the reimplementation floor - by reading this note's cache-on arms against arm H figures
+    measured in U6's session. That is a cross-session comparison, which the project's
+    pre-registered discipline (U6's KTD18, in-session control arms) forbids: two sessions differ
+    by ambient load, page cache and broker state, and a ratio taken across them attributes drift
+    to the term under test.
+
+    So every arm here runs in one session, interleaved within each repetition, at ONE record
+    count and ONE key count:
+
+    - arm H at both specifications first, on this process's wall clock (H produces nothing, so it
+      has no log-append record of its own progress) while no engine is up;
+    - ``T0-cache`` and ``D-cache``, the wrapper's best case at each specification;
+    - ``D0`` and ``T0``, the cache-off anchors that tie this box to 2026-08-25's;
+    - arm H again at ``--f2-host-control-keys``, the key-count control. The engine arms run at
+      1,000 keys rather than U6's 8,000 because a 64 MB cache over an 8,000-key hopping working
+      set would measure eviction thrash - but that deviation lands on arm H too, and U6's arm-H
+      figures were taken at 8,000. Moving only the key count, in this session, says whether a
+      disagreement with U6's arm H is the key count or the box.
+
+    THE RECORD COUNT IS RECONCILED DELIBERATELY. ``run_engine_floor`` reads ``--floor-records``
+    and ``run_host_reimpl`` reads ``max(--crossings-sweep)``; a comparison whose two sides ran at
+    different loads is void, so this experiment drives BOTH sides from ``--floor-records`` and
+    arm H's own record count follows the engine's.
+    """
+    records = args.floor_records
+    by_label = {arm.label: arm for arm in _FLOOR_ARMS + _INSTRUMENT_ARMS}
+    engine_arms = tuple(by_label[label] for label in _F2_ENGINE_ORDER)
+    # I100 is deliberately NOT run: 0.1 ms was refuted as too small in the 2026-08-25 session -
+    # the client dispatches invocations onto a thread pool, which absorbs a delay smaller than
+    # the crossing it rides on. I0 is the crossing control against T0 (same topology, one
+    # registered host function between them); I1000 is the injected-cost check at a magnitude
+    # the pool cannot hide.
+    instrument_arms = (tuple(by_label[label] for label in ("I0", "I1000"))
+                       if args.floor_instrument else ())
+
+    print("f2-rerun - the F2 comparison retaken IN-SESSION, arm H interleaved with the "
+          "cache-on arms")
+    print(f"  records per run         {records:,} (engine arms AND arm H - one count, "
+          "reconciled)")
+    print(f"  keys                    {args.keys:,}")
+    print(f"  reps                    {args.reps} (arms interleaved within each rep, H first)")
+    print(f"  partitions              {args.partitions}, {args.stream_threads} stream threads, "
+          f"{args.payload_bytes} B payloads")
+    print(f"  commit.interval.ms      {args.commit_interval_ms} (set explicitly)")
+    print(f"  quiescence              {args.quiescence_intervals} commit intervals, each break "
+          "confirmed against sink end offsets after a further 2x, and the engine group must "
+          "have committed the whole seeded backlog")
+    print(f"  event time              constant {_EVENT_TIME_MS} ms for every record")
+    print(f"  load limit              {args.load_limit:g} (1-minute load read and recorded "
+          "beside every run)")
+    print("  crossings               every engine arm registers NO host function, so its zero "
+          "crossings are measured client-side rather than assumed")
+    print(f"  order within a rep      H tumbling, H hopping-12, "
+          f"{', '.join(_F2_ENGINE_ORDER)}"
+          + (f", {', '.join(a.label for a in instrument_arms)}" if instrument_arms else ""))
+    print(f"  JAVA_TOOL_OPTIONS       {os.environ.get('JAVA_TOOL_OPTIONS', '(unset)')}")
+
+    control_keys = args.f2_host_control_keys
+    if control_keys:
+        print(f"  arm-H key control       {control_keys:,} keys beside the {args.keys:,} the "
+              "engine arms run at - the ONE term that differs from U6's arm H, moved in-session "
+              "so a disagreement with U6's figures is attributed rather than explained")
+
+    h_topic = _seed_host_topic(args, records, args.keys, "f2")
+    control_topic = (_seed_host_topic(args, records, control_keys, "f2-control")
+                     if control_keys else None)
+    runs: dict[str, list[PlacementRun]] = {}
+    h_runs: list[HostRun] = []
+    control_runs: list[HostRun] = []
+    try:
+        for rep in range(args.reps):
+            print(f"\n  rep {rep + 1}/{args.reps}")
+            h_runs.append(measure_host(args, h_topic, records, args.keys, _TUMBLE, "tumbling"))
+            h_runs.append(measure_host(args, h_topic, records, args.keys, _HOP5, "hopping-12"))
+            if control_topic is not None:
+                # Arm H again with exactly ONE term moved - the key count. Nothing else differs:
+                # same session, same records, same payload, same partitions, same consume loop.
+                control_runs.append(measure_host(args, control_topic, records, control_keys,
+                                                 _TUMBLE, "tumbling"))
+                control_runs.append(measure_host(args, control_topic, records, control_keys,
+                                                 _HOP5, "hopping-12"))
+            for arm in engine_arms + instrument_arms:
+                runs.setdefault(arm.label, []).append(
+                    _run_floor_arm(args, arm, records, show_topology=(rep == 0)))
+    finally:
+        if not args.keep_topics:
+            topics = [h_topic] + ([control_topic] if control_topic is not None else [])
+            delete_run_topics(AdminClient({"bootstrap.servers": args.bootstrap}), topics)
+
+    _print_floor_table(engine_arms + instrument_arms, runs)
+
+    print("\n  arm H, this session - single-threaded, NON-DURABLE (no store, no changelog, no "
+          "rebalance recovery,")
+    print("  no late-record handling), so F2 is an UPPER bound on a real reimplementation:")
+    h_median: dict[str, float] = {}
+    for spec_label in ("tumbling", "hopping-12"):
+        rates = [h.rate for h in h_runs if h.spec == spec_label]
+        h_median[spec_label] = statistics.median(rates)
+        print(f"  arm H {spec_label:<12s} {h_median[spec_label]:9,.0f} "
+              f"({min(rates):,.0f}-{max(rates):,.0f}) rec/s, {1e6 / h_median[spec_label]:.1f} "
+              f"us/rec, n={len(rates)}")
+
+    print("\n  THE F2 VERDICT, RETAKEN IN-SESSION (wrapper best case vs arm H at the SAME "
+          "specification, same session, interleaved):")
+    for spec_label, wrapper in (("tumbling", "T0-cache"), ("hopping-12", "D-cache")):
+        wrapper_rate = statistics.median(r.rate for r in runs[wrapper])
+        host_rate = h_median[spec_label]
+        print(f"    {spec_label:<11s} {wrapper:9s} {wrapper_rate:9,.0f} rec/s   arm H "
+              f"{host_rate:9,.0f} rec/s   -> H is {host_rate / wrapper_rate:.2f}x the wrapper")
+
+    if control_runs:
+        print(f"\n  ARM-H KEY-COUNT CONTROL - the same consume loop at {control_keys:,} keys "
+              f"(U6's) instead of {args.keys:,}, one term moved, same session:")
+        for spec_label in ("tumbling", "hopping-12"):
+            rates = [h.rate for h in control_runs if h.spec == spec_label]
+            control_median = statistics.median(rates)
+            print(f"    H {spec_label:<11s} {args.keys:>6,} keys {h_median[spec_label]:9,.0f} "
+                  f"rec/s   {control_keys:>6,} keys {control_median:9,.0f} "
+                  f"({min(rates):,.0f}-{max(rates):,.0f}) rec/s   -> the key count is worth "
+                  f"{h_median[spec_label] / control_median:.2f}x on arm H alone")
+
+    print("\n  ANCHORS - the two cache-off arms against their 2026-08-25 medians at the same "
+          "conditions:")
+    for label, then in _F2_ANCHOR_RATES.items():
+        now = statistics.median(r.rate for r in runs[label])
+        print(f"    {label:9s} this session {now:9,.0f} rec/s   2026-08-25 {then:9,.0f} rec/s   "
+              f"-> {now / then:.2f}x")
+
+    if instrument_arms:
+        t0_us = 1e6 / statistics.median(r.rate for r in runs["T0"])
+        i0_us = 1e6 / statistics.median(r.rate for r in runs["I0"])
+        i1000_us = 1e6 / statistics.median(r.rate for r in runs["I1000"])
+        print("\n  INSTRUMENT CHECK, both halves - a figure that cannot move is not measuring "
+              "the engine:")
+        print(f"    crossing:  T0 -> I0 adds exactly one registered host function to the same "
+              f"tumbling topology, {t0_us:,.1f} -> {i0_us:,.1f} us/rec, delta "
+              f"{i0_us - t0_us:,.0f}us against U6's independently fitted 135us per crossing")
+        print(f"    injected:  I0 -> I1000 adds +1,000us/record host-side, {i0_us:,.1f} -> "
+              f"{i1000_us:,.1f} us/rec, delta {i1000_us - i0_us:,.0f}us - the client's thread "
+              "pool absorbs the rest, a known property of this harness rather than a new result")
+
+    loads = ([r.load1 for arm_runs in runs.values() for r in arm_runs]
+             + [h.load1 for h in h_runs + control_runs])
+    print(f"\n  1-minute load beside the {len(loads)} runs: {min(loads):.2f}-{max(loads):.2f} "
+          f"(median {statistics.median(loads):.2f}, limit {args.load_limit:g})")
+    return 0
+
+
 EXPERIMENTS = {
     "hot-key": run_hot_key,
     "placement": run_placement,
     "host-reimpl": run_host_reimpl,
     "engine-floor": run_engine_floor,
+    "f2-rerun": run_f2_rerun,
 }
 
 
