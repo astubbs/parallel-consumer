@@ -140,7 +140,20 @@ rate recovered from starved runs prices every candidate budget at once.
 
 The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
 both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
-first evidence against the method, not for the code.
+first evidence against the method, not for the code. The same demand applied to an analyser rather
+than a test is what catches inert configuration.
+
+**Inert configuration**
+Analysis or build settings that are present in the source, syntactically valid, and never reach the
+run they were written for - so the tool executes correctly against a configuration that is not the
+one you wrote. Distinct from a broken tool: nothing errors, nothing is skipped, and the report is
+truthful about a scope nobody intended.
+
+It is invisible to every signal except a count, because the absence of findings it produces is
+indistinguishable from a clean codebase. Suppressions are the mirror case: one matching nothing looks
+exactly like one that works. The verification is therefore to assert the number - that a disabled
+rule reports zero, that an enabled one reports more than zero - never to observe that the build
+passed.
 
 **Positive control**
 An arm of a measurement whose only job is to register a hit, proving the instrument could have detected

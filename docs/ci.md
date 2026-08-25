@@ -647,6 +647,18 @@ never run on our own hardware.
   (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation job in `maven.yml`
   only covers classes changed against the base; this is its exhaustive counterpart.
 
+### A green mutation tick usually means "measured nothing" - read the exit code
+
+`bin/ci-mutation-test.sh` answers in its exit code, and the script's own header owns the contract:
+**0** scored mutants, **2** could not run (a scope regex matching nothing in the tree, or PIT
+producing no statistics / zero mutants), **3** nothing in scope. Measured over the last 40
+`maven.yml` PR runs: 40 passes, zero mutants scored - the lane is correctly narrow, not broken. Only
+a **0** is evidence about test quality. `bin/test-ci-mutation-test.sh` guards the contract and runs
+in the lane ahead of it. The scope, the exclusions and the ranked widening list are in
+[`docs/inflight/ci-mutation-testing.md`](inflight/ci-mutation-testing.md); whether a skip should
+render grey rather than green is an open decision in
+[`docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md`](inflight/ci-mutation-lane-skip-reads-as-a-pass.md).
+
 **There is no scheduled build, deliberately.** Every suite worth re-running is already a required
 check on each PR and runs again on every push to master, so a cron lane would only repeat covered
 work. **Do not add a lane for suites the gate already covers.** The repo's single cron lane,

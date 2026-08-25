@@ -335,6 +335,24 @@ one is a case in that file, and the suite goes red against the old parser.
   before pulling; the `.gitignore` comment says so at the point someone reads it.
   <!-- file-refs: N/A - the file is git-ignored by design, so it is absent from every checkout -->
 
+## NOT settled by testing - the nested cascade
+
+`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md` is placed at a **package
+root**, above the three sub-packages its rules are about - `state`, `metrics`, `internal`. That
+placement assumes a nested `CLAUDE.md` loads for a file in a **subdirectory**, not only for a file
+directly in its own directory. The layer table above says "file in that dir is touched", which does
+not answer it, and the two existing bridges (`bin/`, `docs/inflight/`) both sit directly above their
+files, so neither tests the question.
+
+**Evidence it probably cascades**, short of a test: the root `CLAUDE.md` loads for work anywhere in
+the tree, so ancestors clearly participate. Whether the root is special-cased is the open part.
+
+**How to settle it:** edit a file in `.../parallelconsumer/state/` in a fresh session and check
+whether the package-root rules arrive. If they do not, the fix is three bridges instead of one - the
+content is identical and the cost is duplication, which is why one was tried first.
+
+Until then this is an assumption, and a rule that does not arrive is a rule that does not exist.
+
 ## Settled by testing, so nobody re-opens them
 
 - **Sub-agent hooks DO fire.** Whether `.claude/settings.json` hooks apply to agents spawned via the
