@@ -27,6 +27,24 @@ stops anyone looking, and it never goes red to tell you. Three worked examples a
   surefire and included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
 
+## The adaptive-concurrency behaviour suites: three jobs, three suites
+
+[`docs/plans/2026-08-25-002-test-adaptive-soak-torture-plan.md`](plans/2026-08-25-002-test-adaptive-soak-torture-plan.md)
+owns the design; what binds here is the boundary, so a finding lands in the right suite:
+
+| Suite | Asks | Where | A red means |
+|---|---|---|---|
+| **Chaos** | is the protocol honest under faults | `chaostests/` ITs | a correctness bug |
+| **Simulated horizon + torture** (the soak plan's U7/U4) | does the CONTROLLER behave as designed over time and across workload shapes | `internal/admission/` unit tests: `ScenarioMatrixTest`, `AdmissionHorizonLaneTest`, `AdmissionTortureTest` | a law or calibration finding - report it, shrink it to a falsifier, never loosen the scenario |
+| **Bench** (the U10 arm) | how much does it help, on real hardware | its own branch | a value question, never a gate |
+
+The simulated lanes run per-PR in seconds - twelve simulated hours is ~43k deterministic windows -
+and their assertion discipline is **derived bounds only** (plant construction, the law's own step
+arithmetic), never a band fitted to a run. Trajectory CSVs land under `target/trajectories/` as the
+evidence a red attaches to its inflight note. Note the name collision this table exists to prevent:
+`bin/soak-test.sh` is the single-test flake resurfacer and has nothing to do with these suites; the
+future real-broker soak lane (the plan's U5, unlanded) takes a non-colliding name.
+
 ## The ambient probe: contention artifact, or genuine bug?
 
 Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
