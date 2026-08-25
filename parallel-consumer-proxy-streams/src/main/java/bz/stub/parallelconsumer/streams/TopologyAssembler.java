@@ -372,14 +372,21 @@ public class TopologyAssembler {
         TimeWindowSpec window = handles.get(handle).type().getWindow();
         HandleType resultType = windowedType(HandleKind.HANDLE_KIND_TABLE, window);
         storeValueTypes.put(storeName, resultType.getValueType());
-        return mint(upstream.aggregate(
-                initializer,
-                aggregator,
+        Materialized<byte[], byte[], WindowStore<Bytes, byte[]>> materialized =
                 Materialized.<byte[], byte[], WindowStore<Bytes, byte[]>>as(storeName)
                         .withStoreType(Materialized.StoreType.IN_MEMORY)
                         .withRetention(Duration.ofMillis(window.getRetentionMs()))
                         .withKeySerde(operatorSerde(resultType.getKeyType()))
-                        .withValueSerde(operatorSerde(resultType.getValueType()))), resultType);
+                        .withValueSerde(operatorSerde(resultType.getValueType()));
+        // MEASUREMENT-ONLY ESCAPE HATCH, off by default: the engine-floor spike needs one arm with the
+        // changelog term removed and nothing else changed. It is deliberately NOT on the protocol - see
+        // docs/inflight/perf-streams-engine-floor.md; a real capability would be an additive field on
+        // Aggregate. A system property rather than an environment variable because the lab already owns
+        // the engine's JVM arguments and does not own its environment.
+        if (Boolean.getBoolean("pcStreams.measure.disableChangelog")) {
+            materialized = materialized.withLoggingDisabled();
+        }
+        return mint(upstream.aggregate(initializer, aggregator, materialized), resultType);
     }
 
     /**

@@ -194,6 +194,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "point; B's per-record cost does not depend on records-per-key, and "
                              "an uncapped B at twelve crossings per record dominates the wall "
                              "time (default 24000)")
+    # --- engine-floor ---
+    parser.add_argument("--floor-records", type=int, default=32_000,
+                        help="engine-floor: records per run, every arm the same (default 32000). "
+                             "Not a crossings sweep - the arms are crossing-free, so there is no "
+                             "invocation count to normalise on and the term under test is the "
+                             "record")
+    parser.add_argument("--floor-jfr", action="store_true",
+                        help="engine-floor: attach a JFR profile recording to every engine in "
+                             "this invocation; intended for a SEPARATE single-arm run, because a "
+                             "profiler on every arm taxes the comparison it exists to explain")
+    parser.add_argument("--floor-arms", default="",
+                        help="engine-floor: comma-separated arm labels to run instead of all "
+                             "(e.g. D0), for the profiled capture and for re-running one arm")
+    parser.add_argument("--floor-instrument", action="store_true",
+                        help="engine-floor: also run the I0/I100 instrument-check pair, which "
+                             "costs two host-function arms (slow) and proves the figure can move")
     return parser.parse_args(argv)
 
 
@@ -561,6 +577,11 @@ class ArmSpec:
 
 _ARMS: dict[str, ArmSpec] = {
     "A": ArmSpec(_TUMBLE, "host", 1),
+    # The engine-floor experiment's multiplier-1 control: arm A's window with arm D's
+    # crossing-free combine, so the pair A/A-free isolates the crossing and the pair D0/T0
+    # isolates the window multiplier. Added rather than folded into A, whose row U6's results
+    # are reported against.
+    "A-free": ArmSpec(_TUMBLE, "last", 1),
     "B": ArmSpec(_HOP5, "host", 12),
     "C": ArmSpec(_HOP30, "host", 2),
     "D": ArmSpec(_HOP5, "last", 12),
@@ -587,6 +608,23 @@ class PlacementRun:
     group_state: str
     log_append: bool
     emit_band: tuple[int, int]
+    # The engine-floor experiment's toggles, one per arm; the defaults are U6's conditions, so a
+    # placement run records them unchanged and a floor run records exactly what it moved.
+    threads: int = 8
+    sink_on: bool = True
+    changelog_on: bool = True
+    delay_ms: float = 0.0
+    committed_window_s: float = 0.0   # the second clock: committed source offsets, first to last
+
+    @property
+    def committed_rate(self) -> float:
+        """Rate on the committed-source-offset clock - the only clock a no-sink arm has.
+
+        Reported beside ``rate`` on every sink-bearing arm precisely so the no-sink comparison is
+        never the first time this clock is used: two clocks that agree where both exist are what
+        make the one that stands alone believable.
+        """
+        return self.records / self.committed_window_s if self.committed_window_s > 0 else 0.0
 
     @property
     def rate(self) -> float:
@@ -706,6 +744,64 @@ def _committed_source_records(bootstrap: str, group: str, topic: str, partitions
         probe.close()
 
 
+class CommittedClock(threading.Thread):
+    """The second clock: the engine group's committed source offsets, sampled to completion.
+
+    The sink's log-append clock is the lab's authority and stays so - but the engine-floor
+    experiment has an arm with NO SINK, and a rate read off a clock that arm cannot have would be
+    a cross-clock comparison wearing one number. So this clock is sampled on EVERY floor arm: the
+    two agree wherever both exist, which is what licenses the one that stands alone.
+
+    The window is first observed progress (committed > 0) to the sample that reaches the whole
+    seeded backlog, so engine startup and the seed are outside it - the same exclusion the sink
+    clock gets for free by starting at the first append. Its resolution is the commit interval,
+    so an arm that lengthens the commit interval is read on the sink clock instead.
+    """
+
+    def __init__(self, bootstrap: str, group: str, topic: str, partitions: int, records: int,
+                 period_s: float = 0.05) -> None:
+        super().__init__(daemon=True)
+        self._probe = Consumer({"bootstrap.servers": bootstrap, "group.id": group,
+                                "enable.auto.commit": False})
+        self._partitions = [TopicPartition(topic, p) for p in range(partitions)]
+        self._records = records
+        self._period_s = period_s
+        self._stop = threading.Event()
+        self.first_progress_s: float | None = None
+        self.complete_s: float | None = None
+        self.last_committed = 0
+
+    def run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                committed = sum(tp.offset for tp
+                                in self._probe.committed(self._partitions, timeout=30)
+                                if tp.offset >= 0)
+            except Exception as error:  # a clock must never fail the run it is only witnessing
+                log.warning("committed-offset clock sample failed: %s", error)
+                committed = self.last_committed
+            now = time.monotonic()
+            if committed > 0 and self.first_progress_s is None:
+                self.first_progress_s = now
+            if committed >= self._records and self.complete_s is None:
+                self.complete_s = now
+                self.last_committed = committed
+                return
+            self.last_committed = committed
+            self._stop.wait(self._period_s)
+
+    @property
+    def window_s(self) -> float:
+        if self.first_progress_s is None or self.complete_s is None:
+            return 0.0
+        return self.complete_s - self.first_progress_s
+
+    def close(self) -> None:
+        self._stop.set()
+        self.join(timeout=60)
+        self._probe.close()
+
+
 def _slf4j_simple_jar() -> str:
     """The slf4j binding the eviction instrument rides on - the engine classpath has none."""
     root = pathlib.Path.home() / ".m2" / "repository" / "org" / "slf4j" / "slf4j-simple"
@@ -748,9 +844,22 @@ def _count_evictions(engine_log: pathlib.Path) -> int:
 def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: int,
                       cache_bytes: int, *, trace_cache: bool = False,
                       tolerate_evictions: bool = False,
-                      show_topology: bool = False) -> PlacementRun:
-    """One measured placement run: fresh topics, fresh engine, one arm."""
+                      show_topology: bool = False,
+                      commit_ms: int | None = None, threads: int | None = None,
+                      sink_on: bool = True, changelog_on: bool = True,
+                      delay_ms: float = 0.0) -> PlacementRun:
+    """One measured placement run: fresh topics, fresh engine, one arm.
+
+    The keyword toggles are the engine-floor experiment's, one term each, and every default is
+    U6's condition - so a placement run is unaffected and a floor run's row records exactly what
+    it moved. ``delay_ms`` is the instrument check only: it sleeps inside the HOST function, so it
+    is meaningless (and refused) on an arm that registers no function.
+    """
     spec = _ARMS[arm]
+    commit_ms = args.commit_interval_ms if commit_ms is None else commit_ms
+    threads = args.stream_threads if threads is None else threads
+    if delay_ms and spec.placement != "host":
+        raise SystemExit(f"delay_ms is a host-function toggle; arm {arm} registers no function")
     load1 = wait_for_quiet(args.load_limit)
 
     run_id = time.time_ns()
@@ -792,6 +901,8 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         nonlocal crossings
         with accounting:
             crossings += 1
+        if delay_ms:
+            time.sleep(delay_ms / 1000.0)
         return value
 
     def emit_fold(_key: bytes, value: bytes) -> bytes:
@@ -803,6 +914,21 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
             crossings += 1
         return len(value).to_bytes(8, "big")
 
+    # The changelog toggle is a system property on the engine JVM, gated in TopologyAssembler
+    # (`pcStreams.measure.disableChangelog`) because the protocol has no logging-disabled field and
+    # this spike is not the place to add one; see docs/inflight/perf-streams-engine-floor.md. Off by
+    # default, so every other experiment is untouched by its existence.
+    if not changelog_on:
+        jvm_args = ("-DpcStreams.measure.disableChangelog=true", *jvm_args)
+    jfr_file: pathlib.Path | None = None
+    if getattr(args, "floor_jfr", False):
+        # ONE profiled capture, of the baseline arm only: a profiler on every arm would tax the
+        # comparison it is supposed to explain. async-profiler is not on this box; JFR ships with
+        # the JDK, so the capture is JFR's execution samples.
+        jfr_file = pathlib.Path(tempfile.gettempdir()) / f"pc-wlab-floor-{run_id}.jfr"
+        jvm_args = ("-XX:StartFlightRecording=settings=profile,"
+                    f"filename={jfr_file},dumponexit=true", *jvm_args)
+        print(f"    JFR capture -> {jfr_file}")
     sidecar = Sidecar(SidecarCommand(java, jvm_args))
     port = sidecar.start(timeout=90)
     session = StreamsSession(GrpcStreamsTransport(port))
@@ -811,9 +937,9 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         session.open(application_id, {
             "bootstrap.servers": args.bootstrap,
             "auto.offset.reset": "earliest",
-            "num.stream.threads": str(args.stream_threads),
+            "num.stream.threads": str(threads),
             "statestore.cache.max.bytes": str(cache_bytes),
-            "commit.interval.ms": str(args.commit_interval_ms),
+            "commit.interval.ms": str(commit_ms),
         })
         builder = session.builder()
         windowed = builder.windowed_by(builder.group_by_key(builder.source(source)),
@@ -829,7 +955,8 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
             table = builder.aggregate(windowed, store_name=_STORE,
                                       combine=CombineKind.APPEND_BYTES)
             streamed = builder.map_values(builder.to_stream(table), emit_fold)
-        builder.sink(streamed, sink)
+        if sink_on:
+            builder.sink(streamed, sink)
         if show_topology:
             print()
             print(f"Topology, arm {arm} (window {spec.window.size_ms / 60000:.0f}m advance "
@@ -838,14 +965,27 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
                 print(f"    {line}")
         session.start()
 
-        quiet_s = args.quiescence_intervals * args.commit_interval_ms / 1000.0
+        quiet_s = args.quiescence_intervals * commit_ms / 1000.0
         # A cap, never the predicate: quiescence ends every healthy run long before this.
         timeout = 180 + 2 * (spec.multiplier * records * 400e-6 + records * 2e-3)
         deadline = time.monotonic() + timeout
-        with GroupWatch(admin, application_id, args.stream_threads) as watch:
-            emits, window, log_append, premature = read_emits_quiescent(
-                args.bootstrap, sink, quiet_s, deadline)
+        clock = CommittedClock(args.bootstrap, application_id, source, args.partitions, records)
+        clock.start()
+        with GroupWatch(admin, application_id, threads) as watch:
+            if sink_on:
+                emits, window, log_append, premature = read_emits_quiescent(
+                    args.bootstrap, sink, quiet_s, deadline)
+            else:
+                # No sink, so no log-append clock and no quiescence to read: the committed-offset
+                # clock IS the measurement, and its completion is the completion predicate. The
+                # settle wait afterwards is the same 2x-quiet confirmation the sink arms get.
+                while time.monotonic() < deadline and clock.complete_s is None:
+                    time.sleep(0.05)
+                emits, window, log_append, premature = 0, 0.0, True, clock.complete_s is None
+                time.sleep(2 * quiet_s)
         group_ok, group_state = watch.verdict()
+        clock.close()
+        committed_window = clock.window_s
         # Read BEFORE the topics are deleted below - deleting a topic purges its group offsets.
         # By here the engine has been idle for 3x quiet_s (45 commit intervals at the defaults),
         # so a shortfall is a truncated run, never a commit still in flight.
@@ -864,7 +1004,11 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
 
     # Post-hoc emit band (KTD11: on a broker, caching makes the emit count nondeterministic).
     # With the cache OFF every put forwards, so the band collapses to an exact count.
-    if cache_bytes == 0:
+    if not sink_on:
+        # Nothing is produced out, so there is no emit count to band. The record basis is proven
+        # by the committed-offset check below exactly as it is on every other arm.
+        emit_band = (0, 0)
+    elif cache_bytes == 0:
         emit_band = (spec.multiplier * records, spec.multiplier * records)
     else:
         # Every touched (key, window) entry emits at least once and at most once per put.
@@ -876,7 +1020,11 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         "append": emits,                     # once per emit, at the emit placement
     }[spec.placement]
     problems: list[str] = []
-    if premature:
+    if not sink_on and premature:
+        problems.append("the committed-offset clock never reached the seeded backlog before the "
+                        "deadline - a no-sink arm has no other completion predicate, so the run "
+                        "is unmeasured rather than slow")
+    elif premature:
         problems.append("premature quiescence break: sink end offsets advanced during the "
                         "2x-quiet confirmation wait - the engine was stalled, not finished, so "
                         "the window is truncated and the rate would read inflated")
@@ -889,7 +1037,10 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         problems.append(f"emits={emits:,} outside band {emit_band[0]:,}..{emit_band[1]:,}")
     if not group_ok:
         problems.append(f"group={group_state}")
-    if not log_append:
+    if committed_window <= 0:
+        problems.append("the committed-offset clock produced no window - it is reported on every "
+                        "arm precisely so the no-sink arm's sole clock is corroborated elsewhere")
+    if sink_on and not log_append:
         problems.append("sink not on the log-append clock")
     if evictions and not tolerate_evictions:
         problems.append(f"cache evictions={evictions:,} (the zero-evictions assertion failed: "
@@ -898,12 +1049,18 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
 
     result = PlacementRun(arm=arm, records=records, keys=keys, multiplier=spec.multiplier,
                           crossings=crossings, emits=emits, window_s=window,
-                          cache_bytes=cache_bytes, commit_ms=args.commit_interval_ms,
+                          cache_bytes=cache_bytes, commit_ms=commit_ms,
                           evictions=evictions, load1=load1, group_ok=group_ok,
-                          group_state=group_state, log_append=log_append, emit_band=emit_band)
+                          group_state=group_state, log_append=log_append, emit_band=emit_band,
+                          threads=threads, sink_on=sink_on, changelog_on=changelog_on,
+                          delay_ms=delay_ms, committed_window_s=committed_window)
     verdict = "ok" if not problems else "INVALID (" + "; ".join(problems) + ")"
     print(f"  arm={arm} records={records:>7,} keys={keys:>5,} cache={cache_bytes:>11,} "
+          f"commit={commit_ms}ms threads={threads} sink={'on' if sink_on else 'OFF'} "
+          f"changelog={'on' if changelog_on else 'OFF'} delay={delay_ms:g}ms "
           f"window={window:7.2f}s rec/s={result.rate:8,.0f} "
+          f"committed_window={committed_window:6.2f}s "
+          f"committed_rec/s={result.committed_rate:8,.0f} "
           f"crossings/rec={result.crossings_per_record:6.2f} emits={emits:>9,} "
           f"evict={'-' if evictions is None else format(evictions, ',')} "
           f"load1={load1:.2f} {verdict}")
@@ -1343,10 +1500,110 @@ def run_placement(args: argparse.Namespace) -> int:
     return 0
 
 
+@dataclasses.dataclass(frozen=True)
+class FloorArm:
+    """One engine-floor arm: a label, the placement arm it borrows its topology from, and the
+    ONE term it moves against the baseline. Everything unstated is U6's condition."""
+
+    label: str
+    arm: str                  # "D" (hop 1h/5m, crossing-free) or "A" (tumbling, host function)
+    toggle: str               # what this arm moves; "-" for the baseline
+    cache_bytes: int = 0
+    commit_ms: int | None = None
+    threads: int | None = None
+    sink_on: bool = True
+    changelog_on: bool = True
+    delay_ms: float = 0.0
+
+
+_FLOOR_ARMS: tuple[FloorArm, ...] = (
+    FloorArm("D0", "D", "-"),
+    FloorArm("D-cache", "D", "statestore.cache.max.bytes 0 -> 64 MB", cache_bytes=64 * 1024 * 1024),
+    FloorArm("D-nolog", "D", "changelog on -> off", changelog_on=False),
+    FloorArm("D-commit", "D", "commit.interval.ms 200 -> 5000", commit_ms=5000),
+    FloorArm("D-nosink", "D", "sink on -> off", sink_on=False),
+    FloorArm("D-t1", "D", "num.stream.threads 8 -> 1", threads=1),
+    FloorArm("T0", "A-free", "hopping 1h/5m -> tumbling 1h (multiplier 12 -> 1)"),
+    # The two toggles that turned out to matter, applied together: the best case a crossing-free
+    # wrapper can reach at all, which is the number the F2 comparison actually wants.
+    FloorArm("T0-cache", "A-free", "tumbling AND cache 64 MB (both winning toggles)",
+             cache_bytes=64 * 1024 * 1024),
+)
+
+_INSTRUMENT_ARMS: tuple[FloorArm, ...] = (
+    FloorArm("I0", "A", "instrument check control: host fn, no delay"),
+    FloorArm("I100", "A", "instrument check: +0.1 ms per record in the host fn", delay_ms=0.1),
+    # 0.1 ms did not move the figure, and the reason is structural rather than instrumental: the
+    # client dispatches invocations to a thread pool, so a delay smaller than the crossing it rides
+    # on is absorbed by concurrency rather than added to the critical path. 1 ms exceeds what the
+    # pool can hide, which is what makes it a check the instrument can actually fail.
+    FloorArm("I1000", "A", "instrument check: +1 ms per record in the host fn", delay_ms=1.0),
+)
+
+
+def run_engine_floor(args: argparse.Namespace) -> int:
+    """The engine-floor decomposition: U6 arm D's crossing-free run, one term moved per arm.
+
+    Registered in docs/inflight/perf-streams-engine-floor.md before any arm ran. Arms are
+    INTERLEAVED within each repetition rather than blocked, so machine drift lands on all of them
+    - the same rule every prior crossing measurement here was re-learned by.
+    """
+    records = args.floor_records
+    print("engine-floor experiment - where the microseconds go with NOTHING crossing")
+    print(f"  records per run         {records:,}")
+    print(f"  keys                    {args.keys:,}")
+    print(f"  reps                    {args.reps} (arms interleaved within each rep)")
+    print(f"  baseline conditions     cache 0 B, commit {args.commit_interval_ms} ms, "
+          f"{args.stream_threads} threads, sink on, changelog on")
+    runs: dict[str, list[PlacementRun]] = {}
+    arms = _FLOOR_ARMS + (_INSTRUMENT_ARMS if args.floor_instrument else ())
+    if args.floor_arms:
+        wanted = {label.strip() for label in args.floor_arms.split(",")}
+        arms = tuple(a for a in _FLOOR_ARMS + _INSTRUMENT_ARMS if a.label in wanted)
+        if not arms:
+            raise SystemExit(f"no engine-floor arm matches {sorted(wanted)}")
+    for rep in range(args.reps):
+        print(f"\n  rep {rep + 1}/{args.reps}")
+        for arm in arms:
+            # T0 is arm A's tumbling window with arm D's crossing-free combine; the lab's arm
+            # table has "A" as the host-function tumbling arm, so the free variant is minted here
+            # rather than by editing a table U6's results are reported against.
+            spec_arm = "A-free" if arm.arm == "A-free" else arm.arm
+            run = measure_placement(
+                args, spec_arm, records, args.keys, arm.cache_bytes,
+                show_topology=(rep == 0), commit_ms=arm.commit_ms, threads=arm.threads,
+                sink_on=arm.sink_on, changelog_on=arm.changelog_on, delay_ms=arm.delay_ms)
+            runs.setdefault(arm.label, []).append(run)
+    print("\n  results - rec/s on the sink's log-append clock (committed-offset clock beside it)")
+    print(f"  {'arm':10s} {'toggle':46s} {'rec/s (min-max)':>26s} {'us/rec':>9s} "
+          f"{'us/rec/window':>14s} {'emits':>10s}")
+    baseline = statistics.median(r.rate or r.committed_rate
+                                 for r in runs.get("D0", next(iter(runs.values()))))
+    for arm in arms:
+        got = runs[arm.label]
+        rates = [r.rate or r.committed_rate for r in got]
+        median = statistics.median(rates)
+        multiplier = got[0].multiplier
+        print(f"  {arm.label:10s} {arm.toggle:46s} "
+              f"{median:9,.0f} ({min(rates):,.0f}-{max(rates):,.0f}) "
+              f"{1e6 / median:9.1f} {1e6 / median / multiplier:14.1f} "
+              f"{statistics.median(r.emits for r in got):10,.0f}"
+              f"   x{median / baseline:.2f} vs D0")
+    if args.floor_instrument:
+        control = statistics.median(r.rate for r in runs["I0"])
+        slowed = statistics.median(r.rate for r in runs["I100"])
+        moved = 1e6 / slowed - 1e6 / control
+        print(f"\n  INSTRUMENT CHECK: +100us/record injected moved the per-record figure by "
+              f"{moved:,.0f}us ({1e6 / control:,.0f} -> {1e6 / slowed:,.0f} us/rec). "
+              f"A figure that cannot move is not measuring the engine.")
+    return 0
+
+
 EXPERIMENTS = {
     "hot-key": run_hot_key,
     "placement": run_placement,
     "host-reimpl": run_host_reimpl,
+    "engine-floor": run_engine_floor,
 }
 
 
