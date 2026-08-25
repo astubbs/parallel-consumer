@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright (C) 2026 Antony Stubbs and contributors
+
+  Crossing-cost ladder (docs/inflight/perf-crossing-cost-ladder.md): scratch pom that only
+  exists to pull the GraalWasm and GraalPy polyglot runtimes off Maven Central for the
+  ladder's arms (e) and (f). Not part of the reactor; never released.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>bz.stub.scratch</groupId>
+    <artifactId>crossing-ladder-graal</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <properties>
+        <polyglot.version>25.0.2</polyglot.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>polyglot</artifactId>
+            <version>${polyglot.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>wasm</artifactId>
+            <version>${polyglot.version}</version>
+            <type>pom</type>
+        </dependency>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>python</artifactId>
+            <version>${polyglot.version}</version>
+            <type>pom</type>
+        </dependency>
+    </dependencies>
+</project>
