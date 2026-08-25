@@ -3,8 +3,14 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 
-Written 2026-08-25 at head `a8d51e1b2`, for a move to another machine. **Delete when astubbs#334
-merges.**
+Written 2026-08-25, for a move to another machine. **Delete when astubbs#334 merges.**
+
+**Where this file is, because it is not on `master`:** repository
+`astubbs/parallel-consumer`, branch **`research/kafka-streams-foreign-wrappers`**, path
+`docs/inflight/pr-334-handoff.md`. A fresh clone lands on `master`, where this file does not exist -
+check the branch out first, or the path resolves to nothing and the handoff looks lost rather than
+unreached. The state below was captured at head `a8d51e1b2`; the commits carrying this file sit on
+top of it.
 
 **An earlier handoff was deleted this same day** for restating facts other notes own, and that
 reasoning still holds - so this one deliberately carries *only what nothing else owns*: the review
@@ -99,9 +105,14 @@ knowing before choosing how to review the next draft.
 
 - Branch `research/kafka-streams-foreign-wrappers`, clean, level with origin, **five commits behind
   `origin/master`**. Both sides are package-renamed, so a catch-up merge is ordinary.
-- **Sibling branch `fix/node-gates-preflight`** is pushed and has **no PR**. It fixes gate scripts that
-  reported "policy violated" when node could not start; astubbs#341 carries a comment explaining it,
-  and its agent was told to wait for it.
+- **`fix/node-gates-preflight` is gone, and its work lives in astubbs#341.** It fixed gate scripts
+  that reported "policy violated" when node could not start. astubbs#341 **absorbed rather than
+  merged** it - the commits are not ancestors, but `bin/lib/node-gate.sh` is byte-identical there,
+  both gates still call `node_gate_verdict`, the self-test hermeticity fix is present, and astubbs#341
+  went further by adding a fail-closed guard for when the helper itself cannot be loaded. Verified
+  before deleting. The local branch and its worktree are removed; **the remote branch may still
+  exist** if the deletion was not carried out.
+  <!-- file-refs: N/A - bin/lib/node-gate.sh is named as it exists on astubbs#341's branch, not on this one -->
 - **A stale `NODE_OPTIONS` preload breaks every `node` invocation on the capture machine**, which
   makes the citation and issue-ref gates fail as if the policy were violated. Workaround used
   throughout: prefix with `env -u NODE_OPTIONS`. Machine-local; may not follow the move.
