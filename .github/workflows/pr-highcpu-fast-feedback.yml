@@ -77,11 +77,37 @@ jobs:
     runs-on: [self-hosted, highcpu]
     continue-on-error: ${{ matrix.optional != 'false' }}   # optional / FYI - except chaos (see name comment)
     timeout-minutes: 60
-    # Per-suite superseding: a new push cancels only ITS OWN suite's previous run, so fast suites start
-    # within seconds instead of queueing behind the old run's slowest-dying job (see header note).
+    # Two different policies, because the two suites want different things from one physical box.
+    #
+    # Every suite EXCEPT chaos: per-suite, per-ref superseding. A new push cancels only ITS OWN suite's
+    # previous run, so fast suites start within seconds instead of queueing behind the old run's
+    # slowest-dying job (see header note).
+    #
+    # Chaos: ONE group for the whole repository, and it queues rather than cancels. The ref-keyed group
+    # above deduplicates within a branch and does nothing across branches - which is backwards for a
+    # SHARED PHYSICAL RESOURCE. Six runner processes serve one machine, so six PRs pushing at once gave
+    # six concurrent chaos suites, each starting 20+ PC instances against its own broker. Measured
+    # 2026-08-25: four of six chaos jobs RED in each of two windows, on six different seeds, all with
+    # ~154s lagStagnation against a 150s bound - the bound meeting the load, not a defect. A chaos RED
+    # taken while sibling agents were pushing was therefore uninformative by default, which is the worst
+    # possible state for a tripwire.
+    #
+    # `cancel-in-progress: false` matches chaos-pain.yml's existing policy and its reason: chaos runs are
+    # MEASUREMENTS - queue, never kill. GitHub keeps one running plus one pending per group and discards
+    # older pending entries, so a busy day means some PRs get no chaos run rather than a queue that never
+    # drains. That is the intended trade: no measurement beats a measurement taken under six-way
+    # contention, and this lane is advisory and not a required check.
+    #
+    # The alternative considered and NOT taken: a dedicated single-slot runner label for chaos. It is the
+    # better shape, but it needs runner-side provisioning, and docs/self-hosted-runner.md warns that a job
+    # pinned to a label nothing serves does not fail - it queues silently until GitHub cancels it. This
+    # fix is in-repo, reversible, and testable; see docs/inflight/test-chaos-class2-red-was-runner-contention.md.
     concurrency:
-      group: highcpu-${{ matrix.suite-name }}-${{ github.head_ref || github.ref }}
-      cancel-in-progress: true
+      group: >-
+        ${{ matrix.suite-name == 'Chaos Pain Suite'
+            && 'highcpu-chaos-exclusive'
+            || format('highcpu-{0}-{1}', matrix.suite-name, github.head_ref || github.ref) }}
+      cancel-in-progress: ${{ matrix.suite-name != 'Chaos Pain Suite' }}
     strategy:
       fail-fast: false           # each suite is independent
       matrix:

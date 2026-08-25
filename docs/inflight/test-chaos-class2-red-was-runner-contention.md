@@ -70,3 +70,48 @@ disagreement. Neither cited the other until now.
 ## Delete when
 
 The contention is fixed or the bound is widened, and the finding is folded into the chaos ledger.
+
+## 2026-08-25: the decision above is taken - the jobs no longer share the box
+
+This note has leaned one way since it was written - *"Widen the bound, or stop the two jobs sharing
+the box - prefer the second, because widening hides the cause and the bound's sensitivity is the
+entire tripwire."* The second option is now implemented, and the reason it could not fix itself is
+worth stating because it looks like a config typo and is not.
+
+`pr-highcpu-fast-feedback.yml`'s job-level group was
+`highcpu-<suite>-${{ github.head_ref || github.ref }}`. Keyed by ref, it deduplicates runs **within**
+a branch and does nothing **across** branches - which is exactly backwards for a shared physical
+resource. Several runner processes serve one machine, so N branches pushing at once bought N
+concurrent chaos suites, each starting twenty-plus PC instances against its own broker. The group was
+doing its stated job perfectly; its stated job was the wrong one.
+
+The Chaos Pain Suite now gets **one group for the whole repository** and queues rather than cancels,
+matching `chaos-pain.yml`'s existing policy and its reason - chaos runs are measurements, so queue,
+never kill. Every other suite keeps per-suite, per-ref superseding.
+
+**The trade, stated rather than discovered later.** GitHub keeps one running plus one pending per
+group and discards older pending entries, so on a busy day some PRs get **no** chaos run instead of a
+contended one. That is deliberate: no measurement beats a measurement nobody can interpret, and this
+lane is advisory rather than a required check.
+
+**The better shape, not taken, and why.** A dedicated single-slot runner label for chaos would
+serialise by capacity and never co-reside with `Performance` either. It needs runner-side
+provisioning, and [`self-hosted-runner.md`](../self-hosted-runner.md) warns that a job pinned to a
+label nothing serves does not fail - it queues silently until GitHub cancels it. The workflow fix is
+in-repo, reversible and testable; the label remains the upgrade if co-residency with `Performance`
+turns out to matter on its own.
+
+**What this does NOT settle.** Serialising the lane removes the load that crossed the bound; it does
+not make the bound a correctness statement. That half is settled separately and in the opposite
+direction - the bound now reports instead of gating, on the evidence in
+[`bug-857-family.md`](bug-857-family.md)'s discriminator entry. Both changes are needed: a quiet box
+stops manufacturing the crossings, and a demoted detector stops the crossings that remain from
+reading as defects.
+
+## Delete when
+
+The original delete-when above ("the contention is fixed or the bound is widened, and the finding is
+folded into the chaos ledger") is now half-met: the contention is fixed. Delete this note once one
+full week of chaos runs on the serialised lane has been observed and the co-residency rate confirmed
+at zero - until then it is the only record of what the old group did and why the new one is shaped
+this way.
