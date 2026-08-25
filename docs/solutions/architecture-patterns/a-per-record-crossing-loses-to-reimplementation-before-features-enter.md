@@ -28,11 +28,13 @@ same box under the same load.
 
 The fitted cost model is the durable finding: per-record cost across the boundary fits
 **t(m) = 33us + m x 135us** (m = the window multiplier, `ceil(size/advance)`), over the
-single-session gRPC transport. That crosses the parity floor (1,000 rec/s) at m ~ 7 - but crosses
-both reimplementation floors **below m = 1**. The window multiplier was real, linear and exactly
-as predicted (12.0 and 2.0 crossings per record, measured), and it was not the losing term: the
-crossing-free control ran **2.7x above** the single-crossing tumbling arm, so *one* crossing per
-record already costs more than an entire native hopping topology.
+single-session gRPC transport. That crosses the parity floor (1,000 rec/s) at m ~ 7 - and **never
+reaches either reimplementation floor at any m >= 0**: the 33us intercept alone caps the model at
+~30,300 rec/s, an order of magnitude short of both floors, and the measured single-crossing arm
+fails both directly. The window multiplier was real, linear and exactly as predicted (12.0 and 2.0
+crossings per record, measured), and it was not the losing term: the crossing-free control ran
+**2.7x above** the single-crossing tumbling arm, so *one* crossing per record already costs more
+than an entire native hopping topology.
 
 ## The pattern
 

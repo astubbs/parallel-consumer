@@ -538,3 +538,23 @@ one. `STRATEGY.md`'s Kafka Streams claim is falsified for windowed aggregation a
 specifications over the current single-session transport (U10 owns writing that in), against a
 non-durable single-threaded reimplementation, under the untested windowing-is-not-optional
 premise, at the loads named above.
+
+### Dated correction, 2026-08-25 (post-review) - three entries, per this note's never-edit-in-place rule
+
+1. **The fitted F2-crossing multipliers (m = 0.05 and m = 0.12) are withdrawn as impossible under
+   the model that produced them.** t(m) = 33us + m x 135us caps the fitted rate at ~30,300 rec/s
+   even at m = 0 - below both F2s - so the line never crosses either floor at ANY m >= 0; solving
+   for the crossings yields negative multipliers (-0.23 and -0.16), and the printed positives were
+   an extrapolation below the fit's own support ([1, 12]) with the sign lost. The correct, stronger
+   statement: **within the fitted model no multiplier reaches either reimplementation floor,
+   including zero crossings**, and the measured single-crossing arm (A) fails both floors directly.
+   The verdicts never rested on these figures. The F1 crossing (m = 7.14) is inside the fit's
+   support and stands.
+2. **The hopping verdict's "max 725" is the maximum over ALL arm-B runs across both sessions**
+   (the quiet-box session's best), where the rates table's 707 is the pooled largest-sweep-point
+   maximum. Stated against the table's own number the margin is ~125x rather than ~122x; the
+   verdict is unchanged either way. The broader max was quoted to give B its best case; this entry
+   makes that choice explicit rather than a discrepancy.
+3. **The U8 follow-up about the test's "default 200ms" comment is closed**: this branch already
+   corrected `WindowedAggregatorCallCountTest`'s comment to the verified figures (1000ms engine
+   default; TTD overrides to zero), so no follow-up remains.

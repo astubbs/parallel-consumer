@@ -156,8 +156,9 @@ multiplier is **confirmed and linear** (12.0 crossings per record at hopping 1h/
 measured exactly). And the verdicts are **bet off at both measured specifications, decided at the
 hard floor**: a stateless single-threaded Python reimplementation ran 69x the wrapper's tumbling
 rate and 122x its hopping rate, and the fitted model (33us + 135us per crossing per record,
-single-session transport) puts that floor below multiplier ONE - the per-crossing cost loses before
-windowing enters. Per placement: P1 measured throughout; P2's crossing collapse is real where
+single-session transport) never reaches that floor at ANY multiplier - the intercept alone caps the
+wrapper an order of magnitude short, and the measured single-crossing arm fails both floors
+directly - so the per-crossing cost loses before windowing enters. Per placement: P1 measured throughout; P2's crossing collapse is real where
 measured (1.50 vs 12.00 crossings per record) and cannot close two orders of magnitude. Range reads
 (U7) were skipped under the spike's own stop condition.
 
