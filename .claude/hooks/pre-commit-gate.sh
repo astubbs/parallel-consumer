@@ -81,6 +81,20 @@ if python3 - "$payload_file" <<'PYGATE'
 import json, re, shlex, sys
 
 OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
+# An unquoted NEWLINE separates statements exactly like `;`, but shlex's default whitespace
+# swallows it - no token, no reset - so `at_command` carried over from wherever the previous line
+# left it and `git add -A<newline>git commit -m wip` counted ZERO commits: an ordinary two-line
+# payload silently exempted (found by review on this same PR). The lexer below therefore treats
+# `\n` as a punctuation char instead, and this predicate recognises the runs shlex gloms together
+# (a bare "\n", ";\n\n", "&&\n") which have no canonical spelling OPERATORS could enumerate.
+SEPARATOR_CHARS = set(";&|()\n")
+
+
+def is_separator(token):
+    return token in OPERATORS or ("\n" in token and set(token) <= SEPARATOR_CHARS)
+
+
+
 # Shell RESERVED WORDS that are FOLLOWED BY ANOTHER COMMAND, so command position survives them.
 # Without these, `if ok; then git commit -m x; fi` counted zero commits: `then` is not an operator,
 # so it consumed the command position and the commit behind it was invisible. That was harmless
@@ -106,27 +120,39 @@ def commit_bypass_counts(line):
     `git commit -m first; git commit --no-verify -m second` used to exit 0 for both, so in a clone
     with no core.hooksPath the first commit landed with no gate run at all.
     """
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    # `\n` joins the default punctuation set and leaves `whitespace`, so a newline becomes a
+    # TOKEN the loop can reset command position on - see SEPARATOR_CHARS above. Quoted newlines
+    # are unaffected: quoting is resolved before either classification applies.
+    lexer = shlex.shlex(line, posix=True, punctuation_chars="();<>|&;\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     tokens = list(lexer)
     commits = bypassing = 0
     i, at_command = 0, True
     while i < len(tokens):
         token = tokens[i]
-        if token in OPERATORS:
+        if is_separator(token):
             at_command = True
             i += 1
             continue
         if at_command and (token in COMMAND_INTRODUCERS or ASSIGNMENT.match(token)):
             i += 1
             continue             # a reserved word or a var assignment; the command is still ahead
+        if at_command and token == "function":
+            # `function NAME { body; }`: the token after the keyword is the function's NAME, never
+            # a command, so skip both and leave command position OPEN for the `{` introducer (or
+            # the `()` operators) that follows. Without this the name consumed the position and the
+            # body's commits were invisible - the `foo() { ... }` spelling was only ever caught
+            # because its bare `()` are operator tokens that happen to reopen position.
+            i += 2
+            continue
         if at_command and (token == "git" or token.endswith("/git")):
             j = i + 1
             while j < len(tokens) and tokens[j] in GIT_VALUE_FLAGS:
                 j += 2               # git global flags that consume a value
             if j < len(tokens) and tokens[j] == "commit":
                 end = j
-                while end < len(tokens) and tokens[end] not in OPERATORS:
+                while end < len(tokens) and not is_separator(tokens[end]):
                     end += 1
                 commits += 1
                 if "--no-verify" in tokens[j:end]:
