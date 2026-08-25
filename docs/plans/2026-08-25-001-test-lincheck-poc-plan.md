@@ -351,17 +351,43 @@ of a difference between machines. The row above and the `WorkManagerLincheckTest
 before it both describe that edge, so read both through this correction.
 
 Three runs cannot separate a 10% miss rate from a 0% one, so the follow-up measured the underlying
-per-iteration probability instead of the bound's outcome. **Deliberately under-budgeting is the
-cheap way to do that**: at `iterations(25)` the harness hit 2 times in 8, so the per-iteration
-survival is `0.75^(1/25) = 0.9886` and each iteration finds the tear with probability 1.14%. That
-one number prices every bound, and it took eight two-second runs to obtain:
+per-iteration probability instead of the bound's outcome. **Deliberately under-budgeting is the cheap
+way to do that**: at `iterations(25)` the harness misses most of the time, and the miss fraction gives
+the per-iteration probability, which prices every bound at once.
 
-| `iterations` | Predicted miss rate | Measured |
-|---|--:|---|
-| 25 | 75% | 6 misses in 8 |
-| 200 (as first committed) | 10% | 0 misses in 8 here, 2 in 8 elsewhere |
-| 400 | 1% | - |
-| 1,000 (committed now) | 0.001% | 0 misses in 8 |
+**The first attempt at this used 8 starved runs and got a materially wrong answer**, which is worth
+recording because it is the same mistake one level up. 2 hits in 8 implied 1.14% per iteration; 24
+further runs took it to 14 hits in 32 and 2.33%, i.e. the first estimate was off by a factor of two
+and its 8-sample interval was wide enough to contain almost anything. An 8-run figure was not enough
+to condemn the 200 bound, and it was not enough to bless its replacement either.
+
+Fitted over all 48 single-class runs on one machine - 14 hits in 32 at `iterations(25)`, 8 of 8 at
+200, 8 of 8 at 1,000 - by maximum likelihood:
+
+| Quantity | Value |
+|---|---|
+| Per-iteration hit probability | **2.33%** (95% profile-likelihood interval 1.38-3.72%) |
+| Predicted misses at 25, against 18 observed of 32 | 17.7 |
+| Predicted misses at 200, against 0 observed of 8 | 0.07 |
+| Miss rate at 200 | 0.89% (6.2% at the pessimistic end of the interval) |
+| Miss rate at 1,000 | 6e-9% (9e-5% at the pessimistic end) |
+
+The middle two rows are the part that matters for trusting the rest: **the independent-trials model
+is validated across a 40x span of bounds, not assumed.** Treating each iteration as an independent
+Bernoulli trial is what the reviewer questioned, on the grounds that a large share of generated
+scenarios (both actors landing on `completeWork`) cannot tear at all. They cannot - but that share is
+already inside the measured marginal probability, and the fit's agreement at three separate bounds is
+the evidence that nothing else is going on.
+
+**The number is machine-dependent, and that is the finding that outlives this bound.** The 2 misses
+in 8 at 200 came from a different machine, and it is 3.4x slower to find the tear: 0.69% per
+iteration against 2.33%. A likelihood-ratio test rejects the two machines being equal (LR 6.42 on 1
+df, p = 0.011), so this is a real difference and not sampling noise, and **no single-machine
+calibration of a stress arm transfers to another machine**. On the slower machine's own estimate,
+1,000 iterations misses about 1 run in 1,000; only 8 runs exist from it, so the pessimistic end of
+its interval is roughly 1 in 14. Reaching 0.1% at *that* end would need about 2,700 iterations, which
+is recorded rather than applied - see `docs/inflight/test-lincheck-lane-open-items.md` for the open
+item and for the 10 minutes of measurement that would settle it.
 
 **The other two harnesses were probed the same way and are not marginal.** Starved to a tenth of
 their committed bounds - `ShardManagerLincheckTest` at 5 iterations instead of 50,
@@ -374,11 +400,13 @@ the flake was specific to the one harness, and the other two bounds are left alo
 
 **Raising `iterations` is free on the path that matters**, which is why the bound moved to 1,000
 rather than to the smallest sufficient number. Lincheck stops at the first violation, so a run that
-finds the tear never reaches the extra iterations: measured 6.7-19.1s at 1,000 against 5.3-23.8s at
-200, the same distribution. The only path that gets longer is the one where the harness is going to
-fail anyway - either a real flake, which this change is removing, or the designed inversion when the
-fix PR lands, which happens once and wants the extra certainty. The whole-lane wall clock in the
-table above is unchanged for the same reason.
+finds the tear never reaches the extra iterations: measured **mean 11.1s at 1,000 against 12.9s at
+200** over 8 runs each, i.e. no increase at all. The only path that gets longer is the one where the
+harness is going to fail anyway - either a real flake, which this change is removing, or the designed
+inversion when the fix PR lands, which happens once and wants the extra certainty. That path costs a
+measured **0.142s per iteration** (from the 18 exhausted starved runs, and cross-checked at 0.140s
+against a near-exhaust at 200), so a full exhaust is ~33s at 200 and ~2.4 minutes at 1,000. The
+whole-lane wall clock in the table above is unchanged, because it is a hit-path number.
 
 The default unit suite is unaffected: `bin/ci-unit-test.sh` runs green across every module with the
 ASM pin and the `argLine` change in place, and selects no Lincheck class.

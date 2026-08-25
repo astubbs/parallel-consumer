@@ -120,16 +120,29 @@ public class WorkManagerLincheckTest {
     @Test
     void stressRediscoversTheCheckpointThreeTear() {
         // 1,000 iterations, and the number is measured rather than chosen. A rebalance is expensive next
-        // to a mailbox handoff, so the tear's window is a small fraction of each invocation: running this
-        // harness at a deliberately starved iterations(25) hit 2 times in 8, which puts the per-iteration
-        // probability at 1.14% and prices every bound. 200 - the first bound committed here, picked on three
-        // green runs - therefore misses about one run in ten, which is a flake, and a flake fails this build
-        // with no retry, by design. 1,000 takes that to one run in a hundred thousand.
+        // to a mailbox handoff, so the tear's window is a small fraction of each invocation, and 200 - the
+        // first bound committed here, chosen on three green runs - missed 2 runs in 8 on the reviewer's
+        // machine. A miss is a flake, and a flake fails this build with no retry, by design.
         //
-        // The extra iterations are free where it counts: Lincheck stops at the FIRST violation, so a run
-        // that finds the tear never reaches them (measured 6.7-19.1s at 1,000 against 5.3-23.8s at 200 - the
-        // same distribution). Only the run that was going to fail gets longer, and that run is either the
-        // flake this bound removes or the designed inversion below, which happens once.
+        // HOW THE BOUND WAS PRICED. Running the harness at a deliberately starved iterations(25) makes it
+        // miss most of the time, and the miss fraction gives the per-iteration probability, which then
+        // prices every bound at once. 48 runs on one machine - 14 hits in 32 at 25, 8 of 8 at 200, 8 of 8
+        // at 1,000 - fit a per-iteration hit probability of 2.33% (95% profile-likelihood interval
+        // 1.38-3.72%). Treating each iteration as an independent trial is not just assumed: that fit
+        // predicts 17.7 misses out of 32 at 25 against 18 observed, and 0.07 out of 8 at 200 against 0.
+        //
+        // THE NUMBER IS A RANGE, AND IT IS MACHINE-DEPENDENT. Those 48 runs put this machine's miss rate at
+        // 1,000 below 1e-8%. The reviewer's machine is 3.4x slower to find the tear (0.69%/iteration from
+        // its 2-in-8; a likelihood-ratio test rejects the two being equal, p=0.011), and on ITS estimate
+        // 1,000 misses about 1 run in 1,000. Only 8 runs exist from that machine, so the pessimistic end of
+        // its interval is far weaker - roughly 1 in 14 - and no bound stated here should be read as more
+        // precise than that. docs/inflight/test-lincheck-lane-open-items.md carries what would settle it.
+        //
+        // WHY 1,000 RATHER THAN THE SMALLEST SUFFICIENT NUMBER. The extra iterations are free where it
+        // counts: Lincheck stops at the FIRST violation, so a run that finds the tear never reaches them -
+        // measured mean 11.1s at 1,000 against 12.9s at 200, i.e. no increase at all. Only the run that was
+        // going to fail gets longer, at a measured ~0.14s per iteration, so an exhaust costs ~2.4min here
+        // against ~33s at 200. That run is either the flake this removes, or the designed inversion below.
         //
         // Do NOT tune this by lowering it back, by adding a retry, or by weakening the assertion: this
         // harness asserting that a violation EXISTS is the calibration itself.

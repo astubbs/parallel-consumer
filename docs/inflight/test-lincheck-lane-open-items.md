@@ -45,6 +45,40 @@ about the memory model, so the plain non-volatile `long` reads of `offsetHighest
 `offsetHighestSeen` are outside it however many harnesses are added. That half of the evaluation is
 jcstress's, and it is still open on `test/jcstress-poc-plain-long-visibility`.
 
+## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
+
+`WorkManagerLincheckTest` was raised from `iterations(200)` to `iterations(1_000)` on measurement,
+and the measurement turned up something worth more than the bound: **the two machines it was run on
+differ by 3.4x in how quickly they find the tear** - 2.33% per iteration against 0.69% - and a
+likelihood-ratio test rejects their being equal (LR 6.42 on 1 df, p = 0.011). That is a real
+difference, not sampling noise, so **no single-machine calibration of a stress arm transfers**, and
+every bound in this lane is currently justified by runs on one machine only.
+
+What this leaves genuinely unsettled: on the slower machine's own estimate 1,000 iterations misses
+about 1 run in 1,000, which is fine - but only **8 runs exist from that machine**, so the pessimistic
+end of its interval is about 1 in 14. Reaching 0.1% at that end would need roughly **2,700**
+iterations, at a measured 0.142s per iteration on the exhaust path, i.e. a ~6.4 minute designed-red
+against ~2.4 minutes at 1,000.
+
+The bound was **not** raised to 2,700, deliberately. That number defends against the tail of an
+8-sample estimate from a machine that was not available to re-measure, and inflating a bound to cover
+an interval nobody has narrowed is the same unfounded precision this note exists to catch. What
+settles it is cheap and specific:
+
+- Run `LINCHECK_TEST=WorkManagerLincheckTest bin/lincheck-test.sh` about 24 times on the slower
+  machine with the harness temporarily starved to `iterations(25)`, and read off the miss fraction.
+  That is ~10 minutes and it collapses the interval; the arithmetic is in the correction to
+  [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](../plans/2026-08-25-001-test-lincheck-poc-plan.md)
+  section 3.1.
+- Starving the harness is **measurement scaffolding and must never be committed** - it is a 40x
+  coverage reduction on a harness whose bounds are its coverage.
+- This becomes load-bearing the moment the item below is fixed and something actually runs the lane
+  on hardware nobody calibrated against.
+
+The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
+`PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
+only.
+
 ## Nothing runs the lane, so the tripwire it promises cannot fire
 
 `bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The
@@ -93,5 +127,8 @@ Whoever lands astubbs#344 records that against the evaluation note and leaves th
 This paragraph exists because the handoff note that used to carry the obligation was deleted at merge
 prep, as `docs/inflight/AGENTS.md` requires - a "delete this when it merges" marker must never reach
 master. Everything else that note held is already stated where it is looked up: the inversion
-contract and the red control in [`docs/testing.md`](../testing.md), the five exclusion points in
-`bin/lincheck-test.sh`'s own header, and the Jabel and model-checker findings in the plan doc.
+contract and the red control in [`docs/testing.md`](../testing.md); the five **gating-exclusion
+points** in the plan doc's "Adding a lane touches five places" section, enforced by
+`QuarantinedAnnotationContractTest` rather than by prose; the five **invocation flags**, which are a
+different list, in `bin/lincheck-test.sh`'s own header; and the Jabel and model-checker findings in
+the plan doc.
