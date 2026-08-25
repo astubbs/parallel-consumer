@@ -18,6 +18,25 @@ Everything else about the allowlist - the two boundaries it sits between, what s
 grant, and why a grant must land before the pull request that needs it - is in
 [`docs/ci.md`](../docs/ci.md) -> "Editing the reviewer".
 
+## Run them all with `bin/check-all.sh`, not from memory
+
+**Before you push: `bin/check-all.sh`.** It globs `bin/test-*.sh` then `bin/check-*.sh`, so a gate
+added tomorrow is swept with no edit anywhere - nobody has to remember to register it, and nobody
+has to remember it exists.
+
+That property is the whole design, and it is why the discovery loop must stay a glob. The script
+exists because astubbs#356 pushed a branch that failed `check-branch-self-reference.sh` in CI after
+a local sweep of seven gates chosen by hand. The gate was not new, subtle, or broken; it was not on
+somebody's list.
+
+- **A skip is never a pass.** Exit 2 (cannot run) and exit 3 (nothing in scope) get their own
+  columns and are excluded from the pass count, because a gate that measured nothing must not read
+  like one that measured and found nothing.
+- **Five scripts are not tree gates** - four report the state of a *pull request* and one needs a
+  maven-log argument - so they are skipped by default and run under `--pr`. Since a hand-maintained
+  list is exactly what this script abolishes, every name in it is **asserted to exist**: rename one
+  and the runner exits 2 rather than quietly sweeping one gate fewer than it claims.
+
 ## Scripts that guard other scripts
 
 `test-check-*.sh` files are self-tests for the corresponding `check-*.sh`, and CI runs them **before**

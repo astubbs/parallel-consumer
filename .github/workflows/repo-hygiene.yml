@@ -26,6 +26,61 @@ permissions:
   contents: read
 
 jobs:
+  # ShellCheck over bin/ and .claude/hooks/, ERRORS only. Register item 2.
+  #
+  # The self-test runs BEFORE the gate, the same sequencing sigpipe uses below: a lint lane looks
+  # identical whether it examined 59 scripts or zero, so the control that proves it can fire has to
+  # run first. It carries two red arms, two green near-misses, and one deliberately green assertion
+  # recording that ShellCheck cannot see a bash-4 builtin on a bash 3.2 platform - that class belongs
+  # to the macos lane, not this one.
+  shell-lint:
+    name: "shell: lint"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      # ubuntu-latest ships shellcheck, but an image change that removed it must fail rather than
+      # silently pass - bin/check-shell-lint.sh exits 2 for "cannot run", and this makes that
+      # explicit at the point a reader looks.
+      - name: Confirm shellcheck is present
+        run: shellcheck --version
+
+      - name: Self-test the lint gate
+        run: bash bin/test-check-shell-lint.sh
+
+      # The RacerD preflight self-test needs a JDK, because one of its arms proves the JDK guard does
+      # NOT fire on a valid JDK. Pinned here rather than left to whatever the runner image ships:
+      # the arm used to look only for a developer's SDKMAN path, find nothing on a hosted runner, and
+      # print `skip` while the job reported success - so the one arm that matters never ran in CI.
+      # It now fails closed when no JDK resolves, which makes this step a real dependency rather than
+      # a nice-to-have. No `cache: maven` here, per the warning at the top of maven.yml.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # racerd-test.sh's preflight guards AND its identity ratchet. The ratchet arms used to need a
+      # real Infer run and so ran nowhere; they now drive the script through RACERD_DRY_RUN_REPORT
+      # against canned reports, including the same-count swap a bare ceiling waves through.
+      - name: Self-test the RacerD gate's preflight
+        run: bash bin/test-check-racerd.sh
+
+      # The PR-surface reporter's own self-test. It runs here rather than beside the reporter because
+      # the reporter needs a live PR and this does not: `gh` is faked on PATH, so the arms that matter
+      # - a finding on a line the diff wrote versus one merely in a file it opened - run anywhere.
+      - name: Self-test the PR analysis-surface reporter
+        run: bash bin/test-check-pr-analysis-surfaces.sh
+
+      # The run-all's own self-test. Worth having in CI for one reason above the others: it pins the
+      # assertion that catches its exception list going stale, and a stale list means the sweep is
+      # quietly checking fewer gates than it reports.
+      - name: Self-test the run-all sweep
+        run: bash bin/test-check-all.sh
+
+      - name: Lint the shell corpus
+        run: bash bin/check-shell-lint.sh
+
   sigpipe:
     name: "shell: sigpipe"
     runs-on: ubuntu-latest

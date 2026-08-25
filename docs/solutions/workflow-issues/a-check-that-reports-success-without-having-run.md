@@ -331,3 +331,11 @@ A guard for this class has to say *which* kind of red it is.
   guard beside it.
 - astubbs/parallel-consumer#281 - retiring the standing backlog, which is what let findings become
   fatal.
+
+## Related
+
+[`an-inert-analysis-config-reads-as-a-clean-codebase.md`](an-inert-analysis-config-reads-as-a-clean-codebase.md) owns the neighbouring case this doc's model has no slot for: the tool **ran**, and
+enforced faithfully, against a configuration that never reached it - so there is no "could not run"
+state to detect. Its instances are a SpotBugs filter that matched nothing, a compiler flag in a dead
+Maven profile, a control arm that reddened on an unrelated rule, and a mutation lane green on 40 runs
+having scored nothing. The piped `$?` trap this doc closes on is shared between them.

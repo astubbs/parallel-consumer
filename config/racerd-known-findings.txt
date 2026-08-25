@@ -1,0 +1,33 @@
+# RacerD known findings - the ratchet's identity set, not a count.
+#
+# WHY IDENTITIES AND NOT A NUMBER. This lane first gated on a bare count ceiling of 13. An
+# independent cross-model review pointed out the hole in it: fix one race, introduce another, the
+# count is still 13 and the gate passes green. A ratchet that only counts cannot tell a codebase
+# that improved from one that swapped one defect for a different one - which is the exact
+# "reports green while the thing it guards changed" class this whole change exists to remove.
+#
+# KEYED ON bug type + class.method, DELIBERATELY NOT ON A LINE NUMBER. The SpotBugs baseline this
+# branch deleted was keyed on class + method + bug type and was defeated wholesale by a package
+# rename; a line number is worse still, invalidated by any edit above it. Class and method survive
+# reformatting and unrelated edits, and change when the code genuinely moves.
+#
+# THE COUNT COLUMN MATTERS. Two findings can share one class.method, so a bare identity set would
+# not notice a third appearing in the same place.
+#
+# EDITING THIS FILE IS THE RATCHET. Fixing a race means deleting its line, in the same change. The
+# gate fails BOTH ways: an identity here that no longer fires means somebody fixed something and
+# did not ratchet, which is how a ceiling quietly stops meaning anything.
+#
+# Format: <count> <bug_type> <Class.method>
+1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.controlLoop
+1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.isTimeToCommitNow
+1 THREAD_SAFETY_VIOLATION PCMetrics.gaugeFromMetricDef
+1 THREAD_SAFETY_VIOLATION PCMetrics.getCounterFromMetricDef
+1 THREAD_SAFETY_VIOLATION PCMetrics.getDistributionSummaryFromMetricDef
+1 THREAD_SAFETY_VIOLATION PCMetrics.getTimerFromMetricDef
+1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.close
+1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.hasNext
+2 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.next
+1 THREAD_SAFETY_VIOLATION RetryQueue.isEmpty
+1 THREAD_SAFETY_VIOLATION RetryQueue.removeAll
+1 THREAD_SAFETY_VIOLATION RetryQueue.size

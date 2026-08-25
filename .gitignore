@@ -19,6 +19,7 @@ CLAUDE.md
 !/CLAUDE.md
 !/bin/CLAUDE.md
 !/docs/inflight/CLAUDE.md
+!/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/CLAUDE.md
 
 # Local per-worktree ownership markers (see AGENTS.md "Worktree ownership")
 .worktree-owner
