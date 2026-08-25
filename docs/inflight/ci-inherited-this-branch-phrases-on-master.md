@@ -12,26 +12,22 @@ The consequence is that everything already on master is invisible to it. A sweep
 found the phrase in thirteen files. Most are fine; these are the ones that are not. Delete this note
 when both are resolved.
 
-## Two notes outlived the PRs that owned them
+## Two notes outlived the PRs that owned them - now shrunk and renamed
 
 <!-- post-merge: checked-begin -->
-`docs/inflight/AGENTS.md` says a note is deleted when its work lands, that a PR deletes its own note,
-and that a `delete this when #NN merges` marker must never be left on master - "the merge is exactly
-when nobody is looking here". Two notes carry exactly that marker and both PRs have merged:
+`pr-323-docs-outstanding.md` and `pr-324-tooling-outstanding.md` both carried a "delete this note
+when it merges" marker and both PRs had merged - the exact thing `docs/inflight/AGENTS.md` forbids
+leaving on master, because "the merge is exactly when nobody is looking here".
 
-- **`pr-323-docs-outstanding.md`** (astubbs#323, merged 2026-08-20). Its "Closed" section describes a
-  window that closed, in the present tense, and the surviving content is three editorial items with
-  nothing to do with astubbs#323 as an event.
-- **`pr-324-tooling-outstanding.md`** (astubbs#324, merged). Same shape. Two items genuinely survive:
-  the `agents: hook self-tests` case that asserts against the live `docs/inflight/` corpus rather
-  than a fixture, and five agent-hook commit bodies that exist only on `backup/pre-split-322`.
-
-The prescribed repair is not to rewrite them into an accurate past tense - the directory's rules
-forbid that explicitly - but to **shrink each to its surviving items and rename it** to an area
-prefix, then repoint the one citation that survives the rename
-(`bug-shared-collections-across-the-poll-boundary.md` cites astubbs#323's note for a merge ordering).
-Left undone here deliberately: it decides the fate of two other workstreams' records, and this branch
-has no standing to do that quietly.
+Repaired the way that doc prescribes - shrink to the surviving items and rename, never rewrite into
+an accurate past tense. **Each surviving item was re-verified rather than copied**, and that halved
+them: the hook self-test now builds `mktemp` fixtures instead of asserting against the live
+`docs/inflight/` corpus, so astubbs#324's first item was already fixed; astubbs#323's flagged
+PCMetrics figures are now traceable to the run they came from. What was left became
+`docs-claims-their-own-evidence-does-not-support.md` and
+`branch-agent-hook-commit-bodies-only-on-backup.md`. The merge ordering that only astubbs#323's note
+held moved to `pr-blockers-and-collisions.md`, which owns standing coordination facts, and the one
+citation of it was repointed there.
 <!-- post-merge: checked-end -->
 
 ## The other eleven are not defects
