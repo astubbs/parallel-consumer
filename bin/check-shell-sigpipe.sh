@@ -18,8 +18,11 @@
 # review posted" on four PRs whose reviews had posted; the one that broke it had the citation 4.7 KB
 # in with a 127 KB report behind it.
 #
-# shellcheck does NOT catch this - verified against the known-bad line, which it passed clean. Hence
-# a bespoke grep rather than a linter.
+# NOTE: ShellCheck does NOT catch this - verified against the known-bad line, which it passed clean.
+# Hence a bespoke grep rather than a linter. (The `NOTE:` prefix is load-bearing: a comment whose
+# first word is `shellcheck` is parsed as a DIRECTIVE, and this one errored as SC1072/SC1073, which
+# aborts analysis of the rest of the file. A prose sentence about the linter silently switched the
+# linter off here.)
 #
 # THE FIX is always the same: a herestring. `grep -q PATTERN <<<"$data"` has no pipeline, so no
 # SIGPIPE and nothing for pipefail to promote.
@@ -75,7 +78,18 @@ for f in $(for d in $SCAN_DIRS; do ls "$d"/*.sh 2>/dev/null; done); do
         violations=$((violations + 1))
     # Matches `| grep -q`, `-qE`, `-Eq`, split flags (`grep -v -q`) and `--quiet`/`--silent`.
     # A bare word like `query` cannot match: a leading `-` is required on the q-bearing token.
-    done < <(grep -nE '\|[[:space:]]*grep([[:space:]]+-[a-zA-Z-]+)*[[:space:]]+(-[a-zA-Z]*q|--quiet|--silent)' "$f" \
+    #
+    # The `(^|[^|])` prefix is what stops `||` reading as a pipe. `cmd || grep -q x <<<"$s"` is a
+    # logical OR followed by a HERESTRING - the prescribed fix, not the defect - and the old regex
+    # flagged it because the second `|` of `||` sits immediately before ` grep -q`. That is the worst
+    # shape a guard can have: it fired on correct code while the thing it polices was already absent,
+    # so the only way to satisfy it was to rewrite a correct line. Caught when this gate went red on
+    # a herestring added in the same PR.
+    #
+    # `||grep -q` (no space) is still correctly ignored: the first `|` is not followed by `grep`, and
+    # the second is preceded by a `|`, which `[^|]` rejects. A genuine `foo | grep -q` keeps matching
+    # via `[^|]`, and a continuation line starting with `| grep -q` via `^`.
+    done < <(grep -nE '(^|[^|])\|[[:space:]]*grep([[:space:]]+-[a-zA-Z-]+)*[[:space:]]+(-[a-zA-Z]*q|--quiet|--silent)' "$f" \
              | grep -vE '^[0-9]+:[[:space:]]*#' || true)
 done
 

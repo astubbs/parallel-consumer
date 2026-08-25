@@ -117,14 +117,24 @@ jobs:
 
   # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
   # (GITHUB_BASE_REF), so it's fast enough for the 2-core hosted runner - the full internal.* sweep would
-  # time out here (which is why it used to be self-hosted-only). Advisory / non-gating.
+  # time out here (which is why it used to be self-hosted-only).
+  #
+  # ADVISORY ABOUT SCORES, NOT ABOUT ITSELF. `continue-on-error: true` stays - it keeps a mutation
+  # result from failing the workflow run, while the check ROW still renders red when the step fails
+  # (measured, see docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md). So red was always
+  # honest here and green never was: measured 2026-08-25 over the last 40 pull_request runs of this
+  # workflow, 40 green ticks and zero mutants scored, because every path out of the script exited 0.
+  # The step below reads bin/ci-mutation-test.sh's exit code instead and reacts to each state
+  # separately - survivors still fail nothing, but a lane that could not run, or ran and measured
+  # nothing, now goes red. The exit-code contract lives in that script's header;
+  # docs/inflight/ci-mutation-testing.md has the measurement.
   mutation:
     if: github.event_name == 'pull_request'
     needs: prepare-deps
     name: "Mutation Tests (PIT, PR-scoped)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true      # advisory - never gates merge
+    continue-on-error: true      # advisory - never gates merge; a failed STEP still reddens the row
     steps:
       - uses: actions/checkout@v6
         with:
@@ -140,8 +150,25 @@ jobs:
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             setup-java-Linux-x64-maven-
+      - name: Self-test the mutation verdict
+        # Ahead of the lane it protects, the same ordering repo-hygiene.yml and pr-checklist.yml use.
+        # Seconds, no maven: it feeds canned PIT logs through the verdict and asserts the exit codes.
+        run: bash bin/test-ci-mutation-test.sh
+
       - name: Mutation testing (changed classes only)
-        run: bin/ci-mutation-test.sh
+        run: |
+          set +e
+          bin/ci-mutation-test.sh
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "PIT scored mutants - see the job summary for the survivor list." ;;
+            3) echo "::notice::PIT had nothing in scope: no core main-source class in a decidable package changed." ;;
+            2) echo "::error::PIT could not run, or ran and scored nothing. This is a broken lane, not a clean PR."
+               exit 1 ;;
+            *) echo "::error::PIT exited ${rc}."
+               exit "$rc" ;;
+          esac
 
   # Quarantine AUDIT: the seconds-fast enforcement job on every PR - registry drift and broken owner
   # claims are real, actionable errors that turn it red. It does NOT run any tests (that is
@@ -318,9 +345,94 @@ jobs:
           compare_with_base: true
           max_increase: 10
 
+  # RacerD (Meta's Infer) - the only detector here that finds races WITHOUT being told where to look.
+  # Error Prone's GuardedBy only fires where somebody wrote the annotation, and this codebase has
+  # none; the racing-double seam tests can only re-prove seams already found by hand. RacerD infers
+  # which locks protect which state from how the code uses them.
+  #
+  # AN IDENTITY SET, not a count. config/racerd-known-findings.txt records which races are known, keyed on
+  # bug type plus class.method. A bare count ceiling could not distinguish "one race fixed" from "one
+  # race swapped for a different one" - both leave the total unchanged - which an independent
+  # cross-model review caught, and which is the same reports-green-while-it-changed class this lane
+  # exists to police. Twelve lines, checked in, so both directions are a visible diff.
+  #
+  # Fails BOTH ways: a new identity is a new race, and a known one that stops firing means somebody
+  # fixed a race without ratcheting the file.
+  racerd:
+    if: github.event_name == 'pull_request'
+    name: "static: racerd"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: prepare-deps
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Keyed on the version alone - the toolchain changes only when we bump it, which makes this a
+      # better cache key than the pom-hash ones above. Unpacked it is ~950 MB, so the TARBALL is what
+      # gets cached and it is unpacked per run: the repo-wide cache budget is 10 GB and several jobs
+      # already hold ~/.m2.
+      - name: Restore the Infer toolchain
+        id: infer-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/infer-dist/infer.tar.xz
+          key: infer-linux-x86_64-v1.3.0
+
+      - name: Download Infer
+        if: steps.infer-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/infer-dist
+          curl -sSL --fail -o ~/infer-dist/infer.tar.xz \
+            https://github.com/facebook/infer/releases/download/v1.3.0/infer-linux-x86_64-v1.3.0.tar.xz
+
+      # Runs UNCONDITIONALLY, not only on a cache miss, because the cache is the mutable half. A
+      # fresh download arrives over TLS from a pinned release URL; a restored one arrives from a
+      # writable store keyed by a string anyone with write access to a branch can populate. Verifying
+      # only what was just downloaded would check the half that is already the safer of the two, and
+      # then unpack the other half unexamined.
+      #
+      # The digest was taken from two independent fetches of the pinned URL and the tarball confirmed
+      # to be an Infer distribution. If this step ever fails, do not "fix" it by re-recording the
+      # digest from whatever arrived - that is the failure mode it exists to catch. Bump the cache key
+      # to force a clean download and see whether the digest returns; a genuine upstream re-cut of a
+      # published tag is the rarer explanation and should be confirmed against the release page.
+      - name: Verify the Infer archive against its pinned digest
+        run: |
+          echo "02be62ba931cb43e2d42bbf7abf4bd9a410cf8464cce5453934e25c90a825850  $HOME/infer-dist/infer.tar.xz" \
+            | sha256sum --check --strict -
+
+      - name: Unpack and confirm it runs
+        run: |
+          mkdir -p ~/infer
+          tar -xJf ~/infer-dist/infer.tar.xz -C ~/infer --strip-components=1
+          ~/infer/bin/infer --version
+
+      # Asserts the ceiling in both directions. Analysis itself is ~11s over core's 73 files; the
+      # timeout is for the download on a cache miss.
+      # INFER_BIN and RACERD_JDK are set here rather than in an `env:` block on purpose. An earlier
+      # version set all three in `env:` AND overrode two of them inline, so the env values were dead
+      # - and worse, wrong: INFER_BIN pointed at the workspace, while the unpack step above puts the
+      # toolchain in $HOME/infer. Deleting the inline prefix, which is exactly what a later tidy-up
+      # would do, would have pointed the lane at nothing. `$HOME` and `$JAVA_HOME` are not available
+      # to `env:` at all, which is what forced the inline form in the first place.
+      - name: RacerD
+        run: INFER_BIN="$HOME/infer/bin/infer" RACERD_JDK="$JAVA_HOME" bash bin/racerd-test.sh
+
   # SpotBugs static analysis - finds null derefs, concurrency issues, resource leaks.
-  # Uses a baseline from the base branch so only NEW bugs introduced by the PR are
-  # reported. The baseline is generated by the push build and cached.
+  # Whole reactor, main AND test code, with fb-contrib and find-sec-bugs detectors loaded.
+  # Suppression is by rule in config/spotbugs-exclude.xml; the registry that justifies every entry is
+  # docs/inflight/static-spotbugs-rule-registry.md.
   spotbugs:
     if: github.event_name == 'pull_request'
     name: "static: spotbugs"
@@ -340,25 +452,35 @@ jobs:
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             setup-java-Linux-x64-maven-
-      - name: Restore SpotBugs baseline
-        id: spotbugs-baseline
-        uses: actions/cache/restore@v4
-        with:
-          path: .spotbugs-baseline.xml
-          key: spotbugs-baseline-${{ github.base_ref }}-${{ hashFiles('**/src/main/**/*.java') }}
-          restore-keys: |
-            spotbugs-baseline-${{ github.base_ref }}-
-            spotbugs-baseline-
+      # No baseline restore, and no baseline job: suppression is by RULE now, in the checked-in
+      # config/spotbugs-exclude.xml the pom points at, with every entry justified in
+      # docs/inflight/static-spotbugs-rule-registry.md. The job this replaces regenerated an exclude
+      # filter on every push to master, keyed on class + method + bug type, and recorded nothing
+      # about what it swallowed.
+      #
+      # test-compile, not compile: the pom sets includeTests, and target/test-classes has to exist
+      # for that to mean anything. Whole reactor, not `-pl parallel-consumer-core -am` - `-am` adds
+      # only the parent pom, so vertx, reactor, mutiny and the examples went unanalysed.
+      #
+      # `spotbugs:check` IS THE REPORTING HALF, and it is not optional. `spotbugs:spotbugs` writes
+      # spotbugsXml.xml and prints not one finding - the build log says "Skipping ... report goal"
+      # and nothing else - so every bit of reporting was GitHub-side: annotations, the sticky comment,
+      # the check run. Anyone running the build locally got total silence over hundreds of findings,
+      # which review caught by asking the obvious question nobody had: "do they at least get reported,
+      # and in the mvn build output?"
+      #
+      # `failOnError=false` keeps it advisory, so this changes what the lane SAYS and not what it
+      # gates - the staged position the rule registry documents, with its own trigger for making
+      # findings blocking. What `check` adds that neither the annotations nor the sticky comment give
+      # is the RULE NAME on every line, which is the one thing needed to tier a finding in that
+      # registry:
+      #   [ERROR] Medium: ... UTAO_JUNIT_ASSERTION_ODDITIES_ACTUAL_CONSTANT
+      #
+      # Not bound to a lifecycle phase on purpose: SpotBugs at effort=Max over the whole reactor is
+      # minutes, and paying that on every local `mvn test` would get the plugin switched off. Run the
+      # same two goals by hand when you want the list.
       - name: Compile and run SpotBugs
-        run: |
-          EXCLUDE_ARG=""
-          if [ -f .spotbugs-baseline.xml ]; then
-            EXCLUDE_ARG="-Dspotbugs.excludeFilterFile=.spotbugs-baseline.xml"
-            echo "Using baseline — only new bugs will be reported"
-          else
-            echo "No baseline found — reporting all bugs (first run on this base branch)"
-          fi
-          ./mvnw --batch-mode -Pci compile spotbugs:spotbugs $EXCLUDE_ARG -pl parallel-consumer-core -am
+        run: ./mvnw --batch-mode -Pci test-compile spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false
       - name: Post SpotBugs annotations on PR
         if: always()
         uses: jwgmeligmeyling/spotbugs-github-action@v1.2
@@ -372,7 +494,6 @@ jobs:
           script: |
             const fs = require('fs');
             const { execSync } = require('child_process');
-            const hasBaseline = fs.existsSync('.spotbugs-baseline.xml');
             const files = execSync('find . -path "*/target/spotbugsXml.xml" -type f').toString().trim().split('\n').filter(f => f);
             let body;
             if (files.length === 0) {
@@ -384,9 +505,7 @@ jobs:
                 const matches = content.match(/<BugInstance/g);
                 totalBugs += matches ? matches.length : 0;
               }
-              const baselineNote = hasBaseline
-                ? ' (new bugs only — baseline from base branch excluded)'
-                : ' (no baseline available — showing all bugs)';
+              const baselineNote = ' (rule-level exclusions only - see docs/inflight/static-spotbugs-rule-registry.md)';
               if (totalBugs === 0) {
                 body = `## :white_check_mark: SpotBugs Report\n\nNo bugs found${baselineNote}.\n`;
               } else {
@@ -418,57 +537,6 @@ jobs:
           allow-dependencies-licenses: pkg:githubactions/actions/github-script
 
   # ── Push Builds (master) ───────────────────────────────────────────────
-
-  # Generate SpotBugs baseline for PR comparisons. Runs on every push to
-  # master so PR builds can exclude known bugs and only report new ones.
-  spotbugs-baseline:
-    if: github.event_name == 'push'
-    name: "static: spotbugs baseline"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: prepare-deps
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Restore Maven cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.m2/repository
-          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            setup-java-Linux-x64-maven-
-      - name: Compile and generate SpotBugs XML
-        run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -pl parallel-consumer-core -am
-      - name: Convert SpotBugs results to exclude filter
-        run: |
-          # Transform the SpotBugs XML into an exclude filter that can be
-          # passed to future runs via -Dspotbugs.excludeFilterFile. Each
-          # BugInstance becomes a Match element keyed on class + method + bug type.
-          python3 -c "
-          import xml.etree.ElementTree as ET, sys
-          tree = ET.parse('parallel-consumer-core/target/spotbugsXml.xml')
-          root = tree.getroot()
-          out = ET.Element('FindBugsFilter')
-          for bug in root.findall('.//BugInstance'):
-              match = ET.SubElement(out, 'Match')
-              cls = bug.find('Class')
-              method = bug.find('Method')
-              if cls is not None:
-                  ET.SubElement(match, 'Class', name=cls.get('classname', ''))
-              if method is not None:
-                  ET.SubElement(match, 'Method', name=method.get('name', ''))
-              ET.SubElement(match, 'Bug', pattern=bug.get('type', ''))
-          ET.ElementTree(out).write('.spotbugs-baseline.xml', xml_declaration=True, encoding='utf-8')
-          print(f'Baseline: {len(root.findall(\".//BugInstance\"))} bugs excluded')
-          "
-      - name: Cache SpotBugs baseline
-        uses: actions/cache/save@v4
-        with:
-          path: .spotbugs-baseline.xml
-          key: spotbugs-baseline-${{ github.ref_name }}-${{ hashFiles('**/src/main/**/*.java') }}
 
   # Single full build on default Kafka version to gate SNAPSHOT publishing.
   # Uses the same ci-build.sh script that PRs use for Kafka compat testing.

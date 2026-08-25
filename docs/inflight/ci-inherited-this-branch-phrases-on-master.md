@@ -12,22 +12,26 @@ The consequence is that everything already on master is invisible to it. A sweep
 found the phrase in thirteen files. Most are fine; these are the ones that are not. Delete this note
 when both are resolved.
 
-## Two notes outlived the PRs that owned them - now shrunk and renamed
+## Two notes outlived the PRs that owned them - done on master, twice over
 
 <!-- post-merge: checked-begin -->
 `pr-323-docs-outstanding.md` and `pr-324-tooling-outstanding.md` both carried a "delete this note
-when it merges" marker and both PRs had merged - the exact thing `docs/inflight/AGENTS.md` forbids
-leaving on master, because "the merge is exactly when nobody is looking here".
+when it merges" marker after their PRs merged - the residue `docs/inflight/AGENTS.md` forbids on
+master. **Master fixed it**, and this branch had fixed it independently; the merge kept master's,
+which is the better version in two specific ways worth recording, because both are judgements this
+branch got wrong and would otherwise get wrong again:
 
-Repaired the way that doc prescribes - shrink to the surviving items and rename, never rewrite into
-an accurate past tense. **Each surviving item was re-verified rather than copied**, and that halved
-them: the hook self-test now builds `mktemp` fixtures instead of asserting against the live
-`docs/inflight/` corpus, so astubbs#324's first item was already fixed; astubbs#323's flagged
-PCMetrics figures are now traceable to the run they came from. What was left became
-`docs-claims-their-own-evidence-does-not-support.md` and
-`branch-agent-hook-commit-bodies-only-on-backup.md`. The merge ordering that only astubbs#323's note
-held moved to `pr-blockers-and-collisions.md`, which owns standing coordination facts, and the one
-citation of it was repointed there.
+- **`docs/quarantined-tests.md`'s overstatement was corrected in place, not tracked.** This branch
+  opened a note to track the wrong sentence. Master edited the sentence. *Do not track what you can
+  correct* - a tracking note for a one-line fix is a second thing to maintain and a claim that stays
+  wrong until someone reads the tracker.
+- **The unverifiable observations moved INSIDE the notes they are about**, rather than into a third
+  note tracking other notes' defects - which is what this branch built, and which puts the caveat
+  where nobody reading the affected note will see it.
+
+The convergence itself is the other finding: two sessions independently swept for the same residue
+within days. That is the rule working, not duplicated effort - but it argues for the sweep being a
+gate rather than a habit.
 <!-- post-merge: checked-end -->
 
 ## The other eleven are not defects

@@ -221,6 +221,72 @@ that the backlog never drained - see `docs/inflight/test-class2-probe-asserts-ti
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
 
+## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
+
+Lincheck declares a class's operations and explores thread interleavings against a sequential
+specification. It is the only tool class here that finds torn reads **nobody has named yet** - the
+racing-double seam tests can only re-prove seams somebody already found by hand.
+
+**Static analysis reaches one of the four calibration targets, not none of them.** Stock SpotBugs at
+`effort=Max` and ArchUnit see nothing in the family, and that single configuration is the whole
+measurement the original "nothing static sees this class" framing rested on - one analyser,
+generalised to all of them. astubbs#356 measured fb-contrib's `MUI_CONTAINSKEY_BEFORE_GET` naming
+`ShardManager.removeWorkFromShardFor` - astubbs#345's `containsKey`/`get`/dereference seam -
+statically, in seconds, with no harness and no annotation. The other three stay out of reach:
+astubbs#346's seam is a stale-check rather than `containsKey`-before-`get`, and the two
+value-divergence torn reads are not what a check-then-act detector looks for. The clause above
+survives intact, because the seam fb-contrib names is one somebody had already found by hand, while
+the defect Lincheck turned up was on nobody's list.
+
+Harnesses live in core's `bz.stub.parallelconsumer.state` package next to the classes they model:
+`ShardManagerLincheckTest`, `PartitionStateLincheckTest`, `WorkManagerLincheckTest`, plus two
+controls. **That placement is forced, not stylistic, so do not move them to a `lincheck`
+sub-package**: `ShardManagerLincheckTest` drives the package-private `ShardManager.addWorkContainer`
+and `removeAnyShardEntriesReferencedFrom`, and `PartitionStateLincheckTest` calls the `protected`
+`PartitionState.createOffsetAndMetadata`. A harness models a seam, and the seams worth modelling are
+usually the ones the class does not expose. Moving them out would mean widening main-code visibility
+to suit a test, which trades a real encapsulation boundary for a tidier package tree; splitting only
+the two that *could* move is worse still, because then the lane has no single home to document. The
+two toolchain controls stay with them for that reason alone - they model nothing in `state`. The `lincheck` tag sits in the pom's default `excluded.groups`, and each gating wrapper
+repeats it in its own hardcoded list - `QuarantinedAnnotationContractTest` is what fails when the two
+disagree, because a tag the pom excludes and a wrapper does not runs in the GATING suite.
+
+- **Run it**: `bin/lincheck-test.sh` (whole lane, well under a minute), or
+  `LINCHECK_TEST=ShardManagerLincheckTest bin/lincheck-test.sh` for one class. Do not hand-roll the
+  `./mvnw` line - **five flags have to line up and each fails silently on its own**: the group filters
+  (an include alone selects nothing, the same trap the performance lane documents), `-Plincheck` for
+  the JDK module opens the model checker needs, `-Dparallel-tests=false` (Lincheck installs a
+  JVM-wide agent, so two of its classes in one fork share it), `-Djacoco.skip=true` (coverage
+  probes are shared state and bury the trace), and `-Dpc.log.level=info`.
+- **Read the trace**: that last flag is what makes a found interleaving printable at all - the
+  harness logs it at INFO, and `logback-test.xml` defaults to warn.
+- **STRESS only, over the product classes, and that is a tool constraint rather than a preference.**
+  Lincheck's model checker cannot run on any Lombok `@EqualsAndHashCode(callSuper = true)` value type
+  - `ShardKey` is one - and the commit path is not deterministic enough for it to replay.
+  `LincheckSuperHashCodeProbeTest` is the tripwire that fires when that is fixed upstream.
+- **`LincheckToolchainProbeTest` is a RED CONTROL and must never be deleted.** Lincheck degrades
+  silently: a classpath conflict once left it reporting SUCCESS having instrumented nothing. A
+  deliberately broken probe with a known answer is the only thing that tells a real "no violations"
+  from a tool that was not looking.
+- **Every harness currently asserts that a bug EXISTS.** They invert when the fixes land; each
+  javadoc names the PR that triggers it.
+- **Measure a new harness's hit rate across several runs before believing it.** An under-budgeted
+  stress arm is a flake, and a flake fails this build with no retry, by design. Three green runs
+  cannot tell a 0% miss rate from a 10% one, and `WorkManagerLincheckTest` shipped its first bound on
+  exactly that evidence. **Deliberately under-budget instead**: run the harness at a bound low enough
+  to miss most of the time, and the observed miss fraction gives the per-iteration probability, which
+  prices every bound at once. Then raise `iterations` - never `@RepeatedTest`, never a retry, never a
+  weaker assertion, all three of which destroy the signal the harness exists to produce. The
+  arithmetic and a worked example are in the correction to §3.1 of
+  [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
+- **Raising `iterations` costs nothing on the path that matters.** Lincheck stops at the first
+  violation, so a harness that finds its bug never reaches the extra iterations; only the run that
+  was going to fail gets longer. Budget these arms for the miss case you can tolerate, not for the
+  hit case you will actually see.
+
+Calibration result, the obstacles, and the cost tables:
+[`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
+
 ## Mutation-check every new assertion, not just the risky-looking ones
 
 Delete the guard an assertion claims to pin, run the test, confirm it fails, restore. An assertion

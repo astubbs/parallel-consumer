@@ -7,10 +7,10 @@
 Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` has that, and is right.
 
 - **Agreed merge order for the astubbs#322 split and what queues behind it: 323, 324, 325, 57, 322,
-  267, 29.** The first three have merged (323 and 324 on 2026-08-20, 325 after), so what remains is
-  **57, 322, 267, 29**. Recorded here because it outlived the note that held it: it lived in
-  `pr-323-docs-outstanding.md`, which was deleted once astubbs#323 merged, and an ordering is a
-  standing coordination fact rather than one PR's business.
+  267, 29.** The first three have merged, so what remains is **57, 322, 267, 29**. Recorded here
+  because it outlived the note that held it - it lived only in astubbs#323's own note, which that
+  PR's merge deleted - and because an ordering is a standing coordination fact rather than one PR's
+  business.
 - **astubbs#29 and astubbs#31 target `master-confluent`**, the pinned pre-rebrand mirror, so merging either would
   land its fix where no user can reach it. Retarget to `master` - but not mechanically: astubbs#29's deadlock
   fix predates the internals astubbs#80 reshaped, so it needs reconciling rather than replaying.
