@@ -18,14 +18,23 @@
 
 set -uo pipefail
 
+# EVERY case below controls NODE_OPTIONS explicitly - `env -u` where it wants a real verdict, `env
+# NODE_OPTIONS=...` where it is deliberately breaking node. Inheriting it makes this suite fail for
+# a reason that has nothing to do with the gate: on a machine whose ambient NODE_OPTIONS carries a
+# stale `--require`, every verdict case becomes "cannot run" and the suite reports failures that
+# read as a broken gate. That is not hypothetical - it happened while this fix was being reviewed,
+# 8 cases going red on an unrelated environment fault. Which is the same misreading the gate under
+# test exists to prevent, one level up: the harness has to be immune to the condition it asserts on.
+
 REPO_ROOT="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # --- fixture repo, with the script under test in its real layout ---------------------------------
-mkdir -p "$TMP/repo/bin" "$TMP/repo/.github/scripts" "$TMP/stub"
+mkdir -p "$TMP/repo/bin/lib" "$TMP/repo/.github/scripts" "$TMP/stub"
 cp "$REPO_ROOT/bin/check-issue-refs.sh" "$TMP/repo/bin/"
+cp "$REPO_ROOT/bin/lib/node-gate.sh" "$TMP/repo/bin/lib/"
 cp "$REPO_ROOT/.github/scripts/issue-ref-gate.js" "$TMP/repo/.github/scripts/"
 
 cat > "$TMP/stub/gh" <<'STUB'
@@ -49,7 +58,7 @@ mkdir -p docs
 fails=0
 check() { # <name> <expected-exit> <must-contain> [must-not-contain]
     local name=$1 want=$2 must=$3 mustnot=${4:-} out got
-    out="$(bash bin/check-issue-refs.sh master 2>&1)"
+    out="$(env -u NODE_OPTIONS bash bin/check-issue-refs.sh master 2>&1)"
     got=$?
     if [ "$got" != "$want" ]; then
         echo "FAIL: $name (expected exit $want, got $got)"
@@ -115,7 +124,7 @@ check "clean diff and clean body pass, and the success line says the body was ch
 # must cover all four, and the assertion must include the LEAD line: tail -3 passed for months
 # while provably cutting the very sentence the trailer exists to deliver.
 export GH_STUB_JSON='{"number":42,"body":"This fixes #858 for good."}' # issue-refs: exempt - fixture
-out="$(bash bin/check-issue-refs.sh master 2>&1 | tail -4)"
+out="$(env -u NODE_OPTIONS bash bin/check-issue-refs.sh master 2>&1 | tail -4)"
 tail_ok=1
 case "$out" in *"Fix: qualify each ref"*) ;; *) tail_ok=0 ;; esac
 case "$out" in *"issue-refs: N/A"*) ;; *) tail_ok=0 ;; esac
@@ -123,6 +132,92 @@ if [ "$tail_ok" = 1 ]; then
     echo "ok:   the last four lines of a failure carry the whole fix/opt-out reminder"
 else
     echo "FAIL: the fix/opt-out reminder did not survive | tail -4 intact"
+    echo "$out" | sed 's/^/      /'
+    fails=$((fails + 1))
+fi
+
+# --- node is PRESENT but cannot RUN ---------------------------------------------------------------
+# The guard was `command -v node`, which proves node is installed and nothing more. A stale
+# `--require` in NODE_OPTIONS - an agent harness writes a preload into a temp directory, the temp
+# directory is later cleaned up - kills node during preload, before one line of the gate executes,
+# and node's status for that is 1: this script's code for "unqualified refs found". A gate that had
+# checked nothing therefore reported a policy violation, and it cost a real debugging detour.
+#
+# BOTH arms must be 2, "cannot run". The clean tree because the accusation is pure fiction; the
+# dirty one because a gate that did not run may not be believed even when it would have been right.
+broken_preload="$TMP/nodepreflight-deleted-by-the-harness.cjs"   # deliberately never created
+
+check_cannot_run() { # <name>
+    local name=$1 out got
+    out="$(env NODE_OPTIONS="--require=$broken_preload" bash bin/check-issue-refs.sh master 2>&1)"
+    got=$?
+    if [ "$got" != 2 ]; then
+        echo "FAIL: $name (expected exit 2, got $got)"
+        echo "$out" | sed 's/^/      /'
+        fails=$((fails + 1))
+        return
+    fi
+    case "$out" in
+        *"This is NOT a finding"*) ;;
+        *) echo "FAIL: $name (output does not say it is not a finding)"
+           echo "$out" | sed 's/^/      /'; fails=$((fails + 1)); return ;;
+    esac
+    case "$out" in
+        *"NODE_OPTIONS is set"*) ;;
+        *) echo "FAIL: $name (output does not name NODE_OPTIONS, the likely cause)"
+           echo "$out" | sed 's/^/      /'; fails=$((fails + 1)); return ;;
+    esac
+    echo "ok:   $name"
+}
+
+export GH_STUB_JSON='{"number":42,"body":"All refs qualified, honest."}'
+echo "See astubbs#857 for details" > docs/note.md
+git add docs/note.md
+check_cannot_run "clean tree: a node that cannot start is 'cannot run', never a violation"
+
+echo "See #857 for details" > docs/note.md # issue-refs: exempt - fixture
+git add docs/note.md
+check_cannot_run "dirty tree: a gate that could not run is still 'cannot run', not a finding"
+
+
+# --- the verdict helper itself is unreadable -------------------------------------------------------
+# The same fault one level up. `source` returns 1 for a file it cannot read, and under `set -e` that
+# becomes THIS script's exit status - 1, its code for "unqualified refs found". So a missing helper
+# accused the tree of exactly the thing the helper exists to stop being misreported. Measured, not
+# reasoned: before the fix this exited 1 with no message of its own.
+mv bin/lib/node-gate.sh "$TMP/node-gate.sh.away"
+out="$(env -u NODE_OPTIONS bash bin/check-issue-refs.sh master 2>&1)"
+got=$?
+mv "$TMP/node-gate.sh.away" bin/lib/node-gate.sh
+helper_ok=1
+[ "$got" = 2 ] || helper_ok=0
+case "$out" in *"node-gate.sh"*) ;; *) helper_ok=0 ;; esac
+case "$out" in *"NOT a finding"*) ;; *) helper_ok=0 ;; esac
+if [ "$helper_ok" = 1 ]; then
+    echo "ok:   an unreadable verdict helper is 'cannot run', never a violation"
+else
+    echo "FAIL: unreadable verdict helper (expected exit 2 naming the helper, got $got)"
+    echo "$out" | sed 's/^/      /'
+    fails=$((fails + 1))
+fi
+
+# --- node genuinely absent, as opposed to present-but-broken --------------------------------------
+# The other node cases all break a node that EXISTS (a poisoned NODE_OPTIONS). Nothing exercised the
+# plain "not installed" branch, and when it moved into bin/lib/node-gate.sh as node_gate_require_node
+# it became shared code with no test at all - so a later edit there could flip this gate's answer for
+# BOTH callers silently. Calling the function directly, rather than the gate, keeps the case
+# deterministic on any host: it needs no external command (`echo` and `source` are builtins), so it
+# does not depend on where node happens to live, or on it being absent from the machine running this.
+out="$(bash -c 'PATH=/nonexistent-dir-for-test; source bin/lib/node-gate.sh; node_gate_require_node ".github/scripts/issue-ref-gate.js"' 2>&1)"
+got=$?
+absent_ok=1
+[ "$got" = 2 ] || absent_ok=0
+case "$out" in *"node not found"*) ;; *) absent_ok=0 ;; esac
+case "$out" in *"issue-ref-gate.js"*) ;; *) absent_ok=0 ;; esac
+if [ "$absent_ok" = 1 ]; then
+    echo "ok:   node absent is 'cannot run' and names the module it needed"
+else
+    echo "FAIL: node-absent branch (expected exit 2 naming the module, got $got)"
     echo "$out" | sed 's/^/      /'
     fails=$((fails + 1))
 fi
