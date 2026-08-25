@@ -676,112 +676,47 @@ the GREEN side needs two or three replays before it settles anything. **Nobody h
 Recorded as unresolved.
 
 <!-- post-merge: checked-begin -->
-**Fourteenth sighting, 2026-08-25 - the first `INSTANCE_STALL/NO_WORK_COMPLETED` this ledger has
-recorded, and the thirteenth entry is why it matters.** `Chaos Pain Suite` on
-astubbs/parallel-consumer#357
-([run 32812259117](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117)), 8 of 9
-chaos ITs green, `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` red at 224.7s -
-`TerminalFailureException: probe violation during run`. The PR is named as the run's provenance, the
-way every sighting above names one; it reads the same after that PR merges, since a PR number is
-permanent and this is a record of where the run came from, not a claim about open work.
-<!-- post-merge: checked-end -->
+**2026-08-25, three consecutive Class 2 reds on one branch - data for a prediction already made
+elsewhere, not a new sighting.** Deliberately unnumbered: `test/chaos-class2-drain-discriminator`
+adds its own entry here, and two branches minting ordinals against the same list collide.
 
-**Seed `7852140587594987229`**, recorded because the artifact expires and the seed is the asset:
+**That branch owns the diagnosis, and it supersedes what an entry like this would once have
+claimed.** It ran the `-Dchaos.diagnoseStallRecovery=true` discriminator that this file and the probe
+critique both said nobody had run, on two nominated seeds, on a contended box - both backlogs
+drained. It also shows the ~154s constant several entries cite as corroboration is arithmetic (probe
+sample interval plus fail-fast latency), not severity. The Class 2 lag bound therefore reports rather
+than gates there. Read that entry before adding to this one.
 
-    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=7852140587594987229
+What is worth keeping from three runs of astubbs/parallel-consumer#357 - a branch changing agent
+hooks, shell gates and documentation, and no product code at all:
 
-**The ordering is the finding.** At `t=+154670ms` the run tripped
-`INSTANCE_STALL/NO_WORK_COMPLETED: instance 70 holds work (queued=0, outForProcessing=43) but has
-returned no work result for 150s (bound 150s) at 27914 results returned`. The 23 violations the
-autopsy then lists are all `CLASS2_STALL/LAG_STAGNATION`, committed offsets stagnant ~154s against
-the 150s bound - the timing bound
-[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md)
-already says is not a correctness verdict. So the interesting violation is the one the autopsy list
-does *not* contain, and reading only that list would have filed this as another `CLASS2_STALL` tally.
+| Run | Test(s) red | Seed | Violations |
+|---|---|---|---|
+| [32812259117](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117) | `ChaosChurnStormIT` | `7852140587594987229` | 23 Class 2, preceded by one `INSTANCE_STALL/NO_WORK_COMPLETED` |
+| [32814417900](https://github.com/astubbs/parallel-consumer/actions/runs/32814417900) | `ChaosRevokeUnderWorkIT` | `567232329738342203` | 17 Class 2 |
+| [32815394117](https://github.com/astubbs/parallel-consumer/actions/runs/32815394117) | `ChaosRevokeUnderWorkCooperativeIT` | `5843692436386966698` | 3 Class 2 |
+| " | `ChaosRevokeUnderWorkIT` | `4651058060322796970` | 2 Class 2 |
 
-The thirteenth sighting recorded **zero** `INSTANCE_STALL` as evidence that astubbs#325's new
-detector was not crying wolf. This is that detector firing for the first time, on an instance holding
-43 records out for processing and completing none - which is the shape this family is named for,
-stated by a probe rather than inferred from lag. **Whether it is a real stall is unsettled**: nobody
-has replayed the seed, and `-Dchaos.diagnoseStallRecovery=true` is the arm that would say whether the
-backlog drains.
+**This is the falsifiable prediction that branch registered, met on a tree that cannot have caused
+it**: Class 2 findings continuing at the same rate, four distinct tests over five distinct seeds,
+counts falling 23, 17, 3, 2. Two partitions grazing a 150s bound is what a timing proxy looks like,
+not a wedge.
 
-**Retrieval note, because this sighting was nearly filed as something else entirely.**
-`gh run view --job <id> --log` returned 990 lines of a job whose real log is ~5000, cutting inside a
-*passing* test and appending the post-job steps - so it presented as a killed process with no
-`Tests run:` anywhere, and was written up as a runner-load kill in
-[`ci-disabled-jobs-and-runner-load.md`](ci-disabled-jobs-and-runner-load.md) before the artifact
-contradicted it. That is the third recorded instance of the trap in
-[`gh-run-view-log-truncation.md`](../solutions/workflow-issues/gh-run-view-log-truncation.md), whose
-own remedy - fixing `docs/ci.md`, which still recommended the failing route - had never been applied.
-It has been now.
+Two smaller things it settles or offers:
 
-<!-- post-merge: checked-begin -->
-**Fifteenth sighting, 2026-08-25 - the eager arm, on the same branch as the fourteenth, with a
-different test and a different seed.** `Chaos Pain Suite` on astubbs/parallel-consumer#357
-([run 32814417900](https://github.com/astubbs/parallel-consumer/actions/runs/32814417900)), 8 of 9
-chaos ITs green, `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` red at 169.6s on
-`probe violation`. **17 violations, all `CLASS2_STALL/LAG_STAGNATION`** - the timing bound again, not
-a correctness verdict. Both cooperative arms green in the same run.
+- **A cooperative Class 2 red in CI, with an explicit probe verdict.** The second sighting reasoned
+  from a cooperative arm passing to "eager-protocol-specific"; the fifth had only a local, unverdicted
+  one. For Class 2 that reading is now retired - both assignors trip the bound in the same run - which
+  matters mainly as one more reason to read the bound as timing. It says nothing about the astubbs#29
+  deadlock, a different claim about a different mechanism.
+- **One `INSTANCE_STALL/NO_WORK_COMPLETED`** (instance holding 43 records out for processing,
+  completing none) in the first run and none in the other two - the first firing of astubbs#325's
+  detector, on the record because the thirteenth sighting flagged "is it crying wolf" as the open
+  question and one firing in three runs is a partial answer.
 
-**Seed `567232329738342203`:**
-
-    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=567232329738342203
-
-**What the pair is worth, which neither red is worth alone.** Two runs on the same branch, minutes
-apart, failed **different tests on different seeds** - `ChaosChurnStormIT` on `7852140587594987229`,
-then the eager `ChaosRevokeUnderWorkIT` on `567232329738342203` - while the branch changes no product
-code at all (agent hooks, shell gates, documentation). That is the seed-dependence this ledger has
-asserted since the second sighting, observed directly rather than inferred from other branches
-passing: the same tree draws a different interleaving each run, and which test goes red follows the
-seed rather than the diff.
-
-It also puts the fourteenth sighting's `INSTANCE_STALL` in relief. This run produced none - 17
-violations of one kind, the pre-existing timing bound - so that detector is not firing on every
-chaos run, which is what an over-eager new detector would look like.
-<!-- post-merge: checked-end -->
-
-<!-- post-merge: checked-begin -->
-**Sixteenth sighting, 2026-08-25 - a COOPERATIVE `CLASS2_STALL` in CI, and the third consecutive red
-on one branch.** `Chaos Pain Suite` on astubbs/parallel-consumer#357
-([run 32815394117](https://github.com/astubbs/parallel-consumer/actions/runs/32815394117)), **two**
-tests red in one run:
-
-| Test | Seed | Violations |
-|---|---|---|
-| `ChaosRevokeUnderWorkCooperativeIT` | `5843692436386966698` | 3, all `CLASS2_STALL/LAG_STAGNATION` |
-| `ChaosRevokeUnderWorkIT` (eager) | `4651058060322796970` | 2, all `CLASS2_STALL/LAG_STAGNATION` |
-
-    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=5843692436386966698
-    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4651058060322796970
-
-**This is the CI cooperative `CLASS2_STALL` the third and fifth sightings said would settle
-something.** The second sighting reasoned from a cooperative arm passing in the same run to
-"whatever remains is eager-protocol-specific"; the fifth recorded a cooperative `CLASS2_STALL`
-locally and said an unconfirmed one could not retire that inference. This one is in CI, with an
-explicit probe verdict rather than a shutdown-path symptom. **The eager-specific reading does not
-survive it** for `CLASS2_STALL` specifically - both assignors trip the same bound on the same box
-in the same run. It says nothing either way about the deadlock in astubbs#29, which is a different
-claim about a different mechanism.
-
-**The three-run series is the other half, and it points at the bound rather than the code.** Three
-consecutive chaos runs on this branch - which changes agent hooks, shell gates and documentation, and
-no product code - went red on **four distinct tests across five distinct seeds**, every violation the
-same `CLASS2_STALL/LAG_STAGNATION` timing bound, with violation counts falling 23, 17, then 3 and 2.
-A hard stall does not usually present as two partitions grazing a 150s bound; a bound set close to
-the machine's actual timing does.
-
-**Contention remains a hypothesis, and the pairing this ledger already names was present.**
-`Performance (optional)` ran 06:04:37-06:07:22, overlapping the chaos job that started 06:04:36.
-
-**The discriminator is still unrun, and here is why, so nobody assumes it was tried and cleared.**
-An uncontended replay of one of these seeds was attempted on a developer Mac and could not run: the
-machine has no JDK 17, and `/usr/libexec/java_home -v 17` returns the newest installed JDK (26) with
-exit 0 rather than failing, so a replay script that trusts it builds against the wrong JDK and dies
-for reasons unrelated to chaos. Whoever runs the replay should assert the resolved JDK really is 17
-before believing any outcome.
+**Correction to an earlier version of this entry**: it stated the discriminator was still unrun and
+recorded a local replay attempt that never started, having silently built against JDK 26 because
+`/usr/libexec/java_home -v 17` returns the newest installed JDK with exit 0. The discriminator had in
+fact been run on the branch above. The JDK trap is worth the line anyway: assert the resolved version,
+do not trust the request.
 <!-- post-merge: checked-end -->
