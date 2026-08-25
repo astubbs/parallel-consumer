@@ -103,7 +103,9 @@ before any zero is believed.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import gc
 import logging
 import os
 import pathlib
@@ -221,6 +223,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "the control that attributes any disagreement with U6's arm-H "
                              "figures to the key count rather than to the session (default 8000, "
                              "U6's; 0 skips it)")
+    parser.add_argument("--host-fetch-queue-backoff-ms", type=int, default=None,
+                        help="arm H: librdkafka fetch.queue.backoff.ms for the reimplementation "
+                             "consumer. Left unset it is librdkafka's 1,000 ms, which at a "
+                             "record count above the local queue's capacity puts a ~0.65 s "
+                             "fetch stall inside arm H's timed window and reads as a 4.7x "
+                             "slower reimplementation (measured; see the engine-floor note). "
+                             "The stall now fails the run rather than being averaged over")
+    # --- host-bimodal ---
+    parser.add_argument("--bimodal-phases", default="observe,toggle,positive",
+                        help="host-bimodal: which phases to run, in order - observe (the "
+                             "untouched loop, many reps, nothing toggled), toggle (paired "
+                             "single-term arms), positive (arms that force each candidate "
+                             "mechanism so it is priced). Default all three")
+    parser.add_argument("--bimodal-control-reps", type=int, default=12,
+                        help="host-bimodal: reps for the toggle and positive phases; the "
+                             "observational phase uses --reps, which needs to be much larger "
+                             "because the slow mode has appeared about once in twelve "
+                             "(default 12)")
     parser.add_argument("--floor-instrument", action="store_true",
                         help="engine-floor: also run the I0/I100 instrument-check pair, which "
                              "costs two host-function arms (slow) and proves the figure can "
@@ -1087,7 +1107,14 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
 
 @dataclasses.dataclass(frozen=True)
 class HostRun:
-    """One arm-H run: the single-threaded reimplementation whose rate defines F2."""
+    """One arm-H run: the single-threaded reimplementation whose rate defines F2.
+
+    The fields below ``load1`` were added to settle arm H's BIMODAL hopping-12 rate (the
+    ``host-bimodal`` experiment). They are recorded on every arm-H run, not only that
+    experiment's, because a rate with no account of where its window went is exactly what left
+    the bimodality unattributable: twelve samples and nothing beside them to separate a run that
+    WAITED from a run that WORKED SLOWLY.
+    """
 
     spec: str                 # "tumbling" or "hopping-12"
     records: int
@@ -1095,10 +1122,122 @@ class HostRun:
     updates: int              # dict updates; must equal multiplier x records
     window_s: float           # wall clock, first message to last - H produces nothing to stamp
     load1: float = 0.0        # 1-minute load read immediately before the run
+    arm: str = "H"            # which arm-H variant; "H" is the untouched loop
+    rep: int = 0              # 1-based repetition index - the cold-first-read hypothesis needs it
+    cpu_s: float = 0.0        # process CPU time across the SAME window; wall >> cpu means waiting
+    fold_s: float = 0.0       # time inside the aggregation loop only
+    consume_s: float = 0.0    # time inside ``Consumer.consume`` only; the two ~= window_s
+    empty_polls: int = 0      # consume() calls returning nothing AFTER the window opened
+    empty_s: float = 0.0      # and the wall time they burned - each one can cost the 1.0s timeout
+    max_gap_s: float = 0.0    # longest single consume() call after the window opened
+    max_gap_at: int = 0       # records already folded when that gap happened - WHERE it stalls
+    long_polls: int = 0       # consume() calls over 100ms: one big stall or a persistent trickle
+    stalls: tuple[tuple[int, float], ...] = ()  # (records folded, seconds) for each of those
+    batches: int = 0
+    gc_gen0: int = 0          # cyclic-collector passes INSIDE the window, by generation
+    gc_gen1: int = 0
+    gc_gen2: int = 0
+    gc_pause_s: float = 0.0   # measured collector pause time inside the window
+    gc_max_pause_s: float = 0.0
+    calib_s: float = 0.0      # a fixed pure-CPU loop timed just before the window - box speed
 
     @property
     def rate(self) -> float:
         return self.records / self.window_s if self.window_s > 0 else 0.0
+
+    @property
+    def fold_rate(self) -> float:
+        """The rate charging ONLY the aggregation loop - no consume wait, no poll timeout.
+
+        If the wall-clock rate is bimodal and this one is not, the bimodality is wait rather
+        than work, and the wait is a property of the harness's polling rather than of the
+        reimplementation being measured.
+        """
+        return self.records / self.fold_s if self.fold_s > 0 else 0.0
+
+
+@dataclasses.dataclass(frozen=True)
+class HostArm:
+    """One arm-H variant with exactly ONE term moved against the untouched loop.
+
+    Added for the bimodality follow-up. Every field defaults to what plain arm H does, so an arm
+    is defined by the single line that differs - the same discipline ``FloorArm`` uses for the
+    engine arms, and for the same reason: an arm that moves two terms answers neither.
+    """
+
+    label: str
+    spec: str                                          # "tumbling" or "hopping-12"
+    gc_disabled: bool = False                          # H1's paired toggle
+    force_gen2: bool = False                           # H1's positive control, mid-window
+    consumer_extra: tuple[tuple[str, object], ...] = ()  # H3's fetch-sizing toggles
+    fresh_topic: bool = False                          # H2: a topic this rep seeded and nobody read
+    expect_stall: bool = False                         # this arm EXHIBITS the stall on purpose,
+    #                                                    so the validity guard below stands down
+    why: str = ""
+
+    @property
+    def window(self) -> TimeWindow:
+        return _TUMBLE if self.spec == "tumbling" else _HOP5
+
+
+class _GcWatch:
+    """Measures CPython cyclic-collector pauses that land INSIDE a timed window.
+
+    ``gc.get_stats()`` deltas count collections but not their cost, and the bimodality question is
+    a question about a second of wall clock: a hundred cheap gen-0 passes and one expensive gen-2
+    pass are indistinguishable in a count and completely different in a window. ``gc.callbacks``
+    brackets each pass, so the pause time is measured rather than inferred - and the arm can then
+    be refuted on MAGNITUDE without any toggle at all.
+    """
+
+    def __init__(self) -> None:
+        self.pause_s = 0.0
+        self.max_pause_s = 0.0
+        self.counts = [0, 0, 0]
+        self._started: float | None = None
+        self._armed = False
+
+    def _callback(self, phase: str, info: dict) -> None:
+        if not self._armed:
+            return
+        if phase == "start":
+            self._started = time.monotonic()
+        elif self._started is not None:
+            elapsed = time.monotonic() - self._started
+            self.pause_s += elapsed
+            self.max_pause_s = max(self.max_pause_s, elapsed)
+            self.counts[min(int(info.get("generation", 0)), 2)] += 1
+            self._started = None
+
+    def install(self) -> None:
+        gc.callbacks.append(self._callback)
+
+    def arm(self) -> None:
+        """Called when the timed window opens - collections before it are not this run's."""
+        self._armed = True
+
+    def remove(self) -> None:
+        self._armed = False
+        with contextlib.suppress(ValueError):  # cleanup must never fail a valid run
+            gc.callbacks.remove(self._callback)
+
+
+def _cpu_calibration_s(iterations: int = 400_000) -> float:
+    """A fixed pure-CPU loop, timed immediately before a measured window.
+
+    The control that separates 'the harness waited' from 'this core was slow'. It allocates
+    nothing that survives, so it is not itself a cyclic-collector source; it is deliberately the
+    same shape of integer arithmetic the window-start arithmetic does.
+    """
+    started = time.monotonic()
+    total = 0
+    for i in range(iterations):
+        total += i * i
+    # Named rather than discarded: the sum exists only so a future interpreter cannot fold the
+    # loop away, which would turn the calibration into a constant zero without saying so.
+    ignored_calibration_sum = total
+    del ignored_calibration_sum
+    return time.monotonic() - started
 
 
 def _window_starts(timestamp_ms: int, size_ms: int, advance_ms: int) -> list[int]:
@@ -1115,7 +1254,8 @@ def _window_starts(timestamp_ms: int, size_ms: int, advance_ms: int) -> list[int
 
 
 def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
-                 window: TimeWindow, spec_label: str) -> HostRun:
+                 window: TimeWindow, spec_label: str, *, arm: HostArm | None = None,
+                 rep: int = 0, verbose: bool = False) -> HostRun:
     """Arm H: consume the same input single-threaded and aggregate into a dict.
 
     Deliberately stateless and non-durable - no store, no changelog, no rebalance recovery, no
@@ -1126,29 +1266,77 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
     Runs while the engine is idle (the lab tears each sidecar down before any H run starts).
     Timed on this process's wall clock from first message to last - H produces nothing, so there
     is no log-append record of its progress; the consume loop IS the reimplementation.
+
+    ``arm`` moves exactly one term (see ``HostArm``); omitted, the loop is the untouched one every
+    prior session measured. THE UNTOUCHED PATH MUST STAY UNTOUCHED: the instrumentation added for
+    the bimodality follow-up is two ``time.monotonic()`` calls per BATCH (about 130 of them on a
+    128,000-record run) plus a ``gc.callbacks`` entry that runs only when the collector runs, so
+    it cannot itself account for the second of wall clock under investigation - and the
+    ``H-base`` arm reproduces the earlier sessions' rate, which is the check that says so.
     """
+    arm = arm or HostArm(label="H", spec=spec_label)
     load1 = wait_for_quiet(args.load_limit)
+    calib_s = _cpu_calibration_s()
     multiplier = -(-window.size_ms // window.advance_ms)
-    consumer = Consumer({
+    config: dict[str, object] = {
         "bootstrap.servers": args.bootstrap,
         "group.id": f"pc-wlab-h-{time.time_ns()}",
         "enable.auto.commit": False,
-    })
+    }
+    if getattr(args, "host_fetch_queue_backoff_ms", None) is not None:
+        config["fetch.queue.backoff.ms"] = args.host_fetch_queue_backoff_ms
+    config.update(dict(arm.consumer_extra))
+    consumer = Consumer(config)
     state: dict[tuple[bytes, int], bytes] = {}
     updates = 0
     seen = 0
     started: float | None = None
     ended = 0.0
+    cpu_started = 0.0
+    cpu_s = 0.0
+    fold_s = 0.0
+    consume_s = 0.0
+    empty_polls = 0
+    empty_s = 0.0
+    max_gap_s = 0.0
+    max_gap_at = 0
+    long_polls = 0
+    stalls: list[tuple[int, float]] = []
+    batches = 0
+    forced = False
+    watch = _GcWatch()
+    watch.install()
+    gc_was_enabled = gc.isenabled()
+    if arm.gc_disabled:
+        gc.disable()
     try:
         consumer.assign([TopicPartition(topic, p, OFFSET_BEGINNING)
                          for p in range(args.partitions)])
         deadline = time.monotonic() + 120 + records * 1e-3
         while seen < records and time.monotonic() < deadline:
+            poll_started = time.monotonic()
             batch = consumer.consume(num_messages=1000, timeout=1.0)
+            poll_ended = time.monotonic()
+            if started is not None:
+                # Charged to the window whether or not the poll returned anything - which is
+                # precisely the accounting the bimodality question turns on.
+                gap = poll_ended - poll_started
+                consume_s += gap
+                if gap > max_gap_s:
+                    max_gap_s, max_gap_at = gap, seen
+                if gap > 0.1:
+                    long_polls += 1
+                    stalls.append((seen, gap))
             if not batch:
+                if started is not None:
+                    empty_polls += 1
+                    empty_s += poll_ended - poll_started
                 continue
             if started is None:
-                started = time.monotonic()
+                started = poll_ended
+                cpu_started = time.process_time()
+                watch.arm()
+            batches += 1
             for message in batch:
                 if message.error():
                     continue
@@ -1162,18 +1350,67 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
                     state[(key, start)] = value
                     updates += 1
             ended = time.monotonic()
+            fold_s += ended - poll_ended
+            if arm.force_gen2 and not forced and seen >= records // 2:
+                # H1's POSITIVE control: put a full generation-2 collection inside the window on
+                # purpose and let the same instrument price it. A mechanism that cannot produce
+                # the observed excess when forced cannot have produced it by accident.
+                forced = True
+                gc.collect(2)
+                ended = time.monotonic()
     finally:
+        if arm.gc_disabled and gc_was_enabled:
+            gc.enable()
+        if started is not None:
+            cpu_s = time.process_time() - cpu_started
+        watch.remove()
         consumer.close()
     window_s = (ended - started) if started is not None else 0.0
     result = HostRun(spec=spec_label, records=seen, keys=keys, updates=updates,
-                     window_s=window_s, load1=load1)
+                     window_s=window_s, load1=load1, arm=arm.label, rep=rep, cpu_s=cpu_s,
+                     fold_s=fold_s, consume_s=consume_s, empty_polls=empty_polls,
+                     empty_s=empty_s, max_gap_s=max_gap_s, max_gap_at=max_gap_at,
+                     long_polls=long_polls, stalls=tuple(stalls), batches=batches,
+                     gc_gen0=watch.counts[0], gc_gen1=watch.counts[1], gc_gen2=watch.counts[2],
+                     gc_pause_s=watch.pause_s, gc_max_pause_s=watch.max_pause_s,
+                     calib_s=calib_s)
+    stalled = (long_polls or empty_polls) and not arm.expect_stall
     ok = seen == records and updates == multiplier * records
-    print(f"  arm=H {spec_label:<10s} records={seen:>7,} keys={keys:>5,} "
-          f"window={window_s:7.2f}s rec/s={result.rate:8,.0f} dict-updates={updates:>9,} "
-          f"load1={load1:.2f} {'ok' if ok else 'INVALID'}")
+    print(f"  arm={arm.label:<9s} {spec_label:<10s} records={seen:>7,} keys={keys:>5,} "
+          f"window={window_s:7.3f}s rec/s={result.rate:8,.0f} dict-updates={updates:>9,} "
+          f"load1={load1:.2f} "
+          f"{'ok' if ok and not stalled else ('STALLED' if ok else 'INVALID')}")
+    if verbose:
+        print(f"      where the window went: fold={fold_s:6.3f}s consume={consume_s:6.3f}s "
+              f"(empty={empty_polls} for {empty_s:.3f}s, {long_polls} over 100ms, max gap "
+              f"{max_gap_s:.3f}s after {max_gap_at:,} records, {batches} batches)  "
+              f"cpu={cpu_s:6.3f}s cpu/wall={cpu_s / window_s:5.2f} "
+              f"fold-only rec/s={result.fold_rate:8,.0f}")
+        if stalls:
+            # Capped: H-starve produces 154 of these by construction and the point is their
+            # LENGTH, which is identical, not the list.
+            shown = ", ".join(f"{gap:.3f}s after {at:,} records" for at, gap in stalls[:6])
+            more = f" ... and {len(stalls) - 6} more" if len(stalls) > 6 else ""
+            print(f"      polls over 100ms ({len(stalls)}): {shown}{more}")
+        print(f"      collector inside the window: gen0={watch.counts[0]} gen1={watch.counts[1]} "
+              f"gen2={watch.counts[2]} pause={watch.pause_s:.3f}s "
+              f"(max {watch.max_pause_s:.3f}s)  cpu-calibration={calib_s * 1e3:.1f}ms")
     if not ok:
         raise RuntimeError(f"arm H invalid: saw {seen:,}/{records:,} records, "
                            f"{updates:,} updates against {multiplier * records:,} expected")
+    if stalled:
+        raise RuntimeError(
+            f"arm H invalid: {long_polls} consume() call(s) over 100ms inside the timed window "
+            f"({empty_polls} of them empty), the longest {max_gap_s:.3f}s after "
+            f"{max_gap_at:,} records - {consume_s / window_s:.0%} of this window was fetch "
+            "wait, not aggregation, so the rate is a property of the fetch path rather than of "
+            "the reimplementation. This is what made arm H's hopping-12 rate read 89,821 rec/s "
+            "at 128,000 records in U6 and ~460,000 at 64,000: librdkafka stops fetching when "
+            "the local queue passes queued.max.messages.kbytes and then postpones the next "
+            "fetch by fetch.queue.backoff.ms (1,000ms by default). Raise the queue or lower "
+            "the backoff (--host-fetch-queue-backoff-ms) rather than averaging over it; see "
+            "docs/inflight/perf-streams-engine-floor.md, 'Why arm H's hopping-12 rate is "
+            "bimodal'.")
     return result
 
 
@@ -1245,6 +1482,183 @@ def run_host_reimpl(args: argparse.Namespace) -> int:
     finally:
         if not args.keep_topics:
             delete_run_topics(AdminClient({"bootstrap.servers": args.bootstrap}), [topic])
+    return 0
+
+
+"""Arm-H variants for ``host-bimodal``. Each moves ONE term against ``H-base``.
+
+``H-base`` and ``T-base`` are the untouched loop at the two specifications - hopping-12 is the
+bimodal one, tumbling the arm that has been stable in every session and therefore the in-session
+stability control. The rest are named by the hypothesis they can refute.
+"""
+_H_BASE = HostArm(label="H-base", spec="hopping-12",
+                  expect_stall=True,
+            why="the untouched loop - the arm every prior session measured")
+_H_ARMS: tuple[HostArm, ...] = (
+    _H_BASE,
+    HostArm(label="T-base", spec="tumbling",
+            why="the untouched loop at the specification that has never been bimodal"),
+    HostArm(label="H-gcoff", spec="hopping-12", gc_disabled=True,
+            expect_stall=True,
+            why="H1's paired toggle: the cyclic collector cannot run inside the window"),
+    HostArm(label="H-queue", spec="hopping-12",
+            consumer_extra=(("queued.max.messages.kbytes", 2_097_151),
+                            ("queued.min.messages", 2_000_000)),
+            why="H3's paired toggle: the whole backlog fits in the local fetch queue, so the "
+                "loop can never outrun the fetcher"),
+    HostArm(label="H-fresh", spec="hopping-12", fresh_topic=True,
+            expect_stall=True,
+            why="H2's toggle: a topic seeded for this rep and never read, against the shared "
+                "topic every other rep has already read"),
+    HostArm(label="H-gcforce", spec="hopping-12", force_gen2=True,
+            expect_stall=True,
+            why="H1's POSITIVE control: one full generation-2 collection forced inside the "
+                "window, so the mechanism is PRICED rather than argued about"),
+    HostArm(label="H-first", spec="hopping-12",
+            expect_stall=True,
+            why="the untouched loop in the FIRST slot of the rep - added after a smoke pass "
+                "showed the slot, not the arm, tracking the slow mode"),
+    HostArm(label="H-second", spec="hopping-12",
+            expect_stall=True,
+            why="the same untouched loop in a LATER slot, after another arm has already read "
+                "the same topic in this rep - one term moved: read position, nothing else"),
+    HostArm(label="H-backoff100", spec="hopping-12",
+            consumer_extra=(("fetch.queue.backoff.ms", 100),),
+            why="the mechanism's dose-response middle rung: if the stall IS librdkafka's "
+                "fetch-queue backoff timer, its length tracks this setting"),
+    HostArm(label="H-backoff10", spec="hopping-12",
+            consumer_extra=(("fetch.queue.backoff.ms", 10),),
+            why="the bottom rung of the same ladder - predicted stall ~10ms, and the arm's rate "
+                "predicted to land on the fold-only rate"),
+    HostArm(label="H-starve", spec="hopping-12",
+            consumer_extra=(("queued.max.messages.kbytes", 1_024),
+                            ("queued.min.messages", 100)),
+            expect_stall=True,
+            why="H3's POSITIVE control: a local queue too small to stay ahead of the loop, so "
+                "the fetch-stall signature is produced on demand and can be compared"),
+)
+_H_PHASES: dict[str, tuple[str, ...]] = {
+    # Observational first, and nothing is toggled in it: the correlations have to be visible in
+    # the untouched arm before any toggle is worth running (docs/investigating.md).
+    "observe": ("H-base", "T-base"),
+    "toggle": ("H-base", "H-gcoff", "H-queue", "H-fresh"),
+    "positive": ("H-base", "H-gcforce", "H-starve"),
+    # Added after the smoke pass, not planned: H-base ran first in every rep and was slow in
+    # both, where f2-rerun ran tumbling first and found hopping mostly fast. Read position is a
+    # term the pre-registration did not name, so it gets an arm of its own before anything else
+    # is toggled - the same move the key-count control made in the section above.
+    "order": ("H-first", "T-base", "H-second"),
+    # A ladder rather than a toggle: the observational pass localised the stall to one poll of
+    # 0.57-0.66s at a fixed point in the stream, which is what a partially-elapsed 1,000 ms
+    # librdkafka fetch-queue backoff looks like. Moving the timer and predicting the stall's
+    # LENGTH is a stronger claim than removing it.
+    "backoff": ("H-base", "H-backoff100", "H-backoff10"),
+}
+
+
+def _print_host_runs(title: str, runs: list[HostRun]) -> None:
+    """Per-arm distribution AND the per-run correlation table, because a bimodal quantity has no
+    median worth printing on its own - the finding is which runs are slow and what else was true
+    of them."""
+    print(f"\n  {title}")
+    by_arm: dict[str, list[HostRun]] = {}
+    for run in runs:
+        by_arm.setdefault(f"{run.arm} {run.spec}", []).append(run)
+    for label, arm_runs in by_arm.items():
+        rates = sorted(run.rate for run in arm_runs)
+        folds = sorted(run.fold_rate for run in arm_runs)
+        print(f"    {label:<22s} n={len(rates):<3d} median {statistics.median(rates):9,.0f} "
+              f"rec/s  min-max {min(rates):,.0f}-{max(rates):,.0f}  "
+              f"spread {max(rates) / min(rates):.2f}x")
+        print("        wall-clock samples: "
+              + " / ".join(f"{rate:,.0f}" for rate in rates))
+        print(f"        fold-only rate:     median {statistics.median(folds):9,.0f} "
+              f"min-max {min(folds):,.0f}-{max(folds):,.0f}  "
+              f"spread {max(folds) / min(folds):.2f}x")
+        stalled = [run for run in arm_runs if run.empty_polls]
+        print(f"        empty polls: {sum(run.empty_polls for run in arm_runs)} across "
+              f"{len(stalled)}/{len(arm_runs)} runs; gen2 collections "
+              f"{sum(run.gc_gen2 for run in arm_runs)}; collector pause total "
+              f"{sum(run.gc_pause_s for run in arm_runs):.3f}s")
+    print("\n    every run, sorted by rate - the correlation table:")
+    print(f"      {'arm':<10s} {'spec':<11s} {'rep':>3s} {'rec/s':>9s} {'window':>8s} "
+          f"{'fold':>7s} {'consume':>8s} {'empty':>6s} {'>100ms':>7s} {'maxgap':>7s} "
+          f"{'gap@rec':>9s} {'cpu/wall':>8s} {'gen2':>5s} {'gcpause':>8s} {'calib':>7s} "
+          f"{'load1':>6s}")
+    for run in sorted(runs, key=lambda r: r.rate):
+        print(f"      {run.arm:<10s} {run.spec:<11s} {run.rep:>3d} {run.rate:>9,.0f} "
+              f"{run.window_s:>8.3f} {run.fold_s:>7.3f} {run.consume_s:>8.3f} "
+              f"{run.empty_polls:>6d} {run.long_polls:>7d} {run.max_gap_s:>7.3f} "
+              f"{run.max_gap_at:>9,d} "
+              f"{(run.cpu_s / run.window_s if run.window_s else 0):>8.2f} {run.gc_gen2:>5d} "
+              f"{run.gc_pause_s:>8.3f} {run.calib_s * 1e3:>6.1f}m {run.load1:>6.2f}")
+
+
+def run_host_bimodal(args: argparse.Namespace) -> int:
+    """Settle WHY arm H's hopping-12 rate is bimodal, with control arms rather than argument.
+
+    The F2 retake (``f2-rerun``) found arm H's hopping-12 rate bimodal across twelve samples -
+    one at 92,254 rec/s, ten between 372,571 and 487,071 - while its tumbling rate reproduced
+    across sessions. Until that is settled F2 at hopping-12 has no median worth quoting, so this
+    experiment exists to attribute it.
+
+    THREE PHASES, IN THIS ORDER, AND THE ORDER IS THE METHOD:
+
+    1. ``observe`` - the untouched loop at both specifications, many reps, nothing toggled, with
+       every run's window decomposed (fold vs consume vs empty-poll wait), its CPU time, its
+       collector passes and pauses, and a pure-CPU calibration beside it. A hypothesis that
+       cannot show its signature HERE does not deserve a toggle.
+    2. ``toggle`` - paired single-term arms, interleaved within each rep, for the hypotheses the
+       observational pass leaves live.
+    3. ``positive`` - arms that force each candidate mechanism to happen, so it is priced. This
+       is the phase the previous round said the follow-up needed: the slow mode appeared once in
+       twelve, so a toggle arm showing 'no slow runs' proves almost nothing at any affordable n,
+       whereas an arm that makes the mode appear ON DEMAND settles the mechanism in three reps.
+
+    Record count and key count come from ``--floor-records`` and ``--keys`` so this can be run at
+    U6's exact arm-H conditions (128,000 records, 8,000 keys) - the condition under which every
+    slow sample so far was taken.
+    """
+    records = args.floor_records
+    keys = args.keys
+    phases = [p.strip() for p in args.bimodal_phases.split(",") if p.strip()]
+    by_label = {arm.label: arm for arm in _H_ARMS}
+    print("host-bimodal - why arm H's hopping-12 rate is bimodal, with control arms")
+    print(f"  records per run         {records:,}")
+    print(f"  keys                    {keys:,}")
+    print(f"  partitions              {args.partitions}, {args.payload_bytes} B payloads")
+    print(f"  reps                    observe {args.reps}, toggle/positive "
+          f"{args.bimodal_control_reps} (arms interleaved within each rep)")
+    print(f"  phases                  {', '.join(phases)}")
+    print(f"  load limit              {args.load_limit:g} (1-minute load read and recorded "
+          "beside every run)")
+    print("  engine                  none - arm H needs no engine, no sidecar and no classpath")
+
+    admin = AdminClient({"bootstrap.servers": args.bootstrap})
+    shared = _seed_host_topic(args, records, keys, "bimodal")
+    fresh_topics: list[str] = []
+    try:
+        for phase in phases:
+            labels = _H_PHASES[phase]
+            reps = args.reps if phase == "observe" else args.bimodal_control_reps
+            print(f"\n=== phase {phase}: {', '.join(labels)}, {reps} reps ===")
+            for label in labels:
+                print(f"  {label:<10s} {by_label[label].why}")
+            runs: list[HostRun] = []
+            for rep in range(1, reps + 1):
+                print(f"\n  rep {rep}/{reps}")
+                for label in labels:
+                    arm = by_label[label]
+                    topic = shared
+                    if arm.fresh_topic:
+                        topic = _seed_host_topic(args, records, keys, f"fresh-{rep}")
+                        fresh_topics.append(topic)
+                    runs.append(measure_host(args, topic, records, keys, arm.window, arm.spec,
+                                             arm=arm, rep=rep, verbose=True))
+            _print_host_runs(f"phase {phase}", runs)
+    finally:
+        if not args.keep_topics:
+            delete_run_topics(admin, [shared, *fresh_topics])
     return 0
 
 
@@ -1817,6 +2231,7 @@ EXPERIMENTS = {
     "host-reimpl": run_host_reimpl,
     "engine-floor": run_engine_floor,
     "f2-rerun": run_f2_rerun,
+    "host-bimodal": run_host_bimodal,
 }
 
 

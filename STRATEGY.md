@@ -273,8 +273,10 @@ cache was set to zero - and with the cache on and nothing crossing, the wrapper 
 rec/s** at hopping-12 and **169,748 rec/s** at tumbling. **Against it:** retaken with the
 reimplementation arm interleaved in the *same* session, the dictionary still wins **4.70x** at
 tumbling and **6.64x** at hopping-12. So removing the crossing does not by itself close the gap,
-and the 69x/122x above should be read as the crossing's price rather than the residual. (Treat the
-hopping figure as provisional: that arm is bimodal on this harness, and settling it is in flight.)
+and the 69x/122x above should be read as the crossing's price rather than the residual. (Both
+retaken figures are firm: the reimplementation arm's apparent instability was traced to a stalled
+consumer fetch path, not to the arm, and the retake ran below the record count where that stall
+occurs. The **122x** above is itself an artefact of that stall and understates the gap.)
 
 **The substantive change is neither number: it is that the floor was mis-specified.** The
 reimplementation arm is a stateless, non-durable dictionary - no store, no changelog, no restore,

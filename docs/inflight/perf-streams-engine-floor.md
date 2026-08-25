@@ -489,3 +489,351 @@ because until it is settled F2-hopping has no median worth quoting; (2) only the
 `STRATEGY.md`'s windowed-aggregation paragraph is rewritten or annotated - on today's evidence the
 falsification claimed above is **not** established at hopping-12, and annotating it with this
 section is the conservative reading.
+
+### Why arm H's hopping-12 rate is bimodal, settled 2026-08-25
+
+The section above closed by naming this as the first of two things to do, because until it is
+settled *F2 at hopping-12 has no median worth quoting*. It also named the leading suspect - CPython's
+cyclic collector - and, in the same breath, said it was **a hypothesis with no control arm behind
+it**. So this section does not start there. It pre-registers five candidates, runs an observational
+pass that can show each one's signature *before* any toggle exists, and only then toggles.
+
+**Everything from here to the `#### Measured results` marker was written into the tree before the
+first arm ran.** The harness change (`host-bimodal`, `run_host_bimodal`, `_H_ARMS`) was written first, because
+the instrumentation is part of the pre-registration: what gets recorded beside each rate is itself a
+claim about what could be responsible.
+
+#### The condition is chosen to make the slow mode COMMON, not rare
+
+The previous round declined to run a paired toggle and gave the reason: the slow mode appeared once
+in twelve, so three reps would show both sides fast and prove nothing. That is a statement about a
+*pooled* frequency across every key and record condition tried. Split by record count, the twelve
+samples are not one population:
+
+- **64,000 records** (the `f2-rerun` interleave, both key counts): 9 samples, **none** below
+  280,538 rec/s;
+- **128,000 records** (U6's four reps, plus this fork's standalone three at U6's exact conditions):
+  7 samples, **five** at ~90,000 rec/s.
+
+So the slow mode is not 1-in-12 everywhere; at U6's exact arm-H conditions it is roughly 5-in-7, and
+64,000 records is where it hides. **Every arm below therefore runs at 128,000 records and 8,000
+keys** - U6's conditions, the condition under which every slow sample so far was taken. Choosing the
+condition that makes the mode common is what buys the power the previous round did not have; the
+record count is itself pre-registered as a term (H3 predicts it is *the* term).
+
+#### Pre-registered hypotheses and what each predicts
+
+| # | Hypothesis | Predicted signature in the observational pass | Arm that would refute it |
+|---|---|---|---|
+| **H1** | **CPython's cyclic collector.** Hopping-12 allocates a `(key, start)` tuple twelve times per record - 1,536,000 per run against tumbling's twelfth - so whether a generation-2 pass lands inside the timed window is close to a coin toss | Slow runs carry >= 1 gen-2 pass inside the window and fast runs do not; **measured collector pause accounts for most of the ~1.1 s excess**; `cpu/wall` stays near 1 (the process is busy, not waiting) | `H-gcoff` (`gc.disable()`, one term) shows no slow runs, paired against `H-base` in the same rep; and `H-gcforce` prices a forced gen-2 pass |
+| **H2** | **Cold read / per-topic first-read state.** The arm-H topic is REUSED across reps (`_seed_host_topic` sets `retention.ms=-1` for exactly that reason), so the first read of a topic is cold and later ones may be served from page cache | Slow runs cluster at low `rep`; the excess sits in `consume`, not `fold` | `H-fresh` (a topic seeded for this rep and never read) is slow every rep, or is not slow at all |
+| **H3** | **Fetch-path stall.** The loop batch-consumes with `timeout=1.0`; librdkafka's local queue defaults to `queued.max.messages.kbytes=65536`, about 64,000 1 KB records - so at 128,000 records the loop MUST outrun the fetcher and can take an empty poll, which the timed window charges at up to a full second | Slow runs show >= 1 empty poll after the window opened, or one very large `max gap`; **the excess is quantised in ~1.0 s units**; `cpu/wall` collapses (the process is waiting); the fold-only rate is unaffected | `H-queue` (local queue raised past the whole backlog) shows no slow runs; `H-starve` (queue shrunk) produces the signature on demand |
+| **H4** | **Box contention.** The box carries other agent sessions; a ~0.3 s single-threaded burst descheduled or landed on a busy core reads as a slow run | Slow runs correlate with the per-run **pure-CPU calibration** and with 1-minute load; the excess is spread continuously through `fold`, not quantised; `cpu/wall` stays near 1 while the calibration is proportionally slower | The calibration is flat across fast and slow runs |
+| **H5** | **The metric charges wait to the rate.** `records / (ended - started)` counts every second between the first batch and the last, including seconds in which no record was processed. Whatever causes a wait, arm H's "rate" is then a property of the harness's polling rather than of the reimplementation | The **fold-only rate** (`records / fold_s`) is unimodal and stable across every run, while the wall-clock rate is bimodal | The fold-only rate is bimodal too - in which case the slow mode is real work, not accounting |
+
+H1 and H4 predict the process is **busy**; H2, H3 and H5 predict it is **waiting**. `cpu/wall` and
+the fold/consume split separate those two families on the observational pass alone, before a single
+term is toggled - which is the point of running it first.
+
+**H1 can also be refuted on magnitude without any toggle**, and that is the cheapest result
+available: the live dict holds 8,000 x 12 = 96,000 entries plus their tuples, so a full generation-2
+pass traverses a few hundred thousand objects. If `H-gcforce` prices that at milliseconds, no number
+of them accounts for 1.1 s, and H1 is dead whatever the correlation says.
+
+#### Arms
+
+Each moves exactly one term against `H-base`, the untouched loop (`_H_ARMS` in
+`streams_windowing_lab.py`). Three phases, in order, and the order is the method.
+
+| Phase | Arms | What it is for |
+|---|---|---|
+| `observe` | `H-base` (hopping-12), `T-base` (tumbling) | The untouched loop, many reps, **nothing toggled**. `T-base` is the in-session stability control - tumbling has reproduced in every session, so an explanation that would also make tumbling bimodal is wrong |
+| `toggle` | `H-base`, `H-gcoff`, `H-queue`, `H-fresh` | Paired single-term arms, interleaved within each rep, so a rep in which `H-base` is slow and its partner is fast is a *discordant pair* rather than a between-group difference |
+| `positive` | `H-base`, `H-gcforce`, `H-starve` | Arms that make each candidate mechanism happen **on demand**, so it is priced instead of argued about. This is what the previous round said the follow-up needed |
+
+**Power, stated before the runs.** For a toggle arm showing zero slow runs to mean anything, the
+slow mode must be common in its partner. At the pooled `p = 1/12` the previous round quoted, 12 reps
+of a clean toggle arm carry `(1-p)^n = 0.35` - a third of the time you see that by luck, which is why
+it declined to run one. At this section's condition the historical rate is `5/7 = 0.71`, where 12
+reps carry `4e-7`. The paired design is stronger still: with `k` discordant reps all in one
+direction, the exact two-sided sign test is `2^(1-k)`, so **six discordant pairs settle a toggle**.
+`H-gcforce` and `H-starve` need no power argument at all - they do not wait for the mode, they cause
+it.
+
+**Conditions, fixed for every arm.** 128,000 records, 8,000 keys, 8 partitions, 1 KB payloads,
+constant event time past the epoch clamp, single-threaded `confluent_kafka`, **no engine, no sidecar
+and no classpath** (arm H needs none). Compose broker `confluentinc/cp-kafka:7.9.0`, its own port
+and compose project. 1-minute load read and recorded beside every run; every run also carries a
+fixed pure-CPU calibration taken immediately before its window, the window split into fold time and
+consume time, empty-poll count and duration, largest single consume gap, process CPU time across the
+window, and the collector's passes and **measured pause time** inside the window.
+
+**Nothing above this line changes after the first run; corrections land below as dated entries.**
+
+#### Measured results
+
+**Conditions.** Harness `streams_windowing_lab.py`, new experiment `host-bimodal`
+(`run_host_bimodal`, arms in `_H_ARMS`, phases in `_H_PHASES`). Python 3.13.5 with
+`confluent-kafka` 2.15.0 (librdkafka 2.15.0), compose broker `confluentinc/cp-kafka:7.9.0` on
+loopback `127.0.0.1:19099` (compose project `pc-hbimodal`, started and torn down by this run
+alone), 32-core Linux box, 48 GB RAM. 128,000 records, 8,000 keys, 8 partitions, 1 KB payloads,
+constant event time past the epoch clamp, unless a row says otherwise. **No engine, no sidecar and
+no classpath** - arm H needs none, which is why this ran in minutes rather than hours. 1-minute
+load recorded beside every one of the 178 runs: **1.27-8.15**, against a limit of 40, so no run
+ever waited.
+
+#### What settled it, in one line
+
+**The stall is librdkafka's `fetch.queue.backoff.ms`.** When the consumer's local queue passes
+`queued.max.messages.kbytes` (64 MB by default, about 85,000 of these records) librdkafka stops
+fetching and postpones the next fetch by **1,000 ms**. Arm H's aggregation loop then drains the
+queue, arrives at an empty one, and blocks inside `consume()` for the remainder of that timer -
+**one 0.57-0.66 s wait, at a fixed position in the stream, charged in full to a window that
+otherwise takes 0.26 s.** Nothing in arm H is slow; arm H is *waiting*, and
+`records / (ended - started)` counts the wait.
+
+#### Phase `observe` - the untouched loop, nothing toggled
+
+`H-base` hopping-12, n=20, and `T-base` tumbling, n=20, interleaved within each rep.
+
+| Arm | median rec/s | min-max | fold-only rec/s (median) | polls > 100 ms | gen-2 passes | collector pause | cpu/wall |
+|---|---|---|---|---|---|---|---|
+| `H-base` hopping-12 | **94,333** | 93,182-95,088 | **495,980** | **3 in every run** | 0-1 | <= 0.008 s | 0.27-0.31 |
+| `T-base` tumbling | 1,082,531 | 738,540-1,195,233 | 1,802,586 | **0 in every run** | 0 | <= 0.001 s | 1.56-1.65 |
+
+`H-base`'s twenty wall-clock samples: 93,182 / 93,812 / 93,885 / 93,990 / 94,060 / 94,088 / 94,094
+/ 94,213 / 94,306 / 94,310 / 94,355 / 94,405 / 94,411 / 94,420 / 94,492 / 94,557 / 94,621 / 94,647
+/ 94,698 / 95,088.
+
+**Three things are visible before any term is toggled.** The spread is **1.02x** - at 128,000
+records the "slow mode" is not a mode at all, it is the only outcome. Every run's largest wait is
+**0.61-0.66 s and lands at the same record index** (92,545 in 19 of 20). And `cpu/wall` is
+**0.27-0.31**: the process is idle for three quarters of its own measured window, which rules out
+every hypothesis that predicts work.
+
+#### Phase `order` - the confound the smoke pass exposed, refuted
+
+A 2-rep smoke ran before the arms were final and showed `H-base` slow in both reps - but `H-base`
+ran *first* in each rep, where `f2-rerun` runs tumbling first. Read position is a term the
+pre-registration did not name, so it got an arm before anything else was toggled (n=12 each,
+interleaved as `H-first`, `T-base`, `H-second` on one shared topic).
+
+| Arm | median rec/s | min-max |
+|---|---|---|
+| `H-first` (first read of the rep) | 93,438 | 87,517-94,804 |
+| `H-second` (after `T-base` read the same topic) | 93,927 | 91,456-94,842 |
+
+**Read order is worth 1.005x. Refuted** - and with it the "an early rep is disproportionately
+likely to be slow" reading of the historical samples.
+
+#### Phase `toggle` - the pre-registered paired arms
+
+n=12 each, interleaved within every rep, at 1-minute load 5.31-7.43.
+
+| Arm | One term moved | median rec/s | min-max | vs `H-base` | polls > 100 ms |
+|---|---|---|---|---|---|
+| `H-base` | - | 91,871 | 79,817-94,440 | 1.00x | 3 in every run |
+| `H-gcoff` | `gc.disable()` for the window | 93,120 | 86,333-94,242 | **1.01x** | 3 in every run |
+| `H-fresh` | topic seeded this rep, never read | 91,371 | 51,480-93,372 | **0.99x** | 3 in every run |
+| `H-queue` | local queue raised past the whole backlog | **355,205** | 190,638-437,165 | **3.87x** | **0 in every run** |
+
+**`H-gcoff` verified itself**: collector pause was exactly `0.000 s` on all twelve runs, so the
+toggle demonstrably reached the run - and the rate did not move. **`H-fresh`** carries the one
+outlier of the whole session (51,480 rec/s, a 1.734 s wait) and it is the same signature, not a
+different one.
+
+#### Phase `backoff` - the arm that names the mechanism
+
+n=12 each, interleaved, one term: librdkafka's `fetch.queue.backoff.ms`.
+
+| Arm | `fetch.queue.backoff.ms` | median rec/s | min-max | fold-only (median) | polls > 100 ms | cpu/wall |
+|---|---|---|---|---|---|---|
+| `H-base` | 1,000 (librdkafka's default) | 94,650 | 93,370-95,186 | 510,030 | 3 | 0.26-0.30 |
+| `H-backoff100` | 100 | **436,569** | 424,129-447,529 | 513,786 | **0** | 1.21-1.29 |
+| `H-backoff10` | 10 | **430,678** | 407,176-449,563 | 514,542 | **0** | 1.21-1.29 |
+
+**Non-overlapping** - `H-base`'s maximum is 95,186 and `H-backoff100`'s minimum is 424,129 - and
+**12 of 12 discordant pairs in the same direction**, exact two-sided sign test `2^-11 = 4.9e-4`.
+The three arms' **fold-only** rates are identical (510,030 / 513,786 / 514,542): the toggle changes
+nothing about the aggregation, only about the waiting.
+
+**One prediction inside this arm was refuted.** The ladder was registered expecting the stall's
+*length* to track the setting - 100 ms in, 100 ms of stall out. It does not: at 100 ms the stall
+disappears entirely rather than shrinking. The reason is mechanical and is itself a confirmation -
+the timer only bites if the consumer empties the queue before it expires, and draining 64 MB at
+~510,000 rec/s takes ~125 ms, which is longer than 100 ms and far shorter than 1,000 ms. **The
+response is a threshold, not a proportion.**
+
+#### Phase `positive` - the two arms that make each mechanism happen on demand
+
+n=3 each (the reduced n is named below). These need no power argument: they do not wait for a mode,
+they cause one.
+
+| Arm | median rec/s | window | polls > 100 ms | What it prices |
+|---|---|---|---|---|
+| `H-base` | 94,080 | 1.36 s | 3 | - |
+| `H-gcforce` (one forced `gc.collect(2)` mid-window) | **94,453** | 1.36 s | 3 | **a full generation-2 collection over this working set costs 7-12 ms** |
+| `H-starve` (local queue shrunk to ~1 MB) | **947** | 135 s | **135, each of them 1.001-1.002 s** | **`fetch.queue.backoff.ms` read straight off the clock, 135 times per run** |
+
+`H-starve` is the decisive one: with the queue shrunk so that it refills and re-fills constantly,
+the consume loop takes **135 waits of exactly 1.002 s** - at intervals of ~956 records, the shrunken
+queue's capacity - while its **fold-only rate is unchanged at 318,310 rec/s** and `cpu/wall` reads
+`0.00`. The mechanism is not inferred from a correlation; it is reproduced on demand with the timer's
+own value on it.
+
+#### Phase `ladder` - the record count is the term, and tumbling is not immune
+
+3 reps at each count, untouched loop, default fetch config.
+
+| Records | hopping-12 rec/s | stalls in the hopping window | tumbling rec/s | stalls in the tumbling window |
+|---|---|---|---|---|
+| 32,000 | 155,113-318,145 | **none** | 705,517-958,089 | none |
+| 48,000 | 227,199-320,364 | **none** | 392,445-1,003,259 | none |
+| 64,000 | 375,775-398,053 | **none** | 890,508-1,077,448 | none |
+| 80,000 | 163,154-324,199 | **none** | 487,834-1,050,101 | none |
+| 96,000 | 71,061-73,329 | **3/3 runs**, ~0.5 s at record ~84,000-92,000 | 602,690-1,054,509 | none |
+| 128,000 | 91,597-94,395 | **3/3 runs**, ~0.6 s at record ~84,000-92,000 | 1,017,067-1,070,303 | none |
+| 192,000 | 80,281 | **two episodes**, at records ~85,000 **and** ~177,000 | **143,810** | **yes** - 0.742 s at record 177,209 |
+
+**The switch is between 80,000 and 96,000 records**, which is where the backlog first exceeds the
+64 MB local queue by enough for the consumer to drain it before the 1,000 ms timer expires. This is
+the whole of the historical "bimodality": **64,000-record runs sat below the threshold and 128,000-
+record runs above it.** And at 192,000 records **tumbling stalls too** - it is not a property of the
+hopping specification, it is a race between the fetcher's supply rate and the loop's drain rate, and
+tumbling drains fast enough to keep the queue below the cap for longer, not forever.
+
+#### Hypotheses, confirmed and refuted
+
+| # | Hypothesis | Outcome | The arm that settled it |
+|---|---|---|---|
+| **H1** | CPython's cyclic collector | **REFUTED, three ways** | (i) magnitude, no toggle needed: measured collector pause inside a slow window is **2-15 ms** against a **1.1 s** excess, and gen-2 passes are 0 or 1; (ii) `H-gcforce` prices a *forced* full gen-2 pass at **7-12 ms** - you would need ~90 of them; (iii) `H-gcoff`, the paired toggle, moves the rate by **1.01x** with the collector demonstrably off (pause exactly 0.000 s, 12/12) |
+| **H2** | Cold read / per-topic first-read state | **REFUTED, twice** | `H-second` reads a topic another arm read seconds earlier in the same rep and is **1.005x** of `H-first`; `H-fresh` seeds its own topic every rep and is **0.99x** of `H-base` |
+| **H3** | Fetch-path stall | **CONFIRMED, and named exactly** | Three independent arms, each moving one term: `H-backoff100`/`H-backoff10` (the timer) **4.6x**; `H-queue` (the capacity) **3.87x**; `H-starve` (the positive control) reproduces the wait 135 times at its literal 1.002 s. The ladder adds the fourth: the stall switches on between 80,000 and 96,000 records, where the backlog crosses the queue's 64 MB |
+| **H4** | Box contention | **REFUTED** | The per-run pure-CPU calibration is **13.1-26.4 ms across all 178 runs** and flat between fast and slow ones; the slowest and fastest `H-base` runs of the observational pass differ by 1.02x while their calibrations differ by 1.19x in the *wrong* direction. `cpu/wall` at 0.27-0.31 says the process is idle, not contended |
+| **H5** | The metric charges wait to the rate | **CONFIRMED, and it is the reason the quantity looked bimodal** | The **fold-only** rate is 445,501-518,212 rec/s in the observational pass (spread 1.16x) while the wall-clock rate of the *same runs* is 93,182-95,088. Across the toggled arms the fold-only rate is 510,030 / 513,786 / 514,542 - unchanged by every term that moves the wall-clock rate 4.6x |
+
+The two families the pre-registration named separated on the observational pass exactly as it said
+they would: **`cpu/wall` was 0.27-0.31, so the process was waiting**, which killed H1 and H4 before
+a single arm was toggled.
+
+#### The distribution, which is the finding
+
+**98 runs of the untouched loop at 128,000 records** (arms `H-base`, `H-first`, `H-second`,
+`H-gcoff`, `H-fresh`, `H-gcforce` - none of which touches the fetch path), across five phases and
+1-minute loads from 1.27 to 8.15: **every single one between 51,480 and 95,186 rec/s**, 96 of them
+between 79,817 and 95,186. **36 runs with one fetch-path term moved** (`H-backoff100`,
+`H-backoff10`, `H-queue`): **every single one between 190,638 and 449,563 rec/s.** The two
+populations do not overlap and nothing in between was ever observed.
+
+So the quantity was never bimodal in the sense of a coin toss. It was **two deterministic regimes
+selected by the record count**, and the earlier sessions sampled both without recording the term
+that chose between them.
+
+#### Power, as reasoned rather than as hoped
+
+The pre-registration argued from a pooled `p = 1/12` (useless at n=12) and a conditioned
+`p = 5/7` at U6's exact conditions (`(1-p)^12 = 4e-7`). **The measured `p` at 128,000 records is
+1.00 - 98 of 98.** That makes the paired toggles far stronger than planned: `H-base` against
+`H-backoff100` is 12 discordant pairs out of 12, `2^-11 = 4.9e-4`; `H-base` against `H-queue` the
+same. The refutations are equally powered in the other direction - `H-gcoff` produces **zero**
+discordant pairs in 12, against a partner that stalls every time.
+
+**And none of it was load-bearing**, because `H-starve` and `H-gcforce` do not sample a rate: one
+reproduces the mechanism on demand and the other prices it. That is what the previous section meant
+by "a design that can make the slow mode appear on demand", and it is why this settled in one
+session where a paired 3-rep toggle would not have.
+
+#### The guard, and its negative control
+
+**A measurement that could silently become 4.7x wrong now fails instead.** `measure_host` raises
+when its timed window contains a `consume()` call over 100 ms, naming the mechanism, the position
+and the lever; the bimodality arms whose whole purpose is to exhibit the stall carry
+`expect_stall=True` and stand down. Verified in both directions, and the negative control is the
+exact configuration that produced the disputed number:
+
+- `host-reimpl` at U6's conditions (128,000 records, 8,000 keys) - the run that reported **89,821
+  rec/s** in U6 and **92,254** in the section above - now **fails** with
+  `arm H invalid: 3 consume() call(s) over 100ms inside the timed window ... 81% of this window was
+  fetch wait, not aggregation`;
+- the same run with `--host-fetch-queue-backoff-ms 100`, one term moved, **passes**, and reads
+  **393,855 and 433,285 rec/s** at hopping-12 (and 1,118,959 / 1,156,428 at tumbling);
+- the guard then caught a case nobody predicted: **`T-base` at 192,000 records**, where tumbling
+  stalls too, printed `STALLED` rather than a rate.
+
+#### What F2 at hopping-12 should now be quoted as
+
+**The in-session 6.64x stands, and the cross-session 1.32x is now dead for a stated reason rather
+than merely contradicted.**
+
+- The `f2-rerun` retake ran arm H at **64,000 records**, which the ladder places **below the stall
+  threshold**. Its arm-H hopping-12 figure (460,026 rec/s, 390,388-487,071) sits squarely in this
+  session's un-stalled population (190,638-449,563 at 128,000 records; 375,775-398,053 at 64,000).
+  **That comparison was never contaminated, so `D-cache` 69,265 against arm H 460,026 = 6.64x is
+  the figure to quote.**
+- U6's **89,821 rec/s was the artefact**: taken at 128,000 records with librdkafka's default
+  backoff, it is 78-81 percent fetch wait. Corrected at U6's own conditions, through U6's own
+  `host-reimpl` experiment, with one term moved, arm H reads **393,855-433,285 rec/s** - **4.4-4.8x
+  higher**. The 1.32x was a ratio whose denominator was a stalled consumer.
+- **Arm H's hopping-12 rate is a stable quantity after all**, once the term that was never recorded
+  is fixed: **~430,000-440,000 rec/s** on the wall clock at 128,000 records with the fetch queue not
+  starved, and **~510,000 rec/s** on the fold-only clock, which is the figure that does not depend on
+  the harness's polling at all. It was never a coin toss and there was never a second mode.
+- **What this section does NOT license.** No engine ran in this session, so **no new F2 ratio is
+  taken here** - KTD18 forbids pairing these arm-H figures against the wrapper arms measured in the
+  `f2-rerun` session, which is the exact error this whole line of work exists to correct. The
+  hopping-12 verdict remains `f2-rerun`'s 6.64x; what changes is that the 1.32x has a cause, and
+  that arm H now has a defensible number to re-take a ratio against when engine arms next run.
+
+Against the section above, its "Next, in order" item (1) is discharged: **arm H's bimodality is
+settled, F2-hopping does have a median worth quoting, and it is 6.64x.** Item (2) - whether
+`STRATEGY.md`'s windowed-aggregation paragraph is rewritten or annotated - is untouched by this
+work and, on today's evidence, still reads as annotate: the wrapper does not reach the
+reimplementation floor at hopping-12.
+
+#### Deviations, named rather than glossed
+
+- **A 2-rep smoke pass ran before the arm set was final**, and its numbers are reported rather than
+  discarded (92,501 / 91,968 rec/s, both with the 0.57-0.63 s stall, gen-2 pauses of 2-3 ms). It is
+  what exposed the read-order confound and motivated `H-first`/`H-second` and the
+  gap-position instrument. It is counted in the 98.
+- **Two arms and one instrument were added after the pre-registration**, both named at the point
+  they appear above: the `order` phase (read position - a term the pre-registration did not name),
+  and the `backoff` ladder plus the record-count `ladder` (added once the observational pass had
+  localised the stall). The pre-registered arms were all run regardless, including the two the
+  observational pass had already made unlikely.
+- **The `positive` phase ran at n=3, not 12.** `H-starve` takes **135 seconds per run** by
+  construction; three runs of it produce 405 waits of 1.002 s, which is not a quantity more reps
+  would sharpen. A first attempt at n=8 was cut off by a wall-clock limit after 3 reps and its two
+  completed `H-starve` runs agree with these (153 s, 154 waits of 1.001-1.002 s).
+- **The `ladder` phase ran at n=3 per record count**, under a rising ambient load (4.42-8.15). The
+  hopping rates below the threshold vary continuously with that load (155,113-398,053) and are not
+  claimed as anything but "no stall"; the threshold itself is the result and it is 3/3 at every
+  count.
+- **`H-queue`'s spread is wide** (190,638-437,165). A queue raised past the whole backlog makes
+  librdkafka buffer 140 MB eagerly, and its fetch threads then compete with the fold for CPU on a
+  box at load 5-7. It moves the outcome decisively in the right direction; its *median* is not a
+  clean figure for anything and is not used as one.
+- **The instrumentation is inside the loop under test.** Two `time.monotonic()` calls per batch
+  (about 130 per run) plus a `gc.callbacks` entry that runs only when the collector does. The check
+  that it is harmless is that `H-base` reproduces the pre-existing figure: 94,333 here against
+  92,254 in the section above and 89,821 in U6.
+- **`--load-limit 40`, not the harness default of 8**, as in both sections above; the box carried
+  other agent sessions throughout and the per-run load is recorded beside every figure.
+- **The broker is on port 19099 in compose project `pc-hbimodal`**, torn down by this run alone. The
+  leftover `pcnumba-broker-1` on 19096 was left untouched, as was `pc-f2rerun`'s.
+- **No engine arm was run and none was needed.** Every hypothesis on the table was about the
+  reimplementation's own consume loop, and arm H requires no engine, no sidecar and no classpath -
+  which is why 178 measured runs fitted in one session.
+
+#### What is not settled
+
+**Why the previous session's three standalone 128,000-record arm-H runs came out 2/3 fast**
+(423,267 / 92,254 / 417,230) when this session's 98 untouched runs at the same record count are
+98/98 slow. The mechanism explains how that can happen - the stall only arms if the *fetcher*
+outruns the *consumer* far enough to fill 64 MB, so anything that depresses the fetcher (a busier
+broker, a busier box) removes it - and the tumbling arm demonstrates that race in-session from the
+other side, stalling at 192,000 records where it does not at 128,000. But this session never
+reproduced a fast untouched 128,000-record run, at loads from 1.27 to 8.15, so the fetcher-side
+condition is named rather than measured. **What would settle it:** the same ladder run against a
+broker under concurrent read load, with the fetcher's delivery rate recorded per run rather than
+inferred from the consumer's.

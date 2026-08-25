@@ -558,3 +558,44 @@ premise, at the loads named above.
 3. **The U8 follow-up about the test's "default 200ms" comment is closed**: this branch already
    corrected `WindowedAggregatorCallCountTest`'s comment to the verified figures (1000ms engine
    default; TTD overrides to zero), so no follow-up remains.
+
+### Dated correction, 2026-08-25 (second) - arm H's hopping-12 figure was a stalled consumer
+
+**`89,821 rec/s` (arm H, hopping-12, 128,000 records, n=4) does not measure the reimplementation.
+It measures librdkafka's fetch path stalling.** Settled by the `host-bimodal` arm set - five
+pre-registered hypotheses, observational pass before any toggle - recorded in
+[`perf-streams-engine-floor.md`](perf-streams-engine-floor.md) under "Why arm H's hopping-12 rate
+is bimodal". The mechanism: once the consumer's local queue passes `queued.max.messages.kbytes`
+(64 MB, about 85,000 of these records), librdkafka stops fetching and postpones the next fetch by
+`fetch.queue.backoff.ms`, 1,000 ms by default. The fold loop drains the queue, finds it empty, and
+blocks inside `consume()` for the remainder - **78-81 percent of that timed window was fetch wait,
+not aggregation**, and `records / (ended - started)` charges the wait to the rate.
+
+**The threshold sits between 80,000 and 96,000 records**, which is why the figure looked bimodal
+rather than simply wrong: the 64,000-record runs elsewhere in this program are below it and clean,
+and U6's 128,000-record runs are above it. Corrected at U6's own conditions through U6's own
+experiment with one term moved, **arm H reads 393,855-433,285 rec/s** - 4.4-4.8x the recorded
+figure. CPython's cyclic collector, a cold-read effect and box contention were each pre-registered
+and each refuted with their own arm; the collector, the leading suspect, moves the rate 1.01x with
+it demonstrably off.
+
+**What this changes, and it is not the verdict.** The hopping bet is still OFF, and by a wider
+margin than recorded: arm B's max 725 rec/s against a corrected hopping-H of ~393,855 fails F2 by
+roughly **540x**, not ~122x. **So entry 2 above is superseded on its number** - the ~122x/~125x
+discussion is moot, both because its denominator was stalled and because the corrected margin is
+five times larger either way. The tumbling figure (`723,265 rec/s`, 128,000 records) is **not**
+affected: the stall is a fetcher-versus-consumer race that tumbling at this record count wins, and
+the guard below only fires on that arm at 192,000 records.
+
+**Enforced rather than documented, per the repo's rule:** `measure_host` now raises when its timed
+window contains a `consume()` call over 100 ms, naming the mechanism, the position and the lever
+(`--host-fetch-queue-backoff-ms`). Re-running `host-reimpl` at U6's exact conditions now **fails**
+with that diagnosis instead of silently averaging over the stall. **Any future run of `f2-rerun`
+or `placement` above the threshold will now hard-fail** - that is the intent, not a regression.
+
+**Not settled:** why a previous session's three standalone 128,000-record runs came out 2-of-3
+fast, where 98 of 98 untouched runs stalled here. The mechanism explains how it could (anything
+depressing the fetcher removes the stall) and the tumbling arm demonstrates the race in-session,
+but no fast untouched 128,000-record run was reproduced. What would settle it is named in the
+engine-floor note: the record-count ladder against a broker under concurrent read load, with the
+fetcher's delivery rate recorded per run.
