@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Self-test for the three hooks in `.claude/hooks/`. Feeds each one a crafted hook payload on stdin
+# Self-test for the hooks in `.claude/hooks/`. Feeds each one a crafted hook payload on stdin
 # and asserts its verdict.
 #
 # WHY IT EXISTS. docs/agent-harness.md's own rule 3 is "give it a negative control - make it go red
@@ -776,6 +776,182 @@ assert "an immediate second push is throttled" throttled "$got"
 rm -f docs/inflight/pr-90003-selftest.md
 rm -rf "$push_stub"
 rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+
+echo
+echo "--- remind-master-drift-on-push.sh ---"
+
+# The second push-time reporter: what master has that this branch has not, and whether any of it
+# touches files the branch is changing. Informational, like its sibling - the cases below pin the
+# two things that make it useful rather than noise: it reports the SUBJECTS (a count answers no
+# question), and it reports the OVERLAP (which is the actual decision input).
+DRIFT_HOOK="$HOOKS/remind-master-drift-on-push.sh"
+
+# A REAL REMOTE, not a hand-written refs/remotes ref. The hook fetches before reading, and a fixture
+# with no fetchable origin would exercise the degraded path on every case while looking like the
+# healthy one - the same shape as a gate that passes having checked nothing.
+drift_root="$(mktemp -d)"
+drift_stamps="$(mktemp -d)"
+(
+  cd "$drift_root" || exit 1
+  git init -q --bare origin.git
+  # `git init --bare` points HEAD at the git default branch name, which is not `master` on a modern
+  # git - so a clone lands with nothing checked out and every push says "src refspec master does
+  # not match any". Naming it makes the fixture independent of init.defaultBranch.
+  git symbolic-ref HEAD refs/heads/master --git-dir=origin.git 2>/dev/null \
+      || git --git-dir=origin.git symbolic-ref HEAD refs/heads/master
+  git init -q work
+  cd work || exit 1
+  git checkout -q -b master 2>/dev/null || git branch -q -m master
+  printf 'base\n' > shared.txt
+  printf 'base\n' > contended.txt
+  printf 'base\n' > unrelated.txt
+  git add -A
+  git -c user.email=t@e.invalid -c user.name=t commit -qm "base"
+  git remote add origin ../origin.git
+  git push -q origin master
+  # The branch commits an edit to shared.txt only. Master edits shared.txt (overlap by commit),
+  # contended.txt (overlap ONLY once the branch dirties it) and unrelated.txt (never overlap).
+  git checkout -q -b feat/drift
+  printf 'branch\n' >> shared.txt
+  git add -A
+  git -c user.email=t@e.invalid -c user.name=t commit -qm "branch work"
+)
+# MASTER ADVANCES FROM A SECOND CLONE, so the work repo's own `master` stays BEHIND the remote. That
+# is what makes the "pushing master itself" case below mean anything: advancing master inside the
+# work repo leaves local master level with origin/master, the hook exits on the divergence count
+# instead of the branch guard, and deleting the guard entirely still passes. It did - the mutant
+# survived until this fixture was rewritten.
+git clone -q "$drift_root/origin.git" "$drift_root/pusher"
+drift_advance_master() { # <subject> <file>
+  (
+    cd "$drift_root/pusher" || exit 1
+    printf 'master\n' >> "$2"
+    git add -A
+    git -c user.email=t@e.invalid -c user.name=t commit -qm "$1"
+    git push -q origin master
+  )
+}
+(
+  cd "$drift_root/pusher" || exit 1
+  printf 'master\n' >> shared.txt
+  printf 'master\n' >> contended.txt
+  git add -A
+  git -c user.email=t@e.invalid -c user.name=t commit -qm "MASTER_TOUCHED_SHARED"
+)
+drift_advance_master "MASTER_UNRELATED" unrelated.txt
+cd "$drift_root/work" || exit 1
+
+drift_fire() { # <command> -> stdout of the hook, with the SHA throttle cleared but the floor honoured
+    printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
+        | TMPDIR="$drift_stamps" MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null
+}
+drift_clear() { find "$drift_stamps" -maxdepth 1 -name 'pc-master-drift-*' -exec rm -f {} + 2>/dev/null; }
+
+drift_clear
+out="$(drift_fire 'git push')"
+case "$out" in *MASTER_TOUCHED_SHARED*) got=named ;; *) got=missing ;; esac
+assert "the report names master's commit SUBJECTS" named "$got"
+case "$out" in *MASTER_UNRELATED*) got=named ;; *) got=missing ;; esac
+assert "it lists every unmerged commit, not just the overlapping one" named "$got"
+
+# THE OVERLAP IS THE POINT. Without it this is a divergence count, which docs/inflight/AGENTS.md
+# already says not to write down because a command answers it - the command nobody runs.
+case "$out" in *shared.txt*) got=flagged ;; *) got=silent ;; esac
+assert "a file changed on both sides is flagged" flagged "$got"
+case "$out" in *unrelated.txt*) got=flagged ;; *) got=not_flagged ;; esac
+assert "a file only master changed is NOT listed as overlap" not_flagged "$got"
+case "$out" in *contended.txt*) got=flagged ;; *) got=not_flagged ;; esac
+assert "a file the branch has not touched is NOT overlap while clean" not_flagged "$got"
+case "$out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "the drift report never denies" advisory "$got"
+
+# UNCOMMITTED work counts as this branch's: the file you are editing right now is the one you most
+# need told about. `git diff <merge-base>` with no second commit is what reads the working tree, so
+# this case dies if that ever becomes `git diff <merge-base> HEAD` - and the clean control directly
+# above is what makes it evidence rather than a coincidence.
+drift_clear
+printf 'dirty\n' >> contended.txt
+out="$(drift_fire 'git push')"
+case "$out" in *contended.txt*) got=flagged ;; *) got=missed ;; esac
+assert "an UNCOMMITTED edit to a file master touched is flagged" flagged "$got"
+git checkout -q -- contended.txt 2>/dev/null || true
+
+# THROTTLED ON THE SHA, not the clock: the same master tip is reported once, and a master that moves
+# reports again immediately. A clock-only throttle would do the opposite of both.
+drift_clear
+drift_fire 'git push' >/dev/null
+out="$(drift_fire 'git push')"
+[ -z "$out" ] && got=throttled || got=repeated
+assert "the same master tip is not reported twice" throttled "$got"
+
+drift_advance_master "MASTER_MOVED_AGAIN" later.txt
+out="$(drift_fire 'git push')"
+case "$out" in *MASTER_MOVED_AGAIN*) got=reported ;; *) got=silent ;; esac
+assert "a master that MOVED reports again despite the throttle" reported "$got"
+
+# The fetch floor is the only clock in the hook, and it exists so a push loop cannot become a fetch
+# loop. With the floor restored, the run above has just written the stamp, so this must stay silent
+# even though master moved.
+drift_advance_master "MASTER_MOVED_UNDER_THE_FLOOR" floor.txt
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' \
+        | TMPDIR="$drift_stamps" bash "$DRIFT_HOOK" 2>/dev/null)"
+[ -z "$out" ] && got=held || got=fetched
+assert "the fetch floor holds a second push inside the window" held "$got"
+
+# NEGATIVE CONTROLS. Same three as the sibling: a message mentioning push, a non-git binary, and the
+# branch that has nothing to inherit.
+drift_clear
+out="$(drift_fire 'git commit -m "ready to push"')"
+[ -z "$out" ] && got=silent || got=fired
+assert "a commit message mentioning push does not fire" silent "$got"
+out="$(drift_fire 'npm push')"
+[ -z "$out" ] && got=silent || got=fired
+assert "a non-git binary does not fire" silent "$got"
+
+# The shared detector in lib/hook-common.sh must reach this hook too - `git -C <path> push` was
+# silently unmatched for most of the sibling hook's life.
+drift_clear
+out="$(drift_fire 'git -C /some/path push')"
+case "$out" in *MASTER_TOUCHED_SHARED*) got=reported ;; *) got=silent ;; esac
+assert "reminds on: git -C /some/path push" reported "$got"
+
+# THE `## IN FLIGHT:` ECHO IS DERIVED, NOT COPIED. AGENTS.md carries such a section when something
+# must happen BEFORE any branch merges master; restating that rule inside the hook would be a second
+# copy that keeps asserting itself after the section is deleted. Both directions are pinned, because
+# only the pair proves the hook is reading the file rather than printing a constant.
+drift_clear
+out="$(drift_fire 'git push')"
+case "$out" in *"binds any branch merging master"*) got=echoed ;; *) got=absent ;; esac
+assert "no IN FLIGHT section means nothing is claimed" absent "$got"
+
+printf '# fixture\n\n## IN FLIGHT: do the thing before you merge master\n\nbody\n' > AGENTS.md
+drift_clear
+out="$(drift_fire 'git push')"
+case "$out" in *"do the thing before you merge master"*) got=echoed ;; *) got=absent ;; esac
+assert "a live IN FLIGHT heading is echoed back verbatim" echoed "$got"
+rm -f AGENTS.md
+
+# Local master here is DELIBERATELY behind the remote (the fixture advances master from a second
+# clone), so this case fails the moment the branch guard is removed rather than passing on the
+# divergence count.
+drift_clear
+git checkout -q master
+out="$(drift_fire 'git push')"
+[ -z "$out" ] && got=silent || got=fired
+assert "pushing master itself has nothing to inherit" silent "$got"
+git checkout -q feat/drift
+
+# A branch level with master must stay silent, or the report becomes noise on every push of an
+# up-to-date branch. Cut fresh from the remote ref rather than merged into feat/drift: merging the
+# two would conflict in shared.txt, and a fixture that half-fails tests the error path by accident.
+drift_clear
+git checkout -q -B feat/level origin/master
+out="$(drift_fire 'git push')"
+[ -z "$out" ] && got=silent || got=fired
+assert "a branch already level with master is silent" silent "$got"
+git checkout -q feat/drift
+
+cd "$REPO_ROOT" || exit 1
 
 echo
 echo "--- check-history-rewrite.sh ---"

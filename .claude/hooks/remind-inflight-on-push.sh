@@ -21,6 +21,11 @@
 #
 # THROTTLED per branch, because a push loop would otherwise repeat the whole note every time and
 # teach the reader to skip it.
+#
+# THE PUSH DETECTION AND THE MTIME READ ARE SHARED with remind-master-drift-on-push.sh, in
+# .claude/hooks/lib/hook-common.sh, which owns the reasoning for both. Each was got wrong once in a
+# way that made this hook silently stop working, and a second copy hides the next such bug until
+# somebody re-runs the same experiment on the same platform.
 set -uo pipefail
 
 payload="$(cat 2>/dev/null || true)"
@@ -32,41 +37,15 @@ case "$payload" in
     *) exit 0 ;;
 esac
 
-# TOKENS, NOT SUBSTRINGS - the rule check-squash-subject.sh and check-merge-outstanding-work.sh both
-# state. `git commit -m "ready to push"` must not fire this. git is matched by BASENAME so
-# /usr/bin/git counts; an unbalanced quote makes shlex raise, and that fails open.
-is_push="$(printf '%s' "$payload" | python3 -c '
-import json, shlex, sys
-try:
-    data = json.load(sys.stdin)
-    cmd = data.get("tool_input", {}).get("command", "")
-    toks = shlex.split(cmd)
-except Exception:
-    sys.exit(0)
-for i, t in enumerate(toks):
-    if t.rsplit("/", 1)[-1] == "git":
-        # NO APOSTROPHES ANYWHERE IN THIS BLOCK: it lives inside a single-quoted shell string, so
-        # one quote ends the string and bash then parses Python as shell. That is how this comment
-        # was first written, and the whole hook died with a syntax error on line 53.
-        #
-        # Global git flags take a SEPARATE value token, and dropping only the flag leaves the value
-        # where the subcommand should be: `git -C /path push` put "/path" at rest[0], so the reminder
-        # never fired for the form an agent is most likely to use. It was silently dead for most
-        # pushes in the very session that wrote it. Consume each value with its flag, the way
-        # skip_repo_flags in the sibling hook does for -R and --repo.
-        VALUE_FLAGS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
-        j, rest = i + 1, []
-        while j < len(toks):
-            t = toks[j]
-            if t in VALUE_FLAGS:
-                j += 2; continue
-            if t.startswith("-"):
-                j += 1; continue
-            rest.append(t); break
-        if rest and rest[0] == "push":
-            print("push"); break
-' 2>/dev/null || true)"
-[ "$is_push" = "push" ] || exit 0
+# Resolved before it is sourced, and the hook stays SILENT if the helper is missing rather than
+# erroring into the agent's transcript - bin/lib/node-gate.sh's header owns that reasoning for the
+# gates, and a non-blocking reminder has even less business failing loudly.
+hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
+[ -r "$hook_lib" ] || exit 0
+# shellcheck source=.claude/hooks/lib/hook-common.sh
+. "$hook_lib"
+
+[ "$(hook_git_subcommand "$payload")" = "push" ] || exit 0
 
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
@@ -78,16 +57,9 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 # THROTTLE. Same branch, same hour, one reminder.
 stamp="${TMPDIR:-/tmp}/pc-push-reminder-$(printf '%s' "$branch" | tr '/' '_')"
 if [ -f "$stamp" ]; then
-    # PORTABLE MTIME, read where it is used - on a branch's first push there is no stamp and this
-    # never runs. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and returned nothing while still
-    # exiting 0, so the throttle silently read "no mtime". PROBE the platform once rather than
-    # falling back arm to arm: on GNU, `stat -f %m FILE` exits 1 while PRINTING filesystem prose to
-    # stdout, so a blind `-c || -f` returns a string, not a number.
-    if stat -c %Y . >/dev/null 2>&1; then
-        last="$(stat -c %Y "$stamp" 2>/dev/null)"   # GNU coreutils
-    else
-        last="$(stat -f %m "$stamp" 2>/dev/null)"   # BSD / macOS
-    fi
+    # Portable mtime - hook-common.sh owns why this probes the platform instead of chaining `-c`
+    # into `-f`. On a branch's first push there is no stamp and this never runs.
+    last="$(hook_file_mtime "$stamp")"
     # ANYTHING THAT IS NOT A TIMESTAMP MEANS REMIND, not stay silent - the safe direction for a
     # reminder, where the guards in check-merge-outstanding-work.sh and bin/check-pr-ready.sh must
     # instead assume live work. Reminding twice costs a paragraph; skipping loses the only prompt
