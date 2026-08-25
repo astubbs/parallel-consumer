@@ -208,11 +208,11 @@ public class ConsumerManager<K, V> {
                             throw new OffsetCommitBudgetExceededException(msg(
                                     "Offset commit gave up after {} attempt(s) and {}, having spent its whole " +
                                             "offsetCommitTimeout of {}.{} To allow longer, raise offsetCommitTimeout. " +
-                                            "PC shuts down rather than continuing because there is no way yet to hand " +
-                                            "this decision to your application - see " +
-                                            "https://github.com/astubbs/parallel-consumer/issues/317",
+                                            "What happens next is the configured commitFailureHandler's decision " +
+                                            "(astubbs/parallel-consumer#317) - the default policy shuts PC down " +
+                                            "(fail fast), and CommitFailurePolicies has canned alternatives.",
                                     tryCount, elapsed, offsetCommitTimeout, retriesWereReachable(tryCount)),
-                                    timeoutException);
+                                    timeoutException, tryCount, elapsed, offsetsToSend);
                         }
                     } catch(SaslAuthenticationException authenticationException) {
                         // We should honor the user configured SaslAuthenticationException timeout here.
@@ -242,11 +242,11 @@ public class ConsumerManager<K, V> {
                                             "having spent its whole saslAuthenticationRetryTimeout of {} (retries are " +
                                             "spaced by saslAuthenticationExceptionRetryBackoff, currently {}). To ride " +
                                             "out longer authentication outages, raise saslAuthenticationRetryTimeout. " +
-                                            "PC shuts down rather than continuing because there is no way yet to hand " +
-                                            "this decision to your application - see " +
-                                            "https://github.com/astubbs/parallel-consumer/issues/317",
+                                            "What happens next is the configured commitFailureHandler's decision " +
+                                            "(astubbs/parallel-consumer#317) - the default policy shuts PC down " +
+                                            "(fail fast), and CommitFailurePolicies has canned alternatives.",
                                     tryCount, elapsed, saslAuthenticationRetryTimeout, saslAuthenticationRetryBackOff),
-                                    authenticationException);
+                                    authenticationException, tryCount, elapsed, offsetsToSend);
                         }
                     }
                 }

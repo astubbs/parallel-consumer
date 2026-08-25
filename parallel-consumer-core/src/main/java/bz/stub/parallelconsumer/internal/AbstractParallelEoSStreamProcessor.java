@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.state.WorkManager;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
 import lombok.*;
@@ -34,6 +35,8 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -71,6 +74,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
 
     public static final Duration GRACE_PERIOD_FOR_OVERALL_SHUTDOWN = Duration.ofSeconds(10);
+
+    /**
+     * How long the control thread waits for a single {@link CommitFailureHandler} decision before proceeding
+     * fail-safe as {@link CommitFailureHandler.CommitFailureDecision#SHUT_DOWN}. Deliberately a constant
+     * rather than a user option - a handler that needs longer than this to decide is hung, not thinking. Static and
+     * settable only as a test seam, the same shape as {@link BrokerPollSystem#getLongPollTimeout()}.
+     */
+    @Setter
+    @Getter
+    private static Duration commitFailureHandlerTimeBound = Duration.ofSeconds(30);
 
 
     @Getter(PROTECTED)
@@ -209,6 +222,31 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final AtomicBoolean commitCommand = new AtomicBoolean(false);
 
     /**
+     * Guards a commit cycle and the {@link #commitCommand} flag together - what {@code synchronized
+     * (commitCommand)} used to do, as a lock that can be declined instead of a monitor that cannot.
+     * <p>
+     * <b>Why a {@link ReentrantLock}: a rebalance callback may only ever {@code tryLock}.</b> A monitor has no
+     * such thing, and that is the whole AB-BA deadlock of astubbs#29 / confluentinc#857 - the control thread
+     * holds this while blocked inside {@code ConsumerOffsetCommitter.commitAndWait()}, which only the
+     * broker-poll thread can answer, while that same poll thread sits in {@link #onPartitionsRevoked} waiting
+     * to enter. Neither can move, and the member stops answering the group. See
+     * {@code docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md},
+     * which owns the diagnosis; {@link #tryCommitOffsetsOnRevoke()} is the declining side.
+     * <p>
+     * <b>Why it still guards the flag as well</b>, which that write-up argues against ("do not overload a
+     * lock's identity", proposing a separate lock for the flag). Since it was written, the serialization
+     * became load-bearing: the seam's hot-loop fix relies on a commit command being placeable only
+     * <em>between</em> commit cycles, never during one, so that a CONTINUE decision consuming the command
+     * cannot race a request placed mid-commit (see {@link #decideCommitFailureOutcome} and
+     * {@code MockConsumerCommitFailureDecisionTest#pendingCommitCommandDoesNotHotLoopAfterContinue}, whose
+     * determinism note states it). Splitting the two would silently drop such a request. What the write-up
+     * actually warns against - a blocking acquisition on a callback path - is fixed by the {@code tryLock},
+     * not by the split. Its other warning is taken: this is deliberately NOT called {@code commitLock},
+     * because {@link #maybeAcquireCommitLock()} already means the producer's transaction lock.
+     */
+    private final ReentrantLock commitCycleLock = new ReentrantLock();
+
+    /**
      * Multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} to have in our processing queue, in order to make
      * sure threads always have work to do.
      */
@@ -225,6 +263,117 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Time of last successful commit
      */
     private Instant lastCommitTime;
+
+    // --- commit-failure seam accounting (astubbs#317), maintained beside lastCommitTime -------------------------
+
+    /**
+     * The commit-failure seam's history, held as ONE immutable value swapped atomically rather than as separate
+     * mutable fields (astubbs#317).
+     * <p>
+     * <b>Two threads write it</b>, so there is no single-writer field here to lean on: the control thread (an
+     * exhaustion in {@link #decideCommitFailureOutcome}, and the reset a successful cycle takes in
+     * {@link #commitOffsetsThatAreReady()}) and the broker-poll thread, which runs the consumer's rebalance
+     * callbacks - {@link #onPartitionsAssigned} replaces the whole record, and the revocation-time commit inside
+     * {@link #onPartitionsRevoked} reaches that same success reset.
+     * <p>
+     * Updated one field at a time, that costs correctness twice over. A reset racing the non-atomic increment is
+     * lost, carrying a stale exhaustion streak into a fresh assignment - which graduates a bounded CONTINUE policy
+     * to a premature SHUT_DOWN of an instance that had already healed. And {@code buildCommitFailureContext},
+     * reading the fields one by one, could pair a new {@code assignmentEpoch} with the previous assignment's
+     * streak - exactly what {@link CommitFailureContext}'s epoch scoping promises cannot happen. One atomic swap
+     * gives every reader a single coherent generation instead. (Which generation a racing writer lands on is
+     * ordering, not lost state, and is unchanged from before.)
+     */
+    private final AtomicReference<CommitFailureAccounting> commitFailureAccounting =
+            new AtomicReference<>(CommitFailureAccounting.atConstruction(Instant.now()));
+
+    /**
+     * One coherent generation of the commit-failure seam's history - see {@link #commitFailureAccounting} for why
+     * these four move together. Every transition returns a new instance, so a reader sees all of a change or none
+     * of it.
+     */
+    @Value
+    @RequiredArgsConstructor(access = PRIVATE)
+    static class CommitFailureAccounting {
+
+        /**
+         * Feeds {@link CommitFailureContext#getAssignmentEpoch()}: bumped on every assignment callback, so a
+         * stateful handler can notice that history predating the current assignment no longer applies. The rest of
+         * the rebalance lane's history scoping happens alongside the bump in
+         * {@link AbstractParallelEoSStreamProcessor#onPartitionsAssigned}.
+         */
+        long assignmentEpoch;
+
+        /**
+         * The epoch for {@link CommitFailureContext#getTimeSinceLastSuccessfulCommit()} when no commit has ever
+         * succeeded in this assignment - so time-based handler bounds work from the first exhaustion.
+         */
+        Instant assignmentStartTime;
+
+        /**
+         * When a commit last completed without a terminal failure in the current assignment; {@code null} until one
+         * has. Distinct from {@link AbstractParallelEoSStreamProcessor#lastCommitTime}, which is the commit-cadence
+         * clock and is also advanced on a CONTINUE decision to restore the cadence.
+         */
+        Instant lastSuccessfulCommitTime;
+
+        /**
+         * Feeds {@link CommitFailureContext#getConsecutiveExhaustedBudgets()}: budgets exhausted in a row with no
+         * intervening successful commit. Reset on success and on assignment change.
+         */
+        int consecutiveExhaustedBudgets;
+
+        /**
+         * Before the first assignment the time epoch counts from construction, so there is always an epoch and
+         * never an absent-state sentinel.
+         */
+        static CommitFailureAccounting atConstruction(Instant constructionTime) {
+            return new CommitFailureAccounting(0, constructionTime, null, 0);
+        }
+
+        CommitFailureAccounting nextAssignment(Instant assignedAt) {
+            return new CommitFailureAccounting(assignmentEpoch + 1, assignedAt, null, 0);
+        }
+
+        CommitFailureAccounting budgetExhausted() {
+            return new CommitFailureAccounting(assignmentEpoch, assignmentStartTime, lastSuccessfulCommitTime,
+                    consecutiveExhaustedBudgets + 1);
+        }
+
+        CommitFailureAccounting commitSucceeded(Instant succeededAt) {
+            return new CommitFailureAccounting(assignmentEpoch, assignmentStartTime, succeededAt, 0);
+        }
+
+        /**
+         * The epoch rule (see {@link CommitFailureContext#getTimeSinceLastSuccessfulCommit()}): while no commit has
+         * succeeded in the current assignment, measured from {@link #assignmentStartTime}. Time-based bounds are
+         * therefore reachable from the very first failure.
+         */
+        Duration timeSinceLastSuccessfulCommit(Instant now) {
+            Instant successEpoch = lastSuccessfulCommitTime != null ? lastSuccessfulCommitTime : assignmentStartTime;
+            return Duration.between(successEpoch, now);
+        }
+    }
+
+    /**
+     * The commit-failure seam's OWN pause axis (astubbs#317): engaged by a CONTINUE decision under
+     * {@link ParallelConsumerOptions.CommitFailureContinueMode#PAUSE_INTAKE}, released by the next successful
+     * commit (or a fresh assignment). Deliberately NOT the user-visible {@link #state} machine: that field's
+     * RUNNING&lt;-&gt;PAUSED pair carries exactly one pause reason, so borrowing it would let the seam's release
+     * silently resume a user {@link #pauseIfRunning()} - or the user's {@link #resumeIfPaused()} silently cancel
+     * the seam's protection. The two axes are composed in {@link #retrieveAndDistributeNewWork}: new work is drawn
+     * only when BOTH allow it. During DRAINING the close path wins and this flag does not gate the drain.
+     * <p>
+     * Volatile: written by the control thread's decision loop and by whichever thread runs a successful commit
+     * (the rebalance-path commit runs on the broker-poll thread); read by the control thread's distribution gate.
+     */
+    private volatile boolean commitFailurePauseActive;
+
+    /**
+     * Runs {@link CommitFailureHandler} decisions, so user code executes on neither the control thread nor the
+     * broker-poll thread. Single daemon thread, created lazily on the first terminal commit failure.
+     */
+    private ExecutorService commitFailureHandlerExecutor;
 
     @Override
     public boolean isClosedOrFailed() {
@@ -280,6 +429,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
     private Gauge statusGauge;
+
+    /**
+     * The commit-failure seam's meters (astubbs#317): one increment per exhausted budget, plus gauges over the
+     * accounting fields above - so a continuing-but-failing instance is visible from a dashboard, not only from the
+     * ERROR log each exhaustion emits. Registered in {@link #initMetrics()}; the gauge fields hold the strong
+     * references micrometer needs to keep observing.
+     */
+    private Counter commitFailureExhaustionsCounter;
+    private Gauge commitFailureConsecutiveExhaustionsGauge;
+    private Gauge commitTimeSinceLastSuccessGauge;
+    private Gauge commitFailureSeamStateGauge;
 
     private Duration shutdownTimeout;
 
@@ -349,6 +509,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.loadFactorGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.DYNAMIC_EXTRA_LOAD_FACTOR,
                 dynamicExtraLoadFactor, DynamicLoadFactor::getCurrentFactor);
         this.statusGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.PC_STATUS, this, pc -> pc.state.getValue());
+        this.commitFailureExhaustionsCounter =
+                pcMetrics.getCounterFromMetricDef(PCMetricsDef.COMMIT_FAILURE_EXHAUSTIONS);
+        this.commitFailureConsecutiveExhaustionsGauge = pcMetrics.gaugeFromMetricDef(
+                PCMetricsDef.COMMIT_FAILURE_CONSECUTIVE_EXHAUSTIONS, this,
+                pc -> pc.commitFailureAccounting.get().getConsecutiveExhaustedBudgets());
+        this.commitTimeSinceLastSuccessGauge = pcMetrics.gaugeFromMetricDef(
+                PCMetricsDef.COMMIT_TIME_SINCE_LAST_SUCCESS, this, pc -> pc.secondsSinceLastSuccessfulCommit());
+        this.commitFailureSeamStateGauge = pcMetrics.gaugeFromMetricDef(
+                PCMetricsDef.COMMIT_FAILURE_SEAM_STATE, this, pc -> pc.commitFailureSeamState().getValue());
         new ExecutorServiceMetrics(this.getWorkerThreadPool().get(), "pc-user-function-executor",
                 USER_FUNCTION_EXECUTOR_PREFIX,
                 pcMetrics.getCommonTags()).bindTo(pcMetrics.getMeterRegistry());
@@ -512,8 +681,25 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            // commit any offsets from revoked partitions BEFORE truncation
-            commitOffsetsThatAreReady();
+            // commit any offsets from revoked partitions BEFORE truncation - declining to, rather than
+            // blocking, if the control thread is mid-commit
+            try {
+                tryCommitOffsetsOnRevoke();
+            } catch (OffsetCommitBudgetExceededException revocationTimeExhaustion) {
+                // The rebalance lane's fourth handler-free exit (astubbs#317): a commit whose budget - sync
+                // or transactional - exhausts DURING revocation is a DEFERRAL, not a decision point. This runs
+                // inside the rebalance callback, so there is no waiter to act on a handler's answer, and failing
+                // the callback would turn one slow commit into a failed rebalance and a dead instance. So: no
+                // handler, no kill - the offsets were never marked committed, the truncation below hands them to
+                // the new assignee to resolve by reprocessing, and this thread carries on. Adds no locking of
+                // any kind here: a rebalance callback may only ever tryLock, which is the caller's job
+                // (tryCommitOffsetsOnRevoke) and takes the same deferral disposition when it declines.
+                log.warn("Offset commit budget exhausted during partition revocation - deferring (postponed, not " +
+                        "dropped): the revoked partitions' uncommitted offsets fall to their new assignee to " +
+                        "reprocess. The commit-failure handler is not consulted for revocation-time failures - " +
+                        "there is no commit cycle left in this assignment for a CONTINUE to resume.",
+                        revocationTimeExhaustion);
+            }
 
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
@@ -531,6 +717,42 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
+     * The revocation-time commit, which <b>declines rather than waits</b> when a commit is already running.
+     * <p>
+     * This is the callback half of the astubbs#29 / confluentinc#857 deadlock cut (the lock's javadoc,
+     * {@link #commitCycleLock}, holds the cycle). It runs on the broker-poll thread inside {@code poll()}, which
+     * is the only thread that can ever answer the commit the control thread may already be blocked on. So if the
+     * control thread holds the lock, waiting for it here is not slow - it is <em>permanent</em>: neither thread
+     * can proceed, and the member silently stops answering the group coordinator. A rebalance callback may
+     * therefore only ever {@code tryLock}.
+     * <p>
+     * Declining costs nothing that is not already recoverable, and it is the same disposition the
+     * revocation-time budget exhaustion beside it takes: the offsets were never marked committed, so they stay
+     * dirty and travel to whoever ends up owning the partitions, who reprocesses from where the broker actually
+     * is. That is PC's at-least-once contract doing its ordinary job, traded for the rebalance completing.
+     * <p>
+     * WARN rather than INFO, and it names the contention: this branch is the one that only fires in the window
+     * that used to deadlock, so a run that never logs it has never exercised the fix
+     * (docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md records a
+     * CI run where the fix's own branch was never reached and the log said so, by saying nothing).
+     */
+    private void tryCommitOffsetsOnRevoke() throws TimeoutException, InterruptedException {
+        if (!commitCycleLock.tryLock()) {
+            log.warn("Offset commit SKIPPED during partition revocation - deferring (postponed, not dropped): a " +
+                    "commit is already in progress on the control thread and this callback runs on the " +
+                    "broker-poll thread, the only thread that can answer it. Blocking here would deadlock the " +
+                    "pair permanently (astubbs/parallel-consumer#29, confluentinc/parallel-consumer#857), so the " +
+                    "revoked partitions' uncommitted offsets are left dirty for their new assignee to reprocess.");
+            return;
+        }
+        try {
+            commitOffsetsThatAreReady();
+        } finally {
+            commitCycleLock.unlock();
+        }
+    }
+
+    /**
      * Delegate to {@link WorkManager}
      *
      * @see WorkManager#onPartitionsAssigned
@@ -539,6 +761,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
+
+        // a new assignment starts a new commit-failure history epoch (astubbs#317): a stateful handler's
+        // bounds must not graduate on failures that belonged to partitions this instance may no longer even hold.
+        // One swap, because this runs on the broker-poll thread while the control thread is writing the same
+        // accounting - see the field's javadoc
+        Instant assignedAt = Instant.now();
+        // the new generation is read by whoever next needs it (a failure, or a gauge), not here
+        var ignoredNewGeneration =
+                commitFailureAccounting.updateAndGet(previous -> previous.nextAssignment(assignedAt));
+        // the rebalance-deferral streak is scoped to its assignment for the same reason - the committer keeps
+        // that accounting (it observes the deferrals), so the epoch change is forwarded to it
+        brokerPollSubsystem.onPartitionsAssigned();
+        // without this, an assignment arriving with nothing dirty would never attempt a commit, so a pause
+        // engaged before the rebalance could never release - intake would be stuck for good
+        releaseCommitFailurePauseIfActive("a fresh assignment started a new commit-failure history epoch");
+
         wm.onPartitionsAssigned(partitions);
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
@@ -752,6 +990,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.error("exception during close", e);
             throw e;
         } finally {
+            if (commitFailureHandlerExecutor != null) {
+                // interrupts any still-running (already timed-out and forfeited) handler decision
+                var ignoredNeverStartedTasks = commitFailureHandlerExecutor.shutdownNow();
+            }
             deregisterMeters();
             pcMetrics.close();
             log.debug("Close complete.");
@@ -978,7 +1220,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         //
         if (shouldTryCommitNow) {
             // offsets will be committed when the consumer has its partitions revoked
-            commitOffsetsReportingPollerDeath();
+            commitOffsetsConsultingSeamOnTerminalFailure();
         }
 
         // distribute more work
@@ -1033,10 +1275,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * control thread happens to observe.
      * <p>
      * The broker-poll thread is the only producer of commit responses, so any exception that escapes
-     * its control loop turns every later sync commit into
-     * {@code "Timeout waiting for commit response"} - a message that names neither the failing
-     * subsystem nor the failure. That symptom is what users report (astubbs#177, confluentinc#833) and it points
-     * nowhere near the cause.
+     * its control loop leaves every later sync commit unanswerable. Historically that surfaced as
+     * {@code "Timeout waiting for commit response"} - a message that named neither the failing
+     * subsystem nor the failure, was what users reported (astubbs#177, confluentinc#833), and pointed
+     * nowhere near the cause; today the waiter is told of the death directly and fails fast with it.
+     * Note that budget exhaustion no longer arrives this way at all: it stays on the poll thread's
+     * response channel as a typed commit-failure outcome and is intercepted by
+     * {@link #commitOffsetsConsultingSeamOnTerminalFailure()} - what reaches the poller-death paths
+     * here is genuinely a dead poller.
      * <p>
      * {@link BrokerPollSystem#supervise()} holds the real exception, but the ordinary call at the end
      * of {@link #controlLoop} never reaches it in this scenario: the poller dies <em>while servicing
@@ -1069,6 +1315,228 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
             throw commitFailure;
         }
+    }
+
+    /**
+     * The commit-failure seam's decision loop (astubbs#317, confluentinc#833): the scheduled commit's ONE
+     * interception point for {@link OffsetCommitBudgetExceededException}, the typed outcome the broker-poll thread
+     * publishes when a commit's retry budget is exhausted (see {@code ConsumerOffsetCommitter#maybeDoCommit} - the
+     * poll thread stays alive, which is what makes CONTINUE possible at all).
+     * <p>
+     * The catch is deliberately OUTSIDE {@link #commitOffsetsThatAreReady()}'s {@link #commitCycleLock} block: the
+     * failure propagates out of the lock as an exception, so everything below - above all the user's
+     * {@link CommitFailureHandler} - runs lock-free. A rebalance callback contending for that lock now declines
+     * rather than waits ({@link #tryCommitOffsetsOnRevoke()}), so this is no longer what keeps a slow handler from
+     * stalling a rebalance - but holding the lock across arbitrary user code would still be wrong, and every other
+     * caller (a user's {@code requestCommitAsap}, the close sequence) does still block on it.
+     * <p>
+     * Everything else stays handler-free by construction: genuine poller death and non-retriable commit failures
+     * arrive as other exception types and keep their fatal route through
+     * {@link #commitOffsetsReportingPollerDeath()}; the close sequence's own commit and the revocation-time commit
+     * call {@link #commitOffsetsThatAreReady()} at different sites, which this method does not wrap - the
+     * revocation site catches the exhaustion itself and treats it as a deferral (see
+     * {@link #onPartitionsRevoked}).
+     */
+    private void commitOffsetsConsultingSeamOnTerminalFailure() throws TimeoutException, InterruptedException {
+        try {
+            commitOffsetsReportingPollerDeath();
+        } catch (OffsetCommitBudgetExceededException commitFailure) {
+            decideCommitFailureOutcome(commitFailure);
+        }
+    }
+
+    /**
+     * Assemble the failure's history, consult the configured handler (time-bounded, off-thread), act on the
+     * decision. Runs on the control thread, monitor-free - see
+     * {@link #commitOffsetsConsultingSeamOnTerminalFailure()}.
+     */
+    private void decideCommitFailureOutcome(OffsetCommitBudgetExceededException commitFailure) {
+        if (state == DRAINING || state == CLOSING || state == CLOSED) {
+            // once close (or drain-to-close) has begun, the handler is never consulted - continuing is no longer
+            // an option the application can meaningfully choose, so the failure keeps its historical fatal route
+            log.warn("Commit budget exhausted while shutdown already in progress (state: {}) - not consulting the " +
+                    "commit-failure handler", state, commitFailure);
+            throw commitFailure;
+        }
+
+        // counted here, the seam's single interception point, so every lane's exhaustion - sync, transactional,
+        // and an escalated rebalance-deferral streak - increments exactly once, whatever the decision below. The
+        // swap returns the generation this exhaustion produced, and the context is built from that one value: a
+        // rebalance landing between the two can no longer pair its new epoch with this streak
+        CommitFailureAccounting accounting =
+                commitFailureAccounting.updateAndGet(CommitFailureAccounting::budgetExhausted);
+        commitFailureExhaustionsCounter.increment();
+        CommitFailureContext context = buildCommitFailureContext(commitFailure, accounting);
+
+        // loud regardless of the decision: a continuing-but-failing instance must never be quiet
+        log.error("Offset commit failed terminally - retry budget exhausted after {} attempt(s) in {}. Consecutive " +
+                        "exhausted budgets: {}, time since last successful commit: {}. Consulting the configured " +
+                        "commit-failure handler: {}",
+                commitFailure.getAttemptsMade(), commitFailure.getElapsed(), context.getConsecutiveExhaustedBudgets(),
+                context.getTimeSinceLastSuccessfulCommit(), options.getCommitFailureHandler(), commitFailure);
+
+        CommitFailureHandler.CommitFailureDecision decision = invokeHandlerBounded(context, commitFailure);
+        if (decision == CommitFailureHandler.CommitFailureDecision.CONTINUE) {
+            log.error("Commit-failure handler decided CONTINUE: the failed offsets stay dirty and will be " +
+                    "re-committed on the next commit cycle with a fresh budget; each further exhaustion re-consults " +
+                    "the handler with updated history");
+            maybeEngageCommitFailurePause();
+            // restore the commit cadence - the failed cycle counts as this interval's attempt, so the retry
+            // happens one commitInterval from now rather than immediately in a budget-long hot loop
+            this.lastCommitTime = Instant.now();
+            // ...and consume any commit command still pending from before the failure: the command is only
+            // cleared on the success path, so left in place it re-fires the very next control-loop pass and
+            // turns the cadence reset above into exactly that hot loop. The command's offsets are still dirty
+            // and travel on the cadence retry.
+            clearCommitCommand();
+        } else {
+            log.error("Commit-failure handler decided SHUT_DOWN - closing with the commit failure as the cause");
+            // the same fatal route budget exhaustion always took: the supervisor records it as the failure
+            // reason, runs the close, and getFailureCause() reaches it - byte-compatible with the pre-seam
+            // default
+            throw commitFailure;
+        }
+    }
+
+    /**
+     * @param accounting the ONE generation of {@link #commitFailureAccounting} this context describes - taken by
+     *                   the caller rather than re-read here, so every field of the context belongs to the same
+     *                   assignment epoch
+     */
+    private CommitFailureContext buildCommitFailureContext(OffsetCommitBudgetExceededException commitFailure,
+                                                           CommitFailureAccounting accounting) {
+        return CommitFailureContext.builder()
+                .failure(commitFailure)
+                .offsets(commitFailure.getOffsets())
+                .attemptsMade(commitFailure.getAttemptsMade())
+                .elapsed(commitFailure.getElapsed())
+                .consecutiveExhaustedBudgets(accounting.getConsecutiveExhaustedBudgets())
+                .timeSinceLastSuccessfulCommit(accounting.timeSinceLastSuccessfulCommit(Instant.now()))
+                .commitMode(options.getCommitMode())
+                .assignmentEpoch(accounting.getAssignmentEpoch())
+                .build();
+    }
+
+    /**
+     * Seconds since the last successful commit, observed by {@link PCMetricsDef#COMMIT_TIME_SINCE_LAST_SUCCESS} -
+     * {@link CommitFailureAccounting#timeSinceLastSuccessfulCommit(Instant)} carries the epoch rule.
+     */
+    private double secondsSinceLastSuccessfulCommit() {
+        return commitFailureAccounting.get().timeSinceLastSuccessfulCommit(Instant.now()).toMillis() / 1_000.0;
+    }
+
+    /**
+     * The seam's observable state, observed by {@link PCMetricsDef#COMMIT_FAILURE_SEAM_STATE}. Derived from the
+     * accounting fields on each observation rather than stored, so it can never drift from the behaviour it
+     * reports.
+     */
+    private CommitFailureSeamState commitFailureSeamState() {
+        if (commitFailurePauseActive) {
+            return CommitFailureSeamState.FAILING_PAUSED;
+        }
+        if (commitFailureAccounting.get().getConsecutiveExhaustedBudgets() > 0) {
+            return CommitFailureSeamState.FAILING_CONTINUING;
+        }
+        return CommitFailureSeamState.HEALTHY;
+    }
+
+    /**
+     * Engage the seam's pause if the configured {@link ParallelConsumerOptions#getCommitFailureContinueMode()} asks
+     * for it. Called only from a CONTINUE decision (control thread), which the shutdown guard in
+     * {@link #decideCommitFailureOutcome} already keeps out of DRAINING/CLOSING - and the distribution gate
+     * additionally never lets this flag gate a drain, so the close path always wins.
+     * <p>
+     * INFO on the transition: an operator watching a continuing-but-failing instance needs to see intake stop.
+     */
+    private void maybeEngageCommitFailurePause() {
+        boolean pauseIntakeMode = options.getCommitFailureContinueMode()
+                == ParallelConsumerOptions.CommitFailureContinueMode.PAUSE_INTAKE;
+        if (pauseIntakeMode && !commitFailurePauseActive) {
+            commitFailurePauseActive = true;
+            log.info("Commit-failure pause engaged (commitFailureContinueMode: PAUSE_INTAKE): no new work will be " +
+                    "taken until a commit succeeds; in-flight work continues and completed offsets stay dirty for " +
+                    "the next commit cycle");
+        }
+    }
+
+    /**
+     * Release the seam's pause: the condition it guarded against - work completing that may never be committed -
+     * has passed. Called wherever the seam's failure history resets: a genuinely successful commit (a DEFERRED
+     * cycle does not qualify - see {@link #commitOffsetsThatAreReady()}), and a fresh assignment, whose
+     * commit-failure history no longer applies. Never called from the user's {@link #resumeIfPaused()}, which owns
+     * only the {@link #state} axis.
+     */
+    private void releaseCommitFailurePauseIfActive(String reason) {
+        if (commitFailurePauseActive) {
+            commitFailurePauseActive = false;
+            log.info("Commit-failure pause released ({}): resuming taking new work", reason);
+        }
+    }
+
+    /**
+     * Run the handler off-thread, bounded by {@link #getCommitFailureHandlerTimeBound()}. Fail-safe: a
+     * handler that throws, hangs past the bound, or returns {@code null} decides nothing, and PC proceeds as
+     * {@link CommitFailureHandler.CommitFailureDecision#SHUT_DOWN}. When the handler threw, its exception is
+     * attached to {@code commitFailure} as suppressed, so the recorded failure names both.
+     */
+    private CommitFailureHandler.CommitFailureDecision invokeHandlerBounded(CommitFailureContext context,
+                                                                            OffsetCommitBudgetExceededException commitFailure) {
+        CommitFailureHandler handler = options.getCommitFailureHandler();
+        Future<CommitFailureHandler.CommitFailureDecision> decisionFuture =
+                getCommitFailureHandlerExecutor().submit(() -> handler.onCommitFailure(context));
+        long deadlineNanos = System.nanoTime() + getCommitFailureHandlerTimeBound().toNanos();
+        boolean interruptedWhileWaiting = false;
+        try {
+            while (true) {
+                long remainingNanos = deadlineNanos - System.nanoTime();
+                if (remainingNanos <= 0) {
+                    var ignoredMayHaveCompleted = decisionFuture.cancel(true); // best effort - the decision is forfeit either way
+                    log.error("Commit-failure handler did not decide within its time bound of {} - proceeding " +
+                            "fail-safe as SHUT_DOWN", getCommitFailureHandlerTimeBound());
+                    return CommitFailureHandler.CommitFailureDecision.SHUT_DOWN;
+                }
+                try {
+                    var decision = decisionFuture.get(remainingNanos, TimeUnit.NANOSECONDS);
+                    if (decision == null) {
+                        log.error("Commit-failure handler returned null - proceeding fail-safe as SHUT_DOWN");
+                        return CommitFailureHandler.CommitFailureDecision.SHUT_DOWN;
+                    }
+                    return decision;
+                } catch (ExecutionException handlerThrew) {
+                    Throwable handlerFailure = handlerThrew.getCause() != null ? handlerThrew.getCause() : handlerThrew;
+                    log.error("Commit-failure handler itself threw - proceeding fail-safe as SHUT_DOWN, reporting " +
+                            "both the commit failure and the handler's error", handlerFailure);
+                    commitFailure.addSuppressed(handlerFailure);
+                    return CommitFailureHandler.CommitFailureDecision.SHUT_DOWN;
+                } catch (TimeoutException handlerTooSlow) {
+                    // loop: the deadline check above turns this into the fail-safe SHUT_DOWN
+                } catch (InterruptedException interrupted) {
+                    // NOT a fail-safe trigger: interrupting the control thread is this class's ROUTINE wake-up
+                    // mechanism (notifySomethingToDo - worker completions, requestCommitAsap, close all use it),
+                    // so treating it as SHUT_DOWN would let any background wake-up convert a decision in
+                    // progress into a shutdown - measured: a concurrent requestCommitAsap did exactly that.
+                    // Remember it, keep waiting out the bound, and restore the flag for the control loop's own
+                    // handling once the decision is in.
+                    interruptedWhileWaiting = true;
+                }
+            }
+        } finally {
+            if (interruptedWhileWaiting) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private ExecutorService getCommitFailureHandlerExecutor() {
+        if (commitFailureHandlerExecutor == null) {
+            commitFailureHandlerExecutor = Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "pc-commit-failure-handler");
+                // daemon: an abandoned (timed-out) handler must not hold the JVM open after PC closes
+                thread.setDaemon(true);
+                return thread;
+            });
+        }
+        return commitFailureHandlerExecutor;
     }
 
     /**
@@ -1117,8 +1585,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         int gotWorkCount = 0;
 
-        //
-        if (state == RUNNING || state == DRAINING) {
+        // Two pause axes, composed: the user-visible state machine AND the commit-failure seam's own flag -
+        // new work is drawn only when both allow it. During DRAINING the close path wins: the drain must be able to
+        // finish even though the pause's release condition (a successful commit) may never arrive, so the seam flag
+        // deliberately does not gate it - consistent with the shutdown guard in decideCommitFailureOutcome, which
+        // keeps the handler (and so any new pause) out of the close entirely.
+        boolean userStateAllowsNewWork = state == RUNNING || state == DRAINING;
+        boolean seamPauseBlocksNewWork = commitFailurePauseActive && state != DRAINING;
+        if (userStateAllowsNewWork && !seamPauseBlocksNewWork) {
             if (isWorkerPoolShutDown()) {
                 // don't take work there is nowhere to run - taking it would only get it dropped at the submit,
                 // uncommitted, for redelivery after rebalance
@@ -1554,12 +2028,40 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Visible for testing
      */
     protected void commitOffsetsThatAreReady() throws TimeoutException, InterruptedException {
-        log.trace("Synchronizing on commitCommand...");
-        synchronized (commitCommand) {
+        log.trace("Acquiring the commit cycle lock...");
+        // blocking, as it always was, for every control-thread path. The ONE caller that may not block is the
+        // revocation callback, which reaches this through tryCommitOffsetsOnRevoke() - reentrantly, so the
+        // acquisition here is free once that one has the lock, and this method stays the single observable
+        // commit-cycle entry point (RebalanceEoSDeadlockTest overrides exactly this to see the revoke-time commit)
+        commitCycleLock.lock();
+        try {
             log.debug("Committing offsets that are ready...");
             committer.retrieveOffsetsAndCommit();
             clearCommitCommand();
             this.lastCommitTime = Instant.now();
+            if (committer.lastCommitWasDeferred()) {
+                // A DEFERRED cycle (rebalance-class: postponed, not dropped) advances only the cadence clock
+                // above - it reached no broker, so it is not a success (astubbs#317). Treating it as one
+                // would advance lastSuccessfulCommitTime every deferred cycle, laundering the handler's
+                // time-since-last-successful-commit story while nothing commits; wipe the consecutive count
+                // mid-streak; and release the seam pause on the strength of a commit that never happened. The
+                // deferral's own accounting - and its escalation to the handler once a streak outlives the
+                // rebalance-scale deferral escalation bound - lives with the observer of the deferrals,
+                // ConsumerOffsetCommitter#commitDeferringOnRebalance.
+                log.debug("Commit cycle was deferred - commit cadence advances, but the commit-failure seam's " +
+                        "success accounting deliberately does not");
+            } else {
+                // the commit cycle completed without a terminal failure, so the commit-failure seam's history
+                // resets (astubbs#317). One swap: the revocation-time caller of this method is the broker-poll
+                // thread, so this reset races the control thread's exhaustion count - see the field's javadoc
+                Instant succeededAt = this.lastCommitTime;
+                // as in onPartitionsAssigned: the swap is the point, the resulting generation is read elsewhere
+                var ignoredHealedGeneration =
+                        commitFailureAccounting.updateAndGet(previous -> previous.commitSucceeded(succeededAt));
+                releaseCommitFailurePauseIfActive("a commit succeeded");
+            }
+        } finally {
+            commitCycleLock.unlock();
         }
     }
 
@@ -1732,8 +2234,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     public void requestCommitAsap() {
         log.debug("Registering command to commit next chance");
-        synchronized (commitCommand) {
+        // takes the commit cycle lock, so a request placed while a commit is running waits for it - unchanged
+        // from the monitor this replaced, and relied upon: see the lock's javadoc
+        commitCycleLock.lock();
+        try {
             this.commitCommand.set(true);
+        } finally {
+            commitCycleLock.unlock();
         }
         notifySomethingToDo();
     }
@@ -1766,17 +2273,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     private boolean isCommandedToCommit() {
-        synchronized (commitCommand) {
+        commitCycleLock.lock();
+        try {
             return this.commitCommand.get();
+        } finally {
+            commitCycleLock.unlock();
         }
     }
 
     private void clearCommitCommand() {
-        synchronized (commitCommand) {
+        // reentrant: the commit cycle calls this while already holding the lock
+        commitCycleLock.lock();
+        try {
             if (commitCommand.get()) {
                 log.debug("Command to commit asap received, clearing");
                 this.commitCommand.set(false);
             }
+        } finally {
+            commitCycleLock.unlock();
         }
     }
 

@@ -199,8 +199,28 @@ public class ParallelConsumerOptions<K, V> {
          * <p>
          * Failure:
          * <p>
-         * Commit lock: If the system cannot acquire the commit lock in time, it will shut down for whatever reason, the
-         * system will shut down (fail fast) - during the shutdown a final commit attempt will be made. The default
+         * Transaction commit: if committing the transaction keeps failing until the whole-operation retry budget
+         * ({@link #offsetCommitTimeout}) is spent, the configured {@link CommitFailureHandler} decides what happens
+         * next. The default - and the historical behaviour - is to shut down (fail fast,
+         * {@link CommitFailurePolicies#shutDown()}); a handler may instead decide to continue to the next commit
+         * cycle. While continuing in this mode, record intake is always paused
+         * ({@link CommitFailureContinueMode#PAUSE_INTAKE} is enforced by {@link #validate()} - EoS cannot keep
+         * producing past a failed transaction), and the in-flight transaction is first recovered - completed if the
+         * broker in fact accepted it, otherwise aborted - so the uncommitted offsets stay dirty and recommit with
+         * the next cycle.
+         * <p>
+         * <b>Only the input side is recovered on the abort lane.</b> Recovery prefers completion precisely to keep
+         * this window small, but when it has to abort, the records that work already produced into that
+         * transaction are never visible (as above) and are <em>not</em> re-produced: work that has already
+         * COMPLETED has no replay machinery, so its source offsets merely stay dirty and commit with the next
+         * transaction, carrying no output with them. Continuing across an aborted transaction is therefore
+         * at-most-once for those outputs. If that is unacceptable, keep the default
+         * {@link CommitFailurePolicies#shutDown()}: shutting down leaves those offsets uncommitted, so a restart
+         * redelivers the records, reruns the work and re-produces its output.
+         * See {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
+         * <p>
+         * Commit lock: if the system cannot acquire the commit lock in time, it will shut down (fail fast) regardless
+         * of the commit-failure handler - during the shutdown a final commit attempt will be made. The default
          * timeout for acquisition is very high though - see {@link #commitLockAcquisitionTimeout}. This can be caused
          * by the user processing function taking too long to complete.
          * <p>
@@ -361,6 +381,52 @@ public class ParallelConsumerOptions<K, V> {
      */
     @Builder.Default
     private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.FAIL;
+
+    /**
+     * The seam for reacting when an offset commit fails terminally - its retry budget spent without success (see
+     * {@link OffsetCommitBudgetExceededException}). The handler decides between shutting down (the default and
+     * historical behaviour, {@link CommitFailurePolicies#shutDown()}) and continuing to the next commit cycle.
+     * <p>
+     * Canned policies, including the recommended bounded-continue, live in {@link CommitFailurePolicies}.
+     * <p>
+     * Not supported with {@link CommitMode#PERIODIC_CONSUMER_ASYNCHRONOUS} - see {@link #validate()}: async commits
+     * carry no retry budget and report failures only through a later callback, so there is no exhaustion event for
+     * the handler to act on (astubbs#317 records the scoping).
+     *
+     * @see CommitFailureHandler
+     */
+    @Builder.Default
+    private final CommitFailureHandler commitFailureHandler = CommitFailurePolicies.shutDown();
+
+    /**
+     * What happens to record intake while PC continues past a terminally failed commit (the
+     * {@link CommitFailureHandler} returned {@link CommitFailureHandler.CommitFailureDecision#CONTINUE}).
+     */
+    public enum CommitFailureContinueMode {
+
+        /**
+         * Keep taking in and processing new records optimistically - the failed offsets stay dirty and are retried
+         * on the next commit cycle. The default.
+         */
+        KEEP_PROCESSING,
+
+        /**
+         * Stop taking in new work until a commit succeeds again; in-flight work completes. Bounds the amount of
+         * processed-but-uncommitted work (and so the replay on an eventual rebalance).
+         */
+        PAUSE_INTAKE
+    }
+
+    /**
+     * The {@link CommitFailureContinueMode} to use while continuing past a failed commit.
+     * <p>
+     * Not final: {@link #validate()} coerces {@link CommitFailureContinueMode#KEEP_PROCESSING} to
+     * {@link CommitFailureContinueMode#PAUSE_INTAKE} under {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} - EOS
+     * cannot keep producing past a failed transaction - following the same mutate-defaults pattern as
+     * {@link #commitInterval}.
+     */
+    @Builder.Default
+    private CommitFailureContinueMode commitFailureContinueMode = CommitFailureContinueMode.KEEP_PROCESSING;
     /**
      * When a message fails, how long the system should wait before trying that message again. Note that this will not
      * be exact, and is just a target.
@@ -394,8 +460,10 @@ public class ParallelConsumerOptions<K, V> {
     private final Duration sendTimeout = Duration.ofSeconds(10);
 
     /**
-     * Controls how long to block while waiting for offsets to be committed. Only relevant if using
-     * {@link CommitMode#PERIODIC_CONSUMER_SYNC} commit-mode.
+     * Controls how long to block while waiting for offsets to be committed - the whole-operation retry budget whose
+     * exhaustion consults the {@link CommitFailureHandler}. Relevant to {@link CommitMode#PERIODIC_CONSUMER_SYNC} and
+     * {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}; asynchronous commits
+     * ({@link CommitMode#PERIODIC_CONSUMER_ASYNCHRONOUS}) are not bounded by it.
      */
     @Builder.Default
     private final Duration offsetCommitTimeout = Duration.ofSeconds(10);
@@ -474,6 +542,35 @@ public class ParallelConsumerOptions<K, V> {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
         transactionsValidation();
+        commitFailureValidation();
+    }
+
+    private void commitFailureValidation() {
+        // EOS coercion: a failed transactional commit means produced records will never become visible, so
+        // continuing to process (and produce) optimistically is never safe - pause intake instead
+        if (isUsingTransactionCommitMode() && commitFailureContinueMode == CommitFailureContinueMode.KEEP_PROCESSING) {
+            this.commitFailureContinueMode = CommitFailureContinueMode.PAUSE_INTAKE;
+        }
+
+        // async commit-failure handling is excluded for now: async commit failures surface on a later cycle,
+        // detached from the offsets they were for, so the context this seam promises cannot yet be built there
+        if (commitMode == CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS) {
+            // identity check works because CommitFailurePolicies.shutDown() is a shared instance
+            boolean nonDefaultHandler = commitFailureHandler != CommitFailurePolicies.shutDown();
+            boolean nonDefaultContinueMode = commitFailureContinueMode != CommitFailureContinueMode.KEEP_PROCESSING;
+            if (nonDefaultHandler || nonDefaultContinueMode) {
+                throw new IllegalArgumentException(msg(
+                        "Configuring {} or {} is not supported with {} {} - supported commit modes are {} and {}. "
+                                + "Async commits have no retry budget, so there is no exhaustion event for the "
+                                + "handler to act on (astubbs/parallel-consumer#317).",
+                        Fields.commitFailureHandler,
+                        Fields.commitFailureContinueMode,
+                        Fields.commitMode,
+                        commitMode,
+                        CommitMode.PERIODIC_CONSUMER_SYNC,
+                        PERIODIC_TRANSACTIONAL_PRODUCER));
+            }
+        }
     }
 
     private void transactionsValidation() {

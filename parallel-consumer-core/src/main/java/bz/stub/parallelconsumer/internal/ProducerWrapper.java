@@ -218,4 +218,19 @@ public class ProducerWrapper<K, V> implements Producer<K, V> {
     public boolean isTransactionOpen() {
         return this.producerState.equals(BEGIN);
     }
+
+    /**
+     * Re-sync our tracked state with the Producer's own, for the one case where a transaction finishes without a
+     * call of ours driving it: a commit PC stopped waiting on (its budget spent) that then landed anyway, leaving
+     * the Producer's own transaction state {@code READY} -
+     * {@code ProducerManager#recoverExhaustedTransactionIfPending} is the only caller.
+     * <p>
+     * Every other transition here is set by the method that caused it, so without this the tracking stays stale at
+     * {@link ProducerState#BEGIN}: {@link #isTransactionOpen()} would keep answering true, and the next commit
+     * cycle would skip {@code beginTransaction} and send offsets into a transaction that no longer exists.
+     */
+    void markTransactionCompletedExternally() {
+        log.debug("Transaction completed without us driving it - marking tracked state as committed");
+        this.producerState = COMMIT;
+    }
 }

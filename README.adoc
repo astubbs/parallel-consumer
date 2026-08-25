@@ -331,6 +331,7 @@ without operational burden or harming the cluster's performance
 * Solution for the https://en.wikipedia.org/wiki/Head-of-line_blocking["head of line"] blocking problem where continued failure of a single message, prevents progress for messages behind it in the queue
 * Per `key` concurrent processing, per partition and unordered message processing
 * Offsets committed correctly, in order, of only processed messages, regardless of concurrency level or retries
+* Pluggable handling of terminally failed offset commits - fail fast (the default) or continue past the failure under canned bounded policies - see <<commit-failure-handling>> section for more details
 * Batch support in all versions of the API to process batches of messages in parallel instead of single messages.
 ** Particularly useful for when your processing function can work with more than a single record at a time - e.g. sending records to an API which has a batch version like Elasticsearch
 * Vert.x and Reactor.io non-blocking library integration
@@ -1136,8 +1137,28 @@ For implementations details, see the <<Transactional System Architecture>> secti
          * <p>
          * Failure:
          * <p>
-         * Commit lock: If the system cannot acquire the commit lock in time, it will shut down for whatever reason, the
-         * system will shut down (fail fast) - during the shutdown a final commit attempt will be made. The default
+         * Transaction commit: if committing the transaction keeps failing until the whole-operation retry budget
+         * ({@link #offsetCommitTimeout}) is spent, the configured {@link CommitFailureHandler} decides what happens
+         * next. The default - and the historical behaviour - is to shut down (fail fast,
+         * {@link CommitFailurePolicies#shutDown()}); a handler may instead decide to continue to the next commit
+         * cycle. While continuing in this mode, record intake is always paused
+         * ({@link CommitFailureContinueMode#PAUSE_INTAKE} is enforced by {@link #validate()} - EoS cannot keep
+         * producing past a failed transaction), and the in-flight transaction is first recovered - completed if the
+         * broker in fact accepted it, otherwise aborted - so the uncommitted offsets stay dirty and recommit with
+         * the next cycle.
+         * <p>
+         * <b>Only the input side is recovered on the abort lane.</b> Recovery prefers completion precisely to keep
+         * this window small, but when it has to abort, the records that work already produced into that
+         * transaction are never visible (as above) and are <em>not</em> re-produced: work that has already
+         * COMPLETED has no replay machinery, so its source offsets merely stay dirty and commit with the next
+         * transaction, carrying no output with them. Continuing across an aborted transaction is therefore
+         * at-most-once for those outputs. If that is unacceptable, keep the default
+         * {@link CommitFailurePolicies#shutDown()}: shutting down leaves those offsets uncommitted, so a restart
+         * redelivers the records, reruns the work and re-produces its output.
+         * See {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
+         * <p>
+         * Commit lock: if the system cannot acquire the commit lock in time, it will shut down (fail fast) regardless
+         * of the commit-failure handler - during the shutdown a final commit attempt will be made. The default
          * timeout for acquisition is very high though - see {@link #commitLockAcquisitionTimeout}. This can be caused
          * by the user processing function taking too long to complete.
          * <p>
@@ -1150,6 +1171,48 @@ For implementations details, see the <<Transactional System Architecture>> secti
          * @see ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitInterval
          */
 ----
+
+[[commit-failure-handling]]
+=== Handling Terminal Commit Failure
+
+When an offset commit keeps failing until its retry budget (the `offsetCommitTimeout` option) is spent, the default is to shut down (fail fast) - the historical behaviour.
+The `commitFailureHandler` option makes that decision pluggable ({issues_link}/317[astubbs#317], {base_confluent_url}/issues/833[confluentinc#833]): the handler receives a `CommitFailureContext` - the failure, the offsets it was for, and history such as consecutive exhausted budgets and time since the last successful commit - and returns `SHUT_DOWN` or `CONTINUE`.
+Continuing leaves the offsets dirty, so they are retried with the next commit cycle.
+
+Canned policies live in `CommitFailurePolicies`:
+
+* `shutDown()` - always fail fast. The default.
+* `continueBounded()` - continue until a bound trips, then shut down; the recommended way to opt in. The default bounds are 5 consecutive exhausted budgets, 5 minutes without a successful commit, or 20 exhaustions within a 30 minute rolling window.
+* `continueUnbounded()` - never shut down for a commit failure; explicit opt-in only.
+
+While continuing, the `commitFailureContinueMode` option governs record intake: `KEEP_PROCESSING` (the default) keeps working optimistically, while `PAUSE_INTAKE` stops taking on new work until a commit succeeds again, bounding the replay an eventual rebalance would cause.
+In the transactional mode `KEEP_PROCESSING` is always coerced to `PAUSE_INTAKE` - EoS cannot keep producing past a failed transaction - and the in-flight transaction is recovered (completed if the broker in fact accepted it, otherwise aborted) before the offsets are committed again.
+
+WARNING: On that abort lane, only the input side is recovered.
+Records that already completed work had produced into the aborted transaction are never visible to `read_committed` consumers and are *not* re-produced - completed work has no replay machinery, so its source offsets simply stay dirty and commit with the next transaction, carrying no output with them.
+Continuing across an aborted transaction is therefore at-most-once for those outputs; recovery prefers completion precisely to keep that window small.
+If it is unacceptable, keep the default `shutDown()` - shutting down leaves those offsets uncommitted, so a restart redelivers the records, reruns the work and produces its output again.
+
+IMPORTANT: The handler operates in the `PERIODIC_CONSUMER_SYNC` and `PERIODIC_TRANSACTIONAL_PRODUCER` commit modes only.
+It does not operate in `PERIODIC_CONSUMER_ASYNCHRONOUS` (the default mode): asynchronous commits carry no retry budget and report failures only through a later callback, so there is no exhaustion event for a handler to act on.
+Configuring either option in that mode is rejected when the options are validated.
+
+A continuing-but-failing instance stays visible: four meters in the `committer` subsystem track exhaustions, the consecutive-failure streak, time since the last successful commit, and the seam's state - see <<metrics>>.
+
+.Opting in to bounded continue
+[source,java,indent=0]
+----
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(getKafkaConsumer())
+                .commitMode(PERIODIC_CONSUMER_SYNC) // <1>
+                .commitFailureHandler(CommitFailurePolicies.continueBounded()) // <2>
+                .commitFailureContinueMode(PAUSE_INTAKE) // <3>
+                .build();
+----
+
+<1> The handler needs a commit mode with a retry budget - sync (shown) or transactional, not the default async mode.
+<2> Continue past terminally failed commits until a bound trips, then shut down.
+<3> Optional: pause intake of new work while commits are failing, instead of processing optimistically.
 
 [[shutdown]]
 == Shutdown and Close Modes
@@ -1372,6 +1435,32 @@ Ratio between offset metadata payload size and available space
 Distribution Summary `pc.payload.ratio.used{subsystem=offsetencoder}`
 
 Ratio between offset metadata payload size and offsets encoded
+
+==== Committer
+
+**Commit Failure Exhaustions**
+
+Counter `pc.commit.failure.exhaustions{subsystem=committer}`
+
+Total number of exhausted offset-commit retry budgets. Each increment is one terminal commit failure consulting the configured commitFailureHandler - sync, transactional and escalated rebalance-deferral failures all count here
+
+**Commit Failure Consecutive Exhaustions**
+
+Gauge `pc.commit.failure.consecutive.exhaustions{subsystem=committer}`
+
+Number of commit retry budgets exhausted in a row with no intervening successful commit. Resets to 0 on a successful commit and on a fresh partition assignment
+
+**Commit Time Since Last Success**
+
+Gauge `pc.commit.time.since.last.success{subsystem=committer}`
+
+Seconds since the last successful offset commit. While no commit has succeeded in the current assignment yet, measured from the assignment's start (before the first assignment: from instance construction), so the gauge always has an epoch and never reports an absent-state sentinel
+
+**Commit Failure Seam State**
+
+Gauge `pc.commit.failure.seam.state{subsystem=committer}`
+
+Commit-failure seam state, reported as number with following mapping - 0:HEALTHY, 1:FAILING_CONTINUING, 2:FAILING_PAUSED
 
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.

@@ -19,13 +19,13 @@ use_this_when:
 setup:
   options:
     - ParallelConsumerOptions.sendTimeout for producer send completion.
-    - ParallelConsumerOptions.offsetCommitTimeout for PERIODIC_CONSUMER_SYNC.
+    - ParallelConsumerOptions.offsetCommitTimeout for PERIODIC_CONSUMER_SYNC and PERIODIC_TRANSACTIONAL_PRODUCER commits.
 opt_in:
   mechanism: Set the relevant Duration on ParallelConsumerOptions.
   isolated_from_stable_modules: false
 boundaries:
   - A send timeout causes the input record to be reprocessed, so align it with producer delivery settings and idempotency needs.
-  - offsetCommitTimeout applies only to synchronous consumer commit mode.
+  - offsetCommitTimeout is a whole-operation retry budget for the synchronous consumer and transactional producer commit modes; asynchronous commits are not bounded by it. Exhausting it consults the commit-failure handler - see commit-failure-seam.yaml.
 references:
   - label: Timeout options
     path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
