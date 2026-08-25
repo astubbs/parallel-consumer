@@ -1145,7 +1145,17 @@ For implementations details, see the <<Transactional System Architecture>> secti
          * ({@link CommitFailureContinueMode#PAUSE_INTAKE} is enforced by {@link #validate()} - EoS cannot keep
          * producing past a failed transaction), and the in-flight transaction is first recovered - completed if the
          * broker in fact accepted it, otherwise aborted - so the uncommitted offsets stay dirty and recommit with
-         * the next cycle. See {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
+         * the next cycle.
+         * <p>
+         * <b>Only the input side is recovered on the abort lane.</b> Recovery prefers completion precisely to keep
+         * this window small, but when it has to abort, the records that work already produced into that
+         * transaction are never visible (as above) and are <em>not</em> re-produced: work that has already
+         * COMPLETED has no replay machinery, so its source offsets merely stay dirty and commit with the next
+         * transaction, carrying no output with them. Continuing across an aborted transaction is therefore
+         * at-most-once for those outputs. If that is unacceptable, keep the default
+         * {@link CommitFailurePolicies#shutDown()}: shutting down leaves those offsets uncommitted, so a restart
+         * redelivers the records, reruns the work and re-produces its output.
+         * See {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
          * <p>
          * Commit lock: if the system cannot acquire the commit lock in time, it will shut down (fail fast) regardless
          * of the commit-failure handler - during the shutdown a final commit attempt will be made. The default
@@ -1177,6 +1187,11 @@ Canned policies live in `CommitFailurePolicies`:
 
 While continuing, the `commitFailureContinueMode` option governs record intake: `KEEP_PROCESSING` (the default) keeps working optimistically, while `PAUSE_INTAKE` stops taking on new work until a commit succeeds again, bounding the replay an eventual rebalance would cause.
 In the transactional mode `KEEP_PROCESSING` is always coerced to `PAUSE_INTAKE` - EoS cannot keep producing past a failed transaction - and the in-flight transaction is recovered (completed if the broker in fact accepted it, otherwise aborted) before the offsets are committed again.
+
+WARNING: On that abort lane, only the input side is recovered.
+Records that already completed work had produced into the aborted transaction are never visible to `read_committed` consumers and are *not* re-produced - completed work has no replay machinery, so its source offsets simply stay dirty and commit with the next transaction, carrying no output with them.
+Continuing across an aborted transaction is therefore at-most-once for those outputs; recovery prefers completion precisely to keep that window small.
+If it is unacceptable, keep the default `shutDown()` - shutting down leaves those offsets uncommitted, so a restart redelivers the records, reruns the work and produces its output again.
 
 IMPORTANT: The handler operates in the `PERIODIC_CONSUMER_SYNC` and `PERIODIC_TRANSACTIONAL_PRODUCER` commit modes only.
 It does not operate in `PERIODIC_CONSUMER_ASYNCHRONOUS` (the default mode): asynchronous commits carry no retry budget and report failures only through a later callback, so there is no exhaustion event for a handler to act on.

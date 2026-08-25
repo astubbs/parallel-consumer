@@ -39,6 +39,7 @@ boundaries:
   - Classification is per commit RPC and all-or-nothing - the whole failed commit's offsets are retried or abandoned together; there is no per-partition or per-offset decision.
   - The handler runs on the control thread; a slow handler delays the commit cycle, so it must decide quickly rather than perform I/O or block.
   - Under PERIODIC_TRANSACTIONAL_PRODUCER, KEEP_PROCESSING is always coerced to PAUSE_INTAKE, and the in-flight transaction is recovered (completed or aborted) before offsets are recommitted.
+  - CONTINUE under PERIODIC_TRANSACTIONAL_PRODUCER is at-most-once for output records when recovery has to abort - records already produced into the aborted transaction are not re-produced (completed work has no replay machinery; only its source offsets stay dirty), so an application that cannot lose those outputs must keep the default shutDown(), where a restart replays the work.
 references:
   - label: Feature issue
     url: https://github.com/astubbs/parallel-consumer/issues/317

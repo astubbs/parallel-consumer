@@ -11,6 +11,8 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -37,13 +39,20 @@ public class CommitFailureContext {
 
     /**
      * The offsets that were in play - what the failed commit was trying to commit.
+     * <p>
+     * Defensively copied into an unmodifiable map by the builder, so a handler cannot mutate it and cannot be
+     * surprised by a caller mutating the map it passed in - the same contract
+     * {@link OffsetCommitBudgetExceededException#getOffsets()} holds, now held for <em>any</em> caller of
+     * {@link #builder()} rather than only for PC's own construction path.
      */
     Map<TopicPartition, OffsetAndMetadata> offsets;
 
     /**
-     * How many commit attempts were made within the budget that this failure exhausted.
+     * How many commit attempts were made within the budget that this failure exhausted. A {@code long} to match
+     * {@link OffsetCommitBudgetExceededException#getAttemptsMade()}, its only producer - a narrower type here
+     * would need a clamp, and a clamp is a silent lie about a long-running outage.
      */
-    int attemptsMade;
+    long attemptsMade;
 
     /**
      * How long was spent inside the failed commit cycle - from the first attempt of the exhausted budget to giving
@@ -77,4 +86,25 @@ public class CommitFailureContext {
      * policy resets its rolling window on a change).
      */
     long assignmentEpoch;
+
+    /**
+     * Partial builder - Lombok merges its generated members into this class, so only the customised setter is
+     * written by hand.
+     */
+    public static class CommitFailureContextBuilder {
+
+        /**
+         * Takes the defensive copy at the type, rather than trusting each caller to. Lombok's generated setter
+         * would store the caller's own map, leaving a public value type whose contents another thread could
+         * still change while a handler reads them; users construct these directly to unit-test their handlers,
+         * so the guarantee has to live here and not at PC's single internal call site.
+         *
+         * @param offsets the offsets the failed commit was trying to commit; {@code null} stays {@code null},
+         *                as it would with the generated setter
+         */
+        public CommitFailureContextBuilder offsets(Map<TopicPartition, OffsetAndMetadata> offsets) {
+            this.offsets = offsets == null ? null : Collections.unmodifiableMap(new HashMap<>(offsets));
+            return this;
+        }
+    }
 }

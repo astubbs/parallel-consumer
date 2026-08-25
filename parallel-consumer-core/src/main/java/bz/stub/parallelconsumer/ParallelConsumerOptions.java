@@ -207,7 +207,17 @@ public class ParallelConsumerOptions<K, V> {
          * ({@link CommitFailureContinueMode#PAUSE_INTAKE} is enforced by {@link #validate()} - EoS cannot keep
          * producing past a failed transaction), and the in-flight transaction is first recovered - completed if the
          * broker in fact accepted it, otherwise aborted - so the uncommitted offsets stay dirty and recommit with
-         * the next cycle. See {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
+         * the next cycle.
+         * <p>
+         * <b>Only the input side is recovered on the abort lane.</b> Recovery prefers completion precisely to keep
+         * this window small, but when it has to abort, the records that work already produced into that
+         * transaction are never visible (as above) and are <em>not</em> re-produced: work that has already
+         * COMPLETED has no replay machinery, so its source offsets merely stay dirty and commit with the next
+         * transaction, carrying no output with them. Continuing across an aborted transaction is therefore
+         * at-most-once for those outputs. If that is unacceptable, keep the default
+         * {@link CommitFailurePolicies#shutDown()}: shutting down leaves those offsets uncommitted, so a restart
+         * redelivers the records, reruns the work and re-produces its output.
+         * See {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
          * <p>
          * Commit lock: if the system cannot acquire the commit lock in time, it will shut down (fail fast) regardless
          * of the commit-failure handler - during the shutdown a final commit attempt will be made. The default
