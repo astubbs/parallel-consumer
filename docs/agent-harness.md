@@ -232,9 +232,12 @@ grants stay in `settings.local.json`, still ignored.
   `.claude/hooks/check-squash-subject.sh`, which refuses a `--subject` that would drop or misstate
   the PR number. It carried `if: Bash(gh pr merge *)` until review pointed out that a prefix match
   misses every shape it exists for (`/usr/local/bin/gh pr merge`, `echo x && gh pr merge`); see
-  *`if` matches a PREFIX* above for the reasoning and the measured cost of removing it. Because it
-  now sees every command, it only matches `gh` in **command position**, so `echo gh pr merge ...`
-  is text rather than a merge.
+  *`if` matches a PREFIX* above for the reasoning and the measured cost of removing it. It finds the
+  merge with a regex over the raw command, **not** a command-position scan - this file claimed the
+  opposite until it was run: an `echo` whose argument spells out a subject-overriding merge is
+  denied, and the near-miss case that reads like a command-position test passes only because its
+  quoting makes `shlex` raise. Erring towards denying is the safe direction for a guard that can
+  only refuse a merge, but do not build on the stronger claim. See *Known gaps*.
 - `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
   `.claude/hooks/check-merge-outstanding-work.sh`, which refuses a `gh pr merge` while this
   session's background tasks are still writing output. A green PR is not a finished PR when a
@@ -323,7 +326,19 @@ one is a case in that file, and the suite goes red against the old parser.
   command. The `PreToolUse` hook covers Claude Code in that window; nothing covers a human.
 - **The `PreToolUse` `if` matches the command as written.** `Bash(git commit *)` does not fire on
   `cd sub && git commit ...`. The git hook covers that case; the Claude-side belt-and-braces does
-  not.
+  not. **And it does not filter reliably in the other direction either** - verified against 2.1.231,
+  the same registration lets a COMPOUND command through to the hook: a `for` loop with a nested `if`
+  and a command substitution reached an always-deny hook and was blocked, while a plain `echo` was
+  correctly filtered out. That is the misfire this harness has now been bitten by twice. Treat `if`
+  as a cheap filter for the common case and nothing more - `pre-commit-gate.sh` decides for itself
+  whether the payload holds a commit.
+- **`check-squash-subject.sh` matches its merge anywhere in the command, not in command position.**
+  An `echo` that merely names one is denied. Unfixed on purpose: the hook can only ever refuse a
+  merge, so over-matching costs a spurious deny carrying an actionable message, while under-matching
+  costs the thing it exists to prevent. The sibling guards (`check-merge-outstanding-work.sh`,
+  `remind-inflight-on-push.sh`, `check-history-rewrite.sh`) scan every token for the same reason.
+  Only `pre-commit-gate.sh` tracks command position, because only it can exit 0 on a miss - which is
+  exactly how it came to have a blind spot worth fixing.
 - **Nothing enforces that a nested `AGENTS.md` has its `CLAUDE.md` bridge.** A check could;
   see below. Until then the `.gitignore` negation is the only place the question is asked - which is
   why the three bridges are enumerated there rather than blanket-negated.
