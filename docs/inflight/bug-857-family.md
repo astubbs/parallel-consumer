@@ -674,3 +674,45 @@ and per the table in
 [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
+
+<!-- post-merge: checked-begin -->
+**Fourteenth sighting, 2026-08-25 - the first `INSTANCE_STALL/NO_WORK_COMPLETED` this ledger has
+recorded, and the thirteenth entry is why it matters.** `Chaos Pain Suite` on
+astubbs/parallel-consumer#357
+([run 32812259117](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117)), 8 of 9
+chaos ITs green, `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` red at 224.7s -
+`TerminalFailureException: probe violation during run`. The PR is named as the run's provenance, the
+way every sighting above names one; it reads the same after that PR merges, since a PR number is
+permanent and this is a record of where the run came from, not a claim about open work.
+<!-- post-merge: checked-end -->
+
+**Seed `7852140587594987229`**, recorded because the artifact expires and the seed is the asset:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=7852140587594987229
+
+**The ordering is the finding.** At `t=+154670ms` the run tripped
+`INSTANCE_STALL/NO_WORK_COMPLETED: instance 70 holds work (queued=0, outForProcessing=43) but has
+returned no work result for 150s (bound 150s) at 27914 results returned`. The 23 violations the
+autopsy then lists are all `CLASS2_STALL/LAG_STAGNATION`, committed offsets stagnant ~154s against
+the 150s bound - the timing bound
+[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md)
+already says is not a correctness verdict. So the interesting violation is the one the autopsy list
+does *not* contain, and reading only that list would have filed this as another `CLASS2_STALL` tally.
+
+The thirteenth sighting recorded **zero** `INSTANCE_STALL` as evidence that astubbs#325's new
+detector was not crying wolf. This is that detector firing for the first time, on an instance holding
+43 records out for processing and completing none - which is the shape this family is named for,
+stated by a probe rather than inferred from lag. **Whether it is a real stall is unsettled**: nobody
+has replayed the seed, and `-Dchaos.diagnoseStallRecovery=true` is the arm that would say whether the
+backlog drains.
+
+**Retrieval note, because this sighting was nearly filed as something else entirely.**
+`gh run view --job <id> --log` returned 990 lines of a job whose real log is ~5000, cutting inside a
+*passing* test and appending the post-job steps - so it presented as a killed process with no
+`Tests run:` anywhere, and was written up as a runner-load kill in
+[`ci-disabled-jobs-and-runner-load.md`](ci-disabled-jobs-and-runner-load.md) before the artifact
+contradicted it. That is the third recorded instance of the trap in
+[`gh-run-view-log-truncation.md`](../solutions/workflow-issues/gh-run-view-log-truncation.md), whose
+own remedy - fixing `docs/ci.md`, which still recommended the failing route - had never been applied.
+It has been now.
