@@ -49,13 +49,36 @@ to 60s/20s so `60+20+20=100s` sat under 150s - and the arithmetic assumed ONE re
 heavy record. Measured reality with several restarts is 281s. A third retune would be the same move
 a third time.
 
+## RESOLVED 2026-08-25 - the replay was run, and this note's prescription is implemented
+
+The `-Dchaos.diagnoseStallRecovery=true` replay the paragraph above says "nobody has run yet" has now
+been run twice, on the two seeds the ledger itself nominated. Both fired the bound and then drained
+completely on a contended box: `6825864417772979246` (2 findings) and `4044221734199516240` (46
+findings) each reached `inFlight=0` with full key coverage. Numbers and the reasoning in
+[`bug-857-family.md`](bug-857-family.md)'s 2026-08-25 entry.
+
+**"Gate on progress; report timing" is implemented as written.** `CLASS2_STALL/LAG_STAGNATION` now
+lands in `ProgressProbe`'s non-gating `observations`; `INSTANCE_STALL` - the "in-flight work never
+sits at zero while a backlog exists" liveness check this note asked for - gates, alongside the
+correctness ledger. `Class2ObservationIT` guards the routing and is untagged, so it runs in every
+default integration build.
+
+**The before/after control arm, same seed and same box:** `4044221734199516240` on
+`ChaosRevokeUnderWorkDrainIT` failed with 46 gating violations, and passes with 41 non-gating
+observations - while the ledger still balanced, no failure cause went unclassified, and
+`INSTANCE_STALL` stayed silent. The suite did not lose its verdict; it lost a false one.
+
+**Why this note is not deleted yet.** The thing it warns against is a demotion being quietly reverted
+by someone who finds a silent detector and "repairs" it. `Class2ObservationIT` is the mechanical
+guard; this note is the reason, and the reason has to outlive the memory of the argument. Delete it
+once the demotion has survived a release and the reasoning has a home in `docs/solutions/`.
+
 ## Related
 
 - `docs/inflight/test-857-revoke-under-work-sightings.md` - the four arms and their numbers
 - `docs/inflight/test-truth-probes-for-internal-state.md` - the same shape of question for internal state
 - `docs/testing.md` - the chaos suite and its probes
-- `docs/inflight/bug-857-family.md` - the sighting ledger. Its **twelfth sighting** is the live test
-  of this critique: the new drain control arm fired `CLASS2_STALL` twice on 2026-08-20, and whether
-  that is a stall or the slowness this note describes is decided by one
-  `-Dchaos.diagnoseStallRecovery=true` replay, which nobody has run yet
+- `docs/inflight/bug-857-family.md` - the sighting ledger, and the record of the replays that
+  settled this. Its **twelfth sighting** was the live test of this critique; its 2026-08-25 entry is
+  the result
 <!-- file-refs: N/A - the sightings ledger arrives with astubbs/parallel-consumer#29, which this branch was split out of; it resolves once that merges -->

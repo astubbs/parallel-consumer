@@ -142,8 +142,26 @@ code:
 | Loss and bounded duplication | `ProgressProbe`'s ledger | a record never arrives, or arrives more often than a disturbance explains |
 | **Per-key ORDERING and concurrency** | `KeyOrderLedger` | a key's offsets going backwards, or two deliveries of one key in flight at once |
 | **A stalled instance** | `InstanceStallProbeIT`, `ProgressProbe` | a member present and heartbeating while making no progress |
-| Lag stagnation (Class 2) | `ProgressProbe` | a committed offset frozen while lag grows, group STABLE |
+| Lag stagnation (Class 2) - **reports, never gates** | `ProgressProbe` observations | a committed offset frozen while lag grows, group STABLE. **A timing measurement: crossing the bound does not fail the run** - see below |
 | **Watching a stall instead of killing it** | `-Dchaos.diagnoseStallRecovery=true` | keeps a stalled run alive so its state can be read |
+
+**Class 2 lag stagnation reports, and only reports - read its findings as speed, never as a verdict.**
+`CLASS2_STALL/LAG_STAGNATION` lands in `ProgressProbe`'s `observations`, not its `violations`: it is
+printed in the run summary and the ambient autopsy, and it fails nothing. The detector watches a
+partition's COMMITTED offset, which one incomplete record legitimately pins while the shard behind it
+completes work normally - so a busy fleet and a wedged one are indistinguishable to it. Three replays
+say so: seeds `4734674029169027864`, `6825864417772979246` and `4044221734199516240` all cross the
+bound and then drain completely, the latter two being the seeds
+[`bug-857-family.md`](inflight/bug-857-family.md) nominated as its strongest evidence.
+
+**Two consequences worth carrying.** A `lagStagnation` peak in the 151-155s band is what a crossed
+150s bound looks like *whatever crossed it* - the probe samples every 5s, so the number is bound plus
+detection latency and encodes no severity; do not read a tight cluster of them across runs as
+corroboration. And the liveness claim the bound was standing in for now belongs to
+`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS - any returned work result re-arms it -
+so it structurally cannot fire on slow-but-progressing. A run where Class 2 observes and
+`INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
+it is untagged deliberately, so it gates every default integration build.
 
 **Recorded but not yet analysed - reach for this before adding instrumentation.** The ledger is an
 event register: it writes down facts and lets the end-of-run assessment decide what they mean. So

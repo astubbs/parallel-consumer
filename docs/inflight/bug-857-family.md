@@ -674,3 +674,69 @@ and per the table in
 [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
+
+## 2026-08-25: the discriminator was finally run, and it closes the `CLASS2_STALL` line of this file
+
+**Every `CLASS2_STALL` entry above is a timing measurement, not a family sighting.** The twelfth
+sighting named the experiment that would decide it - *"replay `4044221734199516240` (34 violations,
+the larger sample) with `-Dchaos.diagnoseStallRecovery=true` and read whether the backlog drains"* -
+and pre-declared both readings. It has now been run, on that seed and on the eleventh sighting's, and
+the answer is the one that entry called the timing-proxy side.
+
+| Seed | Arm | Head | Observations fired | Outcome |
+|---|---|---|---|---|
+| `6825864417772979246` (eleventh sighting - the seed with the plain-master control arm) | `ChaosRevokeUnderWorkIT` | `da91f3f61` (master) | 2 | **drained**: `consumed=251326/250000 started=251326 inFlight=0`, full key coverage, 33s after the bound was crossed |
+| `4044221734199516240` (twelfth sighting's own nominated seed) | `ChaosRevokeUnderWorkDrainIT` | `da91f3f61` (master) | 46 | **drained**: `consumed=251726/250000 inFlight=0`, full key coverage |
+
+**Both ran on a CONTENDED developer box, which biases toward "did not drain".** They drained anyway.
+That asymmetry is what makes a local run worth the minutes here, and it is the reverse of the usual
+caution in [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md):
+that note's "a GREEN replay needs two or three" rule governs an *absent* violation, where contention
+and a quiet schedule are indistinguishable. These runs are not absences - the bound was crossed, 2 and
+46 times, and the run finished anyway. A fired-and-drained replay is positive evidence, and one is
+enough for the same reason one RED replay was.
+
+**The eleventh sighting's master arm does not survive as evidence of a defect, and it is the entry
+that most needs re-reading.** Its argument was that the seed replays RED on plain master, so "this is
+the family's own defect and not something that PR introduced". The first half still holds - the
+schedule really does cross the bound on master, deterministically. The second half does not follow:
+crossing a timing bound on master means master is slow on that schedule, not that master is wedged.
+
+**The ~154s constant was never corroboration, and several entries above read it as such.** The sixth,
+eleventh and twelfth sightings all remark on peaks landing within a few hundred milliseconds of each
+other across runs, branches and machines. That is arithmetic, not signal: the probe samples every 5s
+and the scenario fail-fasts on the first violation, so the peak is always bound plus detection latency
+and can carry no severity information at all. The note above already said "~154s is a signature, not a
+diagnosis"; this is the same point, now with the mechanism rather than the caution.
+
+**What this does NOT close.** The confluentinc#857 wedge is real and `bugs/857-paused-consumption-multi-consumers-bug`
+(astubbs#29) still fixes a real deadlock. What is now established is narrower and more useful: **the
+chaos suite has never reproduced it.** That agrees with
+[`test-chaos-phase2.md`](test-chaos-phase2.md)'s own long-standing assessment - *"a 9-seed sweep found
+0 hits"* - and disagrees with the accumulating shape of this file, which read fourteen timing
+crossings as fourteen sightings.
+
+**The detector that would be a real sighting exists, and has never fired.**
+`INSTANCE_STALL/NO_WORK_COMPLETED` (astubbs#325) watches COMPLETIONS, so it cannot fire on
+slow-but-progressing - it is the wedge signature exactly. The thirteenth sighting is its first full
+exposure: 21 violations in one storm run, every one of them the Class 2 timing bound, zero
+`INSTANCE_STALL`. **Honest limit: "it has never cried wolf" and "it has never had a wolf to catch"
+are not yet distinguishable** - the detector is days old. That is an argument for watching it, not
+for keeping a bound that cries constantly.
+
+**A falsifiable prediction, recorded before the fact.** Land astubbs#29 and the rest of the backlog,
+re-run the chaos suite on a loaded box, and the `CLASS2_STALL` findings continue at roughly the same
+rate - because they are the bound meeting the load, and neither the deadlock fix nor the sequencing
+argument in the contention note touches that. If they instead drop off, this entry is wrong and
+should be marked so loudly.
+
+**Consequences already applied:** the bound now reports instead of gating (`Class2ObservationIT`
+guards the routing), the diagnostic mode's quiet cap no longer silently exceeds the scenario
+`@Timeout` - which is why nobody had run this experiment in the five days since two documents called
+it cheap - and the chaos lane no longer runs several suites at once on one box.
+
+## Delete when
+
+The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
+timing proxy accumulated fourteen sightings. This file may be retired once astubbs#29 lands and the
+remaining open item - the original deadlock - has its own solutions write-up.
