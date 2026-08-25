@@ -298,3 +298,87 @@ Read from this branch's `streams.proto` and the engine that speaks it, not from 
 U1 note's "200ms" figure (no such constant on the 3.9.2 path); and the TTD emit-interval override,
 which was established from bytecode (`javap`) rather than sources because no
 `kafka-streams-test-utils` sources jar is present in `~/.m2`.
+
+### U2 - hot-key throughput, normalised to invocations, 2026-08-25
+
+Predictions restated from the plan's U2, written here before the first measured run. Harness:
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python/demo/streams_windowing_lab.py`
+(new, experiment `hot-key`), using the existing `reduce` operator - already a per-key serial
+dependency across the boundary. Arms matched on host invocations `I` (reduce skips each key's
+first value): arm A ("hot") sends `I + 1` records under ONE key; arm B ("spread") sends `I + K`
+records over `K = 8,000` keys. 1 KB payloads, eight partitions, eight stream threads,
+`commit.interval.ms` set explicitly. Sweep `I` over 32,000 / 64,000 / 128,000, arms interleaved
+A,B, throughput read from the sink topic's broker log-append clock, slope fitted across the
+sweep; every point is at or above the 32,000-invocation warm-up line.
+
+| # | Prediction | Outcome |
+|---|---|---|
+| 1 | Arm A lands near the single-thread band, 6,500-7,000 inv/s (one key -> one partition -> one stream thread) | **shortfall, not a refutation** - 5,502-5,636 inv/s, ~15% below the band; the registered caveat covers it (serial aggregate, different hardware). It did **not exceed** the band, so the interesting branch did not open |
+| 2 | Arm B lands near 9,500 inv/s (the eight-thread plateau), NOT eight times arm A | **the load-bearing half held**: 1.22x arm A at I=64,000, strictly under 4x, nowhere near eight times. The absolute plateau also fell short (6,233-7,003 inv/s vs 9,501), covered by the same caveat. No near-linear scaling, so nothing here reopens bundling or one-session-per-stream-thread |
+| 3 | The achievable bundle size for arm A is one, by construction: the next record for a key cannot cross until the previous accumulator returns | holds by construction |
+
+**Caveat, binding (section 2 above):** a shortfall against 1 or 2 is not a refutation - those
+baselines were measured on an independent per-record transform (`mapValues`), not a per-key serial
+aggregate. What would be interesting: arm A *exceeding* the band, or arm B scaling near-linearly
+with threads, which would reopen bundling and one-session-per-stream-thread. A further hardware
+caveat registered before the run: the published bands were measured on an Apple Silicon macOS
+developer machine; this run is on a 32-core Linux box, so the *ratio* between the arms, the fitted
+slopes and the instrument check are the load-bearing results, and any absolute agreement with the
+published bands is checked but not relied on.
+
+**Conditions.** 32-core Linux box; compose broker `confluentinc/cp-kafka:7.9.0` on loopback
+(`127.0.0.1:19095`, fresh for this session, torn down after); engine on Temurin 17.0.20+8 - with
+the box's ambient `JAVA_TOOL_OPTIONS` capping the engine JVM at `ActiveProcessorCount=8` and
+`MaxRAM 48g` at 20%, applied identically to every run and both arms; Python 3.13.5; gRPC over
+loopback; `num.stream.threads=8`, 8 partitions, `statestore.cache.max.bytes=0`,
+**`commit.interval.ms=200`** (set explicitly by the lab and printed - neither `demo_kafka.py` nor
+`demo_options.py` sets it); 1 KB payloads. Machine quietness: 1-minute load read before **every**
+measured run and recorded with it; runs started only under the load-8 line (per-run start loads
+2.13-7.85; the gate paused 13 times, and the elevated load it waited out was the previous run's
+own decaying workload - the box ran nothing else). Both arms' printed `Topology.describe()` are a
+single sub-topology, source -> reduce -> toStream -> sink, no repartition - groupByKey preserves
+the key, so the arms differ only in the seeded key distribution.
+
+**Validity, all 24 runs:** host-counted invocations equalled `I` exactly (reduce skipped exactly
+one first value per key), sink updates equalled the derived record count (cache off), the engine's
+consumer group read STABLE/8 on every sample after joining, and every sink record carried a broker
+log-append timestamp. No run was discarded.
+
+**Rates, in invocations per second (broker log-append clock; derived record counts beside):**
+
+| Arm | I | records | inv/s mean | min-max | n |
+|---|---|---|---|---|---|
+| A hot (1 key) | 32,000 | 32,001 | 5,617 | 5,109-5,935 | 3 |
+| A hot | 64,000 | 64,001 | 5,636 | 4,780-6,244 | 3 |
+| A hot | 128,000 | 128,001 | 5,542 | 5,285-5,972 | 3 |
+| B spread (8,000 keys) | 32,000 | 40,000 | 7,003 | 6,380-7,603 | 3 |
+| B spread | 64,000 | 72,000 | 6,867 | 5,845-7,698 | 3 |
+| B spread | 128,000 | 136,000 | 6,233 | 4,468-7,699 | 3 |
+
+Fitted slope across the sweep (all nine points per arm at or above the 32,000-invocation warm-up
+line, none discarded): **arm A 182us/invocation (5,502 inv/s steady-state, intercept -0.11s); arm
+B 179us/invocation (5,579 inv/s, intercept -1.50s)**. The two marginal costs are
+indistinguishable at this noise level (arm B's reps at I=128,000 span 16.6-28.7s windows); arm
+B's point-rate advantage sits in its intercept, not its slope.
+
+**Instrument check (R4):** three paired (plain, +1ms-in-the-reducer) arm-A runs at I=32,000.
+Per-invocation cost moved **198 -> 1,290us (delta 1,091us against 1,000us added)**; throughput
+fell 5,446-5,859 -> 753-792 inv/s. The number moves by roughly the added delay per invocation, so
+the harness measures what it claims to.
+
+**Did key spread rescue the hot key? No.** At matched invocations, spreading the serial chain over
+8,000 keys with eight stream threads and eight partitions bought **1.22x** at I=64,000 - and
+nothing at all in the fitted marginal cost (179 vs 182us/invocation). The single-session
+transport's serialised boundary dominates before per-key parallelism can bind, consistent with the
+`transmitLock` finding in
+[`perf-crossing-is-cpu-and-serialised.md`](perf-crossing-is-cpu-and-serialised.md). For the hot
+key itself the achievable bundle size is one by construction - accumulator `n+1` needs accumulator
+`n`, so there is never a second invocation in flight to bundle. **Consequence for the parked
+bundling work: as the plan stated, bundling cannot amortise a serial chain.** A hot-key
+aggregation is outside what bundling can rescue; and on this transport even the spread case left
+little for per-key concurrency, so nothing measured here reopens bundling or
+one-session-per-stream-thread (the latter stays open on its own prior grounds, not this unit's).
+Scope: over the current single-session transport, as section 4 requires.
+
+Harness: `streams_windowing_lab.py` (path above), experiment `hot-key` - one lab, an experiment
+selector, later units add a function rather than a sibling script.
