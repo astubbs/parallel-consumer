@@ -61,6 +61,13 @@ jobs:
       - name: Self-test the local issue-reference checker's body plumbing
         run: bash bin/test-check-issue-refs.sh
 
+      # The local file-reference mirror has no `gh` plumbing, but it does have an EXIT CODE
+      # CONTRACT that .githooks/pre-commit reads: 1 blocks the commit, 2 warns and lets it through.
+      # A node that cannot start exits 1, so the script used to report "dangling references found"
+      # for a run that checked nothing. These cases pin both codes.
+      - name: Self-test the local file-reference checker's exit codes
+        run: bash bin/test-check-file-refs.sh
+
       # Runs BEFORE the gate below, per bin/AGENTS.md. It tests the script's ARGUMENT PARSING, which
       # is a permission boundary rather than a formatting concern: the reviewer is granted
       # `bin/todo-index.sh --check` exactly so it can ask whether the index is stale without being

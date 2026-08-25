@@ -136,12 +136,16 @@ if [ -r "$OWNER_DOC" ]; then
     for v in $INFLIGHT_TYPES $INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS; do
         grep -q "\`${v}\`" "$OWNER_DOC" || note "vocabulary '$v' is in bin/lib/inflight-tags.sh but never described in $OWNER_DOC"
     done
-    # every impact the doc's table declares must be one the gate accepts
+    # every impact the doc's table declares must be one the gate accepts.
+    # `sed -E`, NOT a basic regex: `\+` and `\|` are GNU BRE extensions that BSD sed does not
+    # implement, so on macOS this expression matched nothing and extracted ZERO impacts - this whole
+    # direction of the agreement check passed by never running. It reported success, which is worse
+    # than failing. Measured: 0 rows on BSD against 17 with the form below.
     while IFS= read -r v; do
         [ -n "$v" ] || continue
         in_set "$v" "$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS" \
             || note "$OWNER_DOC documents impact '$v', which bin/lib/inflight-tags.sh does not accept"
-    done <<< "$(sed -n 's/^| `\([a-z-]\+\)` | \(bug\|task\|feature\|register\).*/\1/p' "$OWNER_DOC")"
+    done <<< "$(sed -E -n 's/^\| `([a-z-]+)` \| (bug|task|feature|register).*/\1/p' "$OWNER_DOC")"
 fi
 
 if [ "$problems" -gt 0 ]; then
