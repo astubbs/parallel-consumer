@@ -361,7 +361,8 @@ class WindowedAggregatorCallCountTest {
     }
 
     /**
-     * The on-window-close emit pass is throttled by a WALL-clock interval (default 200ms), and TTD's mock wall
+     * The on-window-close emit pass is throttled by a WALL-clock interval (default 1000ms in the engine; TTD
+     * itself overrides it to zero via putIfAbsent - U8 verified both against the 3.9.2 sources), and TTD's mock wall
      * clock never moves on its own - so with the default, closed windows sit unemitted behind the throttle and
      * the count depends on construction-time wall clock. Interval zero makes the emit pass run on every record,
      * which is what makes scenario 8 deterministic.
