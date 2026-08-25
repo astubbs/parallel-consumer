@@ -742,3 +742,46 @@ It also puts the fourteenth sighting's `INSTANCE_STALL` in relief. This run prod
 violations of one kind, the pre-existing timing bound - so that detector is not firing on every
 chaos run, which is what an over-eager new detector would look like.
 <!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**Sixteenth sighting, 2026-08-25 - a COOPERATIVE `CLASS2_STALL` in CI, and the third consecutive red
+on one branch.** `Chaos Pain Suite` on astubbs/parallel-consumer#357
+([run 32815394117](https://github.com/astubbs/parallel-consumer/actions/runs/32815394117)), **two**
+tests red in one run:
+
+| Test | Seed | Violations |
+|---|---|---|
+| `ChaosRevokeUnderWorkCooperativeIT` | `5843692436386966698` | 3, all `CLASS2_STALL/LAG_STAGNATION` |
+| `ChaosRevokeUnderWorkIT` (eager) | `4651058060322796970` | 2, all `CLASS2_STALL/LAG_STAGNATION` |
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=5843692436386966698
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4651058060322796970
+
+**This is the CI cooperative `CLASS2_STALL` the third and fifth sightings said would settle
+something.** The second sighting reasoned from a cooperative arm passing in the same run to
+"whatever remains is eager-protocol-specific"; the fifth recorded a cooperative `CLASS2_STALL`
+locally and said an unconfirmed one could not retire that inference. This one is in CI, with an
+explicit probe verdict rather than a shutdown-path symptom. **The eager-specific reading does not
+survive it** for `CLASS2_STALL` specifically - both assignors trip the same bound on the same box
+in the same run. It says nothing either way about the deadlock in astubbs#29, which is a different
+claim about a different mechanism.
+
+**The three-run series is the other half, and it points at the bound rather than the code.** Three
+consecutive chaos runs on this branch - which changes agent hooks, shell gates and documentation, and
+no product code - went red on **four distinct tests across five distinct seeds**, every violation the
+same `CLASS2_STALL/LAG_STAGNATION` timing bound, with violation counts falling 23, 17, then 3 and 2.
+A hard stall does not usually present as two partitions grazing a 150s bound; a bound set close to
+the machine's actual timing does.
+
+**Contention remains a hypothesis, and the pairing this ledger already names was present.**
+`Performance (optional)` ran 06:04:37-06:07:22, overlapping the chaos job that started 06:04:36.
+
+**The discriminator is still unrun, and here is why, so nobody assumes it was tried and cleared.**
+An uncontended replay of one of these seeds was attempted on a developer Mac and could not run: the
+machine has no JDK 17, and `/usr/libexec/java_home -v 17` returns the newest installed JDK (26) with
+exit 0 rather than failing, so a replay script that trusts it builds against the wrong JDK and dies
+for reasons unrelated to chaos. Whoever runs the replay should assert the resolved JDK really is 17
+before believing any outcome.
+<!-- post-merge: checked-end -->
