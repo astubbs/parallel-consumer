@@ -112,8 +112,9 @@ different one has occurred it can never become true, so the wait always expires 
 **Ambient probe**
 The always-on recorder attached to broker integration tests, which annotates a failure with
 consumer-group progress evidence so the contention-versus-product-bug question is answered before
-manual diagnosis starts. Its verdict is only informative when its detectors could have fired for the
-test in question — a short, low-volume test cannot trip them, and a clean reading there means nothing.
+manual diagnosis starts. Its clean verdict is only informative when its detectors could have fired for
+the test in question — a short, low-volume test cannot trip them, so it needs a positive control like
+any other instrument.
 
 **Red-proof**
 The verification that a new or extended test fails against the code as it was before the fix it
@@ -140,6 +141,32 @@ rate recovered from starved runs prices every candidate budget at once.
 The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
 both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
 first evidence against the method, not for the code.
+
+**Positive control**
+An arm of a measurement whose only job is to register a hit, proving the instrument could have detected
+something on this run. Its own reading is never the result — it is what licenses reading every other
+number, so a zero there makes the rest of the run uninterpretable rather than clean.
+
+Required wherever a negative is the outcome being reported, because a tool that observed nothing and a
+tool that could observe nothing produce the same output.
+
+**Control arm**
+An arm that declares the anomaly it is watching for to be *forbidden*, so the run fails if it appears.
+Distinct from a positive control, which must fire: a control arm must not, and the distinction is what
+separates a checked claim from an unchecked one. The same absence observed without that declaration is
+only a bound at the sample size reached.
+
+**Faithful arm**
+An arm that keeps every real surrounding access in place, run alongside a reduced arm that strips them,
+so the pair says whether the surrounding code was closing the hole by accident rather than by design.
+The gap between the two rates is the result; collapsing the arms into one deletes it.
+
+**Replica probe**
+A probe that reproduces the code it models by hand instead of importing it — necessary when the probe
+must control declarations the real code does not expose, and bound to its subject by nothing but
+whoever copied it. Its distinguishing property is that it decays silently: when the modelled code
+moves, the probe keeps passing, so it needs a correspondence check that fails on divergence or it is
+only as current as its last manual review.
 
 ## Flagged ambiguities
 
