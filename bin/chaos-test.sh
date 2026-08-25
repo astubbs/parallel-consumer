@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+# Must byte-match the WARN line ProgressProbe.observe() emits - grep it there before editing.
+readonly OBSERVATION_MARKER="OBSERVATION (does not fail the run)"
+
 REPS="${CHAOS_REPS:-1}"
 SEED_ARG=""
 if [ -n "${CHAOS_SEED:-}" ]; then SEED_ARG="-Dchaos.seed=${CHAOS_SEED}"; fi
@@ -36,15 +39,55 @@ summary() {
         echo "Quarantine Lane runs them - see docs/quarantined-tests.md). Real coverage"
         echo "returns when the W4 variants or the quarantine owner fix (astubbs#80) land."
     else
-        echo "| Test class | Time |"
-        echo "|---|---|"
-        find . -path '*/failsafe-reports/TEST-*.xml' -print0 | while IFS= read -r -d '' f; do
-            local tag n t
+        # Class 2 lag stagnation REPORTS rather than gates (see ProgressProbe.getObservations and
+        # docs/inflight/test-class2-probe-asserts-timing-not-correctness.md), so a green run is the
+        # only place its findings can ever appear. Printing them here is what stops "does not gate"
+        # from meaning "nobody reads it" - the peak is the number a timing regression moves.
+        # Every read here uses a whole-file `grep` with no early-exiting reader downstream: `| head`
+        # would close the pipe and pipefail would promote the writer's EPIPE to a failure, which
+        # bin/AGENTS.md bans and bin/check-shell-sigpipe.sh enforces.
+        # One pass over the reports, feeding the loop by process substitution rather than a pipe:
+        # `find | while` runs the loop in a SUBSHELL, so per-file counts cannot accumulate and a
+        # second full scan was needed to answer "did anything observe?". These XMLs embed captured
+        # stdout and reach hundreds of MB, so the extra scan was not free. Same shape as
+        # bin/quarantine-lane-report.sh. No early-exiting reader is introduced, so the
+        # check-shell-sigpipe.sh ban is not implicated.
+        local any_observations=0
+        echo "| Test class | Time | Lag stagnation peak | Class 2 observations |"
+        echo "|---|---|---|---|"
+        while IFS= read -r -d '' f; do
+            local tag n t obs peak_ms peak_line
             tag=$(head -3 "$f" | tr '\n' ' ')
             n=$(grep -o 'name="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
             t=$(grep -o 'time="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
-            if [ -n "$n" ]; then echo "| $n | ${t}s |"; fi
-        done
+            obs=$(grep -c "$OBSERVATION_MARKER" "$f") || obs=0
+            # MAX, not first match: a class with several test methods emits one `peaks:` line per
+            # method, and reporting the first would understate a later method's peak.
+            peak_ms=""
+            while IFS= read -r peak_line; do
+                [ -n "$peak_line" ] || continue
+                if [ -z "$peak_ms" ] || [ "$peak_line" -gt "$peak_ms" ]; then peak_ms="$peak_line"; fi
+            done <<< "$(grep -o 'maxLagStagnation=[0-9]*ms' "$f" | cut -d= -f2 | tr -d 'ms')"
+            # Counted independently of the table-row guard: a report with no name= attribute still
+            # observed whatever it observed.
+            if [ "$obs" -gt 0 ]; then any_observations=$((any_observations + 1)); fi
+            if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak_ms:-n/a}${peak_ms:+ms} | ${obs} |"; fi
+        done < <(find . -path '*/failsafe-reports/TEST-*.xml' -print0)
+        if [ "$any_observations" -gt 0 ]; then
+            echo ""
+            echo "### Class 2 observations fired in ${any_observations} scenario(s) - this did NOT fail the run"
+            echo ""
+            echo "\`CLASS2_STALL/LAG_STAGNATION\` measures how long a partition's committed offset stayed"
+            echo "pinned. One incomplete record pins it legitimately, so a busy fleet and a wedged one look"
+            echo "identical to it - three replays cross this bound and drain completely. Read the peak as a"
+            echo "SPEED number: worth noticing if it moves, never a defect on its own. The liveness claim is"
+            echo "\`INSTANCE_STALL\`, which gates; if that stayed silent, this run was slow, not stalled."
+            echo ""
+            echo "One caveat worth knowing before you close the tab: \`INSTANCE_STALL\` is per-INSTANCE, so a"
+            echo "single wedged shard beside busy siblings gates nothing. If a watermark froze here while the"
+            echo "fleet stayed busy, rule that case out by hand -"
+            echo "docs/inflight/test-per-shard-liveness-has-no-gate.md has the shape to look for."
+        fi
     fi
 }
 
@@ -55,8 +98,12 @@ summary() {
 # exits 0).
 emit_summaries() {
     local ec=$?
-    summary || true
-    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then summary >> "$GITHUB_STEP_SUMMARY" || true; fi
+    # Build it ONCE. summary() now greps every failsafe report, and CI rendered it twice - to stdout
+    # and again into the step summary - doubling the reads of files that reach hundreds of MB.
+    local rendered
+    rendered=$(summary) || true
+    printf '%s\n' "$rendered"
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$rendered" >> "$GITHUB_STEP_SUMMARY" || true; fi
     exit "$ec"
 }
 trap emit_summaries EXIT

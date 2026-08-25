@@ -19,6 +19,25 @@ with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadloc
 under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is explicitly *not* a
 member). astubbs#29 needs a rebase and a retarget first - see `pr-blockers-and-collisions.md`.
 
+**READ BEFORE RESUMING astubbs#29, and before reading any `CLASS2_STALL` entry below.** On
+2026-08-25 the discriminating replay this file had been asking for since the twelfth sighting was
+finally run, and it establishes that **the chaos suite's `CLASS2_STALL` reds are a timing proxy, not
+sightings of this family** - both nominated seeds fired the bound and then drained completely. The
+full evidence is the last section of this file; three consequences bind anyone picking astubbs#29 up:
+
+- **Do not treat a `CLASS2_STALL` red as evidence for or against astubbs#29.** It measures how long a
+  committed offset stays pinned, which one incomplete record does legitimately. The detector that
+  would be real evidence is `INSTANCE_STALL/NO_WORK_COMPLETED`, which watches completions and has
+  never fired.
+- **A prediction recorded before the fact, so landing astubbs#29 tests it rather than merely
+  following it:** land astubbs#29 and the rest of the backlog, re-run the chaos suite on a loaded
+  box, and the Class 2 findings **continue at roughly the same rate**, because they are the bound
+  meeting the load and no deadlock fix touches that. **If they instead drop off, this reading is
+  wrong** - say so loudly here, because the whole 2026-08-25 section then needs revisiting.
+- **The sequencing advice in [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
+  - "land the backlog, then re-run" - was sound when written and no longer applies to `CLASS2_STALL`
+  specifically.** It still applies to any signature this file records that is *not* the lag bound.
+
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
 fail-fast by `ProgressProbe` with five simultaneous violations, on
@@ -503,7 +522,7 @@ clean". This one does not:
 | **Local control** | **`5c377ec04` (master)** | **RED** | **10** | **154387ms** |
 
 **A RED here does NOT mean every `CLASS2_STALL` is a family occurrence.**
-[`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
+[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
 records one with this same ~154s signature whose seed replays **green** on an uncontended box,
 peaking at 121.3s - self-hosted runner contention, from `Performance` and `Chaos Pain Suite` sharing
 the box. That note owns the discriminator; the short version is that ~154s is what a crossed 150s
@@ -671,52 +690,120 @@ the pre-existing `CLASS2_STALL` timing bound, whose value and gating that PR del
 on the same self-hosted box, overlapping the chaos job's opening minutes, and this ledger already
 records that pairing as a prior cause. But the discriminator is an uncontended replay of *this* seed,
 and per the table in
-[`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
+[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
 
+## 2026-08-25: the discriminator was finally run, and it closes the `CLASS2_STALL` line of this file
+
+**Every `CLASS2_STALL` entry above is a timing measurement, not a family sighting.** The twelfth
+sighting named the experiment that would decide it - *"replay `4044221734199516240` (34 violations,
+the larger sample) with `-Dchaos.diagnoseStallRecovery=true` and read whether the backlog drains"* -
+and pre-declared both readings. It has now been run, on that seed and on the eleventh sighting's, and
+the answer is the one that entry called the timing-proxy side.
+
+| Seed | Arm | Head | Observations fired | Outcome |
+|---|---|---|---|---|
+| `6825864417772979246` (eleventh sighting - the seed with the plain-master control arm) | `ChaosRevokeUnderWorkIT` | `da91f3f61` (master) | 2 | **drained**: `consumed=251326/250000 started=251326 inFlight=0`, full key coverage, 33s after the bound was crossed |
+| `4044221734199516240` (twelfth sighting's own nominated seed) | `ChaosRevokeUnderWorkDrainIT` | `da91f3f61` (master) | 46 | **drained**: `consumed=251726/250000 inFlight=0`, full key coverage |
+
+**Both ran on a CONTENDED developer box, which biases toward "did not drain".** They drained anyway.
+That asymmetry is what makes a local run worth the minutes here, and it is the reverse of the usual
+caution in [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md):
+that note's "a GREEN replay needs two or three" rule governs an *absent* violation, where contention
+and a quiet schedule are indistinguishable. These runs are not absences - the bound was crossed, 2 and
+46 times, and the run finished anyway. A fired-and-drained replay is positive evidence, and one is
+enough for the same reason one RED replay was.
+
+**The eleventh sighting's master arm does not survive as evidence of a defect, and it is the entry
+that most needs re-reading.** Its argument was that the seed replays RED on plain master, so "this is
+the family's own defect and not something that PR introduced". The first half still holds - the
+schedule really does cross the bound on master, deterministically. The second half does not follow:
+crossing a timing bound on master means master is slow on that schedule, not that master is wedged.
+
+**The ~154s constant was never corroboration, and several entries above read it as such.** The sixth,
+eleventh and twelfth sightings all remark on peaks landing within a few hundred milliseconds of each
+other across runs, branches and machines. That is arithmetic, not signal: the probe samples every 5s
+and the scenario fail-fasts on the first violation, so the peak is always bound plus detection latency
+and can carry no severity information at all. The note above already said "~154s is a signature, not a
+diagnosis"; this is the same point, now with the mechanism rather than the caution.
+
+**What this does NOT close.** The confluentinc#857 wedge is real and `bugs/857-paused-consumption-multi-consumers-bug`
+(astubbs#29) still fixes a real deadlock. What is now established is narrower and more useful: **the
+chaos suite has never reproduced it.** That agrees with
+[`test-chaos-phase2.md`](test-chaos-phase2.md)'s own long-standing assessment - *"a 9-seed sweep found
+0 hits"* - and disagrees with the accumulating shape of this file, which read fourteen timing
+crossings as fourteen sightings.
+
+**The detector that would be a real sighting exists, and has never fired.**
+`INSTANCE_STALL/NO_WORK_COMPLETED` (astubbs#325) watches COMPLETIONS, so it cannot fire on
+slow-but-progressing - it is the wedge signature exactly. The thirteenth sighting is its first full
+exposure: 21 violations in one storm run, every one of them the Class 2 timing bound, zero
+`INSTANCE_STALL`. **Honest limit: "it has never cried wolf" and "it has never had a wolf to catch"
+are not yet distinguishable** - the detector is days old. That is an argument for watching it, not
+for keeping a bound that cries constantly.
+
+**A second limit, and it is a correction to the paragraph above rather than a footnote to it.**
+`INSTANCE_STALL` is per-INSTANCE, so it does NOT cover everything the demoted bound was watching. One
+partition's committed offset freezing while the owning instance's other shards keep completing fires
+nothing that gates - `INSTANCE_STALL` is re-armed by any returned work result, and the ledger counts
+records processed rather than offsets durably committed. **So the demotion reduced per-shard liveness
+coverage; it did not relocate it**, and an earlier version of this entry said otherwise. Tracked, with
+the correlated gate that would close it and the red control that gate must have first, in
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md).
 <!-- post-merge: checked-begin -->
-**2026-08-25, three consecutive Class 2 reds on one branch - data for a prediction already made
-elsewhere, not a new sighting.** Deliberately unnumbered: `test/chaos-class2-drain-discriminator`
-adds its own entry here, and two branches minting ordinals against the same list collide.
-
-**That branch owns the diagnosis, and it supersedes what an entry like this would once have
-claimed.** It ran the `-Dchaos.diagnoseStallRecovery=true` discriminator that this file and the probe
-critique both said nobody had run, on two nominated seeds, on a contended box - both backlogs
-drained. It also shows the ~154s constant several entries cite as corroboration is arithmetic (probe
-sample interval plus fail-fast latency), not severity. The Class 2 lag bound therefore reports rather
-than gates there. Read that entry before adding to this one.
-
-What is worth keeping from three runs of astubbs/parallel-consumer#357 - a branch changing agent
-hooks, shell gates and documentation, and no product code at all:
-
-| Run | Test(s) red | Seed | Violations |
-|---|---|---|---|
-| [32812259117](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117) | `ChaosChurnStormIT` | `7852140587594987229` | 23 Class 2, preceded by one `INSTANCE_STALL/NO_WORK_COMPLETED` |
-| [32814417900](https://github.com/astubbs/parallel-consumer/actions/runs/32814417900) | `ChaosRevokeUnderWorkIT` | `567232329738342203` | 17 Class 2 |
-| [32815394117](https://github.com/astubbs/parallel-consumer/actions/runs/32815394117) | `ChaosRevokeUnderWorkCooperativeIT` | `5843692436386966698` | 3 Class 2 |
-| " | `ChaosRevokeUnderWorkIT` | `4651058060322796970` | 2 Class 2 |
-
-**This is the falsifiable prediction that branch registered, met on a tree that cannot have caused
-it**: Class 2 findings continuing at the same rate, four distinct tests over five distinct seeds,
-counts falling 23, 17, 3, 2. Two partitions grazing a 150s bound is what a timing proxy looks like,
-not a wedge.
-
-Two smaller things it settles or offers:
-
-- **A cooperative Class 2 red in CI, with an explicit probe verdict.** The second sighting reasoned
-  from a cooperative arm passing to "eager-protocol-specific"; the fifth had only a local, unverdicted
-  one. For Class 2 that reading is now retired - both assignors trip the bound in the same run - which
-  matters mainly as one more reason to read the bound as timing. It says nothing about the astubbs#29
-  deadlock, a different claim about a different mechanism.
-- **One `INSTANCE_STALL/NO_WORK_COMPLETED`** (instance holding 43 records out for processing,
-  completing none) in the first run and none in the other two - the first firing of astubbs#325's
-  detector, on the record because the thirteenth sighting flagged "is it crying wolf" as the open
-  question and one firing in three runs is a partial answer.
-
-**Correction to an earlier version of this entry**: it stated the discriminator was still unrun and
-recorded a local replay attempt that never started, having silently built against JDK 26 because
-`/usr/libexec/java_home -v 17` returns the newest installed JDK with exit 0. The discriminator had in
-fact been run on the branch above. The JDK trap is worth the line anyway: assert the resolved version,
-do not trust the request.
+It was raised by the cross-model adversarial reviewer on astubbs#354, the PR that demoted the bound;
+three in-process reviewers on that same diff missed it, which is the clearest argument this file
+records for keeping a cross-model pass.
 <!-- post-merge: checked-end -->
+
+**A falsifiable prediction, recorded before the fact.** Land astubbs#29 and the rest of the backlog,
+re-run the chaos suite on a loaded box, and the `CLASS2_STALL` findings continue at roughly the same
+rate - because they are the bound meeting the load, and neither the deadlock fix nor the sequencing
+argument in the contention note touches that. If they instead drop off, this entry is wrong and
+should be marked so loudly.
+
+**Consequences already applied:** the bound now reports instead of gating (`Class2ObservationIT`
+guards the routing), the diagnostic mode's quiet cap no longer silently exceeds the scenario
+`@Timeout` - which is why nobody had run this experiment in the five days since two documents called
+it cheap - and the chaos lane no longer runs several suites at once on one box.
+
+### Correction to the section above: `INSTANCE_STALL` has now fired, once
+
+<!-- post-merge: checked-begin -->
+The section above says the detector that would be a real sighting "has never fired", and states the
+honest limit that never-cried-wolf and never-had-a-wolf are not yet distinguishable. One of those two
+has moved.
+
+**On [run 32812259117](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117),
+`ChaosChurnStormIT` fired `INSTANCE_STALL/NO_WORK_COMPLETED` at `t=+154670ms`** - *instance 70 holds
+work (queued=0, outForProcessing=43) but has returned no work result for 150s (bound 150s) at 27914
+results returned*. Seed `7852140587594987229`. The 23 violations the autopsy then listed were all
+Class 2, so the interesting one is absent from the autopsy list and only in the run log - which is
+worth knowing for whoever reads the next one.
+
+**This does not make it a wedge, and the section above is why.** One firing, on a box also running
+`Performance`, with no replay: `INSTANCE_STALL` is re-armed by any returned work result, so an
+instance that is merely very slow can trip it. What it does change is the evidential position - the
+detector can fire, which was previously untested either way, so "watch it" is now a live instruction
+rather than a hope. The replay that would settle it is the same one this file already prescribes,
+against that seed.
+
+**Corroboration for the prediction, not a test of it.** Three consecutive chaos runs on
+astubbs/parallel-consumer#357 - a branch changing agent hooks, shell gates and documentation and no
+product code - went red on four distinct tests across five distinct seeds, every violation Class 2,
+counts falling 23, 17, 3, 2 (seeds `7852140587594987229`, `567232329738342203`,
+`5843692436386966698`, `4651058060322796970`). Two partitions grazing the bound is what a timing
+proxy meeting load looks like. It is **not** the registered prediction, which asks for a re-run after
+astubbs#29 and the backlog land; recorded here so nobody later reads it as one.
+
+One of those runs took the **cooperative** arm down with an explicit probe verdict, which retires the
+second sighting's "eager-protocol-specific" reading for Class 2 specifically - a small thing now that
+Class 2 is a speed measurement, but it was an open question above.
+<!-- post-merge: checked-end -->
+
+## Delete when
+
+The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
+timing proxy accumulated fourteen sightings. This file may be retired once astubbs#29 lands and the
+remaining open item - the original deadlock - has its own solutions write-up.

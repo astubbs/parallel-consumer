@@ -10,11 +10,14 @@ import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.junit.jupiter.api.Timeout;
+import org.junit.platform.commons.support.AnnotationSupport;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
@@ -62,20 +65,27 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
 
     /**
      * <b>Diagnostic only - never a way to make this test pass.</b> Set {@code -Dchaos.diagnoseStallRecovery=true}
-     * to answer the one question the gating configuration structurally cannot: when a Class 2 stall
+     * to answer the one question the gating configuration structurally cannot: when a Class 2 finding
      * fires, does the frozen partition <b>ever</b> recover, or is it wedged forever?
      * <p>
-     * The scenario's own arithmetic above asserts that "a REAL Class 2 stall is unbounded", and the
-     * probe's javadoc records RED calibration as still open. Neither has been tested, because the
-     * gating run destroys the evidence at the moment of detection: {@code failFast} aborts the wait on
-     * the first violation and {@code QUIET_CAP} gives up at 5 minutes, so every observation to date
-     * ends the instant the stall is confirmed. Unbounded and merely-slow are indistinguishable from
-     * that data.
+     * The scenario's own arithmetic above asserts that "a REAL Class 2 stall is unbounded". Until
+     * 2026-08-25 that had never been tested, because the gating run destroyed the evidence at the
+     * moment of detection: {@code failFast} aborted the wait on the first violation and
+     * {@code QUIET_CAP} gave up at 5 minutes, so every observation ended the instant the finding was
+     * confirmed. Unbounded and merely-slow were indistinguishable from that data.
      * <p>
-     * In this mode the quiet phase does not bail on a violation and waits {@link #DIAGNOSTIC_QUIET_CAP}
-     * instead, logging consumption progress each poll. The discriminator is which way the wait ends:
-     * the backlog drains (the stall was bounded - a starvation or fairness defect) or it times out with
-     * consumption flat (unbounded - lost state, a partition paused and never resumed, or a lost wakeup).
+     * <b>It has now been run, and the answer was "it recovers".</b> Two replays of the seeds the
+     * sightings ledger nominated as its strongest evidence both crossed the bound and then drained to
+     * {@code inFlight=0} with full key coverage - which is why the Class 2 bound is a non-gating
+     * observation today rather than a violation. Numbers in
+     * {@code docs/inflight/bug-857-family.md}'s 2026-08-25 entry. The mode stays because the question
+     * recurs per seed, not because it is unanswered.
+     * <p>
+     * In this mode the quiet phase does not bail on a violation and waits
+     * {@link #effectiveDiagnosticQuietCap} instead, logging consumption progress each poll. The
+     * discriminator is which way the wait ends: the backlog drains (the finding was bounded - a
+     * starvation or fairness defect) or it times out with consumption flat (unbounded - lost state, a
+     * partition paused and never resumed, or a lost wakeup).
      * <p>
      * <b>It cannot turn a red run green.</b> {@code assertScenarioSlos} still asserts the probe's
      * violations are empty after the wait, whichever way the wait ended, so a run that trips the probe
@@ -85,17 +95,11 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     private static final boolean DIAGNOSE_STALL_RECOVERY = Boolean.getBoolean("chaos.diagnoseStallRecovery");
 
     /**
-     * Quiet cap in {@link #DIAGNOSE_STALL_RECOVERY} mode - long enough that "never recovered" means
-     * something. Override with {@code -Dchaos.diagnosticQuietCapMinutes=<n>}.
-     * <p>
-     * <b>The scenario class's {@code @Timeout} is the real ceiling, and it wins silently.</b> Those
-     * are 600s today, so a quiet cap above about six minutes cannot be reached - JUnit kills the
-     * test first, mid-observation, and the run then looks like one that stopped for its own reasons
-     * rather than one that was cut off. Raise the annotation if you genuinely need a longer watch;
-     * do not just raise this number and believe the result.
+     * How long the {@link #DIAGNOSE_STALL_RECOVERY} watch may run - owned by {@link DiagnosticQuietCap},
+     * which holds the requested cap, the teardown reserve, and the arithmetic that fits one inside the
+     * scenario's {@code @Timeout}. It lives outside this hierarchy so it can be tested without booting
+     * Kafka; that class's javadoc explains why that is not merely a preference.
      */
-    private static final Duration DIAGNOSTIC_QUIET_CAP =
-            Duration.ofMinutes(Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
     /** Low eviction horizon: a storm-wedged (deadlocked) member stops polling and gets evicted ~30s
      * later, letting pending rebalances resolve and the group re-stabilize for the quiet phase. */
     protected static final int MAX_POLL_INTERVAL_MS = 30_000;
@@ -188,7 +192,41 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         return weights;
     }
 
+    /**
+     * How long this run can actually watch for - the requested cap, shortened if the concrete
+     * scenario's {@code @Timeout} does not leave room for it.
+     * <p>
+     * A diagnostic that promises a 20-minute watch under a 600s annotation does not deliver a shorter
+     * watch - it delivers an UNINTERPRETABLE one, because JUnit's kill is neither of the two outcomes
+     * the experiment distinguishes ("drained" / "did not drain"), and a killed run reads like one that
+     * ended for its own reasons. Shortening the watch to fit converts that into a real, if smaller,
+     * negative result, and names the number to raise for a longer one.
+     * <p>
+     * Read from the annotation rather than duplicating the literal per subclass, so raising a
+     * scenario's annotation raises its watch with no second edit to forget. Resolved through
+     * {@link AnnotationSupport#findAnnotation}, which is what JUnit itself uses - so this seam tracks
+     * the enforcer rather than approximating it, including meta-present and interface-declared cases.
+     * {@code @Timeout} IS {@code @Inherited} (verified against the pinned junit-jupiter-api), so a
+     * ceiling hoisted onto a shared superclass is still found.
+     * <p>
+     * <b>The one real gap is a METHOD-level {@code @Timeout}</b>, which overrides the class-level one
+     * in JUnit and is invisible to a class lookup. No scenario uses one today - every {@code @Test}
+     * here delegates straight to this method - but a method-level override would restore the silent
+     * kill this guard exists to prevent. An absent annotation means no ceiling, so the request stands.
+     */
+    private Duration effectiveDiagnosticQuietCap(Instant methodStart) {
+        Duration ceiling = AnnotationSupport.findAnnotation(getClass(), Timeout.class)
+                // toMillis() rather than TimeUnit.toChronoUnit(): the latter is Java 9+, and this
+                // module compiles to Java 8 bytecode through Jabel.
+                .map(t -> Duration.ofMillis(t.unit().toMillis(t.value())))
+                .orElse(null);
+        return DiagnosticQuietCap.within(ceiling, Duration.between(methodStart, Instant.now()),
+                getClass().getSimpleName());
+    }
+
     protected void runRevokeUnderWorkScenario() throws Exception {
+        // The @Timeout clock starts here, so the time-remaining sum below has to measure from here too.
+        Instant methodStart = Instant.now();
         ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
                 scenarioLabel(), useCooperativeAssignor(), seed.getValue(), seed.replayCommand());
@@ -249,15 +287,21 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                     scenarioLabel(), totalConsumed.get());
 
             // Phase 2 - quiet observation: group must settle, evict any storm-wedged member, and FINISH.
-            // The only defect signal that can fire here is the protocol-invisible kind - exactly Class 2.
+            // The protocol-invisible signals are the ones that can still fire here. Since 2026-08-25 the
+            // Class 2 lag bound is a non-gating OBSERVATION, so what can fail this phase is
+            // INSTANCE_STALL - which watches completions and cannot fire on slow-but-progressing - plus
+            // the fleet watermark and the end-of-run ledger. INSTANCE_STALL is per-instance, so a
+            // single wedged shard beside busy siblings fails nothing here: see
+            // docs/inflight/test-per-shard-liveness-has-no-gate.md.
             org.awaitility.core.ConditionFactory quiet =
                     await().alias("backlog drained after the storm settles (quiet phase)")
                             .pollInterval(Duration.ofSeconds(2));
             if (DIAGNOSE_STALL_RECOVERY) {
+                Duration diagnosticCap = effectiveDiagnosticQuietCap(methodStart);
                 // Deliberately no failFast: the whole point is to keep watching AFTER the violation.
                 log.warn("=== chaos.diagnoseStallRecovery ACTIVE - quiet cap {} and no fail-fast. " +
                         "This is a DIAGNOSTIC run: violations are still asserted at the end, so this " +
-                        "cannot make the test pass. ===", DIAGNOSTIC_QUIET_CAP);
+                        "cannot make the test pass. ===", diagnosticCap);
                 // The prior art nobody greps, delivered at the moment it is about to be repeated: the
                 // six prior-art checks in AGENTS.md search docs, PRs and issues, and none of them
                 // reaches a class javadoc. This exact experiment was run once before at the 90s/45s
@@ -270,7 +314,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                         "reproduced a known result - the NEW question is whether it still recovers " +
                         "at the current shape, and how long it takes against the {} bound. ===",
                         ProgressProbe.LAG_STAGNATION_BOUND);
-                quiet = quiet.atMost(DIAGNOSTIC_QUIET_CAP);
+                quiet = quiet.atMost(diagnosticCap);
             } else {
                 quiet = quiet.atMost(QUIET_CAP).failFast("probe violation", probe::hasViolations);
             }
@@ -284,9 +328,10 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                     // difference, and it is what makes a flat consumed count interpretable.
                     long started = totalStarted.get();
                     long consumed = totalConsumed.get();
-                    log.info("[diagnose] quiet phase: consumed={}/{} started={} inFlight={} violations={} done={}",
+                    log.info("[diagnose] quiet phase: consumed={}/{} started={} inFlight={} violations={} "
+                                    + "observations={} done={}",
                             consumed, EXPECTED_MESSAGES, started, started - consumed,
-                            probe.getViolations().size(), done);
+                            probe.getViolations().size(), probe.getObservations().size(), done);
                 }
                 return done;
             });
