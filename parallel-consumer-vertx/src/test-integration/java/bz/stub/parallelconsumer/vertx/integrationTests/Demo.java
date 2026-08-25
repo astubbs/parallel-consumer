@@ -124,6 +124,12 @@ public class Demo extends BrokerIntegrationTest<String, String> {
     @EnabledIfSystemProperty(named = DEMO_ENABLED_PROPERTY, matches = "true")
     @SneakyThrows
     void testVertxConcurrency() {
+        // The failsafe route reaches here without main(): the broker comes from the base class's
+        // @BeforeEach, but the WireMock stub only ever started from main() - so the documented
+        // `-Dit.test=Demo -Dpc.demo=true` run died on a null stubServer before this guard.
+        if (stubServer == null) {
+            setupWireMock();
+        }
         var commitMode = PERIODIC_CONSUMER_ASYNCHRONOUS;
         var order = ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 
