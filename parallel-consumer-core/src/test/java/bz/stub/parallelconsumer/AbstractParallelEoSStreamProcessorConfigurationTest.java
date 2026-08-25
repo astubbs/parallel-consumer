@@ -50,6 +50,10 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
     final MockConsumer<String, String> consumer = new MockConsumer<>(OffsetResetStrategy.LATEST);
     final ParallelConsumerOptions<String, String> testOptions = ParallelConsumerOptions.<String, String>builder()
             .consumer(consumer)
+            // pinned: this class asserts ThreadPoolExecutor configuration - the rejection handler and the
+            // covariant setupWorkerPool overrides - which -Dpc.virtualThreads=true would silently replace with a
+            // pool none of those assertions are about
+            .useVirtualThreads(false)
             .build();
 
     ModelUtils mu = new ModelUtils();

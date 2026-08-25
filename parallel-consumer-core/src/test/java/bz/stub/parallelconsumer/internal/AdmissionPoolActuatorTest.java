@@ -359,6 +359,9 @@ class AdmissionPoolActuatorTest {
                 .maxConcurrency(CEILING_SLOTS)
                 .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.ENFORCE)
                 .adaptiveConcurrencyInitialTarget(2)
+                // pinned like optionsBuilder(): the widen is a ThreadPoolExecutor core-size move, which the
+                // virtual-thread pool does not have - under -Dpc.virtualThreads=true the cast below would throw
+                .useVirtualThreads(false)
                 .build();
         var processor = new ParallelEoSStreamProcessor<String, String>(options);
         var pool = (ThreadPoolExecutor) processor.workerThreadPool.get();
