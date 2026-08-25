@@ -143,11 +143,37 @@ Do not start one casually.
   `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
   Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
 
+### Annotate every fixed race with `@GuardedBy`, as you fix it
+
+- **Owned by
+  [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](../parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md)**,
+  which arrives automatically when you edit a file in the engine - the moment the rule applies. A
+  backlog entry is consulted; that one fires. Kept here as a pointer only, because this list is where
+  somebody browsing debt will look for it.
+- The short version: Error Prone's `GuardedBy` check is on at ERROR and examines nothing, because the
+  codebase contains no annotation. Every detector here is discovery and none prevents regression, so
+  the annotation is what makes a fix permanent - write it with the fix.
+
+### `AbstractParallelEoSStreamProcessor.lastCommitTime` is read unsynchronised
+
+- Plain `Instant`, written in the commit path and read by `isTimeToCommitNow()` with no
+  happens-before edge. Found by RacerD 2026-08-25; **not previously in any ledger**. The poll thread
+  can read a stale value and mis-time a commit, on a codebase that already tracks commit-timeout
+  flakes. Not diagnosed further. Fix it with `@GuardedBy` per the policy above.
+
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
   rebalance listener + deprecated options in one class. Design ref: draft
   `confluentinc#488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
   state machine). Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+- **Landing this unblocks whole-FILE static analysis, and it can be taken piecemeal.** The
+  new-code analysis profile is scoped to changed *lines* rather than changed *files* purely because
+  of size: touching a 1533-line class would otherwise inherit every latent finding in it. Line
+  scoping is the weaker choice - it misses a finding reported away from the edit that caused it - so
+  each file that comes down to a reviewable size can be promoted to file scoping on its own, without
+  waiting for the whole decomposition.
+  [`docs/inflight/static-analysis-rule-profiles.md`](inflight/static-analysis-rule-profiles.md) owns
+  the profiles and carries the promotion list.
 
 ### Actor / IPC message bus for commits & results
 - Replace shared-state coordination with a lightweight actor/mailbox. Design refs:
@@ -281,6 +307,14 @@ Do not start one casually.
   `retryQueueOrdering`, `testRetryQueueOrdering` and `testRetryQueueOrderingMultipleTries`, all of
   which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
   either path.
+
+### state/RetryQueue.java
+
+- **Four `// visible for testing` accessors that no test calls.** `RetryQueue`'s `unique`, `sorted`
+  and `comparator` Lombok `@Getter(AccessLevel.PACKAGE)`s, and `ShardManager`'s `retryQueue` one,
+  have zero callers anywhere in the tree - main, test or integration. Delete them; the comment is
+  documenting an access route nobody uses, and an ArchUnit rule policing a dead accessor would pass
+  vacuously forever (see `docs/inflight/static-archunit-main-code-rules.md`).
 
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because

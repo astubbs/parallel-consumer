@@ -16,13 +16,13 @@ their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 |---|---|---|
 | `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED; quarantined on its sighting ledger (rule 1) - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `simpleBatchTest` in **both** `ReactorBatchTest` and `MutinyBatchTest` | 2 seen (2026-08-18, 2026-08-19) | Not from the original scan - both found while babysitting a **docs-only** branch (astubbs#308 head `d930ca98d`; astubbs#320 head `70a247184`). Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda - see below, the second sighting is what makes it worth diagnosing. UNDIAGNOSED - classify (contention vs product) before touching |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
 
-### `simpleBatchTest` - the second sighting says it is the shared helper, not either wrapper
+### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
 
 2026-08-18 it was `ReactorBatchTest`. 2026-08-19 it was `MutinyBatchTest`, on
 astubbs/parallel-consumer#320 - and the failure is the same one, not a similar one: the alias, the
@@ -41,15 +41,44 @@ question, not a lost-work question. Two readings, and they need separating rathe
 - **Product.** The batcher can split a batch under a timing the library is supposed to tolerate,
   in which case an over-eager boundary is a real defect and the test is right to complain.
 
-**Both sightings are on branches whose diffs contain no Java at all**, which is what rules out "a PR
-broke it" and makes it master state - the same reasoning applied to `ProducerManagerTest` below.
-That is also why neither was quarantined on the branch that met it: quarantine is master-state and
-needs a diagnosis, and neither sighting has one.
+**No sighting is on a branch whose diff contains main Java**, which is what rules out "a PR broke
+it" and makes it master state - the same reasoning applied to `ProducerManagerTest` below. That is
+also why none was quarantined on the branch that met it: quarantine is master-state and needs a
+diagnosis, and no sighting has one.
 
-The 2026-08-18 sighting passed on re-run. A re-run is diagnosis here, not a way to go green - it
-distinguishes flaky from deterministic - and AGENTS.md's ban is on the automatic
-`surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job to learn
-something.
+The 2026-08-18 sighting passed on re-run, and so did the 2026-08-25 one - three consecutive clean
+re-runs of the same test, so **1 failure in 4 local runs, not deterministic**. A re-run is diagnosis
+here, not a way to go green - it distinguishes flaky from deterministic - and AGENTS.md's ban is on
+the automatic `surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job
+to learn something.
+
+#### The 2026-08-25 sighting: a third module, and the first look at what was in the batches
+
+`VertxBatchTest`, KEY ordering, on a local macOS full unit run of the branch that added
+`ShardMapIsNeverReplacedArchTest` - one new core test class plus docs, no main Java. Same
+`Expected size: 3 but was: 4`. **Three modules now, so the wrapper is definitively not the
+variable.**
+
+What is new is the payload the assertion printed. The five records carried keys `29, 36, 36, 36,
+71` - a **three-way key collision** - and arrived as `{o0, o4}`, `{o1}`, `{o2}`, `{o3}`, so every
+key-36 record came alone. Meanwhile `simpleBatchTest` computes its expectation from the record count
+and nothing else: grep `BatchTestMethods` for `expectedNumOfBatches`, which is
+`ceil(numRecsExpected / batchSizeSetting)` for every ordering except PARTITION. **The keys are
+random** - `KafkaTestUtils.getRandomKey` draws from `defaultKeys`, a hundred integers - so the shard
+distribution the batcher works against varies run to run while the expected batch count does not.
+
+That is a third reading to separate, not a diagnosis, and it displaces neither of the two above:
+
+- **Expectation-versus-input.** The test randomises the key distribution and then asserts a batch
+  count that only holds for some distributions. A rare draw would explain a rare failure without any
+  contention or product defect at all.
+
+The experiment that settles it is cheap and has a control arm, and **nobody has run it**: pin the
+keys through the Lombok setter on `KafkaTestUtils`'s `defaultKeys`, force a three-way collision
+under KEY ordering, and predict a deterministic failure; then five distinct keys, and predict it
+always passes. If both hold, this is
+the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
+is a red herring and contention-versus-product stands as before.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
