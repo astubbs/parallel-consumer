@@ -530,10 +530,16 @@ for record in maturity_records:
             f"cannot resolve"
         )
 for module, path in feature_modules:
+    # 'repository' is the one non-reactor value: a repo-level capability (the schema's 'engineering'
+    # category exists for exactly these - the agent harness, the embedded issue tracker). It
+    # publishes no Maven coordinates, so the scar this check guards against - published coordinates
+    # that cannot resolve - cannot occur for it.
+    if module == "repository":
+        continue
     if module not in reactor:
         problems.append(
             f"{path}: module '{module}' is in no pom.xml <modules> list - a feature record must "
-            f"name a module the reactor builds"
+            f"name a module the reactor builds (or 'repository' for a repo-level capability)"
         )
 
 # Every non-deferred maturity row's evidence_id must resolve to a module_evidence id somewhere in

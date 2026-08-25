@@ -207,7 +207,10 @@ function suspectRefs(files, opts = {}) {
       if (NOT_A_REF.some((re) => re.test(line))) continue;
       if (LINE_OPT_OUT.test(markerView)) continue;
 
-      for (const m of stripQualified(line).matchAll(/(?<![\w\/#])#(\d+)\b/g)) {
+      // `&` is excluded so an HTML/XML numeric character entity (`&#47;` in javadoc that must not
+      // close its own comment, `&#183;` in markup) is never read as a ref - it is a character, and
+      // exempting each one at the use site taxes exactly the files that escape most.
+      for (const m of stripQualified(line).matchAll(/(?<![\w\/#&])#(\d+)\b/g)) {
         const n = Number(m[1]);
         if (n < limit) {
           out.push({ file: f.filename, ref: `#${n}`, text: line.trim().slice(0, 120) });
