@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Controls a loading factor. Is used to ensure enough messages in multiples of our target concurrency are queued ready
@@ -71,9 +72,32 @@ public class DynamicLoadFactor {
     private long lastSteppedFactor = currentFactor;
     private Instant lastStepTime = Instant.MIN;
 
+    /**
+     * True when this factor is fixed - it starts at its ceiling, so there is nothing for the stepping machinery to do
+     * and being "at max" carries no information.
+     * <p>
+     * This is the shape produced by {@link bz.stub.parallelconsumer.ParallelConsumerOptions#messageBufferSize},
+     * which pins both bounds to the factor that yields the requested buffer size, and by explicitly configuring
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#initialLoadFactor} equal to
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#maximumLoadFactor}. In both cases the user asked for
+     * a fixed buffer, so saturation is the configuration working as requested - not a condition to report.
+     */
+    @Getter
+    private final boolean staticFactor;
+
     public DynamicLoadFactor(int initial, int maximum) {
         this.currentFactor = initial;
         this.maxFactor = maximum;
+        this.staticFactor = initial >= maximum;
+    }
+
+    /**
+     * A load factor pinned to a single value - it can never step, because it starts at its own ceiling.
+     *
+     * @param factor the fixed factor to use for the lifetime of the instance
+     */
+    public static DynamicLoadFactor fixedAt(int factor) {
+        return new DynamicLoadFactor(factor, factor);
     }
 
     /**
@@ -82,25 +106,41 @@ public class DynamicLoadFactor {
      * @return true if could step up
      */
     public boolean maybeStepUp() {
+        if (staticFactor) {
+            // nothing to step to - don't engage the stepping machinery at all
+            return false;
+        }
         if (couldStep()) {
             return doStep();
         }
         return false;
     }
 
-    private synchronized boolean doStep() {
-        if (isMaxReached()) {
-            return false;
-        } else {
-            // compare and set
-            currentFactor = currentFactor + stepUpFactorBy;
-            long delta = currentFactor - lastSteppedFactor;
-            log.debug("Stepped up load factor by {} from {} to {}", delta, lastSteppedFactor, currentFactor);
+    private final ReentrantLock stepLock = new ReentrantLock();
 
-            //
-            lastSteppedFactor = currentFactor;
-            lastStepTime = Instant.now();
-            return true;
+    /**
+     * A {@link ReentrantLock} rather than {@code synchronized} for uniformity with the other monitors on the
+     * virtual-thread path, not because this one pins: nothing inside blocks. Kept as a lock so the whole engine
+     * reads one way.
+     */
+    private boolean doStep() {
+        stepLock.lock();
+        try {
+            if (isMaxReached()) {
+                return false;
+            } else {
+                // compare and set
+                currentFactor = currentFactor + stepUpFactorBy;
+                long delta = currentFactor - lastSteppedFactor;
+                log.debug("Stepped up load factor by {} from {} to {}", delta, lastSteppedFactor, currentFactor);
+
+                //
+                lastSteppedFactor = currentFactor;
+                lastStepTime = Instant.now();
+                return true;
+            }
+        } finally {
+            stepLock.unlock();
         }
     }
 

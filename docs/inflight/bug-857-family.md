@@ -6,6 +6,19 @@
 
 Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom.
 
+**Candidate fourth mechanism, 2026-08-24 - the broker-poller load gate drifts high across
+rebalances.** `ProcessingShard.availableWorkContainerCnt` had two conditional decrements whose
+conditions did not match the increment's; the reproducible one is exactly rebalance-shaped: revoking
+a record parked in retry back-off left its increment behind permanently, in the direction nothing
+corrected (the clamp only caught the low side). The sum feeds `WorkManager.isSufficientlyLoaded()`,
+which decides whether the broker poller pauses - so enough phantom "awaiting selection" records keep
+intake paused indefinitely, and a restart clears it because the counter is in-memory. That matches
+this family's symptom signature (halts after rebalance, resumes on restart), and possibly
+astubbs#183 (confluentinc#875) as well. **Hypothesis, not a diagnosis**: no reporter's instance has
+been tied to the counter, and the mirror's primary mechanism (the lost-partition skip) is different.
+The fix - deriving the gate by conservation - lands independently of this attribution; if reports
+persist after it ships, this mechanism is ruled out for them, which is also information.
+
 **Landed:** astubbs#100 (a mid-rebalance commit threw `RebalanceInProgressException`, which nothing caught,
 permanently killing the broker-poll thread) and astubbs#80 (a draining consumer never called
 `consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
@@ -94,6 +107,23 @@ concluding the poll thread died again would re-open something already closed.
 one-line test annotation, so the branch is not a suspect. As with the second sighting, the chaos
 suite randomises its seed per run, so other branches passing the same day only means their seeds did
 not draw this interleaving.
+
+**Fifth sighting, 2026-08-24 - the EAGER variant again, a clean probe kill, same signature as the
+second.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` was killed fail-fast by
+`ProgressProbe` on
+[job 97320214735](https://github.com/astubbs/parallel-consumer/actions/runs/32689392702/job/97320214735)
+(astubbs#201's CI): `CLASS2_STALL/LAG_STAGNATION` on THREE partitions at once - lag 2,916 / 2,523 /
+982 with committed offsets stagnant at 47 / 653 / 2,107 for 154s against the 150s bound, group
+STABLE, heartbeats flowing. The protocol-invisible stall, exactly the second sighting's shape.
+**Replay seed `1197508156275542070`:**
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1197508156275542070
+
+**Branch context:** astubbs#201 changes logging only (the load-factor ceiling report), so the branch
+is not a suspect. The cooperative variant PASSED in the same run, which is now the third time the
+red draws eager and the cooperative control holds - strengthening the eager-specific reading that
+points at the `onPartitionsRevoked` / `commitOffsetsThatAreReady` contention astubbs#29 addresses.
 
 **Fourth sighting, 2026-08-12 - the `ZOMBIE_MEMBER` arm, and the probe genuinely fired.**
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed fail-fast by `ProgressProbe` on

@@ -1,0 +1,13 @@
+scenario,engine,repeat,committed_offset,committed_metadata
+stuck,core,1,1,ZQAAAAEAAw0+
+stuck,core,2,1,ZQAAAAEAAw0+
+stuck,core,3,1,ZQAAAAEAAw0+
+stuck,llingr,1,1,kgo-3f32164b-d442-48f7-a58b-7c1eb130a94a
+stuck,llingr,2,1,kgo-afaa4962-16cd-4c8b-b354-b02d94588ec8
+stuck,llingr,3,1,kgo-f55a1089-d1a8-4948-a57f-9f3b7f480c83
+restart-crash,core,1,1,ZQAAAAEAAW7RAAAAAQAAAAQAAAABAAAAQw==
+restart-crash,core,2,1,ZQAAAAEAAW0p
+restart-crash,core,3,1,ZQAAAAEAAXE1AAAAAQAAAEI=
+restart-crash,llingr,1,1,kgo-d6bfd61c-6fa0-4441-9eb7-e2c32695ac6c
+restart-crash,llingr,2,1,kgo-83a4283c-4085-4e15-8ca0-ab37ca175d44
+restart-crash,llingr,3,1,kgo-4e55cdc8-67da-46ff-b058-1040456e8a7e

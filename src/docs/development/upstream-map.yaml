@@ -1,7 +1,5 @@
-# =============================================================================
-# upstream-map.yaml  --  fork <-> upstream tracking cache (SOURCE OF TRUTH)
-# =============================================================================
-#
+# ======================================================================# upstream-map.yaml  --  fork <-> upstream tracking cache (SOURCE OF TRUTH)
+# ======================================================================#
 # WHY THIS FILE EXISTS
 #   This repo is a long-lived hard fork (bz.stub.parallelconsumer) of the
 #   effectively-archived confluentinc/parallel-consumer. Upstream's open issues
@@ -55,8 +53,7 @@
 #     status      last-known upstream state (open | closed | merged | mixed)
 #     last_checked  ISO date the above was verified
 #
-# =============================================================================
-
+# ======================================================================
 last_swept: 2026-08-06
 upstream_repo: confluentinc/parallel-consumer
 fork_repo: astubbs/parallel-consumer
@@ -384,6 +381,32 @@ entries:
       #640 open, #57 closed-by-sweep.
 
 
+  - id: issue-402-max-load-factor-log-noise
+    group: logging-ux
+    summary: "\"Max loading factor steps reached\" WARN spammed every control loop pass"
+    fork:
+      branches: [fix/155-load-factor-noise]
+      prs: [201]
+      fork_issue: 155
+      status: pr-open
+    upstream:
+      repo: confluentinc/parallel-consumer
+      issues: [402]
+      related: [547, 606, 857]
+      status: open
+      last_checked: 2026-08-06
+    adoc_anchor: null
+    notes: >
+      Mirrored as astubbs#155. Two halves to the original report: the STALL was
+      fixed in confluentinc#547/#606 and further in the confluentinc#857 family on
+      the fork (astubbs#119), and is not touched here. This is the LOG NOISE half
+      only -- checkPipelinePressure() ran the WARN on every control loop pass with
+      no rate limiting, and a configured messageBufferSize pins the load factor to
+      its own ceiling so it fired from startup. Fix: DynamicLoadFactor#isStaticFactor()
+      -> debug for a fixed factor, RateLimiter(30s) + reworded WARN for a dynamic
+      factor at its cap. No change to buffering behaviour. The unanswered question on
+      the original report is tracked in docs/inflight/pr-155-load-factor-noise.md -
+      loose ends belong there rather than in this manifest.
   # ---------------------------------------------------------------------------
   # THE 2023 ADMINISTRATIVE SWEEPS
   #

@@ -1,0 +1,3 @@
+pc_version,pc_build,client_pin,mode,callee,ordering,key_dist,records,partitions,max_poll_records,buffer,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,inflight_p50,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms,e2e_p50_ms,e2e_p99_ms,e2e_p999_ms,e2e_max_ms,arrival_requested,arrival_achieved,feed_lag_p99_ms,backlog_p99,backlog_max,injected_failures
+LOCAL,2266159329,NATIVE,streams,timer,PARTITION,distinct,12000,24,500,20000,10,24,1,1126.3,24,24,4.13,3326,6889,7260,7412,6534,10096,10455,10620,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,streams,timer,PARTITION,zipf,12000,24,500,20000,10,24,1,324.3,24,1,4.39,3907,32177,33605,33767,7112,35370,36800,36962,-,-,-,-,-,-,-,0,0,0

@@ -15,5 +15,11 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 - **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence, don't parallelise.
 - **File ownership right now:** astubbs#57 owns metrics + partition state, astubbs#106 owns the offset encoders, and
   astubbs#29 will want the poll/lifecycle internals astubbs#80 reshaped. Pick parallel work accordingly.
+- **Two branches grew a log-capture test helper at the same time, and both PRs are still open.**
+  astubbs#203 (`fix/log-verbosity-batch`) adds a reusable `LogCapture` (an `AutoCloseable` appender +
+  level override); astubbs#201 (`fix/155-load-factor-noise`) has the same logic inline in
+  `LoadFactorCeilingReportingTest` because neither was on `master` when the other was written.
+  **Whichever merges second must delete its copy and use the shared one** - do not leave two ways to
+  capture a log line.
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.

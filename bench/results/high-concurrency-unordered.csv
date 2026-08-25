@@ -1,0 +1,123 @@
+# PC, a bare Java consumer, llingr and a bare franz-go consumer - unordered, real broker, one dataset.
+#
+# WHY THIS FILE EXISTS. A competitor's published benchmark gives every record a unique key, which
+# makes per-key ordering vacuous - so its headline figures describe an effectively UNORDERED run. Our
+# harness already produces unique keys ("key-<i>") and the core arm's handler is a plain sleep, so the
+# two are directly comparable. These rows are that comparison, plus the control arms and the
+# controlled runs needed to attribute the result to a component.
+#
+# THE FOUR ARMS, and why each exists:
+#   core    - Parallel Consumer, ParallelEoSStreamProcessor, UNORDERED.
+#   pool    - plain KafkaConsumer + fixed thread pool + semaphore + sleep. NO ENGINE. The Java floor.
+#   llingr  - the llingr-demux engine, which reaches Kafka through franz-go.
+#   franz   - plain franz-go + worker pool + sleep. NO ENGINE. The Go floor.
+# Without the two floors, an engine comparison across languages confounds engine with client and
+# silently charges the whole difference to the engines. With them, each column is attributable.
+#
+# THE HEADLINE FINDING, which is not the one we expected. At 100ms and a concurrency setting of
+# 5,000, PC plateaus at 2,751 records in flight - and the bare Java consumer plateaus at 2,848. The
+# ceiling is essentially the same with the engine and without it, so it is NOT PC's dispatch. Both Go
+# arms reach 5,000 exactly. See docs/inflight/bug-in-flight-ceiling-above-2000-concurrency.md.
+#
+# SUSPECTS RULED OUT for PC, each by a single-variable run: window length (100k vs 500k - throughput
+# moved 56%, plateau 1.6%), partition count (1 vs 10 - within 8%), max.poll.records (500 vs 5,000 -
+# within 0.3%), and the loading-factor buffer (dynamic vs a static 25,000 - within 1%).
+#
+# ORDERING IS A COLUMN because it changes what a shard IS. UNORDERED and PARTITION shard by
+# topic-partition, so a handful of shards each hold every in-flight record for their partition. KEY
+# shards by record key, so this all-distinct-keys dataset gets one shard per record. Same records,
+# opposite data shape - and the KEY rows are what refuted the shard-count hypothesis and exposed the
+# UNORDERED-only deficit at 100ms/1,000. See docs/inflight/perf-throughput-regression-since-0-3.md.
+#
+# READ THE records COLUMN BEFORE COMPARING ANY TWO ROWS. Rows exist at both 100,000 and 500,000
+# records, and window length moves throughput a long way - 12,429 to 19,385 at 5,000 concurrent on that
+# change alone. A comparison across two different record counts is not a comparison. This is not
+# hypothetical: an UNORDERED row at 100k was compared against a KEY row at 500k, the difference was
+# published as a 21% ordering-mode deficit, and a fix was written and merged before the like-for-like
+# runs showed the two modes are 0.9% apart. See docs/inflight/perf-throughput-regression-since-0-3.md.
+#
+# AND 2ms/5,000 IS THE NOISY POINT - 21% run-to-run spread against 1% elsewhere. Single runs there mean
+# nothing; three of four conclusions drawn from single samples at that point were wrong.
+#
+# CONDITIONS, since a number without them is not evidence: 12-core laptop under normal desktop load,
+# single-broker container on localhost, one consumer group per run, ALL KEYS DISTINCT, handler is a
+# sleep that never reads the payload. Not a quiet machine - the ratios are sound, the absolute
+# figures are approximate, and single repeats are marked as such by the repeat column.
+pc_version,client_pin,mode,ordering,records,partitions,max_poll_records,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight
+LOCAL,NATIVE,core,UNORDERED,100000,1,500,100,250,1,2241.5,250
+LOCAL,NATIVE,core,UNORDERED,100000,1,500,100,250,2,2241.9,250
+LOCAL,NATIVE,core,UNORDERED,100000,1,500,100,1000,1,7301.9,1000
+LOCAL,NATIVE,core,UNORDERED,100000,1,500,100,1000,2,7313.1,1000
+LOCAL,NATIVE,core,UNORDERED,100000,1,500,100,5000,1,12428.5,2708
+LOCAL,NATIVE,core,UNORDERED,100000,1,500,100,5000,2,12391.6,2595
+LOCAL,NATIVE,core,UNORDERED,500000,1,500,100,5000,1,19385.1,2752
+LOCAL,NATIVE,core,UNORDERED,100000,10,500,100,250,1,2240.3,250
+LOCAL,NATIVE,core,UNORDERED,100000,10,500,100,1000,1,7318.0,1000
+LOCAL,NATIVE,core,UNORDERED,100000,10,500,100,5000,1,12166.9,2538
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,100,5000,1,19634.8,2710
+LOCAL,NATIVE,core,UNORDERED,500000,10,5000,100,5000,1,19577.1,2751
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,200,5000,1,15594.3,3889
+LOCAL-buffer25000,NATIVE,core,UNORDERED,500000,10,500,100,5000,1,19776.1,2654
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,0,250,1,96618.4,250
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,0,1000,1,105864.9,644
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,0,5000,1,93161.9,534
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,2,250,1,57425.1,250
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,2,1000,1,67258.5,403
+LOCAL,NATIVE,core,UNORDERED,500000,10,500,2,5000,1,34015.9,237
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,0,250,1,97200.6,250
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,0,1000,1,100725.2,1000
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,0,5000,1,96246.4,1419
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,2,250,1,53208.5,250
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,2,1000,1,68250.1,462
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,2,5000,1,43482.0,327
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,100,250,1,2384.4,250
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,100,1000,1,9095.5,1000
+LOCAL,NATIVE,pool,UNORDERED,500000,10,500,100,5000,1,20102.1,2848
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,0,250,1,116658.9,3
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,0,1000,1,115740.7,3
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,0,5000,1,103691.4,3
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,2,250,1,66190.1,250
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,2,1000,1,111557.3,1000
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,2,5000,1,109385.3,1249
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,100,250,1,2434.0,250
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,100,1000,1,9306.0,1000
+llingr-demux-v0.12.2,franz,llingr,n/a,500000,10,default,100,5000,1,37698.9,5000
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,0,250,1,144009.2,3
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,0,1000,1,141242.9,3
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,0,5000,1,143184.4,4
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,2,250,1,64909.8,250
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,2,1000,1,118708.5,1000
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,2,5000,1,138427.5,5000
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,100,250,1,2437.7,250
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,100,1000,1,9326.3,1000
+franz-go-v1.21.5,franz,franz,n/a,500000,10,default,100,5000,1,37599.6,5000
+LOCAL,NATIVE,core,KEY,500000,10,500,2,1000,1,65223.1,488
+LOCAL,NATIVE,core,KEY,500000,10,500,2,5000,1,27895.6,366
+LOCAL,NATIVE,core,KEY,500000,10,500,100,1000,1,8875.2,1000
+LOCAL,NATIVE,core,KEY,500000,10,500,100,5000,1,19151.2,2747
+# --- like-for-like repeats at 500,000 records, added after the confound above was found ---
+# resume-scan-fix=no is the unmodified code; =yes is perf/resume-shard-scan, since reverted.
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,1000,1,8840.6,1000
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,1000,2,8790.9,1000
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,1000,3,8769.6,1000
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,1000,1,8806.5,1000
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,1000,2,8784.1,1000
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,1000,3,8867.8,1000
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,5000,1,19648.7,2828
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,5000,2,19378.3,2714
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,100,5000,3,19670.3,2900
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,5000,1,19233.7,2816
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,5000,2,19663.4,2864
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,100,5000,3,19219.7,2670
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,5000,1,27845.8,258
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,5000,2,28320.6,194
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,5000,3,33772.4,362
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,5000,1,27881.6,308
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,5000,2,29841.8,263
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,5000,3,29232.9,212
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,1000,1,67321.9,453
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,1000,2,65858.8,515
+LOCAL-resume-scan-fix-no,NATIVE,core,UNORDERED,500000,10,500,2,1000,3,64985.7,494
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,1000,1,66542.5,512
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,1000,2,65385.1,494
+LOCAL-resume-scan-fix-yes,NATIVE,core,UNORDERED,500000,10,500,2,1000,3,67132.1,494

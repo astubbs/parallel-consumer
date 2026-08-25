@@ -29,6 +29,7 @@ public enum PCMetricsDef {
     PROCESSED_RECORDS("processed.records", "Total number of records successfully processed", PCMetricsSubsystem.WORK_MANAGER, COUNTER, topicPartitionTags()),
     FAILED_RECORDS("failed.records", "Total number of records failed to be processed", PCMetricsSubsystem.WORK_MANAGER, COUNTER, topicPartitionTags()),
     SLOW_RECORDS("slow.records", "Total number of records that spent more than the configured time threshold in the waiting queue. This setting defaults to 10 seconds", PCMetricsSubsystem.WORK_MANAGER, COUNTER, topicPartitionTags()),
+    RECORD_RESIDENCE_TIME("record.residence.time", "Time from a record leaving the consumer to Parallel Consumer finishing with it - INCLUDING time queued in the client-side work queue and every retry, and EXCLUDING produce time and time waiting on the broker. Recorded on success, on failure and on abandonment, so a record that is retried three times contributes a sample per attempt and its last sample covers the whole of it", PCMetricsSubsystem.WORK_MANAGER, TIMER),
 
     PC_POLLER_STATUS("poller.status", "PC Broker Poller Status, reported as number with following mapping - " + getStateToValueListing(), PCMetricsSubsystem.BROKER_POLLER, GAUGE),
     PC_STATUS("status", "PC Status, reported as number with following mapping - " + getStateToValueListing(), PCMetricsSubsystem.PROCESSOR, GAUGE),

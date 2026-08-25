@@ -1,0 +1,53 @@
+/*
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+/**
+ * One engine under measurement, in its own compilation unit.
+ *
+ * WHY THIS EXISTS AT ALL. Bench.java.template has to compile against every release in the version
+ * bisect, back to 0.3.0.2. The fork ships engines those releases never had - Mutiny and the proxy
+ * exist in no published release, and the proxy is not even on Maven Central. A single template that
+ * imported them would fail to compile for ten of the eleven versions in PC_VERSIONS, which is to say
+ * it would delete the version bisect in order to add an engine arm.
+ *
+ * So the shared harness names no engine type. It resolves an arm by class name (see
+ * Bench#armFor) and run-bisect.sh compiles into each arm directory only the arm files the modes
+ * being swept need, with only the Maven artifacts those arms need. Adding an engine is one new file
+ * here plus one line in run-bisect.sh's arm table; it costs the other arms nothing and it cannot
+ * break the bisect.
+ *
+ * WHAT AN ARM MAY AND MAY NOT DO. It runs the engine and returns the measured window. It must not
+ * define its own counters, its own consumer properties, its own options builder or its own callee -
+ * those live in Bench and are shared precisely so that two arms differ by the engine and by nothing
+ * else. An arm that reimplements one of them is measuring a different experiment.
+ */
+public interface BenchArm {
+
+    /**
+     * Runs one measurement. The callee (if this arm uses the shared HTTP one) is already started.
+     *
+     * @return elapsed wall-clock milliseconds of the measured window - started immediately before the
+     *         engine is handed its user function, ended when the expected record count has completed.
+     *         The window includes the consumer-group join for every arm, which is the convention every
+     *         committed results file was taken under; see
+     *         docs/inflight/perf-platform-threads-are-the-ceiling.md on why that matters when reading
+     *         mean in-flight back out of a throughput number.
+     */
+    long run(String bootstrap, String topic, int expected, int delayMs, int concurrency, int bufferSize)
+            throws Exception;
+
+    /**
+     * Whether Bench should start the shared callee (WireMock, the async stub under BENCH_ASYNC_STUB,
+     * or the bare timer under BENCH_TIMER_CALLEE) before {@link #run}.
+     * <p>
+     * True for every engine whose simulated work is an HTTP request, which is all of them except the
+     * proxy: the proxy's callee is a connected worker on the far side of the dispatch protocol, not an
+     * HTTP server, so its arm builds its own and honours {@link Bench#asyncCallee()} itself. That is
+     * the same axis under a different transport, deliberately - so the "does the callee hold a thread"
+     * question is asked identically of every engine.
+     */
+    default boolean usesSharedCallee() {
+        return true;
+    }
+}

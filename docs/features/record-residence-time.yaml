@@ -1,0 +1,65 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Record residence time
+category: observability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: planned
+  target_release: 0.6.0.0
+readme_anchor: metrics
+summary: >-
+  A timer measuring how long each record spends inside Parallel Consumer: from the moment it comes out of the
+  consumer to the moment Parallel Consumer finishes with it. Produce time and time waiting on the broker are
+  excluded - they are the environment, not the engine. Time queued in the client-side work queue, every retry
+  and every retry delay are included.
+use_this_when:
+  - You need latency rather than throughput - the p99 a caller downstream of your consumer actually experiences, which no other meter reports.
+  - Measured in-flight concurrency sits far below the configured maxConcurrency and you need to know whether records are not being fetched or are fetched and queued. This is the only meter that distinguishes the two - a rising residence time with a flat in-flight count is over-buffering, not under-fetching.
+  - You are tuning the load factor or the message buffer and want the cost of that buffering expressed as latency.
+  - Your ordering mode serialises work (PARTITION, or KEY on a skewed key distribution) and you need to see head-of-line blocking, which shows up in the upper percentiles long before it shows up in the mean.
+setup:
+  options:
+    - ParallelConsumerOptions.meterRegistry - the timer, like every other meter, only reaches a backend when a registry is supplied.
+  emits:
+    - Timer pc.record.residence.time, tagged subsystem=workmanager, from PCMetricsDef.RECORD_RESIDENCE_TIME.
+    - Percentiles are published at 0, 0.5, 0.75, 0.95, 0.99 and 0.999, the same set every Parallel Consumer timer publishes.
+opt_in:
+  mechanism: Always recorded; supply a MeterRegistry to observe it.
+  isolated_from_stable_modules: false
+boundaries:
+  - >-
+    The measure STARTS when the WorkContainer is constructed from a poll batch, which is when the record leaves
+    the consumer. It is not the record's broker timestamp, so it says nothing about producer-to-consumer latency;
+    ConsumerRecord.timestamp() is there for anyone who wants that included.
+  - >-
+    The measure ENDS when the control loop takes the delivery back, not when the user function returns. The hop
+    from the worker's mailbox to the controller is Parallel Consumer's own queueing and belongs inside the number.
+  - >-
+    A sample is recorded on EVERY outcome - success, failure and abandonment - not only on success. A record that
+    fails three times before succeeding therefore contributes four samples, each measured from the same arrival
+    instant, so the last of them covers every attempt and every retry delay. This is the surprising choice and it
+    is deliberate: sampling only successes would make the distribution look best exactly when the engine is doing
+    worst. It also means the sample count exceeds the record count whenever anything is being retried, so the
+    counter to divide by is pc.processed.records, never this timer's count.
+  - >-
+    A record whose partition is revoked while it is still out at a worker records NO sample. Its result is
+    discarded and the record will be redelivered to whichever consumer takes the partition, so counting it would
+    measure a rebalance rather than the engine.
+  - >-
+    One timer for the whole consumer - deliberately NOT tagged by topic and partition, unlike pc.processed.records
+    and pc.failed.records. A percentile histogram per partition is a far heavier meter than a counter, and
+    percentiles cannot be merged afterwards, so per-partition timers could never be combined into a consumer-wide
+    p99. To narrow a bad p99 to a partition, use the per-partition counters and offset gauges.
+  - The timer only reaches a metrics backend if a MeterRegistry is supplied; see micrometer-metrics.yaml.
+references:
+  - label: Meter definition
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java
+  - label: Arrival timestamp and the residence measure
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java
+  - label: Where each outcome records its sample
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java
+  - label: Metrics
+    path: README.adoc#mertics
