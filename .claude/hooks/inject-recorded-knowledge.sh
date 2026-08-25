@@ -342,14 +342,14 @@ emit_deferred
 emit "# Dated plans and investigations"
     emit ""
     emit "\`docs/plans/\` - the method that settled a question of this shape before:"
-plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
+plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
 emit "${plans:-(none)}"
 emit ""
 
 # Point-in-time audits of tests that do not run, do not assert, or were never written. Easy to miss
 # precisely because nothing goes red to tell you - which is why AGENTS.md says to read the newest
 # before re-enabling, deleting or rewriting a dark test.
-hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
+hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
 if [ -n "$hardening" ]; then
     emit "# Dated test-hardening audits"
     emit ""

@@ -145,11 +145,43 @@ print(verdict)
 [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || exit 0
 
 now="$(date +%s)"
+# PORTABLE MTIME. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and this returned nothing while
+# still exiting 0, so every caller silently read "no mtime". PROBE the platform once rather than
+# falling back arm to arm. What a blind `-c || -f` would actually do on GNU coreutils 9.7, measured:
+# `stat -f %m FILE` exits 1 but PRINTS SIX LINES OF FILESYSTEM PROSE TO STDOUT - `File:`, `ID:`,
+# `Blocks: Total: ...`. So the fallback arm hands back not a wrong number but a wrong STRING, which
+# the caller then does arithmetic on. Probing means only one arm ever runs.
+#
+# `|| true` IS LOAD-BEARING, not tidiness: this script runs under `set -e`, and `mtime="$(_mtime ...)"`
+# takes the substitution's status, so a failing stat killed the hook AT that line - never reaching the
+# fail-closed branch below, and exiting non-zero, which PreToolUse reads as a non-blocking error and
+# ALLOWS the merge. The fail-closed arm was unreachable until this was here. `_mtime` therefore never
+# fails: it prints the mtime, or nothing.
+if stat -c %Y . >/dev/null 2>&1; then
+    _mtime() { stat -c %Y "$1" 2>/dev/null || true; }      # GNU coreutils
+else
+    _mtime() { stat -f %m "$1" 2>/dev/null || true; }      # BSD / macOS
+fi
+
 live_tasks=""
 while IFS= read -r f; do
     [ -f "$f" ] || continue
-    mtime="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
-    [ "$mtime" -eq 0 ] && continue
+    mtime="$(_mtime "$f")"
+    # FAIL CLOSED, ON ANYTHING THAT IS NOT A TIMESTAMP - not just on empty. A file matched the
+    # session's tasks glob, so something is there; being unable to date it is not evidence that
+    # nothing is running. The old code skipped it, which is how this guard came to allow every merge
+    # on macOS.
+    #
+    # NOT `[ -z "$mtime" ]`: `stat` can FAIL AND STILL PRINT. Feed the arithmetic below a non-numeric
+    # `mtime` and `$(( now - mtime ))` evaluates it as an expression, so a word in it is a variable
+    # name and `set -u` aborts the hook - "File: unbound variable" - which exits non-zero with no
+    # verdict, and PreToolUse reads that as a non-blocking error and ALLOWS the merge. Testing the
+    # shape of the value, not merely its presence, is what keeps the closed arm closed.
+    case "$mtime" in
+        ''|*[!0-9]*)
+            live_tasks="${live_tasks}  - $(basename "$f" .output) (mtime unreadable - assuming live)"$'\n'
+            continue ;;
+    esac
     age=$(( now - mtime ))
     if [ "$age" -lt "$WINDOW_SECONDS" ]; then
         live_tasks="${live_tasks}  - $(basename "$f" .output) (wrote ${age}s ago)"$'\n'
