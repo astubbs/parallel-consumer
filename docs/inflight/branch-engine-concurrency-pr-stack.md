@@ -46,8 +46,8 @@ PR. Each stacked PR body carries `depends on astubbs/parallel-consumer#N`, one l
 | Virtual threads (`b6083f5ef` + CI harness `e337b166a`) | **astubbs#360**, cut from master 2026-08-25. Full core suite green (403 tests). Kept master's versions of two things the branch commit predates: the `submitWorkToPool` shutdown guards, and the load-factor reporting (astubbs#201's) |
 | Direct pull + the scan fix | **astubbs#361**, cut 2026-08-25. One review, five declared parents (astubbs#335, astubbs#336, astubbs#358, astubbs#360, astubbs#201) - every one a compile or correctness dependency. 457 tests green |
 | Scan fix (`b73f8b97e` + `3c617f4f7`) | shipped inside astubbs#361, as the abandoned isolation attempt predicted it must | **Improves the shipped default too** - the 440 -> 1.00 examinations-per-dispatch collapse in `UNORDERED` - so it may deserve promotion ahead of direct pull |
-| Bench harness, results, measurement docs | not cut |
-| The ledger itself (register, this note, K4 data, strategy notes) | not cut - belongs on a docs-only branch off master, so the records land whatever the code does |
+| Bench harness, results, measurement docs | **astubbs#362**, stacked on astubbs#361 - not for compile reasons (the harness runs any version by design) but because on a master without the new options `MODES=core-vt` would silently run platform threads: an arm that lies |
+| The ledger itself (register, this note, K4 data, strategy notes) | **astubbs#363** - the integration branch now has its own PR, declaring all eight parents. Owner's call: a PR being complex and dependent is a reason to sequence it, not to withhold it. Its diff collapses to the records as the parents merge |
 
 **Owner's steer 2026-08-25:** the branches are useful markers whether or not each becomes a PR; the
 split is chosen for REVIEW QUALITY, so combine where the review is genuinely one idea (direct pull
