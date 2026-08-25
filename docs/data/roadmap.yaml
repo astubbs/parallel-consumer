@@ -382,19 +382,25 @@ entries:
     stage: in-progress
     stage_detail: >-
       Dimension one - per-instance admission control - is implemented and opt-in: a three-state
-      adaptiveConcurrencyMode (DISABLED default / OBSERVE / ENFORCE) governs the admission target
-      from measured service time, outcome signals and sustained in-flight, with the binding
-      constraint published as a gauge, and unsupported engines refusing it by warning rather than
-      silently. It is EXPERIMENTAL and observe-first: OBSERVE changes no runtime behaviour and is
-      the mode documented for adoption, while ENFORCE is unvalidated - the arrival-controlled bench
-      harness that would measure it lands separately, and no result is published. So the stage does
-      not reach 'implemented', which requires proof in use rather than a working build; that bump is
-      gated on those published closed-loop results. Dimension two - instance-count scaling - is
-      untouched. The two 2020 proof-of-concept branches remain unmerged and were not the basis:
-      features/dynamic-concurrency-control drove the worker pool from Netflix concurrency-limits,
-      feature/auto-tuning-pressure added AIMD against the last observed failure point; the landed
-      work controls admission rather than the pool, and ports the control-law math natively to keep
-      the core dependency-free.
+      adaptiveConcurrencyMode (DISABLED default / OBSERVE / ENFORCE) governs the admission target,
+      with the binding constraint published as a gauge, and unsupported engines refusing it by
+      warning rather than silently. The control law steers on throughput elasticity - grow while
+      more concurrency still buys more completions, hold at the plateau - with absolute brakes for
+      overload drops, failure-poisoned windows and offset back-pressure; under ENFORCE the target
+      also drives the worker pool's size, so the loop is closed at every value rather than only
+      below the pool. It is EXPERIMENTAL and observe-first: OBSERVE changes no runtime behaviour
+      and is the mode documented for adoption. ENFORCE is broker-validated in this tree's
+      integration tests - ramping without loss, surviving a rebalance, a genuinely closed loop, and
+      a three-arm comparison beating a hand-tuned static on every strict phase - but the
+      arrival-controlled bench harness on real hardware lands separately and no result is
+      published. So the stage does not reach 'implemented', which requires proof in use rather than
+      a working build; that bump is gated on those published results. Dimension two -
+      instance-count scaling - is untouched. The two 2020 proof-of-concept branches remain unmerged
+      and were not the basis: features/dynamic-concurrency-control drove the worker pool from
+      Netflix concurrency-limits, feature/auto-tuning-pressure added AIMD against the last observed
+      failure point; the landed work owns admission and actuates the pool from it, with the law
+      written natively to keep the core dependency-free (the earlier Gradient2 port is kept
+      reachable at the admission-gradient2-port tag).
     why_now: >-
       Deploy-time configuration guesses runtime-dependent quantities and is wrong in both directions.
       The engine already measures what it needs to decide for itself; STRATEGY.md carries this as the

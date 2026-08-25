@@ -3,31 +3,31 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: throughput -->
 
-> **Status, 2026-08-24: dimension one is no longer deferred and its direction is chosen.** The
-> per-instance controller is built and landed opt-in and off by default on astubbs#333 - admission
-> is the control variable rather than the pool, the control-law math is a native port of Gradient2
-> with attribution, and it runs against a real broker across a rebalance. The state tag that used to
-> sit here said *deferred - after v6, direction not yet chosen*, and both halves of that had become
-> false.
+> **Status, 2026-08-25: dimension one is built, and the law rewrite landed and verified.** The
+> per-instance controller landed opt-in and off by default on astubbs#333; the control law now
+> steers on **throughput elasticity** - grow while more concurrency still buys more completions,
+> hold at the plateau - with the learned latency baseline deleted outright, and under ENFORCE the
+> target drives the worker pool's size, closing the loop at every value. The Gradient2 port it
+> replaced is kept reachable at the `admission-gradient2-port` tag. Verified against a real broker:
+> ramping without loss, a rebalance, a genuinely closed loop, and a three-arm comparison where the
+> adaptive arm beats a hand-tuned static on every strict phase.
+>
+> The headline debt the 2026-08-24 status recorded here - **no fixed point below the ceiling**, the
+> target walking upward indefinitely on any workload that degrades gracefully - is what the rewrite
+> fixed, falsifier-first: the ratchet is red on the old law's own control run and green on the band
+> machine. It was the difficulty the owner reports having hit repeatedly when first attempting
+> this, years before this attempt - the hard part of the problem domain, not a defect introduced
+> here, and
+> [`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md)
+> is the design that answered it.
 >
 > **Dimension two remains deferred and genuinely direction-unchosen** - see the staging below, which
 > still stands as written for the instance-count half.
 >
-> What dimension one still owes is tracked, item by item, in
-> [`pr-333-adaptive-concurrency-outstanding.md`](pr-333-adaptive-concurrency-outstanding.md); the
-> capabilities it should grow next are in
-> [`core-adaptive-concurrency-future-modes.md`](core-adaptive-concurrency-future-modes.md). The
-> headline debt is that the control law has **no fixed point below the ceiling**: its reference is
-> relative with no anchor, so on any workload that degrades gracefully the target walks upward
-> indefinitely. That is the difficulty the owner reports having hit repeatedly when first attempting
-> this, years before this attempt - it is the hard part of the problem domain, not a defect
-> introduced here.
->
-> **Dimension one's remaining work is one design** (2026-08-24):
-> [`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md),
-> requirements-only. It states what makes the target rise, fall and hold, and derives the mechanism
-> from that rather than patching the arms inherited from the Gradient2 port. It steers on throughput
-> and deletes the learned latency baseline outright.
+> What dimension one still owes is in
+> [`pr-333-adaptive-concurrency-outstanding.md`](pr-333-adaptive-concurrency-outstanding.md) - now
+> just the real-hardware value measurement and merge prep; the capabilities it should grow next are
+> in [`core-adaptive-concurrency-future-modes.md`](core-adaptive-concurrency-future-modes.md).
 >
 > It replaces a two-plan split
 > ([`...-001`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md) superseded,

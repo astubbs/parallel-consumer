@@ -37,10 +37,24 @@ opt_in:
   isolated_from_stable_modules: false
 boundaries:
   - >-
-    ENFORCE is unvalidated. The arrival-controlled bench harness that would establish what it is
-    worth lands separately, and no benchmark result is published, so the documentation describes
-    enforcement without recommending it. OBSERVE is the mode to adopt: it changes no runtime
-    behaviour at all.
+    ENFORCE is broker-validated but not benchmarked. This tree's integration tests run it against a
+    real broker - ramping without loss, surviving a rebalance, closing the loop against a handler
+    whose latency depends on the chosen concurrency, and a three-arm comparison where the adaptive
+    arm beats a hand-tuned static on every strict phase. What does not exist is a published number
+    from real hardware on the arrival-controlled bench harness, which lands separately - so the
+    documentation describes enforcement without recommending it. OBSERVE is the mode to adopt: it
+    changes no runtime behaviour at all.
+  - >-
+    Under the default configuration the brake is the throughput plateau band, not any latency
+    bound. The law raises the target while more concurrency still buys more completions and holds
+    when it stops paying - so rising per-record latency alone does not brake it: if doubling the
+    in-flight count doubles what each record waits but throughput still climbs, the law reads that
+    as progress. What that trades away is any implicit per-record latency guarantee - a workload
+    whose consumers care about individual response times more than about total throughput needs
+    maxConcurrency set explicitly as a pinned ceiling, because no latency objective exists to
+    protect them by default. Absolute brakes still fire regardless of throughput: an overload drop
+    takes a multiplicative cut, a failure-poisoned window freezes growth, and offset-encoding
+    back-pressure holds - only healthy windows ever argue for more.
   - >-
     Adaptive concurrency only helps a workload bounded by how much is in flight. Under KEY or
     PARTITION ordering with skewed keys, the shards serialise and the instance sustains a fraction of
@@ -87,3 +101,5 @@ references:
     path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java
   - label: The plan - product contract, requirements and scope boundaries
     path: docs/plans/2026-08-18-001-feat-self-scaling-concurrency-plan.md
+  - label: The control-law design - the throughput-elasticity objective, and why the latency baseline was deleted
+    path: docs/plans/2026-08-24-003-feat-admission-control-law-design.md

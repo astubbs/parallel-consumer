@@ -1,7 +1,6 @@
 # Performance hypotheses: what was tested, and what it turned out to be
 
-<!-- inflight-type: perf -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21. **Every explanation raised during the performance investigation, and its fate.**
@@ -47,7 +46,11 @@ critical path.**
 - **The gap is the client, not the engine.** With no engine on either side, the Java floor reaches
   31-67% of the Go floor. PC sits within a few percent of the Java floor and beats it at two points.
 - **In-flight plateaus near 2,750 for PC and 2,848 for a bare `KafkaConsumer` with a thread pool** -
-  the same wall, so it is not PC's.
+  the same wall, so it is not PC's. Since settled one level deeper: **the wall is platform threads**,
+  proven with no Kafka and no PC in the tree's own control
+  ([`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md) - virtual
+  threads reach 92% of theoretical where platform threads reach 13%). On platform threads a
+  controller converging near that figure is the controller being right, not failing to climb.
 - **Ordering is enforced by in-flight records remaining in the shard.** Discovered by removing them and
   watching ten tests fail. The "wasteful walk" is the mechanism.
 - **`RetryQueue`'s fair lock is not a problem** - 5 parks out of 39,000, despite being a fair
@@ -70,7 +73,7 @@ core** - spinning burns exactly the cores the working threads need. Removing the
 | **The ceiling is stated as a law, not a thread count** - `min(maxConcurrency, r x handler_latency)`, `r ~ 20-27k activations/sec` | 400ms held 5,000 threads in sleep, so no count limit exists. Quoting "2,500 threads" would mislead; the useful figure is **~25k records/sec per instance for thread-per-record work, whatever the handler duration** |
 | **Block exactly-once on any future-returning API, if need be** - *owner* | Takes the sharpest constraint off the critical path. The restriction lands on the new entry point only; the classic `poll` keeps EoS because its future completes inline before the commit path runs |
 | **Direct pull is a measurement, not a merge candidate** | And it was merged anyway - see the correction below |
-| **The mechanism behind the ceiling is recorded as OPEN, not solved** | Every candidate tested is out. Further attribution needs kernel tooling, and the fix does not depend on the cause |
+| **The mechanism behind the ceiling is recorded as OPEN, not solved** | Every candidate tested is out. Further attribution needs kernel tooling, and the fix does not depend on the cause. *Superseded 2026-08-21*: the platform-threads control settled the mechanism - [`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md) |
 | **Opt-in execution paths get a CI matrix axis, not per-path test suites** | They are meant to be behaviourally *equivalent*; what needs asserting is agreement with the default, which is the existing suite run again |
 
 ## Process corrections, recorded because each cost real time
@@ -95,8 +98,6 @@ core** - spinning burns exactly the cores the working threads need. Removing the
 
 ## Still open
 
-- **Too many platform threads for the machine.** Raised by the owner early, argued down by me on
-  evidence that was weaker than I presented it, and now the strongest surviving candidate. See below.
 - **The mailbox** - [`parked-mailbox-is-not-the-bottleneck.md`](parked-mailbox-is-not-the-bottleneck.md), the largest single park
   site and PC's own code. Currently a hypothesis, not a finding.
 - The two ~20% cells against the Java floor, and whether they are even real given run-to-run spread.
@@ -112,6 +113,8 @@ count. It says nothing about threads being *expensive*, and the `LinkedTransferQ
 direct evidence that thread-to-core ratio governs behaviour here: the same change that would help a
 well-provisioned pool cost 69% on an oversubscribed one.
 
-**It remains unproven** - nothing has yet shown platform threads cost throughput in the baseline, where
-they park cheaply rather than spin. But it is now the leading candidate rather than a dismissed one,
-and **the decisive test is virtual threads**, which has still not been run.
+**The decisive test has since been run, and the owner was right.** The forty-line control -
+no Kafka, no PC, a fixed pool and `Thread.sleep` - shows platform threads reaching 13% of
+theoretical where virtual threads reach 92%, a 7.1x gap with the thread type as the only variable:
+[`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md), settled
+2026-08-21. The paragraph above stays as the record of how a correct proposal got argued down.
