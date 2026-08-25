@@ -833,3 +833,15 @@ recorded. **And it corroborates the fourteenth sighting's timing rule-out of run
 04:17:05Z, three minutes after the box went quiet - the second drain-arm red in one day where the
 contention pairing provably was not present. The discriminator remains an uncontended replay, and
 nobody has replayed this seed either. Recorded as unresolved.
+
+**The same branch's next run drew TWO arms at once** - not a new numbered sighting, the signature
+is already this entry's, but the seeds are the asset.
+[Run 32863352692](https://github.com/astubbs/parallel-consumer/actions/runs/32863352692/job/97852502402):
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (**eager**, seed
+`5501517460666962649`, `lagStagnation=154115ms`) and
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` (seed
+`7370431147468591204`, `lagStagnation=154524ms`), 47 `CLASS2_STALL/LAG_STAGNATION` violations
+between them, every peak inside the familiar ~154s band. And a THIRD same-day timing rule-out of
+contention: `Performance (optional)` ended 15:06:08Z, the eager arm started 15:08:36Z and the
+drain arm 15:11:28Z. The head under test differs from this entry's by hook-script and markdown
+commits only.
