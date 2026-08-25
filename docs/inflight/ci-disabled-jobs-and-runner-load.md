@@ -36,3 +36,22 @@
 
   Context worth keeping with the measurement: several agent sessions were building against the same
   box concurrently. The load driving it is not only CI's.
+
+- **Seen again 2026-08-25, on `highcpu-5`, with the signature matched line for line.** Run
+  [`32812259117`](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117): the
+  `Chaos Pain Suite tests` step starts at 05:18:01, its last log line is at **05:18:55** - 54 seconds
+  in, mid-scenario, `RESTART -> instance 12` at `t=+22011ms` - and the step does not end until
+  05:32:29. Inside it: **zero** `BUILD FAILURE`, **zero** `Tests run:`, **zero** `<<< FAILURE`,
+  **zero** `##[error]`. The only annotation is a bare "Process completed with exit code 1".
+
+  Rate, which is the part a single red cannot give you: in the ninety minutes around it the
+  `pr-highcpu-fast-feedback` workflow failed on **six unrelated branches** - `feats/833-commit-failure-seam`
+  (three times), `test/chaos-class2-drain-discriminator`, `fix/gates-run-on-macos`,
+  `fix/pre-commit-gate-fires-on-noncommit`, `tooling/inject-branch-context`,
+  `test/jcstress-poc-plain-long-visibility` - **with successes interleaved on two of those same
+  branches**, and one of the failures started sixty seconds after the run above. That is the
+  master-state test this entry already states, satisfied rather than assumed.
+
+  Recorded here rather than in a quarantine ledger for the reason two entries up: this is not a test
+  failing, it is a process being killed, so there is no test to quarantine and nothing a rerun would
+  tell you.
