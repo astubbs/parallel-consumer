@@ -151,11 +151,43 @@ message TimeWindowSpec {
 // Kafka's Initializer is zero-argument and pure, so the host supplies its value at build time and
 // the engine hands out a fresh copy each time a key opens a new window. The per-record function is
 // named by token exactly as map_values and reduce name theirs.
+//
+// `function_token` and `combine` are ALTERNATIVES, and exactly one must be set. The token places
+// the host's function at the aggregator, called once per record per overlapping window; the
+// combine names a fold the ENGINE executes, so nothing crosses the boundary per record and the
+// host meets the aggregation only at its emits. A call setting both is describing two different
+// aggregations at once, and one setting neither is describing none - each is refused by name
+// rather than resolved by precedence, because a precedence rule here would silently discard half
+// of what the host said. `initial` belongs to the token placement only: a combine kind defines
+// its own empty accumulator, so initial bytes sent alongside a combine are refused rather than
+// silently dropped.
 message Aggregate {
   optional int64 handle = 1;
   optional bytes initial = 2;
   optional int64 function_token = 3;
   optional string store_name = 4;
+  optional CombineKind combine = 5;
+}
+
+// An engine-executed combine, named rather than supplied: the host picks one from this set, and
+// no callable crosses - a function sent to run per record would be the aggregator placement
+// wearing a different name.
+//
+// TWO kinds, and the second is a control requirement rather than coverage. A placement
+// measurement needs a crossing-free arm that differs from the host-function arm by exactly one
+// term - the crossing. APPEND_BYTES collects raw values, so its accumulator, store, changelog
+// and emit payload all grow with window occupancy where a host fold's do not: that is two terms
+// changed, which voids the control. LAST_BYTES keeps only the newest value, so its accumulator
+// is bounded like a fold's and only the crossing differs. So the control arm takes LAST_BYTES,
+// and APPEND_BYTES exists for the placement where collecting is the point.
+enum CombineKind {
+  COMBINE_KIND_UNSPECIFIED = 0;
+  // Length-prefixed concatenation of record values in arrival order: each value is preceded by
+  // its length as four big-endian bytes, so a reader splits on declared boundaries rather than
+  // guessing. The accumulator grows with window occupancy.
+  COMBINE_KIND_APPEND_BYTES = 1;
+  // Keeps only the newest value; the accumulator is bounded by one value's size.
+  COMBINE_KIND_LAST_BYTES = 2;
 }
 
 // Re-keys a windowed table to its INNER key, minting a plain byte-keyed stream - the one call that

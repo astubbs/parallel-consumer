@@ -23,6 +23,7 @@ import pytest
 
 from parallel_consumer._generated import streams_pb2 as pb
 from parallel_consumer.streams import (
+    CombineKind,
     DataType,
     FunctionKind,
     HandleKind,
@@ -310,6 +311,10 @@ def test_the_python_enums_mirror_the_wire_constants_exactly() -> None:
     wire_types = {name.removeprefix("DATA_TYPE_"): number
                   for name, number in pb.DataType.items()}
     assert {m.name: m.value for m in DataType if m is not DataType.UNKNOWN} == wire_types
+
+    wire_combines = {name.removeprefix("COMBINE_KIND_"): number
+                     for name, number in pb.CombineKind.items()}
+    assert {m.name: m.value for m in CombineKind} == wire_combines
 
 
 def test_a_sink_answer_without_handle_or_type_is_inert_rather_than_fatal(

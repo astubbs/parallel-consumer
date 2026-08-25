@@ -160,9 +160,9 @@ public class StreamsSessionService extends StreamsServiceGrpc.StreamsServiceImpl
                         assembler.count(call.getCount().getHandle(), call.getCount().getStoreName()));
                 case WINDOWED_BY -> minted(callId, assembler.windowedBy(
                         call.getWindowedBy().getHandle(), call.getWindowedBy().getWindow()));
-                case AGGREGATE -> minted(callId, assembler.aggregate(
-                        call.getAggregate().getHandle(), call.getAggregate().getInitial().toByteArray(),
-                        call.getAggregate().getFunctionToken(), call.getAggregate().getStoreName()));
+                // The whole message travels: which placement it names - a host function token, or an
+                // engine-executed combine - is the assembler's dispatch, made on field presence.
+                case AGGREGATE -> minted(callId, assembler.aggregate(call.getAggregate()));
                 case TO_STREAM -> minted(callId, assembler.toStream(call.getToStream().getHandle()));
                 case SINK -> {
                     assembler.sink(call.getSink().getHandle(), call.getSink().getTopic());

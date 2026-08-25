@@ -16,6 +16,7 @@ or a builder call from inside a mapper - which hung while the reader thread ran 
 
 from ._session import (
     AggregatorFunction,
+    CombineKind,
     DataType,
     FunctionKind,
     Handle,
@@ -33,6 +34,7 @@ from ._transport import GrpcStreamsTransport
 
 __all__ = [
     "AggregatorFunction",
+    "CombineKind",
     "DataType",
     "FunctionKind",
     "GrpcStreamsTransport",

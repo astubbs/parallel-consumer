@@ -3,6 +3,8 @@ package bz.stub.parallelconsumer.streams;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Aggregate;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.CombineKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
@@ -16,6 +18,7 @@ import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.kstream.Aggregator;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
+import org.apache.kafka.streams.kstream.Initializer;
 import org.apache.kafka.streams.kstream.KGroupedStream;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
@@ -30,6 +33,7 @@ import org.apache.kafka.streams.kstream.Windowed;
 import org.apache.kafka.streams.state.Stores;
 import org.apache.kafka.streams.state.WindowStore;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -283,6 +287,71 @@ public class TopologyAssembler {
      * theirs, and {@code Materialized.withRetention} carries the specification's {@code retention_ms}.
      */
     public long aggregate(long handle, byte[] initial, long functionToken, String storeName) {
+        byte[] captured = initial.clone();
+        return windowedAggregate(handle, captured::clone, aggregators.forToken(functionToken), storeName);
+    }
+
+    /**
+     * The whole {@code aggregate} wire call: dispatches between the two placements the message can name, and
+     * refuses the shapes that name both or neither.
+     *
+     * <p>{@code function_token} and {@code combine} are alternatives - a host function at the aggregator, or a
+     * fold the engine executes with nothing crossing per record. Precedence would silently discard half of what
+     * the host said, so both set, and neither set, are refused by name. {@code initial} belongs to the token
+     * placement only: a combine kind defines its own empty accumulator, and initial bytes arriving beside a
+     * combine would be silently dropped state - refused instead.
+     */
+    public long aggregate(Aggregate call) {
+        require(!(call.hasFunctionToken() && call.hasCombine()),
+                "aggregate carries both function_token and combine; they are alternatives - a host function"
+                        + " called at the aggregator, or an engine-executed combine");
+        require(call.hasFunctionToken() || call.hasCombine(),
+                "aggregate carries neither function_token nor combine; exactly one must be set");
+        if (call.hasFunctionToken()) {
+            return aggregate(call.getHandle(), call.getInitial().toByteArray(), call.getFunctionToken(),
+                    call.getStoreName());
+        }
+        require(!call.hasInitial(), "aggregate carries initial alongside combine; a combine kind defines its own"
+                + " empty accumulator, so the bytes would be silently dropped");
+        return windowedAggregate(call.getHandle(), () -> new byte[0],
+                combineAggregator(call.getCombine()), call.getStoreName());
+    }
+
+    /**
+     * The engine-executed combine for a named kind - the whole point is that the returned {@link Aggregator}
+     * never touches the host boundary. Package-visible so the counting tests can run the SAME implementation
+     * under {@code suppress} and {@code emitStrategy}, which this wire does not expose.
+     *
+     * <p>An unknown or unspecified kind is refused by name: proto3's zero member selects nothing, and defaulting
+     * it to either real kind would silently choose an accumulator shape the host never asked for.
+     */
+    static Aggregator<byte[], byte[], byte[]> combineAggregator(CombineKind kind) {
+        return switch (kind) {
+            case COMBINE_KIND_APPEND_BYTES -> (key, value, aggregate) -> appendLengthPrefixed(aggregate, value);
+            case COMBINE_KIND_LAST_BYTES -> (key, value, aggregate) -> value;
+            default -> throw new TopologyDescriptionException("aggregate names combine kind " + kind
+                    + ", which is outside this engine's combine set; name COMBINE_KIND_APPEND_BYTES or"
+                    + " COMBINE_KIND_LAST_BYTES");
+        };
+    }
+
+    /**
+     * One appended value: the accumulator, then the value's length as four big-endian bytes, then the value -
+     * so a reader splits the collection on declared boundaries in arrival order rather than guessing.
+     */
+    private static byte[] appendLengthPrefixed(byte[] accumulator, byte[] value) {
+        ByteBuffer grown = ByteBuffer.allocate(accumulator.length + Integer.BYTES + value.length);
+        grown.put(accumulator).putInt(value.length).put(value);
+        return grown.array();
+    }
+
+    /**
+     * The materialisation both placements share, so the minted handle, the store, the read path and the sink
+     * refusal cannot differ between them - which is what makes a placement comparison a comparison of the
+     * placement and nothing else.
+     */
+    private long windowedAggregate(long handle, Initializer<byte[]> initializer,
+                                   Aggregator<byte[], byte[], byte[]> aggregator, String storeName) {
         requireNotBuilt("aggregate");
         require(storeName != null && !storeName.isEmpty(), "aggregate names no store");
         TimeWindowedKStream<byte[], byte[]> upstream = resolve(
@@ -290,10 +359,9 @@ public class TopologyAssembler {
         TimeWindowSpec window = handles.get(handle).type().getWindow();
         HandleType resultType = windowedType(HandleKind.HANDLE_KIND_TABLE, window);
         storeValueTypes.put(storeName, resultType.getValueType());
-        byte[] captured = initial.clone();
         return mint(upstream.aggregate(
-                captured::clone,
-                aggregators.forToken(functionToken),
+                initializer,
+                aggregator,
                 Materialized.<byte[], byte[], WindowStore<Bytes, byte[]>>as(storeName)
                         .withStoreType(Materialized.StoreType.IN_MEMORY)
                         .withRetention(Duration.ofMillis(window.getRetentionMs()))

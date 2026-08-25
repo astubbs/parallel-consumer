@@ -3,6 +3,8 @@ package bz.stub.parallelconsumer.streams;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Aggregate;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.CombineKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -764,6 +768,197 @@ class TopologyAssemblerTest {
         // A plain table is the near-miss worth naming separately: it IS a table, just not a windowed one, and
         // Kafka's own KTable.toStream would happily take it - the refusal is this wire's scope choice.
         assertRefusedNaming(() -> assembler.toStream(plainTable), "to_stream", "table", "windowed table");
+    }
+
+    // ---- U5, the P2 placement: a declared JVM-side combine on the same aggregate call ----
+
+    /** An aggregate call naming a combine kind and nothing the host would run. */
+    private static Aggregate combineCall(long handle, CombineKind kind, String storeName) {
+        return Aggregate.newBuilder().setHandle(handle).setCombine(kind).setStoreName(storeName).build();
+    }
+
+    /**
+     * U5 scenario 1: the combine placement mints a handle of exactly the shape the token placement mints - same
+     * kind, same types, same window, and the same sink refusal - so nothing downstream of the mint can tell the
+     * two placements apart. That sameness is what makes a comparison of them a comparison of the placement only.
+     */
+    @Test
+    void aggregateWithACombineAndNoTokenMintsATableOfTheTokenPathsShape() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+
+        long table = assembler.aggregate(
+                combineCall(windowed, CombineKind.COMBINE_KIND_APPEND_BYTES, "agg-store"));
+
+        HandleType recorded = assembler.typeOf(table);
+        assertThat(recorded.getKind()).isEqualTo(HandleKind.HANDLE_KIND_TABLE);
+        assertThat(recorded.getKeyType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(recorded.getValueType()).isEqualTo(DataType.DATA_TYPE_BYTES);
+        assertThat(recorded.hasWindow()).isTrue();
+        assertThat(recorded.getWindow()).isEqualTo(tumblingHour());
+        // The sink refusal reads the recorded type, so the combine-minted table is refused exactly as the
+        // token-minted one is, naming to_stream as the way out.
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.sink(table, "out"));
+        assertThat(refused).hasMessageThat().contains("windowed table");
+        assertThat(refused).hasMessageThat().contains("to_stream");
+    }
+
+    /**
+     * U5 scenario 2: both set is refused by name, saying they are alternatives. Precedence would silently
+     * discard half of what the host said - either the function it registered or the combine it named.
+     */
+    @Test
+    void anAggregateCarryingBothACombineAndAFunctionTokenIsRefusedNamingThemAsAlternatives() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        Aggregate both = Aggregate.newBuilder().setHandle(windowed).setFunctionToken(7)
+                .setCombine(CombineKind.COMBINE_KIND_APPEND_BYTES).setStoreName("agg-store").build();
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.aggregate(both));
+
+        assertThat(refused).hasMessageThat().contains("function_token");
+        assertThat(refused).hasMessageThat().contains("combine");
+        assertThat(refused).hasMessageThat().contains("alternatives");
+    }
+
+    /** U5 scenario 3: neither set is refused by name - an aggregation with no combining step is not one. */
+    @Test
+    void anAggregateCarryingNeitherACombineNorAFunctionTokenIsRefusedByName() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        Aggregate neither = Aggregate.newBuilder().setHandle(windowed).setStoreName("agg-store").build();
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.aggregate(neither));
+
+        assertThat(refused).hasMessageThat().contains("neither");
+        assertThat(refused).hasMessageThat().contains("function_token");
+        assertThat(refused).hasMessageThat().contains("combine");
+    }
+
+    /**
+     * A combine kind defines its own empty accumulator, so initial bytes beside a combine have nowhere to go.
+     * Refused rather than dropped: a host that supplied a seed and got a topology that silently ignored it
+     * would read its own aggregates as wrong for a reason it could not see.
+     */
+    @Test
+    void anAggregateCarryingInitialAlongsideACombineIsRefusedRatherThanDropped() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        Aggregate seeded = combineCall(windowed, CombineKind.COMBINE_KIND_APPEND_BYTES, "agg-store")
+                .toBuilder().setInitial(com.google.protobuf.ByteString.copyFromUtf8("seed")).build();
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.aggregate(seeded));
+
+        assertThat(refused).hasMessageThat().contains("initial");
+        assertThat(refused).hasMessageThat().contains("combine");
+    }
+
+    /** Proto3's zero member selects nothing; defaulting it to a real kind would choose an accumulator shape
+     * the host never asked for, so it is refused naming the two real kinds. */
+    @Test
+    void anUnspecifiedCombineKindIsRefusedNamingTheRealKinds() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.aggregate(
+                        combineCall(windowed, CombineKind.COMBINE_KIND_UNSPECIFIED, "agg-store")));
+
+        assertThat(refused).hasMessageThat().contains("COMBINE_KIND_APPEND_BYTES");
+        assertThat(refused).hasMessageThat().contains("COMBINE_KIND_LAST_BYTES");
+    }
+
+    /**
+     * U5 scenario 6: the appended accumulator is length-prefixed and splits back into the original values in
+     * arrival order, so a host fold over the collection never guesses at boundaries. Distinct value lengths on
+     * purpose - equal lengths would let a wrong prefix or a transposed order still parse.
+     *
+     * <p>Red-proofed (R4): with {@code appendLengthPrefixed} sabotaged to write the value's length AFTER its
+     * bytes, this test failed with {@code BufferUnderflowException} inside the split - so the assertion does
+     * walk the declared boundaries, and a mis-framed store value cannot pass. Sabotage removed after the red run.
+     */
+    @Test
+    void anAppendedWindowStoresLengthPrefixedValuesThatSplitBackInArrivalOrder(@TempDir Path stateDir) {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        assembler.aggregate(combineCall(windowed, CombineKind.COMBINE_KIND_APPEND_BYTES, "agg-store"));
+
+        byte[] stored;
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer(), BASE, Duration.ZERO);
+            in.pipeInput(bytes("a"), bytes("x"));
+            in.pipeInput(bytes("a"), bytes("yy"));
+            in.pipeInput(bytes("a"), bytes("zzz"));
+
+            WindowStore<byte[], byte[]> store = driver.getWindowStore("agg-store");
+            try (WindowStoreIterator<byte[]> iterator = store.fetch(
+                    bytes("a"), BASE.minusMillis(ONE_HOUR_MS), BASE.plusMillis(ONE_HOUR_MS))) {
+                assertThat(iterator.hasNext()).isTrue();
+                stored = iterator.next().value;
+                assertThat(iterator.hasNext()).isFalse();
+            }
+        }
+
+        assertThat(splitLengthPrefixed(stored)).containsExactly("x", "yy", "zzz").inOrder();
+    }
+
+    /**
+     * U5 scenario 8: {@code LAST_BYTES} crosses zero times and keeps a BOUNDED accumulator - after three records
+     * the stored value is one value's size, not three. That bound is what qualifies it as the placement
+     * comparison's control arm (KTD16): against a host-fold arm it changes exactly one term, the crossing,
+     * where an appending accumulator would also change the store, changelog and emit volumes.
+     */
+    @Test
+    void aLastBytesCombineCrossesZeroTimesAndItsAccumulatorDoesNotGrowWithRecords(@TempDir Path stateDir) {
+        AtomicInteger crossings = new AtomicInteger();
+        TopologyAssembler.AggregatorFactory counting = token -> (key, value, aggregate) -> {
+            crossings.incrementAndGet();
+            return aggregate;
+        };
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, counting);
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source("in")), tumblingHour());
+        assembler.aggregate(combineCall(windowed, CombineKind.COMBINE_KIND_LAST_BYTES, "agg-store"));
+
+        byte[] stored;
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestInputTopic<byte[], byte[]> in = driver.createInputTopic(
+                    "in", new ByteArraySerializer(), new ByteArraySerializer(), BASE, Duration.ZERO);
+            in.pipeInput(bytes("a"), bytes("v1"));
+            in.pipeInput(bytes("a"), bytes("v2"));
+            in.pipeInput(bytes("a"), bytes("v3"));
+
+            WindowStore<byte[], byte[]> store = driver.getWindowStore("agg-store");
+            try (WindowStoreIterator<byte[]> iterator = store.fetch(
+                    bytes("a"), BASE.minusMillis(ONE_HOUR_MS), BASE.plusMillis(ONE_HOUR_MS))) {
+                assertThat(iterator.hasNext()).isTrue();
+                stored = iterator.next().value;
+                assertThat(iterator.hasNext()).isFalse();
+            }
+        }
+
+        // The newest value only, at one value's size after three same-sized records: the accumulator is bounded.
+        assertThat(new String(stored, StandardCharsets.UTF_8)).isEqualTo("v3");
+        assertThat(stored.length).isEqualTo(bytes("v1").length);
+        // Zero crossings: the counting factory's aggregator was never called - the engine ran its own.
+        assertThat(crossings.get()).isEqualTo(0);
+    }
+
+    /** Splits a length-prefixed collection on its declared boundaries: four big-endian length bytes, then the
+     * value, repeated. The reader-side half of the engine's {@code COMBINE_KIND_APPEND_BYTES} format. */
+    private static List<String> splitLengthPrefixed(byte[] appended) {
+        ByteBuffer buffer = ByteBuffer.wrap(appended);
+        List<String> values = new ArrayList<>();
+        while (buffer.hasRemaining()) {
+            byte[] value = new byte[buffer.getInt()];
+            buffer.get(value);
+            values.add(new String(value, StandardCharsets.UTF_8));
+        }
+        return values;
     }
 
     private static byte[] bytes(String s) {

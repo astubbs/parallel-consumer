@@ -3,6 +3,9 @@ package bz.stub.parallelconsumer.streams;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.Aggregate;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.CombineKind;
+import bz.stub.parallelconsumer.streams.protocol.v1alpha1.TimeWindowSpec;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.Serde;
@@ -45,9 +48,14 @@ import static com.google.common.truth.Truth.assertThat;
 /**
  * U1 of the windowed-aggregation falsification spike: how many times would a windowed aggregation cross the host
  * boundary per record, at each placement? At P1 (host at the aggregator) the crossing count is the aggregator call
- * count; at P2 (JVM combine, host at emit) it is the emit count. Built directly against {@link StreamsBuilder} -
- * not {@code TopologyAssembler} - so this runs before any wire code exists, and counts with plain
- * {@link AtomicInteger}s: one inside the aggregator, one on the node downstream of {@code toStream()}.
+ * count; at P2 (JVM combine, host at emit) it is the emit count. U1's arms are built directly against
+ * {@link StreamsBuilder} - not {@code TopologyAssembler} - so they ran before any wire code existed, and count
+ * with plain {@link AtomicInteger}s: one inside the aggregator, one on the node downstream of {@code toStream()}.
+ *
+ * <p>The U5 section at the bottom breaks that rule deliberately: its subject IS the wire code - the assembler
+ * selecting a JVM combine so the host's aggregator is never consulted - so its zero-crossing arm drives
+ * {@code TopologyAssembler} itself, and only the arms needing {@code suppress}/{@code emitStrategy} (which the
+ * wire does not expose) fall back to {@link StreamsBuilder} with the assembler's own combine implementation.
  *
  * <p>Predictions were recorded in {@code docs/inflight/perf-streams-windowing-multiplier.md} before the first run;
  * the plan is {@code docs/plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md} (U1).
@@ -291,6 +299,148 @@ class WindowedAggregatorCallCountTest {
 
         assertThat(calls.get()).isEqualTo(12 * RECORDS);
         assertThat(emits.get()).isEqualTo(19);
+    }
+
+    // ---- U5: the P2 instrument - a declared JVM-side combine, host at the emit ----
+
+    /**
+     * U5 scenario 4, the placement claim in its smallest form: with {@code combine} set, the host's aggregator
+     * is NEVER consulted - zero crossings against the 1,200 aggregator invocations (12 x 100) the same load
+     * costs at P1 - whatever the window multiplier.
+     *
+     * <p><b>The emit count is reported beside the zero and must not be read into it (KTD11):</b> TopologyTestDriver
+     * commits per record, so the emit count here is {@code ceil(size / advance)} per record - 1,200, equal to
+     * P1's crossing count BY CONSTRUCTION. The zero is a claim about the AGGREGATOR only; whether the emits
+     * collapse below P1's count is a property of broker-side caching that only U6 can measure.
+     *
+     * <p><b>Instrument check (R4, the plan's mandatory sabotage):</b> with the assembler's combine dispatch
+     * sabotaged to wire the host token's aggregator ({@code aggregators.forToken(0)} in place of
+     * {@code combineAggregator(...)} on the combine arm), this test failed at the zero-crossing assertion with
+     * {@code expected: 0 / but was : 1200} - the counter can move, so its zero is a measurement rather than a
+     * dead instrument. The same run also turned scenarios 6 and 8 red (a mis-selected aggregator breaks the
+     * stored format they read), so the selection is watched from three sides. Sabotage removed after the red run.
+     */
+    @Test
+    void aDeclaredCombineCrossesTheAggregatorBoundaryZeroTimesWhateverTheMultiplier(@TempDir Path stateDir) {
+        AtomicInteger crossings = new AtomicInteger();
+        TopologyAssembler assembler = new TopologyAssembler(
+                token -> (key, value) -> value,
+                token -> (aggregate, value) -> value,
+                token -> (streamValue, tableValue) -> streamValue,
+                token -> (key, value, aggregate) -> {
+                    crossings.incrementAndGet();
+                    return aggregate;
+                });
+        long windowed = assembler.windowedBy(assembler.groupByKey(assembler.source(INPUT)),
+                hoppingHourAdvancingFiveMinutesSpec());
+        long table = assembler.aggregate(Aggregate.newBuilder()
+                .setHandle(windowed)
+                .setCombine(CombineKind.COMBINE_KIND_APPEND_BYTES)
+                .setStoreName(STORE)
+                .build());
+        assembler.sink(assembler.toStream(table), OUTPUT);
+
+        int emits;
+        try (TopologyTestDriver driver = new TopologyTestDriver(assembler.build(), config(stateDir))) {
+            TestOutputTopic<byte[], byte[]> out = driver.createOutputTopic(
+                    OUTPUT, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+            pipeOneHundredRecordsOneMinuteApart(driver);
+            emits = out.readValuesToList().size();
+        }
+
+        // ZERO, against the 12 * RECORDS = 1,200 aggregator invocations this load costs at P1.
+        assertThat(crossings.get()).isEqualTo(0);
+        // Reported beside it, never as part of it: TTD's emit count equals P1's 1,200 by construction (KTD11).
+        assertThat(emits).isEqualTo(12 * RECORDS);
+    }
+
+    /**
+     * U5 scenario 5, first half: the combine placement under {@code suppress(untilWindowCloses)}, with the host
+     * function where P2 puts it - a {@code map_values} downstream of {@code to_stream}. Host invocations equal
+     * the closed (key, window) pairs: the same 19 U1's prediction 4 measured, independent of the record count.
+     * Built against {@link StreamsBuilder} with the assembler's OWN combine implementation, because suppress is
+     * not on the wire - the combine under test is still the engine's, not a test stand-in.
+     */
+    @Test
+    void suppressedCombinePlacementCallsTheHostOncePerClosedWindow(@TempDir Path stateDir) {
+        AtomicInteger hostInvocations = new AtomicInteger();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(
+                combineTopology(TimeWindows.ofSizeWithNoGrace(ONE_HOUR).advanceBy(Duration.ofMinutes(5)),
+                        EmitMode.SUPPRESSED, hostInvocations),
+                config(stateDir))) {
+            pipeOneHundredRecordsOneMinuteApart(driver);
+        }
+
+        assertThat(hostInvocations.get()).isEqualTo(19);
+    }
+
+    /**
+     * U5 scenario 5, second half: the same placement through {@code emitStrategy(onWindowClose())} - public DSL,
+     * no suppression buffer - lands on the same 19 closed pairs (U1 prediction 7). Needs the internal
+     * {@code __emit.interval.ms.kstreams.windowed.aggregation__} at zero for TTD determinism, exactly as U1's
+     * scenario 8 established.
+     */
+    @Test
+    void onWindowCloseCombinePlacementCallsTheHostOncePerClosedWindow(@TempDir Path stateDir) {
+        AtomicInteger hostInvocations = new AtomicInteger();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(
+                combineTopology(TimeWindows.ofSizeWithNoGrace(ONE_HOUR).advanceBy(Duration.ofMinutes(5)),
+                        EmitMode.ON_WINDOW_CLOSE, hostInvocations),
+                emitFinalImmediatelyConfig(stateDir))) {
+            pipeOneHundredRecordsOneMinuteApart(driver);
+        }
+
+        assertThat(hostInvocations.get()).isEqualTo(19);
+    }
+
+    /** U1's hopping headline arm as a wire specification: 1h size, 5m advance, no grace, 2h retention. */
+    private static TimeWindowSpec hoppingHourAdvancingFiveMinutesSpec() {
+        return TimeWindowSpec.newBuilder()
+                .setSizeMs(ONE_HOUR.toMillis())
+                .setAdvanceMs(Duration.ofMinutes(5).toMillis())
+                .setGraceMs(0)
+                .setRetentionMs(Duration.ofHours(2).toMillis())
+                .build();
+    }
+
+    /**
+     * The P2 shape at the emit modes the wire does not expose: the ENGINE's combine (the very implementation
+     * {@code TopologyAssembler} selects for {@code COMBINE_KIND_APPEND_BYTES}) at the aggregator, then the
+     * "host" - a counting mapValues - downstream of the re-key, which is where P2 places the user's function.
+     */
+    private static Topology combineTopology(TimeWindows windows, EmitMode mode, AtomicInteger hostInvocations) {
+        StreamsBuilder builder = new StreamsBuilder();
+        TimeWindowedKStream<byte[], byte[]> windowed = builder
+                .stream(INPUT, Consumed.with(Serdes.ByteArray(), Serdes.ByteArray()))
+                .groupByKey(Grouped.with(Serdes.ByteArray(), Serdes.ByteArray()))
+                .windowedBy(windows);
+        if (mode == EmitMode.ON_WINDOW_CLOSE) {
+            windowed = windowed.emitStrategy(EmitStrategy.onWindowClose());
+        }
+
+        KTable<Windowed<byte[]>, byte[]> aggregated = windowed.aggregate(
+                () -> new byte[0],
+                TopologyAssembler.combineAggregator(CombineKind.COMBINE_KIND_APPEND_BYTES),
+                Materialized.<byte[], byte[]>as(
+                                Stores.inMemoryWindowStore(STORE, Duration.ofHours(2), ONE_HOUR, false))
+                        .withKeySerde(Serdes.ByteArray())
+                        .withValueSerde(Serdes.ByteArray()));
+
+        if (mode == EmitMode.SUPPRESSED) {
+            aggregated = aggregated.suppress(Suppressed.untilWindowCloses(
+                    Suppressed.BufferConfig.maxRecords(10_000).shutDownWhenFull()));
+        }
+
+        // to_stream's re-key to the inner key, then the host's function - P2's placement of it.
+        aggregated.toStream((windowedKey, value) -> windowedKey.key())
+                .mapValues(value -> {
+                    hostInvocations.incrementAndGet();
+                    return value;
+                })
+                .to(OUTPUT, Produced.with(Serdes.ByteArray(), Serdes.ByteArray()));
+        return builder.build();
     }
 
     private static Topology topology(

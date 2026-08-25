@@ -9,6 +9,12 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class CombineKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    COMBINE_KIND_UNSPECIFIED: _ClassVar[CombineKind]
+    COMBINE_KIND_APPEND_BYTES: _ClassVar[CombineKind]
+    COMBINE_KIND_LAST_BYTES: _ClassVar[CombineKind]
+
 class HandleKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     HANDLE_KIND_UNSPECIFIED: _ClassVar[HandleKind]
@@ -37,6 +43,9 @@ class InvocationKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INVOCATION_KIND_REDUCE: _ClassVar[InvocationKind]
     INVOCATION_KIND_JOIN: _ClassVar[InvocationKind]
     INVOCATION_KIND_AGGREGATE: _ClassVar[InvocationKind]
+COMBINE_KIND_UNSPECIFIED: CombineKind
+COMBINE_KIND_APPEND_BYTES: CombineKind
+COMBINE_KIND_LAST_BYTES: CombineKind
 HANDLE_KIND_UNSPECIFIED: HandleKind
 HANDLE_KIND_STREAM: HandleKind
 HANDLE_KIND_GROUPED_STREAM: HandleKind
@@ -203,16 +212,18 @@ class TimeWindowSpec(_message.Message):
     def __init__(self, size_ms: _Optional[int] = ..., advance_ms: _Optional[int] = ..., grace_ms: _Optional[int] = ..., retention_ms: _Optional[int] = ...) -> None: ...
 
 class Aggregate(_message.Message):
-    __slots__ = ("handle", "initial", "function_token", "store_name")
+    __slots__ = ("handle", "initial", "function_token", "store_name", "combine")
     HANDLE_FIELD_NUMBER: _ClassVar[int]
     INITIAL_FIELD_NUMBER: _ClassVar[int]
     FUNCTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
     STORE_NAME_FIELD_NUMBER: _ClassVar[int]
+    COMBINE_FIELD_NUMBER: _ClassVar[int]
     handle: int
     initial: bytes
     function_token: int
     store_name: str
-    def __init__(self, handle: _Optional[int] = ..., initial: _Optional[bytes] = ..., function_token: _Optional[int] = ..., store_name: _Optional[str] = ...) -> None: ...
+    combine: CombineKind
+    def __init__(self, handle: _Optional[int] = ..., initial: _Optional[bytes] = ..., function_token: _Optional[int] = ..., store_name: _Optional[str] = ..., combine: _Optional[_Union[CombineKind, str]] = ...) -> None: ...
 
 class ToStream(_message.Message):
     __slots__ = ("handle",)

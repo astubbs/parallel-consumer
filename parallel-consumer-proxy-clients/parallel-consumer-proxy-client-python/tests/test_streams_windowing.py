@@ -22,9 +22,11 @@ from collections.abc import Iterator
 import pytest
 
 from parallel_consumer.streams import (
+    CombineKind,
     DataType,
     FunctionKind,
     HandleKind,
+    StreamsError,
     StreamsSession,
     TimeWindow,
 )
@@ -177,4 +179,91 @@ def test_an_aggregation_sent_to_a_mapper_is_refused_rather_than_guessed(
     assert not called
     assert "registered as MAP" in result.invocation_result.error
     assert "arrived as AGGREGATE" in result.invocation_result.error
+    session.close()
+
+
+# ---- U5: the declared engine-side combine on the same aggregate call ----
+
+
+def test_a_combine_aggregate_carries_the_kind_and_no_token_and_no_initial(
+    engine: FakeEngine,
+) -> None:
+    """U5 scenario 7: the call names the combine and nothing the engine would call back for.
+
+    No token - nothing was registered, so nothing can cross per record - and no initial, because
+    the combine kind defines its own empty accumulator. The returned handle exposes the window
+    exactly as the function placement's does.
+
+    Red-proofed (R4): with the combine branch of ``TopologyBuilder.aggregate`` sabotaged to also
+    set ``function_token=1``, this test failed at ``assert not
+    aggregate.HasField("function_token")`` - so the token-absence claim is measured, not assumed.
+    Sabotage removed after the red run.
+    """
+    session = StreamsSession(engine)
+    session.open("windows", {})
+    builder = session.builder()
+
+    windowed = builder.windowed_by(builder.group_by_key(builder.source("in")), HOPPING_HOUR)
+    table = builder.aggregate(windowed, store_name="agg-store",
+                              combine=CombineKind.APPEND_BYTES)
+
+    calls = [m.builder_call for m in engine.sent if m.WhichOneof("message") == "builder_call"]
+    aggregate = calls[-1].aggregate
+    assert aggregate.combine == pb.COMBINE_KIND_APPEND_BYTES
+    assert not aggregate.HasField("function_token")
+    assert not aggregate.HasField("initial")
+    # No RegisterFunction travelled either: there is no function to register.
+    assert not any(m.WhichOneof("message") == "register_function" for m in engine.sent)
+    assert table.kind is HandleKind.TABLE
+    assert table.window == HOPPING_HOUR
+    session.close()
+
+
+def test_aggregate_with_both_a_function_and_a_combine_is_refused_before_the_wire(
+    engine: FakeEngine,
+) -> None:
+    """The client refuses the same shape the engine refuses, without a round trip."""
+    session = StreamsSession(engine)
+    session.open("windows", {})
+    builder = session.builder()
+    windowed = builder.windowed_by(builder.group_by_key(builder.source("in")), HOPPING_HOUR)
+    calls_before = len(engine.sent)
+
+    with pytest.raises(StreamsError, match="alternatives"):
+        builder.aggregate(windowed, lambda key, value, acc: acc, store_name="agg-store",
+                          combine=CombineKind.APPEND_BYTES)
+
+    assert len(engine.sent) == calls_before
+    session.close()
+
+
+def test_aggregate_with_neither_a_function_nor_a_combine_is_refused_before_the_wire(
+    engine: FakeEngine,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("windows", {})
+    builder = session.builder()
+    windowed = builder.windowed_by(builder.group_by_key(builder.source("in")), HOPPING_HOUR)
+    calls_before = len(engine.sent)
+
+    with pytest.raises(StreamsError, match="neither a function nor a combine"):
+        builder.aggregate(windowed, store_name="agg-store")
+
+    assert len(engine.sent) == calls_before
+    session.close()
+
+
+def test_aggregate_with_initial_alongside_a_combine_is_refused_rather_than_dropped(
+    engine: FakeEngine,
+) -> None:
+    """A combine kind defines its own empty accumulator; a seed sent beside one would vanish."""
+    session = StreamsSession(engine)
+    session.open("windows", {})
+    builder = session.builder()
+    windowed = builder.windowed_by(builder.group_by_key(builder.source("in")), HOPPING_HOUR)
+
+    with pytest.raises(StreamsError, match="initial alongside combine"):
+        builder.aggregate(windowed, initial=b"seed", store_name="agg-store",
+                          combine=CombineKind.LAST_BYTES)
+
     session.close()

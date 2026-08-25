@@ -16,7 +16,7 @@ import logging
 import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Protocol
+from typing import Protocol, cast
 from collections.abc import Callable, Iterator
 
 from .._generated import streams_pb2 as pb
@@ -65,6 +65,25 @@ class FunctionKind(enum.IntEnum):
     REDUCE = 2
     JOIN = 3
     AGGREGATE = 4
+
+
+class CombineKind(enum.IntEnum):
+    """An engine-executed combine for :meth:`TopologyBuilder.aggregate`. Mirrors the wire's
+    ``CombineKind`` values exactly.
+
+    Named rather than supplied: the host picks one from this set and no callable crosses, so
+    nothing crosses the boundary per record - the aggregation meets this process only at its
+    emits. The price is parity: the combine step is the engine's, not the host's own code.
+
+    Two kinds, and the second is a control requirement rather than coverage. ``APPEND_BYTES``
+    collects the raw values length-prefixed, so its accumulator grows with window occupancy;
+    ``LAST_BYTES`` keeps only the newest value, so its accumulator is bounded - which is what
+    lets a crossing-free arm differ from a host-fold arm by exactly one term, the crossing.
+    """
+
+    UNSPECIFIED = 0
+    APPEND_BYTES = 1
+    LAST_BYTES = 2
 
 
 class HandleKind(enum.IntEnum):
@@ -306,18 +325,48 @@ class TopologyBuilder:
                 grace_ms=window.grace_ms, retention_ms=window.retention_ms))))
 
     def aggregate(
-        self, handle: int, function: AggregatorFunction, initial: bytes, store_name: str,
+        self,
+        handle: int,
+        function: AggregatorFunction | None = None,
+        initial: bytes = b"",
+        store_name: str = "",
+        *,
+        combine: CombineKind | None = None,
     ) -> Handle:
-        """Aggregate a time-windowed stream with a function that runs here, in this process.
+        """Aggregate a time-windowed stream - with a function that runs here, OR a named combine.
 
-        The windowed sibling of :meth:`reduce`, with the difference that makes it the windowed
-        operator of choice: ``function`` sees EVERY record, first value included. ``initial`` is
-        the initializer's result, sent once as bytes - it never crosses per record, and the engine
-        hands out a fresh copy each time a key opens a new window.
+        ``function`` and ``combine`` are alternatives, and exactly one must be given; both, or
+        neither, is refused here with the same meaning the engine would refuse it with. With a
+        ``function``, this is the windowed sibling of :meth:`reduce`, with the difference that
+        makes it the windowed operator of choice: ``function`` sees EVERY record, first value
+        included. ``initial`` is the initializer's result, sent once as bytes - it never crosses
+        per record, and the engine hands out a fresh copy each time a key opens a new window.
 
-        The returned handle is a windowed table: :meth:`sink` refuses it, and :meth:`to_stream`
-        is the sanctioned way to make it consumable.
+        With a ``combine``, the ENGINE executes the named fold and nothing crosses the boundary
+        per record: this process meets the aggregation only downstream, at what the table emits.
+        A combine kind defines its own empty accumulator, so ``initial`` belongs to the function
+        placement only and is refused beside a combine rather than silently dropped.
+
+        The returned handle is a windowed table either way: :meth:`sink` refuses it, and
+        :meth:`to_stream` is the sanctioned way to make it consumable.
         """
+        if combine is not None:
+            if function is not None:
+                raise StreamsError(
+                    "aggregate was given both a function and a combine; they are alternatives - "
+                    "a function called here per record, or an engine-executed combine")
+            if initial:
+                raise StreamsError(
+                    "aggregate was given initial alongside combine; a combine kind defines its "
+                    "own empty accumulator, so the bytes would be silently dropped")
+            # The numeric value IS the wire value: the enum mirrors the wire member for member,
+            # and the mirror test asserts both directions - which is what makes this cast safe.
+            return self._session._call(pb.BuilderCall(aggregate=pb.Aggregate(
+                handle=handle, store_name=store_name,
+                combine=cast("pb.CombineKind", combine.value))))
+        if function is None:
+            raise StreamsError(
+                "aggregate was given neither a function nor a combine; exactly one is required")
         token = self._session.register(function, kind=FunctionKind.AGGREGATE)
         return self._session._call(pb.BuilderCall(aggregate=pb.Aggregate(
             handle=handle, initial=initial, function_token=token, store_name=store_name)))
