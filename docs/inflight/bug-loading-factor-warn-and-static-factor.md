@@ -13,7 +13,7 @@ title: this note exists so that does not have to happen twice.
 **Three separate things are tangled under one title, and only two are open.**
 
 1. **The stall the original reporter hit is FIXED.** Cause was stale work leaking
-   `WorkManager#numberRecordsOutForProcessing`, fixed upstream by confluentinc#547 and #606, with
+   `WorkManager#numberRecordsOutForProcessing`, fixed upstream by confluentinc#547 and confluentinc#606, with
    another reporter on the thread confirming it stopped recurring. The fork has since fixed three
    further stall causes in the confluentinc#857 family. **The warning was never the stall.**
 2. **The warning itself is open, and is noise.** It logs at WARN with no rate limiting from

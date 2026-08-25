@@ -73,7 +73,7 @@ Branches in play, all stacked: `feats/classic-vertx-demo` -> `perf/throughput-re
 - **Prior art for the user-selectable concurrency key** - none; the subset rule appears to be new.
   Recorded in [`next-multi-topic-multi-function.md`](next-multi-topic-multi-function.md).
 - **The multi-topic/multi-function issue** - astubbs#254 (`confluentinc#372`), and its upstream
-  "implemented in #390" claim is false.
+  "implemented in #390" claim is false. <!-- issue-refs: exempt (quoted upstream issue body) -->
 
 - **Offset gaps / compaction (item 10)** - PC tracks only records it actually polled, so a gap is
   indistinguishable from a success and nothing enumerates a numeric range. Deliberate, documented in

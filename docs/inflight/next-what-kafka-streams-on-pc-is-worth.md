@@ -88,7 +88,7 @@ rather than a number they compare once.
 restoration, interactive queries against a concurrently-written store, suppression and caching
 semantics, task assignment, and the packaging question already parked.
 
-**And #1 is doing most of the work in "assume I solve it".** `KEY` ordering serialises per key, which
+**And problem 1 - the state store - is doing most of the work in "assume I solve it".** `KEY` ordering serialises per key, which
 maps cleanly onto per-key state - but a Streams store is per-**task**, and a task spans many keys.
 Making that concurrent is either fine-grained locking inside the store access path or sharding the
 store by key. Whichever it is, **it decides whether the other three matter**, and it is answerable on

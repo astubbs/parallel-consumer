@@ -19,7 +19,7 @@ None of these is independent, and answering them separately would produce four i
 | Issue | Ask | Why it belongs here |
 |---|---|---|
 | **astubbs#254** (`confluentinc#372`) | Per-topic processing functions | The core of this note |
-| **astubbs#243** (`confluentinc#175`) | Separate consume and produce key/value types | `upstream-map.yaml` (`sweep-2023-api-shape`) says these two **must be designed together**: per-topic handlers pay off precisely when topics carry different types, which is what #175 blocks. Both are breaking, so one major release, not two |
+| **astubbs#243** (`confluentinc#175`) | Separate consume and produce key/value types | `upstream-map.yaml` (`sweep-2023-api-shape`) says these two **must be designed together**: per-topic handlers pay off precisely when topics carry different types, which is what confluentinc#175 blocks. Both are breaking, so one major release, not two |
 | **astubbs#236** (`confluentinc#50`) | Prioritise some topics over others when subscribed to several | Once functions are per-topic, "how much capacity does each get" is immediately askable - see the scheduling section |
 | **astubbs#150** (`confluentinc#314`) | With KEY ordering, combine queues from different partitions **or topics** | Cross-topic key identity: does the same key in two topics share a queue? |
 | **astubbs#245** (`confluentinc#187`) | Change topic subscription before or after PC has started | A dynamic subscription needs a place to attach a function |
@@ -125,14 +125,15 @@ which builds `reck4` then asserts on `reck2`. The dead assertion is worth re-che
 ## Two things the prior-art search settled
 
 **The upstream issue claims it was implemented. It was not.** `confluentinc#372`'s body says
-*"Implemented in: #390"*, and upstream PR #390 (`astubbs/features/streams`, head `e2f1d53e4`) was
+*"Implemented in: #390"* <!-- issue-refs: exempt (quoted upstream issue body) -->, and upstream PR
+confluentinc#390 (`astubbs/features/streams`, head `e2f1d53e4`) was
 **closed unmerged** in the 2023-06-15 sweep. The mirror astubbs#254 already records this. The commit
 is reachable, so the draft is recoverable - but read it as a draft, not as shipped work.
 
 **Branches worth reading before designing:** `origin/features/extend-functional`,
 `origin/refactor/function-runner` ("START: major: Function Runner refactor"), and
 `origin/improvements/multi-topic-test`. Also relevant: `confluentinc#184` was a multi-topic KEY-ordering
-**bug**, fixed by #315 *"adding topic to shard key"* - so the shard key already carries the topic, which
+**bug**, fixed by confluentinc#315 *"adding topic to shard key"* - so the shard key already carries the topic, which
 is what makes per-topic behaviour tractable.
 
 ## Open design questions

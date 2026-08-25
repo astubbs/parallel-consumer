@@ -12,8 +12,9 @@
 # that does not exist yet, or is a placeholder.
 #
 # THE RULE THAT GOVERNS EVERY LINE. State what Parallel Consumer does. Never state what anything else
-# lacks. See docs/inflight/next-landing-page.md for the reasoning and worked rewrites - it is not
-# politeness, it is that a negative claim teaches a reader nothing and ages badly.
+# lacks. (The inflight note that held the reasoning and worked rewrites was retired when the
+# workstream was dropped - the rule itself is not politeness, it is that a negative claim teaches a
+# reader nothing and ages badly.)
 #
 # EVIDENCE IS MANDATORY. Every claim carries `evidence`, pointing at a feature record, a test, a
 # committed benchmark result or a source file. A claim that cannot cite one is not ready to publish,
@@ -92,7 +93,7 @@ sections:
       - Adding partitions changes key-to-partition assignment, which is a data-layout change, not a tuning knob.
       - The cost lands on brokers, on rebalance time, and on whoever coordinates the change across teams.
     evidence:
-      - { type: external, note: "Third-party analyses of partition-count cost. Cite sources rather than asserting - see next-landing-page.md." }
+      - { type: external, note: "Third-party analyses of partition-count cost. Cite sources rather than asserting." }
     status_note: Needs a citation chosen before publish. Do not assert the cost without one.
 
   - id: offset-map
