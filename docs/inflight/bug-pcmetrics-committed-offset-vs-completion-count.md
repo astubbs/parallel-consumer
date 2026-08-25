@@ -14,6 +14,11 @@ Seen on `fix/909-load-reproduction` CI, run 32244188439 (2026-08-19, Unit Tests)
 expected: 1214.0 but was: 1207.0 within 2 minutes
 ```
 
+Those two figures come from that one run's log and were never re-derived from a local reproduction.
+They are internally consistent with the suite's own constants (see the arithmetic below), which is
+what the diagnosis rests on - so treat them as the observed instance of the gap, not as the gap's
+size.
+
 Grep `PARTITION_LAST_COMMITTED_OFFSET, 1` in `PCMetricsTest` - the assertion is
 
 ```java
