@@ -70,10 +70,16 @@
 # than no index.
 #
 # BSD-CLEAN FROM LINE ONE. No `stat -c`, `mapfile`, `readarray`, `grep -P`, `date -d`,
-# `readlink -f`, `touch -d`, `xargs -r`, and no `timeout(1)` - that last one is GNU coreutils and
-# macOS does not ship it, which is the trap this class of bound usually falls into. The `gh` call is
-# bounded by python3's `subprocess` timeout instead, and python3 also does the cache mtime check
-# that would otherwise be `stat -c %Y`.
+# `readlink -f`, `touch -d`, `xargs -r`, no bare `mktemp`, and no `timeout(1)` - that last one is GNU
+# coreutils and macOS does not ship it, which is the trap this class of bound usually falls into. The
+# `gh` call is bounded by python3's `subprocess` timeout instead, and python3 also does the cache
+# mtime check that would otherwise be `stat -c %Y`.
+#
+# `mktemp` is on that list because it was ON THIS SCRIPT, and reviewed past twice: the construct
+# lists both this header and the review agent grepped for were inherited from
+# astubbs/parallel-consumer#341's sweep, which did not include it. A list is only as good as the last
+# defect that taught it something, so a construct joins it the run it is found, not the run it is
+# theorised.
 #
 # CHEAP: names, counts and pointers - never bodies. The failure being fixed is not knowing the
 # record EXISTS. Once a count and a command are in context, the agent's own `gh pr view --comments`
@@ -88,7 +94,12 @@ set -uo pipefail
 # Linux caps a single argv string at ~128 KiB (MAX_ARG_STRLEN) and a hook payload carries the whole
 # tool input; a dispatch prompt clears that easily. Passing it as an argument fails with "Argument
 # list too long" BEFORE python starts, and since these hooks fail open the failure is silent.
-payload_file=$(mktemp 2>/dev/null) || exit 0
+# A TEMPLATE, NOT A BARE `mktemp`. BSD/macOS `mktemp` requires a template operand (or `-t prefix`)
+# and exits 1 on none, where GNU defaults one - so a bare call made this hook exit 0 having emitted
+# ZERO BYTES on macOS. That is the exact failure this file's DEGRADED READS ARE LOUD rule exists to
+# forbid, and it is worse here than anywhere else: an injection hook is silent when it is working,
+# so total inertness is indistinguishable from a boring branch. Six X's satisfies both userlands.
+payload_file=$(mktemp "${TMPDIR:-/tmp}/pc-branch-context-payload.XXXXXX" 2>/dev/null) || exit 0
 trap 'rm -f "$payload_file"' EXIT
 cat > "$payload_file" 2>/dev/null || exit 0
 [ -s "$payload_file" ] || exit 0

@@ -20,6 +20,35 @@ include `xargs`, so its "no others found" is incomplete.
 Unfixed because the usual `/dev/null` operand workaround does not work for `grep -L` - the fix is a
 restructure, and the premise cannot be confirmed on Linux.
 
+## An eighth site - bare `mktemp` - and one of its victims is a gate that stops gating
+
+GNU `mktemp` invents a template when given none; BSD/macOS `mktemp` **requires** a template operand
+(or `-t prefix`) and exits 1 on none. Every hook in `.claude/hooks/` writes its payload to a temp
+file as its first act - deliberately, because the payload arrives on stdin and a dispatch prompt
+clears Linux's `MAX_ARG_STRLEN` - so on macOS that first line fails and the hook is over before it
+starts. `bin/` has roughly twenty more sites, all in fixtures.
+
+Measured under a BSD-shaped `mktemp` stub, on a `gh pr merge --subject` that the gate denies on
+Linux:
+
+| Hook | On Linux | Under a BSD `mktemp` |
+|---|---|---|
+| `check-squash-subject.sh` | emits the `deny` verdict | prints `usage:` to stderr, **exits 0, no verdict** |
+| `pre-commit-gate.sh` | same shape | same shape - `set -euo pipefail` aborts before the verdict |
+| `inject-merge-checklist.sh` | injects the checklist | silent |
+
+For the two gates this is the failure mode already recorded above for `stat`: `PreToolUse` reads a
+non-zero exit with no verdict as a **non-blocking** error, so the guard allows what it exists to
+refuse - and it does so on every invocation, not just an unlucky one. It is not a degraded read; the
+gate is simply absent on macOS while still being registered, still appearing in
+`docs/agent-harness.md`, and still passing every self-test on Linux CI.
+
+`.claude/hooks/inject-branch-context.sh` no longer has the site - it is templated, and carries a
+modelled-BSD-`mktemp` case with a negative control - because a hook whose correct output is silence
+cannot afford a defect whose symptom is silence. The remaining sites are still open, and are listed
+here rather than fixed alongside it because they belong to this note's sweep: the construct list that
+produced "six sites" did not include `mktemp`, exactly as it did not include `xargs`.
+
 ## The PR body states the rationale wrongly, and the truth is stronger
 
 The body says a blind `stat -c %Y || stat -f %m` fallback is wrong because on Linux `stat -f` is
@@ -52,6 +81,7 @@ GitHub artefact and was not edited here.
 
 ## The class has bitten 10+ times and has no `docs/solutions/` entry
 
-`sed -i`, `date -d`, `awk -v`, `\b` in grep, plus this PR's six sites and the `xargs` one above. The
+`sed -i`, `date -d`, `awk -v`, `\b` in grep, plus this PR's six sites, the `xargs` one and the
+`mktemp` one above. The
 identical "probe, never fall back" reasoning is now repeated near-verbatim in three files.
 `bin/AGENTS.md` has the precedent: the SIGPIPE class got a named write-up and a CI guard.
