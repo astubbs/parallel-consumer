@@ -1,0 +1,13 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# build-streams-native.sh writes a ~78MB executable, a JDK shared library and its build logs here.
+# None of that belongs in git, and nothing under ffi/ is ignored by the root .gitignore - so an
+# orchestrator staging this directory would commit the binary without noticing.
+#
+# The ONE artifact worth keeping is the traced reachability metadata: it is the expensive half of
+# the recipe (it needs a broker, a demo run and the tracing agent), and the build is reproducible
+# from it in under a minute.
+*
+!.gitignore
+!trace/
+!trace/reachability-metadata.json

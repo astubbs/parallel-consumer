@@ -130,11 +130,36 @@ def poll_interval_property(args: argparse.Namespace) -> dict[str, str]:
     return {}
 
 
+def resolve_engine() -> SidecarCommand:
+    """How to start the Streams engine, as an **absolute** path - never a ``PATH`` lookup.
+
+    ``PC_DEMO_STREAMS_ENGINE`` names a binary directly, and is the same seam
+    ``reference_demo.py`` gives the comparison arm as ``PC_DEMO_SIDECAR``: a native-image build of
+    the engine is an executable that takes no classpath. Otherwise the "binary" is ``java`` plus
+    ``PC_DEMO_STREAMS_CLASSPATH``, which is an argument about the *binary* rather than
+    configuration - bootstrap servers, credentials and concurrency still travel only in the
+    handshake.
+    """
+    binary = os.environ.get("PC_DEMO_STREAMS_ENGINE")
+    if binary:
+        return SidecarCommand.coerce(str(pathlib.Path(binary).resolve()))
+
+    return SidecarCommand(executable=pathlib.Path(java_binary()).resolve(),
+                          args=("-cp", resolve_classpath(), _MAIN_CLASS))
+
+
 def resolve_classpath() -> str:
+    """The JVM engine's classpath, for callers that compose their own ``java`` invocation.
+
+    The windowing lab needs the raw classpath (it injects the eviction instrument's jar beside
+    it), so this stays a seam of its own; ``resolve_engine`` above is the right entry for anyone
+    who just wants the engine started, native binary or JVM alike.
+    """
     classpath = os.environ.get("PC_DEMO_STREAMS_CLASSPATH")
     if not classpath:
         raise SystemExit(
-            "set PC_DEMO_STREAMS_CLASSPATH - demo/run.sh --streams builds it. By hand:\n"
+            "set PC_DEMO_STREAMS_ENGINE to an absolute engine binary, or "
+            "PC_DEMO_STREAMS_CLASSPATH - demo/run.sh --streams builds the second one. By hand:\n"
             "  ./mvnw -pl :parallel-consumer-proxy-streams -am -DskipTests "
             "-DincludeScope=runtime package dependency:build-classpath "
             "'-Dmdep.outputFile=${project.build.directory}/streams-classpath.txt'"
@@ -335,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     application_id = f"pc-streams-demo-{run_id}"
 
     # Absolute, because the client library refuses a PATH lookup for the executable it spawns.
-    java, classpath = pathlib.Path(java_binary()).resolve(), resolve_classpath()
+    engine = resolve_engine()
 
     log.info("Creating topics %s and %s (%d partitions)...", source, sink, args.partitions)
     ensure_topic(args.bootstrap, source, args.partitions)
@@ -376,8 +401,8 @@ def main(argv: list[str] | None = None) -> int:
             invocations += 1
         return result
 
-    sidecar = Sidecar(SidecarCommand(java, ("-cp", classpath, _MAIN_CLASS)))
-    log.info("Starting the Streams engine...")
+    sidecar = Sidecar(engine)
+    log.info("Starting the Streams engine (%s)...", engine.executable)
     port = sidecar.start(timeout=90)
     session = StreamsSession(GrpcStreamsTransport(port))
     admin = AdminClient({"bootstrap.servers": args.bootstrap})
