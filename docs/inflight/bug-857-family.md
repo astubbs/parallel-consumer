@@ -750,9 +750,12 @@ nothing that gates - `INSTANCE_STALL` is re-armed by any returned work result, a
 records processed rather than offsets durably committed. **So the demotion reduced per-shard liveness
 coverage; it did not relocate it**, and an earlier version of this entry said otherwise. Tracked, with
 the correlated gate that would close it and the red control that gate must have first, in
-[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md). Raised by the
-cross-model adversarial reviewer on astubbs#354; three in-process reviewers on the same diff missed
-it, which is the clearest argument this file records for keeping that pass.
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md).
+<!-- post-merge: checked-begin -->
+It was raised by the cross-model adversarial reviewer on astubbs#354, the PR that demoted the bound;
+three in-process reviewers on that same diff missed it, which is the clearest argument this file
+records for keeping a cross-model pass.
+<!-- post-merge: checked-end -->
 
 **A falsifiable prediction, recorded before the fact.** Land astubbs#29 and the rest of the backlog,
 re-run the chaos suite on a loaded box, and the `CLASS2_STALL` findings continue at roughly the same

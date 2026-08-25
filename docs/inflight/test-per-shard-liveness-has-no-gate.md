@@ -30,9 +30,12 @@ redeliver.
 **`ProgressProbe` had already written this down** - `INSTANCE_STALL_BOUND`'s javadoc says *"What per
 instance cannot see is one wedged shard on an instance whose other shards keep completing; that case
 remains `CLASS2_STALL`'s, false positives and all."* The demotion removed the "remains" without
-removing the sentence's premise. Found by the cross-model adversarial reviewer on
-astubbs/parallel-consumer#354, which attacked the claim rather than the code; three in-process
-reviewers on the same diff did not raise it.
+removing the sentence's premise.
+<!-- post-merge: checked-begin -->
+It was found by the cross-model adversarial reviewer on astubbs#354, the PR that demoted the bound,
+which attacked the claim rather than the code; three in-process reviewers on that same diff did not
+raise it.
+<!-- post-merge: checked-end -->
 
 ## What would close it: gate on the correlation, not the timer
 
