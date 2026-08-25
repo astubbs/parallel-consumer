@@ -806,9 +806,11 @@ above. That is a defect in the autopsy rather than in this family, and it has it
 Entries in this ledger that lean on a clean autopsy are worth re-checking against it.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
 **Sixteenth sighting, 2026-08-25 - the drain arm again, and a SECOND same-day timing rule-out of
 contention.** `Chaos Pain Suite` on astubbs/parallel-consumer#353's head `c1f423e4a`
 ([run 32807910210](https://github.com/astubbs/parallel-consumer/actions/runs/32807910210/job/97681493424)),
+<!-- post-merge: checked-end -->
 `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red at 172s. **4
 `CLASS2_STALL/LAG_STAGNATION` in the autopsy** (3 fired live), committed offsets stagnant 154s
 against the 150s bound, group STABLE and heartbeats flowing.
@@ -820,7 +822,10 @@ band the twelfth sighting measured across four arms (154064-154360ms).
     ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
       -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=6037000644302969438
 
-Two things this entry adds. **The branch is not a suspect, again**: astubbs#353 changes only
+Two things this entry adds. **The branch is not a suspect, again**:
+<!-- post-merge: checked-begin -->
+at the observed head `c1f423e4a`, astubbs#353 carried only
+<!-- post-merge: checked-end -->
 `.claude/hooks/pre-commit-gate.sh`, `bin/test-check-agent-hooks.sh` and `docs/agent-harness.md` -
 no Java at all - the same not-PR-introduced control the fourteenth and fifteenth sightings each
 recorded. **And it corroborates the fourteenth sighting's timing rule-out of runner contention**:
