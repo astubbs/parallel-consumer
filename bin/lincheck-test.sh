@@ -87,6 +87,13 @@ fi
 # the number is updated: that friction IS the check, because a harness the lane silently stops
 # running is indistinguishable from one that never existed. Skipped when LINCHECK_TEST selects a
 # single class, where a short count is the whole point.
+#
+# WHY THE NUMBER IS PINNED BY HAND rather than derived from `grep -rl '@Tag("lincheck")'` at run time,
+# which is the obvious way to remove the human step: deriving it makes the guard BLIND to a dropped
+# tag, because the same missing tag that drops the class from the run also drops it from the
+# expectation, and the two cancel to a green. A derived count could only ever catch the include
+# pattern, never the roster - so the hand-maintained number is not a compromise here, it is the only
+# version that can fail.
 EXPECTED_LINCHECK_CLASSES=5
 if [ -z "${LINCHECK_TEST:-}" ] && [ "$selected" -ne "$EXPECTED_LINCHECK_CLASSES" ]; then
     printf 'Lincheck report files: %s, EXPECTED %s.\n' "$selected" "$EXPECTED_LINCHECK_CLASSES"
