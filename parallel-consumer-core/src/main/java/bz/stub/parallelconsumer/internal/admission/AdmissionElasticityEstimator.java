@@ -33,14 +33,16 @@ import java.util.Objects;
  * <li><b>zero or negative throughput</b> - {@code log(y)} is undefined at or below zero, and a zero-success
  * window carries no elasticity information anyway;</li>
  * <li><b>zero or negative active slots</b> - {@code log(0)} is undefined. Unreachable by construction today
- * ({@link ClosedAdmissionWindow#bindingClassification()} requires {@code activeTasks >= targetSlots > 0} to
- * read limit-bound), kept as a defensive guard so the arithmetic can never see it.</li>
+ * ({@link ClosedAdmissionWindow#bindingClassification()} requires the SAME active-slots figure
+ * {@link ClosedAdmissionWindow#activeSlotsForEstimation()} reports to be {@code >= targetSlots > 0} to read
+ * limit-bound), kept as a defensive guard so the arithmetic can never see it.</li>
  * </ul>
  * <p>
- * <b>The x input is the boundary-sampled active-task count</b>
- * ({@link AdmissionBoundarySignals#getActiveTasks()}). KTD1 words the input as the active-task window median,
- * but the closed window carries only the boundary snapshot of active tasks (its {@code inFlightMedian} is the
- * in-flight snapshot median, a different accounting) - so the boundary snapshot is the x, per the unit contract.
+ * <b>The x input is the window's active-slots figure</b> ({@link ClosedAdmissionWindow#activeSlotsForEstimation()}):
+ * the per-pass active-task aggregate when the caller recorded samples, else the boundary snapshot - the same
+ * source, and the same precedence, as the binding verdict, so a window bound by its aggregate can never hand
+ * this regression a flickered near-zero x. (Historical note: this class originally read the raw boundary
+ * snapshot; the 2026-08-25 comparison-IT freeze showed the boundary instant lies under deep backlog.)
  * Denomination is slots throughout: no batch-size term exists anywhere in this class (KTD1).
  * <p>
  * <b>Verdict persistence (KTD1, load-bearing).</b> A computed verdict REMAINS IN FORCE until replaced by a new
@@ -158,7 +160,8 @@ public class AdmissionElasticityEstimator {
      * the minimum signal holds.
      *
      * @param closeInstant the instant the caller's clock closed the window (the estimator has no clock)
-     * @param window       the closed aggregates; the entry is distilled from its boundary active tasks and
+     * @param window       the closed aggregates; the entry is distilled from
+     *                     {@link ClosedAdmissionWindow#activeSlotsForEstimation()} and
      *                     {@link ClosedAdmissionWindow#successThroughputPerSecond()}
      * @param adjudicated  the caller's assertion that the law accepted this window (not cooldown-discarded,
      *                     pause-poisoned or sample-starved - KTD3)
@@ -175,9 +178,9 @@ public class AdmissionElasticityEstimator {
             log.trace("Refusing window: not limit-bound ({}) (R2)", window.bindingClassification());
             return false;
         }
-        int activeSlots = window.getBoundarySignals().getActiveTasks();
+        int activeSlots = window.activeSlotsForEstimation();
         if (activeSlots <= 0) {
-            // unreachable while limit-bound requires activeTasks >= targetSlots > 0; guarded so log(x) is safe
+            // unreachable while limit-bound requires active slots >= targetSlots > 0; guarded so log(x) is safe
             log.warn("Refusing limit-bound window with non-positive active slots {} - log undefined", activeSlots);
             return false;
         }
@@ -221,6 +224,37 @@ public class AdmissionElasticityEstimator {
     /** Number of entries currently in the history - eviction and refusal are observable through this. */
     public int historySize() {
         return history.size();
+    }
+
+    /**
+     * The MARGINAL elasticity of the newest evidence: the pairwise log-log slope between the newest entry and
+     * the most recent prior entry at a DIFFERENT active-slots level; empty when the history holds no such
+     * pair. Same statistic as {@link #verdict()}, restricted to the freshest cross-level comparison - which is
+     * what makes it lag-free where the whole-horizon regression lags by up to the horizon: during a
+     * fast multiplicative walk (one level per window) the regression stays dominated by levels the walk has
+     * already left, while this pair answers "did the LAST movement still pay?" from the movement's own
+     * resulting window. The admission law's FALL fast lane uses it as the walk's stop condition; the
+     * capacity-collapse falsifier measured the walk without it over-contracting to half the new knee (target
+     * 5 against a knee of 10) on stale FALL evidence and cycling there.
+     * <p>
+     * Never NaN or infinite: both entries carry {@code x >= 1, y > 0} (the offer refusals), and the pair is
+     * only formed across distinct x.
+     */
+    public java.util.OptionalDouble marginalElasticityOfNewestPair() {
+        if (history.size() < 2) {
+            return java.util.OptionalDouble.empty();
+        }
+        Entry newest = history.get(history.size() - 1);
+        for (int i = history.size() - 2; i >= 0; i--) {
+            Entry prior = history.get(i);
+            if (prior.getActiveSlots() != newest.getActiveSlots()) {
+                double slope = (Math.log(newest.getSuccessThroughputPerSecond())
+                        - Math.log(prior.getSuccessThroughputPerSecond()))
+                        / (Math.log(newest.getActiveSlots()) - Math.log(prior.getActiveSlots()));
+                return java.util.OptionalDouble.of(slope);
+            }
+        }
+        return java.util.OptionalDouble.empty();
     }
 
     /** Drops entries strictly older than {@link #horizon} relative to the newest entry's instant - never "now". */

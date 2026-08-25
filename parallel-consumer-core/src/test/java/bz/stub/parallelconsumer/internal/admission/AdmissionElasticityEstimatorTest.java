@@ -301,7 +301,7 @@ class AdmissionElasticityEstimatorTest {
     private static ClosedAdmissionWindow limitBound(int activeSlots, double throughput) {
         long successes = Math.round(throughput * THROUGHPUT_SCALE);
         long elapsedNanos = THROUGHPUT_SCALE * 1_000_000_000L;
-        return new ClosedAdmissionWindow(1, 1.0, 1, activeSlots, 0, successes, 0, 0,
+        return new ClosedAdmissionWindow(1, 1.0, 1, activeSlots, 0, 0, 0, successes, 0, 0,
                 elapsedNanos, TestWindows.boundAt(activeSlots));
     }
 
@@ -314,7 +314,7 @@ class AdmissionElasticityEstimatorTest {
     private static ClosedAdmissionWindow unbound(int activeSlots, long successes) {
         AdmissionBoundarySignals belowTarget =
                 new AdmissionBoundarySignals(activeSlots, activeSlots + 1, true, 100, 100, false, false);
-        return new ClosedAdmissionWindow(1, 1.0, 1, activeSlots, 0, successes, 0, 0,
+        return new ClosedAdmissionWindow(1, 1.0, 1, activeSlots, 0, 0, 0, successes, 0, 0,
                 1_000_000_000L, belowTarget);
     }
 }

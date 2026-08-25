@@ -228,7 +228,7 @@ class AdmissionControlLawTest {
 
         @Test
         void grantsAreClippedToTheRemainingAllowance() {
-            // q = sqrt(9) = 3, then sqrt(12) = 3.46 clipped to the 1 slot left of the 4-slot allowance.
+            // round(sqrt(9)) = 3, then round(sqrt(12)) = 3 clipped to the 1 slot left of the 4-slot allowance.
             AdmissionControlLaw law = AdmissionControlLaw.newBuilder().initialLimit(9).ceiling(100).build();
 
             law.onWindowClosed(bound(400, 9));
@@ -336,17 +336,59 @@ class AdmissionControlLawTest {
             assertThat(law.getEstimatedLimit()).isWithin(EXACT).of(10 * AIMD_BACKOFF_RATIO);
         }
 
+        /**
+         * Contraction never pays the settle cadence (AIMD / RFC 7661: fast down, slow up) - the 2026-08-25
+         * comparison IT's phase-2 finding: one cut per 8-window settle walked a halved knee in 57s of a 60s
+         * phase, erasing the adaptive arm's whole claim. While the verdict stays FALL a cut lands on EVERY
+         * offered window; the walk's brake is the evidence loop (each cut's window is offered before the next
+         * verdict read), pinned in {@link #fallWalkIsStoppedByTheNewestCrossLevelPairNotTheLaggingHorizon}.
+         */
         @Test
-        void fallCutsOncePerSettle_notOncePerWindow() {
+        void fallCutsEveryOfferedWindowWhileTheVerdictStaysFall() {
             AdmissionControlLaw law = bandOnlyLaw(10, 100);
             feedSeries(law, 10, 170, -10);
-            double afterCut = law.getEstimatedLimit();
+            double afterFirstCut = law.getEstimatedLimit();
+            assertThat(afterFirstCut).isWithin(EXACT).of(10 * AIMD_BACKOFF_RATIO);
 
-            // Further falling windows inside the settle: the verdict is still FALL, but a fresh cut needs
-            // post-cut evidence - otherwise one bad episode compounds 0.9 per window into a collapse.
+            // The very next falling window: still FALL, so the next cut lands immediately - no settle park.
             AdmissionDecision next = law.onWindowClosed(bound(80, 19));
-            assertThat(next.getReason()).isEqualTo(PLATEAU);
-            assertThat(law.getEstimatedLimit()).isEqualTo(afterCut);
+            assertThat(next.getReason()).isEqualTo(ADAPTING);
+            assertThat(law.getEstimatedLimit()).isWithin(EXACT).of(afterFirstCut * AIMD_BACKOFF_RATIO);
+
+            // And again: the cuts compound per window for as long as the verdict stays in the negative band.
+            AdmissionDecision third = law.onWindowClosed(bound(70, 20));
+            assertThat(third.getReason()).isEqualTo(ADAPTING);
+            assertThat(law.getEstimatedLimit())
+                    .isWithin(EXACT).of(afterFirstCut * AIMD_BACKOFF_RATIO * AIMD_BACKOFF_RATIO);
+        }
+
+        /**
+         * The fast walk's own brake, and it must be as fast as the walk: each further cut is adjudicated on
+         * the MARGINAL elasticity of the newest cross-level pair - the last cut's own resulting window
+         * against the level it left - because the whole-horizon regression stays FALL for up to the horizon
+         * after the knee is crossed (stale high-level entries dominate it; the capacity-collapse falsifier
+         * measured the un-vetoed walk over-contracting to HALF the new knee and limit-cycling there). A
+         * non-negative pair - the lower level bought LESS - parks the walk the same window.
+         */
+        @Test
+        void fallWalkIsStoppedByTheNewestCrossLevelPairNotTheLaggingHorizon() {
+            AdmissionControlLaw law = bandOnlyLaw(10, 100);
+            feedSeries(law, 10, 170, -10); // FALL in force: first cut taken, 10 -> 9
+            double afterFirstCut = law.getEstimatedLimit();
+            assertThat(afterFirstCut).isWithin(EXACT).of(10 * AIMD_BACKOFF_RATIO);
+
+            // The cut's resulting window: a LOWER level whose throughput also fell slightly - the marginal
+            // pair reads positive (the cut crossed the knee) while the horizon's regression, still dominated
+            // by the falling series above, remains FALL. The walk must stop on the pair, not the horizon.
+            AdmissionDecision vetoed = law.onWindowClosed(bound(95, 8));
+            assertWithMessage("fixture: the horizon verdict must still read FALL - otherwise this window "
+                    + "tests re-banding, not the marginal veto")
+                    .that(law.currentVerdict().getBand())
+                    .isEqualTo(AdmissionElasticityEstimator.Band.FALL);
+            assertWithMessage("a non-negative newest cross-level pair parks the walk the same window")
+                    .that(vetoed.getReason()).isEqualTo(PLATEAU);
+            assertWithMessage("no further cut on the lagging horizon verdict alone")
+                    .that(law.getEstimatedLimit()).isWithin(EXACT).of(afterFirstCut);
         }
     }
 
@@ -406,7 +448,7 @@ class AdmissionControlLawTest {
     void growthClippedByTheCeilingReportsAtCap() {
         AdmissionControlLaw law = AdmissionControlLaw.newBuilder().initialLimit(30).ceiling(32).build();
 
-        // Warmup wants 30 + sqrt(30) = 35.48; the cap binds at 32.
+        // Warmup wants 30 + 4 (the whole-slot grant, allowance-clipped); the cap binds at 32.
         AdmissionDecision decision = law.onWindowClosed(bound(400, 30));
 
         assertThat(decision.getReason()).isEqualTo(AT_CAP);

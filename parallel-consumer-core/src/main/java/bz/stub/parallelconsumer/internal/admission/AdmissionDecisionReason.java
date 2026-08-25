@@ -134,7 +134,30 @@ public enum AdmissionDecisionReason {
      * probes answer different operator questions (stranded-at-floor vs parked-above-the-knee), and a shared gauge
      * value would make them indistinguishable on a dashboard.
      */
-    DESCENT_PROBE(18);
+    DESCENT_PROBE(18),
+
+    /**
+     * The stagnation probe is running: {@code WARMUP_EXHAUSTED} persisted with growth pending adjudication and
+     * no verdict ever computing - the operating point is spread-less, so the verdict that owes the episode its
+     * confirm-or-retract is structurally unreachable (the 2026-08-25 comparison-IT freeze) - and the controller
+     * is re-measuring one accelerator step UP (the direction the blind growth went), evaluated by throughput
+     * like the descent probe. Every reachable state must have an evidence-driven exit; this is that state's.
+     * Its own gauge value: a stranded warmup is a different operator question from either sibling probe.
+     */
+    STAGNATION_PROBE(19),
+
+    /**
+     * The recovery re-ask probe is running (law-U13): the target has been parked under a LIVE verdict for a
+     * full re-ask cadence - or the parked level's own throughput drifted above the park-era reference, where
+     * that is observable - and the controller is re-measuring one accelerator step UP, evaluated by throughput
+     * like its sibling probes. The park it exits is otherwise absorbing when downstream capacity RECOVERS:
+     * below the knee a level's throughput carries no capacity term, so recovery is invisible at every level
+     * the controller visits and only asking upward can reveal it (the 2026-08-25 capacity-recovery falsifier's
+     * bit-identical-windows measurement; the comparison IT's phase-3 strand). Its own gauge value: "holding a
+     * level that stopped being the knee" is a different operator question from a stranded warmup
+     * ({@link #STAGNATION_PROBE}) or a parked-above-the-knee walk-down ({@link #DESCENT_PROBE}).
+     */
+    RECOVERY_PROBE(20);
 
     /**
      * What the constraint gauge publishes before the first window has closed - no gate has decided anything yet, so

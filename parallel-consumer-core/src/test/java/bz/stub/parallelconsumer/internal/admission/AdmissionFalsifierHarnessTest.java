@@ -37,10 +37,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * Mutant applicability matrix (a mutant is asserted only against scenarios whose falsified decision it
  * embodies; a dash is a scenario the mutant legitimately passes, each dash explained on its test):
  * <pre>
- *                  sweep(wrong start)  burst  lull  plateau  sparse
- * FrozenLimit             FAILS        FAILS  FAILS    -       -
- * AlwaysMaxLimit          FAILS        FAILS  FAILS  FAILS   FAILS
- * AlwaysMinLimit          FAILS        FAILS  FAILS  FAILS     -
+ *                  sweep(wrong start)  burst  lull  plateau  sparse  flicker  collapse  recovery
+ * FrozenLimit             FAILS        FAILS  FAILS    -       -      FAILS    FAILS     FAILS
+ * AlwaysMaxLimit          FAILS        FAILS  FAILS  FAILS   FAILS    FAILS    FAILS     FAILS
+ * AlwaysMinLimit          FAILS        FAILS  FAILS  FAILS     -      FAILS    FAILS     FAILS
  * </pre>
  */
 class AdmissionFalsifierHarnessTest {
@@ -180,6 +180,39 @@ class AdmissionFalsifierHarnessTest {
                     () -> FalsifierScenarios.appLimitedLull(new FrozenLimit(), 1));
         }
 
+        /**
+         * The broker-freeze scenario's negative control: the freeze it reproduces IS a frozen controller (the
+         * comparison IT's arm C never moved after t=2s), so FrozenLimit from the IT's seed must fail it.
+         */
+        @Test
+        void failsTheSaturatedFlickerFromTheFrozenSeed() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.saturatedFlickerConvergesToTheKnee(new FrozenLimit(), 2));
+        }
+
+        /**
+         * The capacity-collapse negative control: a frozen controller passes the healthy phase (it holds the
+         * seeded knee, which is exactly what R5's preserve demands there) and then sits on the STALE knee
+         * after mu_max halves - out of the new knee's band for the whole degraded phase.
+         */
+        @Test
+        void failsTheCapacityCollapseByHoldingTheStaleKnee() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.capacityCollapse(new FrozenLimit()));
+        }
+
+        /**
+         * The capacity-recovery negative control: the scenario asserts the full ROUND TRIP, and a frozen
+         * controller fails its contraction half - 40 held through the degraded phase sits far above the
+         * degraded knee's band. (The recovered band alone would NOT catch it: 40 sits inside [39, 81] by
+         * geometric accident, which is why the scenario asserts both halves.)
+         */
+        @Test
+        void failsTheCapacityRecoveryByNeverContracting() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.capacityRecovery(new FrozenLimit()));
+        }
+
         // No plateau/sparse arms: a frozen controller started on the knee holds it (plateau) and never grows
         // (sparse) - both are the inaction those scenarios do not exist to falsify; the sweep owns FrozenLimit.
     }
@@ -221,6 +254,27 @@ class AdmissionFalsifierHarnessTest {
             assertThrows(AssertionError.class,
                     () -> FalsifierScenarios.sparseAdjudication(mutant(), 10));
         }
+
+        /** The flicker band's ceiling half: a ceiling-pinned target sits far above the knee's band. */
+        @Test
+        void failsTheSaturatedFlicker() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.saturatedFlickerConvergesToTheKnee(mutant(), 2));
+        }
+
+        /** Ceiling-pinned from window one: fails the healthy phase's exact seed hold, let alone the band. */
+        @Test
+        void failsTheCapacityCollapse() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.capacityCollapse(mutant()));
+        }
+
+        /** The recovered band's ceiling half: 100 pinned sits above the recovered knee's band of [39, 81]. */
+        @Test
+        void failsTheCapacityRecovery() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.capacityRecovery(mutant()));
+        }
     }
 
     @Nested
@@ -249,6 +303,27 @@ class AdmissionFalsifierHarnessTest {
         void failsTheAppLimitedLull() {
             assertThrows(AssertionError.class,
                     () -> FalsifierScenarios.appLimitedLull(new AlwaysMinLimit(), ORACLE_START));
+        }
+
+        /** The flicker band's floor half: a floor-pinned target never reaches the knee's band. */
+        @Test
+        void failsTheSaturatedFlicker() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.saturatedFlickerConvergesToTheKnee(new AlwaysMinLimit(), 2));
+        }
+
+        /** Floor-pinned from window one: fails the healthy phase's exact seed hold, let alone the band. */
+        @Test
+        void failsTheCapacityCollapse() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.capacityCollapse(new AlwaysMinLimit()));
+        }
+
+        /** The recovered band's floor half: one slot never reaches the recovered knee's band. */
+        @Test
+        void failsTheCapacityRecovery() {
+            assertThrows(AssertionError.class,
+                    () -> FalsifierScenarios.capacityRecovery(new AlwaysMinLimit()));
         }
 
         // No sparse arm: pinning the floor grows by nothing, and bounded growth is exactly what sparse

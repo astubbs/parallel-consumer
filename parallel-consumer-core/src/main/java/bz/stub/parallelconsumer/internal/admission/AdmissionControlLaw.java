@@ -67,7 +67,17 @@ import java.time.Instant;
  * flat throughput with climbing in-flight never licenses growth (the ratchet the old law shipped).</li>
  * <li><b>FALL</b> (elasticity below zero): multiplicative contraction by {@link #AIMD_BACKOFF_RATIO}, floor
  * clamped, applied to the retracted baseline when growth was pending - more concurrency bought less work, so the
- * unconfirmed step is taken back before the cut.</li>
+ * unconfirmed step is taken back before the cut. <b>Contraction never pays the settle cadence</b> (the AIMD /
+ * RFC 7661 lineage: fast down, slow up): while the verdict stays FALL, one cut lands on every offered window,
+ * and each further cut is adjudicated on the {@link AdmissionElasticityEstimator#marginalElasticityOfNewestPair
+ * marginal elasticity of the newest cross-level pair} - the cut's own resulting window against the level it
+ * left - because the whole-horizon regression lags a one-level-per-window walk by up to the horizon (measured:
+ * the un-vetoed walk over-contracted to half the new knee and limit-cycled there). A non-negative marginal
+ * pair parks the walk; a FALL verdict that has outlived its spread (KTD1 persistence, no pair computable)
+ * contracts at the settle cadence as before. The settle cadence otherwise governs acting on RISE and HOLD only
+ * (growth stays deliberate). Falsified both ways by the capacity-collapse scenario: cadence-paying contraction
+ * took ~8 windows per cut against a halved-capacity plant - on the 2026-08-25 comparison IT that meant 57s of
+ * a 60s degradation phase spent over-driving (target 15 -&gt; 5, p95 no better than static).</li>
  * </ul>
  * <p>
  * <b>Floor invariant (R7), asserted at construction:</b> the floor never sits below one accelerator step -
@@ -124,9 +134,10 @@ public final class AdmissionControlLaw {
 
     /**
      * How many offered (bound, adjudicated, un-braked) windows must pass after a movement before the law acts on
-     * a live verdict again - the settle cadence that makes the estimator's verdict marginal rather than
-     * whole-climb-averaged (class javadoc). Chosen equal to the estimator's minimum entry count so a post-settle
-     * verdict is computable from post-movement evidence.
+     * a live RISE or HOLD verdict again - the settle cadence that makes the estimator's verdict marginal rather
+     * than whole-climb-averaged (class javadoc). Chosen equal to the estimator's minimum entry count so a
+     * post-settle verdict is computable from post-movement evidence. A live FALL verdict is exempt: contraction
+     * acts every offered window (fast down, slow up - the class javadoc's FALL bullet).
      */
     static final int DEFAULT_SETTLE_WINDOWS = 8;
 
@@ -292,6 +303,31 @@ public final class AdmissionControlLaw {
         if (!verdict.isLive()) {
             return warmupBand(limit);
         }
+        if (verdict.getBand() == AdmissionElasticityEstimator.Band.FALL) {
+            // Contraction never pays the settle cadence (the AIMD / RFC 7661 lineage: fast down, slow up).
+            // While the verdict is FALL, one cut lands on EVERY offered window - measured on the
+            // capacity-collapse falsifier, cadence-paying contraction walked a halved knee at one 0.9 cut per
+            // 8 windows, which on the 2026-08-25 comparison IT meant 57s of a 60s degradation phase spent
+            // over-driving. The walk's STOP condition must be as fast as the walk: the whole-horizon
+            // regression lags by up to the horizon (it stays dominated by levels the walk already left -
+            // measured over-contraction to HALF the new knee, then a limit cycle), so each further cut is
+            // adjudicated on the MARGINAL elasticity of the newest cross-level pair - the same statistic,
+            // restricted to the last movement's own resulting window (offered above, before this read).
+            java.util.OptionalDouble marginal = estimator.marginalElasticityOfNewestPair();
+            if (marginal.isPresent() && marginal.getAsDouble() >= 0) {
+                // The freshest cross-level evidence contradicts the horizon verdict: the last movement
+                // already crossed the knee (a lower level bought LESS, or a higher one more). Park and let
+                // the horizon's regression catch up - it re-bands within the horizon as stale entries evict.
+                return hold(AdmissionDecisionReason.PLATEAU);
+            }
+            if (marginal.isPresent()) {
+                return fallContraction(limit);
+            }
+            // No cross-level pair left in the horizon: the verdict is a persisted FALL with its supporting
+            // spread evicted (KTD1 persistence outlives its evidence). Without fresh marginal ground to walk
+            // on, contraction keeps the pre-fast-lane discipline: one cut per settle cadence - each cut then
+            // creates the very spread that re-opens marginal adjudication one window later.
+        }
         if (offeredWindowsSinceMovement < settleWindows) {
             // Between movements: the history is still dominated by the pre-movement operating level, so the
             // current verdict answers yesterday's question. Park until the settle completes (class javadoc).
@@ -303,7 +339,7 @@ public final class AdmissionControlLaw {
             case HOLD:
                 return holdBand(limit);
             case FALL:
-                return fallContraction(limit);
+                return fallContraction(limit); // the spread-evicted stale-FALL arm - see the fast lane above
             default:
                 // INSUFFICIENT_SIGNAL is excluded by isLive() above; fail loudly rather than guess.
                 throw new IllegalStateException("unreachable band: " + verdict.getBand());
@@ -314,13 +350,20 @@ public final class AdmissionControlLaw {
      * WARMUP band (R3/KTD2): no verdict in force - binding alone licenses one additive step per window, until the
      * episode's allowance is spent. The episode's first grant records the pre-episode baseline, so the episode's
      * eventual adjudicating verdict can retract blind growth that bought nothing.
+     * <p>
+     * <b>Grants are WHOLE slots</b> (the accelerator step rounded, still clipped to the remaining allowance):
+     * summing fractional sqrt-steps in floating point leaves the episode's total a hair under the allowance
+     * (seed 2 + the 4-slot allowance summed to 5.999...), and the truncating publish then delivers one slot
+     * LESS than seed-plus-allowance - the 2026-08-25 comparison IT froze at 5 where its arrival needed 6.
+     * Integer grants make {@code seed + allowance} exact by construction; only the RISE band's confirmed steps
+     * stay fractional, where sub-slot accumulation is the designed behaviour and every step is adjudicated.
      */
     private AdmissionDecision warmupBand(double limit) {
         double remaining = warmupAllowanceSlots - warmupSlotsGranted;
         if (remaining <= 0) {
             return hold(AdmissionDecisionReason.WARMUP_EXHAUSTED);
         }
-        double grant = Math.min(acceleratorStep(limit), remaining);
+        double grant = Math.min(Math.max(1.0, Math.round(acceleratorStep(limit))), remaining);
         if (pendingGrowthBaseline == null) {
             pendingGrowthBaseline = limit;
         }
@@ -369,10 +412,22 @@ public final class AdmissionControlLaw {
     }
 
     /**
+     * The fractional estimate as published whole slots: rounded to nearest, never truncated. Truncation
+     * silently withholds up to a whole slot of estimate the law has committed to - the 2026-08-25 comparison
+     * IT froze partly on {@code 6.0 - epsilon} publishing as 5 (fixed at the source by whole-slot warmup
+     * grants), and the closed-loop IT's overshoot step of 14.73 published as 14 kept a knee-12 plant from ever
+     * being DRIVEN past its elbow, voiding the very measurement the step exists to take. The estimate stays
+     * fractional internally; only the actuator-facing figure rounds.
+     */
+    private int publishedLimit() {
+        return (int) Math.round(estimatedLimit);
+    }
+
+    /**
      * A hold: the estimate is untouched - bit-identical, not re-derived - which is what R5's preserve means.
      */
     private AdmissionDecision hold(AdmissionDecisionReason reason) {
-        return new AdmissionDecision((int) estimatedLimit, reason);
+        return new AdmissionDecision(publishedLimit(), reason);
     }
 
     private AdmissionDecision move(double desired, AdmissionDecisionReason reason) {
@@ -394,14 +449,15 @@ public final class AdmissionControlLaw {
         }
         this.estimatedLimit = clamped;
         this.offeredWindowsSinceMovement = 0;
-        return new AdmissionDecision((int) clamped, reason);
+        return new AdmissionDecision(publishedLimit(), reason);
     }
 
     /**
-     * Current admission limit in whole slots.
+     * Current admission limit in whole slots - rounded to nearest, like every published figure
+     * ({@link #publishedLimit()}).
      */
     public int getLimit() {
-        return (int) estimatedLimit;
+        return publishedLimit();
     }
 
     /**
@@ -510,6 +566,30 @@ public final class AdmissionControlLaw {
             warmupSlotsGranted = Math.min(warmupAllowanceSlots, clamped - estimatedLimit);
         } else {
             pendingGrowthBaseline = null;
+        }
+        this.estimatedLimit = clamped;
+        this.offeredWindowsSinceMovement = settleWindows;
+    }
+
+    /**
+     * Concludes a STAGNATION probe that RESTORES (the up-step did not pay): the buffered evidence is ADOPTED -
+     * the probe's whole product is the in-flight spread the stagnant level could not manufacture, and a failed
+     * up-probe's flat-throughput-at-higher-x evidence bands as HOLD/FALL, the truth it measured - but unlike
+     * {@link #concludeProbe} the warmup EPISODE stays exactly as it was and the pending baseline survives: the
+     * probe just measured that blind growth's own direction does not pay, so opening a fresh allowance from its
+     * conclusion would re-fund blind growth toward the very level it rejected, every cadence, without bound
+     * (caught by {@code AdaptiveConcurrencyModeTest}'s bounded-growth pin: restore-then-refresh walked
+     * 8 -&gt; 11 -&gt; 12 on a plant that never supplies a verdict). The settle cadence opens so a verdict the
+     * adopted evidence computed can act on the next qualifying window.
+     */
+    void concludeProbeRestoringWithEvidence(double restoreLimit) {
+        for (BufferedProbeWindow buffered : probeWindowBuffer) {
+            estimator.offer(buffered.cursorInstant, buffered.window, true);
+        }
+        probeWindowBuffer.clear();
+        double clamped = clampToBounds(restoreLimit);
+        if (pendingGrowthBaseline != null && pendingGrowthBaseline >= clamped) {
+            pendingGrowthBaseline = null; // the restore landed at or below the anchor - nothing left to retract
         }
         this.estimatedLimit = clamped;
         this.offeredWindowsSinceMovement = settleWindows;

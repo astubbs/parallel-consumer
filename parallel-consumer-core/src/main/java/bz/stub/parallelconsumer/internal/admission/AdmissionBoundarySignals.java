@@ -33,9 +33,12 @@ public class AdmissionBoundarySignals {
             new AdmissionBoundarySignals(0, 0, false, 0, 0, false, false);
 
     /**
-     * Active user-function tasks (slots) at the boundary - {@code UserFunctionTaskAccounting#getActive()}. The
-     * KTD1 binding verdict compares this against {@link #targetSlots}: achieved slots, not commanded, because the
-     * target lies exactly when the shards cannot fill it.
+     * Occupied user-function slots at the boundary - {@code UserFunctionTaskAccounting#getOccupied()}
+     * (dispatched-and-unfinished tasks; {@code getActive()} alone reads the submit-to-start handoff as an empty
+     * slot at exactly the post-dispatch instant this is sampled). The binding verdict compares this against
+     * {@link #targetSlots} only as the fallback when no per-pass samples exist - achieved slots, not commanded,
+     * because the target lies exactly when the shards cannot fill it; the aggregated per-pass stream is the
+     * primary evidence ({@code ClosedAdmissionWindow#bindingClassification()}).
      */
     int activeTasks;
 

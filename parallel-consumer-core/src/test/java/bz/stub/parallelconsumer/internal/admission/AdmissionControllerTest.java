@@ -30,7 +30,10 @@ import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReaso
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.COOLDOWN;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.DESCENT_PROBE;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.ESCAPE_PROBE;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.ADAPTING;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.INSUFFICIENT_SIGNAL;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.RECOVERY_PROBE;
+import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.STAGNATION_PROBE;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.WARMUP;
 import static bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason.WARMUP_EXHAUSTED;
 import static com.google.common.truth.Truth.assertThat;
@@ -732,16 +735,35 @@ class AdmissionControllerTest {
                 .that(controller.currentTarget()).isEqualTo(16);
         assertThat(controller.law().getEstimatedLimit()).isEqualTo(16.0);
 
-        // The cadence doubled: the old cadence's worth of plateau windows must NOT re-fire...
+        // The cadence doubled: the old cadence's worth of plateau windows must NOT re-fire the descent...
         for (int window = 0; window < AdmissionController.DESCENT_PLATEAU_WINDOWS; window++) {
             feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
             assertWithMessage("window %s re-fired inside the backed-off cadence", window)
                     .that(controller.lastDecisionReason().orElse(null)).isNotEqualTo(DESCENT_PROBE);
         }
-        // ...while the doubled cadence does.
-        for (int window = 0; window < AdmissionController.DESCENT_PLATEAU_WINDOWS; window++) {
+        // ...but the RECOVERY re-ask (law-U13) interleaves here BY DESIGN: its streak survives a descent
+        // round trip that restores (its counter's javadoc carries why - the descent cadence floor would
+        // otherwise preempt it forever), so it reaches its 8-window cadence first: 3 parked windows before
+        // the descent probe plus 5 after it. Flat throughput at the half-step ask restores the park.
+        feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+        assertWithMessage("the recovery re-ask fires on the 8th parked window, mid descent backoff")
+                .that(controller.lastDecisionReason()).hasValue(RECOVERY_PROBE);
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
             feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
         }
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("flat throughput at the half-step ask restores the park")
+                .that(controller.currentTarget()).isEqualTo(16);
+
+        // The recovery excursion interrupted the park, so the DOUBLED descent cadence now needs its six
+        // consecutive parked windows - and then fires: the backoff pin this test exists for.
+        for (int window = 0; window < 2 * AdmissionController.DESCENT_PLATEAU_WINDOWS - 1; window++) {
+            feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
+            assertWithMessage("window %s re-fired before the doubled cadence completed", window)
+                    .that(controller.lastDecisionReason().orElse(null)).isNotEqualTo(DESCENT_PROBE);
+        }
+        feedBoundWindowAndTick(controller, 10 * MS, controller.currentTarget());
         assertThat(controller.lastDecisionReason()).hasValue(DESCENT_PROBE);
     }
 
@@ -856,6 +878,242 @@ class AdmissionControllerTest {
                 .that(controller.law().estimatorHistorySize()).isEqualTo(PROBE_DURATION_WINDOWS);
         assertWithMessage("bound throughout: the re-entry step fires")
                 .that(controller.currentTarget()).isEqualTo(2);
+    }
+
+    // ------------------------------------------------------------------
+    // The stagnation probe: no absorbing state above the floor (the 2026-08-25 comparison-IT freeze's exit).
+    // ------------------------------------------------------------------
+
+    /**
+     * Drives a fresh ENFORCE controller (ceiling 100, seed 16) into the stagnation state and to its probe: the
+     * warmup grant moves 16 -&gt; 20 with the retraction anchor pending, but every offered window carries the
+     * SAME active-slots figure (boundary pinned at 16), so the estimator's in-flight spread is zero forever and
+     * the verdict that owes the episode its confirm-or-retract can never compute. Pre-fix this state was
+     * absorbing (the pending anchor suppressed the descent arm, plateau arming needs a live HOLD verdict, the
+     * escape fires only at the floor); after {@link AdmissionController#STAGNATION_PROBE_WINDOWS} such windows
+     * the stagnation probe must fire one accelerator step UP (20 -&gt; 24). Sabotage signature: remove the
+     * stagnation arm and this fixture loops WARMUP_EXHAUSTED forever - the broker freeze in miniature.
+     */
+    private AdmissionController driveToStagnationProbe() {
+        var controller = seededController(100, 16);
+        feedCountedBoundWindowAndTick(controller, SAMPLES, 16); // warmup grant 16 -> 20, anchor pending
+        assertWithMessage("fixture: the blind grant moved the target")
+                .that(controller.currentTarget()).isEqualTo(20);
+
+        for (int window = 0; window < AdmissionController.STAGNATION_PROBE_WINDOWS; window++) {
+            assertThat(controller.probeInFlight()).isFalse();
+            feedCountedBoundWindowAndTick(controller, SAMPLES, 16); // spread-less: x pinned at 16
+        }
+
+        assertWithMessage("fixture: the stagnation probe fires after the verdict-less exhausted streak")
+                .that(controller.lastDecisionReason()).hasValue(STAGNATION_PROBE);
+        assertThat(controller.probeInFlight()).isTrue();
+        assertWithMessage("fixture: one accelerator step UP - the direction the blind growth went")
+                .that(controller.currentTarget()).isEqualTo(24);
+        assertWithMessage("fixture: the deferred restore value is the parked level")
+                .that(controller.probeDeferredRestoreTarget()).isEqualTo(20);
+        return controller;
+    }
+
+    /**
+     * Stagnation KEEP: probe windows whose throughput demonstrably improved (beyond the tolerance) prove the
+     * step up PAID - the higher target is kept, and the adopted two-level evidence computes the verdict that
+     * was structurally unreachable at the parked level.
+     */
+    @Test
+    void stagnationProbeKeepsThePayingStepUpAndUnlocksTheVerdict() {
+        var controller = driveToStagnationProbe();
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 2 * SAMPLES, 24); // throughput doubled at the higher level
+        }
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("doubled throughput at the higher target: the step up paid, keep it")
+                .that(controller.currentTarget()).isEqualTo(24);
+        assertWithMessage("the adopted probe evidence manufactures the spread the stagnant level could not - "
+                + "the verdict is live again, so every later window is band-adjudicated, not blind-held")
+                .that(controller.law().currentVerdict().isLive()).isTrue();
+    }
+
+    /**
+     * Stagnation RESTORE: flat throughput at the higher level restores the parked target - but the probe's
+     * evidence is ADOPTED anyway (the deliberate asymmetry with a failed descent: flat-throughput-at-higher-x
+     * bands as HOLD, the truth the probe measured), so the next window is adjudicated by a LIVE verdict -
+     * which finally delivers the episode's owed confirm-or-retract - never a return to the absorbing
+     * WARMUP_EXHAUSTED hold.
+     */
+    @Test
+    void stagnationProbeRestoresOnFlatThroughputAndStillExitsTheAbsorbingHold() {
+        var controller = driveToStagnationProbe();
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, SAMPLES, 24); // same throughput: growth bought nothing
+        }
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("flat throughput: the step up did not pay - the parked level is restored")
+                .that(controller.currentTarget()).isEqualTo(20);
+        assertWithMessage("the failed probe's evidence still enters the history - it is what makes the "
+                + "verdict computable")
+                .that(controller.law().currentVerdict().isLive()).isTrue();
+
+        feedCountedBoundWindowAndTick(controller, SAMPLES, 20);
+        assertWithMessage("the live HOLD verdict then delivers the adjudication the episode was owed all "
+                + "along: the pre-probe blind grant is RETRACTED to its anchor - the absorbing "
+                + "WARMUP_EXHAUSTED hold is gone and the law's own confirm-or-retract governs again")
+                .that(controller.lastDecisionReason()).hasValue(ADAPTING);
+        assertWithMessage("retracted to exactly the episode's pre-grant baseline")
+                .that(controller.currentTarget()).isEqualTo(16);
+    }
+
+    // ------------------------------------------------------------------
+    // The recovery re-ask probe (law-U13): the live-verdict park's bounded periodic up-ask.
+    // ------------------------------------------------------------------
+
+    /**
+     * Drives a fresh ENFORCE controller (ceiling 100, seed 16) to a LIVE-HOLD park and its first recovery
+     * re-ask: warmup 16 -&gt; 20, flat evidence retracts to 16 with a live HOLD verdict, the descent probe
+     * asks its own (down) question first at its shorter cadence and is answered "down loses throughput", and
+     * on the 8th PARKED window - the recovery counter deliberately survives the descent round trip - the
+     * re-ask fires one HALF accelerator step up (16 -&gt; 18). Sabotage signature: remove the recovery arm and
+     * this park is absorbing - no mechanism above the floor ever asks up from a live-HOLD park again.
+     */
+    private AdmissionController driveToRecoveryProbe() {
+        var controller = seededController(100, 16);
+        feedCountedBoundWindowAndTick(controller, 160, 16); // warmup grant 16 -> 20
+        for (int window = 0; window < 8; window++) {
+            feedCountedBoundWindowAndTick(controller, 160, 20); // flat at 20: HOLD computes, then retracts
+        }
+        assertWithMessage("fixture: the blind step was retracted to the seed on flat evidence")
+                .that(controller.currentTarget()).isEqualTo(16);
+
+        for (int window = 0; window < 3; window++) {
+            feedCountedBoundWindowAndTick(controller, 160, 16); // the park; descent fires on its 3rd window
+        }
+        assertWithMessage("fixture: the descent probe asks the down question first (shorter cadence)")
+                .that(controller.lastDecisionReason()).hasValue(DESCENT_PROBE);
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 120, 12); // down loses throughput: restore
+        }
+        assertWithMessage("fixture: the failed descent restored the park")
+                .that(controller.currentTarget()).isEqualTo(16);
+
+        for (int window = 0; window < 5; window++) {
+            assertThat(controller.probeInFlight()).isFalse();
+            feedCountedBoundWindowAndTick(controller, 160, 16); // parked windows 4..8 of the recovery counter
+        }
+        assertWithMessage("fixture: the re-ask fires on the 8th parked window - the counter survived the "
+                + "descent round trip")
+                .that(controller.lastDecisionReason()).hasValue(RECOVERY_PROBE);
+        assertThat(controller.probeInFlight()).isTrue();
+        assertWithMessage("fixture: the ask is HALF an accelerator step - 16 + round(4/2)")
+                .that(controller.currentTarget()).isEqualTo(18);
+        assertWithMessage("fixture: the deferred restore value is the parked level")
+                .that(controller.probeDeferredRestoreTarget()).isEqualTo(16);
+        return controller;
+    }
+
+    /**
+     * Recovery KEEP: probe windows whose throughput demonstrably improved prove capacity above the park
+     * exists - the step is kept, and the adopted cross-level pair re-opens the RISE band the park had locked
+     * out, so the ordinary FULL-step climb resumes at once (probe conclusion opens the settle).
+     */
+    @Test
+    void recoveryProbeKeepsThePayingStepAndReopensTheRiseLadder() {
+        var controller = driveToRecoveryProbe();
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 190, 18); // +19%: far beyond the 2% tolerance
+        }
+
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("improved throughput at the half-step ask: recovered capacity exists, keep it")
+                .that(controller.currentTarget()).isEqualTo(18);
+        assertWithMessage("the adopted pair computes a live verdict again")
+                .that(controller.law().currentVerdict().isLive()).isTrue();
+
+        feedCountedBoundWindowAndTick(controller, 190, 18);
+        assertWithMessage("the re-opened RISE band climbs by FULL accelerator steps - the probe only asks "
+                + "gently, the ladder it unlocks does not")
+                .that(controller.lastDecisionReason()).hasValue(ADAPTING);
+        assertThat(controller.currentTarget()).isEqualTo(22); // 18 + sqrt(18), published rounded
+    }
+
+    /**
+     * Recovery RESTORE plus backoff: flat throughput at the ask restores the park and DOUBLES the re-ask
+     * cadence (the sibling probes' discipline - the plant answered, so re-asking gets rarer), so the old
+     * 8-window cadence's worth of parked windows must not re-fire. The descent probe's own cadence
+     * legitimately interleaves; only the recovery re-ask is pinned quiet here.
+     */
+    @Test
+    void recoveryProbeRestoresOnFlatThroughputAndBacksTheCadenceOff() {
+        var controller = driveToRecoveryProbe();
+
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 160, 18); // flat: the park is still the knee
+        }
+        assertThat(controller.probeInFlight()).isFalse();
+        assertWithMessage("flat throughput restores the parked level")
+                .that(controller.currentTarget()).isEqualTo(16);
+
+        // Nine parked windows - one more than the ORIGINAL cadence - with the descent interlude driven
+        // through: no recovery re-ask may fire inside the doubled cadence.
+        for (int window = 0; window < 5; window++) {
+            feedCountedBoundWindowAndTick(controller, 160, 16);
+            assertWithMessage("parked window %s re-asked inside the doubled cadence", window)
+                    .that(controller.lastDecisionReason().orElse(null)).isNotEqualTo(RECOVERY_PROBE);
+        }
+        feedCountedBoundWindowAndTick(controller, 160, 16); // the descent probe's cadence lands here
+        assertThat(controller.lastDecisionReason()).hasValue(DESCENT_PROBE);
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 120, 12); // down still loses: restore
+        }
+        for (int window = 0; window < 3; window++) {
+            feedCountedBoundWindowAndTick(controller, 160, 16);
+            assertWithMessage("parked window %s (post-interlude) re-asked inside the doubled cadence", window)
+                    .that(controller.lastDecisionReason().orElse(null)).isNotEqualTo(RECOVERY_PROBE);
+        }
+    }
+
+    /**
+     * The drift ACCELERATOR: at a spread-evicted park (the KTD1-persisted verdict, no recompute possible),
+     * own-level throughput rising beyond the tolerance fires the re-ask IMMEDIATELY, backed-off cadence
+     * notwithstanding - the broker shape where the park sits above a degraded knee and recovery IS observable
+     * at the parked level (the comparison IT's phase 3: 76 -&gt; 115/s at 5 slots). Where no drift is
+     * observable (a below-knee park), the timer owns the ask - which is why drift is never the gate.
+     */
+    @Test
+    void ownLevelThroughputDriftFiresTheReAskThroughTheBackedOffCadence() {
+        var controller = driveToRecoveryProbe();
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 160, 18); // flat: restore, cadence doubles to 16
+        }
+        assertThat(controller.currentTarget()).isEqualTo(16);
+
+        // Age the cross-level evidence out of the 12s horizon so the park is spread-less: 6 parked windows
+        // (the 6th fires the descent probe), the failed descent's 4 (its evidence is dropped by design),
+        // then 4 more parked - the newest entries are now all at the parked level.
+        for (int window = 0; window < 6; window++) {
+            feedCountedBoundWindowAndTick(controller, 160, 16);
+        }
+        assertThat(controller.lastDecisionReason()).hasValue(DESCENT_PROBE);
+        for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+            feedCountedBoundWindowAndTick(controller, 120, 12);
+        }
+        for (int window = 0; window < 4; window++) {
+            feedCountedBoundWindowAndTick(controller, 160, 16);
+            assertThat(controller.probeInFlight()).isFalse();
+        }
+
+        // Own-level throughput rises 12.5% - far beyond the 2% band - while the re-ask cadence (16) is
+        // nowhere near elapsed: the drift must fire the probe THIS window.
+        feedCountedBoundWindowAndTick(controller, 180, 16);
+        assertWithMessage("drift fires the re-ask immediately - cadence backoff bounds the BLIND ask, "
+                + "never the evidenced one")
+                .that(controller.lastDecisionReason()).hasValue(RECOVERY_PROBE);
+        assertThat(controller.probeInFlight()).isTrue();
+        assertThat(controller.currentTarget()).isEqualTo(18);
     }
 
     /**

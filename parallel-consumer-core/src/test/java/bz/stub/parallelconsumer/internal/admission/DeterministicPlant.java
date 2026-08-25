@@ -40,6 +40,9 @@ final class DeterministicPlant {
     /** Fixed nominal window length: the plant closes exact one-second windows. */
     static final long WINDOW_NANOS = 1_000_000_000L;
 
+    /** Nominal control-loop passes per window - the active-task sample count every produced window carries. */
+    static final int NOMINAL_PASSES_PER_WINDOW = 20;
+
     private static final double BACKLOG_EPSILON_RECORDS = 1e-9;
 
     private final int batchSize;
@@ -47,6 +50,27 @@ final class DeterministicPlant {
     private double muMaxRecordsPerSecond;
     private double arrivalRatePerSecond;
     private double backlogRecords = 0.0;
+
+    // ------------------------------------------------------------------
+    // Broker-fidelity mode (off by default). The default plant emits perfectly dense, perfectly bound windows:
+    // boundary activeTasks == targetSlots and pollerSelfThrottled == false on every saturated window. A real
+    // broker run does neither - the 2026-08-25 AdaptiveConcurrencyComparisonIT freeze (45x SELF_THROTTLED,
+    // 16x WARMUP_EXHAUSTED, target frozen at 5 for 188s) was invisible to this suite precisely because of that
+    // gap. Fidelity mode models the two real-engine behaviours that produced it:
+    //  - boundary-instant flicker: the ONE-INSTANT active-task sample reads empty between completions and
+    //    dispatches, on a deterministic cadence (only every honestBoundaryPeriod-th boundary catches the
+    //    saturated instant);
+    //  - self-throttle-under-saturation: the poller pauses itself because the buffer is FULL - healthy
+    //    back-pressure that coexists with saturated slots, so it must never mask binding.
+    // ------------------------------------------------------------------
+
+    /** 0 = fidelity off (every bound boundary reads honestly). */
+    private int honestBoundaryPeriod = 0;
+    /** Whether bound windows carry a self-paused poller (the deep-backlog steady state on a real broker). */
+    private boolean selfThrottledWhenBound = false;
+    /** Whether over-driving collapses throughput (quadratic service curve) - see {@link #enableCongestionCollapse}. */
+    private boolean congestionCollapse = false;
+    private int windowsProduced = 0;
 
     DeterministicPlant(double muMaxRecordsPerSecond, double w0Seconds, int batchSize) {
         if (muMaxRecordsPerSecond <= 0 || w0Seconds <= 0 || batchSize < 1) {
@@ -87,13 +111,44 @@ final class DeterministicPlant {
     }
 
     /**
+     * Switches on broker-fidelity boundaries (see the field block above): only every
+     * {@code honestBoundaryPeriod}-th saturated window's boundary INSTANT catches the slots full (the others
+     * read momentarily empty - the between-completions dip), and every saturated window closes under a
+     * self-paused poller when {@code selfThrottledWhenBound}. At the comparison IT's observed ratio
+     * (~3 flickered : 1 honest) a period of 4 reproduces the freeze's evidence starvation exactly.
+     */
+    void enableBoundaryFidelity(int honestBoundaryPeriod, boolean selfThrottledWhenBound) {
+        if (honestBoundaryPeriod < 1) {
+            throw new IllegalArgumentException("honestBoundaryPeriod must be >= 1");
+        }
+        this.honestBoundaryPeriod = honestBoundaryPeriod;
+        this.selfThrottledWhenBound = selfThrottledWhenBound;
+    }
+
+    /**
+     * Switches on CONGESTION-COLLAPSE fidelity: service time grows QUADRATICALLY with over-drive above the
+     * knee ({@code S = W0 * (inFlight/knee)^2}), so achievable throughput above the knee is
+     * {@code mu_max * knee/inFlight} - more concurrency buys measurably LESS work, log-log elasticity exactly
+     * -1. This is {@code SyntheticCongestionCurve.quadratic}, the curve the 2026-08-25 comparison IT's
+     * degradation phases run against a real broker; the default plant's linear curve plateaus exactly flat
+     * above the knee, which makes a genuinely negative elasticity verdict (the FALL band) unreachable by
+     * construction - the very dynamics the capacity-collapse falsifier exists to exercise.
+     */
+    void enableCongestionCollapse() {
+        this.congestionCollapse = true;
+    }
+
+    /**
      * Runs one fixed one-second window under {@code targetSlots} and closes it. Advances the backlog.
      */
     ClosedAdmissionWindow produceWindow(int targetSlots) {
+        windowsProduced++;
         double offeredRecords = backlogRecords + arrivalRatePerSecond; // one second of arrivals
         double inFlightRecordsAtTarget = (double) targetSlots * batchSize;
         double kneeRecords = muMaxRecordsPerSecond * w0Seconds;
-        double serviceSecondsAtTarget = w0Seconds * Math.max(1.0, inFlightRecordsAtTarget / kneeRecords);
+        double overDriveRatio = Math.max(1.0, inFlightRecordsAtTarget / kneeRecords);
+        double serviceSecondsAtTarget =
+                w0Seconds * (congestionCollapse ? overDriveRatio * overDriveRatio : overDriveRatio);
         double achievableThroughput = targetSlots == 0 ? 0.0 : inFlightRecordsAtTarget / serviceSecondsAtTarget;
 
         double completedRecords = Math.min(offeredRecords, achievableThroughput);
@@ -116,12 +171,25 @@ final class DeterministicPlant {
         long successes = Math.round(completedRecords);
         double meanServiceTimeNanos = invocations == 0 ? 0.0 : serviceSeconds * WINDOW_NANOS;
 
-        AdmissionBoundarySignals signals = limitBound
-                ? new AdmissionBoundarySignals(activeSlots, targetSlots, false,
-                Math.round(backlogRecords), Math.round(backlogRecords), false, false)
-                : new AdmissionBoundarySignals(activeSlots, targetSlots, false, 0, 0, false, false);
+        final AdmissionBoundarySignals signals;
+        if (limitBound) {
+            // Fidelity mode: the boundary INSTANT misses the saturated slots on most windows (flicker), and the
+            // poller is self-paused because the buffer is full - both while the slots genuinely stay saturated.
+            boolean boundaryInstantFlickered =
+                    honestBoundaryPeriod > 0 && windowsProduced % honestBoundaryPeriod != 0;
+            int boundaryInstantActive = boundaryInstantFlickered ? 0 : activeSlots;
+            signals = new AdmissionBoundarySignals(boundaryInstantActive, targetSlots, false,
+                    Math.round(backlogRecords), Math.round(backlogRecords), selfThrottledWhenBound, false);
+        } else {
+            signals = new AdmissionBoundarySignals(activeSlots, targetSlots, false, 0, 0, false, false);
+        }
 
+        // The plant is honest about the per-pass active-task stream in EVERY mode: the engine samples active
+        // tasks once per control-loop pass, and on this plant every pass of a window reads the same level, so
+        // the p90 aggregate IS activeSlots (a nominal per-window pass count stands in for the loop cadence).
+        // In fidelity mode this is exactly what keeps binding decidable while the boundary instant flickers.
         return new ClosedAdmissionWindow(invocations, meanServiceTimeNanos, invocations, activeSlots, 0,
+                NOMINAL_PASSES_PER_WINDOW, activeSlots,
                 successes, 0, 0, WINDOW_NANOS, signals);
     }
 }

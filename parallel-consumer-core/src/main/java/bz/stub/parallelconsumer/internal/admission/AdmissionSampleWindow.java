@@ -19,6 +19,10 @@ import java.util.List;
  * <li>in-flight snapshots (ints) - reduced at close to their MEDIAN and SPREAD, where spread is the p90 - p10
  * distance (chosen over IQR for a stronger bimodality signature: a distribution split between near-idle and
  * near-limit shows a p90 - p10 close to the full range, which the decision layer must not read as starvation);</li>
+ * <li>active-task snapshots (ints, slots occupied by user-function invocations, one per control-loop pass) -
+ * reduced at close to their p90, the aggregate {@link ClosedAdmissionWindow#bindingClassification()} judges
+ * binding from (a boundary-instant point check mis-files dense saturation as starvation - the 2026-08-25
+ * comparison-IT freeze);</li>
  * <li>outcome counts - success / ignore / overloadDrop.</li>
  * </ul>
  * {@link #close(long, AdmissionBoundarySignals)} returns the immutable aggregates with whatever has accumulated -
@@ -50,6 +54,8 @@ public class AdmissionSampleWindow {
 
     private final List<Integer> inFlightSamples = new ArrayList<>();
 
+    private final List<Integer> activeTaskSamples = new ArrayList<>();
+
     private long successCount = 0;
     private long ignoreCount = 0;
     private long overloadDropCount = 0;
@@ -68,6 +74,14 @@ public class AdmissionSampleWindow {
      */
     public void addInFlightSample(int inFlight) {
         inFlightSamples.add(inFlight);
+    }
+
+    /**
+     * Records a snapshot of how many SLOTS were occupied by active user-function tasks - one per control-loop
+     * pass, the binding verdict's per-pass evidence stream (see the class javadoc's active-task bullet).
+     */
+    public void addActiveTaskSample(int activeTasks) {
+        activeTaskSamples.add(activeTasks);
     }
 
     public void recordSuccess() {
@@ -105,12 +119,20 @@ public class AdmissionSampleWindow {
         int inFlightCount = inFlightSamples.size();
         if (inFlightCount > 0) {
             Collections.sort(inFlightSamples);
-            median = percentile(P50);
-            spread = percentile(P90) - percentile(P10);
+            median = percentile(inFlightSamples, P50);
+            spread = percentile(inFlightSamples, P90) - percentile(inFlightSamples, P10);
+        }
+
+        int activeTaskCount = activeTaskSamples.size();
+        int activeTasksHigh = 0;
+        if (activeTaskCount > 0) {
+            Collections.sort(activeTaskSamples);
+            activeTasksHigh = percentile(activeTaskSamples, P90);
         }
 
         ClosedAdmissionWindow closed = new ClosedAdmissionWindow(serviceTimeSampleCount, mean,
                 inFlightCount, median, spread,
+                activeTaskCount, activeTasksHigh,
                 successCount, ignoreCount, overloadDropCount,
                 elapsedNanos, boundarySignals);
         reset();
@@ -127,17 +149,18 @@ public class AdmissionSampleWindow {
     }
 
     /**
-     * Nearest-rank percentile over the (already sorted) in-flight snapshots: index {@code round(q * (n - 1))}.
+     * Nearest-rank percentile over an (already sorted) snapshot list: index {@code round(q * (n - 1))}.
      */
-    private int percentile(double quantile) {
-        int index = (int) Math.round(quantile * (inFlightSamples.size() - 1));
-        return inFlightSamples.get(index);
+    private static int percentile(List<Integer> sorted, double quantile) {
+        int index = (int) Math.round(quantile * (sorted.size() - 1));
+        return sorted.get(index);
     }
 
     private void reset() {
         serviceTimeSumNanos = 0.0;
         serviceTimeSampleCount = 0;
         inFlightSamples.clear();
+        activeTaskSamples.clear();
         successCount = 0;
         ignoreCount = 0;
         overloadDropCount = 0;

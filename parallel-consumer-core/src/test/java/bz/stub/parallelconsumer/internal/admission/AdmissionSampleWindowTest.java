@@ -66,6 +66,19 @@ class AdmissionSampleWindowTest {
     }
 
     @Test
+    void activeTaskSamplesReduceToTheirP90() {
+        AdmissionSampleWindow window = new AdmissionSampleWindow();
+        // 0..10 sorted: p90 index round(0.9 * 10) = 9 -> 9
+        for (int i = 10; i >= 0; i--) { // insertion order must not matter
+            window.addActiveTaskSample(i);
+        }
+
+        ClosedAdmissionWindow closed = close(window);
+        assertThat(closed.getActiveTaskSampleCount()).isEqualTo(11);
+        assertThat(closed.getActiveTasksHigh()).isEqualTo(9);
+    }
+
+    @Test
     void outcomeCountsAndNonSuccessFraction() {
         AdmissionSampleWindow window = new AdmissionSampleWindow();
         window.recordSuccess();
@@ -86,6 +99,7 @@ class AdmissionSampleWindowTest {
         AdmissionSampleWindow window = new AdmissionSampleWindow();
         window.addServiceTimeSample(10);
         window.addInFlightSample(7);
+        window.addActiveTaskSample(7);
         window.recordSuccess();
         window.recordOverloadDrop();
         close(window);
@@ -96,6 +110,8 @@ class AdmissionSampleWindowTest {
         assertThat(second.getInFlightSampleCount()).isEqualTo(0);
         assertThat(second.getInFlightMedian()).isEqualTo(0);
         assertThat(second.getInFlightSpread()).isEqualTo(0);
+        assertThat(second.getActiveTaskSampleCount()).isEqualTo(0);
+        assertThat(second.getActiveTasksHigh()).isEqualTo(0);
         assertThat(second.totalOutcomeCount()).isEqualTo(0);
         assertThat(second.successThroughputPerSecond()).isWithin(TOLERANCE).of(0.0);
     }
@@ -286,6 +302,50 @@ class AdmissionSampleWindowTest {
                 signals(8, 8, false, 0, 0, true, false));
 
         assertThat(closed.bindingClassification()).isEqualTo(BindingClassification.LIMIT_BOUND);
+    }
+
+    // --- the aggregate binding verdict: per-pass active-task samples out-rank the boundary instant ---
+
+    /**
+     * THE comparison-IT freeze mechanism, pinned at the unit: a window saturated on ~90% of its per-pass
+     * samples is BOUND even though the boundary INSTANT caught a between-completions dip (active 0) under a
+     * self-paused poller. Pre-fix, this exact shape classified SELF_THROTTLED on 3 of 4 windows, starved the
+     * estimator, and froze a real broker run at 5 slots for 188s. The p90 aggregate tolerates the dips; the
+     * poller's self-throttle must not mask saturation - a full buffer at full slots IS the bound state.
+     */
+    @Test
+    void aggregateSaturationBindsEvenWhenTheBoundaryInstantDipsUnderASelfThrottledPoller() {
+        AdmissionSampleWindow window = new AdmissionSampleWindow();
+        for (int pass = 0; pass < 18; pass++) {
+            window.addActiveTaskSample(8); // saturated on 90% of passes
+        }
+        window.addActiveTaskSample(0); // the between-completions dips
+        window.addActiveTaskSample(3);
+
+        ClosedAdmissionWindow closed = window.close(NOMINAL_ELAPSED_NANOS,
+                signals(0, 8, false, 40, 40, true, false)); // instant reads EMPTY, poller self-paused
+
+        assertThat(closed.bindingClassification()).isEqualTo(BindingClassification.LIMIT_BOUND);
+        assertWithMessage("the estimator's x must come from the aggregate, never the flickered instant")
+                .that(closed.activeSlotsForEstimation()).isEqualTo(8);
+    }
+
+    /**
+     * The mirror: when per-pass samples exist, they DECIDE - a window that spent most of its passes starved
+     * is not bound just because the boundary instant happened to catch a momentarily full slot set.
+     */
+    @Test
+    void aggregateStarvationIsNotOverriddenByALuckyBoundaryInstant() {
+        AdmissionSampleWindow window = new AdmissionSampleWindow();
+        for (int pass = 0; pass < 20; pass++) {
+            window.addActiveTaskSample(2); // well below the target of 8 on every pass
+        }
+
+        ClosedAdmissionWindow closed = window.close(NOMINAL_ELAPSED_NANOS,
+                signals(8, 8, false, 0, 0, false, false)); // the instant alone reads saturated
+
+        assertThat(closed.isLimitBound()).isFalse();
+        assertThat(closed.bindingClassification()).isEqualTo(BindingClassification.NO_WORK);
     }
 
     /** The R8 plumbing: offset-encoding back-pressure sampled at the boundary rides the closed window. */

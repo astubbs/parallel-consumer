@@ -175,9 +175,63 @@ public class AdmissionController {
     /**
      * The descent probe's keep-vs-restore criterion: the probe's mean success throughput must be within this
      * fraction of the pre-probe reference or the deferred target is restored. THROUGHPUT ONLY - no latency term
-     * exists anywhere in this decision (R8).
+     * exists anywhere in this decision (R8). The stagnation probe reuses it mirrored: the raised level is kept
+     * only when its mean throughput beat the reference by MORE than this fraction (growth must demonstrably
+     * pay; a within-noise result restores).
      */
     static final double DESCENT_THROUGHPUT_TOLERANCE = 0.02;
+
+    /**
+     * Consecutive {@code WARMUP_EXHAUSTED}-with-pending-growth windows before the stagnation probe fires.
+     * Derivation: equal to the estimator's minimum entry count ({@code AdmissionControlLaw
+     * .DEFAULT_ESTIMATOR_MIN_ENTRIES}) - eight bound, adjudicated windows are enough for a first verdict
+     * whenever the horizon holds ANY in-flight spread, so eight exhausted windows without one prove the spread
+     * is structurally absent at this operating point and only a level change can create it. Waiting longer
+     * cannot help (the state was absorbing on the 2026-08-25 comparison IT: the pending-growth anchor
+     * suppressed the descent probe's blind-exhausted arming, plateau arming needs a live HOLD verdict, and the
+     * escape fires only at the floor - no other exit exists). Denominated in closed, evaluated windows like
+     * every probe counter (KTD3).
+     */
+    static final int STAGNATION_PROBE_WINDOWS = 8;
+
+    /**
+     * The stagnation re-ask cadence's backoff ceiling: {@code 8 * 2^3} - the descent probe's doubling
+     * discipline at the stagnation probe's base cadence. A permanently verdict-starved plant settles into a
+     * rare bounded re-measurement, never a walk.
+     */
+    static final int STAGNATION_CADENCE_WINDOWS_CAP = 64;
+
+    /**
+     * Consecutive live-verdict parked windows (reason {@code PLATEAU} under a live HOLD verdict) before the
+     * recovery re-ask probe fires (law-U13) - one accelerator step UP, throughput-adjudicated.
+     * <p>
+     * <b>Why a timer and not a drift gate.</b> The obvious trigger - fire only when the parked level's own
+     * throughput drifts above its park-era reference - is provably insufficient: the FALL walk's marginal-pair
+     * stop parks one cut BELOW the knee by construction (the first below-knee window is what reveals the
+     * crossing), and below the knee a level's throughput is {@code slots/W0} with NO capacity term, so a
+     * capacity recovery changes nothing observable at any level the controller visits. Measured on the
+     * capacity-recovery falsifier: windows either side of a capacity-tripling boundary read bit-identical
+     * ({@code target=19 throughput=380.0/s bound=true}, windows 78-85) while backlog grew against an idle
+     * two-thirds of the downstream. Only asking upward can reveal recovery, so the ask is periodic and
+     * bounded; drift, where it IS observable (a park left above the degraded knee, the comparison IT's
+     * phase-3 shape), serves as a cadence ACCELERATOR - see {@code armProbes} - never the gate. Do not
+     * "simplify" the timer back into a drift gate.
+     * <p>
+     * Derivation of 8: equal to the estimator's minimum entry count (and the stagnation probe's base cadence)
+     * - eight parked windows are one full first-verdict budget of unchanged evidence, so asking sooner would
+     * out-pace the law's own adjudication cadence. Denominated in closed, evaluated windows (KTD3).
+     */
+    static final int RECOVERY_REASK_WINDOWS = 8;
+
+    /**
+     * The recovery re-ask cadence's backoff ceiling: {@code 8 * 2^2}. Derived from the steady-state cost
+     * budget: at the cap a park pays one {@link #PROBE_DURATION_WINDOWS 4-window} upward excursion per 36
+     * windows (~11% of windows), below the descent probe's own worst case at ITS cap (4 per 28, ~14%) - the
+     * up-ask must never cost a settled park more than the down-ask it already pays. The cap also bounds
+     * recovery-detection latency: capacity restored just after a failed ask is noticed within
+     * cap + probe windows, which is what the capacity-recovery falsifier's deadline arithmetic budgets for.
+     */
+    static final int RECOVERY_CADENCE_WINDOWS_CAP = 32;
 
     /**
      * The reasons that describe the target being HELD by something rather than adapting: a window closed, and the
@@ -201,7 +255,9 @@ public class AdmissionController {
             AdmissionDecisionReason.SELF_THROTTLED,
             AdmissionDecisionReason.OFFSET_BACK_PRESSURE,
             AdmissionDecisionReason.ESCAPE_PROBE,
-            AdmissionDecisionReason.DESCENT_PROBE);
+            AdmissionDecisionReason.DESCENT_PROBE,
+            AdmissionDecisionReason.STAGNATION_PROBE,
+            AdmissionDecisionReason.RECOVERY_PROBE);
 
     /**
      * How often at most the binding-constraint line above may speak. The condition it describes is a steady state
@@ -276,6 +332,7 @@ public class AdmissionController {
     // windowLock, and never incremented in DISABLED, whose records return before reaching the window.
     private long serviceTimeSamplesRecorded = 0;
     private long inFlightSamplesRecorded = 0;
+    private long activeTaskSamplesRecorded = 0;
     private long successOutcomesRecorded = 0;
     private long ignoreOutcomesRecorded = 0;
     private long overloadDropOutcomesRecorded = 0;
@@ -333,6 +390,17 @@ public class AdmissionController {
         ESCAPE,
         /** R14's sweep-from-above: step down one accelerator step and ask whether throughput held. */
         DESCENT,
+        /**
+         * The stagnation exit (see {@link #STAGNATION_PROBE_WINDOWS}): step UP one accelerator step from a
+         * verdict-less {@code WARMUP_EXHAUSTED} park and ask whether throughput improved.
+         */
+        STAGNATION,
+        /**
+         * The recovery re-ask (law-U13, see {@link #RECOVERY_REASK_WINDOWS}): step UP one accelerator step
+         * from a LIVE-verdict park and ask whether capacity has recovered - the exit from the otherwise
+         * absorbing below-knee park, where recovery is unobservable without asking.
+         */
+        RECOVERY,
     }
 
     private ProbeKind probeKind = ProbeKind.NONE;
@@ -361,8 +429,42 @@ public class AdmissionController {
     /** Consecutive plateau-held windows above the floor - the descent probe's arming counter. */
     private int plateauHoldStreak = 0;
 
+    /**
+     * Consecutive {@code WARMUP_EXHAUSTED}-with-pending-growth windows - the stagnation probe's arming counter
+     * (see {@link #STAGNATION_PROBE_WINDOWS}). Distinct from {@link #plateauHoldStreak}: that arm requires the
+     * pending adjudication to be RESOLVED (or absent) before probing down, while this one exists precisely
+     * because the resolving verdict is structurally unreachable.
+     */
+    private int stagnationStreak = 0;
+
+    /** The stagnation probe's current re-ask cadence in stagnant windows - doubles on a restore, capped. */
+    private int stagnationCadenceWindows = STAGNATION_PROBE_WINDOWS;
+
     /** The descent probe's current cadence in plateau windows - doubles on a failed probe, capped. */
     private int descentCadenceWindows = DESCENT_PLATEAU_WINDOWS;
+
+    /**
+     * Consecutive live-verdict parked windows - the recovery re-ask's arming counter (law-U13; see
+     * {@link #RECOVERY_REASK_WINDOWS}). Deliberately SURVIVES a descent probe that restores (the park is the
+     * same park, and the descent cadence's floor of {@link #DESCENT_PLATEAU_WINDOWS} would otherwise preempt
+     * this counter forever); reset when the park actually ends - a movement, a kept probe, a pause, a
+     * rebalance, or this probe's own firing.
+     */
+    private int recoveryReaskStreak = 0;
+
+    /** The recovery re-ask's current cadence in parked windows - doubles on a failed probe, capped. */
+    private int recoveryCadenceWindows = RECOVERY_REASK_WINDOWS;
+
+    /**
+     * The parked level's own-throughput reference, captured on the park's first counted window - the drift
+     * ACCELERATOR's baseline (see {@link #RECOVERY_REASK_WINDOWS} for why drift cannot be the gate): a parked
+     * window whose throughput exceeds it beyond the {@link #DESCENT_THROUGHPUT_TOLERANCE} noise band (the
+     * same "throughput meaningfully moved" tolerance every probe conclusion already uses - one physical
+     * question, one tolerance) fires the re-ask immediately, cadence backoff notwithstanding. NaN while no
+     * park is being counted; re-armed from the CURRENT window when counting restarts, so a failed probe's
+     * restore cannot re-fire on the drift that armed it.
+     */
+    private double parkReferenceThroughput = Double.NaN;
 
     /** The jitter source the controller OWNS (deterministic under the test-seam seed). */
     private final java.util.Random escapeJitterRandom;
@@ -534,6 +636,22 @@ public class AdmissionController {
         synchronized (windowLock) {
             window.addInFlightSample(inFlight);
             inFlightSamplesRecorded++;
+        }
+    }
+
+    /**
+     * Records a per-control-loop-pass snapshot of how many SLOTS are occupied by active user-function tasks -
+     * the binding verdict's evidence stream: {@link AdmissionSampleWindow} reduces these to their p90, which
+     * {@link ClosedAdmissionWindow#bindingClassification()} compares against the target instead of trusting one
+     * boundary instant (a point check froze the 2026-08-25 comparison-IT run).
+     */
+    public void recordActiveTasks(int activeTasks) {
+        if (window == null) {
+            return;
+        }
+        synchronized (windowLock) {
+            window.addActiveTaskSample(activeTasks);
+            activeTaskSamplesRecorded++;
         }
     }
 
@@ -800,12 +918,29 @@ public class AdmissionController {
      * {@link #plateauHoldStreak}. While growth IS pending, the next verdict owes a confirm-or-retract and the
      * probe waits for it - probing first would erase the retraction anchor and park the target one blind step
      * high (measured on the pause-cycling plant: 24 instead of the knee's 20).</li>
+     * <li><b>Stagnation</b> - the wait above is only sound while the owed verdict is REACHABLE. A window held
+     * {@code WARMUP_EXHAUSTED} with growth still pending is a verdict-less park at a spread-less operating
+     * point; {@link #STAGNATION_PROBE_WINDOWS} consecutive ones prove the verdict structurally unreachable
+     * (its javadoc carries the derivation) and fire {@link #beginStagnationProbe} - one accelerator step UP
+     * (the direction the blind growth went), throughput-evaluated. Without this arm the state is absorbing:
+     * the 2026-08-25 comparison IT froze in it for 188 of 190 seconds.</li>
+     * <li><b>Recovery re-ask (law-U13)</b> - the LIVE-verdict park's counterpart of the stagnation exit: a
+     * park under a live HOLD verdict advances {@link #recoveryReaskStreak}, and after
+     * {@link #RECOVERY_REASK_WINDOWS} parked windows (or immediately on an own-level throughput drift, where
+     * one is observable) {@link #beginRecoveryProbe} asks one step up. Without it the post-contraction park
+     * is absorbing when capacity RECOVERS: below the knee recovery changes nothing observable at the parked
+     * level (the constant's javadoc carries the measurement), the descent probe asks only downward, and RISE
+     * is locked out by the persisted HOLD verdict - the 2026-08-25 comparison IT's arm C sat at 3-5 slots
+     * through a whole phase of tripled capacity.</li>
      * </ul>
      */
     private void armProbes(int windowTarget, AdmissionDecision decision, ClosedAdmissionWindow closed,
                            Instant now) {
         if (windowTarget <= AdmissionControlLaw.LIMIT_FLOOR_SLOTS) {
             plateauHoldStreak = 0;
+            stagnationStreak = 0;
+            recoveryReaskStreak = 0; // the floor strand is the escape probe's, not the recovery re-ask's
+            parkReferenceThroughput = Double.NaN;
             if (enforceCeiling <= AdmissionControlLaw.LIMIT_FLOOR_SLOTS) {
                 return; // floor == ceiling: there is nowhere to escape to
             }
@@ -830,16 +965,58 @@ public class AdmissionController {
         boolean blindExhausted = decision.getReason() == AdmissionDecisionReason.WARMUP_EXHAUSTED
                 && !law.hasPendingGrowth();
         if (plateauHold || blindExhausted) {
+            stagnationStreak = 0;
             plateauHoldStreak++;
+            if (plateauHold) {
+                // The recovery re-ask arms on the LIVE-verdict park only (law-U13): a verdict-less park
+                // belongs to the stagnation/descent machinery. Counted independently of the descent streak,
+                // and BEFORE the descent check - when both are due, the up-ask this counter exists for wins.
+                if (recoveryReaskStreak == 0) {
+                    parkReferenceThroughput = closed.successThroughputPerSecond();
+                }
+                recoveryReaskStreak++;
+                boolean throughputDrifted = !Double.isNaN(parkReferenceThroughput)
+                        && closed.successThroughputPerSecond()
+                        > parkReferenceThroughput * (1 + DESCENT_THROUGHPUT_TOLERANCE);
+                if (throughputDrifted || recoveryReaskStreak >= recoveryCadenceWindows) {
+                    beginRecoveryProbe(closed, now, throughputDrifted);
+                    return;
+                }
+            } else {
+                recoveryReaskStreak = 0;
+                parkReferenceThroughput = Double.NaN;
+            }
             if (plateauHoldStreak >= descentCadenceWindows) {
                 beginDescentProbe(closed, now);
             }
             return;
         }
+        boolean stagnant = decision.getReason() == AdmissionDecisionReason.WARMUP_EXHAUSTED
+                && law.hasPendingGrowth();
+        if (stagnant) {
+            plateauHoldStreak = 0;
+            recoveryReaskStreak = 0;
+            parkReferenceThroughput = Double.NaN;
+            stagnationStreak++;
+            if (stagnationStreak >= stagnationCadenceWindows) {
+                beginStagnationProbe(closed, now);
+            }
+            return;
+        }
         plateauHoldStreak = 0;
-        if (verdict.isLive() && verdict.getBand() != AdmissionElasticityEstimator.Band.HOLD) {
-            // A FALL/RISE band: the plant moved, so a backed-off descent cadence re-arms briskly.
-            descentCadenceWindows = DESCENT_PLATEAU_WINDOWS;
+        stagnationStreak = 0;
+        recoveryReaskStreak = 0; // any other reason means the park ended - a movement, a brake, a starve
+        parkReferenceThroughput = Double.NaN;
+        if (verdict.isLive()) {
+            // A verdict is in force again: the stagnation was resolved by evidence, so a backed-off re-ask
+            // cadence re-arms briskly for the next episode.
+            stagnationCadenceWindows = STAGNATION_PROBE_WINDOWS;
+            if (verdict.getBand() != AdmissionElasticityEstimator.Band.HOLD) {
+                // A FALL/RISE band: the plant moved, so backed-off descent and recovery cadences re-arm
+                // briskly.
+                descentCadenceWindows = DESCENT_PLATEAU_WINDOWS;
+                recoveryCadenceWindows = RECOVERY_REASK_WINDOWS;
+            }
         }
     }
 
@@ -902,6 +1079,100 @@ public class AdmissionController {
     }
 
     /**
+     * Fires the stagnation probe (the C exit: no absorbing state above the floor): remember the current target,
+     * step the published target UP one accelerator step - the direction the pending blind growth went - and
+     * measure throughput there for {@link #PROBE_DURATION_WINDOWS} windows against the parked level's
+     * reference. Keep the higher target only when throughput IMPROVED beyond the tolerance (growth must
+     * demonstrably pay - the mirrored descent criterion); restore otherwise. Either way the probe's bound
+     * windows are ADOPTED into the estimator: they sit at a DIFFERENT operating level, so they create exactly
+     * the in-flight spread whose absence caused the stagnation - the evidence-driven exit. (This adoption is
+     * the deliberate asymmetry with a failed DESCENT probe, whose dropped evidence would read as RISE fuel: a
+     * failed UP-probe's flat-throughput-at-higher-x evidence reads as HOLD/FALL, which is the truth the probe
+     * measured and precisely what unlocks the verdict.) Throughput criterion only (R8). The law keeps its
+     * history - the conclusion compares against the parked level, like the descent probe.
+     */
+    private void beginStagnationProbe(ClosedAdmissionWindow closed, Instant now) {
+        int probeTarget = Math.min(enforceCeiling,
+                (int) Math.round(adaptiveTarget + AdmissionControlLaw.acceleratorStep(adaptiveTarget)));
+        stagnationStreak = 0;
+        if (probeTarget <= adaptiveTarget) {
+            return; // at the cap there is nowhere up; the blind-exhausted descent arm owns the capped park
+        }
+        probeKind = ProbeKind.STAGNATION;
+        probeDeferredRestoreTarget = adaptiveTarget;
+        probeReferenceThroughput = closed.successThroughputPerSecond();
+        probeWindowsRemaining = PROBE_DURATION_WINDOWS;
+        probeWindowsAllLimitBound = true;
+        probeThroughputSum = 0;
+        probeThroughputWindowCount = 0;
+        law.pinForProbe(probeTarget, false);
+        publishTarget(probeTarget, AdmissionDecisionReason.STAGNATION_PROBE, closed, now);
+        lastDecisionReason = AdmissionDecisionReason.STAGNATION_PROBE;
+        log.info(LOG_PREFIX + " ({}): {} verdict-less WARMUP_EXHAUSTED window(s) at {} slot(s) - the owed "
+                        + "verdict is structurally unreachable (no in-flight spread), firing the stagnation "
+                        + "probe: one step up to {} slot(s) for {} windows against reference throughput {}/s.",
+                mode, STAGNATION_PROBE_WINDOWS, probeDeferredRestoreTarget, probeTarget, PROBE_DURATION_WINDOWS,
+                String.format(Locale.ROOT, "%.1f", probeReferenceThroughput));
+    }
+
+    /**
+     * Fires the recovery re-ask probe (law-U13, the exit from the otherwise absorbing live-verdict park; see
+     * {@link #RECOVERY_REASK_WINDOWS} for why the trigger is a bounded timer with drift only accelerating it):
+     * remember the parked target, step the published target UP one accelerator step, and measure throughput
+     * there for {@link #PROBE_DURATION_WINDOWS} windows against the park's reference. Keep the higher target
+     * only when throughput IMPROVED beyond the tolerance with every window bound (the stagnation probe's
+     * mirrored criterion - growth must demonstrably pay); restore otherwise and double the cadence. Throughput
+     * criterion only (R8). Evidence is adopted in BOTH outcomes, exactly as the stagnation probe's is and for
+     * the same reason: the probe's whole product is cross-level spread at the park, a failed up-probe's
+     * flat-throughput-at-higher-x evidence bands as HOLD/FALL - the truth it measured - and a KEPT probe's
+     * pair is what re-opens the RISE band the park had locked out. (The failed-DESCENT-probe evidence drop
+     * does not apply here: dropped descent evidence guards against reading a rejected LOWER level's lower
+     * throughput as climb fuel; an up-probe's evidence carries no such false-climb reading.)
+     * <p>
+     * <b>The ask is HALF an accelerator step (rounded, at least one slot) - deliberately smaller than its
+     * sibling probes' full step.</b> This probe fires from settled parks FOREVER (bounded-periodic is its
+     * whole design), and legitimate parks settle up to one full step ABOVE the knee (climb-ladder
+     * quantization - measured: the saturated-flicker plant parks at 23 on a knee of 20, because the descent
+     * dip to 18 undershoots the knee and loses throughput). A full-step ask from such a park peaks two steps
+     * above the knee - measured breaching the falsifier band (28 against a ceiling of 27) on every re-ask,
+     * forever - while a half-step ask peaks ~1.5 steps above and stays inside. Detection stays sound: below
+     * the knee a half-step buys {@code 1/(2*sqrt(park))} relative throughput - above the
+     * {@link #DESCENT_THROUGHPUT_TOLERANCE} noise band for every park below ~625 slots, far past any
+     * plausible ceiling. The RISE ladder a kept ask re-opens climbs by FULL steps as always; only the
+     * question is asked gently.
+     */
+    private void beginRecoveryProbe(ClosedAdmissionWindow closed, Instant now, boolean firedByDrift) {
+        int askStepSlots = Math.max(1, (int) Math.round(AdmissionControlLaw.acceleratorStep(adaptiveTarget) / 2));
+        int probeTarget = Math.min(enforceCeiling, adaptiveTarget + askStepSlots);
+        recoveryReaskStreak = 0;
+        plateauHoldStreak = 0; // the excursion interrupts the park; both timers restart on the resumed park
+        parkReferenceThroughput = Double.NaN;
+        if (probeTarget <= adaptiveTarget) {
+            return; // at the cap there is nowhere up to ask
+        }
+        probeKind = ProbeKind.RECOVERY;
+        probeDeferredRestoreTarget = adaptiveTarget;
+        probeReferenceThroughput = closed.successThroughputPerSecond();
+        probeWindowsRemaining = PROBE_DURATION_WINDOWS;
+        probeWindowsAllLimitBound = true;
+        probeThroughputSum = 0;
+        probeThroughputWindowCount = 0;
+        law.pinForProbe(probeTarget, false);
+        publishTarget(probeTarget, AdmissionDecisionReason.RECOVERY_PROBE, closed, now);
+        lastDecisionReason = AdmissionDecisionReason.RECOVERY_PROBE;
+        log.info(LOG_PREFIX + " ({}): {} at the parked level of {} slot(s) - recovery re-ask probe: one step "
+                        + "up to {} slot(s) for {} windows against reference throughput {}/s (below the knee "
+                        + "a capacity recovery is invisible at the parked level, so the ask is periodic - "
+                        + "law-U13).",
+                mode,
+                firedByDrift
+                        ? "own-level throughput drifted above the park-era reference"
+                        : "the re-ask cadence elapsed",
+                probeDeferredRestoreTarget, probeTarget, PROBE_DURATION_WINDOWS,
+                String.format(Locale.ROOT, "%.1f", probeReferenceThroughput));
+    }
+
+    /**
      * One evaluated window while a probe is in flight: the law only OBSERVES it (cursor advance plus buffering
      * of qualifying evidence - normal decisions stay suspended), the probe's own aggregates accumulate, and the
      * duration counts down in evaluated windows (KTD3).
@@ -911,8 +1182,23 @@ public class AdmissionController {
         probeThroughputSum += closed.successThroughputPerSecond();
         probeThroughputWindowCount++;
         probeWindowsAllLimitBound &= closed.isLimitBound();
-        AdmissionDecisionReason reason = probeKind == ProbeKind.ESCAPE
-                ? AdmissionDecisionReason.ESCAPE_PROBE : AdmissionDecisionReason.DESCENT_PROBE;
+        final AdmissionDecisionReason reason;
+        switch (probeKind) {
+            case ESCAPE:
+                reason = AdmissionDecisionReason.ESCAPE_PROBE;
+                break;
+            case DESCENT:
+                reason = AdmissionDecisionReason.DESCENT_PROBE;
+                break;
+            case STAGNATION:
+                reason = AdmissionDecisionReason.STAGNATION_PROBE;
+                break;
+            case RECOVERY:
+                reason = AdmissionDecisionReason.RECOVERY_PROBE;
+                break;
+            default:
+                throw new IllegalStateException("probe window with no probe in flight: " + probeKind);
+        }
         lastDecisionReason = reason;
         probeWindowsRemaining--;
         if (probeWindowsRemaining <= 0) {
@@ -923,7 +1209,9 @@ public class AdmissionController {
     }
 
     /**
-     * Concludes the in-flight probe (updates resume; the law opens a fresh warmup allowance either way - KTD2):
+     * Concludes the in-flight probe (updates resume; the law opens a fresh warmup allowance - KTD2 - except on
+     * a stagnation RESTORE, whose measured "growth does not pay" makes a refill the unbounded ratchet KTD2's
+     * cap exists to prevent):
      * <ul>
      * <li><b>ESCAPE</b> - the probe's buffered limit-bound windows enter the estimator (valid by construction).
      * When EVERY probe window read limit-bound, even the floor saturates its slot, so capacity above the floor
@@ -936,6 +1224,11 @@ public class AdmissionController {
      * keep it, adopt its evidence, and the walk may repeat after another plateau streak. Throughput fell: restore
      * the deferred target, DROP the probe's evidence (a rejected level's lower throughput would read as positive
      * elasticity and teach the law to climb off the knee), and double the cadence up to its cap.</li>
+     * <li><b>STAGNATION</b> - throughput improved beyond the tolerance with every window bound: the step up
+     * PAID; keep it (fresh allowance - the throughput-gated climb continues). Otherwise restore WITHOUT a fresh
+     * allowance and double the re-ask cadence. The evidence is adopted in BOTH outcomes - the probe's whole
+     * purpose is to manufacture the in-flight spread the stagnant level could not, and a failed up-probe's
+     * evidence bands as HOLD/FALL, never as climb fuel (see {@link #beginStagnationProbe}).</li>
      * </ul>
      */
     private void concludeProbe(ClosedAdmissionWindow closed, Instant now) {
@@ -953,12 +1246,72 @@ public class AdmissionController {
                             ? "the floor stayed limit-bound; taking one re-entry step"
                             : "the floor did not bind; restoring unchanged",
                     adaptiveTarget);
+        } else if (probeKind == ProbeKind.RECOVERY) {
+            double probeMeanThroughput = probeThroughputSum / probeThroughputWindowCount;
+            boolean recoveredCapacityFound = probeWindowsAllLimitBound
+                    && probeMeanThroughput > probeReferenceThroughput * (1 + DESCENT_THROUGHPUT_TOLERANCE);
+            if (recoveredCapacityFound) {
+                // Capacity above the park exists: keep the probed level and adopt its evidence - the fresh
+                // cross-level pair re-opens the RISE band, and the ordinary climb machinery takes it from
+                // here (probe conclusion opens the settle, so the first qualifying verdict acts at once).
+                law.concludeProbe(adaptiveTarget, false, true);
+                recoveryCadenceWindows = RECOVERY_REASK_WINDOWS;
+            } else {
+                // The step up did not pay - the park IS still the knee. Restore and adopt the evidence
+                // (see beginRecoveryProbe for why adoption is safe both ways), but through the
+                // no-fresh-allowance seam: at a live-verdict park the warmup band is unreachable anyway, and
+                // sharing the stagnation restore's seam keeps one restore semantics for both up-probes -
+                // including the no-refill property the pause-cycling pin protects. Back the cadence off:
+                // the plant answered, so re-asking gets exponentially rarer (the sibling probes' discipline).
+                law.concludeProbeRestoringWithEvidence(probeDeferredRestoreTarget);
+                publishTarget(probeDeferredRestoreTarget, AdmissionDecisionReason.RECOVERY_PROBE, closed, now);
+                recoveryCadenceWindows = Math.min(RECOVERY_CADENCE_WINDOWS_CAP, recoveryCadenceWindows * 2);
+            }
+            log.info(LOG_PREFIX + " ({}): recovery re-ask probe concluded - throughput {}/s against reference "
+                            + "{}/s: {} - target {} slot(s), next re-ask after {} parked window(s).",
+                    mode,
+                    String.format(Locale.ROOT, "%.1f", probeMeanThroughput),
+                    String.format(Locale.ROOT, "%.1f", probeReferenceThroughput),
+                    recoveredCapacityFound
+                            ? "capacity above the park exists, keeping the step"
+                            : "the park is still the knee, restoring",
+                    adaptiveTarget, recoveryCadenceWindows);
+        } else if (probeKind == ProbeKind.STAGNATION) {
+            double probeMeanThroughput = probeThroughputSum / probeThroughputWindowCount;
+            boolean higherTargetPaid = probeWindowsAllLimitBound
+                    && probeMeanThroughput > probeReferenceThroughput * (1 + DESCENT_THROUGHPUT_TOLERANCE);
+            if (higherTargetPaid) {
+                // The step up demonstrably paid: keep the probed level (it is the law's pinned limit already)
+                // and adopt its evidence - the two-level history unlocks the verdict that was unreachable. A
+                // paying step earns a fresh episode (the ordinary concludeProbe semantics, KTD2): the climb
+                // continues, throughput-gated one stagnation cycle at a time.
+                law.concludeProbe(adaptiveTarget, false, true);
+                stagnationCadenceWindows = STAGNATION_PROBE_WINDOWS;
+            } else {
+                // Flat (or unbound, or fallen): restore the parked level and adopt the bound evidence, but do
+                // NOT open a fresh allowance - re-funding blind growth toward the level this probe just
+                // rejected would ratchet without bound on a verdict-starved plant (the law seam's javadoc
+                // carries the caught instance) - and back the re-ask cadence off: the plant answered, so
+                // re-asking gets exponentially rarer, the descent probe's own discipline.
+                law.concludeProbeRestoringWithEvidence(probeDeferredRestoreTarget);
+                publishTarget(probeDeferredRestoreTarget, AdmissionDecisionReason.STAGNATION_PROBE, closed, now);
+                stagnationCadenceWindows = Math.min(STAGNATION_CADENCE_WINDOWS_CAP, stagnationCadenceWindows * 2);
+            }
+            log.info(LOG_PREFIX + " ({}): stagnation probe concluded - throughput {}/s against reference "
+                            + "{}/s: {} - target {} slot(s), next probe after {} stagnant window(s).",
+                    mode,
+                    String.format(Locale.ROOT, "%.1f", probeMeanThroughput),
+                    String.format(Locale.ROOT, "%.1f", probeReferenceThroughput),
+                    higherTargetPaid ? "the step up paid, keeping it" : "growth did not pay, restoring",
+                    adaptiveTarget, stagnationCadenceWindows);
         } else {
             double probeMeanThroughput = probeThroughputSum / probeThroughputWindowCount;
             boolean lowerTargetPaid =
                     probeMeanThroughput >= probeReferenceThroughput * (1 - DESCENT_THROUGHPUT_TOLERANCE);
             if (lowerTargetPaid) {
                 law.concludeProbe(adaptiveTarget, false, true); // the pinned probe value is the new level
+                recoveryReaskStreak = 0; // the park MOVED - the recovery re-ask's timer restarts at the new one
+                parkReferenceThroughput = Double.NaN;
             } else {
                 law.concludeProbe(probeDeferredRestoreTarget, false, false);
                 publishTarget(probeDeferredRestoreTarget, AdmissionDecisionReason.DESCENT_PROBE, closed, now);
@@ -1117,7 +1470,12 @@ public class AdmissionController {
                 .build();
         floorWindowStreak = 0;
         plateauHoldStreak = 0;
+        stagnationStreak = 0;
+        recoveryReaskStreak = 0;
+        stagnationCadenceWindows = STAGNATION_PROBE_WINDOWS;
         descentCadenceWindows = DESCENT_PLATEAU_WINDOWS;
+        recoveryCadenceWindows = RECOVERY_REASK_WINDOWS;
+        parkReferenceThroughput = Double.NaN;
         windowOpenedAt = now;
         cooldownUntil = now.plus(REBALANCE_TARGET_FREEZE_COOLDOWN);
         lastDecisionReason = AdmissionDecisionReason.COOLDOWN;
@@ -1160,6 +1518,9 @@ public class AdmissionController {
         law.invalidateEstimator(AdmissionElasticityEstimator.InvalidationReason.PAUSE);
         floorWindowStreak = 0;
         plateauHoldStreak = 0;
+        stagnationStreak = 0;
+        recoveryReaskStreak = 0; // KTD3: a pause ends the park; its timer must not span the discontinuity
+        parkReferenceThroughput = Double.NaN;
     }
 
     /**
@@ -1264,6 +1625,15 @@ public class AdmissionController {
     public long inFlightSamplesRecorded() {
         synchronized (windowLock) {
             return inFlightSamplesRecorded;
+        }
+    }
+
+    /**
+     * How many active-task snapshots have been recorded since construction. Zero always in DISABLED.
+     */
+    public long activeTaskSamplesRecorded() {
+        synchronized (windowLock) {
+            return activeTaskSamplesRecorded;
         }
     }
 

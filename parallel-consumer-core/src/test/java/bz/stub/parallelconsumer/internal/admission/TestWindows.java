@@ -46,7 +46,7 @@ class TestWindows {
                                         int inFlightMedian, int inFlightSpread,
                                         long successes, long ignores, long drops) {
         return new ClosedAdmissionWindow(samples, meanServiceTimeNanos, inFlightSampleCount, inFlightMedian,
-                inFlightSpread, successes, ignores, drops,
+                inFlightSpread, 0, 0, successes, ignores, drops,
                 NOMINAL_ELAPSED_NANOS, boundAt(inFlightMedian));
     }
 
@@ -69,34 +69,34 @@ class TestWindows {
      */
     static ClosedAdmissionWindow bound(int successes, int activeSlots) {
         return new ClosedAdmissionWindow(successes, 10_000_000.0, successes, activeSlots, 0,
-                successes, 0, 0, NOMINAL_ELAPSED_NANOS, boundAt(activeSlots));
+                0, 0, successes, 0, 0, NOMINAL_ELAPSED_NANOS, boundAt(activeSlots));
     }
 
     /** An UNBOUND window whose cause is the app running out of work - {@code NO_WORK}. */
     static ClosedAdmissionWindow unboundNoWork(int samples) {
         return new ClosedAdmissionWindow(samples, 10_000_000.0, samples, 0, 0,
-                samples, 0, 0, NOMINAL_ELAPSED_NANOS,
+                0, 0, samples, 0, 0, NOMINAL_ELAPSED_NANOS,
                 new AdmissionBoundarySignals(0, 8, false, 0, 0, false, false));
     }
 
     /** An UNBOUND window with buffered work the shards could not yield - {@code ORDERING_STARVED}. */
     static ClosedAdmissionWindow unboundOrderingStarved(int samples) {
         return new ClosedAdmissionWindow(samples, 10_000_000.0, samples, 0, 0,
-                samples, 0, 0, NOMINAL_ELAPSED_NANOS,
+                0, 0, samples, 0, 0, NOMINAL_ELAPSED_NANOS,
                 new AdmissionBoundarySignals(0, 8, true, 0, 50, false, false));
     }
 
     /** An UNBOUND window closed under a self-throttled poller - {@code SELF_THROTTLED}. */
     static ClosedAdmissionWindow unboundSelfThrottled(int samples) {
         return new ClosedAdmissionWindow(samples, 10_000_000.0, samples, 0, 0,
-                samples, 0, 0, NOMINAL_ELAPSED_NANOS,
+                0, 0, samples, 0, 0, NOMINAL_ELAPSED_NANOS,
                 new AdmissionBoundarySignals(0, 8, false, 0, 50, true, false));
     }
 
     /** A limit-bound window flagged with offset-encoding back-pressure at the boundary (the R8 brake). */
     static ClosedAdmissionWindow boundWithOffsetBackPressure(int successes, int activeSlots) {
         return new ClosedAdmissionWindow(successes, 10_000_000.0, successes, activeSlots, 0,
-                successes, 0, 0, NOMINAL_ELAPSED_NANOS,
+                0, 0, successes, 0, 0, NOMINAL_ELAPSED_NANOS,
                 new AdmissionBoundarySignals(activeSlots, Math.max(1, activeSlots), false, 0, 0, false, true));
     }
 }

@@ -1475,7 +1475,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     /**
      * The admission controller's IN-FLIGHT tap: one snapshot per {@link #controlLoop} pass of the EXISTING
      * conservation-derived accounting, {@link WorkManager#getNumberRecordsOutForProcessing()} - no new counter, and
-     * a pure read (nothing drained, nothing altered).
+     * a pure read (nothing drained, nothing altered). The same pass also snapshots the OCCUPIED slot count
+     * ({@link UserFunctionTaskAccounting#getOccupied()}: dispatched-and-unfinished tasks, queued plus active) -
+     * the per-pass evidence stream {@code ClosedAdmissionWindow#bindingClassification()} aggregates (p90) to judge
+     * binding, replacing the boundary-instant point check that froze the 2026-08-25 comparison-IT run (the instant
+     * sample reads momentarily empty between completions and dispatches even while the window is saturated
+     * throughout). Occupied, not {@code getActive()}: this sampler runs immediately after dispatch, inside the
+     * submit-to-start handoff of the replacements this very pass dispatched, so the active count alone reads
+     * target-minus-one on almost every saturated pass - the same point-check defect one layer down.
      * <p>
      * Sampled from the control loop deliberately, never from the completion path: completion-driven samples land
      * just after decrements, biasing the distribution low exactly when throughput is high. The loop's fixed cadence
@@ -1489,7 +1496,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     void sampleAdmissionInFlight() {
         if (isAdaptiveConcurrencyActive()) {
-            module.admissionController().recordInFlight(wm.getNumberRecordsOutForProcessing());
+            var controller = module.admissionController();
+            controller.recordInFlight(wm.getNumberRecordsOutForProcessing());
+            controller.recordActiveTasks(userFunctionTaskAccounting.getOccupied());
         }
     }
 
@@ -1574,7 +1583,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     AdmissionBoundarySignals sampleAdmissionBoundarySignals() {
         return new AdmissionBoundarySignals(
-                userFunctionTaskAccounting.getActive(),
+                // Occupied (dispatched-and-unfinished), not getActive() - the boundary is sampled at the same
+                // post-dispatch instant as the per-pass sampler, so the active count alone sits in the
+                // submit-to-start handoff (see sampleAdmissionInFlight); occupied is the honest instant figure.
+                userFunctionTaskAccounting.getOccupied(),
                 module.admissionTargetSlots(),
                 !lastWorkRequestWasFulfilled,
                 wm.getUpperBoundOnSelectableWork(),

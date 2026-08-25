@@ -47,6 +47,17 @@ final class ControllerAdmissionPolicy implements AdmissionPolicy {
     private boolean pausedPhase = false;
     private boolean capacityShrinkDelivered = false;
 
+    /**
+     * The engine's pause-poison discard, mirrored (KTD3): the first window the plant produces after a resume
+     * ran at the RUNNER's one-window-stale target - in the engine those samples land in the window
+     * {@code notifyPauseResumed} discards, so the controller never sees a full adjudicated window at the
+     * stale level. Without this the harness is unfaithful in exactly one damaging case, found when the
+     * recovery re-ask probe (law-U13) straddled a pause: the abort restored the target, but the runner's
+     * next window - produced at the aborted probe's level - taught the estimator a spread-less history one
+     * blind step high, and the stagnation ladder that followed walked the pause-cycling band out at 29.
+     */
+    private boolean discardFirstWindowAfterResume = false;
+
     ControllerAdmissionPolicy(int initialTarget, int partitionCount) {
         ParallelConsumerOptions<?, ?> options = ParallelConsumerOptions.builder()
                 .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.ENFORCE)
@@ -70,6 +81,7 @@ final class ControllerAdmissionPolicy implements AdmissionPolicy {
         if (pausedPhase) {
             pausedPhase = false;
             controller.notifyPauseResumed(); // the first post-resume tick's poison consumption
+            discardFirstWindowAfterResume = true; // see the field: the engine discards this window's samples
         }
         if (phase.getMuMaxOverrideRecordsPerSecond() > 0 && !capacityShrinkDelivered
                 && assignedPartitions.size() > 1) {
@@ -88,6 +100,10 @@ final class ControllerAdmissionPolicy implements AdmissionPolicy {
             return controller.currentTarget(); // the engine's state gate: no tick while PAUSED
         }
         clock.add(Duration.ofSeconds(1));
+        if (discardFirstWindowAfterResume) {
+            discardFirstWindowAfterResume = false; // pause-poisoned window: dropped, exactly as the engine's
+            return controller.currentTarget();     // window.discard() drops its samples (see the field)
+        }
         controller.injectClosedWindow(window);
         return controller.currentTarget();
     }

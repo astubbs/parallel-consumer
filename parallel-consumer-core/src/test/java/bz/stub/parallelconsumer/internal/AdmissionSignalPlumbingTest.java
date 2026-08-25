@@ -253,6 +253,9 @@ class AdmissionSignalPlumbingTest {
 
         assertWithMessage("N passes must record exactly N samples")
                 .that(controller().inFlightSamplesRecorded()).isEqualTo(passes);
+        assertWithMessage("the same pass records the ACTIVE-TASK snapshot - the binding verdict's per-pass "
+                + "evidence stream (a boundary-instant point check froze the 2026-08-25 comparison-IT run)")
+                .that(controller().activeTaskSamplesRecorded()).isEqualTo(passes);
         Mockito.verify(mockedWm, Mockito.times(passes)).getNumberRecordsOutForProcessing();
         assertWithMessage("a zero-completion window must still carry its in-flight samples")
                 .that(controller().outcomesRecorded(Outcome.SUCCESS)
@@ -277,6 +280,7 @@ class AdmissionSignalPlumbingTest {
 
         assertThat(controller().serviceTimeSamplesRecorded()).isEqualTo(0);
         assertThat(controller().inFlightSamplesRecorded()).isEqualTo(0);
+        assertThat(controller().activeTaskSamplesRecorded()).isEqualTo(0);
         assertThat(controller().outcomesRecorded(Outcome.SUCCESS)).isEqualTo(0);
         assertThat(controller().outcomesRecorded(Outcome.IGNORE)).isEqualTo(0);
         assertThat(controller().outcomesRecorded(Outcome.OVERLOAD_DROP)).isEqualTo(0);

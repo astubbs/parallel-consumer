@@ -77,6 +77,24 @@ public class ClosedAdmissionWindow {
     int inFlightSpread;
 
     /**
+     * Number of per-pass ACTIVE-TASK snapshots (slots occupied by user-function invocations, one snapshot per
+     * control-loop pass) observed this window. Zero when the caller records none - unit tests driving the law
+     * directly, and any pre-plumbing path - in which case {@link #bindingClassification()} falls back to the
+     * boundary-instant sample.
+     */
+    int activeTaskSampleCount;
+
+    /**
+     * High quantile (p90, {@link AdmissionSampleWindow}'s nearest-rank convention) of the per-pass active-task
+     * snapshots. This - not the boundary instant - is what the binding verdict compares against the target when
+     * samples exist: a saturated engine's boundary INSTANT reads momentarily empty between completions and
+     * dispatches (the 2026-08-25 comparison-IT freeze: a point check standing in for a window property), while
+     * the p90 tolerates those sub-service-time dips (up to ~10% of passes) yet still demands saturation be the
+     * window's RECURRING state, not one lucky instant. Zero when {@link #activeTaskSampleCount} is zero.
+     */
+    int activeTasksHigh;
+
+    /**
      * Invocations that completed successfully this window.
      */
     long successCount;
@@ -125,16 +143,27 @@ public class ClosedAdmissionWindow {
     }
 
     /**
-     * The KTD1 verdict from the boundary signals. Limit-bound iff active tasks reached the commanded target at
-     * the boundary (slot saturation - achieved slots, not batch fill, so a thin-batch workload that fills every
-     * slot reads BOUND, never app-limited). When not bound, the three engine signals name the cause, in
-     * precedence order: a self-throttled poller wins (self-inflicted starvation masks the others), then work
-     * presence separates {@link BindingClassification#NO_WORK} from
-     * {@link BindingClassification#ORDERING_STARVED}.
+     * The KTD1 verdict. Limit-bound iff active tasks reached the commanded target (slot saturation - achieved
+     * slots, not batch fill, so a thin-batch workload that fills every slot reads BOUND, never app-limited) -
+     * judged from the WINDOW-AGGREGATED active-task samples ({@link #activeTasksHigh}) when the caller recorded
+     * any, and from the boundary instant only as the sample-less fallback. The aggregate exists because the
+     * instant check froze a real broker run (the 2026-08-25 comparison IT): under deep backlog the boundary
+     * instant reads momentarily empty while the window's slots were saturated throughout, so a point check
+     * mis-filed dense saturation as starvation - this repo's flake ledger names exactly this defect class.
+     * <p>
+     * When not bound, the three engine signals name the cause, in precedence order: a self-throttled poller
+     * wins (self-inflicted starvation masks the others), then work presence separates
+     * {@link BindingClassification#NO_WORK} from {@link BindingClassification#ORDERING_STARVED}. The
+     * SELF_THROTTLED cause can never mask saturation: binding is decided FIRST, so a window whose aggregate
+     * reads saturated is BOUND even while the poller is paused - a full buffer at full slots IS the bound
+     * state (healthy back-pressure, not starvation).
      */
     public BindingClassification bindingClassification() {
-        if (boundarySignals.getTargetSlots() > 0
-                && boundarySignals.getActiveTasks() >= boundarySignals.getTargetSlots()) {
+        int target = boundarySignals.getTargetSlots();
+        boolean bound = target > 0 && (activeTaskSampleCount > 0
+                ? activeTasksHigh >= target
+                : boundarySignals.getActiveTasks() >= target);
+        if (bound) {
             return BindingClassification.LIMIT_BOUND;
         }
         if (boundarySignals.isPollerSelfThrottled()) {
@@ -144,6 +173,17 @@ public class ClosedAdmissionWindow {
             return BindingClassification.NO_WORK;
         }
         return BindingClassification.ORDERING_STARVED;
+    }
+
+    /**
+     * The active-slots figure the elasticity estimator regresses on (its x input): the window-aggregated
+     * {@link #activeTasksHigh} when per-pass samples exist, else the boundary instant - the same source and
+     * the same precedence as the binding verdict, so a window bound by its aggregate can never hand the
+     * estimator a flickered near-zero x (which would corrupt the log-log slope exactly on the windows that
+     * matter most).
+     */
+    public int activeSlotsForEstimation() {
+        return activeTaskSampleCount > 0 ? activeTasksHigh : boundarySignals.getActiveTasks();
     }
 
     /** Convenience read of {@link #bindingClassification()}'s verdict half. */

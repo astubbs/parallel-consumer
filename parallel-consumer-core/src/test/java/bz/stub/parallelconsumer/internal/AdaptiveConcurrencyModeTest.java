@@ -302,8 +302,10 @@ class AdaptiveConcurrencyModeTest {
         module.clock.add(WINDOW_STEP);
         pc.tickAdmissionController();
 
-        // The independently computed expectation: one AIMD cut off the static target, truncated to whole slots.
-        int expectedShadowTarget = (int) (CEILING_SLOTS * BOUNDED_CONTRACTION_RATIO);
+        // The independently computed expectation: one AIMD cut off the static target, ROUNDED to whole slots -
+        // the law's published figure rounds to nearest (truncation withheld committed estimate; see
+        // AdmissionControlLaw#publishedLimit(), the comparison/closed-loop IT fix).
+        int expectedShadowTarget = (int) Math.round(CEILING_SLOTS * BOUNDED_CONTRACTION_RATIO);
 
         assertWithMessage("OBSERVE saw a shedding downstream and would have cut - this is the finding the mode "
                 + "exists to produce")
@@ -387,8 +389,8 @@ class AdaptiveConcurrencyModeTest {
         assertWithMessage("an overload drop in a window with enough samples is the AIMD arm, whatever else the "
                 + "window carried")
                 .that(controller.lastDecisionReason()).hasValue(AdmissionDecisionReason.BACKOFF);
-        assertWithMessage("...and the AIMD arm's cut off the seed, truncated to whole slots")
-                .that(controller.currentTarget()).isEqualTo((int) (seed * BOUNDED_CONTRACTION_RATIO));
+        assertWithMessage("...and the AIMD arm's cut off the seed, rounded to whole slots")
+                .that(controller.currentTarget()).isEqualTo((int) Math.round(seed * BOUNDED_CONTRACTION_RATIO));
         assertWithMessage("the target moved, so the controller must be able to say when")
                 .that(controller.lastMovementAt()).isPresent();
         assertWithMessage("an explicit maxConcurrency is never substituted for, in any mode")
@@ -405,9 +407,17 @@ class AdaptiveConcurrencyModeTest {
      * <p>
      * EXPECTATION FLIPPED by the U5 rewrite, deliberately: the old law climbed all the way to the ceiling on
      * this workload - additive headroom growth with no absolute objective, which is exactly the ratchet the
-     * band machine deletes. The new pin is just as exact: blind growth is the KTD2 warmup allowance and NOT ONE
-     * SLOT MORE, because this drive's window cadence (2s steps against the law's short elasticity horizon)
-     * never accumulates the estimator's minimum evidence, so no verdict ever licenses more.
+     * band machine deletes. Blind growth is the KTD2 warmup allowance and NOT ONE SLOT MORE, because this
+     * drive's window cadence (2s steps against the law's short elasticity horizon) never accumulates the
+     * estimator's minimum evidence, so no verdict ever licenses more.
+     * <p>
+     * REFINED with the stagnation probe (the 2026-08-25 comparison-IT freeze fix): the verdict-less
+     * {@code WARMUP_EXHAUSTED} park is no longer an absorbing hold - after its arming streak the controller
+     * takes ONE bounded accelerator-step re-measurement up, and this drive's flat throughput makes it restore.
+     * The pins encode both halves: the only windows above seed-plus-allowance are that single probe excursion
+     * (exactly one accelerator step, throughput-evaluated), NET growth still stops at the allowance (the
+     * restore must not re-fund blind growth - that regression walked 8 -&gt; 11 -&gt; 12 here before the
+     * no-refill conclusion), and the backed-off cadence keeps the tail parked.
      */
     @Test
     void theTargetGrowsFromALowSeedWithinABoundedNumberOfWindows() {
@@ -422,16 +432,23 @@ class AdaptiveConcurrencyModeTest {
                 break;
             }
         }
+        int warmupParkSlots = LOW_SEED_SLOTS + WARMUP_ALLOWANCE_SLOTS;
+        int probeExcursionSlots = warmupParkSlots + (int) Math.round(Math.sqrt(warmupParkSlots));
         assertWithMessage("the target never left the seed at all: trace was %s", trace)
                 .that(firstGrowth).isGreaterThan(0);
         assertWithMessage("the target must leave the seed within %s windows, not eventually: trace was %s",
                 GROWTH_DEADLINE_WINDOWS, trace)
                 .that(firstGrowth).isAtMost(GROWTH_DEADLINE_WINDOWS);
-        assertWithMessage("...and blind growth stops at EXACTLY the warmup allowance - growth past it needs "
-                + "elasticity evidence this drive never supplies (KTD2): trace was %s", trace)
-                .that(Collections.max(trace)).isEqualTo(LOW_SEED_SLOTS + WARMUP_ALLOWANCE_SLOTS);
-        assertWithMessage("...and holds there rather than oscillating: trace was %s", trace)
-                .that(trace.get(trace.size() - 1)).isEqualTo(LOW_SEED_SLOTS + WARMUP_ALLOWANCE_SLOTS);
+        assertWithMessage("...and the run may exceed the warmup allowance ONLY by the stagnation probe's "
+                + "single bounded accelerator step - anything higher is blind growth past the KTD2 cap: "
+                + "trace was %s", trace)
+                .that(Collections.max(trace)).isAtMost(probeExcursionSlots);
+        assertWithMessage("...and the probe excursion must actually fire within the run - the verdict-less "
+                + "park is no longer absorbing (the comparison-IT freeze): trace was %s", trace)
+                .that(Collections.max(trace)).isEqualTo(probeExcursionSlots);
+        assertWithMessage("...and flat throughput restores it: NET blind growth stays at exactly the warmup "
+                + "allowance, with no post-restore refill: trace was %s", trace)
+                .that(trace.get(trace.size() - 1)).isEqualTo(warmupParkSlots);
     }
 
     /**
@@ -525,10 +542,12 @@ class AdaptiveConcurrencyModeTest {
      * and fed directly; see the class javadoc for why that half is not driven through the tap.
      * <p>
      * One fixture assist the U5 binding gate needs: the instant-return user function means the POOL's tasks
-     * finish long before the window boundary, so the boundary sample would read zero ACTIVE tasks and classify
+     * finish long before the window boundary, so the boundary sample would read zero OCCUPIED slots and classify
      * every window app-limited (which the band machine, correctly, never grows on). The task accounting is
-     * therefore topped up to the live target before each boundary - the boundary then reads what a genuinely
-     * saturated pool would report, while dispatch, the pool and the in-flight sampling stay fully real.
+     * therefore topped up to the live target before each boundary - including one task held in the
+     * submit-to-start handoff, the real post-dispatch shape (see {@link #markPoolSaturatedAtTheLiveTarget()}) -
+     * so the boundary reads what a genuinely saturated pool would report, while dispatch, the pool and the
+     * in-flight sampling stay fully real.
      */
     private List<Integer> driveSaturatedEnforceWindows(int windows, int seedSlots) {
         buildHarness(optionsBuilder()
@@ -558,12 +577,33 @@ class AdaptiveConcurrencyModeTest {
         return trace;
     }
 
-    /** The binding-gate fixture assist described on {@link #driveSaturatedEnforceWindows(int, int)}. */
+    /**
+     * How many phantom tasks {@link #markPoolSaturatedAtTheLiveTarget()} has arranged so far. Tracked test-side
+     * rather than read back off the accounting: the live {@code getOccupied()} also counts REAL dispatched
+     * tasks mid-flight, whose instant-return completions race the drive's loop - a deficit computed from it
+     * under-tops-up nondeterministically and window binding starts depending on scheduler timing (observed as
+     * a same-suite run ending mid-stagnation-probe while a solo run concluded it). Phantoms never finish, so
+     * this count is exact and the drive stays deterministic.
+     */
+    private int phantomOccupiedTasks = 0;
+
+    /**
+     * The binding-gate fixture assist described on {@link #driveSaturatedEnforceWindows(int, int)} - topped up
+     * to the live target by OCCUPANCY (dispatched-and-unfinished), with exactly one task deliberately left in
+     * the submit-to-start handoff (submitted, never started). That is what the real post-dispatch instant looks
+     * like on a saturated engine, and it is the arrangement that catches the tap defect the 2026-08-25
+     * comparison IT hit: a sampler reading {@code getActive()} instead of {@code getOccupied()} sees
+     * target-minus-one here, every window reads unbound, and the growth these tests assert never happens.
+     */
     private void markPoolSaturatedAtTheLiveTarget() {
-        int deficit = controller().currentTarget() - pc.userFunctionTaskAccounting().getActive();
+        var accounting = pc.userFunctionTaskAccounting();
+        int deficit = controller().currentTarget() - phantomOccupiedTasks;
         for (int task = 0; task < deficit; task++) {
-            pc.userFunctionTaskAccounting().onSubmitting();
-            pc.userFunctionTaskAccounting().onTaskStarted();
+            accounting.onSubmitting();
+            if (phantomOccupiedTasks > 0) {
+                accounting.onTaskStarted();
+            }
+            phantomOccupiedTasks++;
         }
     }
 

@@ -44,6 +44,49 @@ final class FalsifierScenarios {
     /** KTD2's working warmup allowance: bounded growth under sparse adjudication, in slots. */
     static final int SPARSE_GROWTH_ALLOWANCE_SLOTS = 8;
 
+    /**
+     * The broker-fidelity scenario's honest-boundary cadence: only one boundary instant in four catches the
+     * saturated slots - the 2026-08-25 comparison IT's observed ratio (45x {@code SELF_THROTTLED} to 16x bound
+     * verdicts on a fully saturated arm). At a 1s window cadence that leaves at most ~4 bound entries inside
+     * the law's 12s estimator horizon when binding is decided by the boundary instant alone - below the
+     * estimator's minimum of 8, which is the evidence starvation that froze the broker run.
+     */
+    static final int FLICKER_HONEST_BOUNDARY_PERIOD = 4;
+
+    /** Capacity collapse: the healthy plant's knee in slots - the seed, and the pre-collapse operating level. */
+    static final int COLLAPSE_HEALTHY_KNEE_SLOTS = 40;
+
+    /** Capacity collapse: windows of healthy running (sub-capacity arrival, unbound) before mu_max halves. */
+    static final int COLLAPSE_HEALTHY_WINDOWS = 20;
+
+    /** Capacity collapse: length of the halved-capacity phase. */
+    static final int COLLAPSE_PHASE_WINDOWS = 60;
+
+    /**
+     * Capacity collapse: windows after the collapse by which the target must be inside the new knee's band.
+     * Derived on {@link #capacityCollapse}: the first FALL verdict needs the estimator's 8 entries (all
+     * post-collapse - the healthy phase is unbound and offers nothing), and the walk from seed-plus-warmup
+     * (44) into the new knee's band (&le; 27) is the retraction to 40 plus four 0.9 cuts
+     * ({@code 40 * 0.9^4 = 26.2}). Contraction paying the settle cadence between cuts therefore needs
+     * {@code 8 + 4 * DEFAULT_SETTLE_WINDOWS = 40} windows and misses this deadline BY CONSTRUCTION;
+     * per-window contraction needs {@code 8 + 4 = 12}, inside it with margin.
+     */
+    static final int COLLAPSE_IN_BAND_DEADLINE_WINDOWS = 16;
+
+    /** Capacity recovery: length of the recovered phase (knee tripled from the degraded level). */
+    static final int RECOVERY_PHASE_WINDOWS = 90;
+
+    /**
+     * Capacity recovery: windows after the recovery by which the target must be inside the recovered knee's
+     * band. Calibrated from the recovery re-ask's own worst case (law-U13): a recovery landing just after a
+     * failed re-ask waits at most the backed-off cadence cap (32) for the next ask, plus the probe (4), plus
+     * the RISE ladder from the kept half-step level (~21) into the band floor (39) - one immediate confirmed
+     * step then one per settle period, {@code 21 -> 26 -> 31 -> 36 -> 42}, ~25 windows - totalling ~61; 64
+     * leaves determinism a small remainder. The pre-U13 controller failed at ANY deadline (its park was
+     * absorbing - see the red-proof record on {@link #capacityRecovery}).
+     */
+    static final int RECOVERY_IN_BAND_DEADLINE_WINDOWS = 64;
+
     private FalsifierScenarios() {
     }
 
@@ -142,6 +185,31 @@ final class FalsifierScenarios {
     }
 
     /**
+     * The broker-freeze reproduction (the 2026-08-25 comparison IT's finding, made deterministic): seed far
+     * below the knee, arrival saturating throughout, and BROKER-FIDELITY boundaries - the boundary-instant
+     * active-task sample flickers empty on 3 of 4 windows and every saturated window closes under a
+     * self-paused poller (healthy back-pressure: the buffer is full precisely because the plant is
+     * saturated). The slots themselves stay saturated the whole run, which the per-pass active-task samples
+     * carry.
+     * <p>
+     * The controller must still converge into the knee's band by the sweep deadline and stay there. Against
+     * the pre-fix law this scenario is RED with the IT's exact freeze signature: the boundary-instant binding
+     * verdict classifies most windows {@code SELF_THROTTLED}, bound windows arrive too sparsely for the warmup
+     * climb levels to coexist in the estimator horizon, the verdict is structurally unreachable, and
+     * {@code WARMUP_EXHAUSTED} absorbs the trajectory a truncated slot below seed-plus-allowance.
+     */
+    static Trajectory saturatedFlickerConvergesToTheKnee(AdmissionPolicy policy, int initialTarget) {
+        DeterministicPlant plant = standardPlant(1);
+        plant.enableBoundaryFidelity(FLICKER_HONEST_BOUNDARY_PERIOD, true);
+        double oracle = plant.optimalTargetSlots();
+        Trajectory trajectory = ScenarioRunner.run(policy, plant, initialTarget,
+                Arrays.asList(Phase.of(SWEEP_WINDOWS, 1.5 * MU_MAX_RECORDS_PER_SECOND)));
+        assertTargetInBandFrom(trajectory, SWEEP_CONVERGENCE_DEADLINE_WINDOW, oracle,
+                "saturated flicker (broker fidelity) from initial target " + initialTarget);
+        return trajectory;
+    }
+
+    /**
      * Sparse adjudication: most windows carry too few samples to adjudicate (KTD2's warmup-allowance
      * scenario). Blind growth must stay within the bounded allowance - a controller that grows on every
      * qualifying scrap of signal without a cap walks away.
@@ -195,6 +263,113 @@ final class FalsifierScenarios {
         double newOracle = plant.optimalTargetSlots(); // halved capacity => halved L*
         assertTargetInBand(trajectory.getFinalTarget(), newOracle,
                 "rebalance-shrink: the trajectory must respect the NEW assignment's L*");
+    }
+
+    /**
+     * Capacity collapse - the FALL band's PACE falsifier (the 2026-08-25 comparison IT's phase-2 finding, made
+     * deterministic): a consumer seeded at its healthy knee (the hand-tuned-operator initial condition, held
+     * exactly by R5's preserve through a sub-capacity healthy phase), on a CONGESTION-COLLAPSE plant
+     * (quadratic curve - the IT's own degradation shape, where over-driving buys measurably less work), whose
+     * mu_max HALVES mid-run WITHOUT a rebalance (one partition assigned, so the capacity override is a silent
+     * downstream slowdown - the rebalance-shrink scenario owns the assignment-delta path). The target must be
+     * inside the NEW knee's band within {@link #COLLAPSE_IN_BAND_DEADLINE_WINDOWS} windows of the collapse and
+     * stay there for the rest of the phase.
+     * <p>
+     * <b>The deadline is derived from the settle-cadence arithmetic (see the constant), and a law that makes
+     * contraction pay the settle cadence misses it by construction</b> - the broker measurement behind it: the
+     * comparison IT's adaptive arm walked 15 -&gt; 5 at one 0.9 cut per 8-window settle, ~57s of a 60s phase
+     * spent over-driving the halved downstream, erasing its whole phase-2 p95 claim. Contraction acting on
+     * every offered window (AIMD / RFC 7661: fast down, slow up) does the walk in ~4 windows.
+     * <p>
+     * <b>The stay-in-band tail is the tail-chasing check</b>: each cut's resulting window feeds the estimator
+     * before the next cut is adjudicated, and the walk must stop when the freshest cross-level evidence says
+     * the knee was crossed - measured without that stop, the walk over-contracted to HALF the new knee on
+     * stale FALL evidence and limit-cycled below the band. The scale (knee 40 -&gt; 20) is chosen so the
+     * band also brackets the controller's honest exploration around the settled level - descent-probe dips
+     * (one accelerator step down, 4 windows) and one-step RISE excursions stay inside it, so the from-deadline
+     * assertion needs no probe exemptions.
+     */
+    static Trajectory capacityCollapse(AdmissionPolicy policy) {
+        DeterministicPlant plant =
+                new DeterministicPlant(2 * MU_MAX_RECORDS_PER_SECOND, W0_SECONDS, 1); // knee 40 slots
+        plant.enableCongestionCollapse();
+        double healthyArrival = 0.75 * 2 * MU_MAX_RECORDS_PER_SECOND; // sub-capacity: healthy phase unbound
+        Trajectory trajectory = ScenarioRunner.run(policy, plant, COLLAPSE_HEALTHY_KNEE_SLOTS, Arrays.asList(
+                Phase.of(COLLAPSE_HEALTHY_WINDOWS, healthyArrival),
+                Phase.withCapacity(COLLAPSE_PHASE_WINDOWS, healthyArrival, MU_MAX_RECORDS_PER_SECOND)));
+        double newOracle = plant.optimalTargetSlots(); // halved capacity => halved L* = 20 slots
+        assertWithMessage("capacity collapse: the healthy phase is unbound, so R5's preserve must hold the "
+                + "seeded knee EXACTLY until the collapse - absence of data yields no decision")
+                .that(trajectory.commandedTargetAt(COLLAPSE_HEALTHY_WINDOWS - 1))
+                .isEqualTo(COLLAPSE_HEALTHY_KNEE_SLOTS);
+        assertTargetInBandFrom(trajectory, COLLAPSE_HEALTHY_WINDOWS + COLLAPSE_IN_BAND_DEADLINE_WINDOWS,
+                newOracle, "capacity collapse: contraction must reach the NEW knee's band inside the deadline");
+        return trajectory;
+    }
+
+    /**
+     * Capacity recovery - the absorbing-park falsifier (law-U13; the 2026-08-25 comparison IT's phase-3
+     * finding, made deterministic): the {@link #capacityCollapse} shape, then capacity RECOVERS past the old
+     * knee (halves, then triples relative to the degraded level - the IT's 8 -&gt; 4 -&gt; 12 shape at this
+     * scenario's scale: knee 40 -&gt; 20 -&gt; 60). Work stays saturating throughout, so from the recovery on,
+     * every window at the parked level is limit-bound with a growing backlog while two-thirds of the
+     * downstream's capacity sits unused. The controller must re-expand into the recovered knee's band within
+     * {@link #RECOVERY_IN_BAND_DEADLINE_WINDOWS} windows of the recovery and hold it to the end.
+     * <p>
+     * <b>RED against the pre-U13 controller, and the red is the diagnosed absorbing park</b> (run recorded
+     * 2026-08-25, temporary harness): the collapse walk parks at 19 by window 34 - one accelerator cut BELOW
+     * the degraded knee of 20, where the marginal-pair stop always lands, since the first below-knee window is
+     * what reveals the crossing - and the recovery phase (windows 80-139) is 19 throughout with 4-window
+     * descent-probe dips to 15 at the backed-off cadence (windows 102-105, 130-133), failing the deadline at
+     * window 120 with target 19 against a band floor of 39: the stale HOLD verdict persists (KTD1, its
+     * supporting spread evicted), RISE cannot fire on it, the descent probe keeps re-asking the only question
+     * it owns (down; the dip completes 300/s against the park's 380/s and restores, evidence dropped by
+     * design), stagnation cannot arm (the verdict is live), and the escape is floor-only. No mechanism asks
+     * UP, so the park is absorbing at any run length.
+     * <p>
+     * <b>What the same run proves about an own-level drift trigger</b> (own-level throughput above the
+     * verdict-era reference - the up-probe trigger law-U13 first specified): at the below-knee park the
+     * plant's windows are BIT-IDENTICAL before and after the recovery - windows 78-85 all read
+     * {@code target=19 throughput=380.0/s service=50ms bound=true} across the boundary at window 80, because
+     * below the knee throughput is {@code slots/W0} with no capacity term. Recovery is unobservable at every
+     * level the controller visits (19 and 15 both sit below the degraded and recovered knees); only probing
+     * above the parked level can reveal it. The broker's phase-3 park (5 slots on a degraded knee of 4,
+     * throughput drifting 76 -&gt; 115/s at the same level) is the special case where the park sits ABOVE the
+     * degraded knee; the general park does not.
+     * <p>
+     * Landed green by law-U13's recovery re-ask probe (the bounded periodic up-ask from a live-verdict park,
+     * drift-accelerated where drift is observable) - driven in {@link AdmissionLawFalsifierTest}, with its
+     * mutant arms in {@code AdmissionFalsifierHarnessTest}. The red-proof record above is retained as the
+     * probe's justification. Green trajectory (2026-08-25): re-asks 19 -&gt; 21 during the degraded phase are
+     * answered "still the knee" and restored (windows 57-60, cadence doubling); the first post-recovery
+     * re-ask (window 81) finds 420/s against the park's 380/s, keeps 21, and the re-opened full-step RISE
+     * ladder walks 26 -&gt; 31 -&gt; 36 -&gt; 42 - inside the recovered band at recovery+30 against the
+     * worst-case deadline of 64 - settling at 63 against the recovered knee of 60.
+     */
+    static Trajectory capacityRecovery(AdmissionPolicy policy) {
+        DeterministicPlant plant =
+                new DeterministicPlant(2 * MU_MAX_RECORDS_PER_SECOND, W0_SECONDS, 1); // knee 40 slots
+        plant.enableCongestionCollapse();
+        double arrival = 0.75 * 2 * MU_MAX_RECORDS_PER_SECOND;
+        Trajectory trajectory = ScenarioRunner.run(policy, plant, COLLAPSE_HEALTHY_KNEE_SLOTS, Arrays.asList(
+                Phase.of(COLLAPSE_HEALTHY_WINDOWS, arrival),
+                Phase.withCapacity(COLLAPSE_PHASE_WINDOWS, arrival, MU_MAX_RECORDS_PER_SECOND),
+                Phase.withCapacity(RECOVERY_PHASE_WINDOWS, arrival, 3 * MU_MAX_RECORDS_PER_SECOND)));
+        double recoveredOracle = plant.optimalTargetSlots(); // tripled from degraded => 60 slots
+        double degradedOracle = recoveredOracle / 3;
+        int recoveryStartWindow = COLLAPSE_HEALTHY_WINDOWS + COLLAPSE_PHASE_WINDOWS;
+        // The full round trip is the claim: contraction INTO the degraded band first (the same deadline the
+        // collapse scenario derives), then re-expansion. Without the contraction half, a controller frozen at
+        // the healthy knee (40) would sit inside the recovered band [39, 81] by geometric accident and the
+        // scenario would be satisfiable by inaction.
+        for (int i = COLLAPSE_HEALTHY_WINDOWS + COLLAPSE_IN_BAND_DEADLINE_WINDOWS; i < recoveryStartWindow; i++) {
+            assertTargetInBand(trajectory.commandedTargetAt(i), degradedOracle,
+                    "capacity recovery: contracted into the DEGRADED knee's band at window " + i);
+        }
+        assertTargetInBandFrom(trajectory, recoveryStartWindow + RECOVERY_IN_BAND_DEADLINE_WINDOWS,
+                recoveredOracle,
+                "capacity recovery: the controller must re-expand into the recovered knee's band");
+        return trajectory;
     }
 
     /**

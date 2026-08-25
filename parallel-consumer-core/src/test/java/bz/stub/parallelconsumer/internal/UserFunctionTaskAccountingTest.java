@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * Pins the conservation arithmetic in {@link UserFunctionTaskAccounting} - that the four counters only ever move the
@@ -54,6 +55,42 @@ class UserFunctionTaskAccountingTest {
         accounting.onTaskFinished();
         assertThat(accounting.getQueued()).isEqualTo(0);
         assertThat(accounting.getActive()).isEqualTo(0);
+    }
+
+    /**
+     * Occupancy - the admission sampler's figure - spans the WHOLE dispatched-to-finished life, submit-to-start
+     * handoff included: a task the pool has been handed but has not begun running still holds its slot. Sampling
+     * {@code getActive()} at the post-dispatch instant instead read the handoff as an empty slot, which is what
+     * made a saturated broker run classify as starved (the 2026-08-25 comparison-IT freeze's second act).
+     */
+    @Test
+    void occupancyCountsTheSubmitToStartHandoffAsAHeldSlot() {
+        var accounting = new UserFunctionTaskAccounting();
+
+        accounting.onSubmitting();
+        assertWithMessage("submitted-not-started holds its slot")
+                .that(accounting.getOccupied()).isEqualTo(1);
+
+        accounting.onTaskStarted();
+        assertThat(accounting.getOccupied()).isEqualTo(1);
+
+        accounting.onSubmitting(); // a second task enters the handoff while the first runs
+        assertWithMessage("occupied is queued plus active, whatever the split")
+                .that(accounting.getOccupied()).isEqualTo(2);
+
+        accounting.onTaskFinished();
+        assertThat(accounting.getOccupied()).isEqualTo(1);
+    }
+
+    /** A rejected submit releases its slot - occupancy must not count a task that will never run. */
+    @Test
+    void occupancyReleasesARejectedSubmitsSlot() {
+        var accounting = new UserFunctionTaskAccounting();
+
+        accounting.onSubmitting();
+        accounting.onSubmitRejected();
+
+        assertThat(accounting.getOccupied()).isEqualTo(0);
     }
 
     @Test

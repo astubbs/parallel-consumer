@@ -196,6 +196,73 @@ class AdmissionLawFalsifierTest {
     }
 
     /**
+     * The broker-freeze reproduction (see {@link FalsifierScenarios#saturatedFlickerConvergesToTheKnee}): the
+     * comparison IT's seed (2) against a saturated plant whose boundary instants flicker and whose poller is
+     * self-paused - the two real-engine behaviours the default plant idealises away. Driven through the REAL
+     * controller: the freeze it guards against was a controller-level absorbing state, so a law-only run
+     * would under-claim. Sabotage signature: decide binding from the boundary instant alone (the pre-fix
+     * law) and the trajectory freezes at seed-plus-allowance-minus-truncation, exactly as the broker run did.
+     */
+    @Test
+    void saturatedFlickerBoundariesDoNotFreezeTheClimb() {
+        Trajectory trajectory =
+                FalsifierScenarios.saturatedFlickerConvergesToTheKnee(controllerPolicy(2), 2);
+        log.info("saturated-flicker trajectory from 2: max {}, final {}, settled throughput {} records/s",
+                trajectory.maxCommandedTarget(), trajectory.getFinalTarget(),
+                trajectory.settledMeanThroughput(30));
+    }
+
+    /**
+     * Capacity collapse - the FALL band's pace falsifier (see
+     * {@link FalsifierScenarios#capacityCollapse}): mu_max halves mid-run with NO rebalance (one partition -
+     * a silent downstream slowdown), on the congestion-collapse plant where over-driving genuinely buys less.
+     * The target must reach the new knee's band within a deadline the settle-cadence-paying contraction
+     * cannot meet - the deterministic reproduction of the comparison IT's phase-2 walk (15 -&gt; 5 at one 0.9
+     * cut per 8-window settle, ~57s of a 60s phase spent over-driving). Driven through the REAL controller so
+     * the fast FALL walk is proven not to fight the descent/stagnation probes' arming (the settled tail's
+     * descent-probe dips must stay inside the asserted band). Two sabotage signatures, both observed while
+     * calibrating: restore the settle gate ahead of the FALL band and the walk pays one cut per settle again,
+     * missing the deadline (measured red at collapse+16: still 3+ cuts short); drop the marginal-pair stop and
+     * the walk over-contracts to half the new knee on stale FALL evidence and limit-cycles below the band.
+     */
+    @Test
+    void capacityCollapseContractsToTheNewKneeInsideTheDeadline() {
+        Trajectory trajectory =
+                FalsifierScenarios.capacityCollapse(controllerPolicy(FalsifierScenarios.COLLAPSE_HEALTHY_KNEE_SLOTS));
+        log.info("capacity-collapse trajectory (collapse at window {}): post-collapse targets {}",
+                FalsifierScenarios.COLLAPSE_HEALTHY_WINDOWS,
+                postCollapseTargets(trajectory));
+    }
+
+    /**
+     * Capacity recovery - the absorbing-park falsifier (law-U13; see
+     * {@link FalsifierScenarios#capacityRecovery}, whose javadoc retains the red-proof record): after the
+     * collapse walk parks one cut below the degraded knee, capacity recovers to THREE times the degraded
+     * level - invisible at the parked level (below the knee, throughput carries no capacity term), so only
+     * the recovery re-ask probe's bounded periodic up-ask can find it, and the RISE ladder it re-opens must
+     * carry the target into the recovered knee's band inside the deadline. Sabotage signatures: gate the
+     * re-ask on own-level throughput drift alone and it never fires (the parked level's windows are
+     * bit-identical across the recovery); remove the probe and the park is absorbing at any run length
+     * (the pre-U13 red).
+     */
+    @Test
+    void capacityRecoveryReExpandsIntoTheRecoveredKneesBand() {
+        Trajectory trajectory =
+                FalsifierScenarios.capacityRecovery(controllerPolicy(FalsifierScenarios.COLLAPSE_HEALTHY_KNEE_SLOTS));
+        log.info("capacity-recovery trajectory (recovery at window {}): final {}",
+                FalsifierScenarios.COLLAPSE_HEALTHY_WINDOWS + FalsifierScenarios.COLLAPSE_PHASE_WINDOWS,
+                trajectory.getFinalTarget());
+    }
+
+    private static java.util.List<Integer> postCollapseTargets(Trajectory trajectory) {
+        java.util.List<Integer> targets = new java.util.ArrayList<>();
+        for (int i = FalsifierScenarios.COLLAPSE_HEALTHY_WINDOWS; i < trajectory.getRecords().size(); i++) {
+            targets.add(trajectory.commandedTargetAt(i));
+        }
+        return targets;
+    }
+
+    /**
      * Descent from above - the flip of U5's documented gap: the {50, ceiling} sweep arms a throughput-steered
      * law cannot descend (flat plateau, no distinguishing signal) now converge down to the knee band via the
      * controller's descent probe (R14's sweep-from-above). Sabotage signature: make the probe keep a target
