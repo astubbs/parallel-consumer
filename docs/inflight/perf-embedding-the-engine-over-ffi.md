@@ -283,3 +283,18 @@ the UDF-compilation family was unsurveyed until this entry.
 
 The crossing-cost ladder therefore gains arms: (e) GraalPy polyglot call, (f) GraalWasm UDF -
 with (f) the only candidate serving every binding, and the same pre-registered bar.
+
+### Owner direction, 2026-08-25: the full binding set does not gate the fast path
+
+A WASM fast path that serves only the WASM-capable bindings is an acceptable product shape for a
+while - do not let ten-language coverage block a simple win. Consequences for the candidate above:
+
+- **The GraalWasm arm is promoted to primary candidate**; Numba `@cfunc` demotes to a
+  Python-specific fallback rather than the lead mechanism.
+- The first fast-path slice may target the to-WASM-mature bindings (Rust, Go, TypeScript/JS,
+  C/C++, .NET) and skip Python/Ruby until their toolchains catch up - which aligns the coverage
+  boundary with the workload boundary: the compiled-language audiences bring the compute-tight
+  functions the fast path exists for, while I/O-bound work stays on the wire path where the hop
+  is noise.
+- The crossing-cost ladder keeps every arm (the bar is unchanged), but a GraalWasm result alone
+  is now sufficient to green-light a product slice.
