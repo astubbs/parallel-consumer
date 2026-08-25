@@ -19,6 +19,7 @@ execution: code
 - **Stop conditions.** Three, and only the third is direction-closing:
   - Stop and report at the end of U1 if the aggregator-call multiplier does not appear. The premise of the whole spike is then wrong and the remaining work is surface, not throughput.
   - Stop **hopping-at-the-aggregator conclusions only** at the end of U6 if the throughput ratio confirms the multiplier reaches the crossing. Tumbling is predicted at full plateau, and the read path and the accumulator work serve tumbling equally, so they continue. This is a result about one placement.
+  - **Marginal, and this is the outcome the plan's own numbers make most likely**: the best arm sits between F2 and F1. Nothing stops. Windowed aggregation is offerable with its placement and its rate stated up front, and `STRATEGY.md`'s claim is qualified rather than falsified. Worth pre-registering plainly: the published plateau is about 9,501 records per second at eight threads, so P1 under a twelvefold multiplier lands near 790 - below F1's 1,000 and eight times above F2's 100. **A plan whose most likely verdict has no branch is the defect this one was rewritten to remove**, so the expectation is recorded here rather than discovered at U6.
   - **The bet is off** if no arm in U6 - not the aggregator placement, not the combine placement, not tumbling - clears the hard floor F2 recorded in U3. Then a windowed aggregation is not viable across this boundary at any placement measured here, `STRATEGY.md`'s Kafka Streams section is falsified rather than qualified, and the plan stops at U6.
   - Do not push, do not open a PR, do not post to GitHub.
 - **Execution profile:** commit each unit as it lands, subject style `feat(streams) astubbs#242: <subject>`, measurement and documentation units `docs(streams) astubbs#242: <subject>`. Bodies carry the prediction, what ran, and what came out.
@@ -218,10 +219,12 @@ flowchart TB
     U5 --> U6{U6 placement comparison}
     U6 -->|a placement clears F1| Rest[U7 read path, U9 accumulator]
     U6 -->|P1 multiplier confirmed, tumbling clears F1| Rest
+    U6 -->|best arm between F2 and F1| Marg[Marginal - offerable at a stated rate]
     U6 -->|no arm clears F2| Off[The bet is off - stop and report]
     U6 -->|inconclusive| Raise[Raise load, resweep; three failures = unsettled, stop]
     U8 --> U7
     Rest --> U10[U10 record the result, incl. STRATEGY.md]
+    Marg --> Rest
     Off --> U10
     Raise --> U10
 ```
