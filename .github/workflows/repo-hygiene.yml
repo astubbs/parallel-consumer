@@ -67,7 +67,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # FULL HISTORY, unlike every other job here. check-branch-self-reference.sh scopes its
+      # `this branch` / `this PR` arm to lines this branch ADDED, which needs a merge base against
+      # the target branch - and the default shallow checkout has none. The gate exits 2 saying it
+      # checked nothing rather than passing, so a missing fetch-depth here is loud, not silent.
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       # Same self-test-then-gate sequencing as the sigpipe job: prove the tag checker can fail, then
       # run it. The session-start index already LISTS a note no group claimed, but only to whoever

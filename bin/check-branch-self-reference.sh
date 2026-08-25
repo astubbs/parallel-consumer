@@ -64,6 +64,31 @@
 # a line marked `post-merge: exempt` would otherwise match nothing and be silently ignored, which is
 # the failure this gate exists to prevent. It is therefore a hard error - see UNKNOWN MARKER below.
 #
+# THE SPELLING THAT NAMES NOTHING: `this branch`, `this PR`. The three patterns above - the branch
+# name, `#NNN`, `/pull/NNN` - all require the mention to NAME something, and the commonest
+# self-reference in this directory names nothing at all. A note saying "nothing on this branch
+# touches them" was added by the very PR that shipped this gate and sailed through it, and a sweep
+# then found the phrase in thirteen files here, two of them plainly stale. The header above claimed
+# this gate "fails when a note mentions THIS branch or THIS PR" while the literal phrase was the one
+# spelling it could not detect.
+#
+# It is the WORSE spelling, not a lesser one. A stale `astubbs#1` still resolves - a reader can go
+# and see what happened. "This branch" after the merge is unresolvable: the branch is deleted, the
+# note is on master with no author attached, and nothing on the page says which branch was meant.
+#
+# SCOPED TO LINES THIS BRANCH ADDED, and that is a real difference from the arms above. Your branch
+# name and your PR number can only be about you, so those arms read whole files. A bare phrase is
+# unattributable - in someone else's note it is about THEIR branch, and demanding you attest to it
+# would mean marking a line you cannot judge, which turns `post-merge: checked` from an attestation
+# into noise. So the phrase arm reads only lines added since the merge base with master (an
+# untracked note counts entirely). Same rule as the rest of the gate, stated the other way round:
+# only what is about to change state, and yours is the only state about to change.
+#
+# It needs a merge base, so a clone too shallow to have one means this arm CHECKED NOTHING. That
+# exits 2, the repo-wide "could not run" code, never 0 - `bin/lib/node-gate.sh` owns that convention
+# and the incident behind it. `.github/workflows/repo-hygiene.yml` fetches full history for this job
+# precisely so the arm runs there.
+#
 # WHAT IT DOES NOT DO. It cannot tell whether your rewritten sentence is actually true after the
 # merge; no grep can. It forces a human to look at every self-reference at the one moment fixing it is
 # cheap, and records that they did. It also does not care about OTHER branches or PRs - only your own,
@@ -92,6 +117,78 @@ branch_re="$(sed 's/[][\\.^$*+?(){}|]/\\&/g' <<<"$branch")"
 
 problems=0
 note() { printf 'SELF-REF: %s\n' "$1" >&2; problems=$((problems + 1)); }
+
+# The phrase arm's scope. `SELF_REF_BASE` is the escape hatch for a checkout where neither of the
+# defaults resolves; `GITHUB_BASE_REF` is what Actions sets on a pull_request event, and it is the
+# base BRANCH NAME, so it needs the remote prefix.
+base_ref="${SELF_REF_BASE:-}"
+if [ -z "$base_ref" ]; then
+    if [ -n "${GITHUB_BASE_REF:-}" ]; then
+        base_ref="origin/${GITHUB_BASE_REF}"
+    else
+        base_ref="origin/master"
+    fi
+fi
+merge_base=""
+base_used=""
+for cand in "$base_ref" master; do
+    git rev-parse --verify --quiet "$cand" >/dev/null 2>&1 || continue
+    merge_base="$(git merge-base HEAD "$cand" 2>/dev/null || true)"
+    # `if`, not `[ -n ... ] && break`: under `set -e` a false test as the last command of the loop
+    # body is fatal, which is the foot-gun bin/check-shell-sigpipe.sh's header warns about.
+    if [ -n "$merge_base" ]; then
+        base_used="$cand"
+        break
+    fi
+done
+
+# A note you have written but not staged has no diff to read, so every line of it is new. Same
+# reasoning as the untracked-file arm below: that case is the commonest way to trip this gate.
+untracked_notes=" $(git ls-files --others --exclude-standard -- 'docs/inflight/*.md' | tr '\n' ' ') "
+
+# Line numbers added to a file since the merge base, one per line.
+added_line_numbers() { # <file>
+    case "$untracked_notes" in
+        *" $1 "*) sed -n '=' "$1" 2>/dev/null; return 0 ;;
+    esac
+    local hunks
+    hunks="$(git diff -U0 "$merge_base" -- "$1" 2>/dev/null || true)"
+    # `+++ b/path` also starts with `+`, so it is consumed before the added-line rule - otherwise
+    # every changed file reports its header line as an addition.
+    awk '
+        /^@@/  { plus = $3; sub(/^\+/, "", plus); split(plus, p, ","); n = p[1] + 0; next }
+        /^\+\+\+/ { next }
+        /^\+/  { if (n) { print n; n++ } }
+    ' <<<"$hunks"
+}
+
+# Whether a line carries a human acknowledgement - on the line, on the line above, or inside a
+# checked block. Reads $markers and $blocks, which the file loop sets per document.
+#
+# `checked([^-]|$)` not a bare `checked`: `checked-end` CONTAINS `checked`, so a loose match let a
+# block's END marker clear the line beneath it - silencing exactly the mentions that fall outside the
+# block. Caught by the near-miss self-test, not by any of the red controls.
+#
+# Herestrings, not `printf | grep -q`: the reader exits on first match, the writer takes EPIPE, and
+# pipefail makes that the pipeline status - so the check would FAIL when it FOUND the marker.
+# bin/AGENTS.md, "Scripts that guard other scripts".
+line_is_marked() { # <lineno>
+    local lineno="$1" prev range start end
+    prev=$((lineno - 1))
+    if grep -qE 'post-merge: checked([^-]|$)' <<<"$(sed -n "${lineno}p" <<<"$markers")"; then return 0; fi
+    if [ "$prev" -ge 1 ] && grep -qE 'post-merge: checked([^-]|$)' <<<"$(sed -n "${prev}p" <<<"$markers")"; then
+        return 0
+    fi
+    for range in $blocks; do
+        start="${range%%:*}"; end="${range##*:}"
+        if [ "$lineno" -ge "$start" ] && [ "$lineno" -le "$end" ]; then return 0; fi
+    done
+    return 1
+}
+
+# Bounded so `this practice` and `this branches` cannot match, and case-insensitive because `THIS PR`
+# is how the phrase is usually written when it matters.
+phrase_re='(^|[^0-9A-Za-z_])this (branch|pr|pull request)([^0-9A-Za-z_]|$)'
 
 # MENTION IS NOT USE. Every marker test runs on this backtick-stripped view: a marker quoted in a code
 # span is documentation, not an instruction. Without it, a note explaining the convention - the
@@ -165,22 +262,7 @@ for f in "${candidates[@]}"; do
 
     while IFS=: read -r lineno text; do
         [ -n "$lineno" ] || continue
-        # A marker on the line itself, or on the line above it, is the human's acknowledgement.
-        prev=$((lineno - 1))
-        # Herestrings, not `printf | grep -q`: the reader exits on first match, the writer takes
-        # EPIPE, and pipefail makes that the pipeline status - so the check would FAIL when it FOUND
-        # the marker. bin/AGENTS.md, "Scripts that guard other scripts".
-        # `checked([^-]|$)` not a bare `checked`: `checked-end` CONTAINS `checked`, so a loose match
-        # let a block's END marker clear the line beneath it - silencing exactly the mentions that
-        # fall outside the block. Caught by the near-miss self-test, not by any of the red controls.
-        if grep -qE 'post-merge: checked([^-]|$)' <<<"$(sed -n "${lineno}p" <<<"$markers")"; then continue; fi
-        if [ "$prev" -ge 1 ] && grep -qE 'post-merge: checked([^-]|$)' <<<"$(sed -n "${prev}p" <<<"$markers")"; then continue; fi
-        covered=""
-        for range in $blocks; do
-            start="${range%%:*}"; end="${range##*:}"
-            if [ "$lineno" -ge "$start" ] && [ "$lineno" -le "$end" ]; then covered=1; break; fi
-        done
-        [ -n "$covered" ] && continue
+        if line_is_marked "$lineno"; then continue; fi
         note "$f:$lineno mentions this branch or PR - rewrite it as it will read AFTER this merges, then add 'post-merge: checked'. Line: ${text:0:100}"
     done < <(
         {
@@ -211,6 +293,19 @@ for f in "${candidates[@]}"; do
             }
         } | sort -t: -k1,1n -u
     )
+
+    # THE PHRASE ARM, on added lines only - see the header for why its scope differs from the three
+    # arms above. A separate loop rather than a fourth entry in the union: the two need different
+    # advice, and the union carries only `lineno:text`, with nothing to say which arm matched.
+    [ -n "$merge_base" ] || continue
+    added=" $(added_line_numbers "$f" | tr '\n' ' ') "
+    [ "$added" = "  " ] && continue
+    while IFS=: read -r lineno text; do
+        [ -n "$lineno" ] || continue
+        case "$added" in *" $lineno "*) ;; *) continue ;; esac
+        if line_is_marked "$lineno"; then continue; fi
+        note "$f:$lineno says 'this branch'/'this PR', which names nothing - after the merge the branch is gone and no reader can tell which one was meant. Name it, or rewrite it as it will read AFTER this merges, then add 'post-merge: checked'. Line: ${text:0:100}"
+    done < <(grep -niE "$phrase_re" "$f" || true)
 done
 
 if [ "$problems" -gt 0 ]; then
@@ -218,8 +313,18 @@ if [ "$problems" -gt 0 ]; then
     echo "After the merge is too late - this branch and its PR stop existing when it lands." >&2
     exit 1
 fi
+
+# COULD NOT RUN IS NOT A PASS, and this is the one arm that can be prevented from running. Exit 2 is
+# the repo-wide code for it (bin/lib/node-gate.sh owns the convention); reporting 0 here would be the
+# silent skip this whole gate exists to make impossible.
+if [ -z "$merge_base" ]; then
+    echo "check-branch-self-reference: NO MERGE BASE against '$base_ref', so the 'this branch' / 'this PR' arm checked NOTHING." >&2
+    echo "This is NOT a finding. The branch-name and PR-number arms did run." >&2
+    echo "A shallow clone is the usual cause: 'git fetch --unshallow', or point SELF_REF_BASE at a ref that shares history." >&2
+    exit 2
+fi
 if [ -n "$pr" ]; then
-    echo "check-branch-self-reference: no unconfirmed self-references (branch '$branch', PR #$pr)"
+    echo "check-branch-self-reference: no unconfirmed self-references (branch '$branch', PR #$pr, phrases vs '$base_used')"
 else
     # NOT the same statement as a clean full run, and it must not read like one. Before the PR exists
     # this is normal; in CI it means PR_NUMBER was not passed and `gh` could not answer, so the whole

@@ -23,13 +23,21 @@
 # CI branch-resolution path has its own cases below.
 #
 # THE BAR IS A MUTATION MATRIX, NOT A GREEN RUN. Green proves nothing here - it was green all three
-# times. Before changing the gate, break it on purpose and confirm this suite goes red. The thirteen
-# mutants it is known to kill: dropping the GITHUB_HEAD_REF preference; the branch match reverting to
-# an unanchored `grep -F`; each of the four marker tests (file, block, line, line-above) reading the
+# times. Before changing the gate, break it on purpose and confirm this suite goes red. The mutants
+# it is known to kill: dropping the GITHUB_HEAD_REF preference; the branch match reverting to an
+# unanchored `grep -F`; each of the four marker tests (file, block, line, line-above) reading the
 # raw file instead of the code-span-stripped view; dropping the untracked-file arm; dropping the
 # `/pull/NNN` arm; the gate crashing outright; removing the unknown-marker diagnosis; widening the
-# marker-above window to two lines; widening the AGENTS.md exclusion to every file; and widening the
-# scope past docs/inflight/. A new case earns its place by killing a mutant none of the others do.
+# marker-above window to two lines; widening the AGENTS.md exclusion to every file; widening the
+# scope past docs/inflight/; dropping the `this branch`/`this PR` phrase arm; widening that arm from
+# added lines to whole files; dropping its word boundaries; and letting a missing merge base report
+# a clean run instead of exit 2. A new case earns its place by killing a mutant none of the others
+# do.
+#
+# EVERY FIXTURE HAS A `master`, and that is load-bearing rather than tidy. The phrase arm reads only
+# lines added since the merge base, so a fixture with no base branch cannot exercise it at all - and
+# because a gate that could not run exits 2, a fixture without one turns EVERY case red for a reason
+# that has nothing to do with what the case is about.
 
 set -uo pipefail
 
@@ -38,30 +46,51 @@ GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/check-branch-self-ref
 
 # Builds a fixture repo on branch feat/my-branch, runs the gate, and checks BOTH the exit code and
 # that a failure named the file it was supposed to catch.
-#   <name> <expected: pass|fail|pass_elsewhere|pass_rules|fail_untracked> <file-body>
+#   <name> <expected: pass|fail|pass_elsewhere|pass_rules|fail_untracked|pass_inherited> <file-body>
 assert() {
-    local name="$1" expected="$2" body="$3" want="${4:-}" tmp rc got target out stage=1
+    local name="$1" expected="$2" body="$3" want="${4:-}" tmp rc got target out stage=1 inherited=0 touch_after=0
     target="docs/inflight/note.md"
     case "$expected" in
         pass_elsewhere) target="docs/solutions/note.md"; expected=pass ;;
         pass_rules)     target="docs/inflight/AGENTS.md"; expected=pass ;;
         fail_untracked) stage=0; expected=fail ;;
+        # INHERITED: the body is committed on master BEFORE the branch exists, so it is somebody
+        # else's sentence. The phrase arm must not ask you to attest to a line you did not write and
+        # cannot judge; the branch-name and PR-number arms still read it, which is why only phrase
+        # cases use this.
+        pass_inherited) inherited=1; expected=pass ;;
+        # ...and the same file EDITED by this branch, which is the case that actually discriminates.
+        # `pass_inherited` alone is satisfied by the whole-file skip for a file with no added lines
+        # at all, so widening the arm from added lines to whole files survived it. Here the file has
+        # added lines and the phrase is not on one of them.
+        pass_inherited_touched) inherited=1; touch_after=1; expected=pass ;;
     esac
     tmp="$(mktemp -d)"
     out="$(
         cd "$tmp" || exit 1
         git init -q .
-        git checkout -q -b feat/my-branch 2>/dev/null || git branch -q -m feat/my-branch
+        git checkout -q -b master 2>/dev/null || git branch -q -m master
         mkdir -p "$(dirname "$target")" docs/inflight
         # A scope control that lands outside docs/inflight/ must still find the directory populated,
         # or it passes through the `no documents to check` early exit and tests nothing at all.
         printf 'unrelated placeholder\n' > docs/inflight/other.md
+        [ "$inherited" = 1 ] && printf '%b' "$body" > "$target"
+        git add -A
+        git -c user.email=t@e.invalid -c user.name=t commit -qm base
+        git checkout -q -b feat/my-branch
         # The untracked case must exist ONLY after the commit: git ls-files reads the index, and a
         # note you have written but not staged is the commonest way to trip this gate locally.
         # Writing it on both sides of the commit would leave it tracked, testing nothing.
-        [ "$stage" = 1 ] && printf '%b' "$body" > "$target"
-        git add -A
-        git -c user.email=t@e.invalid -c user.name=t commit -qm x
+        if [ "$stage" = 1 ] && [ "$inherited" = 0 ]; then
+            printf '%b' "$body" > "$target"
+            git add -A
+            git -c user.email=t@e.invalid -c user.name=t commit -qm x
+        fi
+        if [ "$touch_after" = 1 ]; then
+            printf 'a later paragraph, added here, naming nothing at all\n' >> "$target"
+            git add -A
+            git -c user.email=t@e.invalid -c user.name=t commit -qm touched
+        fi
         [ "$stage" = 0 ] && printf '%b' "$body" > "$target"
         # UNSET the CI variables, or the fixture is not isolated: on a real PR, Actions sets
         # GITHUB_HEAD_REF to the actual branch, the gate prefers it over the checkout in the
@@ -106,8 +135,15 @@ assert_ci() {
     out="$(
         cd "$tmp" || exit 1
         git init -q .
-        git checkout -q -b some-other-local-name 2>/dev/null || git branch -q -m some-other-local-name
+        # A base branch, for the reason given in the header above: without one the phrase arm cannot
+        # run, and every case then exits 2 regardless of what it is testing. NO APOSTROPHES HERE -
+        # bash 3.2 scans a $( ... ) for its closing paren without skipping comments.
+        git checkout -q -b master 2>/dev/null || git branch -q -m master
         mkdir -p docs/inflight
+        printf 'placeholder\n' > docs/inflight/other.md
+        git add -A
+        git -c user.email=t@e.invalid -c user.name=t commit -qm base
+        git checkout -q -b some-other-local-name
         printf '%b' "$body" > docs/inflight/note.md
         git add -A
         git -c user.email=t@e.invalid -c user.name=t commit -qm x
@@ -186,9 +222,60 @@ assert "exempt-file clears the whole file"      pass 'post-merge: exempt-file\na
 # silences everything after it, which is the failure mode this gate is itself about.
 assert "a closed block does not cover later"    fail '<!-- post-merge: checked-begin -->\nx\n<!-- post-merge: checked-end -->\nastubbs#326 unmarked here\n'
 
+# --- `this branch` / `this PR`: the spelling that names nothing --------------------------------
+# The gate shipped claiming to fail "when a note mentions THIS branch or THIS PR" while that literal
+# phrase was the one thing it could not see. `want` pins the phrase arm as the one that fired: none
+# of these bodies contains the branch name or the PR number, but asserting on the message means a
+# mutant that folds the two diagnoses together cannot pass on the wrong arm.
+assert "an added 'this branch' fails"           fail 'work continues on this branch for now\n' 'names nothing'
+assert "THIS PR in caps fails"                  fail 'that is in scope for THIS PR\n' 'names nothing'
+assert "the spelled-out pull request fails"     fail 'it landed in this pull request\n' 'names nothing'
+assert "an untracked note with the phrase"      fail_untracked 'nothing on this branch touches them\n'
+# GREEN: the near-misses. An INHERITED line is somebody elses sentence about their own branch -
+# demanding you attest to it turns the marker from an attestation into noise, so the arm reads only
+# lines added since the merge base. (Apostrophes avoided in this block for the bash 3.2 reason above.)
+assert "an INHERITED phrase is not yours"       pass_inherited 'nothing on this branch touches them\n'
+assert "an inherited phrase in a file you EDIT" pass_inherited_touched 'nothing on this branch touches them\n'
+assert "word boundaries: practice, branches"    pass 'this practice is fine, and this branches out\n'
+assert "a marker clears an added phrase"        pass '<!-- post-merge: checked -->\nnothing on this branch touches them\n'
+assert "exempt-file clears the phrase too"      pass 'post-merge: exempt-file\nnothing on this branch touches them\n'
+assert "the phrase outside docs/inflight"       pass_elsewhere 'nothing on this branch touched them\n'
+
 # --- The CI branch-resolution path: detached HEAD, name from the event ---
 assert_ci "the event branch name is preferred"  fail feat/my-branch 'work continues on feat/my-branch\n'
 assert_ci "the local detached name is not used" pass feat/my-branch 'work continues on some-other-local-name\n'
+
+# --- Could not run is not a pass -----------------------------------------------------------------
+# No base branch anywhere, so the phrase arm has no merge base and checks nothing. Exit 2 is the
+# repo-wide "could not run" code; reporting 0 here would be the silent skip the whole gate exists to
+# make impossible, and it is the one arm an environment can prevent from running (a shallow clone).
+no_base_tmp="$(mktemp -d)"
+no_base_out="$(
+    cd "$no_base_tmp" || exit 1
+    git init -q .
+    git checkout -q -b feat/my-branch 2>/dev/null || git branch -q -m feat/my-branch
+    mkdir -p docs/inflight
+    printf 'a quiet note\n' > docs/inflight/note.md
+    git add -A
+    git -c user.email=t@e.invalid -c user.name=t commit -qm x
+    unset GITHUB_HEAD_REF GITHUB_REF GITHUB_REF_NAME
+    PR_NUMBER=326 bash "$GATE" 2>&1
+)"
+no_base_rc=$?
+if [ "$no_base_rc" = 2 ] && grep -q 'checked NOTHING' <<<"$no_base_out"; then
+    printf 'ok:   %s\n' "no merge base exits 2 and says nothing was checked"; pass=$((pass + 1))
+else
+    printf 'FAIL: %s (rc=%s) %s\n' "no merge base exits 2 and says nothing was checked" "$no_base_rc" "${no_base_out%%$'\n'*}"
+    fail=$((fail + 1))
+fi
+# ...and it must say so rather than accuse the tree: 2 is not 1, and the message has to make that
+# readable to whoever is staring at a red gate.
+if grep -q 'NOT a finding' <<<"$no_base_out"; then
+    printf 'ok:   %s\n' "the could-not-run message says it is not a finding"; pass=$((pass + 1))
+else
+    printf 'FAIL: %s\n' "the could-not-run message says it is not a finding"; fail=$((fail + 1))
+fi
+rm -rf "$no_base_tmp"
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
