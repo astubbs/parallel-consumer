@@ -199,8 +199,18 @@ public class ParallelConsumerOptions<K, V> {
          * <p>
          * Failure:
          * <p>
-         * Commit lock: If the system cannot acquire the commit lock in time, it will shut down for whatever reason, the
-         * system will shut down (fail fast) - during the shutdown a final commit attempt will be made. The default
+         * Transaction commit: if committing the transaction keeps failing until the whole-operation retry budget
+         * ({@link #offsetCommitTimeout}) is spent, the configured {@link CommitFailureHandler} decides what happens
+         * next. The default - and the historical behaviour - is to shut down (fail fast,
+         * {@link CommitFailurePolicies#shutDown()}); a handler may instead decide to continue to the next commit
+         * cycle. While continuing in this mode, record intake is always paused
+         * ({@link CommitFailureContinueMode#PAUSE_INTAKE} is enforced by {@link #validate()} - EoS cannot keep
+         * producing past a failed transaction), and the in-flight transaction is first recovered - completed if the
+         * broker in fact accepted it, otherwise aborted - so the uncommitted offsets stay dirty and recommit with
+         * the next cycle. See {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
+         * <p>
+         * Commit lock: if the system cannot acquire the commit lock in time, it will shut down (fail fast) regardless
+         * of the commit-failure handler - during the shutdown a final commit attempt will be made. The default
          * timeout for acquisition is very high though - see {@link #commitLockAcquisitionTimeout}. This can be caused
          * by the user processing function taking too long to complete.
          * <p>
@@ -369,8 +379,9 @@ public class ParallelConsumerOptions<K, V> {
      * <p>
      * Canned policies, including the recommended bounded-continue, live in {@link CommitFailurePolicies}.
      * <p>
-     * Not supported with {@link CommitMode#PERIODIC_CONSUMER_ASYNCHRONOUS} - see {@link #validate()}; support there
-     * is tracked in astubbs#317's follow-up.
+     * Not supported with {@link CommitMode#PERIODIC_CONSUMER_ASYNCHRONOUS} - see {@link #validate()}: async commits
+     * carry no retry budget and report failures only through a later callback, so there is no exhaustion event for
+     * the handler to act on (astubbs#317 records the scoping).
      *
      * @see CommitFailureHandler
      */
@@ -439,8 +450,10 @@ public class ParallelConsumerOptions<K, V> {
     private final Duration sendTimeout = Duration.ofSeconds(10);
 
     /**
-     * Controls how long to block while waiting for offsets to be committed. Only relevant if using
-     * {@link CommitMode#PERIODIC_CONSUMER_SYNC} commit-mode.
+     * Controls how long to block while waiting for offsets to be committed - the whole-operation retry budget whose
+     * exhaustion consults the {@link CommitFailureHandler}. Relevant to {@link CommitMode#PERIODIC_CONSUMER_SYNC} and
+     * {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}; asynchronous commits
+     * ({@link CommitMode#PERIODIC_CONSUMER_ASYNCHRONOUS}) are not bounded by it.
      */
     @Builder.Default
     private final Duration offsetCommitTimeout = Duration.ofSeconds(10);
@@ -538,8 +551,8 @@ public class ParallelConsumerOptions<K, V> {
             if (nonDefaultHandler || nonDefaultContinueMode) {
                 throw new IllegalArgumentException(msg(
                         "Configuring {} or {} is not supported with {} {} - supported commit modes are {} and {}. "
-                                + "Commit-failure handling for async commit mode is tracked in "
-                                + "astubbs/parallel-consumer#317's follow-up.",
+                                + "Async commits have no retry budget, so there is no exhaustion event for the "
+                                + "handler to act on (astubbs/parallel-consumer#317).",
                         Fields.commitFailureHandler,
                         Fields.commitFailureContinueMode,
                         Fields.commitMode,

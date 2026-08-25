@@ -1,0 +1,50 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Commit-failure handling seam
+category: delivery
+module: parallel-consumer-core
+maturity: alpha
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - New in this release; it has not run in production, and its public types are annotated InterfaceStability.Evolving, so the API may still move.
+  - The default (CommitFailurePolicies.shutDown) preserves the pre-seam fail-fast behaviour exactly; an application that configures nothing is unaffected.
+readme_anchor: commit-failure-handling
+summary: >-
+  Decide what happens when an offset commit fails terminally - its retry budget spent without success: shut down
+  (the default, the historical behaviour) or continue to the next commit cycle, with canned bounded policies and
+  control over record intake while commits are failing.
+use_this_when:
+  - A transient broker or network outage outlasting the commit retry budget should not take the whole consumer down.
+  - Operations want an explicit, bounded policy for surviving commit failure instead of an unconditional fail-fast.
+setup:
+  option: ParallelConsumerOptions.commitFailureHandler
+  values:
+    - CommitFailurePolicies.shutDown() is the default and always fails fast.
+    - CommitFailurePolicies.continueBounded() continues until a bound trips, then shuts down; defaults are 5 consecutive exhausted budgets, 5 minutes without a successful commit, or 20 exhaustions in a 30-minute rolling window.
+    - CommitFailurePolicies.continueUnbounded() never shuts down for a commit failure; explicit opt-in only.
+    - A custom CommitFailureHandler receives a CommitFailureContext (failure, offsets, attempt and history clocks) and returns SHUT_DOWN or CONTINUE.
+  secondary_option: ParallelConsumerOptions.commitFailureContinueMode
+  secondary_values:
+    - KEEP_PROCESSING is the default and keeps taking in new records optimistically while continuing.
+    - PAUSE_INTAKE stops intake of new work until a commit succeeds again, bounding replay on an eventual rebalance.
+opt_in:
+  mechanism: Set commitFailureHandler (and optionally commitFailureContinueMode) when building ParallelConsumerOptions; leaving both unset keeps the fail-fast behaviour.
+  isolated_from_stable_modules: false
+boundaries:
+  - Not available in PERIODIC_CONSUMER_ASYNCHRONOUS, the default commit mode - asynchronous commits carry no retry budget and report failures only through a later callback, so there is no exhaustion event for a handler to act on; configuring either option there is rejected at validate(). Supported modes are PERIODIC_CONSUMER_SYNC and PERIODIC_TRANSACTIONAL_PRODUCER (astubbs#317).
+  - Classification is per commit RPC and all-or-nothing - the whole failed commit's offsets are retried or abandoned together; there is no per-partition or per-offset decision.
+  - The handler runs on the control thread; a slow handler delays the commit cycle, so it must decide quickly rather than perform I/O or block.
+  - Under PERIODIC_TRANSACTIONAL_PRODUCER, KEEP_PROCESSING is always coerced to PAUSE_INTAKE, and the in-flight transaction is recovered (completed or aborted) before offsets are recommitted.
+references:
+  - label: Feature issue
+    url: https://github.com/astubbs/parallel-consumer/issues/317
+  - label: commitFailureHandler and commitFailureContinueMode options
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
+  - label: Canned policies
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/CommitFailurePolicies.java
+  - label: Observability meters - pc.commit.failure.exhaustions, pc.commit.failure.consecutive.exhaustions, pc.commit.time.since.last.success and pc.commit.failure.seam.state, all in the committer subsystem
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java

@@ -18,4 +18,5 @@ deletes this file (or shrinks it to what remains).
   seconds), and `pc.commit.failure.seam.state` (gauge: 0 HEALTHY, 1 FAILING_CONTINUING,
   2 FAILING_PAUSED). The active decision and configured policy are not meters - the GUI reads those
   from the options and the logs. Feature
-  rationale: `docs/inflight/core-commit-failure-seam.md`.
+  rationale: astubbs#317 and the plan above (the rationale note retired with the feature landing);
+  user-facing record: `docs/features/commit-failure-seam.yaml`.

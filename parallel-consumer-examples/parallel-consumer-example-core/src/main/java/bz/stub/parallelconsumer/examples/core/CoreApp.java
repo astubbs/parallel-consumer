@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.examples.core;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.CommitFailurePolicies;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelStreamProcessor;
 import bz.stub.parallelconsumer.RecordContext;
@@ -27,6 +28,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitFailureContinueMode.PAUSE_INTAKE;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
@@ -248,6 +251,22 @@ public class CoreApp {
 
         pc.closeDrainFirst(); // <3>
         // end::closeModes[]
+    }
+
+    /**
+     * Never called - the {@code commitFailurePolicy} tag is included by the README's commit-failure section, and
+     * compiling it here keeps that example honest (see {@link #closeModes()} for the full reasoning).
+     */
+    ParallelConsumerOptions<String, String> commitFailurePolicy() {
+        // tag::commitFailurePolicy[]
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(getKafkaConsumer())
+                .commitMode(PERIODIC_CONSUMER_SYNC) // <1>
+                .commitFailureHandler(CommitFailurePolicies.continueBounded()) // <2>
+                .commitFailureContinueMode(PAUSE_INTAKE) // <3>
+                .build();
+        // end::commitFailurePolicy[]
+        return options;
     }
 
     private String preparePayload(RecordContext<String, String> rc) {

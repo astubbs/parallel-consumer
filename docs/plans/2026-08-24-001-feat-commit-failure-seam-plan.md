@@ -309,6 +309,7 @@ Prose remains authoritative: KTD2 owns the channel, KTD3 the invocation bound, K
 - **Requirements:** R18 (and the R1 exclusion made visible).
 - **Dependencies:** U1-U6 (final wording).
 - **Files:** modify `src/docs/README_TEMPLATE.adoc` (features list entry; commit-mode coverage statement; regenerate `README.adoc`); new `docs/features/commit-failure-seam.yaml` (`schema_version: 1`, `kind: feature`, `availability: target_release`, limits section naming the async exclusion); rewrite the `PERIODIC_TRANSACTIONAL_PRODUCER` "fail fast" javadoc in `ParallelConsumerOptions.java` (it is README-included via `tag::transactionalJavadoc[]`); delete `docs/inflight/core-commit-failure-seam.md` in the landing PR; shrink `docs/inflight/branch-833-commit-failure-seam.md` per the inflight rules.
+<!-- file-refs: N/A - names the inflight notes this PR deletes, as it planned to -->
 <!-- file-refs: N/A - the feature YAML is a file this unit creates -->
 - **Approach:** the feature entry and README text state commit-mode coverage as a first-class limit; the async follow-up issue is filed at delivery and cited from both (opening the issue is an outward action - check in with the repo owner first, per house practice).
 - **Test scenarios:** Test expectation: none - documentation; the gates below verify.
@@ -341,6 +342,7 @@ Flake policy binds: a red is real (no reruns); a genuinely flaky new test is `@Q
 - `OffsetCommitBudgetExceededException`'s message and javadoc, and the transactional "fail fast" javadoc, no longer describe the pre-seam world; README regenerated.
 - The async follow-up issue exists and is cited from Scope Boundaries, the feature YAML, and the README statement.
 - `docs/inflight/core-commit-failure-seam.md` deleted in the landing PR; `docs/inflight/branch-833-commit-failure-seam.md` shrunk to whatever remains open; `docs/inflight/web-gui-surfaces.md` retains the seam entry.
+<!-- file-refs: N/A - names the inflight notes this PR deletes, as it planned to -->
 - All Verification Contract gates green locally, including a scored mutation run over the seam classes.
 - No abandoned experiment code in the final diff.
 
@@ -349,6 +351,7 @@ Flake policy binds: a red is real (no reruns); a genuinely flaky new test is `@Q
 ## Sources / Research
 
 - astubbs#317 - the feature request this plan scopes; confluentinc#833 - the field workaround (try/catch around `controlLoop`), rkolesnev's counter-argument, and the verified failure class (sync commit-response timeout); rationale note `docs/inflight/core-commit-failure-seam.md`.
+<!-- file-refs: N/A - names the inflight notes this PR deletes, as it planned to -->
 - `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerManager.java` - the budget loop (`while (tryCount == 0 || !closeInProgressSignal...`), both exhaustion lanes, the close-abandonment exit, and the tracked state (`tryCount`, `startedTime`) the context object reuses.
 - `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerOffsetCommitter.java` - the request/response channel, `commitDeferringOnRebalance` (the defer precedent R8 folds into the seam), `notifyPollerDied` and `pollerDeath` (the accounting model for KTD9).
 - `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/BrokerPollSystem.java` - `maybeDoCommit` (sole producer of commit responses), the catch that kills the poller today, `initMetrics` (the KTD10 model).

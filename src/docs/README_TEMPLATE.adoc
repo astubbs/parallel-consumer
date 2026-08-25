@@ -329,6 +329,7 @@ without operational burden or harming the cluster's performance
 * Solution for the https://en.wikipedia.org/wiki/Head-of-line_blocking["head of line"] blocking problem where continued failure of a single message, prevents progress for messages behind it in the queue
 * Per `key` concurrent processing, per partition and unordered message processing
 * Offsets committed correctly, in order, of only processed messages, regardless of concurrency level or retries
+* Pluggable handling of terminally failed offset commits - fail fast (the default) or continue past the failure under canned bounded policies - see <<commit-failure-handling>> section for more details
 * Batch support in all versions of the API to process batches of messages in parallel instead of single messages.
 ** Particularly useful for when your processing function can work with more than a single record at a time - e.g. sending records to an API which has a batch version like Elasticsearch
 * Vert.x and Reactor.io non-blocking library integration
@@ -919,6 +920,38 @@ For implementations details, see the <<Transactional System Architecture>> secti
 ----
 include::{project_root}/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java[tag=transactionalJavadoc]
 ----
+
+[[commit-failure-handling]]
+=== Handling Terminal Commit Failure
+
+When an offset commit keeps failing until its retry budget (the `offsetCommitTimeout` option) is spent, the default is to shut down (fail fast) - the historical behaviour.
+The `commitFailureHandler` option makes that decision pluggable ({issues_link}/317[astubbs#317], {base_confluent_url}/issues/833[confluentinc#833]): the handler receives a `CommitFailureContext` - the failure, the offsets it was for, and history such as consecutive exhausted budgets and time since the last successful commit - and returns `SHUT_DOWN` or `CONTINUE`.
+Continuing leaves the offsets dirty, so they are retried with the next commit cycle.
+
+Canned policies live in `CommitFailurePolicies`:
+
+* `shutDown()` - always fail fast. The default.
+* `continueBounded()` - continue until a bound trips, then shut down; the recommended way to opt in. The default bounds are 5 consecutive exhausted budgets, 5 minutes without a successful commit, or 20 exhaustions within a 30 minute rolling window.
+* `continueUnbounded()` - never shut down for a commit failure; explicit opt-in only.
+
+While continuing, the `commitFailureContinueMode` option governs record intake: `KEEP_PROCESSING` (the default) keeps working optimistically, while `PAUSE_INTAKE` stops taking on new work until a commit succeeds again, bounding the replay an eventual rebalance would cause.
+In the transactional mode `KEEP_PROCESSING` is always coerced to `PAUSE_INTAKE` - EoS cannot keep producing past a failed transaction - and the in-flight transaction is recovered (completed if the broker in fact accepted it, otherwise aborted) before the offsets are committed again.
+
+IMPORTANT: The handler operates in the `PERIODIC_CONSUMER_SYNC` and `PERIODIC_TRANSACTIONAL_PRODUCER` commit modes only.
+It does not operate in `PERIODIC_CONSUMER_ASYNCHRONOUS` (the default mode): asynchronous commits carry no retry budget and report failures only through a later callback, so there is no exhaustion event for a handler to act on.
+Configuring either option in that mode is rejected when the options are validated.
+
+A continuing-but-failing instance stays visible: four meters in the `committer` subsystem track exhaustions, the consecutive-failure streak, time since the last successful commit, and the seam's state - see <<metrics>>.
+
+.Opting in to bounded continue
+[source,java,indent=0]
+----
+include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=commitFailurePolicy]
+----
+
+<1> The handler needs a commit mode with a retry budget - sync (shown) or transactional, not the default async mode.
+<2> Continue past terminally failed commits until a bound trips, then shut down.
+<3> Optional: pause intake of new work while commits are failing, instead of processing optimistically.
 
 [[shutdown]]
 == Shutdown and Close Modes
