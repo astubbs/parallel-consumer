@@ -160,6 +160,27 @@ final class DeterministicPlant {
         this.selfThrottledWhenBound = selfThrottledWhenBound;
     }
 
+    /** Second-wind mode (torture plan U4): 0 = off. See {@link #enableSecondWind}. */
+    private double secondWindThresholdRecords = 0;
+    private double secondWindMuMax = 0;
+
+    /**
+     * Switches on the SECOND-WIND curve (the owner's local-minimum question, 2026-08-25): above
+     * {@code thresholdRecords} in flight, the downstream gets BETTER - a batch-amortization threshold, a cache
+     * regime, a pool tier - behaving like a fresh plant with capacity {@code reboundMuMax}
+     * ({@code S = W0 * max(1, inFlight / (reboundMuMax * W0))}). Between the first knee and the threshold lies
+     * the valley: throughput plateaus at the FIRST capacity while latency worsens, so a one-step probe from the
+     * first knee lands in the valley, sees no gain, and restores. The law is first-knee-seeking by
+     * construction; this curve is what pins that as documented, deliberate behaviour.
+     */
+    void enableSecondWind(double thresholdRecords, double reboundMuMax) {
+        if (thresholdRecords <= 0 || reboundMuMax <= muMaxRecordsPerSecond) {
+            throw new IllegalArgumentException("second wind needs a positive threshold and a BETTER capacity");
+        }
+        this.secondWindThresholdRecords = thresholdRecords;
+        this.secondWindMuMax = reboundMuMax;
+    }
+
     /**
      * Switches on CONGESTION-COLLAPSE fidelity: service time grows QUADRATICALLY with over-drive above the
      * knee ({@code S = W0 * (inFlight/knee)^2}), so achievable throughput above the knee is
@@ -184,6 +205,12 @@ final class DeterministicPlant {
         double overDriveRatio = Math.max(1.0, inFlightRecordsAtTarget / kneeRecords);
         double serviceSecondsAtTarget =
                 w0Seconds * (congestionCollapse ? overDriveRatio * overDriveRatio : overDriveRatio);
+        if (secondWindThresholdRecords > 0 && inFlightRecordsAtTarget >= secondWindThresholdRecords) {
+            // Past the threshold the downstream behaves like a fresh plant at the rebound capacity.
+            double reboundKneeRecords = secondWindMuMax * w0Seconds;
+            serviceSecondsAtTarget =
+                    w0Seconds * Math.max(1.0, inFlightRecordsAtTarget / reboundKneeRecords);
+        }
         double achievableThroughput = targetSlots == 0 ? 0.0 : inFlightRecordsAtTarget / serviceSecondsAtTarget;
 
         double completedRecords = Math.min(offeredRecords, achievableThroughput);

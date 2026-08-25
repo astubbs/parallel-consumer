@@ -58,7 +58,20 @@ final class ControllerAdmissionPolicy implements AdmissionPolicy {
      */
     private boolean discardFirstWindowAfterResume = false;
 
+    /** Whether capacity-override phases are delivered as rebalances (the U6 lifecycle scenarios' mapping). */
+    private final boolean capacityChangesAreRebalances;
+
     ControllerAdmissionPolicy(int initialTarget, int partitionCount) {
+        this(initialTarget, partitionCount, true);
+    }
+
+    /**
+     * The torture scenarios' variant: a capacity override models the DOWNSTREAM moving (an outage, a drift,
+     * an oscillation), not partitions moving away - so no rebalance is delivered and the controller must
+     * track the world through its windows alone. The falsifier lifecycle scenarios keep the legacy mapping.
+     */
+    ControllerAdmissionPolicy(int initialTarget, int partitionCount, boolean capacityChangesAreRebalances) {
+        this.capacityChangesAreRebalances = capacityChangesAreRebalances;
         ParallelConsumerOptions<?, ?> options = ParallelConsumerOptions.builder()
                 .adaptiveConcurrencyMode(AdaptiveConcurrencyMode.ENFORCE)
                 .maxConcurrency(FalsifierScenarios.CEILING_SLOTS)
@@ -83,8 +96,8 @@ final class ControllerAdmissionPolicy implements AdmissionPolicy {
             controller.notifyPauseResumed(); // the first post-resume tick's poison consumption
             discardFirstWindowAfterResume = true; // see the field: the engine discards this window's samples
         }
-        if (phase.getMuMaxOverrideRecordsPerSecond() > 0 && !capacityShrinkDelivered
-                && assignedPartitions.size() > 1) {
+        if (capacityChangesAreRebalances && phase.getMuMaxOverrideRecordsPerSecond() > 0
+                && !capacityShrinkDelivered && assignedPartitions.size() > 1) {
             // Capacity override = the per-instance share changed = a rebalance. Revoke all but partition 0 -
             // the rebalanceShrink scenario halves capacity with two partitions assigned, so the ratio matches.
             capacityShrinkDelivered = true;
