@@ -23,7 +23,7 @@
 - **Thin margin.** W4's legit lag-stagnation peaks (117-123s) sit only ~1.25x under the 150s Class 2
   bound. Fine for a non-gating suite; widen it (shorter storm or dwell) if it ever flakes.
   **It has flaked, and the cause was measured** - see
-  [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md).
+  [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md).
 - **Revoke-event instrumentation (open).** Nothing logs actual `onPartitionsRevoked` events, so the
   ~6x revoke-drop finding is not reproducible from a run's own logs. Add a per-instance revoke counter
   to `ManagedPCInstance`'s rebalance listener and fold `revokeEvents=` into the driver's run summary.

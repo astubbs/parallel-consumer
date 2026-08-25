@@ -5,19 +5,17 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
  */
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
-import java.time.Instant;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Coverage for {@link AbstractRevokeUnderWorkScenario#effectiveDiagnosticQuietCap}, the arithmetic
- * that stops {@code -Dchaos.diagnoseStallRecovery=true} promising a longer watch than the scenario's
- * own {@code @Timeout} can deliver.
+ * Coverage for {@link DiagnosticQuietCap#within}, the arithmetic that stops
+ * {@code -Dchaos.diagnoseStallRecovery=true} promising a longer watch than the scenario's own
+ * {@code @Timeout} can deliver.
  * <p>
  * <b>Why this needs a test rather than a careful reading.</b> The bug it fixes was silent by
  * construction: a 20-minute default under a 600s annotation meant JUnit killed the run
@@ -25,80 +23,73 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * distinguish. A regression here does not go red - it produces an uninterpretable diagnostic run,
  * which is exactly how the original defect survived being documented in its own constant's javadoc.
  * <p>
- * Broker-free: the method reads an annotation and subtracts {@link Duration}s, so the fixtures below
- * only need to be real annotated subclasses. Deliberately NOT tagged {@code chaos}, so it runs in
- * every default integration build, matching {@link Class2ObservationIT} and {@link InstanceStallProbeIT}.
+ * <b>Genuinely broker-free, and that took a code change to be true.</b> Everything else in this
+ * package descends from {@code BrokerIntegrationTest}, whose static initialiser calls
+ * {@code kafkaContainer.start()}, so instantiating any scenario subclass boots Kafka under
+ * Testcontainers. {@link DiagnosticQuietCap} is deliberately outside that hierarchy, so touching
+ * it reaches none of that - see its javadoc for the two failed attempts that established a static
+ * method on the scenario is NOT enough (initialising a subclass initialises its superclasses).
+ * Deliberately untagged, so it gates every default integration build.
  */
 class DiagnosticQuietCapIT {
 
-    /** The property the production path reads; the requested cap is resolved from it at class-init. */
-    private static final Duration REQUESTED = Duration.ofMinutes(
-            Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
+    /** The 600s every real chaos scenario carries. */
+    private static final Duration CEILING = Duration.ofSeconds(600);
+    /** Held back for teardown by the production constant; the assertions below only rely on it being non-zero. */
     private static final Duration TEARDOWN_RESERVE = Duration.ofSeconds(90);
-
-    /** Carries the same 600s ceiling every real chaos scenario uses. */
-    @Timeout(600)
-    private static final class TimedScenario extends AbstractRevokeUnderWorkScenario {
-        @Override
-        protected String scenarioLabel() {
-            return "diagnostic-cap-fixture";
-        }
-
-        @Override
-        protected boolean useCooperativeAssignor() {
-            return false;
-        }
-    }
-
-    /** No ceiling to fit inside - the requested watch must stand unshortened. */
-    private static final class UntimedScenario extends AbstractRevokeUnderWorkScenario {
-        @Override
-        protected String scenarioLabel() {
-            return "diagnostic-cap-fixture-untimed";
-        }
-
-        @Override
-        protected boolean useCooperativeAssignor() {
-            return false;
-        }
-    }
+    private static final String SCENARIO = "FixtureScenario";
 
     @Test
     void aFreshRunIsShortenedToWhatTheTimeoutActuallyAllows() {
-        Duration cap = new TimedScenario().effectiveDiagnosticQuietCap(Instant.now());
+        Duration requested = Duration.ofMinutes(20);
+        Duration cap = DiagnosticQuietCap.within(CEILING, Duration.ofSeconds(30), SCENARIO);
 
-        assertWithMessage("the 20-minute default cannot fit under a 600s @Timeout, so it must be cut - "
-                + "leaving it whole is the original defect")
-                .that(cap).isLessThan(REQUESTED);
-        assertWithMessage("what is left must still be a usable watch, not a token remainder")
-                .that(cap).isGreaterThan(Duration.ofMinutes(6));
-        assertWithMessage("the watch must end inside the annotation, leaving the teardown reserve")
-                .that(cap.plus(TEARDOWN_RESERVE)).isLessThan(Duration.ofSeconds(600));
+        assertWithMessage("a 20-minute watch cannot fit under a 600s @Timeout, so it must be cut - "
+                + "returning it whole is the original defect this method exists to prevent")
+                .that(cap).isLessThan(requested);
+        assertWithMessage("the watch plus what was already spent plus the teardown reserve must fit "
+                + "inside the ceiling, or JUnit still kills the run")
+                .that(Duration.ofSeconds(30).plus(cap).plus(TEARDOWN_RESERVE)).isAtMost(CEILING);
+        assertWithMessage("exactly the remaining budget should be used - a shorter watch than the "
+                + "ceiling allows throws away observation time for nothing")
+                .that(cap).isEqualTo(CEILING.minus(Duration.ofSeconds(30)).minus(TEARDOWN_RESERVE));
     }
 
     @Test
     void anAlreadySpentBudgetRefusesToRunRatherThanWatchNothing() {
-        Instant longAgo = Instant.now().minus(Duration.ofSeconds(595));
-
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
-                () -> new TimedScenario().effectiveDiagnosticQuietCap(longAgo));
+                () -> DiagnosticQuietCap.within(CEILING, Duration.ofSeconds(595), SCENARIO));
 
-        assertWithMessage("a diagnostic with no time left must say so rather than run and report "
-                + "an outcome it never observed")
+        assertWithMessage("a diagnostic with no time left must say so rather than run and report an "
+                + "outcome it never observed")
                 .that(thrown).hasMessageThat().contains("no time left to watch");
-        assertWithMessage("the message must name the number to raise @Timeout to, or the operator "
-                + "is told it failed without being told the fix")
+        assertWithMessage("the message must name the number to raise @Timeout to, or the operator is "
+                + "told it failed without being told the fix")
                 .that(thrown).hasMessageThat().contains("Raise this scenario's @Timeout");
     }
 
     /**
-     * The clamp must never silently extend a watch either - an absent ceiling means the request
-     * stands exactly, which is what makes the shortening attributable to the annotation.
+     * The boundary: a budget that lands exactly on zero is refused too. Zero seconds of observation
+     * produces the same uninterpretable "neither drained nor did not drain" result the throw exists
+     * to prevent, so {@code isZero} must be handled alongside {@code isNegative}.
+     */
+    @Test
+    void aBudgetOfExactlyZeroIsRefusedRatherThanRunForNoTime() {
+        Duration everythingButTheReserve = CEILING.minus(TEARDOWN_RESERVE);
+
+        assertThrows(IllegalStateException.class,
+                () -> DiagnosticQuietCap.within(CEILING, everythingButTheReserve, SCENARIO));
+    }
+
+    /**
+     * No ceiling means nothing to fit inside, so the request stands untouched - which is what makes
+     * any shortening attributable to the annotation rather than to this method having an opinion.
      */
     @Test
     void withNoTimeoutTheRequestedWatchStandsExactly() {
-        Duration cap = new UntimedScenario().effectiveDiagnosticQuietCap(Instant.now());
+        Duration cap = DiagnosticQuietCap.within(null, Duration.ofSeconds(30), SCENARIO);
 
-        assertThat(cap).isEqualTo(REQUESTED);
+        assertThat(cap).isEqualTo(Duration.ofMinutes(
+                Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20)));
     }
 }

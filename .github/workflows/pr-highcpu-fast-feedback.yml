@@ -101,7 +101,7 @@ jobs:
     # The alternative considered and NOT taken: a dedicated single-slot runner label for chaos. It is the
     # better shape, but it needs runner-side provisioning, and docs/self-hosted-runner.md warns that a job
     # pinned to a label nothing serves does not fail - it queues silently until GitHub cancels it. This
-    # fix is in-repo, reversible, and testable; see docs/inflight/test-chaos-class2-red-was-runner-contention.md.
+    # fix is in-repo, reversible, and testable; see docs/inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md.
     concurrency:
       # Switched on the `box-exclusive` matrix KEY, never on `suite-name`. The suite name is a display
       # label cited across docs, check names and artifact names; if the policy keyed on it, renaming it

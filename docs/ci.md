@@ -190,7 +190,7 @@ The alternative - a dedicated single-slot runner label for chaos, which would se
 and still give every PR a run - is the better shape and is not done: it needs runner-side
 provisioning, and a job pinned to a label nothing serves does not fail, it queues silently until
 GitHub cancels it (see [`self-hosted-runner.md`](self-hosted-runner.md)). Background:
-[`docs/inflight/test-chaos-class2-red-was-runner-contention.md`](inflight/test-chaos-class2-red-was-runner-contention.md).
+[`docs/inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md`](inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
 - **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
