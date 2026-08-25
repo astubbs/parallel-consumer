@@ -1,5 +1,8 @@
 # Client: .NET (astubbs#242)
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 Per-language working note for the .NET client of the language-proxy plan
 (`docs/plans/2026-08-14-001-feat-language-proxy-plan.md`). Effort figures, divergence notes, and
 anything the .NET wave learns that a later session needs go HERE - never appended to

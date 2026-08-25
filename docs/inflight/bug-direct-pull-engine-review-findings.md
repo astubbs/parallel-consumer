@@ -1,7 +1,7 @@
 # Reading the direct-pull engine for correctness rather than for speed
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: correctness -->
+<!-- inflight-impact: crash -->
 
 Opened 2026-08-22 on `test/direct-pull-coverage`. `DirectPullWorkerPool` and the three shared-state
 changes it forced were merged onto `perf/engine-concurrency` as a measurement, with no

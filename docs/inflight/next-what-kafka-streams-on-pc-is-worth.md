@@ -1,7 +1,7 @@
 # What Kafka Streams on PC is worth, given the engine numbers of 2026-08-22
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
 
 **Antony's question**: given the engine work, how much impact would getting `pc-engine-KafkaStreams`
 working actually make? Signpost to the workstream itself is
@@ -88,7 +88,7 @@ rather than a number they compare once.
 restoration, interactive queries against a concurrently-written store, suppression and caching
 semantics, task assignment, and the packaging question already parked.
 
-**And #1 is doing most of the work in "assume I solve it".** `KEY` ordering serialises per key, which
+**And problem 1 - the state store - is doing most of the work in "assume I solve it".** `KEY` ordering serialises per key, which
 maps cleanly onto per-key state - but a Streams store is per-**task**, and a task spans many keys.
 Making that concurrent is either fine-grained locking inside the store access path or sharding the
 store by key. Whichever it is, **it decides whether the other three matter**, and it is answerable on

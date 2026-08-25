@@ -1,0 +1,165 @@
+# Where adaptive concurrency goes next: catch-up, rate-limit feedback, and the ordering nuance
+
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
+
+Owner's thinking, 2026-08-24, after watching the first closed-loop run. These are directions for the
+controller, not defects in what shipped - the defects live in
+[`pr-333-adaptive-concurrency-outstanding.md`](pr-333-adaptive-concurrency-outstanding.md). What the
+controller optimises now HAS an answer - throughput elasticity, the plateau band, the latency
+baseline deleted
+([`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md))
+- so these directions are designable; where a passage below speaks of a "latency-flavoured standing
+objective", read it as the future latency-CEILING clamp, since no latency objective shipped.
+
+## Catch-up: lag is a third axis, and it suspends the latency goal
+
+Consumer lag is a dimension the current design does not model at all. There are cases where an
+operator will knowingly accept much worse per-record latency for a period, because being far behind
+the head of the topic is the more expensive problem.
+
+Two shapes, and they are the same mechanism:
+
+1. **Cold start on a pre-populated topic.** Millions of offsets behind. Per-record latency three
+   times the eventual goal is fine, because nothing is waiting on any individual record - the whole
+   backlog is late already.
+2. **A traffic spike.** An event dumps an enormous volume onto the input topic. Same trade: burn
+   latency to get back to the head.
+
+In both, once lag falls under some proportion of the topic (or some absolute threshold), the
+controller returns to its normal objective.
+
+**Note what it does and does not interact with.** Catch-up suspends a *latency* goal; it is
+meaningless against a *throughput* goal, because catching up IS maximising throughput - the two
+coincide. So this is not a fourth peer mode alongside the objectives; it is a temporary override
+that only exists when the standing objective is latency-flavoured.
+
+**And catch-up is not permission to saturate the downstream** - owner's own qualifier, and it
+collapses the design. Burning latency does not mean ignoring the downstream: past some point the
+dependency slows under the load and you stop draining the backlog any faster. So catch-up is not a
+fourth mode with its own machinery. **It is the standing objective with the latency ceiling
+suspended, falling back to seeking the point that produces the most results fastest** - the same
+equilibrium search the controller already performs. That is a far smaller feature than it first
+appeared: one suspension, not a new controller.
+
+One real distinction survives, and it is where the two objectives differ. The knee - where power,
+throughput over latency, is maximised - is not the same point as maximum throughput. Past the knee,
+throughput keeps rising for a while but you pay disproportionate latency for each remaining
+percent. Normal running probably wants the knee; **catch-up probably wants the plateau**, because
+the latency it is paying was already declared acceptable. The plateau is self-limiting rather than
+unbounded - a saturated dependency stops rewarding more admission with more completions, which is
+exactly the backing-off the qualifier asks for, arriving as a consequence of the objective rather
+than as a separate guard.
+
+Open: what measures "caught up" (absolute lag, lag as a fraction of the topic, or the derivative -
+is lag shrinking?), the hysteresis so a workload sitting near the threshold does not flap between
+modes, and whether catch-up seeks the plateau or the knee - which is the same throughput-versus-
+latency choice as item 0, asked about a period the operator has already said they will pay for.
+
+## Rate-limit feedback: jump to the answer instead of searching for it
+
+When a downstream tells us its limit outright, searching for it by gradient is absurd. If a service
+rejects with *request limit of 100/s exceeded* and the group has four instances running, this
+instance's share is 25/s - and PC already knows its own group membership, so it can compute that
+share itself. Set the admission target from the limit directly, just under it, then keep adapting
+from there if the rejections continue.
+
+Sharper than the exception path: a user function can succeed AND report a limit at the same time -
+many APIs return their remaining quota in a header on a perfectly good response. So the signal
+should not be exception-only. Let the user function hand back the limits that apply.
+
+On combining multiple limits: the instinct is that PC should not try to reconcile a chain of
+different limits from different services. But taking a *list* and using the lowest is trivial, so
+there is no reason to refuse it. Limits may be supplied at build time or discovered at runtime, and
+they change - so whatever is taken must be continuously reassessed rather than latched.
+
+**This is the competitive line against Share Groups.** With share groups, adaptive rate limiting is
+still the user's problem to implement. It is also what a PC wrapper over share groups could offer:
+a simpler queueing engine underneath (or, initially, just the existing one - the overhead may not
+matter enough to justify a second), with work dispatched through this concurrency system so the
+user never writes that logic. See the share-groups notes for the surrounding argument.
+
+## Ordering is not a fixed constraint - it is a runtime distribution
+
+Earlier framing here was too absolute: *where ordering starves a workload, admission cannot help*.
+That is right at an instant and wrong over time. **In the best case key ordering degenerates into
+unordered** - and which case you are in depends entirely on the key distribution of the records
+currently buffered, which changes minute to minute on a real topic.
+
+So adaptive concurrency can genuinely help key-ordered workloads: it discovers the parallelism the
+*current* buffer actually permits, which no static number can track. What it cannot do is manufacture
+parallelism that the key distribution does not contain at that moment. The starvation report exists
+to distinguish those two, and the distinction is temporal, not a property of the workload.
+
+## The mode ladder, ratified (owner, 2026-08-25)
+
+The build order, decided in conversation over the demo runs below. Parked means parked, not open:
+
+1. **Latency-ceiling clamp** - the first new capability, and the only safe form of "latency mode":
+   knee-seeking as shipped, plus an operator bound on measured service time, contracting when the
+   bound binds and REPORTING when it is unreachable (holding at the floor and saying so) rather than
+   starving. It converts the KTD7 boundary in `docs/features/adaptive-concurrency.yaml` - "pin
+   maxConcurrency yourself if you need a latency bound" - from advice back into the feature. Cheap on
+   signal: the window already samples service time; a bound cannot ratchet the way the deleted
+   baseline did, because it is compared against, never learned from.
+2. **Catch-up** - a CLAUSE of the clamp, not a peer mode. Owner's own re-derivation: against a
+   throughput objective catch-up is self-contradictory - catching up IS maximising throughput, so
+   with no clamp there is no held-back throughput to release. It is exactly "suspend the clamp while
+   lag is large, re-impose with hysteresis when caught up". No clamp, no catch-up.
+3. **Rate-limit feedback** - as below.
+
+**Pacing profiles (an "aggressive"/eager setting): parked, with the experiment that parks it.**
+2026-08-25, on the moving-downstream demo plant (48 slots degrading to 8 and recovering,
+`AdaptiveConcurrencyDemo`): the shipped law's phase-3 re-climb (8 -> 46 in ~70s, +sqrt(target) per
+adjudicated step) is the visible cost an eager profile would attack. The naive version was tried and
+is REFUTED by measurement: scaling the shared accelerator step to doubling (`max(1, limit)`)
+destabilised every phase - the target swung floor-to-ceiling (52 -> 96 -> 1 -> 93 -> 1), the
+degraded phase pounded the sick downstream harder than a static over-guess (163ms avg request,
+excursions to target 93 against 8 slots), and the run ended PINNED at the ceiling, degenerated into
+the static guess the feature exists to replace. Mechanism: that step constant is load-bearing in
+five places - the descent probe steps DOWN by the same unit (48 - 48 lands on the floor), the
+stagnation and recovery probes step up by it, and the warmup allowance is denominated in it - so
+scaling it makes every limb swing, not just growth. A real eager profile is therefore a DESIGNED,
+asymmetric change: multiplicative growth only on the confirmed re-climb path (double only while
+every step demonstrably pays, additive again at the first step that does not), descent and probe
+denominations untouched, falsifier-first with a born-red recovery-time scenario. Parked until the
+ladder above is delivered; raw step/cadence constants are never exposed as user options - that
+re-creates the guess-a-number problem this feature removes.
+
+## Exploration probing: the local-minimum answer, parked beside the pacing profile (owner, 2026-08-25)
+
+The owner's question, twice-asked and now measured: the law assumes that when a step up stops buying
+completions, nothing above ever will - first plateau, final answer. It never reads latency at all;
+its one-step probes land IN a valley, see no gain, and restore. The torture set proves it on the
+second-wind plant (400/s at the first knee, a valley, then 1,200/s past 60 slots):
+`AdmissionTortureTest.secondWindBeyondTheValleyIsNotCrossedUnaided` pins first-knee-seeking as
+DESIGNED behaviour with the forgone plateau logged in the run.
+
+**The feature, when built: an exploration probe.** The machinery already exists in the right shape -
+every probe is pin -> measure -> keep-if-paid / restore-if-not. Exploration is the same discipline
+with a FAR step: on a rare cadence with exponential backoff on failure, pin the target several steps
+up (or binary-search toward the ceiling), adjudicate on throughput alone, keep only what demonstrably
+paid. The descent probe's discipline, mirrored upward.
+
+**Why it is a mode and never the default:** each exploration PAYS - probe windows run through the
+valley at genuinely worse latency, and on a thrash curve the probe costs real throughput while it
+runs. The default stays protective (never deliberately over-drive a downstream on a hypothesis);
+the explorer is for operators who suspect a second wind - batch-amortizing downstreams are the
+honest example. Today's overrides are the seed and the ceiling, and the constraint gauge already
+says plateau-held, which is the operator's cue to suspect more.
+
+**Relationship to the pacing profile above:** siblings, likely one option surface. Pacing changes
+how fast the law chases a knee it can see; exploration changes whether it looks past a knee at all.
+Both are parked behind the ladder; both are designed asymmetric probe changes, falsifier-first,
+never a scaling of the shared step constant (the refuted experiment above binds here too). The
+second-wind pin is the born-red acceptance test the day either crosses a valley: it fails the
+moment the law crosses unaided, forcing the flip to be conscious.
+
+## Prior art to read before publishing anything
+
+**Flink and Google Dataflow both have serious autoscaling machinery, and Dataflow's is key-aware
+streaming autoscaling specifically.** Anyone knowledgeable will raise them immediately, so the
+comparison should be made deliberately rather than met defensively. Read them for what they solved,
+what signals they use, and where the honest differences are - PC's vantage is per-record and
+client-side, theirs is pipeline-level with a scheduler that can add machines, and the objective
+question in item 0 is one they have both had to answer.

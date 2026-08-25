@@ -1,5 +1,7 @@
 # Pre-v6: the shared test suite is a product feature, and the clients must be able to prove it
 
+<!-- inflight-type: feature -->
+
 Owner's requirement, 2026-08-15. When ten client libraries ship at once, the first honest question a
 reader will ask is whether llingr is generated slop. **The answer has to be visible, not asserted**:
 every client passes the same conformance suite, exercising the same scenarios, with the same

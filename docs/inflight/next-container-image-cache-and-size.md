@@ -1,5 +1,8 @@
 # The container languages' images: cache them in CI, then shrink them
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
+
 Two follow-ups from measuring the Swift build, **in this order** — the owner's rule: first make it
 work, then make it faster and smaller. Neither blocks the Swift client; both are worth doing once it
 exists.

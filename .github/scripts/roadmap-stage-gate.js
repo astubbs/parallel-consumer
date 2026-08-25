@@ -1,3 +1,4 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
 // Makes the roadmap's stage ladder self-updating: when a PR is the carrier of a roadmap entry's
 // artifact, merging it changes how real that entry is - so the same PR must move the entry's
 // stage/stage_delivery, or say why not.

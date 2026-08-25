@@ -1,7 +1,6 @@
 # Next: let the core user function return a future
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-type: feature -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21, from the owner's question: *what if core had a return that was a Java future?*

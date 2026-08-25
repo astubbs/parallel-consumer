@@ -1,5 +1,8 @@
 # Client logging contract: the audit, and what each client owes
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 The contract is written and lives in the authoring guide's **§10** (`parallel-consumer-proxy/docs/
 client-authoring-guide.md`). **That is the owner; nothing here restates a rule.** This file holds the
 2026-08-15 audit of the seven existing clients against it, and the per-client task list the

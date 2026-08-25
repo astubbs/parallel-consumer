@@ -108,6 +108,11 @@ class SubmitWorkToPoolShutdownRaceTest {
     void setup() {
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(new MockConsumer<String, String>(OffsetResetStrategy.LATEST))
+                // pinned: these scenarios assert ThreadPoolExecutor's shutdown-rejection mechanics - the
+                // rejection-count filter keys on the pool identity inside AbortPolicy's exception message, which
+                // the virtual-thread pool's RejectedExecutionException does not carry, so under
+                // -Dpc.virtualThreads=true the assertions count nothing rather than the race
+                .useVirtualThreads(false)
                 .build();
         pc = new TestParallelEoSStreamProcessor<>(options);
 

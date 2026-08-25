@@ -1,7 +1,7 @@
 # Direct pull's collapse is the scan, not the claim - and the scan is now fixed for UNORDERED
 
-<!-- inflight-type: perf -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 Measured 2026-08-22. Two mechanisms were on the table for the direct-pull engine's collapse above a

@@ -1,5 +1,8 @@
 # The shared conformance suite exists and Go is wired; four wave-one languages are not
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 The suite is `parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/`, and its
 `README.md` is the runner contract every language implements - flags, exit codes, the stdout
 observation line, the behaviour tokens, and how a language registers itself. Read it before writing

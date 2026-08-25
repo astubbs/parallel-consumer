@@ -1,5 +1,8 @@
 # Divergence review: the five non-JVM proxy clients (astubbs#242)
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 A read-only comparison of `parallel-consumer-proxy-client-{go,python,typescript,rust,ruby}` against
 each other, on the seven dimensions where five implementations of one protocol can quietly disagree.
 The JVM clients are out of scope by the owner's call.

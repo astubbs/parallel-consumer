@@ -1,7 +1,6 @@
 # Next: exactly-once for the async engines
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-type: feature -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21. **`ExternalEngine` rejects transactional commit mode outright**, so Vert.x, Reactor,

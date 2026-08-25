@@ -1,3 +1,6 @@
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 

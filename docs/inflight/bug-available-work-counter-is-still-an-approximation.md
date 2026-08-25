@@ -1,7 +1,7 @@
 # Bug: the shard's available-work counter is still an approximation
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: correctness -->
+<!-- inflight-impact: reliability -->
 <!-- inflight-labels: needs-measurement -->
 
 What is left of `bug-available-work-counter-needs-a-clamp.md` after the load gate stopped depending on

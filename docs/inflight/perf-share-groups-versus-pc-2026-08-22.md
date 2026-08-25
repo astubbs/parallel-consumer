@@ -1,7 +1,7 @@
 # The share-groups comparison does not reproduce, and the 2.5x must not be quoted - measured 2026-08-22, re-taken 2026-08-23
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: strategy -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: process -->
 <!-- inflight-labels: needs-decision -->
 
 > **READ THIS BEFORE ANYTHING BELOW IT.** The 2.5x headline was re-taken on 2026-08-23 at its own

@@ -1,7 +1,7 @@
 # The UNORDERED dispatch scan re-walks the whole in-flight prefix on every pass
 
-<!-- inflight-type: parked -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 Measured 2026-08-22 with `DispatchScanMeter`, which counts entries

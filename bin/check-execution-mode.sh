@@ -41,7 +41,8 @@
 #
 # Usage:  bin/check-execution-mode.sh <mode> [surefire-reports-dir ...]
 #
-#   mode                 the execution mode this run selected: `virtual-threads`, or `default`
+#   mode                 the execution mode this run selected: `virtual-threads`, `adaptive-concurrency`,
+#                        or `default`
 #   surefire-reports-dir defaults to every */target/surefire-reports in the tree
 #
 # Markdown report goes to stdout, so CI can append it to $GITHUB_STEP_SUMMARY. Progress and the
@@ -54,6 +55,7 @@ set -euo pipefail
 mode_marker() {
   case "$1" in
     virtual-threads) echo "VirtualThreadExecutionModeTest" ;;
+    adaptive-concurrency) echo "AdaptiveConcurrencyModeTest" ;;
     default) echo "" ;;
     *) return 1 ;;
   esac
@@ -64,6 +66,7 @@ mode_marker() {
 mode_selector() {
   case "$1" in
     virtual-threads) echo "-Dpc.virtualThreads=true" ;;
+    adaptive-concurrency) echo "-Dpc.adaptiveConcurrency=OBSERVE" ;;
     default) echo "(none)" ;;
     *) return 1 ;;
   esac
@@ -77,7 +80,7 @@ fi
 shift || true
 
 if ! MARKER="$(mode_marker "$MODE")"; then
-  echo "check-execution-mode: unknown mode '$MODE'. Known modes: virtual-threads, default." >&2
+  echo "check-execution-mode: unknown mode '$MODE'. Known modes: virtual-threads, adaptive-concurrency, default." >&2
   echo "Add a row to mode_marker()/mode_selector() when you add a mode." >&2
   exit 1
 fi

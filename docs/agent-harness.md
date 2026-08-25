@@ -282,9 +282,24 @@ one is a case in that file, and the suite goes red against the old parser.
    gate. To bind humans too -> git hook or CI, never `.claude/`.
 2. **Prefer the cheapest layer that actually fires.** A nested `CLAUDE.md` costs nothing and loads at
    exactly the right moment.
-3. **Give it a negative control.** This repo's standing rule: a check that has never failed proves
-   nothing. Make it go red on purpose before you trust it - `bin/AGENTS.md` says the same about
-   `test-check-*.sh`.
+3. **Give it a negative control - and an ADJACENT case it must ignore.** This repo's standing rule:
+   a check that has never failed proves nothing. Make it go red on purpose before you trust it -
+   `bin/AGENTS.md` says the same about `test-check-*.sh`.
+
+   **The red control alone is not enough, and a session's worth of evidence says so.** Every gate
+   that misbehaved on 2026-08-19/20 failed on **scope**, never on logic: `pre-commit-gate.sh` fired
+   on read-only commands that were not commits; `check-pr-ready.sh` read only the first matching
+   `pr-<n>-*.md` when two existed; the inflight `inflight-state` regex was greedy, so the gate and
+   the session index disagreed about the same note; `chaos-test.sh`'s EXIT trap swallowed the exit
+   code and would have rendered a real chaos RED as green. **Not one was wrong about what to check.**
+   A red control proves the gate CAN fire; it says nothing about whether it is looking at the right
+   thing.
+
+   So pair every red control with a **near-miss that must stay green** - the thing one character away
+   from what you are catching. `bin/test-check-agent-hooks.sh` already does this where it was learned
+   the hard way (`a commit MESSAGE mentioning push does not fire`, `gh pr comment --body "run gh pr
+   merge later"`), and those cases exist because the first drafts matched substrings and blocked
+   them. Write the near-miss when the gate is new, not after it has been routed around.
 4. **Keep pre-commit under a couple of seconds.** A slow hook gets `--no-verify`'d by habit and then
    protects nothing. Slower checks belong in CI only.
 5. **Write down what you verified**, especially harness behaviour - the auto-load table above was

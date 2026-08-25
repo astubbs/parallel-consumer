@@ -100,6 +100,18 @@ check("ignores javadoc member links", () => {
   assert.deepStrictEqual(suspectRefs(file("A.java", " * {@link #close()} releases it.")), []);
 });
 
+check("ignores HTML numeric character entities, still catching a real ref beside one", () => {
+  // The escaped-slash javadoc idiom: `**&#47;integrationTest*&#47;**` is a glob, not three refs.
+  assert.deepStrictEqual(
+    suspectRefs(file("Demo.java", " * {@code **&#47;integrationTest*&#47;**&#47;*.java} decides")),
+    []);
+  // A real bare ref on the same line must still fire - this case must not pass via a crash or a
+  // too-wide exclusion.
+  assert.deepStrictEqual(
+    suspectRefs(file("docs/x.md", "the &#183; separator, tracked in #857")).map((h) => h.ref),
+    ["#857"]);
+});
+
 check("ignores refs inside a URL", () => {
   assert.deepStrictEqual(
     suspectRefs(file("docs/x.md", "https://github.com/confluentinc/parallel-consumer/issues/857")),

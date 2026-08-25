@@ -184,6 +184,7 @@ go.mod|slash
 *.h|slash
 *.hpp|slash
 *.proto|slash
+*.css|slash
 # Java source compiled by the bench harnesses after a __PKG__ substitution. Not *.java, so the rule
 # above never saw them, and all three sat unclassified - which the check reports as a violation
 # rather than silently passing, which is how they were found.
@@ -302,6 +303,7 @@ ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 EXTRACTED_FROM_UPSTREAM="
 parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/ManagedPCInstance.java
 parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerTestBase.java
+parallel-consumer-vertx/src/test-integration/java/bz/stub/parallelconsumer/vertx/integrationTests/Demo.java
 ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 "
 
@@ -337,6 +339,9 @@ EOF
 en_glob=(); en_style=(); n_enforced=0
 while IFS='|' read -r g s; do
     [ -n "$g" ] || continue
+    # In-table comment lines annotate their neighbouring rules; without this skip they parse as
+    # garbage globs with an empty style - silent here, loud in the self-test's fixture generator.
+    case "$g" in "#"*) continue ;; esac
     en_glob[$n_enforced]="$g"; en_style[$n_enforced]="$s"; n_enforced=$((n_enforced + 1))
 done <<EOF
 $ENFORCED_TYPES

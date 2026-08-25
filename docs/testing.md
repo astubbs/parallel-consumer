@@ -27,6 +27,24 @@ stops anyone looking, and it never goes red to tell you. Three worked examples a
   surefire and included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
 
+## The adaptive-concurrency behaviour suites: three jobs, three suites
+
+[`docs/plans/2026-08-25-002-test-adaptive-soak-torture-plan.md`](plans/2026-08-25-002-test-adaptive-soak-torture-plan.md)
+owns the design; what binds here is the boundary, so a finding lands in the right suite:
+
+| Suite | Asks | Where | A red means |
+|---|---|---|---|
+| **Chaos** | is the protocol honest under faults | `chaostests/` ITs | a correctness bug |
+| **Simulated horizon + torture** (the soak plan's U7/U4) | does the CONTROLLER behave as designed over time and across workload shapes | `internal/admission/` unit tests: `ScenarioMatrixTest`, `AdmissionHorizonLaneTest`, `AdmissionTortureTest` | a law or calibration finding - report it, shrink it to a falsifier, never loosen the scenario |
+| **Bench** (the U10 arm) | how much does it help, on real hardware | its own branch | a value question, never a gate |
+
+The simulated lanes run per-PR in seconds - twelve simulated hours is ~43k deterministic windows -
+and their assertion discipline is **derived bounds only** (plant construction, the law's own step
+arithmetic), never a band fitted to a run. Trajectory CSVs land under `target/trajectories/` as the
+evidence a red attaches to its inflight note. Note the name collision this table exists to prevent:
+`bin/soak-test.sh` is the single-test flake resurfacer and has nothing to do with these suites; the
+future real-broker soak lane (the plan's U5, unlanded) takes a non-colliding name.
+
 ## The ambient probe: contention artifact, or genuine bug?
 
 Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
@@ -98,6 +116,43 @@ Rules:
 
 A non-empty lane blocks releases - see [`docs/releasing.md`](releasing.md). Run the lane locally
 with `bin/quarantined-test.sh`.
+
+## Does a test earn its place? Mutate a guard and see who notices (optional)
+
+**Reach for this when a test's value is disputed** - two reviewers wanting opposite things, or a
+slow/flaky test somebody wants to keep on the grounds that it "covers" something. It is not a routine
+step; it costs a few builds, and most tests never need it.
+
+The method, which settles the argument instead of continuing it:
+
+1. Name the guards in the code under test - the specific conditionals or flags the test claims to
+   protect.
+2. **Break ONE at a time**, in main code, locally, never committed.
+3. Run every candidate test against each mutant.
+4. Tabulate which tests go red for which break. A test that kills no mutant another test does not
+   already kill is **redundant for the guards you mutated** - which is not the same as covering nothing.
+   A finite, hand-picked mutant set cannot show that: the test may uniquely assert an output, an ordering
+   property, or a race that none of your mutations disturbs. So the table is evidence for a deletion
+   argument, never the whole of one - read the test and say what else it could be asserting before you
+   remove it.
+
+**Worked example, and why it was worth the builds.** `ManagedPCInstanceLifecycleTest` existed to catch
+the astubbs#292 double-submission race. Four reviewers flagged it and split between "delete it" and
+"harden it", so nobody acted. Three mutants over the four guards in `ManagedPCInstance` settled it:
+the test killed **none** - including the scenario its own javadoc named - while the older
+`ManagedPCInstanceLifecycleIT` killed both real mutants deterministically, broker-free, in a hundredth
+of the time. Deleted, with the table in the commit message.
+
+Two things that make the result trustworthy:
+
+- **Fix the test's own bugs before measuring**, or you measure a broken test. That one bypassed the
+  guard it was verifying in its own setup, and had to be corrected first.
+- **Watch for equivalent mutants.** A mutant that changes no observable behaviour is not evidence
+  about anything - one of the three above was probably equivalent, and the write-up says so rather
+  than counting it.
+
+A `@RepeatedTest` is the shape to look at hardest: repetition is what you reach for when you cannot
+force a race and hope to draw it, so it is often a hope-based test sitting in a gating lane.
 
 ## Chaos Pain Suite (on-demand bug detector - never gates)
 

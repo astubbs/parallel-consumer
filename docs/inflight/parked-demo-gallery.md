@@ -1,5 +1,8 @@
 # Parked: a hosted gallery of every language's demo
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: parked - not rejected, just outside the language-proxy plan's scope; no owning workstream -->
+
 Cut from the language-proxy plan (astubbs#242) by user decision on 2026-08-14, which retired the
 plan's R74 (`docs/plans/2026-08-14-001-feat-language-proxy-plan.md`). Parked, not rejected - the
 idea was liked; it is just not that plan's to deliver.

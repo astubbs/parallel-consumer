@@ -1,5 +1,7 @@
 # v6 release: the "Phoenix — Spreading the Love" theme, and the announcement
 
+<!-- inflight-type: feature -->
+
 Owner's idea, 2026-08-15, for the v6 release. Recorded now because a theme is worth deciding while
 the work that justifies it is fresh, and forgotten otherwise.
 

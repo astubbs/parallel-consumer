@@ -1,7 +1,7 @@
 # Next: every benchmark handler is a sleep, and every number is from one operating system
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21. **Two limits that sit underneath every performance number this project has**, and

@@ -1,7 +1,7 @@
 # Direct pull AND virtual threads together is the fastest configuration measured
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement, release-note -->
 
 **Antony asked, 2026-08-22: "does `core-vt` use direct pull underneath now? If not, why haven't you

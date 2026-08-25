@@ -1,7 +1,7 @@
 # A queue of SELECTABLE SHARDS, so taking work never scans
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: performance -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 **Antony's proposal, 2026-08-22.** Under `KEY` ordering, a shard with a record in flight cannot yield

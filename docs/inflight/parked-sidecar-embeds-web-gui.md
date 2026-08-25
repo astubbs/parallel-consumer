@@ -1,5 +1,8 @@
 # Parked: the sidecar embeds the web dashboard, pre-v6
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: parked - waiting on feats/web-gui and the language-proxy engine units to merge to master; must land before v6 -->
+
 Out of the language-proxy plan's scope (astubbs#242), but wanted **before the v6 release**: the
 sidecar should be able to embed the inbound web-GUI system — the embedded dashboard of
 astubbs/parallel-consumer#268 (astubbs#215), currently an open PR on `feats/web-gui`.

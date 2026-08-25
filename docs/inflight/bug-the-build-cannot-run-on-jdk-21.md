@@ -1,7 +1,7 @@
 # Bug: the build does not run on any JDK newer than 17, and three separate things stop it
 
-<!-- inflight-type: bug -->
-<!-- inflight-impact: build -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
 <!-- inflight-labels: needs-measurement -->
 
 Measured 2026-08-22 on Temurin 21.0.9 while building the virtual-threads lane. `./mvnw -pl

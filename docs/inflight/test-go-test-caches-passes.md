@@ -1,5 +1,8 @@
 # `go test` caches passes, and these tests depend on state it cannot see
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 Found 2026-08-17 while documenting the multi-language build (astubbs#242). Open; not fixed, because
 the fix is one flag and the question of whether to pay for it is the owner's.
 

@@ -77,19 +77,6 @@ Every entry below is a timing flake rather than a deterministic failure, so all 
 `flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
 were hidden by the surefire retry until astubbs#224 removed it.
 
-- [ ] `PCMetricsTest.metricsRegisterBinding` - asserts `PARTITION_LAST_COMMITTED_OFFSET` equals a
-  **completion counter** while the suite runs `UNORDERED`. Commits are contiguous and bounded by the
-  lowest incomplete offset; completions are not ordered, and workers call `latch.await()` *before*
-  `counter.incrementAndGet()`, so a latched worker's offset never completes and the gap is
-  **permanent**. The 120s `atMost` cannot close it - it only makes the failure cost 140s of every CI
-  run. Quarantined on a **diagnosed mechanism**, which is the stronger half of rule 1, not on a
-  sighting ledger. The fix is one comparand -
-  `PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED_OFFSET` is the contiguous high-water mark the commit metric
-  actually tracks - but the sibling assertions on `PARTITION_HIGHEST_COMPLETED_OFFSET` and
-  `PARTITION_INCOMPLETE_OFFSETS` derive from the same counters and want reading as a set first, so it
-  is not a one-line change. Diagnosis in
-  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`. No Owner yet.
-
 - [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
   the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
   assertions, so the same signature can surface from any test that uses it. The unblocker is
@@ -121,8 +108,13 @@ were hidden by the surefire retry until astubbs#224 removed it.
   row on one head (astubbs#116, 2026-08-14) as `expected 1213.0 but was 1209.0` then `expected 1207.0
   but was 1195.0` - a shortfall that varies, so no wait closes it. That is the shape
   [`assert-the-commit-frontier-not-the-tick-path.md`](solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md)
-  warns against, and it rhymes with the `OffsetEncodingBackPressureTest` entry below, whose committed
+  warns against, and it rhymes with the `OffsetEncodingBackPressureTest` entry above, whose committed
   high-water mark also never reaches its expectation with a different actual each run - worth ruling
   in or out as one phenomenon rather than two. Whether the un-committed tail is a wrong test
-  assumption or real commit behaviour is undecided and is the open task. No owner yet; diagnosis in
+  assumption or real commit behaviour is undecided and is the open task. The first quarantine's
+  mechanism diagnosis - the assertion compares the commit frontier to a **completion counter** under
+  `UNORDERED`, where a latched worker's offset never completes and the gap is permanent - still
+  stands and is written up in
+  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`; this entry supersedes that
+  first one (the registry keeps one entry per quarantined test). No owner yet; diagnosis in
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).

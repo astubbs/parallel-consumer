@@ -34,9 +34,25 @@ parallel. This is how the project gets concurrency without adding partitions.
 
 **Admission target**
 The number of records the engine allows in flight at once — the control variable that governs
-concurrency. Today it is derived statically from the user's configured concurrency limit; the self-scaling
-work makes it adaptive. Distinct from thread count: threads are capacity, admission is the throttle, so the same
-mechanism governs the thread-pool and async engines alike.
+concurrency. By default it is derived statically from the user's configured concurrency limit; an
+opt-in adaptive mode hands it to a controller that moves it from measurement instead. Distinct from
+thread count: threads are capacity, admission is the throttle, so the same mechanism governs the
+thread-pool and async engines alike.
+
+**Control law**
+The decision function of the adaptive controller: the rule that maps one measurement window's
+readings to the next admission target — grow, hold, or shrink, and by how much. Borrowed from
+control theory. Everything else in the adaptive machinery — windows, estimators, probes, gauges —
+either feeds the law or obeys its decision; the law is the part that decides. Swapping the law
+changes the controller's behaviour without changing what is measured or how the target is enforced.
+
+**Binding constraint**
+Which of the several things that could limit the admission target actually did, for the most recent
+measurement window — the cap, the floor, an overload signal, a failure rate, or the application
+simply not offering enough work to fill the slots. It is reported rather than inferred, because the
+observable symptom of every one of them is the same: a target that stops moving. Knowing which one
+bound is what separates "there is no more headroom" from "nothing is asking for the headroom that is
+already there".
 
 **In-flight work**
 Records handed to the worker pool and not yet resolved. Distinct from records merely fetched:

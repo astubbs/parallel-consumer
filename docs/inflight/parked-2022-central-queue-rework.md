@@ -1,7 +1,8 @@
 # Parked: the 2022 central-queue / direct-pull / per-thread-queue rework
 
-<!-- inflight-type: parked -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
+<!-- inflight-state: parked - kept as prior art; pending assessment in astubbs#327 and a docs/refactoring.md correction -->
 <!-- inflight-labels: needs-measurement -->
 
 Recorded 2026-08-21. **This is the most valuable piece of prior art in the performance work, and it
@@ -112,7 +113,7 @@ at.
 selection - the slowest stage of controller loop and broker poller loop - because it's O(n) shards."*
 The same suspicion arose today. **It is measurably wrong**: `KEY` ordering puts ~500,000 shards through
 that code path against `UNORDERED`'s ten and is *faster*
-([`perf-hypothesis-register.md`](perf-hypothesis-register.md) #6). A four-year-old suspicion, finally
+([`perf-hypothesis-register.md`](perf-hypothesis-register.md), hypothesis 6). A four-year-old suspicion, finally
 tested.
 
 **3. Poller throttling was already the named suspect.** *"identified possible issue with poller
@@ -154,7 +155,7 @@ so there is no load factor, no pressure check, and no queue depth to read.
 **And that last one is the unlock.** The blocker on virtual threads
 ([`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md)) is that the
 pressure system reads `getQueue().size()` and `getActiveCount()` off the `ThreadPoolExecutor`, which a
-virtual-thread executor does not expose - the exact problem PR #51's author reported. **Direct pull
+virtual-thread executor does not expose - the exact problem PR astubbs#51's author reported. **Direct pull
 removes the question rather than answering it.**
 
 **So the 2022 branch was not merely a failed optimisation.** It was a simplification that happened to be

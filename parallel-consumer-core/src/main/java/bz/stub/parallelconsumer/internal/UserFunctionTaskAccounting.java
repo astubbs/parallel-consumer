@@ -141,6 +141,24 @@ public class UserFunctionTaskAccounting {
     }
 
     /**
+     * @return tasks dispatched to the pool and not yet finished - {@link #getQueued() queued} plus
+     *         {@link #getActive() active}, the engine's committed slot occupancy. This is the admission
+     *         sampler's per-pass saturation figure: {@code getActive()} alone reads target-minus-one on almost
+     *         every control-loop pass at saturation, because the sampler runs immediately after dispatch,
+     *         inside the submit-to-start handoff of the replacements that very pass dispatched - which made
+     *         the window-aggregated binding verdict read a fully saturated broker run as starved (the
+     *         2026-08-25 comparison-IT freeze's second act). Deliberately computed WITHOUT the {@code started}
+     *         counter, so a task mid-handoff can never drop out between two derived reads.
+     */
+    public int getOccupied() {
+        // Subtrahends first - the same non-negativity-by-construction reasoning as getQueued().
+        long finishedSoFar = finished.sum();
+        long neverStartedSoFar = neverStarted.sum();
+        long submittedSoFar = submitted.sum();
+        return (int) Math.min(Integer.MAX_VALUE, submittedSoFar - neverStartedSoFar - finishedSoFar);
+    }
+
+    /**
      * @return running total, for asserting on conservation in tests
      */
     public long getSubmittedTotal() {

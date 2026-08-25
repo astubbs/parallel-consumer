@@ -1,5 +1,8 @@
 # Parked, post-v6: run the chaos suite against every client library
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6 -->
+
 The chaos harness should be runnable against all the proxy client libraries, not only the JVM engine.
 Owner's idea, 2026-08-14, post-v6. The shape proposed: **the existing Java orchestrator drives the
 chaos**, and the assertions stay in the same Java suite by having each client **publish its test

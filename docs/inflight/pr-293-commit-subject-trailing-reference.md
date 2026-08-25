@@ -1,5 +1,8 @@
 # PR astubbs#293: settle the trailing `(confluentinc#154)` at merge time
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
+
 The last open item from the code review of the spike and freeze cluster (`2b53104e3..6a2309c28`),
 parked by an explicit call to stop review-and-fix cycles and spend the remaining budget on the
 language fan-out (astubbs#242, 2026-08-14). Every other finding it returned has since been fixed by

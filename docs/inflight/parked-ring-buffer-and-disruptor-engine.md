@@ -1,7 +1,8 @@
 # Parked: ring-buffer / Disruptor engine, and the per-thread-queue variants
 
-<!-- inflight-type: parked -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
+<!-- inflight-state: parked - not worth building until the supply side moves; see the note's own restart checklist -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21, after profiling put the largest parking site in the engine on the mailbox

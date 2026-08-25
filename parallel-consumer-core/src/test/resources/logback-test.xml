@@ -69,6 +69,16 @@
          want it for. -->
     <logger name="bz.stub.parallelconsumer.integrationTests" level="${pc.log.level:-info}"/>
 
+    <!-- ALWAYS ON despite the warn default: adaptive concurrency's target trajectory. The controller is the
+         one component whose entire observable product is a handful of lines - it speaks only when the admission
+         target MOVES (at most one line per one-second window, and most windows hold) or, rate-limited to one
+         line per five seconds, when a named constraint is holding the target still. The feature is opt-in and
+         off by default, so on every other test in the suite this logger emits nothing at all; on
+         AdaptiveConcurrencyEnforceIT it is the whole point of the run, and it is what makes
+         `-Dit.test=AdaptiveConcurrencyEnforceIT` watchable without also enabling -Dpc.log.level=debug, which
+         would bury it. Both lines open with "Adaptive concurrency" - see AdmissionController's javadoc. -->
+    <logger name="bz.stub.parallelconsumer.internal.admission.AdmissionController" level="info"/>
+
     <logger name="org.apache.kafka" level="warn"/>
 
     <!-- ALWAYS ON despite the blanket warn above: offset-reset decisions are rare (one line each) and

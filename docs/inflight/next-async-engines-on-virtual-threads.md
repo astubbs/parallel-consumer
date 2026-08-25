@@ -1,7 +1,7 @@
 # Can the async engines also run on virtual threads?
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 **Antony's question, 2026-08-22, asked on seeing the engine comparison.** Virtual threads are wired

@@ -34,6 +34,15 @@
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
+        <!-- The core test-jar's PCModuleTestEnv (reached via the shared KafkaClientUtils produce path)
+             uses threeten-extra's MutableClock; test scope is not transitive, so it must be declared
+             here or VertxConcurrencyIT dies at class-load with NoClassDefFoundError. Version managed
+             in the parent. -->
+        <dependency>
+            <groupId>org.threeten</groupId>
+            <artifactId>threeten-extra</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- External-->
         <dependency>
             <groupId>io.vertx</groupId>

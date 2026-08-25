@@ -49,13 +49,20 @@ in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # A note in a subdirectory escapes EVERYTHING: this glob is non-recursive and the index's safety net
 # uses -maxdepth 1, while its grouping grep recurses - so a mis-tagged note under docs/inflight/sub/
-# is neither checked nor listed nor grouped. docs/inflight/AGENTS.md forbids subdirectories; this is
-# the line that enforces it.
+# is neither checked nor listed nor grouped. docs/inflight/AGENTS.md forbids subdirectories WITH ONE
+# DELIBERATE EXCEPTION it documents: clients/<lang>.md, the language-proxy fan-out's per-language
+# family (astubbs#242). The gate honours the exception by CHECKING those notes rather than flagging
+# their location - an allowed subdirectory whose notes were skipped would be the escape this line
+# exists to prevent, wearing a permission slip.
 while IFS= read -r stray; do
-    [ -n "$stray" ] && note "$stray: notes must be flat in docs/inflight/ - a subdirectory escapes both this gate and the session index"
+    case "$stray" in docs/inflight/clients/*.md) continue ;; esac
+    [ -n "$stray" ] && note "$stray: notes must be flat in docs/inflight/ - a subdirectory escapes both this gate and the session index (docs/inflight/AGENTS.md names clients/ as the sole exception)"
 done <<< "$(find docs/inflight -mindepth 2 -name '*.md' -type f 2>/dev/null)"
 
-for f in docs/inflight/*.md; do
+for f in docs/inflight/*.md docs/inflight/clients/*.md; do
+    # The clients/ glob is empty in trees (and self-test fixtures) without the fan-out - an
+    # unexpanded literal must not read as a broken note.
+    [ -e "$f" ] || continue
     base=$(basename "$f")
     case "$base" in AGENTS.md|CLAUDE.md) continue ;; esac
 
@@ -136,12 +143,16 @@ if [ -r "$OWNER_DOC" ]; then
     for v in $INFLIGHT_TYPES $INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS; do
         grep -q "\`${v}\`" "$OWNER_DOC" || note "vocabulary '$v' is in bin/lib/inflight-tags.sh but never described in $OWNER_DOC"
     done
-    # every impact the doc's table declares must be one the gate accepts
+    # every impact the doc's table declares must be one the gate accepts.
+    # `sed -E`, NOT a basic regex: `\+` and `\|` are GNU BRE extensions that BSD sed does not
+    # implement, so on macOS this expression matched nothing and extracted ZERO impacts - this whole
+    # direction of the agreement check passed by never running. It reported success, which is worse
+    # than failing. Measured: 0 rows on BSD against 17 with the form below.
     while IFS= read -r v; do
         [ -n "$v" ] || continue
         in_set "$v" "$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS" \
             || note "$OWNER_DOC documents impact '$v', which bin/lib/inflight-tags.sh does not accept"
-    done <<< "$(sed -n 's/^| `\([a-z-]\+\)` | \(bug\|task\|feature\|register\).*/\1/p' "$OWNER_DOC")"
+    done <<< "$(sed -E -n 's/^\| `([a-z-]+)` \| (bug|task|feature|register).*/\1/p' "$OWNER_DOC")"
 fi
 
 if [ "$problems" -gt 0 ]; then

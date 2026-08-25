@@ -1,5 +1,8 @@
 # Parked, post-v6: use batching to compete on throughput with a plain consumer
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6 -->
+
 Owner's idea, 2026-08-15:
 
 > "The core consumer is basically doing massive batching. So I don't see any reason why we can't just

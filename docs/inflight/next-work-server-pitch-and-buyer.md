@@ -1,5 +1,7 @@
 # The work-server pitch: who buys it, what it replaces, what it enables
 
+<!-- inflight-type: register -->
+
 Synthesis of the 2026-08-15 conversation that ran from "wouldn't an HTTP server be just another
 foreign language?" to "what *is* this thing". The dialects, adapters and the sidecar-or-server fork
 are owned by [`next-http-strategy-ideas.md`](next-http-strategy-ideas.md) — **§4h owns the fork and

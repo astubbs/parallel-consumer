@@ -1,3 +1,4 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
 // Unit tests for file-ref-gate.js. Run by the PR Checklist job before the gate itself, so a broken
 // rule fails loudly rather than silently passing - or failing - every PR.
 //

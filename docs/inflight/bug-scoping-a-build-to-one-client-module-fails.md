@@ -1,5 +1,8 @@
 # `-pl :<a client module>` fails on its own, and the message names the wrong thing
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 Found 2026-08-17 while proving the foreign client builds actually compile (astubbs#242). Open, not
 fixed.
 

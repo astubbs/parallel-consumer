@@ -1,5 +1,8 @@
 # Parked, post-v6, **low priority**: reproducible performance against each language's native Kafka client
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6, low priority -->
+
 Owner's idea, 2026-08-15, explicitly "super low priority". Separate from - and deliberately not a
 substitute for - the release-time measurement in
 [`parked-testing-as-a-feature-for-the-clients.md`](parked-testing-as-a-feature-for-the-clients.md),

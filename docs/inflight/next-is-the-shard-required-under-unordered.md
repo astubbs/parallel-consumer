@@ -1,7 +1,7 @@
 # Is the shard key required under UNORDERED? And is indexing around it the wrong fix?
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-impact: refactor -->
 
 > **SCOPE: `UNORDERED` ONLY.** The ordered modes examine **exactly one entry per record dispatched**
 > (measured, `OrderingModeDispatchParityTest`), because the break fires after the head. There is no

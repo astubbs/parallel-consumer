@@ -1,7 +1,8 @@
 # Parked: two attempts at the shard dispatch scan, both measured, both rejected
 
-<!-- inflight-type: parked -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
+<!-- inflight-state: parked - two attempts measured and rejected; kept with retry guidance should it be reattempted -->
 <!-- inflight-labels: needs-measurement -->
 
 Parked 2026-08-21, **because it was measured and does nothing** - not because it was abandoned

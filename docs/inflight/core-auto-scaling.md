@@ -1,7 +1,44 @@
 # Auto-scaling - self-discovered concurrency, and instance-count recommendation
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: deferred - after v6, direction not yet chosen -->
+<!-- inflight-impact: throughput -->
+
+> **Status, 2026-08-25: dimension one is built, and the law rewrite landed and verified.** The
+> per-instance controller landed opt-in and off by default on astubbs#333; the control law now
+> steers on **throughput elasticity** - grow while more concurrency still buys more completions,
+> hold at the plateau - with the learned latency baseline deleted outright, and under ENFORCE the
+> target drives the worker pool's size, closing the loop at every value. The Gradient2 port it
+> replaced is kept reachable at the `admission-gradient2-port` tag. Verified against a real broker:
+> ramping without loss, a rebalance, a genuinely closed loop, and a three-arm comparison where the
+> adaptive arm beats a hand-tuned static on every strict phase.
+>
+> The headline debt the 2026-08-24 status recorded here - **no fixed point below the ceiling**, the
+> target walking upward indefinitely on any workload that degrades gracefully - is what the rewrite
+> fixed, falsifier-first: the ratchet is red on the old law's own control run and green on the band
+> machine. It was the difficulty the owner reports having hit repeatedly when first attempting
+> this, years before this attempt - the hard part of the problem domain, not a defect introduced
+> here, and
+> [`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md)
+> is the design that answered it.
+>
+> **Dimension two remains deferred and genuinely direction-unchosen** - see the staging below, which
+> still stands as written for the instance-count half.
+>
+> What dimension one still owes is in
+> [`pr-333-adaptive-concurrency-outstanding.md`](pr-333-adaptive-concurrency-outstanding.md) - now
+> just the real-hardware value measurement and merge prep; the capabilities it should grow next are
+> in [`core-adaptive-concurrency-future-modes.md`](core-adaptive-concurrency-future-modes.md).
+>
+> It replaces a two-plan split
+> ([`...-001`](../plans/2026-08-24-001-feat-admission-ratchet-plan.md) superseded,
+> [`...-002`](../plans/2026-08-24-002-feat-admission-optimisation-objective-plan.md) absorbed) made on
+> the argument that *an objective is what makes the controller useful; it is not what stops it
+> climbing*. **That argument is contradicted by prior art, and the correction is the finding worth
+> carrying:** Uber Cinnamon hit this exact drift in production and fixed it with a throughput-covariance
+> veto - an absolute objective - not a baseline patch; Netflix/concurrency-limits#137 and envoyproxy/envoy#38338
+> are the same failure and both remain open. A ratio cannot detect a steadily-bad absolute level, so
+> the ratchet is not a defect in how the baseline is maintained. It is what a purely relative objective
+> does.
 
 
 The ask is astubbs#227 (mirror of confluentinc#21): stop making users pick `maxConcurrency` -
@@ -55,6 +92,19 @@ fleet converges without oscillation, AIMD-style (+1 "plateaued at my sustainable
 concurrency and still behind" / -1 "underutilized" / 0 otherwise). Infrastructure sums the
 votes (or HPA averages an equivalent headroom gauge - `desired = ceil(current x metric/target)`
 - convergence for free, no leader, no new channel).
+
+**Addition from the Codex strategy review, 2026-08-22/23
+([`core-engine-thesis.md`](core-engine-thesis.md)): the vote must encode WHY the instance
+plateaued, because "at my ceiling and still behind" is three different situations with three
+different right answers.** Local capacity exhausted while independent keys go unexploited: another
+instance genuinely helps, vote +1. Downstream saturated: another instance makes it worse, vote 0
+(or -1) despite the lag. No exploitable key parallelism left in the assigned data: more instances
+cannot expose more useful work, vote 0 - this is the per-key generalisation of the existing
+partition-count cap. The client-side vantage is exactly what makes the distinction observable
+(admission saturation vs downstream latency vs blocked ordering domains), and it is what makes the
+recommendation stronger than "tell infrastructure when more would help" - the signal no external
+autoscaler can construct.
+
 Lifecycle rules:
 
 - **Post-rebalance cooldown, per instance.** Any membership or assignment change invalidates
@@ -176,3 +226,38 @@ safety margin the load-factor work needs. It is not a switch.
 its entire reason for existing is switched off. Under a Streams topology, though, that operating point
 is the common case rather than the pathological one, which is what changes the answer.
 
+
+## Decisions taken 2026-08-24, and one branch to delete at merge prep
+
+- **Continue with adaptive discovery; do not divert to rate limiting first.** The overload signal is
+  worth much less without a controller to feed, and this work is far enough along that reordering
+  costs more than it buys. Owner's call.
+- **Fixed and adaptive rate limiting are layers that compose, not rivals.** An explicit ceiling
+  ("our endpoint allows 100/s total") and adaptive discovery answer different questions - capacity is
+  discoverable, a contractual quota never is - so they compose by `min()`. This is the same
+  conclusion [`core-distributed-throttling.md`](core-distributed-throttling.md) reached from the
+  other side; that note owns the strategy-menu shape.
+- **`maxConcurrency` is a maximum concurrency, not a thread count.** If the engine is auto-scaling,
+  how the ceiling is honoured - platform pool, virtual threads, no pool - is the engine's business.
+  This turns the open-loop defect into a design correction rather than a patch: the controller sizes
+  the pool to its own target, so the target *is* concurrency instead of a feeding rate. The design
+  owns the mechanism -
+  [`../plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md).
+- **How a user signals downstream overload is decided**: a method on the `PollContext` the function
+  already receives - *exceptions are for aborting, not for messaging* - with a classifier SPI
+  shipping alongside it in v1 for existing throwing code.
+  [`../plans/2026-08-24-004-feat-downstream-pressure-signal-plan.md`](../plans/2026-08-24-004-feat-downstream-pressure-signal-plan.md)
+  owns it, including the recorded override of the ideation's exception design and the v1 reduction
+  of X-RateLimit headers to deferrals (the declared-rate reading belongs to astubbs#228).
+- **The latency baseline is deleted, not augmented** (2026-08-24). The deciding frame: PC's engine
+  is a **work server**, so the precedent class is the CLR ThreadPool's throughput-only worker
+  sizing, not the request servers that keep latency because latency is their product objective. The
+  retreat is bounded by the `admission-gradient2-port` tag and gated on a named falsifier - the
+  design's phase-5 plateau test - never on opinion.
+
+**Delete `origin/features/rate-limiting` when this work is prepped for merge.** A 2021 bucket4j POC
+touching only the Reactor and Vertx example apps, still in `io.confluent` packages, never merged, no
+PR, and contained in no other branch - so nothing is lost. Its idea is already catalogued in
+`docs/refactoring.md`'s idea bank, which is where the record belongs; the branch itself is just a
+stale ref that reads as live work to anyone listing branches. Do it at merge prep, not now, so the
+catalogue entry can be checked against the branch one last time.

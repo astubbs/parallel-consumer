@@ -11,6 +11,7 @@ import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.internal.admission.AdmissionBoundarySignals;
 import bz.stub.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
@@ -295,6 +296,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private State state = State.UNUSED;
 
     /**
+     * R13 pause poison: set on the RUNNING-&gt;PAUSED transition ({@link #pauseIfRunning()}, any thread), consumed
+     * by the control thread at the first post-resume {@link #tickAdmissionController()} pass, which discards the
+     * admission controller's in-progress sample window - in-flight work keeps completing while PAUSED, so without
+     * this the first post-resume window would mix pre-pause and mid-pause samples into one reading. Since U6 the
+     * same consumption also aborts any in-flight probe (restoring its deferred target) and stamps an elasticity
+     * invalidation boundary (KTD3: history predating a pause describes a plant an unknown span in the past); the
+     * warmup EPISODE survives, so pause-cycling shares one allowance (KTD2).
+     */
+    private final AtomicBoolean admissionWindowPoisonedByPause = new AtomicBoolean(false);
+
+    /**
      * Wrapped {@link ConsumerRebalanceListener} passed in by a user that we can also call on events
      */
     private Optional<ConsumerRebalanceListener> usersConsumerRebalanceListener = Optional.empty();
@@ -324,6 +336,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Setter(PACKAGE)
     private boolean lastWorkRequestWasFulfilled = false;
 
+    /**
+     * Package-private read access for request-quantity tests, so they can see what a request reported without going
+     * through the load factor. Deliberately not a bean-style {@code is...} getter: the Truth subject generator wraps
+     * every inherited bean getter into subjects in other packages, where a package-private method is not callable,
+     * and the generated code then fails to compile.
+     */
+    boolean lastWorkRequestWasFulfilled() {
+        return lastWorkRequestWasFulfilled;
+    }
+
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
     private Gauge statusGauge;
@@ -333,6 +355,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private Duration drainTimeout;
 
     private PCMetrics pcMetrics;
+
+    /**
+     * Whether adaptive concurrency was requested ({@link ParallelConsumerOptions#getAdaptiveConcurrencyMode()} not
+     * {@code DISABLED}) <b>and</b> this engine can serve it ({@link #supportsAdaptiveConcurrency()}). Resolved once,
+     * in the constructor, before the worker pool is built - so pool construction can consult it - and is the single
+     * truth every downstream component reads: nothing else re-derives the mode-versus-capability decision. When an
+     * EXPLICITLY set mode is unsupported, resolution throws rather than resolving; when an unsupported mode came
+     * from the ambient system property it logs one WARN naming why and this stays {@code false}, so the system
+     * behaves as {@code DISABLED} everywhere - see {@link #resolveAdaptiveConcurrencyActive()}.
+     */
+    @Getter(PROTECTED)
+    private final boolean adaptiveConcurrencyActive;
 
     protected AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions) {
         this(newOptions, new PCModule<>(newOptions));
@@ -362,7 +396,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
         pcMetrics = module.pcMetrics();
 
+        // Defaulted here, and not later: the worker pool, the broker poller and the control thread all read it when
+        // they name themselves, and all three are wired below.
+        this.myId = Optional.of(defaultInstanceId(newOptions, pcMetrics));
+
         this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
+
+        // Resolved BEFORE the worker pool below is forced, deliberately: pool sizing is allowed to depend on this
+        // decision, so the decision may never depend on the pool.
+        this.adaptiveConcurrencyActive = resolveAdaptiveConcurrencyActive();
 
         workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
         // Resolved here, not left to the first dispatch. The supplier is memoized and therefore lazy, but
@@ -372,6 +414,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // it only stops the precondition's timing from depending on that, and moves the failure ahead of the poller
         // and producer manager, so nothing half built has to be unwound.
         workerThreadPool.get();
+        sizeWorkerPoolForAdmission();
 
         this.wm = module.workManager();
 
@@ -456,6 +499,85 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return true;
     }
 
+    /**
+     * Whether this engine can serve the adaptive-concurrency controller
+     * ({@link ParallelConsumerOptions#getAdaptiveConcurrencyMode()}).
+     * <p>
+     * False for {@link ExternalEngine}, for the same reason {@link #supportsDirectPull()} and
+     * {@link #supportsVirtualThreads()} are: its worker "pool" is one dispatch thread, and the concurrency to adapt
+     * lives in the external runtime, out of this library's reach.
+     * <p>
+     * The direct-pull engine cannot serve it either, but direct pull is an <em>option</em> on the core engine
+     * ({@link ParallelConsumerOptions#isDirectPullEngine()}), not a subclass - so that half of the answer is folded
+     * in here rather than expressed as an override.
+     *
+     * @see #isAdaptiveConcurrencyActive()
+     */
+    protected boolean supportsAdaptiveConcurrency() {
+        return !options.isDirectPullEngine();
+    }
+
+    /**
+     * The constructor-time half of {@link #isAdaptiveConcurrencyActive()}: folds the requested mode into the
+     * capability answer, and is the one place an unservable request is answered.
+     * <p>
+     * <b>The severity depends on who asked.</b> A mode set explicitly on the builder
+     * ({@link ParallelConsumerOptions#isAdaptiveConcurrencyModeExplicit()}) meeting an engine that cannot serve it
+     * is not a degraded configuration, it is an invalid one - the user asked for something that will not happen -
+     * so it THROWS, as {@code useVirtualThreads} already does on a JVM that cannot provide them. A mode that
+     * arrived from the JVM-wide {@value ParallelConsumerOptions#ADAPTIVE_CONCURRENCY_MODE_PROPERTY} property keeps
+     * the WARN and runs static: that property exists so a bench harness or a CI matrix can enable measurement
+     * across a whole JVM, and an ambient default that throws would take down every Vert.x, Reactor and Mutiny
+     * consumer sharing it.
+     * <p>
+     * This is where the decision has to live: {@code ParallelConsumerOptions#validate()} cannot see the engine
+     * subclass, so capability is not knowable until a processor is being constructed.
+     */
+    private boolean resolveAdaptiveConcurrencyActive() {
+        boolean requested = options.getAdaptiveConcurrencyMode() != ParallelConsumerOptions.AdaptiveConcurrencyMode.DISABLED;
+        if (!requested) {
+            return false;
+        }
+        if (supportsAdaptiveConcurrency()) {
+            return true;
+        }
+        String reason = options.isDirectPullEngine()
+                ? "the direct-pull engine (isDirectPullEngine) has no executor queue for the controller to size - " +
+                "workers select their own work"
+                : msg("{} dispatches into an external runtime, so the concurrency to adapt lives out there, " +
+                "not in a pool this library sizes", this.getClass().getSimpleName());
+        if (options.isAdaptiveConcurrencyModeExplicit()) {
+            throw new IllegalArgumentException(msg("adaptiveConcurrencyMode is {} but this configuration cannot " +
+                            "serve it: {}. Remove the option, or run this workload on an engine that can steer " +
+                            "its own concurrency. (A mode picked up from the {} system property instead of set " +
+                            "here would only warn - it is an ambient default, not a request.)",
+                    options.getAdaptiveConcurrencyMode(), reason,
+                    ParallelConsumerOptions.ADAPTIVE_CONCURRENCY_MODE_PROPERTY));
+        }
+        log.warn("adaptiveConcurrencyMode is {} but this configuration cannot serve it: {}. It came from the {} " +
+                        "system property rather than from this application's code, so it is an ambient default and " +
+                        "not a request - continuing with adaptive concurrency DISABLED.",
+                options.getAdaptiveConcurrencyMode(), reason,
+                ParallelConsumerOptions.ADAPTIVE_CONCURRENCY_MODE_PROPERTY);
+        return false;
+    }
+
+    /**
+     * Whether the LIVE admission target is allowed to steer dispatch and intake: adaptive concurrency resolved
+     * ACTIVE ({@link #isAdaptiveConcurrencyActive()}) <b>and</b> the mode is
+     * {@link ParallelConsumerOptions.AdaptiveConcurrencyMode#ENFORCE}. {@code OBSERVE} measures without acting, so
+     * every seam read ({@link PCModule#admissionTargetRecords()}, {@link #getQueueTargetLoaded()},
+     * {@link #timeToBlockFor()}) keeps today's static arithmetic there, exactly as in {@code DISABLED}.
+     * <p>
+     * Package-private with no {@code is} prefix for the Truth-generator reason on
+     * {@link #userFunctionTaskAccounting()}; package-private also lets {@link PCModule} consult it, keeping this the
+     * single place the mode-versus-capability decision meets the mode split.
+     */
+    boolean adaptiveEnforcementActive() {
+        return adaptiveConcurrencyActive
+                && options.getAdaptiveConcurrencyMode() == ParallelConsumerOptions.AdaptiveConcurrencyMode.ENFORCE;
+    }
+
     protected ExecutorService setupWorkerPool(int poolSize) {
         if (options.isUseVirtualThreads()) {
             if (supportsVirtualThreads()) {
@@ -530,6 +652,83 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             "executor - report a bug.",
                     System.getProperty("java.vm.name"), System.getProperty("java.version")), e);
         }
+    }
+
+    /**
+     * The worker pool, when the pool actuator applies to it - empty when the actuator is INERT (the plan's
+     * R10/KTD5): active ENFORCE only, and only a {@link ThreadPoolExecutor}, the same {@code instanceof}
+     * capability test {@link #initMetrics()} uses for {@link ExecutorServiceMetrics}. A virtual-thread executor,
+     * a subclass-overridden pool and an external engine's dispatch thread all answer empty - for those, dispatch
+     * gating (R12, {@link #calculateQuantityToRequest()}) remains the bound on concurrency.
+     * <p>
+     * The {@link #adaptiveEnforcementActive()} gate is also KTD5's two-ceilings exclusion: it folds in
+     * {@link #isAdaptiveConcurrencyActive()}, so the controller's ceiling is only ever read here AFTER capability
+     * resolution - a controller constructed with mode ENFORCE can report the substituted ceiling while the engine
+     * downgraded the mode to static, and behind this gate that state is unreachable.
+     */
+    private Optional<ThreadPoolExecutor> steerableWorkerPool() {
+        if (!adaptiveEnforcementActive()) {
+            return Optional.empty();
+        }
+        ExecutorService pool = workerThreadPool.get();
+        return pool instanceof ThreadPoolExecutor ? Optional.of((ThreadPoolExecutor) pool) : Optional.empty();
+    }
+
+    /**
+     * The construction-time half of the pool actuator (the plan's R9/KTD5): under active ENFORCE with a steerable
+     * pool, {@code maximumPoolSize} is set to the resolved ceiling and {@code corePoolSize} to the seeded initial
+     * target. Under the unbounded work queue the maximum is INERT for thread creation - workers beyond core are
+     * only added when the queue rejects an offer, which an unbounded queue never does - so the ceiling reservation
+     * costs nothing; what it buys is making {@code setCorePoolSize} legal at every value the controller may ever
+     * publish ({@code setCorePoolSize} above {@code maximumPoolSize} throws on JDK 9+).
+     * <p>
+     * Ordering is load-bearing: the pool arrives {@code core == max == maxConcurrency}, and the seeded target may
+     * legitimately exceed that under the substituted default ceiling - so max is raised FIRST.
+     * <p>
+     * DISABLED and OBSERVE never reach the body: their pool stays exactly today's construction.
+     */
+    private void sizeWorkerPoolForAdmission() {
+        steerableWorkerPool().ifPresent(pool -> {
+            var controller = module.admissionController();
+            pool.setMaximumPoolSize(controller.effectiveMaximum());
+            pool.setCorePoolSize(controller.currentTarget());
+        });
+    }
+
+    /**
+     * The live half of the pool actuator (R9): tracks the published admission target with {@code setCorePoolSize}
+     * as the single knob. Called from the control thread on each published target CHANGE - only on change, never
+     * every tick: the target holds on most windows, and {@code setCorePoolSize} takes the pool's main lock.
+     * Lowering it interrupts only IDLE workers, so surplus workers exit as they finish - a contraction never cuts
+     * a running user function.
+     * <p>
+     * Clamped to the pool's own {@code maximumPoolSize} (and to a floor of one worker) so the JDK 9+
+     * {@code IllegalArgumentException} is unreachable whatever a future law publishes - the ceiling was reserved
+     * as max at construction precisely so this clamp is normally a no-op.
+     * <p>
+     * Package-private so the actuator contract is testable without driving a whole control loop - the
+     * {@link #tickAdmissionController()} pattern.
+     */
+    void applyAdmissionTargetToWorkerPool(int targetSlots) {
+        steerableWorkerPool().ifPresent(pool ->
+                pool.setCorePoolSize(Math.max(1, Math.min(targetSlots, pool.getMaximumPoolSize()))));
+    }
+
+    /**
+     * The shutdown half of the pool actuator (the plan's R11): entering DRAINING or CLOSING widens
+     * {@code corePoolSize} back to the ceiling, so a drain that starts with a contracted target does not race
+     * {@code drainTimeout} at contracted width - a breach there discards in-flight work. The seam release
+     * ({@link PCModule#admissionTargetRecords()}) is a READ and cannot resize the pool, which is why this edge
+     * action exists at all.
+     * <p>
+     * Called from {@link #transitionToDraining()} (the caller's or broker-poll thread - {@code setCorePoolSize}
+     * is internally locked, so cross-thread is safe) AND as a mandatory backstop from {@link #innerDoClose}
+     * before pool shutdown: a control-thread tick that read {@code RUNNING} just before the state flipped can
+     * transiently re-narrow the pool after the edge action, and a {@code DONT_DRAIN} close never runs the edge
+     * at all.
+     */
+    void widenWorkerPoolForShutdown() {
+        steerableWorkerPool().ifPresent(pool -> pool.setCorePoolSize(pool.getMaximumPoolSize()));
     }
 
     /**
@@ -654,6 +853,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
         log.debug("Partitions revoked {}, state: {}", partitions, state);
+        if (isAdaptiveConcurrencyActive()) {
+            // FIRST, before anything below can throw: pure set bookkeeping for the KTD9 assignment-delta gate.
+            // The reset decision itself is taken on the control thread, at the admission tick.
+            module.admissionController().onPartitionsRevoked(partitions);
+        }
         isRebalanceInProgress.set(true);
         while (isTransactionCommittingInProgress())
             Thread.sleep(100); //wait for the transaction to finish committing
@@ -689,6 +893,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
         wm.onPartitionsAssigned(partitions);
+        if (isAdaptiveConcurrencyActive()) {
+            // cycle end for the KTD9 assignment-delta gate - the controller compares against its baseline here
+            module.admissionController().onPartitionsAssigned(partitions);
+        }
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
     }
@@ -703,6 +911,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
         wm.onPartitionsLost(partitions);
+        if (isAdaptiveConcurrencyActive()) {
+            // a loss ends a cycle with no assignment half, so the delta gate compares here too
+            module.admissionController().onPartitionsLost(partitions);
+        }
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsLost(partitions));
     }
 
@@ -924,6 +1136,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         directPullPool.ifPresent(DirectPullWorkerPool::stop);
         //Clear scheduled but not started work in execution pool
         discardQueuedWork();
+        // R11 backstop, mandatory: a control-thread tick can have transiently re-narrowed the pool after
+        // transitionToDraining's edge action, and a DONT_DRAIN close never ran that edge at all - widen before
+        // shutdown so the accepted in-flight work drains at full width rather than racing the timeout contracted.
+        widenWorkerPoolForShutdown();
         //request graceful shutdown
         workerThreadPool.get().shutdown();
         if (userFunctionTaskAccounting.getActive() > 0) {
@@ -1016,9 +1232,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return isRecordsAwaitingProcessing || threadsDone;
     }
 
-    private void transitionToDraining() {
+    /**
+     * Package-private (not {@code private}) so the R11 pool-widening edge below is testable without running a
+     * whole control loop - the {@link #tickAdmissionController()} pattern.
+     */
+    void transitionToDraining() {
         log.debug("Transitioning to draining...");
         this.state = State.DRAINING;
+        // R11 edge action: state is set FIRST, so a tick arriving after this line is already gated out of
+        // re-narrowing; a tick that read RUNNING just before it is the race the innerDoClose backstop covers.
+        widenWorkerPoolForShutdown();
         notifySomethingToDo();
     }
 
@@ -1044,11 +1267,45 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * Optional ID of this instance. Useful for testing.
+     * This instance's identity in the logs: rendered as the {@value #MDC_INSTANCE_ID} MDC key (the logback
+     * patterns in this repo carry {@code %X{pcId}}) and appended to the {@code pc-control}, {@code pc-broker-poll}
+     * and worker thread names.
+     * <p>
+     * <b>Defaulted at construction</b> - see {@link #defaultInstanceId} - so that two instances sharing a JVM are
+     * distinguishable in one log stream without anyone opting in. It was previously {@code Optional.empty()} by
+     * default, built as a manual testing aid, which left {@code %X{pcId}} blank on every line: two interleaved
+     * trajectories then read as one impossible controller.
+     * <p>
+     * Still settable - {@code setMyId} after construction wins over the default, which is what the test harnesses
+     * that give instances readable names (e.g. {@code PC1}, {@code Runner-2}) rely on.
      */
     @Setter
     @Getter
     private Optional<String> myId = Optional.empty();
+
+    /**
+     * How many characters of a GENERATED instance tag reach the log. {@link PCMetrics} generates a full UUID when
+     * the user supplied no {@code pcInstanceTag}, and 36 characters on every line is a tax nobody would accept for
+     * an id whose only job is to tell two instances apart. A prefix still grep-matches the full tag on the metric,
+     * so the log line and the meter remain correlatable in the direction that matters.
+     */
+    private static final int GENERATED_INSTANCE_ID_LENGTH = 8;
+
+    /**
+     * The default {@link #myId}: the same identity {@link PCMetrics} publishes as its {@code pcinstance} meter tag,
+     * so a log line and a metric name the same instance.
+     * <p>
+     * A user-supplied {@link ParallelConsumerOptions#getPcInstanceTag() pcInstanceTag} is used verbatim - they
+     * chose that string to be read. A tag PC generated for itself is a UUID, and is abbreviated to
+     * {@value #GENERATED_INSTANCE_ID_LENGTH} characters.
+     */
+    private static String defaultInstanceId(ParallelConsumerOptions<?, ?> options, PCMetrics metrics) {
+        String tag = metrics.getInstanceTag().getValue();
+        boolean generated = options.getPcInstanceTag() == null;
+        return generated && tag.length() > GENERATED_INSTANCE_ID_LENGTH
+                ? tag.substring(0, GENERATED_INSTANCE_ID_LENGTH)
+                : tag;
+    }
 
     /**
      * Kicks off the control loop in the executor, with supervision and returns.
@@ -1140,7 +1397,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         final boolean shouldTryCommitNow = maybeAcquireCommitLock();
 
         // make sure all work that's been completed are arranged ready for commit
-        Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
+        Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : timeToBlockFor();
         processWorkCompleteMailBox(timeToBlockFor);
 
         //
@@ -1165,6 +1422,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } else {
             retrieveAndDistributeNewWork(userFunction, callback);
         }
+
+        // one in-flight snapshot per pass - the admission controller's third input - then the controller's tick,
+        // AFTER the snapshot so a window closing this pass includes it
+        sampleAdmissionInFlight();
+        tickAdmissionController();
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -1208,6 +1470,129 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.trace("End of control loop, waiting processing {}, remaining in partition queues: {}, out for processing: {}. In state: {}",
                     wm.getNumberOfWorkQueuedInShardsAwaitingSelection(), wm.getNumberOfIncompleteOffsets(), wm.getNumberRecordsOutForProcessing(), state);
         }
+    }
+
+    /**
+     * The admission controller's IN-FLIGHT tap: one snapshot per {@link #controlLoop} pass of the EXISTING
+     * conservation-derived accounting, {@link WorkManager#getNumberRecordsOutForProcessing()} - no new counter, and
+     * a pure read (nothing drained, nothing altered). The same pass also snapshots the OCCUPIED slot count
+     * ({@link UserFunctionTaskAccounting#getOccupied()}: dispatched-and-unfinished tasks, queued plus active) -
+     * the per-pass evidence stream {@code ClosedAdmissionWindow#bindingClassification()} aggregates (p90) to judge
+     * binding, replacing the boundary-instant point check that froze the 2026-08-25 comparison-IT run (the instant
+     * sample reads momentarily empty between completions and dispatches even while the window is saturated
+     * throughout). Occupied, not {@code getActive()}: this sampler runs immediately after dispatch, inside the
+     * submit-to-start handoff of the replacements this very pass dispatched, so the active count alone reads
+     * target-minus-one on almost every saturated pass - the same point-check defect one layer down.
+     * <p>
+     * Sampled from the control loop deliberately, never from the completion path: completion-driven samples land
+     * just after decrements, biasing the distribution low exactly when throughput is high. The loop's fixed cadence
+     * samples the level, not the events. Sits after dispatch, so the snapshot includes work this very pass put out
+     * - the concurrency actually deployed, which is what the control law sizes against. Runs in {@code OBSERVE} as
+     * well as {@code ENFORCE} (signals flowing without acting is OBSERVE's whole point); gated only on
+     * {@link #isAdaptiveConcurrencyActive()}, one final-field read, so the inactive cost is nil.
+     * <p>
+     * Package-private (non-{@code get}-prefixed, see {@link #userFunctionTaskAccounting()}) so the per-pass
+     * contract is testable without driving a real control loop - the {@link #checkPipelinePressure()} pattern.
+     */
+    void sampleAdmissionInFlight() {
+        if (isAdaptiveConcurrencyActive()) {
+            var controller = module.admissionController();
+            controller.recordInFlight(wm.getNumberRecordsOutForProcessing());
+            controller.recordActiveTasks(userFunctionTaskAccounting.getOccupied());
+        }
+    }
+
+    /**
+     * The admission controller's TICK, called once per {@link #controlLoop} pass (the plan's KTD7): a direct call
+     * adjacent to {@link #sampleAdmissionInFlight()} rather than a {@link #controlLoopHooks} registration,
+     * deliberately - the hooks are a public plugin surface ({@link #addLoopEndCallBack(Runnable)}) that runs
+     * unconditionally, while this needs the state gate below, an explicit ordering AFTER the pass's in-flight
+     * snapshot (so a window closing this pass includes it), and the same direct per-pass testability the sampler
+     * has. The WINDOW BOUNDARY is the controller's own injected-clock deadline inside
+     * {@code AdmissionController#tick()}, never this loop's block time - {@link #timeToBlockFor()} is itself
+     * target-derived, so a contracted target would otherwise slow the controller's own recovery cadence.
+     * <p>
+     * Gating: only while {@link State#RUNNING} and adaptive concurrency is active (which already folds in
+     * mode-not-DISABLED and engine capability). Not ticking outside RUNNING is load-bearing for the R13 lifecycle:
+     * DRAINING/CLOSING releases enforcement through the STATE-DERIVED seam read in
+     * {@link PCModule#admissionTargetRecords()} plus the R11 pool widening
+     * ({@link #widenWorkerPoolForShutdown()} - the one release a read cannot perform), and a PAUSED interval
+     * simply stops the clock's windows from being acted on until the poison below cleans up.
+     * <p>
+     * Pause poison (R13): the first tick after a RUNNING-&gt;PAUSED-&gt;RUNNING cycle consumes
+     * {@link #admissionWindowPoisonedByPause} and discards the in-progress window, so no pre-pause samples appear
+     * in the first post-resume window. Cost: any samples recorded between resume and this pass (at most one loop
+     * pass) are discarded with them.
+     * <p>
+     * A target that GREW re-runs {@link #maybeWakeupPoller()} so a poller paused for throttling notices the new
+     * headroom this pass rather than next pass - the cheapest correct call, since it re-derives its conditions
+     * (buffer load, poller actually paused) instead of waking blindly; the wake itself is
+     * {@code ConsumerManager#wakeup()}, NOT a thread interrupt, so this adds no sender on the interrupt-based wake
+     * channel.
+     * <p>
+     * Package-private (non-{@code get}-prefixed, see {@link #userFunctionTaskAccounting()}) so the per-pass
+     * contract is testable without driving a real control loop - the {@link #sampleAdmissionInFlight()} pattern.
+     */
+    void tickAdmissionController() {
+        if (!isAdaptiveConcurrencyActive() || state != RUNNING) {
+            return;
+        }
+        var controller = module.admissionController();
+        if (admissionWindowPoisonedByPause.getAndSet(false)) {
+            // U6's pause edge (KTD3): besides discarding the poisoned window, the controller aborts any
+            // in-flight probe (restoring its deferred target) and stamps an estimator invalidation boundary.
+            // A probe abort can move the published target, so the pool follows here too (R9/KTD5).
+            int targetBeforeResume = controller.currentTarget();
+            controller.notifyPauseResumed();
+            int targetAfterResume = controller.currentTarget();
+            if (targetAfterResume != targetBeforeResume) {
+                applyAdmissionTargetToWorkerPool(targetAfterResume);
+            }
+            return;
+        }
+        int targetBefore = controller.currentTarget();
+        // The supplier form keeps the boundary sampling ONCE PER WINDOW: the controller invokes it only when its
+        // injected-clock deadline says a window is actually due, never on the passes in between.
+        controller.tick(this::sampleAdmissionBoundarySignals);
+        int targetAfter = controller.currentTarget();
+        if (targetAfter != targetBefore) {
+            // The actuator half of the tick (R9/KTD5): the pool follows the published target, applied on CHANGE
+            // only - the target holds on most windows, and setCorePoolSize takes the pool's main lock.
+            applyAdmissionTargetToWorkerPool(targetAfter);
+        }
+        if (targetAfter > targetBefore) {
+            maybeWakeupPoller();
+        }
+    }
+
+    /**
+     * Samples the engine signals a closing admission window is classified from (the design's R2/KTD1/R8), ONCE
+     * per window boundary - {@code AdmissionController#tick(Supplier)} invokes this only when a window is
+     * actually due, so the costlier reads here are paid about once a second, never per control-loop pass:
+     * <ul>
+     * <li>active tasks (slots) and the commanded target - the KTD1 binding verdict's two halves;</li>
+     * <li>dispatch under-served - the inverse of {@link #lastWorkRequestWasFulfilled};</li>
+     * <li>the ordering-aware selectable-work upper bound and the buffered shard work -
+     * {@link WorkManager#getUpperBoundOnSelectableWork()} is O(shards) (O(keys) under KEY ordering), acceptable
+     * at window cadence, which is exactly why this sits behind the once-per-boundary supplier;</li>
+     * <li>the poller's self-throttle flag, and the R8 offset-encoding back-pressure read
+     * ({@link WorkManager#isAnyPartitionBlocked()}, O(partitions)).</li>
+     * </ul>
+     * Package-private (non-{@code get}-prefixed, see {@link #userFunctionTaskAccounting()}) so the signal mapping
+     * is testable without driving a real control loop - the {@link #sampleAdmissionInFlight()} pattern.
+     */
+    AdmissionBoundarySignals sampleAdmissionBoundarySignals() {
+        return new AdmissionBoundarySignals(
+                // Occupied (dispatched-and-unfinished), not getActive() - the boundary is sampled at the same
+                // post-dispatch instant as the per-pass sampler, so the active count alone sits in the
+                // submit-to-start handoff (see sampleAdmissionInFlight); occupied is the honest instant figure.
+                userFunctionTaskAccounting.getOccupied(),
+                module.admissionTargetSlots(),
+                !lastWorkRequestWasFulfilled,
+                wm.getUpperBoundOnSelectableWork(),
+                wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                brokerPollSubsystem.isPausedForThrottling(),
+                wm.isAnyPartitionBlocked());
     }
 
     /**
@@ -1535,15 +1920,28 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         int current = wm.getNumberRecordsOutForProcessing();
         int delta = target - current;
 
-        // always round up to fill batches - get however extra are needed to fill a batch
+        // always round up to fill batches - get however many extra are needed to fill the last batch
+        // (astubbs#311: this added target - modulo, requesting almost a whole extra target of work on nearly every
+        // pass and settling in-flight at ~2x the configured target - see CalculateQuantityToRequestTest)
         if (options.isUsingBatching()) {
             //noinspection OptionalGetWithoutIsPresent
             int batchSize = options.getBatchSize();
             int modulo = delta % batchSize;
             if (modulo > 0) {
-                int extraToFillBatch = target - modulo;
+                int extraToFillBatch = batchSize - modulo;
                 delta = delta + extraToFillBatch;
             }
+        }
+
+        // R12: under active ENFORCE dispatch is gated in TASKS - free pool slots - with the record-denominated
+        // seam above as a cap. The record arithmetic alone cannot see task counts: under-filled batches (thin
+        // shards) carry fewer records per task than batchSize, so topping records up to the seam queues tasks
+        // beyond the slots the target commands - reopening the excluded-queue-wait loop the pool actuator exists
+        // to close. The min's seam side is the cap the other way: full batches must not exceed the record budget
+        // just because slots sit idle.
+        if (adaptiveEnforcementActive()) {
+            int freeSlots = module.admissionTargetSlots() - userFunctionTaskAccounting.getActive();
+            delta = Math.min(delta, freeSlots * options.getBatchSize());
         }
 
         log.debug("Will try to get work - target: {}, current queue size: {}, requesting: {}, loading factor: {}",
@@ -1568,8 +1966,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * <p>
      * The factor is <em>not</em> disabled in this mode - it is still doing its other job. See
      * {@link #isVirtualThreadPool()}.
+     * <p>
+     * <b>Under active ENFORCE the live target is consumed un-multiplied for the same reason</b> (the plan's KTD10):
+     * the factor's meaning - "keep the workers N deep in <em>buffered</em> work" - held only while pool size equaled
+     * the target. With the pool at the ceiling and a live target below it, target x factor records would
+     * <em>run</em>, not buffer. The factor keeps its intake-buffer job in {@code WorkManager#isSufficientlyLoaded()}'s
+     * threshold, which is buffer arithmetic.
      */
     protected int getQueueTargetLoaded() {
+        if (adaptiveEnforcementActive()) {
+            return getPoolLoadTarget();
+        }
         if (isVirtualThreadPool()) {
             return getPoolLoadTarget();
         }
@@ -1665,10 +2072,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * @return aim to never have the pool queue drop below this
+     * @return aim to never have the pool queue drop below this - the LIVE admission target when
+     *         {@link #adaptiveEnforcementActive()}, today's static derivation otherwise
+     *         ({@link PCModule#admissionTargetRecords()} owns that split)
      */
     private int getPoolLoadTarget() {
-        return options.getTargetAmountOfRecordsInFlight();
+        return module.admissionTargetRecords();
     }
 
     private boolean isPoolQueueLow() {
@@ -1756,11 +2165,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * The amount of time to block poll in this cycle
+     * <p>
+     * The in-flight-versus-target test deliberately reads the PINNED (static, ceiling-derived) target even when the
+     * live admission target has contracted below it - {@link WorkManager#isWorkInFlightMeetingTarget()}, the plan's
+     * KTD7 "bounded pin": swapping the live target in here would let a contracted target slow the control loop's
+     * own wake-ups, and with them the admission controller's recovery cadence. The pin's cost - this branch firing
+     * on passes it would not have fired on before - is bounded under active ENFORCE by clamping the result to the
+     * remaining time to the next commit check, below.
+     * <p>
+     * Package-private with no {@code get} prefix (Truth-generator constraint, see
+     * {@link #userFunctionTaskAccounting()}) so the KTD7 bound is testable without a control loop.
      *
      * @return either the duration until next commit, or next work retry
      * @see ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()
      */
-    private Duration getTimeToBlockFor() {
+    Duration timeToBlockFor() {
         // if less than target work already in flight, don't sleep longer than the next retry time for failed work, if it exists - so that we can wake up and maybe retry the failed work
         if (!wm.isWorkInFlightMeetingTarget()) {
             // though check if we have work awaiting retry
@@ -1773,6 +2192,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 Duration timeBetweenCommits = getTimeBetweenCommits();
                 Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
                 Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
+                if (adaptiveEnforcementActive()) {
+                    // KTD7 bound: this branch measures against the FULL commit interval, never the remaining one -
+                    // an overshoot that predates adaptive mode, but a contracted live target keeps in-flight below
+                    // the pinned target far more of the time, making this the loop's common branch under ENFORCE.
+                    // Unbounded, a pass landing near the end of the interval would block past the next commit
+                    // check by up to a whole interval (worst in transactional mode's short cadence). DISABLED and
+                    // OBSERVE keep today's arithmetic byte-for-byte.
+                    Duration remainingToCommitCheck = getTimeToNextCommitCheck();
+                    if (remainingToCommitCheck.compareTo(result) < 0) {
+                        result = remainingToCommitCheck;
+                    }
+                }
                 log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
                 return result;
             }
@@ -1977,8 +2408,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                                                                     final Consumer<R> callback,
                                                                                     final List<WorkContainer<K, V>> activeWorkContainers) {
         List<R> resultsFromUserFunction;
+        // System.nanoTime, not the module clock: this is a DURATION on the thread that ran the function, and the
+        // module's java.time.Clock is a wall clock (no monotonic nano source). Measured around the same call the
+        // user-function timer wraps, but independent of it - the admission signal must flow with no MeterRegistry
+        // configured. Taken unconditionally: two nanoTime reads cost nothing against a user-function invocation.
+        long serviceTimeStartNanos = System.nanoTime();
         resultsFromUserFunction = userProcessingTimer.record(() -> usersFunction.apply(context));
-
+        maybeRecordAdmissionServiceTime(System.nanoTime() - serviceTimeStartNanos, activeWorkContainers);
 
         for (final WorkContainer<K, V> kvWorkContainer : activeWorkContainers) {
             onUserFunctionSuccess(kvWorkContainer, resultsFromUserFunction);
@@ -1998,6 +2434,54 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("User function future registered");
 
         return intermediateResults;
+    }
+
+    /**
+     * Feeds one user-function invocation's service time to the admission controller - the SERVICE-TIME tap (the
+     * plan's U6), riding {@link #runUserFunctionInternal}'s worker thread.
+     * <p>
+     * Only when adaptive concurrency is ACTIVE ({@code OBSERVE} or {@code ENFORCE} on an engine that can serve
+     * it), and only for invocations that RETURNED: a throwing user function never reaches this, deliberately - a
+     * fast-failing function would otherwise read as the system speeding up, the same lie the retry exclusion
+     * below prevents. Failed invocations still count, as outcome signal, at
+     * {@link WorkManager#handleFutureResult}'s tap.
+     */
+    private void maybeRecordAdmissionServiceTime(long elapsedNanos, List<WorkContainer<K, V>> batch) {
+        if (!isAdaptiveConcurrencyActive()) {
+            return;
+        }
+        OptionalLong sampleNanos = admissionServiceTimeSampleNanos(elapsedNanos, batch);
+        if (sampleNanos.isPresent()) {
+            module.admissionController().recordServiceTime(sampleNanos.getAsLong());
+        }
+    }
+
+    /**
+     * Derives the admission service-time sample from one invocation's elapsed time: ONE sample per invocation,
+     * fill-normalized - a batch of 5 taking 50ms is one sample of 10ms, never five duplicated samples, so a
+     * half-full batch does not read as the system speeding up.
+     * <p>
+     * <b>Retry exclusion, whole-batch rule:</b> when ANY record in the batch is a retry
+     * ({@link WorkContainer#hasPreviouslyFailed()}), the whole invocation yields NO sample. A retry attempt's
+     * execution must never enter the latency window - fast-failing retries read as improvement - and a mixed
+     * batch's duration cannot be attributed record-by-record, so excluding the contaminated whole is the simple,
+     * conservative rule: it under-samples (the law holds via {@code INSUFFICIENT_SIGNAL} on thin windows) rather than
+     * ever polluting the signal.
+     * <p>
+     * Static and pure, so the arithmetic is testable without threads or clocks.
+     *
+     * @return the fill-normalized sample, or empty when the batch is empty or carries any retry
+     */
+    static OptionalLong admissionServiceTimeSampleNanos(long elapsedNanos, List<? extends WorkContainer<?, ?>> batch) {
+        if (batch.isEmpty()) {
+            return OptionalLong.empty();
+        }
+        for (WorkContainer<?, ?> workContainer : batch) {
+            if (workContainer.hasPreviouslyFailed()) {
+                return OptionalLong.empty();
+            }
+        }
+        return OptionalLong.of(elapsedNanos / batch.size());
     }
 
     private void cleanUpContext(final PollContextInternal<K, V> context) {
@@ -2085,6 +2569,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (this.state == State.RUNNING) {
             log.info("Transitioning parallel consumer to state paused.");
             this.state = State.PAUSED;
+            if (isAdaptiveConcurrencyActive()) {
+                // see the field: consumed at the first post-resume admission tick, which discards the window
+                admissionWindowPoisonedByPause.set(true);
+            }
         } else {
             log.debug("Skipping transition of parallel consumer to state paused. Current state is {}.", this.state);
         }

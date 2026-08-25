@@ -194,6 +194,30 @@ jobs:
             mode: virtual-threads
             advisory: true
             timeout: 20
+          # Adaptive concurrency, and the ONE entry on this axis that is deliberately NOT a whole-suite
+          # re-run. -Dtest scopes it to the mode's own classes plus the parity test, because the axis's
+          # usual shape - the entire suite again under a selector - costs the same 60-minute cap and no
+          # retry that got the direct-pull row above left commented out, and an adaptive-mode flake inside
+          # it would block unrelated PRs rather than only its own feature. WIDENING TO THE FULL SUITE IS
+          # THE LATER STEP, once the mode leaves experimental and its own classes have earned trust; at
+          # that point delete the -Dtest and this comment, and the entry becomes the same shape as the
+          # virtual-thread one above.
+          #
+          # -pl, because a -Dtest filter is reactor-WIDE: surefire's failIfNoSpecifiedTests defaults to
+          # true, so every other module would go red for matching none of these classes. Scoping the
+          # reactor to the module that owns them keeps that default ON, which is what makes a rename or a
+          # moved package a red rather than a green run of zero tests. check-execution-mode.sh's marker
+          # count is the second net under the same hole.
+          #
+          # OBSERVE, not ENFORCE: pc.adaptiveConcurrency may select at most OBSERVE by design, so a lane
+          # asking for enforcement would silently be downgraded and prove nothing about it. ENFORCE is
+          # exercised by the tests' OWN options - which is also why those tests run in the default lane.
+          - suite: unit
+            name: "Unit Tests (adaptive concurrency)"
+            cmd: "bin/ci-unit-test.sh -pl parallel-consumer-core -am -Dpc.adaptiveConcurrency=OBSERVE -Dtest=AdaptiveConcurrencyModeTest,AdaptiveConcurrencyParityTest -Dsurefire.failIfNoSpecifiedTests=true"
+            mode: adaptive-concurrency
+            advisory: true
+            timeout: 20
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
     # Advisory entries never gate merge - see the execution-mode note in this job's header comment.

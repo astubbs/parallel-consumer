@@ -1,6 +1,6 @@
 # Branches: the performance and market-analysis session
 
-<!-- inflight-type: branch -->
+<!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 <!-- inflight-labels: needs-measurement -->
 

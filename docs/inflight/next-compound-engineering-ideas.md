@@ -1,5 +1,7 @@
 # Compound-engineering ideas from the language-proxy fan-out
 
+<!-- inflight-type: register -->
+
 **A running ledger, kept as the work happens, to be ranked and selected at the end** (owner's
 instruction, 2026-08-14 — and the owner asked to be reminded when that point arrives). These are
 candidate *practices*, not product work: things this project did that would compound if turned into

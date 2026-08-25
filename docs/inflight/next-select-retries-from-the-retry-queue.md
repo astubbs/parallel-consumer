@@ -1,7 +1,7 @@
 # Select retries from the RetryQueue, which already exists and is already the right shape
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: performance -->
+<!-- inflight-impact: throughput -->
 
 > **SCOPE: `UNORDERED` ONLY. Antony's ruling, 2026-08-22.** Do not extend any of this to `KEY` or
 > `PARTITION`, and do not treat that as an unfinished half.

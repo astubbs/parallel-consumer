@@ -1,7 +1,7 @@
 # Next: ordered modes are safe by construction. UNORDERED is the one to think about.
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-22. **Supersedes a bug report that was wrong** - filed and retracted within the hour;

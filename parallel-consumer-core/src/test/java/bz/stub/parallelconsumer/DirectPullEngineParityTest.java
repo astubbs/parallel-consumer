@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,15 +39,9 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * @see bz.stub.parallelconsumer.internal.DirectPullWorkerPool
  */
 @Slf4j
-class DirectPullEngineParityTest extends ParallelEoSStreamProcessorTestBase {
+class DirectPullEngineParityTest extends EngineParityTestBase {
 
     static final int RECORDS = 500;
-
-    /**
-     * Every offset delivered to the user function, in delivery order, with duplicates preserved - a set would
-     * silently absorb the very defect this is looking for.
-     */
-    final List<Long> deliveries = Collections.synchronizedList(new ArrayList<>());
 
     private void setupDirectPull(ProcessingOrder ordering, int maxConcurrency) {
         setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
@@ -56,12 +49,6 @@ class DirectPullEngineParityTest extends ParallelEoSStreamProcessorTestBase {
                 .maxConcurrency(maxConcurrency)
                 .directPullEngine(true)
                 .build());
-    }
-
-    private void produce(int count, java.util.function.IntFunction<String> keyFor) {
-        for (int i = 0; i < count; i++) {
-            consumerSpy.addRecord(ktu.makeRecord(keyFor.apply(i), "v-" + i));
-        }
     }
 
     /**
@@ -218,24 +205,5 @@ class DirectPullEngineParityTest extends ParallelEoSStreamProcessorTestBase {
                 .that(duplicates()).isEmpty();
         assertThat(deliveries).hasSize(RECORDS);
         assertCommitsContains(pl.tlinkowski.unij.api.UniLists.of(RECORDS));
-    }
-
-    /**
-     * @return offsets delivered more than once, with their delivery counts
-     */
-    private Map<Long, Integer> duplicates() {
-        Map<Long, Integer> counts = new LinkedHashMap<>();
-        synchronized (deliveries) {
-            for (Long offset : deliveries) {
-                counts.merge(offset, 1, Integer::sum);
-            }
-        }
-        Map<Long, Integer> dupes = new LinkedHashMap<>();
-        counts.forEach((offset, count) -> {
-            if (count > 1) {
-                dupes.put(offset, count);
-            }
-        });
-        return dupes;
     }
 }

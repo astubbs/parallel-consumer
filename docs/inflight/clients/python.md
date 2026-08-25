@@ -1,5 +1,8 @@
 # Python client (astubbs#242)
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 Wave one landed: connect, configure, one dispatched record through a worker process, report, clean
 drain. Leases, heartbeats, reconnect, worker death, terminal outcomes, the demo and PyPI packaging
 are all deferred and named in the module's testing-evidence `limitation`.

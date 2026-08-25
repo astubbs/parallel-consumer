@@ -287,7 +287,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     public boolean isSufficientlyLoaded() {
         long workable = getNumberOfWorkableRecordsInSystem();
-        long threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
+        // The LIVE admission target under active ENFORCE, today's static derivation otherwise - so a contracted
+        // target pauses the poller sooner. The load-factor multiplication stays even in adaptive mode (the plan's
+        // KTD10): this threshold is buffer arithmetic - how deep a stock of polled records to hold - not dispatch
+        // arithmetic, which consumes the live target un-multiplied.
+        long targetRecords = module.admissionTargetRecords();
+        long threshold = targetRecords * getLoadingFactor();
         boolean loaded = workable > threshold;
         // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while
         // no records are actually flowing, the poller never resumes and the PC stalls. Because the figure below is
@@ -297,7 +302,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         if (log.isDebugEnabled()) {
             log.debug("isSufficientlyLoaded={} (inShards={} - parkedForRetry={} = {} vs target({})*loadingFactor({})={})",
                     loaded, sm.getNumberOfRecordsInShards(), sm.getNumberOfRecordsParkedForRetry(), workable,
-                    options.getTargetAmountOfRecordsInFlight(), getLoadingFactor(), threshold);
+                    targetRecords, getLoadingFactor(), threshold);
         }
         return loaded;
     }
@@ -350,6 +355,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return getNumberRecordsOutForProcessing() != 0;
     }
 
+    /**
+     * Deliberately reads the PINNED (static, ceiling-derived) target, never the live admission target - the plan's
+     * KTD7 "bounded pin". Sole reader is the control loop's block-time arithmetic
+     * ({@code AbstractParallelEoSStreamProcessor#timeToBlockFor()}): a live read here would let a contracted target
+     * slow the loop's wake-ups, and with them the admission controller's own recovery cadence. The cost of the pin
+     * is bounded at that reader, not here.
+     */
     public boolean isWorkInFlightMeetingTarget() {
         return getNumberRecordsOutForProcessing() >= options.getTargetAmountOfRecordsInFlight();
     }
@@ -367,6 +379,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     public boolean hasIncompleteOffsets() {
         return pm.hasIncompleteOffsets();
+    }
+
+    /**
+     * @see PartitionStateManager#isAnyPartitionBlocked()
+     */
+    public boolean isAnyPartitionBlocked() {
+        return pm.isAnyPartitionBlocked();
     }
 
     public boolean isRecordsAwaitingProcessing() {
@@ -401,8 +420,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             if (userFunctionSucceeded.isPresent()) {
                 if (TRUE.equals(userFunctionSucceeded.get())) {
                     onSuccessResult(wc);
+                    recordAdmissionOutcome(wc, true);
                 } else {
                     onFailureResult(wc);
+                    recordAdmissionOutcome(wc, false);
                 }
             } else if (wc.isAbandonedForCurrentDelivery()) {
                 onAbandonedResult(wc);
@@ -410,6 +431,27 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");
             }
         }
+    }
+
+    /**
+     * The admission controller's OUTCOME tap - this method sits on the one verdict-carrying completion path, on the
+     * control thread, AFTER the superseded-delivery and stale-partition filters above, so late duplicates and
+     * revoked-partition returns never count. Verdict-free returns (abandoned work) carry no outcome either: the
+     * delivery will run again, and only its eventual verdict is signal.
+     * <p>
+     * Retry attempts DO route through here - a retry's failure counts as failure signal even though its latency
+     * never enters the service-time window (that exclusion is the sampler's,
+     * {@code AbstractParallelEoSStreamProcessor#admissionServiceTimeSampleNanos}). Classification lives behind
+     * {@link bz.stub.parallelconsumer.internal.admission.AdmissionController#recordCompletion(boolean, Throwable)}.
+     * Pure tap: reads only; gated on {@link PCModule#adaptiveSignalsActive()} so an engine that refused the mode
+     * feeds nothing.
+     */
+    private void recordAdmissionOutcome(WorkContainer<K, V> wc, boolean succeeded) {
+        if (!module.adaptiveSignalsActive()) {
+            return;
+        }
+        Optional<Throwable> failureReason = succeeded ? Optional.empty() : wc.getLastFailureReason();
+        module.admissionController().recordCompletion(succeeded, failureReason == null ? null : failureReason.orElse(null));
     }
 
     public boolean isNoRecordsOutForProcessing() {

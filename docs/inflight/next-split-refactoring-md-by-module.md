@@ -1,5 +1,8 @@
 # Split `docs/refactoring.md` into module-scoped lists, keeping a cross-cutting one
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
+
 Raised 2026-08-17 after a proxy-specific list was filed into the global backlog and had to be moved
 out again the same hour. Not started.
 

@@ -1,5 +1,8 @@
 # After the conformance PoC: mine the existing integration tests instead of reinventing them
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 Owner's instruction, 2026-08-15, to run once the shared conformance harness has proved its mechanism
 with one language. The suite should **not** grow scenario-by-scenario from scratch: this project
 already has a large, mature integration suite whose value is not the code but the *edge cases it

@@ -1,5 +1,8 @@
 # astubbs/parallel-consumer#293 - state, and what the next session should pick up
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
+
 Written 2026-08-18 at head `953cae87d`. **Delete this file when astubbs#293 merges**; it exists only
 to hand the branch between sessions, and a stale handoff reads as live.
 

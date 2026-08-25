@@ -298,6 +298,19 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         return false;
     }
 
+    /**
+     * Whether ANY assigned partition is blocked by offset-encoding back-pressure
+     * ({@link PartitionState#isBlocked()}). The admission window boundary's R8 sample - read once per window
+     * (about once a second), O(partitions).
+     */
+    public boolean isAnyPartitionBlocked() {
+        for (var partition : getAssignedPartitions().values()) {
+            if (partition.isBlocked())
+                return true;
+        }
+        return false;
+    }
+
     public long getNumberOfIncompleteOffsets() {
         Collection<PartitionState<K, V>> values = getAssignedPartitions().values();
         return values.stream()

@@ -15,6 +15,47 @@ one met later. The scan's third,
 product behaviour and the assertion was wrong, so no product change was needed. **It has been seen
 again since** - see below.
 
+### Two more point checks in the same class, 2026-08-23
+
+Second sighting pair on `throttling-ideation`, 2026-08-25, on the U2 (pool actuator) full run:
+`JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and
+`inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[1]` - both already ledgered, both
+green on immediate class re-run, and neither can be the change's doing: both run under DISABLED
+mode, where the new actuator is gated inert.
+
+A full core unit run on `throttling-ideation` (2026-08-25 afternoon, the pre-commit gate for the
+law-U12/U13 fixes) failed once: `processInKeyOrder(CommitMode)[3]` at `[sanity check input data]`,
+actual size 0 against expected 9 - the exact symptom this ledger owns below. Class re-run green on
+the same build; the law changes stay non-suspect for the recorded reason (these tests run with the
+adaptive mode `DISABLED`, and the admission paths are mode-gated). One failure in 724.
+
+A full core unit run on `throttling-ideation` (2026-08-25, immediately after merging
+`perf/engine-concurrency` in) failed three times, all in `ParallelEoSStreamProcessorTest`, all
+already on this ledger: `processInKeyOrder(CommitMode)[2]` and `[3]` at `[sanity check input data]`,
+and `inFlightMessagesCommittedIfProcessedDuringShutdown(CommitMode)[2]` at `[1 record completed
+during shutdown]`. Green on the class's immediate re-run - the recorded point-check diagnosis holds;
+the merge is not the suspect (neither side touched these paths).
+
+A full core unit run on `throttling-ideation` (adding the admission controller's metrics) failed four
+times, all in `ParallelEoSStreamProcessorTest`, all point checks:
+
+- `processInKeyOrder(CommitMode)[1]` and `[2]`, at `[sanity check input data]` - the symptom the
+  2026-08-22 entry below already owns, now seen on both parameters of the same run.
+- `consumeFlowDoesntRequireProducer(CommitMode)[2]` - *"Expecting AtomicBoolean(false) to have value
+  true"*. New to this ledger.
+- `offsetsAreNeverCommittedForMessagesStillInFlightLong(CommitMode)[1]` - *"[1 record completed during
+  shutdown] ... to contain exactly [1]"*. New to this ledger; the `Short` sibling is discussed in
+  [`perf-direct-pull-measured.md`](perf-direct-pull-measured.md).
+
+**Conditions and rate:** one full-suite run, on a box with several agent sessions building at once.
+The whole class then passed **58/58 in isolation** on the same build, immediately afterwards.
+
+**Why the change in flight is not the suspect:** it registers meters and adds one rate-limited log
+line, both gated on the adaptive-concurrency mode, and the mode defaults to `DISABLED` with nothing in
+the suite or the poms setting `pc.adaptiveConcurrency` - so in these tests the controller registers no
+meter and never ticks. Same population, same load-tightness shape as below; no quarantine on this
+evidence.
+
 ### Seen again after being called fixed: the shutdown one, 2026-08-22
 
 `ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`

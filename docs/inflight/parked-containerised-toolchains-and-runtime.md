@@ -1,5 +1,7 @@
 # Containers for building the clients, and for running them
 
+<!-- inflight-type: feature -->
+
 Two ideas that arrived together (astubbs#242, 2026-08-14, user). **The build half is now decided and
 mostly moot; the runtime half is the one still open.**
 

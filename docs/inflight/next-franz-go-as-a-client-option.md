@@ -1,7 +1,7 @@
 # Next: franz-go as a client for the non-JVM proxies - what it buys and what it costs
 
 <!-- inflight-type: task -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-impact: process -->
 
 Opened 2026-08-21. **Prior art checked**: no existing inflight entry covers Go client selection; the
 language-proxy fan-out (astubbs#242, `clients/*.md`) assumes a proxy to the JVM engine and does not

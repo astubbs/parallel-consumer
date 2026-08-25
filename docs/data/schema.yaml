@@ -218,3 +218,20 @@ kinds:
         required:
           - status
           - target_release
+  # The content plan for the landing page (docs/data/landing-page.yaml). A CONTENT decision record -
+  # what the page says, in what order, backed by what evidence - not the page itself; the file's own
+  # header carries the full contract. Declared here so the corpus check can hold its field list
+  # closed like every other kind's.
+  landing-page-content:
+    required:
+      - schema_version
+      - kind
+      - stage
+      - title
+      - audience
+      - what_the_page_must_achieve
+      - voice
+      - sections
+    optional:
+      - craft_reference
+      - open_questions

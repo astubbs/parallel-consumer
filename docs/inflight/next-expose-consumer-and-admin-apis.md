@@ -34,7 +34,7 @@ gate on all of it, since `KafkaConsumer` is single-threaded and any user-facing 
 marshalled onto the poll thread.
 
 **An implementation already exists, unmerged.** `origin/features/consumer-interface` (upstream PR
-#346, closed unmerged) contains `FullConsumerFacade<K,V> extends Consumer<K,V>` with a
+confluentinc#346, closed unmerged) contains `FullConsumerFacade<K,V> extends Consumer<K,V>` with a
 `setReactionMode(UnsupportedReaction)` switch to throw or log-and-swallow unsupported methods, plus
 `ConsumerFacadeForPC` (interpret the intent and make the equivalent PC call - e.g. `pause(Collection)`
 pauses all partitions and ignores the argument), strict and non-strict implementations, and three

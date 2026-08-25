@@ -260,7 +260,9 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
      * The direct-pull engine ({@code -Dpc.directPull=true}) has no intermediate queue: exactly the in-flight
      * records finish, and the count is exactly {@code maxConcurrency}. A pause there is exact rather than
      * approximate, which is a behaviour difference this assertion cannot express - so it is skipped, visibly,
-     * rather than loosened for both.
+     * rather than loosened for both. The virtual-thread engine ({@code -Dpc.virtualThreads=true}) is queue-less
+     * the same way - every accepted task gets a thread at once - and the {@code Unit Tests (virtual threads)}
+     * lane measured the pause landing exactly at {@code maxConcurrency}, so it takes the same visible skip.
      * <p>
      * Not parameterised by commit mode: what is under test is how much work the engine had buffered when the
      * pause landed, which has nothing to do with how offsets are committed.
@@ -288,6 +290,9 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         Assumptions.assumeFalse(parallelConsumer.getWm().getOptions().isDirectPullEngine(),
                 "the direct-pull engine has no pre-loaded executor queue, so a pause is exact: "
                         + "exactly maxConcurrency records finish, never more");
+        Assumptions.assumeFalse(parallelConsumer.getWm().getOptions().isUseVirtualThreads(),
+                "the virtual-thread pool hands every accepted task a thread at once - no pre-loaded queue to "
+                        + "drain, so a pause is exact there too: the lane measured exactly maxConcurrency finishing");
 
         Awaitility
                 .waitAtMost(defaultTimeout)
