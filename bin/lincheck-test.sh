@@ -79,6 +79,22 @@ if [ "$selected" -eq 0 ]; then
     printf 'ZERO Lincheck classes ran - this measured NOTHING. Check the group filters above.\n'
     exit 1
 fi
+
+# Zero is the loud failure; a SHORT count is the quiet one. If a rename, a dropped `@Tag`, or a
+# surefire include pattern stops selecting three of the five harnesses, the check above still passes
+# and the summary still prints a healthy-looking number - which is the same false green one step in.
+# So assert the exact roster, not just non-emptiness. Adding a harness deliberately fails this until
+# the number is updated: that friction IS the check, because a harness the lane silently stops
+# running is indistinguishable from one that never existed. Skipped when LINCHECK_TEST selects a
+# single class, where a short count is the whole point.
+EXPECTED_LINCHECK_CLASSES=5
+if [ -z "${LINCHECK_TEST:-}" ] && [ "$selected" -ne "$EXPECTED_LINCHECK_CLASSES" ]; then
+    printf 'Lincheck report files: %s, EXPECTED %s.\n' "$selected" "$EXPECTED_LINCHECK_CLASSES"
+    printf 'The lane selected the wrong roster. Either a harness stopped being selected (a rename, a\n'
+    printf 'lost @Tag, a surefire include pattern) or one was added without updating\n'
+    printf 'EXPECTED_LINCHECK_CLASSES in this script. Both are real; neither is a pass.\n'
+    exit 1
+fi
 printf 'Lincheck report files: %s\n' "$selected"
 
 exit $status
