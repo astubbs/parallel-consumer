@@ -24,6 +24,7 @@ import org.apache.kafka.common.errors.ProducerFencedException;
 import org.apache.kafka.common.errors.TimeoutException;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.ConcurrentModificationException;
 import java.util.List;
@@ -269,6 +270,14 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         // in this offset collection
         ensureCommitLockHeld();
 
+        // One budget bounds the WHOLE commit cycle - recovery of a previously exhausted transaction included -
+        // with the clock captured once per call, matching ConsumerManager#commitSync's whole-operation
+        // semantics (astubbs#177): capturing it inside the retry loop would reset the budget on every attempt.
+        Instant commitCycleStarted = Instant.now();
+        Duration offsetCommitTimeout = options.getOffsetCommitTimeout();
+
+        recoverExhaustedTransactionIfPending(commitCycleStarted, offsetCommitTimeout, offsetsToSend);
+
         //
         lazyMaybeBeginTransaction(); // if not using a produce flow or if no records sent yet, a tx will need to be started here (as no records are being produced)
         try {
@@ -281,21 +290,16 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
 
         // see {@link KafkaProducer#commit} this can be interrupted and is safe to retry
         boolean committed = false;
-        int retryCount = 0;
-        int arbitrarilyChosenLimitForArbitraryErrorSituation = 200;
+        long attemptsMade = 0;
         Exception lastErrorSavedForRethrow = null;
         while (!committed) {
-            if (retryCount > arbitrarilyChosenLimitForArbitraryErrorSituation) {
-                String msg = msg("Retired too many times ({} > limit of {}), giving up. See error above.", retryCount, arbitrarilyChosenLimitForArbitraryErrorSituation);
-                log.error(msg, lastErrorSavedForRethrow);
-                throw new InternalRuntimeException(msg, lastErrorSavedForRethrow);
-            }
+            attemptsMade++;
             try {
                 if (producerWrapper.isMockProducer()) {
                     commitTransaction();
                 } else {
                     // TODO talk about alternatives to this brute force approach for retrying committing transactions
-                    boolean retrying = retryCount > 0;
+                    boolean retrying = attemptsMade > 1;
                     if (retrying) {
                         if (producerWrapper.isTransactionCompleting()) {
                             // try wait again
@@ -313,8 +317,8 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 }
 
                 committed = true;
-                if (retryCount > 0) {
-                    log.warn("Commit success, but took {} tries.", retryCount);
+                if (attemptsMade > 1) {
+                    log.warn("Commit success, but took {} tries.", attemptsMade);
                 }
             }
             /*
@@ -340,9 +344,116 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
 
              Only catch and retry the retriable ones, others fail fast the control thread
              */ catch (TimeoutException | InterruptException e) {
-                log.warn("Commit exception, will retry, have tried {} times (see KafkaProducer#commit)", retryCount, e);
+                // The retriable failures are retried against the offsetCommitTimeout BUDGET - whole-operation,
+                // like ConsumerManager#commitSync - not the fixed attempt count that used to live here
+                // (arbitrarilyChosenLimitForArbitraryErrorSituation = 200): an attempt count has no time
+                // semantics (a real attempt blocks up to max.block.ms, so 200 of them is hours), and its
+                // give-up type, InternalRuntimeException, was invisible to the commit-failure seam.
+                Duration elapsed = Duration.between(commitCycleStarted, Instant.now());
+                boolean budgetRemains = elapsed.toMillis() <= offsetCommitTimeout.toMillis();
+                if (!budgetRemains) {
+                    // the producer is left holding an in-flight transaction - the NEXT cycle must
+                    // complete-else-abort it before beginning a fresh one (KTD8)
+                    exhaustedTransactionAwaitingRecovery = true;
+                    log.error("Transactional offset commit took too long (tried {} times over {})", attemptsMade, elapsed, e);
+                    throw new OffsetCommitBudgetExceededException(msg(
+                            "Transactional offset commit gave up after {} attempt(s) and {}, having spent its whole "
+                                    + "offsetCommitTimeout of {}. To allow longer, raise offsetCommitTimeout. "
+                                    + "What happens next is the configured commitFailureHandler's decision "
+                                    + "(astubbs/parallel-consumer#317) - the default policy shuts PC down (fail "
+                                    + "fast), and CommitFailurePolicies has canned alternatives. The producer's "
+                                    + "in-flight transaction is completed-or-aborted at the start of the next "
+                                    + "transactional commit cycle.",
+                            attemptsMade, elapsed, offsetCommitTimeout),
+                            e, attemptsMade, elapsed, offsetsToSend);
+                }
+                log.warn("Commit exception, will retry - tried {} times over {} of the {} offsetCommitTimeout budget " +
+                        "(see KafkaProducer#commit)", attemptsMade, elapsed, offsetCommitTimeout, e);
                 lastErrorSavedForRethrow = e;
-                retryCount++;
+            }
+        }
+    }
+
+    /**
+     * Set when a transactional commit exhausted its budget mid-{@link #commitTransaction()}, leaving the producer
+     * holding an in-flight transaction (its {@code sendOffsetsToTransaction} had already succeeded) -
+     * {@link #recoverExhaustedTransactionIfPending} owns getting out of that state, and clears it.
+     * <p>
+     * Volatile out of caution only: it is set and cleared on the thread driving commits (the controller - in
+     * transaction mode the committer IS this class, called on the control thread), but shutdown paths run
+     * {@link #close(Duration)} from other threads, and a stale read there must not be possible.
+     */
+    private volatile boolean exhaustedTransactionAwaitingRecovery = false;
+
+    /**
+     * Complete-else-abort recovery of a transaction whose commit exhausted a previous cycle's budget (KTD8,
+     * astubbs#317).
+     * <p>
+     * Without this, the cycle after a CONTINUE decision would call
+     * {@link #lazyMaybeBeginTransaction()}/{@code sendOffsetsToTransaction} against a producer still mid-commit
+     * and meet {@link KafkaProducer}'s "previous fatal or abortable error" - terminally fatal, turning the
+     * seam's pause window into a single grace cycle.
+     * <p>
+     * It runs at the head of the next commit cycle rather than at exhaustion time, deliberately: a CONTINUE
+     * decision means the next cycle begins a commit-cadence later, so the broker gets that whole interval to
+     * finish the still-committing transaction before recovery decides anything - and at exhaustion time the
+     * budget is by definition already spent, so recovery work there would run unbudgeted.
+     * <p>
+     * Preference order:
+     * <ul>
+     * <li><b>Complete</b>: while the producer still reports the transaction as completing, retry
+     * {@link #commitTransaction()} - the exhausted commit may simply land late, and completing it loses
+     * nothing.</li>
+     * <li><b>Abort</b>: otherwise {@link #abortTransaction()}, so a fresh transaction can begin. The exhausted
+     * commit's offsets were never marked committed ({@code onOffsetCommitSuccess} only runs on success), so they
+     * stay dirty and travel on this cycle's commit.</li>
+     * </ul>
+     * Retriable failures ({@link TimeoutException}, {@link InterruptException} - the same classification as the
+     * commit loop above) are retried within THIS cycle's budget; exhausting it throws
+     * {@link OffsetCommitBudgetExceededException} with the recovery still pending, so the seam is re-consulted
+     * and the next CONTINUE cycle resumes recovery - an outage outlasting many budgets stays in the seam's hands
+     * instead of turning fatal. Anything non-retriable (fencing, a "previous fatal" {@link KafkaException})
+     * propagates untouched: a transaction PC can neither complete nor abort is terminal, and deliberately
+     * handler-free.
+     */
+    private void recoverExhaustedTransactionIfPending(Instant commitCycleStarted, Duration offsetCommitTimeout,
+                                                      Map<TopicPartition, OffsetAndMetadata> offsetsToSend) {
+        if (!exhaustedTransactionAwaitingRecovery) {
+            return;
+        }
+        log.warn("A previous commit cycle's budget exhausted mid-transaction - recovering (complete-else-abort) " +
+                "before this cycle begins a fresh transaction");
+        long attemptsMade = 0;
+        while (true) {
+            attemptsMade++;
+            try {
+                if (producerWrapper.isTransactionCompleting()) {
+                    commitTransaction();
+                    log.warn("Recovered by COMPLETING the previously budget-exhausted transaction (attempt {})",
+                            attemptsMade);
+                } else {
+                    abortTransaction();
+                    log.warn("Recovered by ABORTING the previously budget-exhausted transaction (attempt {}) - " +
+                            "its offsets stayed dirty, so they recommit with this cycle", attemptsMade);
+                }
+                exhaustedTransactionAwaitingRecovery = false;
+                return;
+            } catch (TimeoutException | InterruptException e) {
+                Duration elapsed = Duration.between(commitCycleStarted, Instant.now());
+                boolean budgetRemains = elapsed.toMillis() <= offsetCommitTimeout.toMillis();
+                if (!budgetRemains) {
+                    // deliberately NOT clearing exhaustedTransactionAwaitingRecovery: the next cycle resumes
+                    throw new OffsetCommitBudgetExceededException(msg(
+                            "Recovering the previously budget-exhausted transaction (complete-else-abort) itself "
+                                    + "spent this cycle's whole offsetCommitTimeout of {} ({} attempt(s), {}). "
+                                    + "Recovery stays pending and resumes on the next commit cycle. To allow "
+                                    + "longer, raise offsetCommitTimeout. What happens next is the configured "
+                                    + "commitFailureHandler's decision (astubbs/parallel-consumer#317).",
+                            offsetCommitTimeout, attemptsMade, elapsed),
+                            e, attemptsMade, elapsed, offsetsToSend);
+                }
+                log.warn("Transaction recovery attempt {} failed retriably - retrying within this cycle's budget",
+                        attemptsMade, e);
             }
         }
     }
