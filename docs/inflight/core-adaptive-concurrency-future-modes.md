@@ -5,9 +5,12 @@
 
 Owner's thinking, 2026-08-24, after watching the first closed-loop run. These are directions for the
 controller, not defects in what shipped - the defects live in
-[`pr-333-adaptive-concurrency-outstanding.md`](pr-333-adaptive-concurrency-outstanding.md). Read that
-note's item 0 first: none of this can be designed until *what the controller optimises* has an
-answer.
+[`pr-333-adaptive-concurrency-outstanding.md`](pr-333-adaptive-concurrency-outstanding.md). What the
+controller optimises now HAS an answer - throughput elasticity, the plateau band, the latency
+baseline deleted
+([`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md))
+- so these directions are designable; where a passage below speaks of a "latency-flavoured standing
+objective", read it as the future latency-CEILING clamp, since no latency objective shipped.
 
 ## Catch-up: lag is a third axis, and it suspends the latency goal
 
