@@ -674,3 +674,36 @@ and per the table in
 [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
+
+<!-- post-merge: checked-begin -->
+**Fourteenth sighting, 2026-08-25 - two reds on a docs-and-comments branch, and the contention
+explanation does NOT fit this one.** `Chaos Pain Suite` failed twice while astubbs#347 was in review:
+in run `32803999735` at head `5f9fa4088`, and again at `22826761a`. It passed at `257c4173a`, an
+earlier head of the same work. Both failing arms are timing bounds, tripped by margins of 2.7% and 0%:
+<!-- post-merge: checked-end -->
+
+| Test | Probe | Margin | Seed |
+|---|---|---|---|
+| `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` | `CLASS2_STALL/LAG_STAGNATION` on 4 partitions | 154s against a 150s bound | `3334891073975887762` |
+| `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` | `NO_PROGRESS`, fleet stuck at 97896/100000 | 30s against a 30s bound | `1521825993857670757` |
+
+**The branch cannot be the cause, and that is unusually easy to state here.** The diff from the head
+that passed to the head that failed is six markdown files plus a comment and one `iterations` value
+in a `@Tag("lincheck")` class - **no `src/main` file anywhere in the PR**, no integration test, no
+chaos test, no pom change in that range, and the `lincheck` tag is excluded from the chaos suite's
+group filter. So this is another data point for the eleventh sighting's finding that the reds are
+seed-dependent rather than branch-dependent, from about as inert a branch as could produce one.
+
+**What is new: the runner-contention hypothesis is ruled out on timing, not merely unreplayed.** The
+thirteenth sighting names `Performance (optional)` overlapping the chaos job as the prior cause. It
+ran here too - but on `highcpu-2`, finishing **03:10:36**, while the first failing test did not start
+until **03:15:05** and the second failed at 03:19:37 on `highcpu-6`. There is no overlap, so whatever
+produced these two, it was not that pairing.
+
+**Still unresolved, and by the same missing step as every prior entry: nobody has replayed the
+seeds.** Recorded rather than diagnosed. The `CLASS2_STALL` arm is the one
+[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md)
+argues is asserting the wrong property - the probe's own message says the bound "is a TIMING
+measurement, not a correctness verdict" - and a `-Dchaos.diagnoseStallRecovery=true` replay of
+`3334891073975887762` is what would say whether the backlog drains. `Chaos Pain Suite` is **not** in
+master's required-checks ruleset, so neither red blocked the PR.
