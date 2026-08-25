@@ -61,9 +61,17 @@ and the supported grammar is small enough to make it tractable.
 1. **A conformance case is data, not code.** Topology description, input records, expected outputs,
    and the expected foreign-call log - what crossed the boundary, in what order, with which
    arguments. Nothing in it is language-specific.
-2. **`TopologyTestDriver` is the oracle.** The expected outputs are *recorded* by running the spec
-   through plain Java Kafka Streams, never hand-written. Kafka Streams stays the source of truth
-   about what a topology does; we only assert that a binding reproduces it.
+2. **`TopologyTestDriver` is the oracle - with one measured qualification (2026-08-25).** The
+   expected outputs are *recorded* by running the spec through plain Java Kafka Streams, never
+   hand-written. Kafka Streams stays the source of truth about what a topology does; we only assert
+   that a binding reproduces it. The qualification: **TTD OVER-counts cached emissions relative to a
+   broker run** - it builds a real `ThreadCache` and then commits after every processed record,
+   which flushes it, so it emits every intermediate update where a broker's caching deduplicates
+   (verified against the 3.9.2 sources and bytecode; the windowing spike's KTD11). An oracle
+   recording for a cache-sensitive expectation must therefore pin the emit rule (suppression or
+   `EmitStrategy.onWindowClose()`, whose counts are close-driven and deterministic) or assert on
+   final state rather than update streams - never record a TTD update count and expect a broker
+   binding to match it.
 3. **Each language contributes a driver, not a suite.** One small program per binding that reads a
    spec and issues the calls. Adding a language costs a driver; adding a feature costs one spec,
    once, for every language at the same time.

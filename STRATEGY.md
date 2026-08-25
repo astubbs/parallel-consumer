@@ -238,6 +238,27 @@ joins, the aggregations, the windowing, the state stores and exactly-once are al
 never need to cross a boundary. The only thing that must cross is the user's per-record function -
 and a per-record function crossing a boundary is precisely what the language proxy already does.
 
+**Measured 2026-08-25, and the paragraph above is falsified for windowed aggregation - in two
+ways.** (The spike: `docs/plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md`; the
+numbers: `docs/inflight/perf-streams-windowing-multiplier.md`.) First, the declarative claim
+over-reached: a windowed aggregation calls the user's function once per *overlapping window*, so the
+crossing is per-window, not per-record - hopping one hour by five minutes crosses twelve times per
+record, measured exactly. Second, and larger: for windowed aggregation the honest comparison is
+**not** "against nothing". A user can reimplement it in a plain dictionary over the consumer they
+already have, and that stateless single-threaded reimplementation measured **69x** the wrapper's
+tumbling rate and **122x** its hopping rate. The fitted cost model - 33us + 135us per crossing per
+record, over the current single-session transport - puts that floor out of reach at *any* window
+multiplier, including one: the losing term is the per-crossing cost, not windowing. **Windowed
+aggregation is therefore recorded as not offered, at both measured specifications and both
+placements** (moving the host to the emit side genuinely collapses the crossing count, and cannot
+close two orders of magnitude). The parity sentence stands where reimplementation is genuinely hard
+- topology plumbing, joins, repartitioning, fault-tolerant state - but where a user's dictionary is
+the honest alternative, "it exists" is not enough, and that boundary is now a measured question
+rather than an assumption. Scope: verdicts taken against a non-durable reimplementation, over the
+single-session transport, bounded by the untested premise that windowing is not optional in
+practice. What would reopen it is a transport that cuts the per-crossing cost by roughly two orders
+of magnitude - the embedded/FFI direction - not any windowing or placement design.
+
 So the hard part of Streams-in-another-language is not the streaming; it is that a topology has no
 portable description. ~~That is an IDL to design~~ - **and the proof of concept showed it is not.**
 See below.

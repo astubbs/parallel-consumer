@@ -221,8 +221,9 @@ Each of these was deliberately out of scope. This is what the run says they woul
 |---|---|
 | **A sixth builder method (scalar args)** | Nothing structural - one more member of the `BuilderCall` `oneof`. |
 | **Operators taking behaviour** (serdes, comparators, joiners) | The function-token pattern again, generalised beyond `RecordFunction`. **Joiners done 2026-08-25**, and the design step turned out to be on the wire rather than in the token: with three shapes all arriving as two byte strings, which function to call could no longer be inferred from which fields were present, so `Invocation` now names its `kind` explicitly. Serdes and comparators remain. |
-| **Interactive queries** | New message types for get/range/scan over a named store. New surface, not a new mechanism - and unlike the rest it makes the host a *reader* of engine state, which nothing else here does. |
-| **Punctuators** | Cheap, as predicted. A scheduled callback is another work frame in the pull model; the invocation correlation already carries everything needed. |
+| **Interactive queries** | **Point `Get` done 2026-08-25**, with a correlated `call_id` after the one-answer-slot bug. Range/scan remain new surface; the windowed range read (`fetch`) was specified by the windowing spike and skipped under its stop condition. |
+| **Punctuators** | An earlier entry here called them "cheap, as predicted"; the coupling register withdrew that - a punctuator that cannot `forward()` is close to useless, and `forward()` needs one-in-many-out, still open. Blocked behind that dimension, not cheap. |
+| **Windowed aggregation** | **Measured 2026-08-25, and NOT OFFERED at either measured specification.** The surface exists and went on additively (`windowed_by`/`aggregate`/`to_stream`, both placements), but the spike's verdicts are bet-off at the reimplementation floor - 69x (tumbling) and 122x (hopping-by-twelve) - and the fitted model puts that floor below multiplier one: the per-crossing cost loses before windowing enters. [`perf-streams-windowing-multiplier.md`](perf-streams-windowing-multiplier.md) owns the numbers; the register's dimension 4 carries the verdict beside its prediction. |
 | **More than one foreign operator** | **Done 2026-08-25.** Nothing on the wire was needed - tokens already distinguished functions, as predicted. A map, a join and a reduce now run in one topology, each calling a different Python function. The empirical question the prediction raised is still open: crossings *do* multiply with operator count (each record on the joined path crosses twice), and nothing has measured what that costs. |
 | **Engine state and rebalance signals** | An `EngineState` server message. See above, including the transient trap. |
 | **Invocation timeout and failure semantics** | Partly built: the registry times out and the mapper throws, and a Python exception reports back as an error rather than a substituted value. Undesigned is what Streams should *do* with it - fail the thread, skip the record, or route to a dead letter. That is a product decision, not a protocol one. |
@@ -230,10 +231,15 @@ Each of these was deliberately out of scope. This is what the run says they woul
 
 ### What this does not show
 
-Worth restating so a green result is not over-read. One foreign operator, five builder methods, one
-partition-bounded stream thread, at-least-once, no joins, no windows, no interactive queries, no
-punctuators, in-memory state only. **Parity is the goal, not the result.** The PoC shows the model
-works; it does not show the surface is covered.
+Worth restating so a green result is not over-read. As of 2026-08-25 the PoC runs four foreign
+operator shapes (map, reduce, join, windowed aggregate) across a builder surface of ten-plus calls,
+point interactive queries, and both aggregation placements - but still: at-least-once only, no
+punctuators, no one-in-many-out, no exactly-once, no range reads, in-memory state only, one gRPC
+session. And the windowing measurement cuts the other way: the surface existing does not make it
+offerable - windowed aggregation is measured and **not offered** (see the deferred-capability table
+above). **Parity is the goal, not the result.** The PoC shows the model works; it does not show the
+surface is covered, and for windowed aggregation it shows the crossing cost forecloses it on the
+current transport.
 
 ## Sequencing, stated plainly
 

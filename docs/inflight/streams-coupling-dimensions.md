@@ -135,13 +135,38 @@ question**. [`next-serialization-and-record-metadata.md`](next-serialization-and
 already argues exactly this for the frozen proxy wire; the streams wire has the identical hole and
 is still free to change.
 
-### 4. Windowing
+### 4. Windowing - RUN 2026-08-25: the wire stayed additive, the multiplier is real, and the bet is off at the crossing
 
-The one most likely to force a wire *redesign* rather than an addition. A windowed key is composite
-- key plus window bounds - and `DataType` is a flat enum of bytes and long, so the type model has no
-way to say what a windowed handle carries. Suppression adds buffering the host cannot see.
+**The prediction was a wire redesign, and it did not happen; what falsified viability was a cost the
+prediction never named.** Kept in the dimension-1 format - the prediction beside the outcome -
+because both halves teach.
 
-Unlike EOS, windowed aggregation is not optional in practice.
+**What was predicted:** windowing forces a wire *redesign* rather than an addition - a windowed key
+is composite against a flat `DataType`, `fetch(key, from, to)` is a range query where `Get` is
+point-only, stream time is invisible to the host. And: "unlike EOS, windowed aggregation is not
+optional in practice" (asserted without evidence; still untested, and every conclusion below is
+bounded by it).
+
+**What ran** (the spike: `../plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md`;
+results: [`perf-streams-windowing-multiplier.md`](perf-streams-windowing-multiplier.md)): the
+surface went on the wire **additively** - `windowed_by`/`aggregate`/`to_stream`, the window as one
+optional structured field on `HandleType`, both placements (host at the aggregator, and a declared
+JVM combine with the host at the emit) - so the redesign prediction is **refuted**. The window
+multiplier is **confirmed and linear** (12.0 crossings per record at hopping 1h/5m, 2.0 at 1h/30m,
+measured exactly). And the verdicts are **bet off at both measured specifications, decided at the
+hard floor**: a stateless single-threaded Python reimplementation ran 69x the wrapper's tumbling
+rate and 122x its hopping rate, and the fitted model (33us + 135us per crossing per record,
+single-session transport) puts that floor below multiplier ONE - the per-crossing cost loses before
+windowing enters. Per placement: P1 measured throughout; P2's crossing collapse is real where
+measured (1.50 vs 12.00 crossings per record) and cannot close two orders of magnitude. Range reads
+(U7) were skipped under the spike's own stop condition.
+
+**What this dimension turned out to test was not windowing but the crossing itself** - the
+crossing-free control ran 2.7x above the tumbling crossing arm, so even one crossing per record
+costs more than an entire native hopping topology. The reopening condition is a transport that cuts
+the per-crossing cost by roughly two orders of magnitude (the embedded/FFI direction in
+[`perf-embedding-the-engine-over-ffi.md`](perf-embedding-the-engine-over-ffi.md)), not a windowing
+design.
 
 ### 5. Rebalance with an invocation in flight
 
