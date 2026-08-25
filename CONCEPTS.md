@@ -119,6 +119,24 @@ test in question — a short, low-volume test cannot trip them, and a clean read
 The verification that a new or extended test fails against the code as it was before the fix it
 guards — a regression test that has never failed proves nothing.
 
+**Priced bound**
+A scenario, iteration or repetition budget on a probabilistic probe that was derived from a measured
+per-attempt hit rate, rather than chosen because the probe passed at it. The distinction is the whole
+difference between a test and a flake: a probe that explores for a race has a hit *rate*, and only a
+budget priced against that rate has a known miss probability.
+
+A priced bound is a claim about the machine it was priced on, because the same probe finds the same
+race at materially different rates on different hardware — so a rate quoted without its machine is
+incomplete in the way a distance quoted without units is. Pricing a bound therefore also means
+recording which machine it belongs to, and treating a bound carried onto other hardware as
+unmeasured until it is measured there.
+
+**Starved run**
+A deliberate run of a probabilistic probe far below its intended budget, so that it misses often
+enough for the miss fraction to estimate the per-attempt hit rate. It is the cheap way to price a
+bound: runs at the intended budget almost never miss and so carry almost no information, while the
+rate recovered from starved runs prices every candidate budget at once.
+
 The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
 both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
 first evidence against the method, not for the code.
@@ -130,6 +148,12 @@ first evidence against the method, not for the code.
   a real deadline missed under contention, and an unforceable trigger is an awaited event that never
   occurred. All three present as the same expired await, and the whole diagnostic difficulty of this
   area is telling them apart.
+- **An un-priced bound is the fifth member, and the only one that is a test-authoring fault rather
+  than a diagnosis problem.** A probabilistic probe whose budget was chosen because it passed, not
+  priced against a measured hit rate, presents as an ordinary intermittent red. It is told apart by
+  asking whether the probe's hit rate was ever measured at all: if it was not, the red is neither a
+  product bug nor contention but an unfinished calibration, and the fix is to price the bound rather
+  than to diagnose the run.
 - **A tick-path assertion presents as that same expired await, and is the fourth member of the
   confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
   other three all mean the expected thing did not happen, while a tick-path assertion means something
