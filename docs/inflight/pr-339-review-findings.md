@@ -15,8 +15,10 @@ landed; what is below remains. Delete this note when these are resolved.
 The throttle stamp is keyed per-UID, so it is shared across every concurrent session. In the
 motivating incident - eleven per-language demo agents taking the host volume from ample to 8.8 GiB
 free in about an hour - **only the first agent would see the warning**; the other ten are inside the
-ten-minute window somebody else opened. Two reviewers flagged it independently. The fix needs a
-decision about keying on `session_id`, which is why it was not made.
+ten-minute window somebody else opened. Two reviewers flagged it independently. **Still open, and
+blocked on Antony**: the fix means keying the stamp on `session_id` rather than the UID, and that is
+a product call about how far a per-session warner should isolate itself, not something a review pass
+should decide on its own.
 
 Related, smaller: the stamp is written *before* the message is emitted, so a kill between the two
 loses that warning for ten minutes.
