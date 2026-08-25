@@ -9,17 +9,24 @@ which is the precondition for fixing this - but it does not fix it, and the defa
 
 ## What it currently bounds
 
-Two things, from one option (`ParallelConsumerOptions`, `private final Duration offsetCommitTimeout`,
+One thing now, from one option (`ParallelConsumerOptions`, `private final Duration offsetCommitTimeout`,
 default `Duration.ofSeconds(10)`), plus Kafka's own bound underneath:
 
 | Level | Thread | Bounded by | Default |
 |---|---|---|---|
-| `ConsumerOffsetCommitter.commitAndWait` waiting for a commit response | **control** | `offsetCommitTimeout` | 10s |
+| `ConsumerOffsetCommitter.commitAndWait` waiting for a commit response | **control** | no deadline of its own - released by an affirmative event: the typed commit response (committed / deferred / terminally failed) or the poller-death notification | n/a |
 | `ConsumerManager.commitSync`'s retry loop | **poll** | `offsetCommitTimeout` | 10s |
 | One `consumer.commitSync(offsetsToSend)` call, which retries internally | poll | `default.api.timeout.ms` | **60s** |
 
 The 60s is verified, not recalled: read from `ConsumerConfig` in kafka-clients 3.9.2, the version this
 repo builds against.
+
+**The waiter half of this note is settled** (astubbs#317's commit-failure seam, its sync-path re-route):
+`commitAndWait` no longer uses `offsetCommitTimeout` as a second deadline, so the option no longer does
+two jobs - the waiter waits on published outcomes, bounded transitively by the poll side's own budget.
+The "waiter's deadline wants to be small" tension below is therefore resolved by removal rather than by
+choosing a number. **Still open: the budget-default question** - as a retry budget, 10s remains below one
+60s Kafka attempt, so exhaustion still typically means a single attempt.
 
 ## Why the default is wrong, and why raising it is not the fix
 

@@ -47,14 +47,19 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  *         reason was, at the moment it happens, rather than being handed the timeout, which names
  *         neither the failing subsystem nor the failure
  *         ({@link #aDeadPollThreadReportsItsOwnCauseNotTheCommitResponseTimeout()});</li>
- *     <li>and when the poll thread is merely <em>slow</em>, the timeout must be reported as itself,
- *         because the two produce the same observable and only one of them is a dead poller
- *         ({@link #aLivePollThreadThatIsMerelySlowReportsTheTimeoutItActuallyWaited()}).</li>
+ *     <li>and when the poll thread is merely <em>slow</em>, it must be waited on rather than declared
+ *         failed, because a slow poller and a dead one produce the same observable for the waiter and
+ *         only the dead one is unrecoverable
+ *         ({@link #aLivePollThreadThatIsMerelySlowIsWaitedOutRatherThanDeclaredDead()}).</li>
  * </ol>
  * The second is the part the fixes for the known triggers could never cover: they removed two ways to
  * kill that thread, and every remaining way still produced the same uninformative message. The third
- * is what stops the cure becoming the disease - a message that asserts a death it has not established
- * is the same defect wearing different words.
+ * pinned, until the commit-failure seam (astubbs#317) landed, that the waiter's own
+ * {@code offsetCommitTimeout} deadline reported itself truthfully; that deadline is now gone - every
+ * exit is an affirmatively published event (typed response or poller death), because a local deadline
+ * spent the same option the poll side uses as its retry budget, on an earlier clock, so it always
+ * fired first and the budget's terminal outcome could never be delivered - and the scenario now pins
+ * the survival that replaced it.
  * <p>
  * Deliberately not a subclass of {@link CommitRejectionTestBase}. That base pins a different property
  * - one rejection reason at a time, rejected only at start-up, asserting the offsets are not recorded
@@ -272,21 +277,27 @@ class CommitResponseTimeoutSymptomTest {
     }
 
     /**
-     * The other branch: the poll thread is <b>alive</b> and simply has not answered in time. Here the
-     * timeout is the whole story, and must be reported as itself - with the timeout that was actually
-     * configured.
+     * The other branch: the poll thread is <b>alive</b> and simply has not answered in time. The waiter
+     * must wait it out - released by the commit's own (late) answer - rather than declare a failure on
+     * a clock of its own.
      * <p>
      * This is the branch the death event deliberately does not cover, so it is the one that proves the
-     * two are not conflated. A commit that blocks on the poll thread produces the identical observable
-     * for the control thread - no response within {@code offsetCommitTimeout} - and the two must not
-     * report the same thing, because for years the message asserted a dead poller either way.
+     * two are not conflated: a commit blocking on the poll thread produces the identical observable for
+     * the control thread as a dead poller, and only the dead one may be fatal. Before the commit-failure
+     * seam (astubbs#317) this scenario pinned the previous answer - a local {@code offsetCommitTimeout}
+     * deadline whose report carefully claimed no more than it knew ("has not died with an exception").
+     * That deadline spent the SAME option the poll side uses as its retry budget, on an earlier clock,
+     * so whenever a commit was genuinely failing the waiter deterministically died first and the
+     * budget's terminal outcome - the event the seam hands to the {@link CommitFailureHandler} - could
+     * never be delivered. The rework that removed it is pinned here from the waiter's side; the
+     * seam-side half (a held-open commit attempt still reaching the handler) lives in
+     * {@link MockConsumerCommitFailureSeamTest}.
      * <p>
-     * Discriminating on two counts. Make {@code commitAndWait()} report the poller as dead here and the
-     * "not answering" assertion fails; restore the old {@code DEFAULT_TIMEOUT} interpolation and the
-     * duration assertion fails, because that constant is 30s regardless of configuration.
+     * Discriminating: reintroduce any waiter-side deadline at or below {@code offsetCommitTimeout} and
+     * this fails - the instance dies at 1s where the commit answers, successfully, at 5s.
      */
     @Test
-    void aLivePollThreadThatIsMerelySlowReportsTheTimeoutItActuallyWaited() {
+    void aLivePollThreadThatIsMerelySlowIsWaitedOutRatherThanDeclaredDead() {
         final Duration commitTimeout = Duration.ofSeconds(1);
         final Duration commitBlocksFor = commitTimeout.multipliedBy(5);
 
@@ -302,42 +313,28 @@ class CommitResponseTimeoutSymptomTest {
             // inheriting that warning is part of what extending it would have bought, per the class
             // javadoc above.
             public void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
-                // the poll thread stays alive and healthy - it is simply in here, not answering
+                // the poll thread stays alive and healthy - it is simply in here, not answering yet
                 sleepOrFail(commitBlocksFor, "Interrupted while blocking the commit");
                 super.commitSync(offsets);
             }
         };
 
         parallelConsumer = startPc(mockConsumer, commitTimeout);
-        assignPartitions(mockConsumer, parallelConsumer);
+        var partitions = assignPartitions(mockConsumer, parallelConsumer);
         addRecords(mockConsumer, 0, PARTITIONS); // enough to make PC want to commit
 
         parallelConsumer.poll(context -> context.forEach(record -> log.trace("Processing {}", record.key())));
 
-        Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
-                assertThat(parallelConsumer.isClosedOrFailed()).isTrue());
+        // the slow commit completes and is recorded - the waiter sat through a block five times its old
+        // deadline and was released by the answer, not by a clock
+        Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> {
+            var committed = mockConsumer.committed(new HashSet<>(partitions));
+            assertThat(partitions.stream().anyMatch(tp -> committed.get(tp) != null)).isTrue();
+        });
 
-        Exception failureCause = parallelConsumer.getFailureCause();
-        assertThat(failureCause).isNotNull();
-
-        var everyMessage = causeChain(failureCause).stream()
-                .flatMap(t -> Stream.concat(Stream.of(t), java.util.Arrays.stream(t.getSuppressed())))
-                .map(t -> String.valueOf(t.getMessage()))
-                .collect(java.util.stream.Collectors.toList());
-
-        var timeoutReport = everyMessage.stream()
-                .filter(m -> m.contains("Timeout waiting for commit response"))
-                .findFirst();
-        assertThat(timeoutReport.isPresent()).isTrue();
-
-        // the timeout actually waited, not the unrelated DEFAULT_TIMEOUT constant this used to print
-        assertThat(timeoutReport.get()).contains(commitTimeout.toString());
-
-        // and it must not claim a death it has not established. The claim is deliberately the narrow
-        // one the code can actually prove - no exception escaped the poll thread's control loop - not
-        // the broader "it is alive", which an Error would falsify (catch (Exception) does not see one).
-        assertThat(timeoutReport.get()).contains("has not died with an exception");
-        assertThat(everyMessage.stream().noneMatch(m -> m.contains("broker poll thread has died"))).isTrue();
+        // slow is not dead: no failure was declared and the instance is still running
+        assertThat(parallelConsumer.getFailureCause()).isNull();
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
     }
 
     private boolean shouldFail(String key) {

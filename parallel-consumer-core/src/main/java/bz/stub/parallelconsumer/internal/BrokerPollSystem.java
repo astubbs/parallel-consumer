@@ -165,10 +165,12 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             log.error("Unknown error", e);
             // This thread is the only producer of commit responses, so tell the committer before
             // unwinding: a control thread already blocked in ConsumerOffsetCommitter#commitAndWait
-            // cannot discover this by waiting, and would otherwise wait out the whole
-            // offsetCommitTimeout only to report the symptom instead of this. Deliberately only on
-            // the exceptional exit - a normal exit is the coordinated shutdown path, which has its
-            // own handling. See astubbs#177, confluentinc#833.
+            // cannot discover this by waiting - its wait has no deadline of its own, precisely
+            // because every real outcome (including this death) is affirmatively published to it.
+            // Deliberately only on the exceptional exit - a normal exit is the coordinated shutdown
+            // path, which has its own handling. Budget exhaustion never reaches here: it is answered
+            // as a typed commit-failure response inside maybeDoCommit (the commit-failure seam,
+            // astubbs#317), so what dies this way is genuinely dead. See astubbs#177, confluentinc#833.
             committer.ifPresent(c -> c.notifyPollerDied(e));
             throw e;
         }

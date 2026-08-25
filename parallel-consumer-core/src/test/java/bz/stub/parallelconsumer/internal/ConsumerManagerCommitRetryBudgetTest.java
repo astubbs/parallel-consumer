@@ -111,8 +111,11 @@ class ConsumerManagerCommitRetryBudgetTest {
         // and the message has to be actionable: which budget ran out, and what to turn
         assertThat(thrown).hasMessageThat().contains("offsetCommitTimeout");
         assertThat(thrown).hasMessageThat().contains(COMMIT_BUDGET.toString());
-        // the shutdown is a known limit with a home, not an accident the reader has to guess at
-        assertThat(thrown).hasMessageThat().contains("issues/317");
+        // what happens next is the commit-failure seam's decision, and the message says whose and where
+        // (astubbs#317) - it used to claim the opposite ("no way yet to hand this decision"), citing issues/317
+        // as an open limit
+        assertThat(thrown).hasMessageThat().contains("commitFailureHandler");
+        assertThat(thrown).hasMessageThat().contains("astubbs/parallel-consumer#317");
 
         // retries WERE reachable here, so the single-attempt diagnostic must not fire
         assertThat(thrown).hasMessageThat().doesNotContain("Only ONE attempt");

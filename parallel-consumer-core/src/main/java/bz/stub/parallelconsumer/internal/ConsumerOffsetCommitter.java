@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.OffsetCommitBudgetExceededException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.state.WorkManager;
@@ -151,22 +152,56 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     }
 
     /**
-     * Commit response message, linked to a {@link CommitRequest}
+     * Commit response message, linked to a {@link CommitRequest}.
+     * <p>
+     * Three outcomes travel on this one type: committed, deferred (see {@link #commitDeferringOnRebalance}), and -
+     * carrying a non-null {@link #commitFailure} - terminally failed, the commit-failure seam's typed re-route
+     * (astubbs#317). The failure rides the existing response channel deliberately: a typed message on the queue the
+     * waiter already blocks on, never a cross-thread interrupt or a bare flag (the interrupt bit here is already
+     * overloaded - see docs/solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md).
      */
     @Value
     public static class CommitResponse {
         CommitRequest request;
+
+        /**
+         * Non-null when the commit failed terminally - its retry budget was exhausted. The waiter rethrows it on
+         * its own thread, where the {@link bz.stub.parallelconsumer.CommitFailureHandler} decision runs.
+         */
+        OffsetCommitBudgetExceededException commitFailure;
+
+        public CommitResponse(CommitRequest request) {
+            this(request, null);
+        }
+
+        public CommitResponse(CommitRequest request, OffsetCommitBudgetExceededException commitFailure) {
+            this.request = request;
+            this.commitFailure = commitFailure;
+        }
     }
 
     /**
      * Waits for the broker-poll thread to answer a commit request.
      * <p>
-     * The two ways this does not return normally are now genuinely different things, which is the
-     * point of astubbs#177 / confluentinc#833. A <b>dead</b> poller is an event: it publishes its own
-     * exception through {@link #notifyPollerDied} as it dies and this returns immediately with that
-     * as the cause - it is never waited out. A <b>timeout</b> therefore means what it says: the poller
-     * is alive and has not answered within {@code offsetCommitTimeout}. Neither message guesses at the
-     * other's cause; guessing is what sent users looking in the wrong place for years.
+     * Every exit is an affirmative <b>event</b>, never a guessed deadline. The poll thread answers with a typed
+     * {@link CommitResponse} - committed, deferred, or terminally failed ({@link CommitResponse#getCommitFailure()},
+     * rethrown here on the waiter's thread) - or publishes its own death through {@link #notifyPollerDied}, which
+     * releases this immediately with that as the cause (the astubbs#177 / confluentinc#833 half of the story).
+     * <p>
+     * <b>Why there is no longer a local timeout.</b> This used to also give up on its own clock after
+     * {@code offsetCommitTimeout} ("Timeout waiting for commit response"). But the poll side spends the <em>same</em>
+     * option as its retry budget, on a clock that starts later (when it dequeues the request) and whose final
+     * attempt may overrun the budget by up to one whole broker call - so whenever a commit was genuinely failing,
+     * the waiter's deadline deterministically fired first, and the budget's terminal outcome (the event the
+     * commit-failure seam, astubbs#317, exists to intercept) could never be delivered. With every real outcome
+     * published affirmatively, a bare deadline asserts nothing: a poller that dies says so, a commit that fails
+     * terminally says so, and a poller that is merely slow is <em>waited on</em>, bounded by its own budget rather
+     * than by a second copy of the same number. The {@code commitTimeout} poll interval below is only a heartbeat
+     * for logging that the wait continues. See docs/inflight/bug-offset-commit-timeout-does-two-jobs.md - this
+     * settles that note's waiter half.
+     * <p>
+     * The {@link #ARBITRARY_RETRY_LIMIT} backstop remains what it always was: a bound on <em>draining</em> foreign
+     * responses, which should never be needed.
      */
     private void commitAndWait() {
         throwIfPollerDied(null);
@@ -174,12 +209,22 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         // request
         CommitRequest commitRequest = requestCommitInternal();
 
-        // wait - the only way out is our own response arriving, a death, or a timeout
-        for (int attempts = 0; attempts <= ARBITRARY_RETRY_LIMIT; attempts++) {
+        // wait - the only ways out are our own typed response (committed, deferred, or terminally failed) and the
+        // poller's death
+        int foreignResponsesDrained = 0;
+        while (true) {
             try {
                 log.debug("Waiting on a commit response");
                 CommitResponse take = commitResponseQueue.poll(commitTimeout.toMillis(), TimeUnit.MILLISECONDS); // blocks, drain until we find our response
                 if (take != null && commitRequest.getId().equals(take.getRequest().getId())) {
+                    OffsetCommitBudgetExceededException commitFailure = take.getCommitFailure();
+                    if (commitFailure != null) {
+                        // the commit-failure seam's typed outcome (astubbs#317): the budget was exhausted on the
+                        // poll thread, which stayed alive; rethrow on this (the waiting) thread, where the
+                        // CommitFailureHandler decision runs - monitor-free, once the exception has propagated
+                        // out of the commitCommand block
+                        throw commitFailure;
+                    }
                     // Our answer arrived, so this commit HAPPENED - report it as such even if the
                     // poller died immediately afterwards of something unrelated. Checking the death
                     // first would report "request X can never be answered" about a request that was
@@ -191,27 +236,23 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 }
                 throwIfPollerDied(commitRequest);
                 if (take == null) {
-                    // report the timeout actually waited (offsetCommitTimeout). This used to
-                    // interpolate the unrelated constant DEFAULT_TIMEOUT, so every one of these
-                    // errors claimed PT30S no matter what the option was set to - overstating the
-                    // default by 3x and making the number useless as a diagnostic.
-                    // TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
-                    // see docs/inflight/core-exception-hierarchy-cleanup.md
-                    throw InternalRuntimeException.msg(
-                            "Timeout waiting for commit response {} to request {} - the broker poll thread is the " +
-                                    "only producer of commit responses, and it has not died with an exception, so it is " +
-                                    "not answering: it is blocked or slower than the configured offsetCommitTimeout. Had " +
-                                    "it thrown, that would have been reported here immediately, with its own error as the " +
-                                    "cause. An Error rather than an Exception escapes that path and is reported by " +
-                                    "AbstractParallelEoSStreamProcessor's supervise() backstop instead",
-                            commitTimeout, commitRequest);
+                    // a heartbeat, not a deadline - see the method javadoc for why waiting longer than
+                    // offsetCommitTimeout here is correct
+                    log.warn("Commit response still pending after {} - the broker poll thread has not died with an " +
+                                    "exception, so it is still working on (or towards) this commit; continuing to " +
+                                    "wait on it, bounded by its own commit retry budget rather than a local deadline",
+                            commitTimeout);
+                } else {
+                    // an older request's response, or the wake-up token: keep draining until ours arrives
+                    foreignResponsesDrained++;
+                    if (foreignResponsesDrained > ARBITRARY_RETRY_LIMIT) {
+                        throw new InternalRuntimeException("Too many attempts taking commit responses");
+                    }
                 }
-                // an older request's response, or the wake-up token: keep draining until ours arrives
             } catch (InterruptedException e) {
                 log.debug("Interrupted waiting for commit response", e);
             }
         }
-        throw new InternalRuntimeException("Too many attempts taking commit responses");
     }
 
     /**
@@ -259,14 +300,33 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         CommitRequest poll = commitRequestQueue.poll();
         if (poll != null) {
             log.debug("Commit requested, performing...");
-            commitDeferringOnRebalance();
+            CommitResponse response;
+            try {
+                commitDeferringOnRebalance();
+                response = new CommitResponse(poll);
+            } catch (OffsetCommitBudgetExceededException budgetExhausted) {
+                // The commit-failure seam's re-route (astubbs#317, confluentinc#833): budget exhaustion is a
+                // commit OUTCOME for the waiter's CommitFailureHandler to decide about, not a reason for this
+                // thread to die. Letting it escape here kills the broker-poll thread - the only producer of
+                // commit responses - turning "this commit failed" into "the whole instance died" before any
+                // handler could be consulted. So answer the waiter with the failure as a typed response on the
+                // existing channel (the same move the DEFERRED case below makes; never an interrupt or a bare
+                // flag) and keep polling: on a CONTINUE decision the offsets are still dirty, and the next
+                // cycle re-commits them with a fresh budget.
+                if (!isSync()) {
+                    // no waiter to hand the decision to - the async commit mode is outside the seam (and its
+                    // commitAsync path cannot throw this anyway), so preserve the historical fatal route
+                    throw budgetExhausted;
+                }
+                response = new CommitResponse(poll, budgetExhausted);
+            }
             // Only need to send a response if someone will be waiting - and send it even when the
             // commit was DEFERRED (postponed to the next cycle, not dropped - see
-            // #commitDeferringOnRebalance), otherwise the requesting thread blocks for the full
-            // offsetCommitTimeout waiting on a commit that is not coming. It re-requests next cycle.
+            // #commitDeferringOnRebalance), otherwise the requesting thread blocks waiting on a
+            // commit that is not coming. It re-requests next cycle.
             if (isSync()) {
                 log.debug("Adding commit response to queue...");
-                commitResponseQueue.add(new CommitResponse(poll));
+                commitResponseQueue.add(response);
             }
         }
     }
@@ -282,9 +342,11 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * and only the third is correct:
      * <ol>
      *     <li><b>Throw</b> - let it escape. Fatal: this runs on the broker-poll thread, the only
-     *         producer of commit responses, so killing it strands every waiting committer until
-     *         {@code offsetCommitTimeout} and then takes the whole PC instance down. This is the
-     *         "Timeout waiting for commit response" symptom, whose cause looks nothing like it.</li>
+     *         producer of commit responses, so killing it releases every waiting committer with a
+     *         poller-death report (see {@link #notifyPollerDied}) and takes the whole PC instance
+     *         down. Historically - before the death notification - the waiter instead sat out
+     *         {@code offsetCommitTimeout} and reported "Timeout waiting for commit response", a
+     *         symptom whose cause looked nothing like it.</li>
      *     <li><b>Swallow</b> - catch it and carry on. Silently wrong: it would leave
      *         {@link AbstractOffsetCommitter#retrieveOffsetsAndCommit()} free to call
      *         {@code onOffsetCommitSuccess()}, marking offsets that never reached the broker as
