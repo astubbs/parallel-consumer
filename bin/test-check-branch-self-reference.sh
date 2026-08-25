@@ -64,10 +64,13 @@ assert() {
         git -c user.email=t@e.invalid -c user.name=t commit -qm x
         [ "$stage" = 0 ] && printf '%b' "$body" > "$target"
         # UNSET the CI variables, or the fixture is not isolated: on a real PR, Actions sets
-        # GITHUB_HEAD_REF to the actual branch, the gate prefers it over the fixture's checkout, and
-        # every branch-name case silently tests the wrong name. Green on a developer machine where
-        # the variable is absent, red only in CI - which is the worst place to learn it.
+        # GITHUB_HEAD_REF to the actual branch, the gate prefers it over the checkout in the
+        # fixture, and every branch-name case silently tests the wrong name. Green on a developer
+        # machine where the variable is absent, red only in CI - the worst place to learn it.
         # assert_ci below covers the path this unset removes.
+        # NO APOSTROPHES IN THIS BLOCK: bash 3.2, the system bash on macOS, does not skip comments
+        # when scanning a $( ... ) for its closing paren, so one reads as an opening quote and the
+        # whole file fails to parse. Nothing catches that - the suite simply never runs there.
         unset GITHUB_HEAD_REF GITHUB_REF GITHUB_REF_NAME
         PR_NUMBER=326 bash "$GATE" 2>&1
     )"
