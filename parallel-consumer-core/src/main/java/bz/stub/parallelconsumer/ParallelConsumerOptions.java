@@ -361,6 +361,51 @@ public class ParallelConsumerOptions<K, V> {
      */
     @Builder.Default
     private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.FAIL;
+
+    /**
+     * The seam for reacting when an offset commit fails terminally - its retry budget spent without success (see
+     * {@link OffsetCommitBudgetExceededException}). The handler decides between shutting down (the default and
+     * historical behaviour, {@link CommitFailurePolicies#shutDown()}) and continuing to the next commit cycle.
+     * <p>
+     * Canned policies, including the recommended bounded-continue, live in {@link CommitFailurePolicies}.
+     * <p>
+     * Not supported with {@link CommitMode#PERIODIC_CONSUMER_ASYNCHRONOUS} - see {@link #validate()}; support there
+     * is tracked in astubbs#317's follow-up.
+     *
+     * @see CommitFailureHandler
+     */
+    @Builder.Default
+    private final CommitFailureHandler commitFailureHandler = CommitFailurePolicies.shutDown();
+
+    /**
+     * What happens to record intake while PC continues past a terminally failed commit (the
+     * {@link CommitFailureHandler} returned {@link CommitFailureHandler.CommitFailureDecision#CONTINUE}).
+     */
+    public enum CommitFailureContinueMode {
+
+        /**
+         * Keep taking in and processing new records optimistically - the failed offsets stay dirty and are retried
+         * on the next commit cycle. The default.
+         */
+        KEEP_PROCESSING,
+
+        /**
+         * Stop taking in new work until a commit succeeds again; in-flight work completes. Bounds the amount of
+         * processed-but-uncommitted work (and so the replay on an eventual rebalance).
+         */
+        PAUSE_INTAKE
+    }
+
+    /**
+     * The {@link CommitFailureContinueMode} to use while continuing past a failed commit.
+     * <p>
+     * Not final: {@link #validate()} coerces {@link CommitFailureContinueMode#KEEP_PROCESSING} to
+     * {@link CommitFailureContinueMode#PAUSE_INTAKE} under {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} - EOS
+     * cannot keep producing past a failed transaction - following the same mutate-defaults pattern as
+     * {@link #commitInterval}.
+     */
+    @Builder.Default
+    private CommitFailureContinueMode commitFailureContinueMode = CommitFailureContinueMode.KEEP_PROCESSING;
     /**
      * When a message fails, how long the system should wait before trying that message again. Note that this will not
      * be exact, and is just a target.
@@ -474,6 +519,35 @@ public class ParallelConsumerOptions<K, V> {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
         transactionsValidation();
+        commitFailureValidation();
+    }
+
+    private void commitFailureValidation() {
+        // EOS coercion: a failed transactional commit means produced records will never become visible, so
+        // continuing to process (and produce) optimistically is never safe - pause intake instead
+        if (isUsingTransactionCommitMode() && commitFailureContinueMode == CommitFailureContinueMode.KEEP_PROCESSING) {
+            this.commitFailureContinueMode = CommitFailureContinueMode.PAUSE_INTAKE;
+        }
+
+        // async commit-failure handling is excluded for now: async commit failures surface on a later cycle,
+        // detached from the offsets they were for, so the context this seam promises cannot yet be built there
+        if (commitMode == CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS) {
+            // identity check works because CommitFailurePolicies.shutDown() is a shared instance
+            boolean nonDefaultHandler = commitFailureHandler != CommitFailurePolicies.shutDown();
+            boolean nonDefaultContinueMode = commitFailureContinueMode != CommitFailureContinueMode.KEEP_PROCESSING;
+            if (nonDefaultHandler || nonDefaultContinueMode) {
+                throw new IllegalArgumentException(msg(
+                        "Configuring {} or {} is not supported with {} {} - supported commit modes are {} and {}. "
+                                + "Commit-failure handling for async commit mode is tracked in "
+                                + "astubbs/parallel-consumer#317's follow-up.",
+                        Fields.commitFailureHandler,
+                        Fields.commitFailureContinueMode,
+                        Fields.commitMode,
+                        commitMode,
+                        CommitMode.PERIODIC_CONSUMER_SYNC,
+                        PERIODIC_TRANSACTIONAL_PRODUCER));
+            }
+        }
     }
 
     private void transactionsValidation() {
