@@ -52,7 +52,7 @@ hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
 # shellcheck source=.claude/hooks/lib/hook-common.sh
 . "$hook_lib"
 
-[ "$(hook_git_subcommand "$payload")" = "push" ] || exit 0
+hook_git_runs "$payload" push || exit 0
 
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0

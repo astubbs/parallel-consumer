@@ -22,13 +22,22 @@
 # returns nothing and the caller stays silent - a guard that jams the tool call shut when it is
 # itself broken is worse than the mistake it was written to prevent (docs/agent-harness.md).
 
-# Prints the git SUBCOMMAND a hook payload runs (`push`, `commit`, ...), or nothing when the payload
-# is not a git invocation at all. The caller compares - `[ "$(hook_git_subcommand "$payload")" = push ]`.
+# Prints EVERY git subcommand the payload's command runs, one per line - `git add -A && git push`
+# prints `add` then `push`. Use `hook_git_runs` rather than reading the first line.
+#
+# ALL OF THEM, NOT THE FIRST, and the singular version of this was a live regression. The inline
+# code this replaced stopped only at a git invocation whose subcommand was `push`, so it scanned past
+# earlier ones; the first extraction dropped that condition and returned the first git subcommand
+# unconditionally. `git add -A && git commit -m x && git push` then reported `add`, and BOTH push
+# hooks silently did nothing on a real push - the exact silently-stops-working class this file was
+# created to stop being duplicated, reintroduced by the extraction meant to prevent it. Caught by
+# review on astubbs/parallel-consumer#357 and reproduced before being believed; `bin/test-check-agent-hooks.sh`
+# now carries compound-command fixtures for both hooks.
 #
 # TOKENS, NOT SUBSTRINGS, which is the whole point: `git commit -m "ready to push"` contains the
 # word and must not fire. git is matched by BASENAME so /usr/bin/git counts, and an unbalanced quote
 # makes shlex raise, which fails open.
-hook_git_subcommand() { # <payload-json>
+hook_git_subcommands() { # <payload-json>
     printf '%s' "$1" | python3 -c '
 import json, shlex, sys
 try:
@@ -57,8 +66,21 @@ for i, t in enumerate(toks):
                 j += 1; continue
             rest.append(t); break
         if rest:
-            print(rest[0]); break
+            print(rest[0])
 ' 2>/dev/null || true
+}
+
+# True when the payload runs `git <subcommand>` ANYWHERE in its command, including after another git
+# invocation in a compound one. This is the predicate both push hooks actually want; reading a single
+# subcommand is what made a chained push invisible.
+hook_git_runs() { # <payload-json> <subcommand>
+    local want="$2" sub found=1
+    while IFS= read -r sub; do
+        if [ "$sub" = "$want" ]; then found=0; fi
+    done <<EOF
+$(hook_git_subcommands "$1")
+EOF
+    return "$found"
 }
 
 # Prints a file's mtime as a unix timestamp, or nothing when it cannot be read.

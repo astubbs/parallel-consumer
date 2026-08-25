@@ -748,6 +748,17 @@ for form in 'git -C /some/path push' 'git -c user.name=x push' 'git --git-dir=/d
     assert "reminds on: $form" reminded "$got"
 done
 
+# A GIT CALL BEFORE THE PUSH. `git add -A && git commit -m x && git push` is how an agent actually
+# pushes, and the shared helper's first version answered with the FIRST git invocation's subcommand -
+# so it returned `add`, and this hook silently did nothing on a real push. Found by review on
+# astubbs#357, reproduced before it was believed, and pinned here for both hooks because a helper
+# that reads one subcommand cannot see a chained push.
+for form in 'git add -A && git commit -m x && git push' 'git commit --amend && git push' 'git -C /p status && git push' 'git fetch origin && git push -u origin HEAD'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+    assert "reminds on a push CHAINED after another git call: $form" reminded "$got"
+done
+
 # The negative controls matter as much: a hook that fires on any mention of the word is noise, and
 # noise is how a reminder gets ignored.
 out="$(push_fire 'git commit -m "push later"')"
@@ -922,6 +933,16 @@ drift_clear
 out="$(drift_fire 'git -C /some/path push')"
 case "$out" in *MASTER_TOUCHED_SHARED*) got=reported ;; *) got=silent ;; esac
 assert "reminds on: git -C /some/path push" reported "$got"
+
+# Same regression, same fixture shape, for the drift hook - both callers share one helper, so both
+# need the case. A fix applied to one hook while the other keeps the broken call is exactly the drift
+# the shared library exists to prevent.
+for form in 'git add -A && git commit -m x && git push' 'git fetch origin && git push -u origin HEAD'; do
+    drift_clear
+    out="$(drift_fire "$form")"
+    case "$out" in *MASTER_TOUCHED_SHARED*) got=reported ;; *) got=silent ;; esac
+    assert "reports on a push CHAINED after another git call: $form" reported "$got"
+done
 
 # THE `## IN FLIGHT:` ECHO IS DERIVED, NOT COPIED. AGENTS.md carries such a section when something
 # must happen BEFORE any branch merges master; restating that rule inside the hook would be a second
