@@ -15,7 +15,7 @@ execution: code
 - **Objective:** find out whether wrap-rather-than-reimplement breaks on windowing. Dimension 4 of `docs/inflight/streams-coupling-dimensions.md` predicts windowing is the dimension most likely to force a wire redesign. This plan is the experiment that settles it, not a feature delivery. The work belongs to the language-proxy workstream tracked as astubbs#242, which commit subjects reference.
 - **The question, stated so it can come out no:** a hopping window calls the aggregator once per overlapping window, every aggregator call is a boundary crossing, and every crossing serialises through one lock. If that arithmetic holds under measurement, a foreign-language Kafka Streams cannot run a hopping windowed aggregation at a useful rate, and the surface below U4 is not worth designing.
 - **Authority:** this plan; where it is silent, `AGENTS.md`, `docs/investigating.md` for method, and the existing streams module's conventions. The v1alpha1 proto declares itself unfrozen in its own header and may be reshaped; the frozen v1 wire may not be touched.
-- **Stop conditions:** stop and report at the end of U1 if the aggregator-call multiplier does not appear, and at the end of U4 if the throughput ratio refutes the ceiling. Both outcomes reshape the rest of the plan rather than ending it, and both are results. Do not push, do not open a PR, do not post to GitHub.
+- **Stop conditions:** stop and report at the end of U1 if the aggregator-call multiplier does not appear, and at the end of U4 if the throughput ratio confirms the ceiling. Both outcomes reshape the rest of the plan rather than ending it, and both are results. Do not push, do not open a PR, do not post to GitHub.
 - **Execution profile:** commit each unit as it lands, subject style `feat(streams) astubbs#242: <subject>`, measurement and documentation units `docs(streams) astubbs#242: <subject>`. Bodies carry the prediction, what ran, and what came out.
 - **Tail ownership:** the implementer owns the write-up. A unit that measures is not done when the code compiles; it is done when its result, refuted predictions included, is written into the notes named in U9.
 
@@ -448,6 +448,7 @@ flowchart TB
 | Throughput ratio | U4 arm B divided by arm A | U4 | between 1/16 and 1/9 confirms the ceiling; above 1/2 refutes it; anything between is reported as inconclusive |
 | Restore | U6's ten unclean stops | U6 | a discrepancy rate out of ten, with the load and the kill point |
 | Accumulator | U7's sweep | U7 | a slope and an intercept stated against the 120us plus 6.5us/KB model |
+| Suppression | U8's four predictions against the 3.9.2 sources | U8 | each prediction marked confirmed or refuted, with the source files and version named |
 | Copyright headers | `COPYRIGHT_CHECK_REQUIRE_FORK_POINT=1 bin/check-copyright-headers.sh`, after staging | all | zero violations; new files carry `Copyright (C) 2026 Antony Stubbs and contributors` only |
 | Issue references | `bin/check-issue-refs.sh` | all | green |
 | File references | `bin/check-file-refs.sh` | U9 | no dangling citation introduced by this work |

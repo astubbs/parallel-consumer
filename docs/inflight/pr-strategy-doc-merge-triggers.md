@@ -29,6 +29,16 @@ Same family, same section: **`fix/transactional-produce-callback-abort`** and
 guarantee that holds - but the doc should not claim it more strongly than the fixed code supports.
 See [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md).
 
+**`research/kafka-streams-foreign-wrappers`** (astubbs#334) - measures what a windowed aggregation
+actually costs across the boundary. The Kafka Streams section claims the aggregations, the windowing
+and the state stores "never need to cross a boundary", and that **only** the user's per-record
+function crosses. A hopping window calls the aggregator once per overlapping window, so if the
+spike's multiplier holds, the crossing is per-overlapping-window rather than per-record and that
+sentence needs qualifying - not deleting, since the same section now states that parity rather than
+speed is the goal, which is what decides whether the cost is a failure or a price. The spike's plan
+is `docs/plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md`; its result belongs here
+whichever way it lands, including if it refutes the multiplier.
+
 ## Change who the product is for
 
 **`feats/ks-on-pc-spike`** (astubbs#255) and **`feats/connect-on-pc-spike`** (astubbs#240, plus its

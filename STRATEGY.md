@@ -225,6 +225,13 @@ raise and it should be visibly answered rather than absent.
 surface - consumer, producer, admin, and **Kafka Streams** - delivered to every language through the
 model the language proxy already proves.
 
+**Parity is the goal, not speed.** A wrapper does not have to beat JVM Kafka Streams; it has to
+exist. In a language with no Streams implementation the honest comparison is against *nothing*, so a
+topology that runs at a fraction of JVM throughput is still the only one there is. This is the
+sentence that decides whether a measured cost is a failure or a price, and it is why
+[Marketing](#marketing) says to claim the feature set and not general speed. It is a claim about
+what success means, not a prediction that the cost will be small.
+
 **Streams is a better fit for this model than a plain consumer, which is counter-intuitive and is
 the whole reason to write it down.** A Streams application is mostly *declarative*: the topology, the
 joins, the aggregations, the windowing, the state stores and exactly-once are all engine-side and

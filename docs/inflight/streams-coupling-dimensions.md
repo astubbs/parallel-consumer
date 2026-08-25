@@ -23,6 +23,10 @@ question with its own note -
 [`test-cross-binding-streams-conformance.md`](test-cross-binding-streams-conformance.md) **owns
 it**.
 
+**Before writing any claim about how Kafka Streams behaves, read its sources** -
+[`streams-verify-against-the-kafka-sources.md`](streams-verify-against-the-kafka-sources.md) **owns
+that rule** and carries the three times in this workstream that it was decisive.
+
 ## Proved
 
 The host defines the topology; the engine calls the host per record (stateless); the engine calls
