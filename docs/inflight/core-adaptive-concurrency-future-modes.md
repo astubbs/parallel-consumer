@@ -126,6 +126,35 @@ denominations untouched, falsifier-first with a born-red recovery-time scenario.
 ladder above is delivered; raw step/cadence constants are never exposed as user options - that
 re-creates the guess-a-number problem this feature removes.
 
+## Exploration probing: the local-minimum answer, parked beside the pacing profile (owner, 2026-08-25)
+
+The owner's question, twice-asked and now measured: the law assumes that when a step up stops buying
+completions, nothing above ever will - first plateau, final answer. It never reads latency at all;
+its one-step probes land IN a valley, see no gain, and restore. The torture set proves it on the
+second-wind plant (400/s at the first knee, a valley, then 1,200/s past 60 slots):
+`AdmissionTortureTest.secondWindBeyondTheValleyIsNotCrossedUnaided` pins first-knee-seeking as
+DESIGNED behaviour with the forgone plateau logged in the run.
+
+**The feature, when built: an exploration probe.** The machinery already exists in the right shape -
+every probe is pin -> measure -> keep-if-paid / restore-if-not. Exploration is the same discipline
+with a FAR step: on a rare cadence with exponential backoff on failure, pin the target several steps
+up (or binary-search toward the ceiling), adjudicate on throughput alone, keep only what demonstrably
+paid. The descent probe's discipline, mirrored upward.
+
+**Why it is a mode and never the default:** each exploration PAYS - probe windows run through the
+valley at genuinely worse latency, and on a thrash curve the probe costs real throughput while it
+runs. The default stays protective (never deliberately over-drive a downstream on a hypothesis);
+the explorer is for operators who suspect a second wind - batch-amortizing downstreams are the
+honest example. Today's overrides are the seed and the ceiling, and the constraint gauge already
+says plateau-held, which is the operator's cue to suspect more.
+
+**Relationship to the pacing profile above:** siblings, likely one option surface. Pacing changes
+how fast the law chases a knee it can see; exploration changes whether it looks past a knee at all.
+Both are parked behind the ladder; both are designed asymmetric probe changes, falsifier-first,
+never a scaling of the shared step constant (the refuted experiment above binds here too). The
+second-wind pin is the born-red acceptance test the day either crosses a valley: it fails the
+moment the law crosses unaided, forcing the flip to be conscious.
+
 ## Prior art to read before publishing anything
 
 **Flink and Google Dataflow both have serious autoscaling machinery, and Dataflow's is key-aware
