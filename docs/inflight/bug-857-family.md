@@ -674,3 +674,47 @@ and per the table in
 [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
+
+<!-- post-merge: checked-begin -->
+**Fourteenth sighting, 2026-08-25 - the drain arm again, and the decisive replay is still unrun.**
+`Chaos Pain Suite` on astubbs#351's head `d4b6923d0`
+([run 32797365932](https://github.com/astubbs/parallel-consumer/actions/runs/32797365932/job/97651297946)),
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red. **27 violations, all
+one kind**: `CLASS2_STALL/LAG_STAGNATION`, group STABLE with heartbeats flowing. Two of them:
+partition `-70` lag=2795 stagnant at offset 269 for 154s, partition `-49` lag=2932 stagnant at 184
+for 154s, both against the 150s bound. Zero `ZOMBIE_MEMBER`, zero `REBALANCE_BLOCKED`.
+
+**Seed `2445946824654755330`** - recorded because the artifact expires and the seed is the asset:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2445946824654755330
+
+**The branch is not a suspect, and the diff is why.** astubbs#351 changes exactly one code file -
+`OffsetEncodingBackPressureTest.java`, a **surefire** unit test the chaos lane does not run - plus
+four markdown files. This is the same class of control as the twelfth sighting's comment-only
+astubbs#323 head, applied to a suite that cannot reach the changed file at all.
+
+**What this adds beyond a tally mark: the drain arm has now drawn `CLASS2_STALL` on four separate
+seeds, and nobody has yet run the one replay that would tell us what it means.** The twelfth sighting
+named the experiment - replay a drain seed with `-Dchaos.diagnoseStallRecovery=true` and read whether
+the backlog drains - and called it cheap. The thirteenth recorded another drain-arm red and said
+"nobody has replayed it". This is the third consecutive drain-arm sighting written with that sentence
+still true. Until someone runs it, "the drain arm is also red" and "the drain arm is also slow"
+remain the same observation, and each new seed adds sample size to a question that sample size cannot
+answer.
+
+**One discriminator this run offers that the thirteenth could not.** That entry raised runner
+contention as a hypothesis, because `Performance (optional)` overlapped the chaos job *on the same
+box*. Here the two overlapped in time - Performance 01:23:41-01:26:34Z, Chaos 01:24:09-01:36:52Z -
+but reported **different runner names**: `highcpu-4` and `highcpu-2` respectively. Whether those are
+distinct hosts or two runners on one machine is **not established anywhere in the docs**, and
+`docs/self-hosted-runner.md` describes registering runners against a single `highcpu` label without
+saying how many hosts carry it. Worth settling once, because it decides whether the contention
+hypothesis can be applied to any run where two `highcpu` jobs overlap, or only to ones that name the
+same runner.
+
+**The retrieval trap fired again, exactly as the note above describes.** `gh run view --log-failed`
+carried no probe verdict, and the check-run annotation was a bare `Process completed with exit code
+1`. Every number above came from the uploaded `highcpu-fast-feedback-reports-Chaos Pain Suite-1185`
+artifact. The console is still not a place to look for this.
+<!-- post-merge: checked-end -->
