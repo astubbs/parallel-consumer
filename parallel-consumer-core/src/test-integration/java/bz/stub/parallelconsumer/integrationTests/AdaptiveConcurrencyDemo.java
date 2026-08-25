@@ -265,6 +265,36 @@ public class AdaptiveConcurrencyDemo extends BrokerIntegrationTest<String, Strin
         }
     }
 
+    /** One arm's engine, built the same way in every demo: fresh group, UNORDERED, optionally adaptive. */
+    private ArmEngine buildArmEngine(String topic, int maxConcurrency, boolean adaptive, int adaptiveSeed) {
+        var builder = ParallelConsumerOptions.<String, String>builder()
+                .consumer(getKcu().createNewConsumer(GroupOption.NEW_GROUP))
+                .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
+                .ordering(UNORDERED)
+                .maxConcurrency(maxConcurrency);
+        if (adaptive) {
+            builder.adaptiveConcurrencyMode(AdaptiveConcurrencyMode.ENFORCE)
+                    .adaptiveConcurrencyInitialTarget(adaptiveSeed);
+        }
+        var options = builder.build();
+        PCModule<String, String> module = new PCModule<>(options);
+        var pc = new ParallelEoSStreamProcessor<>(options, module);
+        // Resolve before poll() starts engine threads - the sibling ITs' determinism guard.
+        AdmissionController controller = adaptive ? module.admissionController() : null;
+        pc.subscribe(UniSets.of(topic));
+        return new ArmEngine(pc, controller);
+    }
+
+    private static final class ArmEngine {
+        final ParallelEoSStreamProcessor<String, String> pc;
+        final AdmissionController controller;
+
+        ArmEngine(ParallelEoSStreamProcessor<String, String> pc, AdmissionController controller) {
+            this.pc = pc;
+            this.controller = controller;
+        }
+    }
+
     @SneakyThrows
     private PhasedResult runPhasedArm(String topic, String armName, int maxConcurrency, boolean adaptive) {
         log.info("\n=== {} (maxConcurrency {}{}) - {}s schedule ===", armName, maxConcurrency,
@@ -278,20 +308,9 @@ public class AdaptiveConcurrencyDemo extends BrokerIntegrationTest<String, Strin
         java.util.concurrent.atomic.AtomicLongArray phaseCompletions = new java.util.concurrent.atomic.AtomicLongArray(3);
         java.util.concurrent.atomic.AtomicLongArray phaseRequestMs = new java.util.concurrent.atomic.AtomicLongArray(3);
 
-        var builder = ParallelConsumerOptions.<String, String>builder()
-                .consumer(getKcu().createNewConsumer(GroupOption.NEW_GROUP))
-                .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
-                .ordering(UNORDERED)
-                .maxConcurrency(maxConcurrency);
-        if (adaptive) {
-            builder.adaptiveConcurrencyMode(AdaptiveConcurrencyMode.ENFORCE)
-                    .adaptiveConcurrencyInitialTarget(HEALTHY_CAPACITY_SLOTS);
-        }
-        var options = builder.build();
-        PCModule<String, String> module = new PCModule<>(options);
-        var pc = new ParallelEoSStreamProcessor<>(options, module);
-        AdmissionController controller = adaptive ? module.admissionController() : null;
-        pc.subscribe(UniSets.of(topic));
+        ArmEngine engine = buildArmEngine(topic, maxConcurrency, adaptive, HEALTHY_CAPACITY_SLOTS);
+        var pc = engine.pc;
+        AdmissionController controller = engine.controller;
 
         long armStart = System.currentTimeMillis();
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
@@ -407,21 +426,9 @@ public class AdaptiveConcurrencyDemo extends BrokerIntegrationTest<String, Strin
         AtomicInteger completed = new AtomicInteger();
         LongAdder requestMs = new LongAdder();
 
-        var builder = ParallelConsumerOptions.<String, String>builder()
-                .consumer(getKcu().createNewConsumer(GroupOption.NEW_GROUP))
-                .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
-                .ordering(UNORDERED)
-                .maxConcurrency(maxConcurrency);
-        if (adaptive) {
-            builder.adaptiveConcurrencyMode(AdaptiveConcurrencyMode.ENFORCE)
-                    .adaptiveConcurrencyInitialTarget(ADAPTIVE_SEED_SLOTS);
-        }
-        var options = builder.build();
-        PCModule<String, String> module = new PCModule<>(options);
-        var pc = new ParallelEoSStreamProcessor<>(options, module);
-        // Resolve before poll() starts engine threads - the sibling ITs' determinism guard.
-        AdmissionController controller = adaptive ? module.admissionController() : null;
-        pc.subscribe(UniSets.of(topic));
+        ArmEngine engine = buildArmEngine(topic, maxConcurrency, adaptive, ADAPTIVE_SEED_SLOTS);
+        var pc = engine.pc;
+        AdmissionController controller = engine.controller;
 
         long armStart = System.currentTimeMillis();
         ScheduledExecutorService ticker = Executors.newSingleThreadScheduledExecutor();

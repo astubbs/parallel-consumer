@@ -369,6 +369,7 @@ mkdir -p "$repoE/good" "$repoE/bad"
 # opening quote, and the block ends at the lone closing quote - same shape as PACKAGE_MOVES.
 enforced_types=$(awk '/^ENFORCED_TYPES="$/ { inblock = 1; next }
                       inblock && /^"$/     { inblock = 0; next }
+                      inblock && /^#/      { next }
                       inblock              { print }' "$SCANNER")
 
 typed_file() { # <path> <style> <"header"|"bare">

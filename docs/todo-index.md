@@ -159,6 +159,10 @@ that line, leave it in the code - it will show up here.
 - todo make private
 - todo make private
 
+**`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AdaptiveConcurrencyComparisonIT.java`**
+
+- TODO(refactor): U10 - add phase 4 (token-bucket rate limiting) once the 004 pressure-signal plan ships a real
+
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java`**
 
 - todo need to customise this for this test

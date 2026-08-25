@@ -339,6 +339,9 @@ EOF
 en_glob=(); en_style=(); n_enforced=0
 while IFS='|' read -r g s; do
     [ -n "$g" ] || continue
+    # In-table comment lines annotate their neighbouring rules; without this skip they parse as
+    # garbage globs with an empty style - silent here, loud in the self-test's fixture generator.
+    case "$g" in "#"*) continue ;; esac
     en_glob[$n_enforced]="$g"; en_style[$n_enforced]="$s"; n_enforced=$((n_enforced + 1))
 done <<EOF
 $ENFORCED_TYPES
