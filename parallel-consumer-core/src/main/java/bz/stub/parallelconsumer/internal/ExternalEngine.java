@@ -11,7 +11,7 @@ import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ExecutorService;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -47,6 +47,15 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
     }
 
     /**
+     * There is no pool of worker threads here to hand the shards to - {@link #setupWorkerPool(int)} makes exactly one
+     * thread, and the concurrency lives in the external runtime. Direct pull is a core-engine experiment.
+     */
+    @Override
+    protected boolean supportsDirectPull() {
+        return false;
+    }
+
+    /**
      * The vert.x module doesn't use any thread pool for dispatching work, as the work is all done by the vert.x engine.
      * This thread is only used to dispatch the work to vert.x.
      * <p>
@@ -54,8 +63,18 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      * vert.x.
      */
     @Override
-    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+    protected ExecutorService setupWorkerPool(int poolSize) {
         return super.setupWorkerPool(1);
+    }
+
+    /**
+     * @return false - see {@link AbstractParallelEoSStreamProcessor#supportsVirtualThreads()}. The single thread
+     *         this engine's pool holds only starts asynchronous work; making it virtual buys nothing and making it
+     *         unbounded breaks the dispatch model.
+     */
+    @Override
+    protected boolean supportsVirtualThreads() {
+        return false;
     }
 
     /**

@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
 
 import static bz.stub.parallelconsumer.internal.utils.KafkaUtils.toTopicPartition;
 import static java.util.Optional.of;
@@ -38,6 +40,113 @@ import static java.util.Optional.of;
 public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     static final String DEFAULT_TYPE = "DEFAULT";
+
+    /**
+     * Where a record is in its execution lifecycle, as one value.
+     * <p>
+     * <pre>
+     *     AVAILABLE  --claim-->  IN_FLIGHT  --verdict-->  IN_FLIGHT_SUCCEEDED  --land-->  SUCCEEDED (terminal)
+     *          ^                     |                    IN_FLIGHT_FAILED     --land-->  FAILED
+     *          |                     +--no verdict------------------------------land-->  AVAILABLE (abandoned)
+     *          +----------------------------------------claim, once the retry delay passes-----------+
+     * </pre>
+     * <p>
+     * <b>Two dimensions, one value.</b> A record is either out at a worker or it is not, and it either carries a
+     * verdict or it does not; those two questions used to be answered by two fields, and a claim that re-validated
+     * only one of them is what let an already-succeeded record be delivered again. These six states are that pair
+     * of questions crossed, and every one of them is a situation the code already reaches - in particular the two
+     * {@code IN_FLIGHT_*} states, which is where a record sits between the worker recording its verdict and the
+     * controller returning it. Collapsing those would make an outstanding record look parked to the revocation
+     * sweep.
+     * <p>
+     * <b>The retry delay is deliberately NOT a state.</b> A delay expires because a clock passed a point, and
+     * nothing fires a transition when that happens - so {@link #FAILED} covers both "waiting" and "due", and
+     * {@link WorkContainer#isDelayPassed()} separates them at the moment of asking. That term is safe to read
+     * outside the atomic: only the holder of a claim can write the retry deadline, a {@link #FAILED} record has no
+     * holder, and time only ever moves one way.
+     *
+     * @author Antony Stubbs
+     * @see WorkContainer#onQueueingForExecution()
+     */
+    public enum ExecutionState {
+
+        /** Free, carrying no verdict: a fresh record, or one returned without a verdict at all. Claimable. */
+        AVAILABLE(false, null),
+
+        /** Out at a worker, which has not reported yet. */
+        IN_FLIGHT(true, null),
+
+        /** The user function succeeded; the controller has not taken the record back yet. */
+        IN_FLIGHT_SUCCEEDED(true, Boolean.TRUE),
+
+        /** The user function failed; the controller has not taken the record back yet. */
+        IN_FLIGHT_FAILED(true, Boolean.FALSE),
+
+        /** Succeeded and returned. <b>Terminal</b> - a claim from here is always refused. */
+        SUCCEEDED(false, Boolean.TRUE),
+
+        /** Failed and returned. Claimable again, but only once its retry delay has passed. */
+        FAILED(false, Boolean.FALSE);
+
+        private final boolean inFlight;
+
+        private final Optional<Boolean> verdict;
+
+        ExecutionState(boolean inFlight, Boolean verdict) {
+            this.inFlight = inFlight;
+            this.verdict = Optional.ofNullable(verdict);
+        }
+
+        /** @return true while the record is out at a worker and has not been returned to the controller */
+        public boolean isInFlight() {
+            return inFlight;
+        }
+
+        /**
+         * @return true, false, or empty when the user function has not reported on this delivery
+         */
+        public Optional<Boolean> getVerdict() {
+            return verdict;
+        }
+
+        /**
+         * @return true when a claim may be attempted from this state - the state half of the decision; the retry
+         *         delay is the other half
+         */
+        boolean isClaimable() {
+            return this == AVAILABLE || this == FAILED;
+        }
+
+        /**
+         * @return the state this delivery leaves behind when it is returned to the controller, keeping whatever
+         *         verdict it carries. Only meaningful while {@link #isInFlight()}.
+         */
+        ExecutionState afterFlightEnds() {
+            switch (this) {
+                case IN_FLIGHT:
+                    return AVAILABLE;
+                case IN_FLIGHT_SUCCEEDED:
+                    return SUCCEEDED;
+                case IN_FLIGHT_FAILED:
+                    return FAILED;
+                default:
+                    return this;
+            }
+        }
+
+        /**
+         * @return this state with a verdict attached, preserving whether the record is in flight. Total, because a
+         *         verdict may legitimately be recorded against a record that was never claimed - retry-delay
+         *         arithmetic is built that way in tests, and the failure history it drives is independent of the
+         *         claim.
+         */
+        ExecutionState withVerdict(boolean succeeded) {
+            if (inFlight) {
+                return succeeded ? IN_FLIGHT_SUCCEEDED : IN_FLIGHT_FAILED;
+            }
+            return succeeded ? SUCCEEDED : FAILED;
+        }
+    }
 
     /**
      * Instance reference to otherwise static state, for access to the instance type parameters of WorkContainer as
@@ -64,6 +173,28 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Getter
     private final ConsumerRecord<K, V> cr;
 
+    /**
+     * When this record ARRIVED in Parallel Consumer - the instant this container was constructed, which is the
+     * moment the record came out of the consumer and entered the engine's own queues.
+     * <p>
+     * <b>Deliberately not {@link #timeTakenAsWorkMs}</b>, which is stamped when a delivery is <em>claimed</em>.
+     * That one measures time in flight, so it cannot see the interval this exists for: how long a record sits in
+     * the shards after being fetched and before anything picks it up. Under a backlog that interval is Little's
+     * law applied to Parallel Consumer's own buffers - buffered depth divided by throughput - so it is the only
+     * quantity that separates "not fetched yet" from "fetched and queued behind other work", which no other
+     * meter distinguishes.
+     * <p>
+     * Produce time and time waiting on the broker are deliberately EXCLUDED: they are the environment, not the
+     * engine, and {@link ConsumerRecord#timestamp()} is there for anyone who wants them included.
+     * <p>
+     * Taken from the module clock, like {@link #succeededAt}, so a test driving a fake clock sees a residence
+     * time consistent with everything else it observes.
+     *
+     * @see #getResidenceTime()
+     */
+    @Getter
+    private final Instant arrivedAt;
+
     @Getter
     private int numberOfFailedAttempts = 0;
 
@@ -76,10 +207,64 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Getter
     private Optional<Throwable> lastFailureReason;
 
-    private boolean inFlight = false;
+    /**
+     * Where this record is in its execution lifecycle: whether it is out at a worker, and what verdict it carries.
+     * <p>
+     * <b>One field, because two were the bug.</b> This used to be an {@code AtomicBoolean inFlight} plus a separate
+     * {@code Optional<Boolean> maybeUserFunctionSucceeded}, and selection read both but re-validated only the
+     * boolean when it claimed. A puller whose availability decision predated another puller's completion could
+     * therefore win the boolean compare-and-set on an already-succeeded record, and the claim then cleared the
+     * verdict - erasing the term that should have refused it. The record was delivered, and its offset committed,
+     * twice. Diagnosis, reproduction and the refuted predictions:
+     * {@code docs/inflight/bug-direct-pull-claim-is-check-then-act.md}.
+     * <p>
+     * Atomic because the direct-pull engine lets every worker select work straight from the shards, so the
+     * "is it free? then take it" pair has to be one indivisible step. Under the default engine only the control
+     * loop selects work and a plain field would do; making it atomic for both keeps one code path, and the cost is
+     * one uncontended compare-and-set per delivery - the same cost the boolean carried.
+     *
+     * @see ExecutionState
+     * @see #onQueueingForExecution()
+     */
+    private final AtomicReference<ExecutionState> state = new AtomicReference<>(ExecutionState.AVAILABLE);
 
+    /**
+     * The occupancy record of the shard holding this record, charged when a delivery is claimed and released when
+     * that delivery lands - so the charge and its release are the two halves of one state transition and cannot
+     * drift apart. Null only for a container that never entered a shard, which in production cannot happen and in
+     * tests is common.
+     * <p>
+     * Written once, by {@link ProcessingShard#addWorkContainer}, before the container is published into the shard's
+     * entry map - so every thread that can reach this container through the map has already seen the write.
+     * <p>
+     * It carries the shard's index of unheld offsets as well as its in-flight count, deliberately: both are
+     * derived from exactly this transition, and giving them one owner is what keeps the index from becoming a
+     * second thing that has to be remembered about. See {@link ShardOccupancy}.
+     *
+     * @see ProcessingShard#getCountOfWorkInFlight()
+     */
+    private ShardOccupancy shardOccupancy;
+
+    /**
+     * Counts deliveries of this record. Incremented every time it is queued for execution, so each delivery has
+     * an identity a return can be matched against.
+     * <p>
+     * This exists because an abandoned record is immediately re-selectable, and the control loop drains returns
+     * and re-selects work in the same iteration. Without a delivery identity, a return arriving late for
+     * delivery <em>n</em> is indistinguishable from a return for the live delivery <em>n+1</em>, and acting on
+     * it ends a flight that is still running and decrements the in-flight counter twice.
+     */
     @Getter
-    private Optional<Boolean> maybeUserFunctionSucceeded = Optional.empty();
+    private long deliveryCount = 0;
+
+    /**
+     * The delivery this record was abandoned on, or {@code -1} if it has never been abandoned. Deliberately
+     * <em>not</em> cleared on redelivery: a late return still has to be recognisable as belonging to a delivery
+     * that has already ended.
+     *
+     * @see #markAbandoned(long)
+     */
+    private long abandonedAtDelivery = -1;
 
     @Getter
     @Setter(AccessLevel.PUBLIC)
@@ -102,15 +287,35 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         this.cr = cr;
         this.workType = workType;
         this.module = module;
+        this.arrivedAt = module.clock().instant();
     }
 
     public WorkContainer(long epoch, ConsumerRecord<K, V> cr, PCModule<K, V> module) {
         this(epoch, cr, module, DEFAULT_TYPE);
     }
 
+    /**
+     * This delivery has been handed back to the controller: the record leaves flight, keeping whatever verdict it
+     * came back with, and releases its shard's in-flight charge.
+     * <p>
+     * A no-op when the record is not in flight. That is not a legal transition, but it has always been silently
+     * idempotent here and the callers rely on it - {@link WorkManager#handleFutureResult} reaches this from the
+     * revoked-partition branch, which does not know how far the delivery got.
+     */
     public void endFlight() {
-        log.trace("Ending flight {}", this);
-        inFlight = false;
+        while (true) {
+            ExecutionState current = state.get();
+            if (!current.isInFlight()) {
+                log.trace("Flight already ended, nothing to release {}", this);
+                return;
+            }
+            if (state.compareAndSet(current, current.afterFlightEnds())) {
+                log.trace("Ending flight {}", this);
+                releaseShardInFlightCharge();
+                return;
+            }
+            // the worker's verdict landed between the read and the write - re-read and end the flight it left
+        }
     }
 
     public boolean isDelayPassed() {
@@ -187,13 +392,116 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     public boolean isInFlight() {
-        return inFlight;
+        return state.get().isInFlight();
     }
 
-    public void onQueueingForExecution() {
+    /**
+     * @return where this record currently is in its lifecycle
+     */
+    public ExecutionState getExecutionState() {
+        return state.get();
+    }
+
+    /**
+     * Claims this record for execution. <b>One compare-and-set: the check IS the act.</b>
+     * <p>
+     * The whole decision - not in flight, no success verdict, retry delay passed - is evaluated against a single
+     * observed {@link ExecutionState}, and the claim then compares against <em>that exact state</em>. Anything that
+     * moved the record in between makes the compare fail, so there is no window in which a decision can outlive the
+     * facts it was made on. That window is what let an already-completed record be claimed and delivered a second
+     * time, and it is why callers must NOT pre-filter with {@link #isAvailableToTakeAsWork()} and then call this:
+     * the two-step form is the defect, restated.
+     * <p>
+     * A won claim starts a new delivery, and the new delivery carries no verdict - not because anything is cleared,
+     * but because {@link ExecutionState#IN_FLIGHT} has none. That matters for a record that failed, was
+     * redelivered and was then abandoned: under the old field pair it would still have been carrying
+     * {@code succeeded == false} from the earlier attempt and would have taken the failure path, earning a retry
+     * delay the abandonment never earned. The abandon marker is deliberately NOT reset - it is keyed by delivery,
+     * so a stale one identifies itself.
+     *
+     * @return {@code true} if this caller won the claim; {@code false} if the record was not claimable, or another
+     *         caller moved it first, in which case this caller must not process it. Only ever {@code false} under
+     *         the direct-pull engine, where two workers can scan the same shard at the same time.
+     */
+    public boolean onQueueingForExecution() {
+        ExecutionState observed = state.get();
+        if (!isClaimableFrom(observed)) {
+            log.trace("Not claimable from {}: {}", observed, this);
+            return false;
+        }
+        if (!state.compareAndSet(observed, ExecutionState.IN_FLIGHT)) {
+            log.trace("Lost the race to claim {}", this);
+            return false;
+        }
         log.trace("Queueing for execution: {}", this);
-        inFlight = true;
+        deliveryCount++;
         timeTakenAsWorkMs = of(System.currentTimeMillis());
+        chargeShardInFlight();
+        return true;
+    }
+
+    /**
+     * The claim decision, over one observed state. Read the state FIRST and the delay second: the state read is
+     * the volatile one, so its acquire semantics make the retry deadline written by the previous holder visible.
+     * Doing it the other way round would open a second, independent hole.
+     */
+    private boolean isClaimableFrom(ExecutionState observed) {
+        return observed.isClaimable() && isDelayPassed();
+    }
+
+    private void chargeShardInFlight() {
+        ShardOccupancy occupancy = shardOccupancy;
+        if (occupancy != null) {
+            occupancy.onFlightBegan(offset());
+        }
+    }
+
+    private void releaseShardInFlightCharge() {
+        ShardOccupancy occupancy = shardOccupancy;
+        if (occupancy != null) {
+            occupancy.onFlightEnded(offset());
+        }
+    }
+
+    /**
+     * Called by the shard as it takes ownership of this record, before the container is published into the shard's
+     * entry map.
+     */
+    void onAdmittedToShard(ShardOccupancy shardOccupancy) {
+        this.shardOccupancy = shardOccupancy;
+    }
+
+    /**
+     * Marks the given delivery of this work as returned without a verdict, so
+     * {@link WorkManager#handleFutureResult} returns it to scheduling rather than throwing. Does not touch
+     * {@link #numberOfFailedAttempts} or the retry delay - the record is redelivered as the same attempt it
+     * already was.
+     *
+     * @param delivery the {@link #getDeliveryCount()} value observed when the record was handed out. Callers
+     *                 must capture it at dispatch, not read it at return time: by then the record may already
+     *                 have been redelivered, and passing the current value would make a stale return look live.
+     */
+    public void markAbandoned(long delivery) {
+        log.trace("Abandoning delivery {} without verdict {}", delivery, this);
+        this.abandonedAtDelivery = delivery;
+    }
+
+    /**
+     * @return true when this record was abandoned on the delivery that is currently outstanding
+     */
+    public boolean isAbandonedForCurrentDelivery() {
+        return abandonedAtDelivery == deliveryCount;
+    }
+
+    /**
+     * @return true when a return carries no verdict and its abandon marker belongs to a delivery that has
+     *         already ended - a late duplicate, which must be ignored rather than acted on
+     */
+    public boolean isReturnForSupersededDelivery() {
+        // not isEmpty() - core compiles to Java 8 bytecode, where that Optional method does not exist
+        return !getMaybeUserFunctionSucceeded().isPresent()
+                && abandonedAtDelivery >= 0
+                && abandonedAtDelivery != deliveryCount;
     }
 
     public TopicPartition getTopicPartition() {
@@ -202,7 +510,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     public void onUserFunctionSuccess() {
         this.succeededAt = of(module.clock().instant());
-        this.maybeUserFunctionSucceeded = of(true);
+        recordVerdict(true);
     }
 
     public void onUserFunctionFailure(Throwable cause) {
@@ -210,7 +518,26 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
         updateFailureHistory(cause);
 
-        this.maybeUserFunctionSucceeded = of(false);
+        recordVerdict(false);
+    }
+
+    /**
+     * Attaches the user function's verdict to the current state, without ending the flight - the worker that ran
+     * the function still holds the record until the controller takes it back through
+     * {@link WorkManager#handleFutureResult}.
+     * <p>
+     * The failure history behind {@link #getDelayUntilRetryDue()} is written before this, so the state write is
+     * what publishes it: a thread that observes {@link ExecutionState#FAILED} has, by the same happens-before
+     * edge, observed the retry deadline that goes with it.
+     */
+    private void recordVerdict(boolean succeeded) {
+        while (true) {
+            ExecutionState current = state.get();
+            ExecutionState next = current.withVerdict(succeeded);
+            if (current == next || state.compareAndSet(current, next)) {
+                return;
+            }
+        }
     }
 
     private void updateFailureHistory(Throwable cause) {
@@ -219,6 +546,16 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         lastFailureReason = Optional.ofNullable(cause);
         Duration retryDelay = getRetryDelayConfig();
         retryDueAt = of(lastFailedAt.get().plus(retryDelay));
+    }
+
+    /**
+     * The user function's verdict on the current delivery, or empty if it has not reported yet.
+     * <p>
+     * Derived from {@link #getExecutionState()} rather than stored beside it. Keeping it as its own field is what
+     * made a claim able to contradict it.
+     */
+    public Optional<Boolean> getMaybeUserFunctionSucceeded() {
+        return state.get().getVerdict();
     }
 
     public boolean isUserFunctionComplete() {
@@ -233,6 +570,21 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Override
     public String toString() {
         return "WorkContainer(tp:" + toTopicPartition(cr) + ":o:" + cr.offset() + ":k:" + cr.key() + ")";
+    }
+
+    /**
+     * How long this record has been inside Parallel Consumer: from {@link #getArrivedAt()} to now.
+     * <p>
+     * Asked at the moment the controller takes a delivery back, this is the record's RESIDENCE TIME - the
+     * quantity behind {@link bz.stub.parallelconsumer.metrics.PCMetricsDef#RECORD_RESIDENCE_TIME}. Because
+     * arrival is stamped once, at construction, a record that failed and was retried carries every one of those
+     * attempts and every retry delay in this figure, which is the point: excluding them would flatter exactly
+     * the case the metric exists to expose.
+     *
+     * @return the interval between this record entering Parallel Consumer and now, on the module clock
+     */
+    public Duration getResidenceTime() {
+        return Duration.between(arrivedAt, module.clock().instant());
     }
 
     public Duration getTimeInFlight() {
@@ -252,13 +604,20 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     /**
-     * Checks the work is not already in flight, it's retry delay has passed and that it's not already been succeeded.
+     * Whether a claim would be accepted <em>at the instant this is asked</em> - the record is not in flight, has no
+     * success verdict, and its retry delay has passed.
+     * <p>
+     * <b>Answering true here does not reserve anything, and callers that intend to take the record must NOT use
+     * this as a pre-filter.</b> Call {@link #onQueueingForExecution()} directly: it evaluates exactly this
+     * predicate and claims from the state it evaluated, in one step. Testing here and claiming afterwards is
+     * precisely the check-then-act that delivered records twice. This survives for the callers that only want to
+     * know - metrics, diagnostics, and tests.
      * <p>
      * Checking that there's no back pressure for the partition it belongs to is covered by
      * {@link PartitionStateManager#isAllowedMoreRecords(WorkContainer)}.
      */
     public boolean isAvailableToTakeAsWork() {
-        return isNotInFlight() && !isUserFunctionSucceeded() && isDelayPassed();
+        return isClaimableFrom(state.get());
     }
 
     /**

@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -81,6 +82,12 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
                 .batchSize(batchSize)
                 .maxConcurrency(concurrency)
                 .consumer(consumer)
+                // The multiplication asserted below is specific to the pre-loaded-queue engine: the load factor
+                // sizes the executor's QUEUE, so a factor of 2 means twice as many records buffered, not twice as
+                // many running. A virtual-thread pool has no queue, so it deliberately does not multiply, and this
+                // assertion would be asserting a defect there. The virtual-thread half of the contract is pinned
+                // in VirtualThreadExecutionModeTest#theInFlightTargetIsNotMultipliedByTheLoadFactorInThisMode.
+                .useVirtualThreads(false)
                 .build();
         try (final TestParallelEoSStreamProcessor<String, String> testInstance = new TestParallelEoSStreamProcessor<>(testOptions)) {
             final int defaultLoad = 2;
@@ -205,10 +212,10 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
      */
     @Test
     void theDefaultPoolIsAcceptedUnchanged() {
-        var built = new AtomicReference<ThreadPoolExecutor>();
+        var built = new AtomicReference<ExecutorService>();
         try (var testInstance = new TestParallelEoSStreamProcessor<String, String>(testOptions) {
             @Override
-            protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+            protected ExecutorService setupWorkerPool(int poolSize) {
                 var pool = super.setupWorkerPool(poolSize);
                 built.set(pool);
                 return pool;
@@ -217,7 +224,7 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
             assertThat(built.get())
                     .as("the default pool must be built during construction - the check cannot be deferred to first use")
                     .isNotNull();
-            assertThat(built.get().getRejectedExecutionHandler())
+            assertThat(((ThreadPoolExecutor) built.get()).getRejectedExecutionHandler())
                     .as("the pool must be handed on exactly as setupWorkerPool built it")
                     .isInstanceOf(ThreadPoolExecutor.AbortPolicy.class);
         }
@@ -238,7 +245,7 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
         var landmarkWhenPoolWasBuilt = new AtomicReference<Object>("the pool was never built");
         try (var testInstance = new TestParallelEoSStreamProcessor<String, String>(testOptions) {
             @Override
-            protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+            protected ExecutorService setupWorkerPool(int poolSize) {
                 landmarkWhenPoolWasBuilt.set(getWm());
                 return super.setupWorkerPool(poolSize);
             }
@@ -332,7 +339,7 @@ class AbstractParallelEoSStreamProcessorConfigurationTest {
     private TestParallelEoSStreamProcessor<String, String> processorBackedBy(ThreadPoolExecutor pool) {
         return new TestParallelEoSStreamProcessor<String, String>(testOptions) {
             @Override
-            protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+            protected ExecutorService setupWorkerPool(int poolSize) {
                 return pool;
             }
         };

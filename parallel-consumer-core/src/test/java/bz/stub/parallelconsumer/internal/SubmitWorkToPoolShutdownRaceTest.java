@@ -115,7 +115,7 @@ class SubmitWorkToPoolShutdownRaceTest {
         pc.setWm(wm);
 
         // the pool is a lazy supplier - resolve it up front so each test acts on the same instance
-        pool = pc.workerThreadPool.get();
+        pool = (ThreadPoolExecutor) pc.workerThreadPool.get();
     }
 
     @AfterEach
