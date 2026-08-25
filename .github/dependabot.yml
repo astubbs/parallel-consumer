@@ -227,6 +227,35 @@ updates:
           - "minor"
           - "patch"
 
+  # The Go benchmark harnesses. Not product code, but their manifests still rot: an unbumpable
+  # client library skews the cross-client comparison the bench exists to make. Weekly is enough -
+  # a bench arm's dependency moving is a re-measurement trigger, not a security surface.
+  - package-ecosystem: "gomod"
+    directory: "/bench/franz"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "gomod"
+    directory: "/bench/llingr"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-non-major:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
   - package-ecosystem: "cargo"
     directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust"
     schedule:
