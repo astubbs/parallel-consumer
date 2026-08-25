@@ -744,3 +744,52 @@ the `-Dchaos.diagnoseStallRecovery=true` replay has been run on none of them.** 
 would not change that. Whoever picks this up should spend one replay before another sighting is
 written.
 <!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**Fifteenth sighting, 2026-08-25 - NOT the timing bound. A commit response that never came, from a
+poll thread that had not died.** Third consecutive red on the same branch (head `ec2c54181`, again a
+markdown-only diff from its predecessor), but a different arm and a different failure:
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest`.
+
+**The assertion that failed is a correctness one**, not `CLASS2_STALL`:
+
+```
+AssertionErrorWithFacts: no instance may end the run with an unclassified failure cause
+expected to be empty
+but was: [instance 42: java.lang.RuntimeException: Error from poll control thread:
+  Timeout waiting for commit response PT10S to request ConsumerOffsetCommitter.CommitRequest(...)
+  - the broker poll thread is the only producer of commit responses, and it has not died with an
+  exception, so it is not answering: it is blocked or slower than the configured offsetCommitTimeout]
+```
+
+Alongside it, **1 `ZOMBIE_MEMBER/REBALANCE_BLOCKED`**: group `group-1-604121656` dwelling in
+`PreparingRebalance` for 15s against the 15s bound.
+
+**Seed `8584935079849032188`:**
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8584935079849032188
+
+**Why this is worth more than the two entries above it, stated carefully.** Everything recorded in
+the fourteenth sighting is the `CLASS2_STALL` timing bound, which
+[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md)
+argues cannot distinguish a wedge from slowness - the probe's own message says so. **This failure is
+not that.** A commit request that times out after 10s, from a broker-poll thread the runtime has
+positively established is *alive and not throwing*, is a thread that is blocked - and the error text
+reaches that conclusion itself, by elimination, rather than inferring it from a watermark.
+
+**Do NOT read this as identifying the open deadlock.** It is the right *shape* - a poll thread not
+answering while a rebalance goes unanswered is what
+`synchronized(commitCommand)` contention between `onPartitionsRevoked` and
+`commitOffsetsThatAreReady` would look like from outside, which is the mechanism astubbs#29
+replaces with `ReentrantLock.tryLock()`. But shape is not identification: the same symptom is
+produced by a poll thread merely slower than `offsetCommitTimeout`, and nothing here separates
+those. The fifth sighting's rule applies - do not promote a signature to a mechanism without the
+step that distinguishes them.
+
+**What would settle it, and it is different from the drain-arm replay.** Replay this seed and
+capture a thread dump of the broker-poll thread at the moment the commit request times out. Parked
+in the commit lock -> the family's original deadlock has a reproduction at last. Running, or waiting
+on the broker -> it is a timeout to tune, and belongs with the timing-proxy critique rather than
+here.
+<!-- post-merge: checked-end -->
