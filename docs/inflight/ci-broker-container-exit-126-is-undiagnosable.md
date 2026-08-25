@@ -3,9 +3,11 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 
+<!-- post-merge: checked-begin -->
 The GitHub-hosted `Integration Tests` gate goes red with the whole suite erroring, for a reason that
-is **not the branch** and that the log does not contain enough evidence to explain. Seen twice on
-astubbs#347 (2026-08-25), on two different heads.
+is **not the branch** and that the log does not contain enough evidence to explain. First recorded
+from two occurrences on astubbs#347 (2026-08-25), on two different heads of that branch.
+<!-- post-merge: checked-end -->
 
 ## The signature
 
@@ -30,11 +32,15 @@ timeout is a consequence of it rather than a second cause.
 
 ## Why the branch is ruled out, and how to rule it out again
 
-The cheap control is the same PR's own earlier heads. On astubbs#347: `Integration Tests` **passed** on
-`6d0ac6f99` and `a6c4c9077` and **failed** on `c190baf1e`, where the delta was five markdown files
-plus one shell script no workflow invokes - zero Java, zero pom, zero workflow. Run
+<!-- post-merge: checked-begin -->
+The cheap control is the branch's own earlier heads. On astubbs#347 the gate **passed** on two
+successive heads and then **failed** on the third, across a delta of five markdown files plus one
+shell script no workflow invokes - zero Java, zero pom, zero workflow. (Those heads are named in that
+PR's own commit range; they are deliberately not quoted here, since a squash merge would leave the
+SHAs unresolvable while the reasoning stays valid.) Run
 `git diff --name-only <passing-head>..<failing-head>` before anything else; if nothing executable
 changed, this is the environment.
+<!-- post-merge: checked-end -->
 
 **A re-run is the correct response here, and it is not a retry masking a flake.** Nothing about the
 test changed and no assertion is being weakened - the container never started, so the suite never
