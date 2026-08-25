@@ -91,3 +91,57 @@ marked untested at per-specification granularity.
 
 Appended by the units as they run. Nothing above this line changes after U6 starts; a correction to
 the pre-registration is recorded here as a dated entry, never edited in place.
+
+### U1 - aggregator calls and window emits (TTD), 2026-08-25
+
+Predictions restated compactly from the plan's U1, written here before the first run. All arms:
+100 records over one key, event times one minute apart, base timestamp two hours past the epoch
+(`TimeWindows.windowsFor` clamps the earliest window start at zero, so every arm must start at
+least `size - advance` = 55 minutes past the epoch or the hopping arms under-count).
+
+| # | Prediction | Predicted count | Outcome |
+|---|---|---|---|
+| 1 | Tumbling 1h: calls == records | 100 calls | **confirmed** - 100 calls observed |
+| 2 | Hopping 1h/5m: calls == 12x records | 1,200 calls | **confirmed** - 1,200 calls observed |
+| 3 | Hopping 1h/30m (linearity): calls == 2x records | 200 calls | **confirmed** - 200 calls observed |
+| 4 | suppress(untilWindowCloses): calls unchanged; emits == closed (key,window) pairs | 1,200 calls, 19 emits | **confirmed** - 1,200 calls, 19 emits observed |
+| 5 | Without suppression, emits == 12x records in TTD (commit per record) | 1,200 emits | **confirmed** - 1,200 emits observed, equal to the aggregator call count |
+| 6 | advanceWallClockTime does not close a window | 0 emits | **confirmed** - output topic empty, 0 emits, after advanceWallClockTime(1 day) on the suppressed topology |
+| 7 | emitStrategy(onWindowClose) matches suppression's emit count, no buffer | 1,200 calls, 19 emits | **confirmed** - 1,200 calls, 19 emits observed, matching the suppressed arm |
+| - | Record below every matched window's close bound: zero calls, dropped-records once per matched window | 0 calls, 12 drops | **confirmed** - 0 calls, dropped-records-total 12.0 |
+| - | Companion at windowCloseTime - 1: calls for every still-open matched window | 11 calls, 1 drop | **confirmed** - 11 calls, dropped-records-total 1.0; scenario 6 measured the boundary, not a coincidence |
+
+The 19 closed pairs: records span minutes 120-219 past epoch; hopping 1h/5m windows containing
+records have starts 65..215 (31 windows); with grace zero, closed means window end <= observed
+stream time 219 min, i.e. starts 65..155 - 19 windows, one key each.
+
+**Observations, environment and caveats:**
+
+- Test: `parallel-consumer-proxy-streams/src/test/java/bz/stub/parallelconsumer/streams/WindowedAggregatorCallCountTest.java`,
+  nine tests, all green in the full module suite (83 tests, 0 failures).
+- Kafka Streams **3.9.2** (the parent pom's `kafka.version`; the surefire classpath resolved
+  `kafka-streams-3.9.2.jar` and `kafka-streams-test-utils-3.9.2.jar`). Epoch offset: every
+  100-record arm starts at **two hours past the epoch** (clamp margin is `size - advance` = 55
+  minutes); the close-bound arms anchor stream time at ten hours past the epoch.
+- The zero-call bound is exactly where the plan's corrected scenario 6 put it: in 3.9.2
+  `KStreamWindowAggregate` tests `windowEnd > windowCloseTime`, so mere lateness still aggregates -
+  the companion arm's record at `windowCloseTime - 1ms` was aggregated into all 11 still-open
+  windows and dropped only from the one whose end had passed.
+- One measurement note: the on-window-close arm is only deterministic with the internal config
+  `__emit.interval.ms.kstreams.windowed.aggregation__` set to 0 - the emit-final pass is throttled
+  by a 200ms WALL-clock interval, and TTD's mock wall clock never moves on its own, so at the
+  default the closed windows sit unemitted behind the throttle. The test names this.
+- **TTD over-count limitation restated (KTD11): the emit counts here are the UPPER bound - TTD
+  commits (and so flushes the cache) per record, making unsuppressed emits equal P1's call count by
+  construction; only a broker run can measure the caching collapse, and that is U6's job.**
+- **Instrument check (R4):** scenario 3 sabotaged by setting its advance from 30 to 5 minutes; the
+  test failed red with `expected: 200 / but was : 1200`
+  (`WindowedAggregatorCallCountTest.hoppingOneHourAdvancingThirtyMinutesCallsTheAggregatorTwicePerRecord`),
+  then the advance was restored and the suite re-ran green. The counter moves.
+
+Consequence for the placements: P1's per-record crossing count under a 1h/5m hopping window is
+12x the record count, and the linearity arm pins it to `ceil(size / advance)` rather than anything
+window-count-shaped. P2 under a close-only emit rule (suppress or onWindowClose) crosses once per
+closed (key, window) pair - independent of the record count - which is the collapse P2's value
+rests on; the record-rate-driven half of P2's count (unsuppressed, cache-flush-driven) cannot be
+distinguished from P1 in TTD and waits on U6's broker arms.
