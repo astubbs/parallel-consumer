@@ -72,6 +72,17 @@ final class DeterministicPlant {
     private boolean congestionCollapse = false;
     private int windowsProduced = 0;
 
+    // ------------------------------------------------------------------
+    // Outcome-mix knobs (soak/torture plan U1). Both default to the plant's original all-success behaviour,
+    // so every pre-existing falsifier runs byte-identical windows. Fractional records are carried exactly the
+    // way the backlog is - as doubles rounded only at the window seam - so a 0.19 fraction is honest.
+    // ------------------------------------------------------------------
+
+    /** Fraction of completed outcomes that close as IGNORE rather than success (rides nonSuccessFraction). */
+    private double nonSuccessFraction = 0.0;
+    /** Overload drops recorded per window while set - any non-zero fires the law's BACKOFF arm each window. */
+    private long overloadDropsPerWindow = 0;
+
     DeterministicPlant(double muMaxRecordsPerSecond, double w0Seconds, int batchSize) {
         if (muMaxRecordsPerSecond <= 0 || w0Seconds <= 0 || batchSize < 1) {
             throw new IllegalArgumentException("plant parameters must be positive");
@@ -108,6 +119,30 @@ final class DeterministicPlant {
     /** Capacity change mid-run (rebalance-shrink / metamorphic scenarios); moves the oracle with it. */
     void setMuMaxRecordsPerSecond(double muMaxRecordsPerSecond) {
         this.muMaxRecordsPerSecond = muMaxRecordsPerSecond;
+    }
+
+    /**
+     * Outcome-mix knob (torture plan U1): the given fraction of each window's completed outcomes closes as
+     * IGNORE rather than success, riding {@link ClosedAdmissionWindow#nonSuccessFraction()} without touching
+     * the latency math or firing the BACKOFF arm - the shape the failure-fraction growth-freeze threshold is
+     * tested against. Zero restores the original all-success plant.
+     */
+    void setNonSuccessFraction(double fraction) {
+        if (fraction < 0 || fraction >= 1) {
+            throw new IllegalArgumentException("nonSuccessFraction must be in [0, 1)");
+        }
+        this.nonSuccessFraction = fraction;
+    }
+
+    /**
+     * Outcome-mix knob (torture plan U1): every window closes carrying this many overload drops while set -
+     * each non-zero window fires the law's multiplicative BACKOFF arm. Zero restores the original behaviour.
+     */
+    void setOverloadDropsPerWindow(long drops) {
+        if (drops < 0) {
+            throw new IllegalArgumentException("overloadDropsPerWindow must be >= 0");
+        }
+        this.overloadDropsPerWindow = drops;
     }
 
     /**
@@ -168,7 +203,10 @@ final class DeterministicPlant {
         }
 
         int invocations = (int) Math.round(completedRecords / batchSize);
-        long successes = Math.round(completedRecords);
+        long completedOutcomes = Math.round(completedRecords);
+        long ignores = Math.round(completedOutcomes * nonSuccessFraction);
+        long successes = completedOutcomes - ignores;
+        long drops = completedOutcomes == 0 ? 0 : overloadDropsPerWindow;
         double meanServiceTimeNanos = invocations == 0 ? 0.0 : serviceSeconds * WINDOW_NANOS;
 
         final AdmissionBoundarySignals signals;
@@ -190,6 +228,6 @@ final class DeterministicPlant {
         // In fidelity mode this is exactly what keeps binding decidable while the boundary instant flickers.
         return new ClosedAdmissionWindow(invocations, meanServiceTimeNanos, invocations, activeSlots, 0,
                 NOMINAL_PASSES_PER_WINDOW, activeSlots,
-                successes, 0, 0, WINDOW_NANOS, signals);
+                successes, ignores, drops, WINDOW_NANOS, signals);
     }
 }

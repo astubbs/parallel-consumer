@@ -26,13 +26,23 @@ final class ScenarioRunner {
         double arrivalRatePerSecond;
         /** Zero means "keep the plant's current capacity". */
         double muMaxOverrideRecordsPerSecond;
+        /** NaN means "keep the plant's current outcome mix" (torture plan U1). */
+        double nonSuccessFractionOverride;
+        /** Negative means "keep the plant's current per-window overload drops" (torture plan U1). */
+        long overloadDropsPerWindowOverride;
 
         static Phase of(int windowCount, double arrivalRatePerSecond) {
-            return new Phase(windowCount, arrivalRatePerSecond, 0.0);
+            return new Phase(windowCount, arrivalRatePerSecond, 0.0, Double.NaN, -1);
         }
 
         static Phase withCapacity(int windowCount, double arrivalRatePerSecond, double muMaxRecordsPerSecond) {
-            return new Phase(windowCount, arrivalRatePerSecond, muMaxRecordsPerSecond);
+            return new Phase(windowCount, arrivalRatePerSecond, muMaxRecordsPerSecond, Double.NaN, -1);
+        }
+
+        /** A phase that also moves the outcome mix - the failure-threshold-riding scenarios' knob. */
+        static Phase withOutcomes(int windowCount, double arrivalRatePerSecond, double nonSuccessFraction,
+                                  long overloadDropsPerWindow) {
+            return new Phase(windowCount, arrivalRatePerSecond, 0.0, nonSuccessFraction, overloadDropsPerWindow);
         }
     }
 
@@ -94,6 +104,12 @@ final class ScenarioRunner {
             plant.setArrivalRatePerSecond(phase.getArrivalRatePerSecond());
             if (phase.getMuMaxOverrideRecordsPerSecond() > 0) {
                 plant.setMuMaxRecordsPerSecond(phase.getMuMaxOverrideRecordsPerSecond());
+            }
+            if (!Double.isNaN(phase.getNonSuccessFractionOverride())) {
+                plant.setNonSuccessFraction(phase.getNonSuccessFractionOverride());
+            }
+            if (phase.getOverloadDropsPerWindowOverride() >= 0) {
+                plant.setOverloadDropsPerWindow(phase.getOverloadDropsPerWindowOverride());
             }
             for (int w = 0; w < phase.getWindowCount(); w++) {
                 ClosedAdmissionWindow window = plant.produceWindow(target);
