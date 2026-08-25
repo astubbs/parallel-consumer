@@ -793,3 +793,44 @@ in the commit lock -> the family's original deadlock has a reproduction at last.
 on the broker -> it is a timeout to tune, and belongs with the timing-proxy critique rather than
 here.
 <!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**CORRECTION to the fourteenth sighting and its addendum, same day, before anyone builds on them.**
+Both were written without consulting
+[`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md),
+which is on master and owns exactly this question. Read against it, **neither entry is family
+evidence, and they should not be counted as sightings.**
+
+That note's central finding: **~154s `CLASS2_STALL/LAG_STAGNATION` is a signature, not a
+diagnosis** - "roughly what a 150s bound produces once crossed, whatever crossed it. Do not read the
+number as evidence either way." The two entries above report 154s and 153s and treat the accumulation
+as meaningful. It is not.
+
+**Worse, the documented contention precondition was present in both runs and I did not check it.**
+That note measures `Performance` and `Chaos Pain Suite` overlapping on the self-hosted box inflating
+the same seed from 121.3s to 154.5s - about 27%, over a bound whose modelled worst legitimate case is
+100s. In both runs recorded above the two jobs overlapped:
+
+| Run | Performance | Chaos | Overlap |
+|---|---|---|---|
+| 32797365932 | 01:23:41-01:26:34Z (`highcpu-4`) | 01:24:09-01:36:52Z (`highcpu-2`) | yes |
+| 32799691980 | 02:14:51-02:17:59Z (`highcpu-1`) | 02:15:22-02:30:19Z (`highcpu-5`) | yes |
+
+**The discriminator is a replay of the seed on an uncontended box, and nothing cheaper works.** Per
+that note's table: RED uncontended and unbounded -> a family occurrence, one replay carries it; GREEN
+and draining -> contention, and it needs two or three replays because a green is an absence and this
+family is intermittent. Neither seed above has been replayed at all, so both entries are
+**unclassified**, not weak evidence for the family.
+
+**What survives.** The observation that the two jobs reported *different runner names* while
+overlapping (`highcpu-4`/`highcpu-2`, `highcpu-1`/`highcpu-5`) is still worth settling, because that
+note's measured case had them sharing a box and the workflow header warns about that sharing. If
+distinct names mean distinct hosts, contention needs re-establishing for these two runs specifically;
+if they are runners on one machine, it is the documented cause and these entries are closed. Either
+way the replay decides it, not the reasoning.
+
+**The fifteenth sighting is NOT affected by this correction.** It failed a *correctness* assertion -
+"no instance may end the run with an unclassified failure cause", on a commit response that never
+arrived from a poll thread positively established as alive - not the `CLASS2_STALL` timing bound this
+note governs. Its own discriminator (a thread dump at the timeout) stands unchanged.
+<!-- post-merge: checked-end -->
