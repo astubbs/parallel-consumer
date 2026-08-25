@@ -253,6 +253,10 @@ public class TopologyAssembler {
      * <p>All four window fields must be present, and each default is a trap the refusals below name: a defaulted
      * retention is Kafka's own {@code size + grace}, under which a one-hour window retains roughly the currently
      * open window and nothing else.
+     *
+     * <p>Present-but-invalid values are refused here too, by name and in protocol vocabulary. Without these
+     * refusals a value like {@code advance_ms} of zero reaches Kafka's own window constructors and surfaces to
+     * the host as an unnamed engine failure quoting a class it has never heard of.
      */
     public long windowedBy(long handle, TimeWindowSpec window) {
         requireNotBuilt("windowed_by");
@@ -260,6 +264,15 @@ public class TopologyAssembler {
         requireWindowField(window.hasAdvanceMs(), "advance_ms");
         requireWindowField(window.hasGraceMs(), "grace_ms");
         requireWindowField(window.hasRetentionMs(), "retention_ms");
+        require(window.getSizeMs() >= 1, "windowed_by names size_ms " + window.getSizeMs()
+                + ", below the minimum 1: a window with no width can hold no record");
+        require(window.getAdvanceMs() > 0, "windowed_by names advance_ms " + window.getAdvanceMs()
+                + ", below the minimum 1: a hop that never advances would reopen the same window forever");
+        require(window.getAdvanceMs() <= window.getSizeMs(), "windowed_by names advance_ms "
+                + window.getAdvanceMs() + ", above size_ms " + window.getSizeMs()
+                + ": a hop wider than the window would leave records falling between windows");
+        require(window.getGraceMs() >= 0, "windowed_by names grace_ms " + window.getGraceMs()
+                + ", below the minimum 0: a window cannot close before it ends");
         long minimumRetention = window.getSizeMs() + window.getGraceMs();
         require(window.getRetentionMs() >= minimumRetention,
                 "windowed_by names retention_ms " + window.getRetentionMs() + ", below the minimum "

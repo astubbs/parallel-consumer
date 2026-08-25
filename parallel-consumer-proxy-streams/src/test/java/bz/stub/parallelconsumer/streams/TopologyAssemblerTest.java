@@ -141,6 +141,16 @@ class TopologyAssemblerTest {
      * The refusal matrix: every method applied to every wrong kind of handle it can meet, each refused by the
      * RECORDED kind. One passing case per method is not enough - a resolver that reported every mismatch as
      * "grouped stream" would pass a single-case test.
+     *
+     * <p>The time-windowed rows are what pin the protocol string "time-windowed stream": before them no test
+     * fed a time-windowed handle into any refusing method, so its recorded name was unenforced. Red-proofed,
+     * two separate sabotages of {@code TopologyAssembler}: with {@code kindName}'s time-windowed branch changed
+     * to return "time windowed stream" (hyphen dropped), the first time-windowed row failed with
+     * {@code expected to contain: it names a time-windowed stream / but was: ... time windowed stream ...};
+     * with {@code windowedAggregate}'s expected kind changed to {@code HANDLE_KIND_GROUPED_STREAM}, the
+     * aggregate-on-stream row failed with {@code expected to contain: needs a time-windowed stream / but was:
+     * ... aggregate needs a grouped stream} (and every aggregate happy-path test in the class errored). Both
+     * sabotages restored.
      */
     @Test
     void everyMethodRefusesEveryWrongKindByItsRecordedName() {
@@ -148,14 +158,38 @@ class TopologyAssemblerTest {
         long stream = assembler.source("in");
         long grouped = assembler.groupByKey(stream);
         long table = assembler.count(grouped, "counts");
+        long windowed = assembler.windowedBy(grouped, tumblingHour());
 
         assertRefusedNaming(() -> assembler.mapValues(grouped, 42), "mapValues", "grouped stream", "stream");
         assertRefusedNaming(() -> assembler.mapValues(table, 42), "mapValues", "table", "stream");
+        assertRefusedNaming(() -> assembler.mapValues(windowed, 42), "mapValues", "time-windowed stream", "stream");
         assertRefusedNaming(() -> assembler.groupByKey(grouped), "groupByKey", "grouped stream", "stream");
         assertRefusedNaming(() -> assembler.groupByKey(table), "groupByKey", "table", "stream");
+        assertRefusedNaming(() -> assembler.groupByKey(windowed), "groupByKey", "time-windowed stream", "stream");
         assertRefusedNaming(() -> assembler.count(stream, "s"), "count", "stream", "grouped stream");
         assertRefusedNaming(() -> assembler.count(table, "s"), "count", "table", "grouped stream");
+        assertRefusedNaming(() -> assembler.count(windowed, "s"), "count", "time-windowed stream",
+                "grouped stream");
+        assertRefusedNaming(() -> assembler.reduce(windowed, 7, "s"), "reduce", "time-windowed stream",
+                "grouped stream");
         assertRefusedNaming(() -> assembler.sink(grouped, "out"), "sink", "grouped stream", "stream or a table");
+        assertRefusedNaming(() -> assembler.sink(windowed, "out"), "sink", "time-windowed stream",
+                "stream or a table");
+        // Both of join's positions, because each resolves by its own expected kind.
+        assertRefusedNaming(() -> assembler.join(windowed, table, 7), "join", "time-windowed stream", "stream");
+        assertRefusedNaming(() -> assembler.join(stream, windowed, 7), "join", "time-windowed stream", "table");
+        assertRefusedNaming(() -> assembler.windowedBy(windowed, tumblingHour()), "windowed_by",
+                "time-windowed stream", "grouped stream");
+        // to_stream accepts windowed TABLES, not windowed streams - the near-miss its refusal must name.
+        assertRefusedNaming(() -> assembler.toStream(windowed), "to_stream", "time-windowed stream",
+                "windowed table");
+        // aggregate is the one method whose CONTRACT is the time-windowed stream: everything else refuses it.
+        assertRefusedNaming(() -> assembler.aggregate(stream, bytes("i"), 7, "s"), "aggregate", "stream",
+                "time-windowed stream");
+        assertRefusedNaming(() -> assembler.aggregate(grouped, bytes("i"), 7, "s"), "aggregate", "grouped stream",
+                "time-windowed stream");
+        assertRefusedNaming(() -> assembler.aggregate(table, bytes("i"), 7, "s"), "aggregate", "table",
+                "time-windowed stream");
     }
 
     /**
@@ -682,24 +716,42 @@ class TopologyAssemblerTest {
         assertThat(initials).containsExactly("id-", "id-").inOrder();
     }
 
+    /**
+     * All four fields have an arm, and each asserts the DISTINCTIVE clause "missing &lt;field&gt;". A bare
+     * {@code contains("advance_ms")} proved unable to detect a wrong field name: the refusal's enumeration tail
+     * ("size_ms, advance_ms, grace_ms and retention_ms must all be present") contains every field name, so the
+     * old assertion passed whichever field the message blamed. Red-proofed: with the {@code hasSizeMs} and
+     * {@code hasAdvanceMs} labels swapped at their {@code requireWindowField} call sites, this test failed with
+     * {@code expected to contain: missing size_ms / but was: ... missing advance_ms ...}; sabotage restored.
+     */
     @Test
     void aWindowSpecificationMissingAFieldIsRefusedByName() {
         TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
         long grouped = assembler.groupByKey(assembler.source("in"));
+        TimeWindowSpec noSize = TimeWindowSpec.newBuilder()
+                .setAdvanceMs(ONE_HOUR_MS).setGraceMs(0).setRetentionMs(TWO_HOURS_MS).build();
         TimeWindowSpec noAdvance = TimeWindowSpec.newBuilder()
                 .setSizeMs(ONE_HOUR_MS).setGraceMs(0).setRetentionMs(TWO_HOURS_MS).build();
+        TimeWindowSpec noGrace = TimeWindowSpec.newBuilder()
+                .setSizeMs(ONE_HOUR_MS).setAdvanceMs(ONE_HOUR_MS).setRetentionMs(TWO_HOURS_MS).build();
         TimeWindowSpec noRetention = TimeWindowSpec.newBuilder()
                 .setSizeMs(ONE_HOUR_MS).setAdvanceMs(ONE_HOUR_MS).setGraceMs(0).build();
 
+        TopologyDescriptionException missingSize = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, noSize));
         TopologyDescriptionException missingAdvance = assertThrows(TopologyDescriptionException.class,
                 () -> assembler.windowedBy(grouped, noAdvance));
+        TopologyDescriptionException missingGrace = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, noGrace));
         TopologyDescriptionException missingRetention = assertThrows(TopologyDescriptionException.class,
                 () -> assembler.windowedBy(grouped, noRetention));
 
         // Refused by NAME, never defaulted: proto3's zero would silently turn a tumbling window into a point
         // (advance) or hand the store Kafka's own size+grace default (retention), each wrong in a different way.
-        assertThat(missingAdvance).hasMessageThat().contains("advance_ms");
-        assertThat(missingRetention).hasMessageThat().contains("retention_ms");
+        assertThat(missingSize).hasMessageThat().contains("missing size_ms");
+        assertThat(missingAdvance).hasMessageThat().contains("missing advance_ms");
+        assertThat(missingGrace).hasMessageThat().contains("missing grace_ms");
+        assertThat(missingRetention).hasMessageThat().contains("missing retention_ms");
     }
 
     @Test
@@ -716,6 +768,73 @@ class TopologyAssemblerTest {
         // engine one build step later.
         assertThat(refused).hasMessageThat().contains(String.valueOf(ONE_HOUR_MS + graceMs));
         assertThat(refused).hasMessageThat().contains("size_ms + grace_ms");
+    }
+
+    /**
+     * Present-but-invalid window values are refused by the engine's own named refusals, in protocol vocabulary -
+     * never left to reach Kafka's window constructors, whose exceptions surface to the host as unnamed engine
+     * failures quoting classes it has never heard of. Each arm names the offending field and its bound.
+     *
+     * <p>Red-proofed: with all three bound checks removed from {@code TopologyAssembler.windowedBy}, every arm
+     * here failed with "Unexpected exception type ... expected TopologyDescriptionException but was
+     * IllegalArgumentException" - Kafka's own exception leaking, which is exactly the defect these refusals
+     * close. Sabotage restored.
+     */
+    @Test
+    void aWindowOfZeroSizeIsRefusedNamingTheField() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        TimeWindowSpec zeroSize = window(0, ONE_HOUR_MS, 0, TWO_HOURS_MS);
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, zeroSize));
+
+        assertThat(refused).hasMessageThat().contains("size_ms 0");
+        assertThat(refused).hasMessageThat().contains("minimum 1");
+        assertThat(refused).hasMessageThat().doesNotContain("TimeWindows");
+    }
+
+    @Test
+    void aWindowWhoseAdvanceIsZeroIsRefusedNamingTheField() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        TimeWindowSpec zeroAdvance = window(ONE_HOUR_MS, 0, 0, TWO_HOURS_MS);
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, zeroAdvance));
+
+        assertThat(refused).hasMessageThat().contains("advance_ms 0");
+        assertThat(refused).hasMessageThat().contains("minimum 1");
+        assertThat(refused).hasMessageThat().doesNotContain("TimeWindows");
+    }
+
+    @Test
+    void aWindowWhoseAdvanceExceedsItsSizeIsRefusedNamingBothFields() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        TimeWindowSpec gappy = window(ONE_HOUR_MS, TWO_HOURS_MS, 0, TWO_HOURS_MS);
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, gappy));
+
+        assertThat(refused).hasMessageThat().contains("advance_ms " + TWO_HOURS_MS);
+        assertThat(refused).hasMessageThat().contains("above size_ms " + ONE_HOUR_MS);
+        assertThat(refused).hasMessageThat().doesNotContain("TimeWindows");
+    }
+
+    /** Reachable because the wire field is int64: nothing before this refusal rejects a negative. */
+    @Test
+    void aNegativeGraceIsRefusedNamingTheField() {
+        TopologyAssembler assembler = new TopologyAssembler(echo, concat, joining, appending);
+        long grouped = assembler.groupByKey(assembler.source("in"));
+        TimeWindowSpec negativeGrace = window(ONE_HOUR_MS, ONE_HOUR_MS, -1, TWO_HOURS_MS);
+
+        TopologyDescriptionException refused = assertThrows(TopologyDescriptionException.class,
+                () -> assembler.windowedBy(grouped, negativeGrace));
+
+        assertThat(refused).hasMessageThat().contains("grace_ms -1");
+        assertThat(refused).hasMessageThat().contains("minimum 0");
+        assertThat(refused).hasMessageThat().doesNotContain("TimeWindows");
     }
 
     /**

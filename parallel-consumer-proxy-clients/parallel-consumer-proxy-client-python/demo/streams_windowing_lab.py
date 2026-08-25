@@ -66,7 +66,13 @@ emit per window under COLLIDING inner keys, and on a broker the emit count is ex
 makes nondeterministic - an equality predicate hangs when dedup lands below the expectation. The
 replacement is QUIESCENCE: the arm is complete when the sink gains no new records for N commit
 intervals (N printed), and the emit count is validated post-hoc as a band, never as the stop
-condition.
+condition. A quiescence break is then CONFIRMED before it is believed: the sink's per-partition
+end offsets are captured, re-read after a further 2x the quiet window, and any advance fails the
+run as a premature break - an engine stalled longer than the quiet window (a long GC pause, cache
+pressure) satisfies the silence predicate mid-backlog, which would truncate the measured window
+under an untruncated record count and inflate the rate. The engine group's committed source
+offsets are additionally required to cover the whole seeded backlog, because with the cache on a
+truncated run's emit count can land inside the post-hoc band.
 
 Event times: every record carries the same producer-assigned constant timestamp, far past the
 epoch clamp in ``TimeWindows.windowsFor`` - the multiplier is timestamp-independent past the
@@ -269,6 +275,21 @@ def seed_keyed(bootstrap: str, topic: str, records: int, keys: int, payload_byte
         raise RuntimeError(f"the lab could not seed its backlog: {failures[0]}")
 
 
+def delete_run_topics(admin: AdminClient, topics: list[str]) -> None:
+    """Deletes a run's topics and AWAITS each result - the lab's one cleanup path.
+
+    ``delete_topics`` only queues the requests and returns futures; unawaited, a failed delete (a
+    dead controller, a topic mid-recreation) is silent and dead runs accumulate until the compose
+    broker's container disk fills. Cleanup must never fail a valid run, so a failed delete logs a
+    warning rather than raising.
+    """
+    for topic, future in admin.delete_topics(topics).items():
+        try:
+            future.result()
+        except Exception as error:  # cleanup must not fail a valid run
+            log.warning("failed to delete run topic %s: %s", topic, error)
+
+
 def read_sink(bootstrap: str, topic: str, expected_updates: int,
               deadline: float) -> tuple[int, float, bool]:
     """Counts the lab's own sink updates until ``expected_updates`` arrive or time runs out.
@@ -321,6 +342,8 @@ def measure(args: argparse.Namespace, arm: str, invocations: int,
     source = f"pc-wlab-{run_id}"
     sink = f"{source}-out"
     application_id = f"pc-wlab-{run_id}"
+    store = "wlab-store"
+    changelog = f"{application_id}-{store}-changelog"
 
     java, classpath = pathlib.Path(java_binary()).resolve(), resolve_classpath()
 
@@ -360,7 +383,7 @@ def measure(args: argparse.Namespace, arm: str, invocations: int,
         })
         builder = session.builder()
         grouped = builder.group_by_key(builder.source(source))
-        reduced = builder.reduce(grouped, last_value, "wlab-store")
+        reduced = builder.reduce(grouped, last_value, store)
         builder.sink(reduced, sink)
         if show_topology:
             print()
@@ -381,8 +404,9 @@ def measure(args: argparse.Namespace, arm: str, invocations: int,
         sidecar.close(timeout=30)
         if not args.keep_topics:
             # 24 runs x ~270 MB of topics would fill the compose broker's container disk; each
-            # run's numbers are already read, so its topics are dead weight.
-            admin.delete_topics([source, sink])
+            # run's numbers are already read, so its topics - including the reduce store's
+            # changelog - are dead weight.
+            delete_run_topics(admin, [source, sink, changelog])
 
     result = RunResult(arm=arm, invocations=invocations, records=records, delay_ms=delay_ms,
                        updates=updates, window_s=window, host_invocations=host_invocations,
@@ -578,8 +602,15 @@ class PlacementRun:
         return self.window_s / self.records if self.records else 0.0
 
 
+def _end_offsets(consumer: Consumer, topic: str) -> dict[int, int]:
+    """Per-partition end offsets, read from the broker rather than any client-side cache."""
+    metadata = consumer.list_topics(topic, timeout=10)
+    return {p: consumer.get_watermark_offsets(TopicPartition(topic, p), timeout=10)[1]
+            for p in metadata.topics[topic].partitions}
+
+
 def read_emits_quiescent(bootstrap: str, topic: str, quiet_s: float,
-                         deadline: float) -> tuple[int, float, bool]:
+                         deadline: float) -> tuple[int, float, bool, bool]:
     """Counts sink records until the topic goes QUIET - the U6 completion predicate.
 
     Not the inherited last-value-per-key predicate, and not an expected count: after
@@ -590,7 +621,15 @@ def read_emits_quiescent(bootstrap: str, topic: str, quiet_s: float,
     intervals, N printed by the caller) after at least one arrived. The observed count is
     validated post-hoc as a band, never used to stop.
 
-    Returns (emits, window seconds on the broker's log-append clock, clock validity).
+    A break is then CONFIRMED before it is believed: an engine stalled for longer than
+    ``quiet_s`` mid-backlog (a long GC pause, cache pressure) satisfies the silence predicate
+    while records are still coming, which would truncate the measured window under an
+    untruncated record basis and inflate the rate. So after the break the sink's per-partition
+    end offsets are captured, re-read after a further ``2 x quiet_s``, and any advance is
+    reported as a premature break for the caller to fail the run on.
+
+    Returns (emits, window seconds on the broker's log-append clock, clock validity,
+    premature break).
     """
     consumer = Consumer({
         "bootstrap.servers": bootstrap,
@@ -602,6 +641,8 @@ def read_emits_quiescent(bootstrap: str, topic: str, quiet_s: float,
     first_ms: int | None = None
     last_ms: int | None = None
     log_append = True
+    quiescent = False
+    premature = False
     last_new = time.monotonic()
     try:
         consumer.subscribe([topic])
@@ -611,6 +652,7 @@ def read_emits_quiescent(bootstrap: str, topic: str, quiet_s: float,
             batch = consumer.consume(num_messages=2000, timeout=0.2)
             if not batch:
                 if emits and time.monotonic() - last_new > quiet_s:
+                    quiescent = True
                     break
                 continue
             for message in batch:
@@ -628,10 +670,40 @@ def read_emits_quiescent(bootstrap: str, topic: str, quiet_s: float,
                     first_ms = timestamp_ms
                 if last_ms is None or timestamp_ms > last_ms:
                     last_ms = timestamp_ms
+        if quiescent:
+            # The confirmation wait. End offsets rather than more consuming, so the counted
+            # emits stay exactly what the break saw; the flag, not the count, fails the run.
+            before = _end_offsets(consumer, topic)
+            time.sleep(2 * quiet_s)
+            after = _end_offsets(consumer, topic)
+            premature = any(after.get(p, offset) > offset for p, offset in before.items())
     finally:
         consumer.close()
     window = (last_ms - first_ms) / 1000.0 if first_ms is not None and last_ms is not None else 0.0
-    return emits, window, log_append
+    return emits, window, log_append, premature
+
+
+def _committed_source_records(bootstrap: str, group: str, topic: str, partitions: int) -> int:
+    """The engine group's committed source offsets, summed - the processed-record basis.
+
+    A placement rate divides the SEEDED record count by the observed sink window, so a valid run
+    must prove the engine consumed the whole backlog. The emit band alone cannot: with the cache
+    on, a truncated run's emit count can land inside the band, and arm E's expected crossing
+    count is the emit count itself. Committed offsets are fetched with a plain group-coordinator
+    read (no subscribe, so no rebalance against the live engine); a never-committed partition
+    reads as zero.
+    """
+    probe = Consumer({
+        "bootstrap.servers": bootstrap,
+        "group.id": group,
+        "enable.auto.commit": False,
+    })
+    try:
+        committed = probe.committed([TopicPartition(topic, p) for p in range(partitions)],
+                                    timeout=30)
+        return sum(tp.offset for tp in committed if tp.offset >= 0)
+    finally:
+        probe.close()
 
 
 def _slf4j_simple_jar() -> str:
@@ -771,14 +843,19 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         timeout = 180 + 2 * (spec.multiplier * records * 400e-6 + records * 2e-3)
         deadline = time.monotonic() + timeout
         with GroupWatch(admin, application_id, args.stream_threads) as watch:
-            emits, window, log_append = read_emits_quiescent(
+            emits, window, log_append, premature = read_emits_quiescent(
                 args.bootstrap, sink, quiet_s, deadline)
         group_ok, group_state = watch.verdict()
+        # Read BEFORE the topics are deleted below - deleting a topic purges its group offsets.
+        # By here the engine has been idle for 3x quiet_s (45 commit intervals at the defaults),
+        # so a shortfall is a truncated run, never a commit still in flight.
+        committed = _committed_source_records(args.bootstrap, application_id, source,
+                                              args.partitions)
     finally:
         session.close()
         sidecar.close(timeout=30)
         if not args.keep_topics:
-            admin.delete_topics([source, sink, changelog])
+            delete_run_topics(admin, [source, sink, changelog])
 
     evictions: int | None = None
     if trace_cache:
@@ -799,6 +876,13 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         "append": emits,                     # once per emit, at the emit placement
     }[spec.placement]
     problems: list[str] = []
+    if premature:
+        problems.append("premature quiescence break: sink end offsets advanced during the "
+                        "2x-quiet confirmation wait - the engine was stalled, not finished, so "
+                        "the window is truncated and the rate would read inflated")
+    if committed != records:
+        problems.append(f"engine committed {committed:,} source records of {records:,} seeded "
+                        "- the rate's record basis is unproven, whatever the emit band says")
     if crossings != expected_crossings:
         problems.append(f"crossings={crossings:,} expected {expected_crossings:,}")
     if not emit_band[0] <= emits <= emit_band[1]:
@@ -986,7 +1070,7 @@ def run_host_reimpl(args: argparse.Namespace) -> int:
             measure_host(args, topic, records, args.keys, _HOP5, "hopping-12")
     finally:
         if not args.keep_topics:
-            AdminClient({"bootstrap.servers": args.bootstrap}).delete_topics([topic])
+            delete_run_topics(AdminClient({"bootstrap.servers": args.bootstrap}), [topic])
     return 0
 
 
@@ -999,7 +1083,8 @@ def _shared_phase(args: argparse.Namespace, sweep: list[int]) -> tuple[
     print("  statestore.cache.bytes  0 (set explicitly; every put forwards, emit counts exact)")
     print(f"  quiescence              {args.quiescence_intervals} commit intervals "
           f"({args.quiescence_intervals * args.commit_interval_ms / 1000:.1f}s) with no new "
-          "sink record")
+          "sink record; each break confirmed against sink end offsets after a further 2x, "
+          "and the engine group must have committed the whole seeded backlog")
     print(f"  keys                    {args.keys:,} over {args.partitions} partitions, "
           f"{args.stream_threads} stream threads, {args.payload_bytes} B payloads")
     print(f"  event time              constant {_EVENT_TIME_MS} ms for every record")
@@ -1041,7 +1126,7 @@ def _shared_phase(args: argparse.Namespace, sweep: list[int]) -> tuple[
                      measure_placement(args, "B", 480, 20, 64 * 1024 * 1024))
     finally:
         if not args.keep_topics:
-            AdminClient({"bootstrap.servers": args.bootstrap}).delete_topics([h_topic])
+            delete_run_topics(AdminClient({"bootstrap.servers": args.bootstrap}), [h_topic])
     return runs, h_runs, scenario4
 
 
@@ -1200,7 +1285,8 @@ def _emit_phase(args: argparse.Namespace) -> None:
                                                        "hopping-12"))
         finally:
             if not args.keep_topics:
-                AdminClient({"bootstrap.servers": args.bootstrap}).delete_topics([h_topic])
+                delete_run_topics(AdminClient({"bootstrap.servers": args.bootstrap}),
+                                  [h_topic])
 
     print()
     print("E ratio curve (crossings per record, E vs the MATCHED B; rho = records-per-key-per-"
