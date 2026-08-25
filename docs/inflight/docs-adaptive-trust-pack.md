@@ -8,6 +8,21 @@ genuinely good to get people to trust this** - along with test demonstrations, a
 humans to run themselves. Adaptive concurrency asks users to hand a production knob to a controller;
 nobody does that on a claim, and a trust-rebuilding fork gets one chance at the first impression.
 
+**Owner-approved promotional copy, 2026-08-25** (recorded verbatim from the demo session; publication
+still gated on the real-hardware bench number per `pr-333-adaptive-concurrency-outstanding.md`):
+
+> **The only configuration that changes when the world does.** Maximises throughput while minimising
+> latency: matches the throughput of a higher static setting at much lower latency - a better
+> experience for every system downstream of you.
+
+The demonstration behind the copy (2026-08-25, `AdaptiveConcurrencyDemo`, the moving-downstream
+plant): against a downstream degrading 48 slots to 8 and recovering, every static guess was wrong
+somewhere - the lucky 48 spent the outage six-deep on the sick service (116ms per 20ms request), the
+"safe" 100 paid double latency every ordinary day and 206ms during the outage, the cautious 10 threw
+away 79% of healthy capacity forever - while the adaptive arm, seeded with the SAME lucky number,
+walked its target to the degraded truth of exactly 8 (pressure fully off by mid-outage) and climbed
+back after recovery. Its one cost, the re-climb lag, is in the same table rather than hidden.
+
 Three deliverables, distinct jobs:
 
 1. **Architecture and user-feature documentation.** What the controller does, what it optimises,
@@ -28,9 +43,12 @@ Three deliverables, distinct jobs:
    versus throughput per arm. The [`web-three-reveal-demo.md`](web-three-reveal-demo.md)
    centrepiece (1 partition, 10k keys - the architecture demonstrating itself) is the bigger
    sibling and stays its own item; this one is narrower: the adaptive claim specifically, runnable
-   the day the feature ships rather than gated on the full demo programme. The existing
-   `AdaptiveConcurrencyClosedLoopIT` and `AdaptiveConcurrencyComparisonIT` are the raw material -
-   what is missing is the packaging and the tuning-for-watchability.
+   the day the feature ships rather than gated on the full demo programme. **First cut delivered
+   2026-08-25: `AdaptiveConcurrencyDemo`** - three plants (hard knee, CPU-contended knee, moving
+   downstream), arm selection via `-Dpc.demo.arms`, a 5-second ticker narrating rate, avg request
+   time and the live target, run commands in its javadoc. What remains of this deliverable is the
+   watchability polish: one command without the maven flag incantation, and a view better than
+   tailing a log.
 
 ## The provenance story - owner-approved copy for the feature docs (2026-08-25)
 
