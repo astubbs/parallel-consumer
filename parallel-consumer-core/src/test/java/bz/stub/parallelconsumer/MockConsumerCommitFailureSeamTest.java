@@ -712,6 +712,55 @@ class MockConsumerCommitFailureSeamTest {
         assertThat(parallelConsumer.isClosedOrFailed()).isTrue();
     }
 
+    /**
+     * A commit command pending at the moment a budget exhausts must not defeat CONTINUE's cadence reset. The
+     * command is only cleared on the success path, so it survives the failure's throw - and because the very
+     * command that <em>initiates</em> a failing commit is that leftover, one {@code requestCommitAsap} before a
+     * terminal failure would otherwise re-fire the commit every control-loop pass forever: back-to-back
+     * budget-length attempts, each re-consulting the handler, with the cadence reset never taking effect. The
+     * CONTINUE decision therefore consumes the command; the offsets it asked to commit stay dirty and travel on
+     * the cadence retry.
+     * <p>
+     * Determinism note: the command cannot be placed while a commit is in flight - the control thread holds the
+     * {@code commitCommand} monitor for the whole commit, so a concurrent {@code requestCommitAsap} just blocks
+     * until the decision is done (the monitor-free guarantee covers the handler <em>decision</em>, not the
+     * commit itself). Between attempts, with a 30s cadence, the control thread is idle and the placement is
+     * race-free.
+     */
+    @Test
+    void pendingCommitCommandDoesNotHotLoopAfterContinue() {
+        var healed = new AtomicBoolean(false);
+        mockConsumer = consumerWithFailingCommits(() -> new TimeoutException("mock commit timeout"), healed);
+        var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
+        // cadence far beyond the observation window: any re-attempt inside it can only come from a leftover command
+        startPc(SMALL_BUDGET, Duration.ofSeconds(30), handler);
+        addRecordsAndProcess();
+
+        // the first, cadence-sentinel commit exhausts and CONTINUE restores the (30s) cadence
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handler.contexts).hasSize(1));
+
+        // place the command while the control thread is idle between attempts; the commanded attempt fires
+        // promptly and exhausts too
+        parallelConsumer.requestCommitAsap();
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handler.contexts).hasSize(2));
+
+        // the negative half: the command was consumed by that decision, so while the 30s cadence owns the retry
+        // no third decision may arrive - a leftover command would produce one within roughly a budget-length
+        Awaitility.await()
+                .during(SMALL_BUDGET.multipliedBy(5))
+                .atMost(Duration.ofSeconds(10))
+                .until(() -> handler.contexts.size() == 2);
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+
+        // heal and prove the command mechanism itself still works: a fresh request lands the dirty offsets
+        // without waiting out the 30s cadence
+        healed.set(true);
+        parallelConsumer.requestCommitAsap();
+        awaitCommittedOffset(RECORDS);
+    }
+
     // ---------------------------------------------------------------------------------------------------------
     // harness
     // ---------------------------------------------------------------------------------------------------------

@@ -1209,6 +1209,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // restore the commit cadence - the failed cycle counts as this interval's attempt, so the retry
             // happens one commitInterval from now rather than immediately in a budget-long hot loop
             this.lastCommitTime = Instant.now();
+            // ...and consume any commit command still pending from before the failure: the command is only
+            // cleared on the success path, so left in place it re-fires the very next control-loop pass and
+            // turns the cadence reset above into exactly that hot loop. The command's offsets are still dirty
+            // and travel on the cadence retry.
+            clearCommitCommand();
         } else {
             log.error("Commit-failure handler decided SHUT_DOWN - closing with the commit failure as the cause");
             // the same fatal route budget exhaustion always took: the supervisor records it as the failure
