@@ -674,3 +674,27 @@ and per the table in
 [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
+
+**Fourteenth sighting, 2026-08-25 - the drain arm again, and the first drain-arm red with NO
+`Performance` overlap at all.** `Chaos Pain Suite` on astubbs/parallel-consumer#353's head
+`c1f423e4a`
+([run 32807910210](https://github.com/astubbs/parallel-consumer/actions/runs/32807910210/job/97681493424)),
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red at 172s. **4
+`CLASS2_STALL/LAG_STAGNATION` in the autopsy** (3 fired live), committed offsets stagnant 154s
+against the 150s bound, group STABLE and heartbeats flowing.
+`peaks: rebalanceDwell=13178ms lagStagnation=154263ms` - the ~154s constant again, inside the 300ms
+band the twelfth sighting measured across four arms (154064-154360ms).
+
+**Seed `6037000644302969438`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=6037000644302969438
+
+Two things this entry adds. **The branch is not a suspect, again**: astubbs#353 changes only
+`.claude/hooks/pre-commit-gate.sh`, `bin/test-check-agent-hooks.sh` and `docs/agent-harness.md` -
+no Java at all - the same not-PR-introduced control the twelfth sighting's astubbs#323 head gave.
+**And contention is not available as the hypothesis here**: `Performance (optional)` finished at
+04:14:18Z and the failing drain arm did not start until 04:17:05Z, three minutes after the box went
+quiet - every prior drain-arm entry either overlapped `Performance` or did not check. The
+discriminator remains an uncontended replay of this seed, and nobody has replayed this one either.
+Recorded as unresolved.
