@@ -229,3 +229,31 @@ easiest thing to mistake for a decision to ship.
 - [`perf-native-image-sidecar-works.md`](perf-native-image-sidecar-works.md) - the executable build,
   the five-attempt log, and the reachability capture reused here.
 - `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` - KTD13, KTD41, and the Dead ends section.
+
+## Candidate raised 2026-08-25: compile the FUNCTION, not just embed the engine
+
+Raised by the owner after the windowing spike's bet-off
+([`perf-streams-windowing-multiplier.md`](perf-streams-windowing-multiplier.md)): intercept user
+functions at registration and compile them to C-ABI artifacts the engine calls directly - in the
+embedded shape, the engine invokes a function POINTER the host registered, and the crossing
+disappears entirely rather than shrinking to a queue handoff.
+
+- **Mechanism exists for Python: Numba `@cfunc`** - restricted-Python JIT to an LLVM-compiled C
+  function pointer, no interpreter, no GIL. The registration wire already carries function tokens,
+  so "this token is also callable natively" is one additive capability field. The nopython coverage
+  cliff routes per function: compute-light folds (exactly the class the windowing verdict was lost
+  on) compile; I/O-bound functions stay on the wire, where the hop is noise against the work.
+  GraalPy is the competing shape (host Python on the engine runtime) and changes what users install.
+- **Sizing before any design work**: a direct native call (~0.1-1us) is the only shape that reaches
+  the two-orders-of-magnitude reopening condition `STRATEGY.md` names; the embedded queue seam alone
+  still pays two thread handoffs. But the ceiling relocates rather than vanishes - U6's arm D
+  (zero crossings) ran ~20k rec/s, the engine's own floor on that box - so the perfect version
+  closes the reimplementation gap from ~100x to single digits, and the verdict question becomes
+  parity-plus-durability against a published rate bound rather than a rout.
+- **The spike to run first is a crossing-cost ladder, not the interception machinery**: (a) gRPC
+  baseline (135us, measured), (b) embedded pull-queue handoff, (c) Numba cfunc pointer called from
+  the native-image engine, (d) GraalPy polyglot comparison - pre-registered bar for (c): at or
+  under ~1.35us marginal, with the end-to-end ceiling re-derived against the engine floor.
+  Hazards inherited from this note: crash isolation (a segfaulting compiled function kills the
+  topology process where the sidecar dies loudly), CTD7's stack-swap FFI incompatibility, the
+  per-entry isolate thread-attach rule, and the release-matrix gate on shipping anything embedded.
