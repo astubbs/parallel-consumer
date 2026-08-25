@@ -768,6 +768,72 @@ class AdmissionControllerTest {
     }
 
     /**
+     * law-U14 (owner-ratified 2026-08-25): probe LIFECYCLE - excursions firing, restores, backoff - logs on a
+     * second channel, the logger named {@code AdmissionController.class.getName() + ".probe"}; a probe whose
+     * conclusion PAYS (a real target movement kept) logs on the MAIN channel with every other movement. Both
+     * channels sit at INFO, so an operator silences probe chatter by logger NAME, never by level - dropping the
+     * main channel below INFO to quiet the probes would also hide the movements it exists to show.
+     * <p>
+     * Driven through the two descent round trips the sibling tests establish: a RESTORE round trip (firing and
+     * restoring are both lifecycle - probe channel only) and a KEEP round trip (the firing is lifecycle, the
+     * paid conclusion is a movement - main channel). One appender on the MAIN logger sees both channels
+     * (logback additivity - the child's events propagate up, so an operator's ordinary appenders keep working),
+     * and the channel a line took is its {@code getLoggerName()} - exactly the name the operator's
+     * {@code <logger name="....probe" level="warn"/>} keys on. The message substrings matched are each unique
+     * to their arm. History: born red on the main-channel-only implementation - every probe line carried the
+     * main logger's name, so both name-routing assertions failed.
+     */
+    @Test
+    void probeLifecycleLogsOnTheProbeChannelAndPaidConclusionsOnTheMainOne() {
+        var mainLogger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(AdmissionController.class);
+        String mainName = AdmissionController.class.getName();
+        String probeName = mainName + ".probe";
+        var events = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        // The class logger is global and surefire runs classes concurrently in this JVM, so sibling tests'
+        // controllers write into this appender while the assertions stream it - COW makes that safe.
+        events.list = new java.util.concurrent.CopyOnWriteArrayList<>();
+        events.start();
+        mainLogger.addAppender(events);
+        try {
+            // RESTORE round trip: excursion fires, throughput falls, the park is restored and the cadence
+            // backs off - all lifecycle, so all of it belongs to the probe channel.
+            var restored = driveToDescentProbe(0);
+            for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+                feedCountedBoundWindowAndTick(restored, 10, 12);
+            }
+            assertThat(restored.probeInFlight()).isFalse();
+
+            // KEEP round trip, fresh controller: the excursion is lifecycle, the paid conclusion is a movement.
+            var kept = driveToDescentProbe(0);
+            for (int probeWindow = 0; probeWindow < PROBE_DURATION_WINDOWS; probeWindow++) {
+                feedBoundWindowAndTick(kept, 10 * MS, kept.currentTarget());
+            }
+            assertThat(kept.probeInFlight()).isFalse();
+
+            java.util.function.BiPredicate<String, String> tookChannel = (substring, channel) ->
+                    events.list.stream().anyMatch(e -> e.getFormattedMessage().contains(substring)
+                            && e.getLoggerName().equals(channel));
+
+            assertWithMessage("the excursion firing is lifecycle - probe channel")
+                    .that(tookChannel.test("descent probe to", probeName)).isTrue();
+            assertWithMessage("the restore is lifecycle - probe channel")
+                    .that(tookChannel.test("throughput fell, restoring", probeName)).isTrue();
+            assertWithMessage("a firing must never carry the main channel's name - silencing the probe "
+                    + "logger must silence the whole excursion")
+                    .that(tookChannel.test("descent probe to", mainName)).isFalse();
+            assertWithMessage("a restore must never carry the main channel's name")
+                    .that(tookChannel.test("throughput fell, restoring", mainName)).isFalse();
+            assertWithMessage("a paid conclusion is a real movement - main channel")
+                    .that(tookChannel.test("the lower target paid, keeping it", mainName)).isTrue();
+            assertWithMessage("a paid conclusion must not be silenced with the probe chatter")
+                    .that(tookChannel.test("the lower target paid, keeping it", probeName)).isFalse();
+        } finally {
+            mainLogger.detachAppender(events);
+        }
+    }
+
+    /**
      * The pause edge (KTD3): a pause mid-probe aborts it - deferred target restored immediately, the law
      * instance retained, the history boundary stamped - and the first bound post-resume window lands in the
      * warmup band (never an absorbing hold), on the allowance the pause deliberately did NOT refill (KTD2).

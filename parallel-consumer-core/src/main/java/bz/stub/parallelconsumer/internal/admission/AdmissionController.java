@@ -79,6 +79,10 @@ import java.util.function.Supplier;
  * <pre>{@code
  * <logger name="bz.stub.parallelconsumer.internal.admission.AdmissionController" level="info"/>
  * }</pre>
+ * Probe LIFECYCLE - excursions firing, restores, cadence backoff - narrates on the child channel
+ * {@code ...AdmissionController.probe} instead ({@link #probeLog}, law-U14), so silencing probe chatter is one
+ * logger-name line ({@code <logger name="...AdmissionController.probe" level="warn"/>}) that costs no movement
+ * visibility: a probe whose conclusion pays logs the kept movement on the main channel like any other.
  * Both lines are INFO deliberately. A window is a second and most windows hold, so movements are infrequent by
  * construction; the mode is opt-in and off by default, so no user who has not asked for adaptive concurrency
  * ever sees either line; and the trajectory is the whole observable product of an experimental feature - DEBUG
@@ -274,6 +278,19 @@ public class AdmissionController {
      * moving needs the line that says why in the same filter as the ones that moved it.
      */
     private static final String LOG_PREFIX = "Adaptive concurrency";
+
+    /**
+     * The probe LIFECYCLE channel (law-U14, owner-ratified 2026-08-25): excursions firing, restores, and cadence
+     * backoff log here, named {@code <this class>.probe}, while a probe whose conclusion PAYS - a real target
+     * movement kept - logs on the MAIN channel with every other movement. Both channels sit at INFO on purpose:
+     * an operator who finds probe chatter noisy silences it by logger NAME
+     * ({@code <logger name="...AdmissionController.probe" level="warn"/>}), never by LEVEL - dropping the main
+     * channel's level to quiet the probes would also hide the movement lines it exists to show. The split means
+     * the main channel narrates only what the target IS (movements, holds, kept probes), and this one narrates
+     * what the controller is doing to find out (asking, restoring, backing off).
+     */
+    private static final org.slf4j.Logger probeLog =
+            org.slf4j.LoggerFactory.getLogger(AdmissionController.class.getName() + ".probe");
 
     /**
      * How a completed invocation's outcome classifies for admission purposes - the pass-through vocabulary for
@@ -1044,7 +1061,7 @@ public class AdmissionController {
         law.pinForProbe(AdmissionControlLaw.LIMIT_FLOOR_SLOTS, true);
         publishTarget(AdmissionControlLaw.LIMIT_FLOOR_SLOTS, AdmissionDecisionReason.ESCAPE_PROBE, closed, now);
         lastDecisionReason = AdmissionDecisionReason.ESCAPE_PROBE;
-        log.info(LOG_PREFIX + " ({}): {} consecutive floor windows - firing the escape probe: re-measuring at "
+        probeLog.info(LOG_PREFIX + " ({}): {} consecutive floor windows - firing the escape probe: re-measuring at "
                         + "the floor for {} windows with a cleared elasticity history (R6).",
                 mode, FLOOR_ESCAPE_WINDOWS + escapeJitterExtraWindows, PROBE_DURATION_WINDOWS);
     }
@@ -1072,7 +1089,7 @@ public class AdmissionController {
         law.pinForProbe(probeTarget, false);
         publishTarget(probeTarget, AdmissionDecisionReason.DESCENT_PROBE, closed, now);
         lastDecisionReason = AdmissionDecisionReason.DESCENT_PROBE;
-        log.info(LOG_PREFIX + " ({}): sustained plateau at {} slot(s) - descent probe to {} slot(s) for {} "
+        probeLog.info(LOG_PREFIX + " ({}): sustained plateau at {} slot(s) - descent probe to {} slot(s) for {} "
                         + "windows against reference throughput {}/s (R14 sweep-from-above).",
                 mode, probeDeferredRestoreTarget, probeTarget, PROBE_DURATION_WINDOWS,
                 String.format(Locale.ROOT, "%.1f", probeReferenceThroughput));
@@ -1108,7 +1125,7 @@ public class AdmissionController {
         law.pinForProbe(probeTarget, false);
         publishTarget(probeTarget, AdmissionDecisionReason.STAGNATION_PROBE, closed, now);
         lastDecisionReason = AdmissionDecisionReason.STAGNATION_PROBE;
-        log.info(LOG_PREFIX + " ({}): {} verdict-less WARMUP_EXHAUSTED window(s) at {} slot(s) - the owed "
+        probeLog.info(LOG_PREFIX + " ({}): {} verdict-less WARMUP_EXHAUSTED window(s) at {} slot(s) - the owed "
                         + "verdict is structurally unreachable (no in-flight spread), firing the stagnation "
                         + "probe: one step up to {} slot(s) for {} windows against reference throughput {}/s.",
                 mode, STAGNATION_PROBE_WINDOWS, probeDeferredRestoreTarget, probeTarget, PROBE_DURATION_WINDOWS,
@@ -1160,7 +1177,7 @@ public class AdmissionController {
         law.pinForProbe(probeTarget, false);
         publishTarget(probeTarget, AdmissionDecisionReason.RECOVERY_PROBE, closed, now);
         lastDecisionReason = AdmissionDecisionReason.RECOVERY_PROBE;
-        log.info(LOG_PREFIX + " ({}): {} at the parked level of {} slot(s) - recovery re-ask probe: one step "
+        probeLog.info(LOG_PREFIX + " ({}): {} at the parked level of {} slot(s) - recovery re-ask probe: one step "
                         + "up to {} slot(s) for {} windows against reference throughput {}/s (below the knee "
                         + "a capacity recovery is invisible at the parked level, so the ask is periodic - "
                         + "law-U13).",
@@ -1239,13 +1256,15 @@ public class AdmissionController {
                     : probeDeferredRestoreTarget;
             law.concludeProbe(concluded, true, true);
             publishTarget(concluded, AdmissionDecisionReason.ESCAPE_PROBE, closed, now);
-            log.info(LOG_PREFIX + " ({}): escape probe concluded - {} - target {} slot(s), fresh warmup "
-                            + "allowance opened.",
-                    mode,
-                    probeWindowsAllLimitBound
-                            ? "the floor stayed limit-bound; taking one re-entry step"
-                            : "the floor did not bind; restoring unchanged",
-                    adaptiveTarget);
+            // law-U14: a conclusion that PAID (a kept movement) is main-channel narration; a restore is lifecycle.
+            (probeWindowsAllLimitBound ? log : probeLog)
+                    .info(LOG_PREFIX + " ({}): escape probe concluded - {} - target {} slot(s), fresh warmup "
+                                    + "allowance opened.",
+                            mode,
+                            probeWindowsAllLimitBound
+                                    ? "the floor stayed limit-bound; taking one re-entry step"
+                                    : "the floor did not bind; restoring unchanged",
+                            adaptiveTarget);
         } else if (probeKind == ProbeKind.RECOVERY) {
             double probeMeanThroughput = probeThroughputSum / probeThroughputWindowCount;
             boolean recoveredCapacityFound = probeWindowsAllLimitBound
@@ -1267,7 +1286,8 @@ public class AdmissionController {
                 publishTarget(probeDeferredRestoreTarget, AdmissionDecisionReason.RECOVERY_PROBE, closed, now);
                 recoveryCadenceWindows = Math.min(RECOVERY_CADENCE_WINDOWS_CAP, recoveryCadenceWindows * 2);
             }
-            log.info(LOG_PREFIX + " ({}): recovery re-ask probe concluded - throughput {}/s against reference "
+            (recoveredCapacityFound ? log : probeLog)
+                    .info(LOG_PREFIX + " ({}): recovery re-ask probe concluded - throughput {}/s against reference "
                             + "{}/s: {} - target {} slot(s), next re-ask after {} parked window(s).",
                     mode,
                     String.format(Locale.ROOT, "%.1f", probeMeanThroughput),
@@ -1297,7 +1317,8 @@ public class AdmissionController {
                 publishTarget(probeDeferredRestoreTarget, AdmissionDecisionReason.STAGNATION_PROBE, closed, now);
                 stagnationCadenceWindows = Math.min(STAGNATION_CADENCE_WINDOWS_CAP, stagnationCadenceWindows * 2);
             }
-            log.info(LOG_PREFIX + " ({}): stagnation probe concluded - throughput {}/s against reference "
+            (higherTargetPaid ? log : probeLog)
+                    .info(LOG_PREFIX + " ({}): stagnation probe concluded - throughput {}/s against reference "
                             + "{}/s: {} - target {} slot(s), next probe after {} stagnant window(s).",
                     mode,
                     String.format(Locale.ROOT, "%.1f", probeMeanThroughput),
@@ -1317,7 +1338,8 @@ public class AdmissionController {
                 publishTarget(probeDeferredRestoreTarget, AdmissionDecisionReason.DESCENT_PROBE, closed, now);
                 descentCadenceWindows = Math.min(DESCENT_CADENCE_WINDOWS_CAP, descentCadenceWindows * 2);
             }
-            log.info(LOG_PREFIX + " ({}): descent probe concluded - throughput {}/s against reference {}/s: "
+            (lowerTargetPaid ? log : probeLog)
+                    .info(LOG_PREFIX + " ({}): descent probe concluded - throughput {}/s against reference {}/s: "
                             + "{} - target {} slot(s), next probe after {} plateau window(s).",
                     mode,
                     String.format(Locale.ROOT, "%.1f", probeMeanThroughput),
@@ -1511,7 +1533,7 @@ public class AdmissionController {
                 if (movementCounter != null) {
                     movementCounter.increment();
                 }
-                log.info(LOG_PREFIX + " ({}): pause aborted the in-flight probe - target restored {} -> {} "
+                probeLog.info(LOG_PREFIX + " ({}): pause aborted the in-flight probe - target restored {} -> {} "
                         + "slot(s).", mode, previousTarget, restored);
             }
         }
