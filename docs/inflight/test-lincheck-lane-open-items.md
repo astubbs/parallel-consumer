@@ -47,6 +47,11 @@ jcstress's, and it is still open on `test/jcstress-poc-plain-long-visibility`.
 
 ## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
 
+**The transferable rule from this is now written down and owned elsewhere**:
+`docs/solutions/best-practices/a-stress-probes-calibration-is-a-claim-about-one-machine.md` states
+the method and the machine-dependence finding for probabilistic probes generally. What is below is
+only the part still OPEN on this lane - the decision nobody has taken yet.
+
 `WorkManagerLincheckTest` was raised from `iterations(200)` to `iterations(1_000)` on measurement,
 and the measurement turned up something worth more than the bound: **the two machines it was run on
 differ by 3.4x in how quickly they find the tear** - 2.33% per iteration against 0.69% - and a
