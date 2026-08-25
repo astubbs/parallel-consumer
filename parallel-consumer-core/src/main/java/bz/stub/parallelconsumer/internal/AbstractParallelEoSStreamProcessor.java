@@ -268,6 +268,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private volatile int consecutiveExhaustedBudgets;
 
     /**
+     * The commit-failure seam's OWN pause axis (astubbs#317, KTD5): engaged by a CONTINUE decision under
+     * {@link ParallelConsumerOptions.CommitFailureContinueMode#PAUSE_INTAKE}, released by the next successful
+     * commit (or a fresh assignment). Deliberately NOT the user-visible {@link #state} machine: that field's
+     * RUNNING&lt;-&gt;PAUSED pair carries exactly one pause reason, so borrowing it would let the seam's release
+     * silently resume a user {@link #pauseIfRunning()} - or the user's {@link #resumeIfPaused()} silently cancel
+     * the seam's protection. The two axes are composed in {@link #retrieveAndDistributeNewWork}: new work is drawn
+     * only when BOTH allow it. During DRAINING the close path wins and this flag does not gate the drain.
+     * <p>
+     * Volatile: written by the control thread's decision loop and by whichever thread runs a successful commit
+     * (the rebalance-path commit runs on the broker-poll thread); read by the control thread's distribution gate.
+     */
+    private volatile boolean commitFailurePauseActive;
+
+    /**
      * Runs {@link CommitFailureHandler} decisions, so user code executes on neither the control thread nor the
      * broker-poll thread (R15). Single daemon thread, created lazily on the first terminal commit failure.
      */
@@ -594,6 +608,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         assignmentStartTime = Instant.now();
         lastSuccessfulCommitTime = null;
         consecutiveExhaustedBudgets = 0;
+        // without this, an assignment arriving with nothing dirty would never attempt a commit, so a pause
+        // engaged before the rebalance could never release - intake would be stuck for good
+        releaseCommitFailurePauseIfActive("a fresh assignment started a new commit-failure history epoch");
 
         wm.onPartitionsAssigned(partitions);
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
@@ -1188,6 +1205,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.error("Commit-failure handler decided CONTINUE: the failed offsets stay dirty and will be " +
                     "re-committed on the next commit cycle with a fresh budget; each further exhaustion re-consults " +
                     "the handler with updated history");
+            maybeEngageCommitFailurePause();
             // restore the commit cadence - the failed cycle counts as this interval's attempt, so the retry
             // happens one commitInterval from now rather than immediately in a budget-long hot loop
             this.lastCommitTime = Instant.now();
@@ -1214,6 +1232,38 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 .commitMode(options.getCommitMode())
                 .assignmentEpoch(assignmentEpoch)
                 .build();
+    }
+
+    /**
+     * Engage the seam's pause if the configured {@link ParallelConsumerOptions#getCommitFailureContinueMode()} asks
+     * for it. Called only from a CONTINUE decision (control thread), which the shutdown guard in
+     * {@link #decideCommitFailureOutcome} already keeps out of DRAINING/CLOSING - and the distribution gate
+     * additionally never lets this flag gate a drain, so the close path always wins (KTD5).
+     * <p>
+     * INFO on the transition: an operator watching a continuing-but-failing instance needs to see intake stop.
+     */
+    private void maybeEngageCommitFailurePause() {
+        boolean pauseIntakeMode = options.getCommitFailureContinueMode()
+                == ParallelConsumerOptions.CommitFailureContinueMode.PAUSE_INTAKE;
+        if (pauseIntakeMode && !commitFailurePauseActive) {
+            commitFailurePauseActive = true;
+            log.info("Commit-failure pause engaged (commitFailureContinueMode: PAUSE_INTAKE): no new work will be " +
+                    "taken until a commit succeeds; in-flight work continues and completed offsets stay dirty for " +
+                    "the next commit cycle");
+        }
+    }
+
+    /**
+     * Release the seam's pause: the condition it guarded against - work completing that may never be committed -
+     * has passed. Called wherever the seam's failure history resets: a successful commit, and a fresh assignment
+     * (whose commit-failure history no longer applies - the rebalance-lane unit, plan U5, refines revocation-time
+     * behaviour). Never called from the user's {@link #resumeIfPaused()}, which owns only the {@link #state} axis.
+     */
+    private void releaseCommitFailurePauseIfActive(String reason) {
+        if (commitFailurePauseActive) {
+            commitFailurePauseActive = false;
+            log.info("Commit-failure pause released ({}): resuming taking new work", reason);
+        }
     }
 
     /**
@@ -1328,8 +1378,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         int gotWorkCount = 0;
 
-        //
-        if (state == RUNNING || state == DRAINING) {
+        // Two pause axes, composed (KTD5): the user-visible state machine AND the commit-failure seam's own flag -
+        // new work is drawn only when both allow it. During DRAINING the close path wins: the drain must be able to
+        // finish even though the pause's release condition (a successful commit) may never arrive, so the seam flag
+        // deliberately does not gate it - consistent with the shutdown guard in decideCommitFailureOutcome, which
+        // keeps the handler (and so any new pause) out of the close entirely.
+        boolean userStateAllowsNewWork = state == RUNNING || state == DRAINING;
+        boolean seamPauseBlocksNewWork = commitFailurePauseActive && state != DRAINING;
+        if (userStateAllowsNewWork && !seamPauseBlocksNewWork) {
             if (isWorkerPoolShutDown()) {
                 // don't take work there is nowhere to run - taking it would only get it dropped at the submit,
                 // uncommitted, for redelivery after rebalance
@@ -1776,6 +1832,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // sharpening deferral accounting is the rebalance-lane unit's job (plan U5).
             this.lastSuccessfulCommitTime = this.lastCommitTime;
             this.consecutiveExhaustedBudgets = 0;
+            releaseCommitFailurePauseIfActive("a commit succeeded");
         }
     }
 
