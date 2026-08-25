@@ -13,37 +13,107 @@ for a PR number.
 
 ## Where to point it next
 
-Ranked by what each buys, not by effort. The lane's value is that it finds seams nobody named, so
-prefer widening what an existing harness explores over adding a class with a narrow guess in it.
+### The selection rule, which matters more than the list
 
-1. **Close the encoder's range-top leg.** The one verdict in the calibration that is not clean:
+**Lincheck's leverage is highest where two individually-atomic things have to be atomic together.**
+That is the whole heuristic, and it is what makes expansion a search rather than a guess.
+
+A `ConcurrentSkipListMap` is safe. An `AtomicLong` is safe. A counter that must *agree* with the map
+is not safe, and **no choice of thread-safe collection fixes it** - which is exactly why this class of
+defect survives code review: every field in the diff is a concurrent type, so the diff looks correct.
+Lincheck attacks precisely this, because it is a statement about a *pair* of operations that no single
+data structure can enforce.
+
+So grep for the signature rather than reading classes hoping to spot something:
+
+- a concurrent collection **plus a derived counter or size field** (the standout below);
+- **two maps keyed identically** that must agree (item 4);
+- a lock that guards **one half** of an invariant, or one entry point out of several (item 3);
+- a "safe" collection whose *iteration or check-then-act* spans two calls.
+
+**The counterpart rule - where not to point it.** Lincheck reasons about interleavings of operations,
+not about the memory model, so a plain non-volatile field's *visibility* is outside it however many
+harnesses are added. `offsetHighestSucceeded` and `offsetHighestSeen` are that case. jcstress owns
+that half, still open on `test/jcstress-poc-plain-long-visibility`.
+
+### What it costs, and the prerequisite nobody can skip
+
+Not free coverage, and it should not be sold as such:
+
+- **Every harness is hand-written, and neither tool discovers *what* to test.** The lane's
+  demonstrated value is that it finds seams nobody named *within a class it was pointed at*. Pointing
+  it is still a human judgement, which is what the heuristic above is for.
+- **The prerequisite is the bound-pricing problem, not any of the targets below.** A stress arm's hit
+  rate is machine-dependent by 3.4x here (p = 0.011, section below), so **each new harness needs its
+  bound priced on the machine that will gate it, not on the machine that wrote it.** Four more
+  harnesses priced the way these were would be four more latent flakes. Settling that is the honest
+  answer to "what do we build first" - it is cheap (see the section below) and it unblocks everything
+  in this list.
+
+### The ranked targets
+
+Ranked by what each buys, not by effort. Prefer widening what an existing harness explores over
+adding a class with a narrow guess in it.
+
+1. **`ProcessingShard` - the standout, because the code already concedes the bug.**
+   `availableWorkContainerCnt` (an `AtomicLong`) must track `entries` (a `ConcurrentSkipListMap`):
+   the signature above, in one class. The stale-replacement path in `addWorkContainer` carries a
+   ~15-line comment admitting the counter undercounts, that **"the deficit survives it and can
+   accumulate across replacements"**, and that it resyncs only when the shard drains far enough for
+   the clamp in `dcrAvailableWorkContainerCntByDelta` to floor it at zero - a clamp whose own comment
+   reads `// in case of possible race condition`. **A clamp to zero for a race is the admission.**
+
+   Today the drift is *argued* to be a backpressure-gauge inaccuracy that errs towards fetching sooner
+   rather than starving. That argument may well be right, but it is an argument; Lincheck would
+   replace it with a measurement - which interleaving produces the drift, and how far it can go. That
+   is exactly what this PoC demonstrated when a faithful arm found what reasoning had dismissed.
+   Bonus: `bug-retry-queue-orphaned-by-inline-stale-removal.md` records a known defect in
+   `getWorkIfAvailable`, the same class, so the harness doubles as a regression detector.
+2. **`PCMetrics.registeredMeters` - a plain `ArrayList` written from two threads.** Not a concurrent
+   collection at all (`private List<Meter.Id> registeredMeters = new ArrayList<>()`, added to from
+   four registration paths). **The lane found this unprompted, during calibration, from a scenario
+   aimed at something else** - which is the strongest single piece of evidence that the technique
+   generalises beyond the seams it was pointed at, and the best answer available to "is this worth
+   expanding". astubbs#57 fixes it, so a harness here becomes a regression detector the moment that
+   lands. See `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md`.
+3. **`ProducerManager`'s produce/commit lock pair - a known defect in a *named* protocol.** The pair
+   is project vocabulary (`CONCEPTS.md`), which means the invariant is already written down in
+   prose - the ideal case for a sequential specification. `producerTransactionLock` is a
+   `ReentrantReadWriteLock`, but `syncBeginTransaction` is guarded by a *separate* `synchronized`
+   method, so two different mechanisms protect one protocol. `bug-producing-lock-double-release.md`
+   records the defect. A known bug in a named protocol is the best target available after item 1.
+4. **`PartitionStateManager` - two maps, one invariant.** `partitionStates` and
+   `partitionsAssignmentEpochs` are both `ConcurrentHashMap`s keyed by the same `TopicPartition` and
+   must agree; each is individually safe and the pair is not. The identically-keyed-maps signature,
+   verbatim.
+5. **The unsynchronised counter maps.** `PartitionStateManager.slowWorkCounters`,
+   `WorkManager.succeededRecordsCounters` and `failedRecordsCounters` are plain `HashMap`s mutated
+   from the rebalance callbacks and the completion path, and `RemovedPartitionState.READ_ONLY_EMPTY_SET`
+   is a mutable `TreeSet` shared by every PC instance in the JVM
+   (`bug-shared-collections-across-the-poll-boundary.md`). Cheap, and it becomes the regression
+   detector the moment the sweep on `fix/concurrent-collection-sweep` lands.
+6. **Close the encoder's range-top leg.** The one verdict in the calibration that is not clean:
    `OffsetMapCodecManager.encodeOffsetsCompressed` came back HALF-FOUND, because the *snapshot* leg
    was exhibited and the two-reads-return-different-values leg was not, and is not expressible in
    the harness as committed. `PartitionStateLincheckTest`'s javadoc already states what widening its
    generator would need. Turning one half-verdict into a whole one is worth more than a new class.
-2. **The unsynchronised counter maps, which the lane already tripped over unprompted.**
-   `PartitionStateManager.slowWorkCounters`, `WorkManager.succeededRecordsCounters` and
-   `failedRecordsCounters` are plain `HashMap`s mutated from the rebalance callbacks and the
-   completion path, and `RemovedPartitionState.READ_ONLY_EMPTY_SET` is a mutable `TreeSet` shared by
-   every PC instance in the JVM (`bug-shared-collections-across-the-poll-boundary.md`). The PoC hit
-   this class of defect from a scenario aimed at something else. A harness here is cheap, and it
-   becomes the regression detector the moment the sweep on `fix/concurrent-collection-sweep` lands.
-3. **`ProcessingShard` and `RetryQueue` are not modelled at all.** Of the ten classes in
-   `bz.stub.parallelconsumer.state`, the lane covers three. These two are the ones carrying ordering
-   and scheduling state across the same two threads the existing harnesses already prove race.
-4. **Model-checking arms over the product classes, which cost nothing once they are possible.**
+7. **`RetryQueue` is not modelled at all**, and carries ordering and scheduling state across the same
+   two threads the existing harnesses already prove race.
+8. **Model-checking arms over the product classes, which cost nothing once they are possible.**
    `ShardManagerLincheckTest` and `WorkManagerLincheckTest` gain one for free - same operations, one
    different `Options` - the day `LincheckSuperHashCodeProbeTest` starts failing. That tripwire is
    already in the lane precisely so nobody has to remember to check.
+9. **`AbstractParallelEoSStreamProcessor` - highest value, highest cost, and last for that reason
+   only.** It holds the most concurrency-primitive fields of any class in core (7 by a `private`-field
+   count, more once locals and inherited state are included) and owns shutdown and the state
+   transitions. Lincheck wants a small `@State` class and this is the opposite of small, so it is
+   ranked last on tractability, **not** on value - if the pricing prerequisite above is solved and
+   appetite exists, this is where the undiscovered defects most plausibly are.
 
 **Not this, and the plan doc says why**: `@Validate` invariants would catch the retry-queue leak in
 §1.1, and they are still the wrong next step, because an invariant naming the retry queue is a hint
 and the value demonstrated here is what the tool finds *unaided*.
 
-**Ground Lincheck structurally cannot cover.** It reasons about interleavings of operations, not
-about the memory model, so the plain non-volatile `long` reads of `offsetHighestSucceeded` and
-`offsetHighestSeen` are outside it however many harnesses are added. That half of the evaluation is
-jcstress's, and it is still open on `test/jcstress-poc-plain-long-visibility`.
 
 ## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
 
