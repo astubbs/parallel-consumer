@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.CommitFailureHandler.CommitFailureDecision;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitFailureContinueMode;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -761,9 +763,365 @@ class MockConsumerCommitFailureSeamTest {
         awaitCommittedOffset(RECORDS);
     }
 
+    /**
+     * The rebalance-deferral lane joins the seam (R8): a commit deferred because this consumer is no longer a group
+     * member ({@link CommitFailedException} - usually eviction) used to loop at WARN forever, uncounted. Once
+     * consecutive deferrals have persisted longer than {@code offsetCommitTimeout} - the same quantum the budget
+     * lane uses - the streak escalates to the handler as the seam's one typed event, and a CONTINUE decision keeps
+     * the instance alive exactly as it does for a budget exhaustion.
+     * <p>
+     * Also pins the deferral sharpening the escalation depends on: deferred cycles must NOT advance
+     * {@code lastSuccessfulCommitTime} (they reach no broker), so the context's time-since-last-successful-commit
+     * spans the whole streak - at least the escalation bound - rather than one commit interval.
+     */
+    @Test
+    void persistentDeferralsEscalateToTheHandlerAndContinueKeepsTheInstanceAlive() {
+        var healed = new AtomicBoolean(false);
+        mockConsumer = consumerWithFailingCommits(
+                () -> new CommitFailedException("Commit cannot be completed since the consumer is not part of an "
+                        + "active group (mocking)"), healed);
+        var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
+        startPc(SMALL_BUDGET, handler);
+        addRecordsAndProcess();
+
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handler.contexts).isNotEmpty());
+
+        var context = handler.contexts.peek();
+        assertThat(context.getFailure()).isInstanceOf(OffsetCommitBudgetExceededException.class);
+        var failure = (OffsetCommitBudgetExceededException) context.getFailure();
+        // the escalation names the deferral cause, not a generic timeout: the operator must learn the consumer
+        // was thrown out of the group, because the remedy (fix max.poll.interval.ms / processing time) is different
+        assertThat(failure.getCause()).isInstanceOf(CommitFailedException.class);
+        assertThat(failure.getMessage()).contains("offsetCommitTimeout");
+        assertThat(failure.getMessage()).contains("no longer a member");
+        assertThat(failure.getMessage()).contains("commitFailureHandler");
+        assertThat(context.getOffsets()).containsKey(TOPIC_PARTITION);
+        // the streak: the bound cannot be crossed by the first deferral, whose elapsed is zero
+        assertThat(failure.getAttemptsMade()).isAtLeast(2);
+        assertThat(failure.getElapsed().toMillis()).isAtLeast(SMALL_BUDGET.toMillis());
+        assertThat(context.getConsecutiveExhaustedBudgets()).isEqualTo(1);
+        // the sharpening: deferred cycles are not successes, so the whole streak is visible here
+        assertThat(context.getTimeSinceLastSuccessfulCommit().toMillis()).isAtLeast(SMALL_BUDGET.toMillis());
+
+        // CONTINUE keeps the instance alive
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+        assertThat(parallelConsumer.getFailureCause()).isNull();
+
+        settleBeforeTeardown(healed);
+    }
+
+    /**
+     * The SHUT_DOWN half of {@link #persistentDeferralsEscalateToTheHandlerAndContinueKeepsTheInstanceAlive()}: the
+     * escalated deferral rides the ordinary decision loop, so a SHUT_DOWN decision closes the instance with the
+     * escalation - deferral cause attached - recorded as the failure.
+     */
+    @Test
+    void persistentDeferralsEscalationShutDownClosesTheInstance() {
+        mockConsumer = consumerWithFailingCommits(
+                () -> new CommitFailedException("Commit cannot be completed since the consumer is not part of an "
+                        + "active group (mocking)"), null);
+        var handler = new RecordingHandler(CommitFailureDecision.SHUT_DOWN);
+        startPc(SMALL_BUDGET, handler);
+        addRecordsAndProcess();
+
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(parallelConsumer.isClosedOrFailed()).isTrue());
+
+        assertThat(handler.contexts).isNotEmpty();
+        Exception failureCause = parallelConsumer.getFailureCause();
+        assertThat(failureCause).isNotNull();
+        var budgetFailure = causeChain(failureCause).stream()
+                .filter(t -> t instanceof OffsetCommitBudgetExceededException)
+                .findFirst();
+        assertWithMessage("the escalated deferral must be reachable from getFailureCause()")
+                .that(budgetFailure.isPresent()).isTrue();
+        assertThat(budgetFailure.get().getCause()).isInstanceOf(CommitFailedException.class);
+    }
+
+    /**
+     * The control arm for the escalation bound: a deferral streak that heals well inside {@code offsetCommitTimeout}
+     * - the normal one-or-two-cycle deferral of a healthy rebalance - never reaches the handler. Without this arm,
+     * the escalation tests could pass with a bound of zero, which would consult the handler for every routine
+     * rebalance.
+     */
+    @Test
+    void aShortDeferralStreakHealsWithoutConsultingTheHandler() {
+        var commitAttempts = new AtomicInteger();
+        final int deferredCommits = 2;
+        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST) {
+            @Override
+            // deliberately NOT synchronized on the failing path - see consumerWithFailingCommits
+            public void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
+                if (commitAttempts.incrementAndGet() <= deferredCommits) {
+                    sleepOrFail(FAILING_COMMIT_PACING, "Interrupted while pacing a failing commit");
+                    throw new CommitFailedException("Commit cannot be completed since the consumer is not part " +
+                            "of an active group (mocking)");
+                }
+                super.commitSync(offsets);
+            }
+        };
+        var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
+        // a bound the short streak cannot plausibly cross, so a red here means the bound logic broke, not the clock
+        startPc(Duration.ofSeconds(10), handler);
+        addRecordsAndProcess();
+
+        // the deferrals heal (attempt 3 commits) and the offsets land - with no decision ever asked for
+        awaitCommittedOffset(RECORDS);
+        assertThat(commitAttempts.get()).isAtLeast(deferredCommits + 1);
+        assertWithMessage("a deferral streak that heals inside the bound must never consult the handler")
+                .that(handler.contexts).isEmpty();
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+        assertThat(parallelConsumer.getFailureCause()).isNull();
+    }
+
+    /**
+     * Covers AE9 and R13's history scoping: a CONTINUE period that ends in revocation and reassignment starts a
+     * fresh handler history - the next exhaustion in the new assignment reports {@code consecutive == 1}, a bumped
+     * assignment epoch, and a time-since-last-successful-commit measured from the new assignment, not the old
+     * failing one. The dirty offsets of the old assignment resolve by the new assignee's reprocessing (here: they
+     * are simply gone with the truncation - MockConsumer does not redeliver - and the new assignment's records
+     * commit cleanly once healed).
+     * <p>
+     * The revocation happens while commits are still failing, so the revocation-time commit exhausts its budget
+     * mid-callback - covering that this defers (no kill, see
+     * {@link #revocationTimeBudgetExhaustionDefersWithoutKillingOrConsultingTheHandler()} for the focused pin)
+     * rather than aborting the rebalance.
+     * <p>
+     * The new assignment's genuine exhaustion is identified by its OFFSETS (only new-assignment commits carry
+     * offsets past the old batch), not by arrival order: a decision already in flight on the control thread when
+     * the test thread reassigns may straddle the epoch bump, and must be ignored rather than raced against.
+     */
+    @Test
+    void revocationAndReassignmentResetTheHandlerHistoryForTheNewAssignment() {
+        var healed = new AtomicBoolean(false);
+        mockConsumer = consumerWithFailingCommits(() -> new TimeoutException("mock commit timeout"), healed);
+        var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
+        startPc(SMALL_BUDGET, handler);
+        addRecordsAndProcess();
+
+        // a real CONTINUE period first: at least two consecutive exhaustions, serialized on the control thread
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handler.contexts.size()).isAtLeast(2));
+        var contexts = new ArrayList<>(handler.contexts);
+        assertThat(contexts.get(0).getConsecutiveExhaustedBudgets()).isEqualTo(1);
+        assertThat(contexts.get(1).getConsecutiveExhaustedBudgets()).isEqualTo(2);
+        long oldEpoch = contexts.get(0).getAssignmentEpoch();
+
+        // revoke mid-failure, then reassign - the harness pattern: MockConsumer is told and PC is told by hand
+        Instant beforeRevocation = Instant.now();
+        parallelConsumer.onPartitionsRevoked(of(TOPIC_PARTITION));
+        mockConsumer.rebalance(of(TOPIC_PARTITION));
+        parallelConsumer.onPartitionsAssigned(of(TOPIC_PARTITION));
+        mockConsumer.updateBeginningOffsets(Collections.singletonMap(TOPIC_PARTITION, 0L));
+
+        // fresh work in the new assignment, commits still failing: the next exhaustion must carry a FRESH history
+        addRecords(RECORDS, 3); // offsets 5..7, so this exhaustion's offsets (8) are distinguishable from the old (5)
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            var freshContext = firstContextCommittingPast(handler, RECORDS);
+            assertThat(freshContext.isPresent()).isTrue();
+            var fresh = freshContext.get();
+            assertWithMessage("the first exhaustion of the new assignment must start a fresh consecutive count")
+                    .that(fresh.getConsecutiveExhaustedBudgets()).isEqualTo(1);
+            assertThat(fresh.getAssignmentEpoch()).isGreaterThan(oldEpoch);
+            // measured from the new assignment: spans at least its own budget...
+            assertThat(fresh.getTimeSinceLastSuccessfulCommit().toMillis()).isAtLeast(SMALL_BUDGET.toMillis());
+            // ...but never the old assignment's failing period, which began well before the revocation
+            assertThat(fresh.getTimeSinceLastSuccessfulCommit().toMillis())
+                    .isAtMost(Duration.between(beforeRevocation, Instant.now()).toMillis());
+        });
+
+        // the new assignment recovers cleanly once the broker heals
+        healed.set(true);
+        awaitCommittedOffset(RECORDS + 3);
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+        assertThat(parallelConsumer.getFailureCause()).isNull();
+    }
+
+    /**
+     * R13 and KTD7's fourth exit, pinned in isolation: a commit whose budget exhausts DURING partition revocation -
+     * inside the rebalance callback, where there is no waiter to hand a decision to - is a DEFERRAL. The poller
+     * stays alive, the instance stays open, the handler is not consulted, and the offsets are not recorded as
+     * committed; they are the new assignee's to resolve by reprocessing.
+     * <p>
+     * The long commit interval keeps the scheduled-commit lane quiet, so the ONLY commit that can exhaust here is
+     * the revocation-time one - otherwise "handler not consulted" could pass or fail on an unrelated scheduled
+     * exhaustion.
+     */
+    @Test
+    void revocationTimeBudgetExhaustionDefersWithoutKillingOrConsultingTheHandler() {
+        var commitsHealthy = new AtomicBoolean(true);
+        mockConsumer = consumerWithFailingCommits(() -> new TimeoutException("mock commit timeout"), commitsHealthy);
+        var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
+        startPc(SMALL_BUDGET, Duration.ofSeconds(30), handler);
+        addRecordsAndProcess();
+        // the first commit fires immediately; requesting one explicitly makes the whole batch land regardless of
+        // how it interleaved with processing, before the 30s cadence takes over
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(processedRecords).hasSize(RECORDS));
+        parallelConsumer.requestCommitAsap();
+        awaitCommittedOffset(RECORDS);
+
+        // break commits, then make the partition dirty again - no scheduled commit will touch it for 30s
+        commitsHealthy.set(false);
+        addRecords(RECORDS, 1); // offset 5
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(processedRecords).hasSize(RECORDS + 1));
+
+        // the revocation-time commit spends its whole budget and exhausts - and that must NOT escape the callback
+        parallelConsumer.onPartitionsRevoked(of(TOPIC_PARTITION));
+
+        assertWithMessage("a revocation-time exhaustion has no waiter, so the handler must not be consulted")
+                .that(handler.contexts).isEmpty();
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+        assertThat(parallelConsumer.getFailureCause()).isNull();
+        // not recorded as committed: the broker still holds the pre-revocation offset
+        var committed = mockConsumer.committed(Collections.singleton(TOPIC_PARTITION)).get(TOPIC_PARTITION);
+        assertThat(committed.offset()).isEqualTo(RECORDS);
+
+        // and the instance is genuinely alive: reassigned, healed, it processes and commits new work
+        mockConsumer.rebalance(of(TOPIC_PARTITION));
+        parallelConsumer.onPartitionsAssigned(of(TOPIC_PARTITION));
+        mockConsumer.updateBeginningOffsets(Collections.singletonMap(TOPIC_PARTITION, 0L));
+        commitsHealthy.set(true);
+        addRecords(RECORDS + 1, 3); // offsets 6..8
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(processedRecords).hasSize(RECORDS + 4));
+        parallelConsumer.requestCommitAsap();
+        awaitCommittedOffset(RECORDS + 4);
+    }
+
+    /**
+     * The deferral accounting clears on a successful commit: after a short streak heals and commits land, a LATER
+     * streak gets the full escalation bound on a fresh clock. Stale accounting would escalate the later streak's
+     * first deferral instantly - its clock would still be running from the first streak, which by then is long
+     * past the bound - which is exactly what the no-escalation window detects.
+     */
+    @Test
+    void deferralAccountingClearsOnASuccessfulCommit() {
+        final Duration bound = Duration.ofSeconds(2);
+        var commitAttempts = new AtomicInteger();
+        var brokenAgain = new AtomicBoolean(false);
+        final int initiallyDeferredCommits = 3;
+        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST) {
+            @Override
+            // deliberately NOT synchronized on the failing path - see consumerWithFailingCommits
+            public void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
+                if (commitAttempts.incrementAndGet() <= initiallyDeferredCommits || brokenAgain.get()) {
+                    sleepOrFail(FAILING_COMMIT_PACING, "Interrupted while pacing a failing commit");
+                    throw new CommitFailedException("Commit cannot be completed since the consumer is not part " +
+                            "of an active group (mocking)");
+                }
+                super.commitSync(offsets);
+            }
+        };
+        var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
+        startPc(bound, handler);
+        addRecordsAndProcess();
+
+        // first streak: a handful of deferrals well inside the bound, then a clean commit
+        awaitCommittedOffset(RECORDS);
+        assertThat(commitAttempts.get()).isAtLeast(initiallyDeferredCommits + 1);
+        assertThat(handler.contexts).isEmpty();
+
+        // park until the FIRST streak's clock, were it still running, would be past the bound
+        sleepOrFail(bound.plusMillis(500), "Interrupted while outliving the first streak's would-be clock");
+
+        // second streak: deferrals resume - on a fresh clock, so nothing may escalate inside the bound
+        brokenAgain.set(true);
+        addRecords(RECORDS, 1); // offset 5 - the dirty-driver for the second streak
+        int attemptsAtSecondStreak = commitAttempts.get();
+        Awaitility.await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(10))
+                .until(() -> handler.contexts.isEmpty());
+        assertWithMessage("the no-escalation window only means something if commits were being deferred in it")
+                .that(commitAttempts.get()).isGreaterThan(attemptsAtSecondStreak);
+
+        // and the fresh clock does its job: left broken, the second streak escalates once ITS bound is crossed
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handler.contexts).isNotEmpty());
+        assertThat(handler.contexts.peek().getFailure().getCause()).isInstanceOf(CommitFailedException.class);
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+
+        brokenAgain.set(false);
+        awaitCommittedOffset(RECORDS + 1);
+    }
+
+    /**
+     * The deferral accounting clears on a completed rebalance (R13): deferrals accumulated before a revocation
+     * belong to the OLD assignment, so after reassignment a new streak gets the full bound on a fresh clock -
+     * pinned with the same stale-clock trap as {@link #deferralAccountingClearsOnASuccessfulCommit()}, but with the
+     * clearing done by the reassignment (no commit ever succeeds here until the very end).
+     */
+    @Test
+    void deferralAccountingClearsOnACompletedRebalance() {
+        final Duration bound = Duration.ofSeconds(2);
+        var commitAttempts = new AtomicInteger();
+        var broken = new AtomicBoolean(true);
+        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST) {
+            @Override
+            // deliberately NOT synchronized on the failing path - see consumerWithFailingCommits
+            public void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets) {
+                if (broken.get()) {
+                    commitAttempts.incrementAndGet();
+                    sleepOrFail(FAILING_COMMIT_PACING, "Interrupted while pacing a failing commit");
+                    throw new CommitFailedException("Commit cannot be completed since the consumer is not part " +
+                            "of an active group (mocking)");
+                }
+                super.commitSync(offsets);
+            }
+        };
+        var handler = new RecordingHandler(CommitFailureDecision.CONTINUE);
+        startPc(bound, handler);
+        addRecordsAndProcess();
+
+        // deferrals accumulate in the old assignment - the streak's clock starts here
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(commitAttempts.get()).isAtLeast(2));
+
+        // the rebalance completes: revocation (whose own commit defers too - CommitFailedException is a deferral,
+        // not an exhaustion, so the callback just carries on) and reassignment, which scopes the history
+        parallelConsumer.onPartitionsRevoked(of(TOPIC_PARTITION));
+        mockConsumer.rebalance(of(TOPIC_PARTITION));
+        parallelConsumer.onPartitionsAssigned(of(TOPIC_PARTITION));
+        mockConsumer.updateBeginningOffsets(Collections.singletonMap(TOPIC_PARTITION, 0L));
+
+        // park until the OLD streak's clock, were it still running, would be well past the bound
+        sleepOrFail(bound.plusMillis(500), "Interrupted while outliving the old assignment's would-be clock");
+
+        // new assignment, commits still broken: the new streak must get the whole bound on a fresh clock
+        addRecords(RECORDS, 3); // offsets 5..7
+        int attemptsAtNewAssignment = commitAttempts.get();
+        Awaitility.await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(10))
+                .until(() -> handler.contexts.isEmpty());
+        assertWithMessage("the no-escalation window only means something if commits were being deferred in it")
+                .that(commitAttempts.get()).isGreaterThan(attemptsAtNewAssignment);
+
+        // and left broken, the new streak escalates once ITS OWN bound is crossed
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(handler.contexts).isNotEmpty());
+        assertThat(parallelConsumer.isClosedOrFailed()).isFalse();
+
+        broken.set(false);
+        awaitCommittedOffset(RECORDS + 3);
+    }
+
     // ---------------------------------------------------------------------------------------------------------
     // harness
     // ---------------------------------------------------------------------------------------------------------
+
+    /**
+     * The first recorded context whose failed commit was for offsets PAST the given one - how a test identifies a
+     * decision that can only belong to the new assignment, immune to decisions that straddled the reassignment.
+     */
+    private static java.util.Optional<CommitFailureContext> firstContextCommittingPast(RecordingHandler handler,
+                                                                                       long offset) {
+        return handler.contexts.stream()
+                .filter(context -> {
+                    OffsetAndMetadata attempted = context.getOffsets().get(TOPIC_PARTITION);
+                    return attempted != null && attempted.offset() > offset;
+                })
+                .findFirst();
+    }
 
     /**
      * Heals the broker and waits for the dirty offsets to land, so a scenario that leaves commits failing forever
@@ -848,7 +1206,8 @@ class MockConsumerCommitFailureSeamTest {
                          CommitFailureContinueMode mode) {
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(mockConsumer)
-                .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC) // the only mode with the budget today
+                // the seam's consumer-side lane; the transactional lane has its own budget tests
+                .commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC)
                 .commitInterval(commitInterval)
                 .offsetCommitTimeout(offsetCommitTimeout)
                 .commitFailureHandler(handler)

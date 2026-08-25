@@ -256,8 +256,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * Feeds {@link CommitFailureContext#getAssignmentEpoch()}: bumped on every assignment callback, so a stateful
-     * handler can notice that history predating the current assignment no longer applies. Minimal here - the
-     * rebalance-lane work (plan U5) refines revocation behaviour.
+     * handler can notice that history predating the current assignment no longer applies. The rest of the
+     * rebalance lane's history scoping happens alongside the bump in {@link #onPartitionsAssigned}.
      */
     private volatile long assignmentEpoch;
 
@@ -574,7 +574,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         try {
             // commit any offsets from revoked partitions BEFORE truncation
-            commitOffsetsThatAreReady();
+            try {
+                commitOffsetsThatAreReady();
+            } catch (OffsetCommitBudgetExceededException revocationTimeExhaustion) {
+                // The rebalance lane's fourth handler-free exit (astubbs#317, R13): a commit whose budget - sync
+                // or transactional - exhausts DURING revocation is a DEFERRAL, not a decision point. This runs
+                // inside the rebalance callback, so there is no waiter to act on a handler's answer, and failing
+                // the callback would turn one slow commit into a failed rebalance and a dead instance. So: no
+                // handler, no kill - the offsets were never marked committed, the truncation below hands them to
+                // the new assignee to resolve by reprocessing (AE9), and this thread carries on. Deliberately
+                // adds no locking of any kind here - a rebalance callback may only ever tryLock.
+                log.warn("Offset commit budget exhausted during partition revocation - deferring (postponed, not " +
+                        "dropped): the revoked partitions' uncommitted offsets fall to their new assignee to " +
+                        "reprocess. The commit-failure handler is not consulted for revocation-time failures - " +
+                        "there is no commit cycle left in this assignment for a CONTINUE to resume.",
+                        revocationTimeExhaustion);
+            }
 
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
@@ -601,13 +616,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
 
-        // a new assignment starts a new commit-failure history epoch (astubbs#317): a stateful handler's bounds
-        // must not graduate on failures that belonged to partitions this instance may no longer even hold.
-        // Minimal here - the rebalance-lane unit (plan U5) refines revocation-time behaviour.
+        // a new assignment starts a new commit-failure history epoch (astubbs#317, R13): a stateful handler's
+        // bounds must not graduate on failures that belonged to partitions this instance may no longer even hold
         assignmentEpoch++;
         assignmentStartTime = Instant.now();
         lastSuccessfulCommitTime = null;
         consecutiveExhaustedBudgets = 0;
+        // the rebalance-deferral streak is scoped to its assignment for the same reason - the committer keeps
+        // that accounting (it observes the deferrals), so the epoch change is forwarded to it
+        brokerPollSubsystem.onPartitionsAssigned();
         // without this, an assignment arriving with nothing dirty would never attempt a commit, so a pause
         // engaged before the rebalance could never release - intake would be stuck for good
         releaseCommitFailurePauseIfActive("a fresh assignment started a new commit-failure history epoch");
@@ -1166,7 +1183,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Everything else stays handler-free by construction: genuine poller death and non-retriable commit failures
      * arrive as other exception types and keep their fatal route through
      * {@link #commitOffsetsReportingPollerDeath()}; the close sequence's own commit and the revocation-time commit
-     * call {@link #commitOffsetsThatAreReady()} at different sites, which this method does not wrap.
+     * call {@link #commitOffsetsThatAreReady()} at different sites, which this method does not wrap - the
+     * revocation site catches the exhaustion itself and treats it as a deferral (R13, see
+     * {@link #onPartitionsRevoked}).
      */
     private void commitOffsetsConsultingSeamOnTerminalFailure() throws TimeoutException, InterruptedException {
         try {
@@ -1260,9 +1279,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * Release the seam's pause: the condition it guarded against - work completing that may never be committed -
-     * has passed. Called wherever the seam's failure history resets: a successful commit, and a fresh assignment
-     * (whose commit-failure history no longer applies - the rebalance-lane unit, plan U5, refines revocation-time
-     * behaviour). Never called from the user's {@link #resumeIfPaused()}, which owns only the {@link #state} axis.
+     * has passed. Called wherever the seam's failure history resets: a genuinely successful commit (a DEFERRED
+     * cycle does not qualify - see {@link #commitOffsetsThatAreReady()}), and a fresh assignment, whose
+     * commit-failure history no longer applies. Never called from the user's {@link #resumeIfPaused()}, which owns
+     * only the {@link #state} axis.
      */
     private void releaseCommitFailurePauseIfActive(String reason) {
         if (commitFailurePauseActive) {
@@ -1832,12 +1852,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             committer.retrieveOffsetsAndCommit();
             clearCommitCommand();
             this.lastCommitTime = Instant.now();
-            // the commit cycle completed without a terminal failure, so the commit-failure seam's history resets
-            // (astubbs#317). A DEFERRED commit passes here too, exactly as it does for lastCommitTime -
-            // sharpening deferral accounting is the rebalance-lane unit's job (plan U5).
-            this.lastSuccessfulCommitTime = this.lastCommitTime;
-            this.consecutiveExhaustedBudgets = 0;
-            releaseCommitFailurePauseIfActive("a commit succeeded");
+            if (committer.lastCommitWasDeferred()) {
+                // A DEFERRED cycle (rebalance-class: postponed, not dropped) advances only the cadence clock
+                // above - it reached no broker, so it is not a success (astubbs#317, R8). Treating it as one
+                // would advance lastSuccessfulCommitTime every deferred cycle, laundering the handler's
+                // time-since-last-successful-commit story while nothing commits; wipe the consecutive count
+                // mid-streak; and release the seam pause on the strength of a commit that never happened. The
+                // deferral's own accounting - and its escalation to the handler once a streak outlives the
+                // offsetCommitTimeout quantum - lives with the observer of the deferrals,
+                // ConsumerOffsetCommitter#commitDeferringOnRebalance.
+                log.debug("Commit cycle was deferred - commit cadence advances, but the commit-failure seam's " +
+                        "success accounting deliberately does not");
+            } else {
+                // the commit cycle completed without a terminal failure, so the commit-failure seam's history
+                // resets (astubbs#317)
+                this.lastSuccessfulCommitTime = this.lastCommitTime;
+                this.consecutiveExhaustedBudgets = 0;
+                releaseCommitFailurePauseIfActive("a commit succeeded");
+            }
         }
     }
 

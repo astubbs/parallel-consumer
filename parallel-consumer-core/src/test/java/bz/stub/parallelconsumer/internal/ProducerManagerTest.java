@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import com.google.common.truth.Truth;
+import bz.stub.parallelconsumer.CommitFailureContext;
 import bz.stub.parallelconsumer.internal.utils.BlockedThreadAsserter;
 import bz.stub.parallelconsumer.internal.utils.LatchTestUtils;
 import bz.stub.parallelconsumer.ParallelConsumer;
@@ -34,6 +35,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
@@ -43,6 +45,7 @@ import java.util.function.Function;
 import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
 import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.internal.utils.ThreadUtils.sleepOrFail;
 import static bz.stub.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
 import static java.time.Duration.ofSeconds;
 import static java.util.Collections.emptyList;
@@ -426,6 +429,69 @@ class ProducerManagerTest {
                         .allowEagerProcessingDuringTransactionCommit(true)
                         .build()
                         .validate());
+    }
+
+    /**
+     * The commit-failure seam's rebalance lane, transactional half (astubbs#317 R13): a transactional commit whose
+     * {@code offsetCommitTimeout} budget exhausts DURING partition revocation is a DEFERRAL - the callback carries
+     * on to truncation, the {@link bz.stub.parallelconsumer.CommitFailureHandler} is NOT consulted (there is no
+     * waiter inside a rebalance callback to act on a decision), and the instance records no failure. The dirty
+     * offsets are the new assignee's to resolve by reprocessing; the producer's in-flight transaction is
+     * complete-else-abort recovered at the head of the next commit cycle, exactly as after a scheduled-lane
+     * exhaustion ({@link ProducerManagerCommitBudgetTest} pins that recovery).
+     * <p>
+     * Red before the seam's revocation-time catch: the budget exhaustion escaped
+     * {@code onPartitionsRevoked} wrapped as "onPartitionsRevoked event error", failing the whole rebalance.
+     * <p>
+     * The work is driven straight into the {@link bz.stub.parallelconsumer.state.WorkManager} rather than through
+     * {@code controlLoop} - this harness's pc commits on every loop pass ({@code isTimeToCommitNow} is pinned
+     * true), so a loop-driven variant would commit the offsets before the revocation ever saw them dirty.
+     */
+    @Test
+    void revocationTimeBudgetExhaustionDefersInsteadOfConsultingTheHandlerOrFailingTheRebalance() throws Exception {
+        var consultedContexts = new ConcurrentLinkedQueue<CommitFailureContext>();
+        setup(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .commitLockAcquisitionTimeout(ofSeconds(10))
+                .offsetCommitTimeout(Duration.ofMillis(500))
+                // SHUT_DOWN so a wrongly-consulted handler is loud (a closed pc), not just a non-empty queue
+                .commitFailureHandler(context -> {
+                    consultedContexts.add(context);
+                    return bz.stub.parallelconsumer.CommitFailureHandler.CommitFailureDecision.SHUT_DOWN;
+                }));
+
+        try (var pc = module.pc()) {
+            pc.subscribe(UniLists.of(mu.getTopic()));
+            pc.onPartitionsAssigned(mu.getPartitions());
+            pc.setState(State.RUNNING);
+
+            // one record's work, completed successfully, straight into the work manager: dirty offsets waiting
+            var wm = module.workManager();
+            wm.registerWork(mu.createFreshWork());
+            var work = wm.getWorkIfAvailable();
+            Truth.assertThat(work).hasSize(1);
+            for (var workContainer : work) {
+                workContainer.onUserFunctionSuccess();
+                wm.handleFutureResult(workContainer);
+            }
+            Truth.assertThat(wm.isDirty()).isTrue();
+
+            // the transactional commit fails retriably for longer than the whole budget
+            doReturn(true).when(module.producerWrap()).isTransactionCompleting();
+            doAnswer(invocation -> {
+                sleepOrFail(Duration.ofMillis(100), "Interrupted while mocking a slow transactional commit");
+                throw new org.apache.kafka.common.errors.TimeoutException("Broker unreachable (mocking)");
+            }).when(module.producerWrap()).commitTransaction();
+
+            // the revocation-time commit exhausts its budget - and the callback must complete anyway
+            pc.onPartitionsRevoked(mu.getPartitions());
+
+            Truth.assertWithMessage("a revocation-time exhaustion has no waiter, so the handler must not be consulted")
+                    .that(consultedContexts).isEmpty();
+            Truth.assertThat(pc.getFailureCause()).isNull();
+            // the budget loop genuinely ran and exhausted, rather than the commit never being attempted
+            verify(module.producerWrap(), atLeast(2)).commitTransaction();
+        }
     }
 
 }

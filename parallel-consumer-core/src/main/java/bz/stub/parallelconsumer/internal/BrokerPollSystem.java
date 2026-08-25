@@ -389,6 +389,26 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     /**
+     * @see OffsetCommitter#lastCommitWasDeferred() - the outcome belongs to the wrapped
+     *         {@link ConsumerOffsetCommitter}, which ran the cycle
+     */
+    @Override
+    public boolean lastCommitWasDeferred() {
+        return committer.map(ConsumerOffsetCommitter::lastCommitWasDeferred).orElse(false);
+    }
+
+    /**
+     * A completed rebalance, forwarded by the controller's {@code onPartitionsAssigned} callback so the wrapped
+     * committer can scope its rebalance-deferral accounting to the new assignment (astubbs#317, R13). No-op in
+     * modes without a consumer-side committer.
+     *
+     * @see ConsumerOffsetCommitter#onPartitionsAssigned()
+     */
+    public void onPartitionsAssigned() {
+        committer.ifPresent(ConsumerOffsetCommitter::onPartitionsAssigned);
+    }
+
+    /**
      * Will silently skip if not configured with a committer
      */
     private void maybeDoCommit() throws TimeoutException, InterruptedException {

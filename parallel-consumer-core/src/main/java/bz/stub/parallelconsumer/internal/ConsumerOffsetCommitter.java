@@ -18,6 +18,8 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.RebalanceInProgressException;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -27,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * Committer that uses the Kafka Consumer to commit either synchronously or asynchronously
@@ -76,6 +79,42 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      */
     private static final CommitResponse POLLER_DIED = new CommitResponse(new CommitRequest());
 
+    // --- rebalance-deferral accounting (astubbs#317, R8) --------------------------------------------------------
+    // Written by the broker-poll thread, which runs every deferral (both commitDeferringOnRebalance call paths
+    // execute there in production); volatile because the clearing side can run on another thread - the controller's
+    // onPartitionsAssigned callback forwards a completed rebalance here, and in test harnesses the callbacks are
+    // driven by the test thread. Single incrementing writer, so the non-atomic ++ is safe.
+
+    /**
+     * When the current streak of consecutive deferrals began - {@code null} while no deferral is outstanding.
+     * This is the escalation's bound clock: once {@code Instant.now() - firstUnclearedDeferral} crosses
+     * {@link #commitTimeout}, the streak stops being silent - see {@link #commitDeferringOnRebalance()}.
+     */
+    private volatile Instant firstUnclearedDeferral;
+
+    /**
+     * Deferrals in the current streak (since {@link #firstUnclearedDeferral}) - becomes the escalation's
+     * {@link OffsetCommitBudgetExceededException#getAttemptsMade()}.
+     */
+    private volatile int consecutiveDeferrals;
+
+    /**
+     * Whether the commit cycle that most recently completed normally was a DEFERRAL rather than a commit - the
+     * committed-vs-deferred outcome {@link OffsetCommitter#lastCommitWasDeferred()} reports to the controller, whose
+     * success accounting must not treat a deferred cycle as a success. Read by the waiting thread after its typed
+     * response arrives (the response queue provides the happens-before edge); commit cycles themselves are
+     * serialized by the controller's {@code commitCommand} monitor, so the flag cannot be overwritten by another
+     * cycle between the response and the read.
+     */
+    private volatile boolean lastCommitCycleDeferred;
+
+    /**
+     * The offsets the most recent commit attempt carried, kept only so an escalated deferral can report which
+     * offsets are stuck - the deferral exceptions are thrown by the broker before this class sees the offsets map
+     * again. Only ever touched by the broker-poll thread, inside a commit cycle.
+     */
+    private Map<TopicPartition, OffsetAndMetadata> lastAttemptedOffsets = Collections.emptyMap();
+
     public ConsumerOffsetCommitter(final ConsumerManager<K, V> newConsumer, final WorkManager<K, V> newWorkManager, final ParallelConsumerOptions options) {
         super(newConsumer, newWorkManager);
         commitMode = options.getCommitMode();
@@ -111,6 +150,8 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
             log.trace("Nothing to commit");
             return;
         }
+        // stashed for the deferral accounting: if this attempt is deferred, the escalation path reports these
+        lastAttemptedOffsets = offsetsToSend;
         switch (commitMode) {
             case PERIODIC_CONSUMER_SYNC -> {
                 log.debug("Committing offsets Sync");
@@ -156,8 +197,9 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * <p>
      * Three outcomes travel on this one type: committed, deferred (see {@link #commitDeferringOnRebalance}), and -
      * carrying a non-null {@link #commitFailure} - terminally failed, the commit-failure seam's typed re-route
-     * (astubbs#317). The failure rides the existing response channel deliberately: a typed message on the queue the
-     * waiter already blocks on, never a cross-thread interrupt or a bare flag (the interrupt bit here is already
+     * (astubbs#317; a spent retry budget, or a deferral streak that outlived one). The failure rides the
+     * existing response channel deliberately: a typed message on the queue the waiter already blocks on,
+     * never a cross-thread interrupt or a bare flag (the interrupt bit here is already
      * overloaded - see docs/solutions/workflow-issues/waking-a-thread-by-interrupting-it-2026-08-17.md).
      */
     @Value
@@ -366,20 +408,109 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * The other half of deferring is in {@link #maybeDoCommit()}, which still sends the commit
      * response, so a waiting committer is released immediately instead of blocking for a commit that
      * is not coming. It simply asks again on the next cycle.
+     * <p>
+     * <b>Deferring is accounted and bounded, not free forever</b> (astubbs#317, R8). Each deferral joins a streak
+     * ({@link #firstUnclearedDeferral}, {@link #consecutiveDeferrals}), cleared by a commit cycle that completes -
+     * commit or nothing-to-commit - and by a completed rebalance ({@link #onPartitionsAssigned()}: after
+     * reassignment the streak belonged to an assignment this consumer may no longer hold). While the streak is
+     * younger than {@link #commitTimeout} - the same {@code offsetCommitTimeout} quantum the retry budget uses -
+     * deferral stays a WARN, so the one-or-two-cycle deferral of a healthy rebalance never escalates. A streak
+     * that outlives the quantum has stopped being "not yet": it escalates as an
+     * {@link OffsetCommitBudgetExceededException} naming the deferral cause, thrown here so it travels the seam's
+     * ordinary route - {@link #maybeDoCommit()} answers the waiter with it as a typed response, and the control
+     * thread's {@code CommitFailureHandler} decision loop runs (never a new interrupt or flag). Escalating starts
+     * a fresh quantum, so a CONTINUE decision is re-consulted once per {@code offsetCommitTimeout}, matching the
+     * budget lane's cadence. A revocation-time cycle can escalate too - on that path the exception surfaces inside
+     * the rebalance callback, where the controller's revocation catch treats it as this same deferral (R13: no
+     * waiter there, no handler, poller stays alive).
      */
     private void commitDeferringOnRebalance() throws TimeoutException, InterruptedException {
         try {
             retrieveOffsetsAndCommit();
+            lastCommitCycleDeferred = false;
+            clearDeferralAccounting("a commit cycle completed");
         } catch (RebalanceInProgressException e) {
             log.warn("Offset commit deferred (postponed, not dropped) - the group is rebalancing. " +
                     "These offsets are still marked as needing a commit and will be re-committed on " +
                     "the next commit cycle, once poll() has completed the rebalance.", e);
+            recordDeferralAndMaybeEscalate(e, "the group is rebalancing (RebalanceInProgressException - " +
+                    "resolved by poll() completing the rebalance)");
         } catch (CommitFailedException e) {
             log.warn("Offset commit deferred (postponed, not dropped) - this consumer is no longer a " +
                     "member of the group, so the commit was rejected. These offsets stay marked as " +
                     "needing a commit rather than being recorded as done, so whoever ends up owning " +
                     "the partitions resumes from where the broker actually is.", e);
+            recordDeferralAndMaybeEscalate(e, "this consumer is no longer a member of the group " +
+                    "(CommitFailedException - usually the consumer was evicted, e.g. it exceeded " +
+                    "max.poll.interval.ms, or a rebalance completed without it)");
         }
+    }
+
+    /**
+     * The accounting half of {@link #commitDeferringOnRebalance()}'s deferral bound: joins this deferral to the
+     * streak, and escalates the streak once it has outlived {@link #commitTimeout}.
+     */
+    private void recordDeferralAndMaybeEscalate(RuntimeException deferralCause, String causeDescription) {
+        lastCommitCycleDeferred = true;
+        Instant now = Instant.now();
+        if (firstUnclearedDeferral == null) {
+            firstUnclearedDeferral = now;
+        }
+        consecutiveDeferrals++;
+        Duration elapsed = Duration.between(firstUnclearedDeferral, now);
+        if (elapsed.toMillis() <= commitTimeout.toMillis()) {
+            // inside the quantum: the healthy-rebalance case, deferral stays a WARN
+            return;
+        }
+        if (!isSync()) {
+            // no waiter to hand a decision to - the async commit mode is outside the seam (and in practice its
+            // commitAsync path never throws the deferral exceptions synchronously), so keep its historical
+            // WARN-and-carry-on disposition rather than inventing a new fatal route for it
+            return;
+        }
+        // one whole quantum of uninterrupted deferrals: surface it to the decision loop, and restart the clock so
+        // a CONTINUE decision buys another full quantum rather than an escalation every cycle
+        int deferralsThisQuantum = consecutiveDeferrals;
+        firstUnclearedDeferral = now;
+        consecutiveDeferrals = 0;
+        throw new OffsetCommitBudgetExceededException(msg(
+                "Offset commit DEFERRED continuously for {} - longer than the offsetCommitTimeout of {} - across " +
+                        "{} consecutive deferral(s), because {}. A deferral is postponement, not failure, and " +
+                        "one or two are normal during a rebalance - but a streak outliving the whole budget is " +
+                        "not healing on its own, so it stops being silent. The offsets are still marked as " +
+                        "needing a commit. What happens next is the configured commitFailureHandler's decision " +
+                        "(astubbs/parallel-consumer#317) - the default policy shuts PC down (fail fast), and " +
+                        "CommitFailurePolicies has canned alternatives.",
+                elapsed, commitTimeout, deferralsThisQuantum, causeDescription),
+                deferralCause, deferralsThisQuantum, elapsed, lastAttemptedOffsets);
+    }
+
+    private void clearDeferralAccounting(String reason) {
+        if (firstUnclearedDeferral != null) {
+            log.debug("Rebalance-deferral accounting cleared after {} deferral(s): {}", consecutiveDeferrals, reason);
+            firstUnclearedDeferral = null;
+            consecutiveDeferrals = 0;
+        }
+    }
+
+    /**
+     * A completed rebalance - partitions reassigned - scopes the deferral streak to the assignment it belonged to
+     * (astubbs#317, R13): whatever was blocking commits for the OLD assignment is history the new one must not
+     * inherit, so the next streak gets the full escalation quantum on a fresh clock. Forwarded by the controller's
+     * own {@code onPartitionsAssigned} through {@link BrokerPollSystem#onPartitionsAssigned()}.
+     */
+    void onPartitionsAssigned() {
+        lastCommitCycleDeferred = false;
+        clearDeferralAccounting("the rebalance completed - partitions were reassigned");
+    }
+
+    /**
+     * @see OffsetCommitter#lastCommitWasDeferred() - reported to the controller through
+     *         {@link BrokerPollSystem#lastCommitWasDeferred()}
+     */
+    @Override
+    public boolean lastCommitWasDeferred() {
+        return lastCommitCycleDeferred;
     }
 
     public boolean isSync() {
