@@ -21,6 +21,22 @@ close. Delete this note when these are resolved.
 - **`AGENTS.md` is past its own backstop.** That file declares "`wc -l AGENTS.md` past ~400 lines
   means something situational has crept in"; it is now 531.
 
+## Two heuristics the review flagged and this work did not change
+
+- **Only the FIRST notice line is placement-checked.** `syntax_violation()` inspects
+  `HDR_LINES[$NOTICE_IDX]`, the topmost `Copyright (C)` line, so a dual header's
+  `Modifications Copyright` line is never tested for being inside a comment. The shebang and
+  `<?xml ?>` halves cannot be reached this way - a later line is by definition below a first line
+  that already passed - so the live case is a mods line written outside the comment syntax. It is
+  not silent, which is why it is recorded rather than fixed: the file breaks for its own toolchain
+  (`Modifications: command not found` in shell, a compile error in Java, an unparseable document in
+  XML). Worth closing when the scanner is next opened.
+- **The same-line Confluent-claim test can false-positive on header prose.** A fork-original file
+  putting `Copyright (C)` and `Confluent` on one physical line reads as a Confluent claim. No file
+  does today, and the failure is a red build rather than a silent pass, so this is the deliberate
+  trade-off the same-line design already argues for in the script - noted so the next reader does
+  not re-derive it.
+
 ## The defect class is wider than this gate: a glob narrower than the claim
 
 <!-- post-merge: checked-begin -->
