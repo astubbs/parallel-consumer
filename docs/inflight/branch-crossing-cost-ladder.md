@@ -29,7 +29,11 @@ reflection over serde config, unknown metadata surface), or (2) **libjvm embeddi
 hosted in the client process (JIT retained, no native-image build, heavier footprint). The ladder
 measures call mechanics with a minimal harness, so neither route gates the measurement - but a
 green ladder without settling this gap is not a green light for Streams-in-process, and the
-write-up must say which route it assumes.
+write-up must say which route it assumes. **Probed 2026-08-25, gap crossed for the in-memory
+surface**: route (1) is proven and cheaper - the engine builds into a 78MB native binary that
+passes the demo, one traced capture was the whole wall, and libjvm demotes to fallback;
+[`perf-streams-under-native-image.md`](perf-streams-under-native-image.md) owns the result and its
+durability boundary.
 
 Delete this note when the branch lands or is superseded; the spike's results note (created on this
 branch) will carry the numbers.
