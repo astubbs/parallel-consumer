@@ -256,6 +256,31 @@ assert "a non-commit command is not gated" 0 \
     "$(gate_rc "$red" 'ls -la')"
 assert "a read-only command naming the gate is not gated" 0 \
     "$(gate_rc "$red" 'cat .githooks/pre-commit')"
+# The NASTY shape that made the misfire visible: shell keywords and a command substitution, and
+# not a commit anywhere in it. The near-miss for every case below - one `git` away from being
+# gated, and it must stay green.
+assert "a compound non-commit command with if/for/\$() is not gated" 0 \
+    "$(gate_rc "$red" 'for f in $(ls); do if [ -f "$f" ]; then echo "$f"; fi; done')"
+
+# ...and the other half of that pair, which the self-filter above quietly broke. Only OPERATORS
+# reopened command position, so `then`, `do`, `{` and `!` swallowed it and the commit behind them
+# counted as zero - gated by accident while zero meant "run the gate", silently EXEMPT the moment
+# zero meant "skip". A gate that stops firing looks exactly like a gate with nothing to say.
+assert "a commit inside if/then is still gated" 2 \
+    "$(gate_rc "$red" 'if true; then git commit -m x; fi')"
+assert "a commit inside a for loop is still gated" 2 \
+    "$(gate_rc "$red" 'for f in a b; do git commit -m "$f"; done')"
+assert "a commit inside a brace group is still gated" 2 \
+    "$(gate_rc "$red" 'git status && { git commit -m x; }')"
+assert "a commit behind a ! negation is still gated" 2 \
+    "$(gate_rc "$red" '! git commit -m x')"
+# The escape hatch reaches inside those constructs too, or the fix above would have taken it away
+# from exactly the shapes it just started gating.
+assert "--no-verify inside if/then is still a bypass" 0 \
+    "$(gate_rc "$red" 'if true; then git commit --no-verify -m x; fi')"
+# A keyword is only a keyword in COMMAND POSITION. As an argument it is text, so this is an echo.
+assert "a keyword in argument position does not make a commit" 0 \
+    "$(gate_rc "$red" 'echo do git commit -m x')"
 
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh

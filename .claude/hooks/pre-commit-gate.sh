@@ -81,6 +81,13 @@ if python3 - "$payload_file" <<'PYGATE'
 import json, re, shlex, sys
 
 OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
+# Shell RESERVED WORDS that are FOLLOWED BY ANOTHER COMMAND, so command position survives them.
+# Without these, `if ok; then git commit -m x; fi` counted zero commits: `then` is not an operator,
+# so it consumed the command position and the commit behind it was invisible. That was harmless
+# while zero commits meant "run the gate anyway", and became a hole the moment zero commits meant
+# "skip" - see the exit-0 branch below. Recognised only when the word is ITSELF in command
+# position, so `echo do git commit` stays text rather than becoming a commit.
+COMMAND_INTRODUCERS = {"if", "then", "elif", "else", "while", "until", "do", "{", "!", "time"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 GIT_VALUE_FLAGS = {"-C", "-c", "--git-dir", "--work-tree"}
 
@@ -110,9 +117,9 @@ def commit_bypass_counts(line):
             at_command = True
             i += 1
             continue
-        if at_command and ASSIGNMENT.match(token):
+        if at_command and (token in COMMAND_INTRODUCERS or ASSIGNMENT.match(token)):
             i += 1
-            continue
+            continue             # a reserved word or a var assignment; the command is still ahead
         if at_command and (token == "git" or token.endswith("/git")):
             j = i + 1
             while j < len(tokens) and tokens[j] in GIT_VALUE_FLAGS:
