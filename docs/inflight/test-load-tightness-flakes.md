@@ -122,3 +122,44 @@ Do not "fix" this by widening the expected set to accept both outcomes - that wo
 vacuous, since `[8]` and `[8, 12]` are the only two possibilities. If it is to be deterministic, the
 shutdown timeout and the sleep have to be separated far enough that only one outcome is reachable;
 otherwise it belongs in the quarantine lane rather than the gating suite.
+
+### The same defect from the other side: `commitTimeout[1]` produced `[2]`'s outcome (2026-08-25)
+<!-- post-merge: checked-begin -->
+
+`Integration Tests` on astubbs#348's head `58d6d38ce`
+([job 97653156995](https://github.com/astubbs/parallel-consumer/actions/runs/32797974288/job/97653156995)),
+`forkCount=4`. The **`[1]`** arm (`multiple=2`) failed at the committed-offset assertion:
+
+    expected to contain: 12   but was: [8]
+
+**This is the strongest evidence yet for the section above, because it is the mirror image of it.**
+The `[2]` sighting had the `multiple=50` arm - the one that pins `[8, 12]`, i.e. "the sleep outlasted
+the shutdown timeout" - produce the *other* javadoc'd outcome, `[8]`. This sighting has the
+`multiple=2` arm - the one that pins offset 12, i.e. "processing finished during the shutdown
+timeout" - produce `[8]` as well, which is `[2]`'s pinned outcome. **Both parameters have now been
+observed producing the outcome the other one pins.** Neither arm's expectation is a property of its
+parameter; both are properties of a race the test does not control. `[2]` passed in this very run, so
+the two arms are not even consistently wrong together.
+
+Ambient probe agreed unprompted, in the same words as the earlier sighting: *"probe clean - no
+rebalance dwell, no lag stagnation, no frozen partitions observed: the fault is likely in the test
+itself, not consumer-group progress."*
+
+**This does NOT reopen the `commitTimeout[1]` reclassification above.** That entry left the family
+because its *trigger* was unforceable - a 35s await on `isClosedOrFailed` that could never fire in
+some interleavings, fixed test-side and written up in
+[`unforceable-trigger-commit-lock-timeout-2026-08-07.md`](../solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md).
+That await passed here; what failed is the *post-shutdown assertion*, three statements later. Same
+test method, different mechanism, and the reclassification stands.
+
+**Master state, not astubbs#348's.** That head's delta from the one that passed this same suite was
+two markdown files, and the `jcstress-poc` module it added has no `<parent>` and no root `<modules>`
+entry, so no reactor build compiles it. Nothing in the change was reachable from the code under test.
+
+**Flaky, not deterministic - and that is a measurement, not an assumption.** The next head of the
+same branch (`02233811c`, a one-file markdown delta) ran the same suite and `commitTimeout[1]`
+passed. So the arm is not simply wrong on this runner; it is wrong when the race falls the other
+way, which is what the family signature says. Still worth noting how thin the evidence for
+"non-deterministic" is on a single retry: it separates *always red* from *not always red*, and
+nothing more.
+<!-- post-merge: checked-end -->

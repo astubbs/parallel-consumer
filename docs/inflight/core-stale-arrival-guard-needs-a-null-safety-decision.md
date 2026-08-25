@@ -37,6 +37,9 @@ that question runs straight into. This note is that conversation, written down.
    `PartitionStateManager.getPartitionState` returns `partitionStates.get(tp)` **unguarded**, and
    `PartitionStateCommittedOffsetTest` registers polls against a `PartitionState` that was never
    installed in the manager. `compactedTopic`, `committedOffsetLower` and one more fail with an NPE.
+   **The third is not named, and recovering it means re-running the prototype** - the guard was not
+   kept, so the list cannot be re-derived by reading. Name it in this note when you do, since
+   identifying which fixtures encode a real production shape is exactly the decision below.
 2. **It makes the stale-resident branch unreachable from every public entry point.** Verified by
    experiment: with the arrival guard in place and the resident branch reverted, the other
    regression tests still pass. So the branch astubbs#31 added becomes defensive code with no
