@@ -209,12 +209,28 @@ public class AdaptiveConcurrencyDemo extends BrokerIntegrationTest<String, Strin
         log.info("Producing {} records...", String.format("%,d", MOVING_RECORD_COUNT));
         getKcu().produceMessages(topic, MOVING_RECORD_COUNT);
 
-        PhasedResult staticArm = runPhasedArm(topic, "static, perfectly tuned (48)", HEALTHY_CAPACITY_SLOTS, false);
-        PhasedResult adaptiveArm = runPhasedArm(topic, "adaptive, seeded at 48", HEALTHY_CAPACITY_SLOTS * 2, true);
+        // Which arms to run, so a re-measurement of one guess does not cost a rerun of all of them:
+        // -Dpc.demo.arms=10,48,100,adaptive (the default runs all four).
+        String[] arms = System.getProperty("pc.demo.arms", "10,48,100,adaptive").split(",");
+        java.util.List<PhasedResult> results = new java.util.ArrayList<>();
+        for (String arm : arms) {
+            if (arm.trim().equals("adaptive")) {
+                results.add(runPhasedArm(topic, "adaptive, seeded at 48", HEALTHY_CAPACITY_SLOTS * 2, true));
+            } else {
+                int slots = Integer.parseInt(arm.trim());
+                String label = slots == HEALTHY_CAPACITY_SLOTS
+                        ? "static, the lottery winner (48)"
+                        : String.format("static, a guess (%d)", slots);
+                results.add(runPhasedArm(topic, label, slots, false));
+            }
+        }
 
-        log.info("\n=== RESULTS: three {}s phases - healthy ({} slots) / DEGRADED ({} slots) / recovered ==="
-                        + "\n{}\n{}\n",
-                PHASE_SECONDS, HEALTHY_CAPACITY_SLOTS, DEGRADED_CAPACITY_SLOTS, staticArm, adaptiveArm);
+        StringBuilder table = new StringBuilder();
+        for (PhasedResult r : results) {
+            table.append('\n').append(r);
+        }
+        log.info("\n=== RESULTS: three {}s phases - healthy ({} slots) / DEGRADED ({} slots) / recovered ==={}\n",
+                PHASE_SECONDS, HEALTHY_CAPACITY_SLOTS, DEGRADED_CAPACITY_SLOTS, table);
         log.info("Phase 2 is the argument: same capacity-bound throughput, but the static arm queued "
                 + "{} requests against a service running {} - the adaptive arm took its pressure off.",
                 HEALTHY_CAPACITY_SLOTS, DEGRADED_CAPACITY_SLOTS);

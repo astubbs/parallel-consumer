@@ -91,6 +91,41 @@ So adaptive concurrency can genuinely help key-ordered workloads: it discovers t
 parallelism that the key distribution does not contain at that moment. The starvation report exists
 to distinguish those two, and the distinction is temporal, not a property of the workload.
 
+## The mode ladder, ratified (owner, 2026-08-25)
+
+The build order, decided in conversation over the demo runs below. Parked means parked, not open:
+
+1. **Latency-ceiling clamp** - the first new capability, and the only safe form of "latency mode":
+   knee-seeking as shipped, plus an operator bound on measured service time, contracting when the
+   bound binds and REPORTING when it is unreachable (holding at the floor and saying so) rather than
+   starving. It converts the KTD7 boundary in `docs/features/adaptive-concurrency.yaml` - "pin
+   maxConcurrency yourself if you need a latency bound" - from advice back into the feature. Cheap on
+   signal: the window already samples service time; a bound cannot ratchet the way the deleted
+   baseline did, because it is compared against, never learned from.
+2. **Catch-up** - a CLAUSE of the clamp, not a peer mode. Owner's own re-derivation: against a
+   throughput objective catch-up is self-contradictory - catching up IS maximising throughput, so
+   with no clamp there is no held-back throughput to release. It is exactly "suspend the clamp while
+   lag is large, re-impose with hysteresis when caught up". No clamp, no catch-up.
+3. **Rate-limit feedback** - as below.
+
+**Pacing profiles (an "aggressive"/eager setting): parked, with the experiment that parks it.**
+2026-08-25, on the moving-downstream demo plant (48 slots degrading to 8 and recovering,
+`AdaptiveConcurrencyDemo`): the shipped law's phase-3 re-climb (8 -> 46 in ~70s, +sqrt(target) per
+adjudicated step) is the visible cost an eager profile would attack. The naive version was tried and
+is REFUTED by measurement: scaling the shared accelerator step to doubling (`max(1, limit)`)
+destabilised every phase - the target swung floor-to-ceiling (52 -> 96 -> 1 -> 93 -> 1), the
+degraded phase pounded the sick downstream harder than a static over-guess (163ms avg request,
+excursions to target 93 against 8 slots), and the run ended PINNED at the ceiling, degenerated into
+the static guess the feature exists to replace. Mechanism: that step constant is load-bearing in
+five places - the descent probe steps DOWN by the same unit (48 - 48 lands on the floor), the
+stagnation and recovery probes step up by it, and the warmup allowance is denominated in it - so
+scaling it makes every limb swing, not just growth. A real eager profile is therefore a DESIGNED,
+asymmetric change: multiplicative growth only on the confirmed re-climb path (double only while
+every step demonstrably pays, additive again at the first step that does not), descent and probe
+denominations untouched, falsifier-first with a born-red recovery-time scenario. Parked until the
+ladder above is delivered; raw step/cadence constants are never exposed as user options - that
+re-creates the guess-a-number problem this feature removes.
+
 ## Prior art to read before publishing anything
 
 **Flink and Google Dataflow both have serious autoscaling machinery, and Dataflow's is key-aware
