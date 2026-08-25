@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+# Must byte-match the WARN line ProgressProbe.observe() emits - grep it there before editing.
+readonly OBSERVATION_MARKER="OBSERVATION (does not fail the run)"
+
 REPS="${CHAOS_REPS:-1}"
 SEED_ARG=""
 if [ -n "${CHAOS_SEED:-}" ]; then SEED_ARG="-Dchaos.seed=${CHAOS_SEED}"; fi
@@ -42,21 +45,34 @@ summary() {
         # from meaning "nobody reads it" - the peak is the number a timing regression moves.
         # grep -m1 rather than `| head -1`: an early-exiting reader closes the pipe and pipefail
         # promotes the writer's EPIPE to a failure - see bin/AGENTS.md.
+        # One pass over the reports, feeding the loop by process substitution rather than a pipe:
+        # `find | while` runs the loop in a SUBSHELL, so per-file counts cannot accumulate and a
+        # second full scan was needed to answer "did anything observe?". These XMLs embed captured
+        # stdout and reach hundreds of MB, so the extra scan was not free. Same shape as
+        # bin/quarantine-lane-report.sh. No early-exiting reader is introduced, so the
+        # check-shell-sigpipe.sh ban is not implicated.
+        local any_observations=0
         echo "| Test class | Time | Lag stagnation peak | Class 2 observations |"
         echo "|---|---|---|---|"
-        local any_observations=0
-        find . -path '*/failsafe-reports/TEST-*.xml' -print0 | while IFS= read -r -d '' f; do
-            local tag n t peak obs
+        while IFS= read -r -d '' f; do
+            local tag n t obs peak_ms peak_line
             tag=$(head -3 "$f" | tr '\n' ' ')
             n=$(grep -o 'name="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
             t=$(grep -o 'time="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
-            peak=$(grep -m1 -o 'maxLagStagnation=[0-9]*ms' "$f" | cut -d= -f2) || peak=""
-            obs=$(grep -c 'OBSERVATION (does not fail the run)' "$f") || obs=0
-            if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak:-n/a} | ${obs} |"; fi
-        done
-        any_observations=$(find . -path '*/failsafe-reports/TEST-*.xml' -exec \
-            grep -l 'OBSERVATION (does not fail the run)' {} + 2>/dev/null | wc -l | tr -d ' ')
-        if [ "${any_observations:-0}" -gt 0 ]; then
+            obs=$(grep -c "$OBSERVATION_MARKER" "$f") || obs=0
+            # MAX, not first match: a class with several test methods emits one `peaks:` line per
+            # method, and reporting the first would understate a later method's peak.
+            peak_ms=""
+            while IFS= read -r peak_line; do
+                [ -n "$peak_line" ] || continue
+                if [ -z "$peak_ms" ] || [ "$peak_line" -gt "$peak_ms" ]; then peak_ms="$peak_line"; fi
+            done <<< "$(grep -o 'maxLagStagnation=[0-9]*ms' "$f" | cut -d= -f2 | tr -d 'ms')"
+            # Counted independently of the table-row guard: a report with no name= attribute still
+            # observed whatever it observed.
+            if [ "$obs" -gt 0 ]; then any_observations=$((any_observations + 1)); fi
+            if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak_ms:-n/a}${peak_ms:+ms} | ${obs} |"; fi
+        done < <(find . -path '*/failsafe-reports/TEST-*.xml' -print0)
+        if [ "$any_observations" -gt 0 ]; then
             echo ""
             echo "### Class 2 observations fired in ${any_observations} scenario(s) - this did NOT fail the run"
             echo ""
@@ -76,8 +92,12 @@ summary() {
 # exits 0).
 emit_summaries() {
     local ec=$?
-    summary || true
-    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then summary >> "$GITHUB_STEP_SUMMARY" || true; fi
+    # Build it ONCE. summary() now greps every failsafe report, and CI rendered it twice - to stdout
+    # and again into the step summary - doubling the reads of files that reach hundreds of MB.
+    local rendered
+    rendered=$(summary) || true
+    printf '%s\n' "$rendered"
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$rendered" >> "$GITHUB_STEP_SUMMARY" || true; fi
     exit "$ec"
 }
 trap emit_summaries EXIT

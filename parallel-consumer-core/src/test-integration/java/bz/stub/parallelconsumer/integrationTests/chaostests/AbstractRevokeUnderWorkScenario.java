@@ -11,11 +11,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.junit.jupiter.api.Timeout;
+import org.junit.platform.commons.support.AnnotationSupport;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
@@ -104,10 +106,19 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     private static final Duration REQUESTED_DIAGNOSTIC_QUIET_CAP =
             Duration.ofMinutes(Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
     /**
-     * Held back from the scenario's {@code @Timeout} so the quiet wait always ends on its OWN cap,
-     * leaving time for {@code settleRun} (conductor stop, drain joins, fleet settle) and the final
-     * assertions. Without this, shortening the watch would merely move the silent kill from the wait to the
-     * teardown.
+     * Held back from the scenario's {@code @Timeout} so the quiet wait ends on its OWN cap, leaving
+     * time for {@code settleRun} (conductor stop, drain joins, producer join, fleet settle) and the
+     * final assertions. Without it, shortening the watch would merely move the silent kill from the
+     * wait into the teardown.
+     * <p>
+     * <b>90s is a typical-case figure, NOT a derivation, and the worst case escapes it - stated here
+     * because a bare constant in this file reads as calculated.</b> The bounded part is the 10s
+     * producer join; the unbounded part is {@code settleFleet}, which waits up to 15s per
+     * close-pending instance SEQUENTIALLY, so a 10-14 instance fleet with most instances still
+     * closing can reach 150-210s on its own. When that happens the JUnit kill lands in teardown -
+     * which is acceptable only because it is after the watch has already produced its answer, and
+     * only in this diagnostic mode. If teardown is ever made to matter, derive this properly rather
+     * than raising it.
      */
     private static final Duration DIAGNOSTIC_TEARDOWN_RESERVE = Duration.ofSeconds(90);
     /** Low eviction horizon: a storm-wedged (deadlocked) member stops polling and gets evicted ~30s
@@ -212,21 +223,32 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
      * ended for its own reasons. Shortening the watch to fit converts that into a real, if smaller,
      * negative result, and names the number to raise for a longer one.
      * <p>
-     * Read reflectively from {@code getClass()} rather than duplicating the literal per subclass, so
-     * raising a scenario's annotation raises its watch with no second edit to forget. {@code @Timeout}
-     * is not {@code @Inherited}, but every concrete scenario carries its own - and an absent one means
-     * no ceiling, so the requested cap stands.
+     * Read from the annotation rather than duplicating the literal per subclass, so raising a
+     * scenario's annotation raises its watch with no second edit to forget. Resolved through
+     * {@link AnnotationSupport#findAnnotation}, which is what JUnit itself uses - so this seam tracks
+     * the enforcer rather than approximating it, including meta-present and interface-declared cases.
+     * {@code @Timeout} IS {@code @Inherited} (verified against the pinned junit-jupiter-api), so a
+     * ceiling hoisted onto a shared superclass is still found.
+     * <p>
+     * <b>The one real gap is a METHOD-level {@code @Timeout}</b>, which overrides the class-level one
+     * in JUnit and is invisible to a class lookup. No scenario uses one today - every {@code @Test}
+     * here delegates straight to this method - but a method-level override would restore the silent
+     * kill this guard exists to prevent. An absent annotation means no ceiling, so the request stands.
      */
     private Duration effectiveDiagnosticQuietCap(Instant methodStart) {
-        Timeout timeout = getClass().getAnnotation(Timeout.class);
-        if (timeout == null) {
+        Optional<Timeout> timeout = AnnotationSupport.findAnnotation(getClass(), Timeout.class);
+        if (!timeout.isPresent()) {
             log.warn("=== no @Timeout on {} - nothing to fit inside, so the full {} watch stands ===",
                     getClass().getSimpleName(), REQUESTED_DIAGNOSTIC_QUIET_CAP);
             return REQUESTED_DIAGNOSTIC_QUIET_CAP;
         }
-        Duration ceiling = Duration.ofMillis(timeout.unit().toMillis(timeout.value()));
+        // toMillis() rather than TimeUnit.toChronoUnit(): the latter is Java 9+, and this module
+        // compiles to Java 8 bytecode through Jabel.
+        Duration ceiling = Duration.ofMillis(timeout.get().unit().toMillis(timeout.get().value()));
         Duration spent = Duration.between(methodStart, Instant.now());
         Duration available = ceiling.minus(spent).minus(DIAGNOSTIC_TEARDOWN_RESERVE);
+        Duration timeoutNeededForFullWatch = spent.plus(DIAGNOSTIC_TEARDOWN_RESERVE)
+                .plus(REQUESTED_DIAGNOSTIC_QUIET_CAP);
 
         if (available.isNegative() || available.isZero()) {
             throw new IllegalStateException(String.format(
@@ -234,8 +256,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                             + "total and %s is already spent, with %s held back for shutdown. Raise this "
                             + "scenario's @Timeout to at least %s to get the requested %s watch.",
                     getClass().getSimpleName(), ceiling, spent, DIAGNOSTIC_TEARDOWN_RESERVE,
-                    spent.plus(DIAGNOSTIC_TEARDOWN_RESERVE).plus(REQUESTED_DIAGNOSTIC_QUIET_CAP),
-                    REQUESTED_DIAGNOSTIC_QUIET_CAP));
+                    timeoutNeededForFullWatch, REQUESTED_DIAGNOSTIC_QUIET_CAP));
         }
         if (REQUESTED_DIAGNOSTIC_QUIET_CAP.compareTo(available) <= 0) {
             return REQUESTED_DIAGNOSTIC_QUIET_CAP;
@@ -246,9 +267,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                         + "did not drain' is a real answer rather than JUnit killing the test mid-look. To "
                         + "get the full {}, raise this scenario's @Timeout to at least {}. ===",
                 REQUESTED_DIAGNOSTIC_QUIET_CAP, available, getClass().getSimpleName(), ceiling, spent,
-                DIAGNOSTIC_TEARDOWN_RESERVE,
-                REQUESTED_DIAGNOSTIC_QUIET_CAP,
-                spent.plus(DIAGNOSTIC_TEARDOWN_RESERVE).plus(REQUESTED_DIAGNOSTIC_QUIET_CAP));
+                DIAGNOSTIC_TEARDOWN_RESERVE, REQUESTED_DIAGNOSTIC_QUIET_CAP, timeoutNeededForFullWatch);
         return available;
     }
 

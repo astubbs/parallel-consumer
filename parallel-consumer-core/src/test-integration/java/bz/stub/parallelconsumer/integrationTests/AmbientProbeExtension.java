@@ -228,36 +228,36 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
             sb.append("probe clean - no rebalance dwell, no lag stagnation, no frozen partitions observed: ")
                     .append("the fault is likely in the test itself, not consumer-group progress\n");
         } else {
-            sb.append("violations (").append(violations.size()).append("):\n");
-            if (violations.isEmpty()) {
-                sb.append("  (none crossed the chaos-calibrated bounds - see peaks/frozen detail below)\n");
-            }
-            for (String violation : violations) {
-                sb.append("  - ").append(violation).append('\n');
-            }
+            appendSection(sb, "violations (" + violations.size() + ")", violations,
+                    "(none crossed the chaos-calibrated bounds - see peaks/frozen detail below)");
             // Non-gating findings still belong in the autopsy: they did not cause this failure, but a
             // reader diagnosing one wants to know a watermark sat pinned while it happened.
-            sb.append("observations, non-gating (").append(observations.size()).append("):\n");
-            if (observations.isEmpty()) {
-                sb.append("  (none)\n");
-            }
-            for (String observation : observations) {
-                sb.append("  - ").append(observation).append('\n');
-            }
+            appendSection(sb, "observations, non-gating (" + observations.size() + ")", observations,
+                    "(none)");
             sb.append("peaks: rebalanceDwell=").append(probe.getPeakRebalanceDwellMs())
                     .append("ms lagStagnation=").append(probe.getPeakLagStagnationMs()).append("ms\n");
-            sb.append("frozen partitions (committed stagnant >= ").append(FROZEN_REPORT_MIN_STAGNATION.getSeconds())
-                    .append("s with lag >= ").append(FROZEN_REPORT_MIN_LAG).append("):\n");
-            if (frozen.isEmpty()) {
-                sb.append("  (none)\n");
-            }
-            for (String line : frozen) {
-                sb.append("  - ").append(line).append('\n');
-            }
+            appendSection(sb, "frozen partitions (committed stagnant >= "
+                            + FROZEN_REPORT_MIN_STAGNATION.getSeconds() + "s with lag >= "
+                            + FROZEN_REPORT_MIN_LAG + ")", frozen, "(none)");
         }
         appendEnvironment(sb);
         sb.append("=== END AMBIENT PROBE AUTOPSY ===");
         return sb.toString();
+    }
+
+    /**
+     * One autopsy section: a {@code header:} line, then either the empty-case line or one {@code - }
+     * bullet per entry. Three sections had grown the same shape by hand; the empty-case text differs
+     * per section, so it is a parameter rather than a constant.
+     */
+    private static void appendSection(StringBuilder sb, String header, List<String> lines, String emptyText) {
+        sb.append(header).append(":\n");
+        if (lines.isEmpty()) {
+            sb.append("  ").append(emptyText).append('\n');
+        }
+        for (String line : lines) {
+            sb.append("  - ").append(line).append('\n');
+        }
     }
 
     /**

@@ -103,11 +103,16 @@ jobs:
     # pinned to a label nothing serves does not fail - it queues silently until GitHub cancels it. This
     # fix is in-repo, reversible, and testable; see docs/inflight/test-chaos-class2-red-was-runner-contention.md.
     concurrency:
+      # Switched on the `box-exclusive` matrix KEY, never on `suite-name`. The suite name is a display
+      # label cited across docs, check names and artifact names; if the policy keyed on it, renaming it
+      # would silently return chaos to per-ref cancel-in-progress - the exact behaviour fixed here -
+      # with nothing going red. `optional` would also have worked and is wrong for a different reason:
+      # it couples "gates the merge" to "owns the box", which are unrelated properties.
       group: >-
-        ${{ matrix.suite-name == 'Chaos Pain Suite'
+        ${{ matrix.box-exclusive == 'true'
             && 'highcpu-chaos-exclusive'
             || format('highcpu-{0}-{1}', matrix.suite-name, github.head_ref || github.ref) }}
-      cancel-in-progress: ${{ matrix.suite-name != 'Chaos Pain Suite' }}
+      cancel-in-progress: ${{ matrix.box-exclusive != 'true' }}
     strategy:
       fail-fast: false           # each suite is independent
       matrix:
@@ -131,6 +136,8 @@ jobs:
           - suite-name: "Chaos Pain Suite"
             cmd: "bin/chaos-test.sh"
             optional: "false"
+            # Needs the whole machine, not one runner slot - see the concurrency block above.
+            box-exclusive: "true"
     steps:
       - name: Checkout
         # Shallow is fine: the only suite that needed full history was the scoped Mutation job (it diffs
