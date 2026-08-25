@@ -19,6 +19,25 @@ with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadloc
 under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is explicitly *not* a
 member). astubbs#29 needs a rebase and a retarget first - see `pr-blockers-and-collisions.md`.
 
+**READ BEFORE RESUMING astubbs#29, and before reading any `CLASS2_STALL` entry below.** On
+2026-08-25 the discriminating replay this file had been asking for since the twelfth sighting was
+finally run, and it establishes that **the chaos suite's `CLASS2_STALL` reds are a timing proxy, not
+sightings of this family** - both nominated seeds fired the bound and then drained completely. The
+full evidence is the last section of this file; three consequences bind anyone picking astubbs#29 up:
+
+- **Do not treat a `CLASS2_STALL` red as evidence for or against astubbs#29.** It measures how long a
+  committed offset stays pinned, which one incomplete record does legitimately. The detector that
+  would be real evidence is `INSTANCE_STALL/NO_WORK_COMPLETED`, which watches completions and has
+  never fired.
+- **A prediction recorded before the fact, so landing astubbs#29 tests it rather than merely
+  following it:** land astubbs#29 and the rest of the backlog, re-run the chaos suite on a loaded
+  box, and the Class 2 findings **continue at roughly the same rate**, because they are the bound
+  meeting the load and no deadlock fix touches that. **If they instead drop off, this reading is
+  wrong** - say so loudly here, because the whole 2026-08-25 section then needs revisiting.
+- **The sequencing advice in [`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
+  - "land the backlog, then re-run" - was sound when written and no longer applies to `CLASS2_STALL`
+  specifically.** It still applies to any signature this file records that is *not* the lag bound.
+
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
 fail-fast by `ProgressProbe` with five simultaneous violations, on

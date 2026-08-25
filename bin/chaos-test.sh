@@ -36,15 +36,36 @@ summary() {
         echo "Quarantine Lane runs them - see docs/quarantined-tests.md). Real coverage"
         echo "returns when the W4 variants or the quarantine owner fix (astubbs#80) land."
     else
-        echo "| Test class | Time |"
-        echo "|---|---|"
+        # Class 2 lag stagnation REPORTS rather than gates (see ProgressProbe.getObservations and
+        # docs/inflight/test-class2-probe-asserts-timing-not-correctness.md), so a green run is the
+        # only place its findings can ever appear. Printing them here is what stops "does not gate"
+        # from meaning "nobody reads it" - the peak is the number a timing regression moves.
+        # grep -m1 rather than `| head -1`: an early-exiting reader closes the pipe and pipefail
+        # promotes the writer's EPIPE to a failure - see bin/AGENTS.md.
+        echo "| Test class | Time | Lag stagnation peak | Class 2 observations |"
+        echo "|---|---|---|---|"
+        local any_observations=0
         find . -path '*/failsafe-reports/TEST-*.xml' -print0 | while IFS= read -r -d '' f; do
-            local tag n t
+            local tag n t peak obs
             tag=$(head -3 "$f" | tr '\n' ' ')
             n=$(grep -o 'name="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
             t=$(grep -o 'time="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
-            if [ -n "$n" ]; then echo "| $n | ${t}s |"; fi
+            peak=$(grep -m1 -o 'maxLagStagnation=[0-9]*ms' "$f" | cut -d= -f2) || peak=""
+            obs=$(grep -c 'OBSERVATION (does not fail the run)' "$f") || obs=0
+            if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak:-n/a} | ${obs} |"; fi
         done
+        any_observations=$(find . -path '*/failsafe-reports/TEST-*.xml' -exec \
+            grep -l 'OBSERVATION (does not fail the run)' {} + 2>/dev/null | wc -l | tr -d ' ')
+        if [ "${any_observations:-0}" -gt 0 ]; then
+            echo ""
+            echo "### Class 2 observations fired in ${any_observations} scenario(s) - this did NOT fail the run"
+            echo ""
+            echo "\`CLASS2_STALL/LAG_STAGNATION\` measures how long a partition's committed offset stayed"
+            echo "pinned. One incomplete record pins it legitimately, so a busy fleet and a wedged one look"
+            echo "identical to it - three replays cross this bound and drain completely. Read the peak as a"
+            echo "SPEED number: worth noticing if it moves, never a defect on its own. The liveness claim is"
+            echo "\`INSTANCE_STALL\`, which gates; if that stayed silent, this run was slow, not stalled."
+        fi
     fi
 }
 

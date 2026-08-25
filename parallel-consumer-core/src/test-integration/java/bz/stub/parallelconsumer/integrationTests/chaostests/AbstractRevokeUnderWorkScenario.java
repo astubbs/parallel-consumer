@@ -97,16 +97,16 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
      * result unreachable, which is why the replay this mode prescribes went unrun for five days after
      * two separate documents called it the cheapest next step.
      * <p>
-     * {@link #effectiveDiagnosticQuietCap} now clamps this to what the annotation actually allows and
-     * says so at WARN. Raise the {@code @Timeout} if you need a longer watch - the clamp reports the
-     * number to raise it to.
+     * {@link #effectiveDiagnosticQuietCap} now shortens this to whatever the annotation actually
+     * leaves room for, and says so at WARN. Raise the {@code @Timeout} if you need a longer watch -
+     * the warning names the number to raise it to.
      */
     private static final Duration REQUESTED_DIAGNOSTIC_QUIET_CAP =
             Duration.ofMinutes(Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
     /**
      * Held back from the scenario's {@code @Timeout} so the quiet wait always ends on its OWN cap,
      * leaving time for {@code settleRun} (conductor stop, drain joins, fleet settle) and the final
-     * assertions. Without this the clamp would merely move the silent kill from the wait to the
+     * assertions. Without this, shortening the watch would merely move the silent kill from the wait to the
      * teardown.
      */
     private static final Duration DIAGNOSTIC_TEARDOWN_RESERVE = Duration.ofSeconds(90);
@@ -203,23 +203,24 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     }
 
     /**
-     * The quiet cap this run can actually reach, clamped to the concrete scenario's {@code @Timeout}.
+     * How long this run can actually watch for - the requested cap, shortened if the concrete
+     * scenario's {@code @Timeout} does not leave room for it.
      * <p>
      * A diagnostic that promises a 20-minute watch under a 600s annotation does not deliver a shorter
      * watch - it delivers an UNINTERPRETABLE one, because JUnit's kill is neither of the two outcomes
      * the experiment distinguishes ("drained" / "did not drain"), and a killed run reads like one that
-     * ended for its own reasons. Clamping converts that into a real, if shorter, negative result and
-     * names the number to raise for a longer one.
+     * ended for its own reasons. Shortening the watch to fit converts that into a real, if smaller,
+     * negative result, and names the number to raise for a longer one.
      * <p>
      * Read reflectively from {@code getClass()} rather than duplicating the literal per subclass, so
-     * raising a scenario's annotation raises its clamp with no second edit to forget. {@code @Timeout}
+     * raising a scenario's annotation raises its watch with no second edit to forget. {@code @Timeout}
      * is not {@code @Inherited}, but every concrete scenario carries its own - and an absent one means
      * no ceiling, so the requested cap stands.
      */
     private Duration effectiveDiagnosticQuietCap(Instant methodStart) {
         Timeout timeout = getClass().getAnnotation(Timeout.class);
         if (timeout == null) {
-            log.warn("=== no @Timeout on {} - diagnostic quiet cap {} stands unclamped ===",
+            log.warn("=== no @Timeout on {} - nothing to fit inside, so the full {} watch stands ===",
                     getClass().getSimpleName(), REQUESTED_DIAGNOSTIC_QUIET_CAP);
             return REQUESTED_DIAGNOSTIC_QUIET_CAP;
         }
@@ -229,9 +230,9 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
 
         if (available.isNegative() || available.isZero()) {
             throw new IllegalStateException(String.format(
-                    "chaos.diagnoseStallRecovery cannot observe anything: %s's @Timeout of %s is already "
-                            + "spent (%s elapsed, %s reserved for teardown). Raise the annotation to at "
-                            + "least %s to watch for the requested %s.",
+                    "chaos.diagnoseStallRecovery has no time left to watch anything: %s is allowed %s in "
+                            + "total and %s is already spent, with %s held back for shutdown. Raise this "
+                            + "scenario's @Timeout to at least %s to get the requested %s watch.",
                     getClass().getSimpleName(), ceiling, spent, DIAGNOSTIC_TEARDOWN_RESERVE,
                     spent.plus(DIAGNOSTIC_TEARDOWN_RESERVE).plus(REQUESTED_DIAGNOSTIC_QUIET_CAP),
                     REQUESTED_DIAGNOSTIC_QUIET_CAP));
@@ -239,10 +240,11 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         if (REQUESTED_DIAGNOSTIC_QUIET_CAP.compareTo(available) <= 0) {
             return REQUESTED_DIAGNOSTIC_QUIET_CAP;
         }
-        log.warn("=== diagnostic quiet cap CLAMPED {} -> {}: {}'s @Timeout is {}, of which {} is already "
-                        + "spent and {} is reserved for teardown. The wait will now end on its own cap, so "
-                        + "'did not drain' is a real result rather than a JUnit kill. For the full {} "
-                        + "watch, raise the @Timeout to at least {}. ===",
+        log.warn("=== diagnostic watch SHORTENED to fit the test's own time limit: you asked for {}, this "
+                        + "run can only give {}. {} is allowed {} in total, {} of it is already spent, and "
+                        + "{} is held back for shutdown. The watch will now end by itself, so 'the backlog "
+                        + "did not drain' is a real answer rather than JUnit killing the test mid-look. To "
+                        + "get the full {}, raise this scenario's @Timeout to at least {}. ===",
                 REQUESTED_DIAGNOSTIC_QUIET_CAP, available, getClass().getSimpleName(), ceiling, spent,
                 DIAGNOSTIC_TEARDOWN_RESERVE,
                 REQUESTED_DIAGNOSTIC_QUIET_CAP,
@@ -251,7 +253,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     }
 
     protected void runRevokeUnderWorkScenario() throws Exception {
-        // The @Timeout clock starts here, so the diagnostic clamp has to measure from here too.
+        // The @Timeout clock starts here, so the time-remaining sum below has to measure from here too.
         Instant methodStart = Instant.now();
         ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
