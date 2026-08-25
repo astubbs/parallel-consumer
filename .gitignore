@@ -129,3 +129,8 @@ release.properties
 /.idea/inspectionProfiles/Project_Default.xml
 /.idea/uiDesigner.xml
 /.idea/vcs.xml
+
+# jcstress run output - both land in the working directory the run was launched from, not
+# under target/, so the documented repo-root command leaves them beside the source tree
+jcstress-results-*.bin.gz
+/results/
