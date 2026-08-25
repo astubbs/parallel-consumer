@@ -3,8 +3,12 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
 
+<!-- post-merge: checked-begin -->
 Found while reviewing astubbs#351, which un-quarantined
 `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`.
+Both references to that PR are deliberately past-tense: they name the merged change this note came
+out of, so they read correctly once it has landed.
+<!-- post-merge: checked-end -->
 Two reviewers independently proposed tightening that test's bound on the settled succeeded frontier
 so a premature block would go red. **Both proposals were measured and both are refuted** - the gap is
 real, but it cannot be closed from inside this test.
@@ -27,6 +31,7 @@ So a regression that engages back pressure moderately early is invisible here, a
 - asserting the committed payload crossed the pressure threshold does not kill it either - the payload
   is 32 in the mutant and in the control.
 
+<!-- post-merge: checked -->
 **Where the coverage belongs.** astubbs#351 built a deterministic single-threaded probe - prime 100,
 hold `{0, 2}`, add 40, `forcedCodec = BitSetV2`, `DefaultMaxMetadataSize = 40`, taking and succeeding
 one record at a time - which reports the block point exactly (136 for that configuration) because it
