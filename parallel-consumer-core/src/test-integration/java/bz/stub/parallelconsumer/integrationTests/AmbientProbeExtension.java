@@ -172,9 +172,10 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         if (probe == null) {
             return;
         }
-        log.debug("[ambient-probe] clean pass '{}': peaks rebalanceDwell={}ms lagStagnation={}ms violations={}",
+        log.debug("[ambient-probe] clean pass '{}': peaks rebalanceDwell={}ms lagStagnation={}ms violations={} "
+                        + "observations={}",
                 context.getDisplayName(), probe.getPeakRebalanceDwellMs(), probe.getPeakLagStagnationMs(),
-                probe.getViolations().size());
+                probe.getViolations().size(), probe.getObservations().size());
     }
 
     // testAborted / testDisabled: TestWatcher's no-op defaults are deliberate - the observer stays silent
@@ -208,6 +209,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
     /** Public for unit testing only - see {@link #isDisabled(ExtensionContext)}. */
     public static String buildAutopsy(ExtensionContext context, ProgressProbe probe, Throwable cause) {
         List<String> violations = new ArrayList<>(probe.getViolations());
+        List<String> observations = new ArrayList<>(probe.getObservations());
         List<String> frozen = frozenPartitionLines(probe);
 
         var sb = new StringBuilder(512);
@@ -220,7 +222,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
             sb.append("chaos seed: ").append(chaosSeed.getValue()).append('\n');
             sb.append("chaos replay: ").append(chaosSeed.replayCommand()).append('\n');
         }
-        boolean nothingObserved = violations.isEmpty() && frozen.isEmpty()
+        boolean nothingObserved = violations.isEmpty() && observations.isEmpty() && frozen.isEmpty()
                 && probe.getPeakRebalanceDwellMs() == 0 && probe.getPeakLagStagnationMs() == 0;
         if (nothingObserved) {
             sb.append("probe clean - no rebalance dwell, no lag stagnation, no frozen partitions observed: ")
@@ -232,6 +234,15 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
             }
             for (String violation : violations) {
                 sb.append("  - ").append(violation).append('\n');
+            }
+            // Non-gating findings still belong in the autopsy: they did not cause this failure, but a
+            // reader diagnosing one wants to know a watermark sat pinned while it happened.
+            sb.append("observations, non-gating (").append(observations.size()).append("):\n");
+            if (observations.isEmpty()) {
+                sb.append("  (none)\n");
+            }
+            for (String observation : observations) {
+                sb.append("  - ").append(observation).append('\n');
             }
             sb.append("peaks: rebalanceDwell=").append(probe.getPeakRebalanceDwellMs())
                     .append("ms lagStagnation=").append(probe.getPeakLagStagnationMs()).append("ms\n");

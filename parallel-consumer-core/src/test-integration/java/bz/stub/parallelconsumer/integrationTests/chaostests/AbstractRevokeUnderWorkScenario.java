@@ -249,7 +249,10 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                     scenarioLabel(), totalConsumed.get());
 
             // Phase 2 - quiet observation: group must settle, evict any storm-wedged member, and FINISH.
-            // The only defect signal that can fire here is the protocol-invisible kind - exactly Class 2.
+            // The protocol-invisible signals are the ones that can still fire here. Since 2026-08-25 the
+            // Class 2 lag bound is a non-gating OBSERVATION, so what can fail this phase is
+            // INSTANCE_STALL - which watches completions and cannot fire on slow-but-progressing - plus
+            // the fleet watermark and the end-of-run ledger.
             org.awaitility.core.ConditionFactory quiet =
                     await().alias("backlog drained after the storm settles (quiet phase)")
                             .pollInterval(Duration.ofSeconds(2));
@@ -284,9 +287,10 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                     // difference, and it is what makes a flat consumed count interpretable.
                     long started = totalStarted.get();
                     long consumed = totalConsumed.get();
-                    log.info("[diagnose] quiet phase: consumed={}/{} started={} inFlight={} violations={} done={}",
+                    log.info("[diagnose] quiet phase: consumed={}/{} started={} inFlight={} violations={} "
+                                    + "observations={} done={}",
                             consumed, EXPECTED_MESSAGES, started, started - consumed,
-                            probe.getViolations().size(), done);
+                            probe.getViolations().size(), probe.getObservations().size(), done);
                 }
                 return done;
             });
