@@ -119,16 +119,26 @@ public class WorkManagerLincheckTest {
 
     @Test
     void stressRediscoversTheCheckpointThreeTear() {
-        // 200 iterations, not 50. At 50 this found the tear in two runs out of three: a rebalance is
-        // expensive next to a mailbox handoff, so the window is a small fraction of each invocation, and the
-        // budget has to buy enough scenarios to land in it. Still seconds - the whole harness is one
-        // partition and one record.
+        // 1,000 iterations, and the number is measured rather than chosen. A rebalance is expensive next
+        // to a mailbox handoff, so the tear's window is a small fraction of each invocation: running this
+        // harness at a deliberately starved iterations(25) hit 2 times in 8, which puts the per-iteration
+        // probability at 1.14% and prices every bound. 200 - the first bound committed here, picked on three
+        // green runs - therefore misses about one run in ten, which is a flake, and a flake fails this build
+        // with no retry, by design. 1,000 takes that to one run in a hundred thousand.
+        //
+        // The extra iterations are free where it counts: Lincheck stops at the FIRST violation, so a run
+        // that finds the tear never reaches them (measured 6.7-19.1s at 1,000 against 5.3-23.8s at 200 - the
+        // same distribution). Only the run that was going to fail gets longer, and that run is either the
+        // flake this bound removes or the designed inversion below, which happens once.
+        //
+        // Do NOT tune this by lowering it back, by adding a retry, or by weakening the assertion: this
+        // harness asserting that a violation EXISTS is the calibration itself.
         var options = new StressOptions()
                 .threads(2)
                 .actorsPerThread(1)
                 .actorsBefore(0)
                 .actorsAfter(0)
-                .iterations(200)
+                .iterations(1_000)
                 .invocationsPerIteration(5_000);
         String report = LincheckHarness.runExpectingViolation("WorkManager / stress", options, getClass());
         assertThat(report).contains("completeWork");

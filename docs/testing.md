@@ -228,7 +228,18 @@ disagree, because a tag the pom excludes and a wrapper does not runs in the GATI
 - **Every harness currently asserts that a bug EXISTS.** They invert when the fixes land; each
   javadoc names the PR that triggers it.
 - **Measure a new harness's hit rate across several runs before believing it.** An under-budgeted
-  stress arm is a flake, and a flake fails this build with no retry, by design.
+  stress arm is a flake, and a flake fails this build with no retry, by design. Three green runs
+  cannot tell a 0% miss rate from a 10% one, and `WorkManagerLincheckTest` shipped its first bound on
+  exactly that evidence. **Deliberately under-budget instead**: run the harness at a bound low enough
+  to miss most of the time, and the observed miss fraction gives the per-iteration probability, which
+  prices every bound at once. Then raise `iterations` - never `@RepeatedTest`, never a retry, never a
+  weaker assertion, all three of which destroy the signal the harness exists to produce. The
+  arithmetic and a worked example are in the correction to §3.1 of
+  [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
+- **Raising `iterations` costs nothing on the path that matters.** Lincheck stops at the first
+  violation, so a harness that finds its bug never reaches the extra iterations; only the run that
+  was going to fail gets longer. Budget these arms for the miss case you can tolerate, not for the
+  hit case you will actually see.
 
 Calibration result, the obstacles, and the cost tables:
 [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).

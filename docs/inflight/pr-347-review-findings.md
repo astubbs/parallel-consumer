@@ -10,17 +10,6 @@ does **not** close. The lane's own false-green guard was fixed before it landed;
 outlived it. Delete this note when these items are resolved - not when any PR merges.
 <!-- post-merge: checked-end -->
 
-## The committed bound does not reliably find the violation
-
-`WorkManagerLincheckTest` asserts a violation and **missed it in 2 of 8 measured single-class runs**;
-a run that did hit took 20.1s of a roughly 25s budget. The plan doc records "3/3 at the committed
-bound, 2.1-5.0s", so the recorded measurement no longer describes the lane.
-
-The pristine control arm is equally marginal, so this is not an artefact of the review's edits - no
-edit touched `options.check()` or the exploration thread. **The lever is raising `iterations` and
-re-measuring. Never a retry**, and never loosening the assertion: this harness asserting a violation
-IS the calibration.
-
 ## Nothing runs the lane, so the tripwire it promises cannot fire
 
 `bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The

@@ -30,7 +30,7 @@ the lane at all**, for reasons that are specific, diagnosed, and mostly not abou
 
 | # | Known bug | Verdict | Strategy | Cost | Reproducibility |
 |---|---|---|---|---|---|
-| 1 | `WorkManager.handleFutureResult` - staleness check and actions on two separate `partitionStates.get(tp)` lookups (dossier candidate 3, "the worst") | **FOUND** | stress | 2-5s | 3/3 at the committed bound; 2/3 at a quarter of it |
+| 1 | `WorkManager.handleFutureResult` - staleness check and actions on two separate `partitionStates.get(tp)` lookups (dossier candidate 3, "the worst") | **FOUND** | stress | 2-5s | 3/3 at the bound this document was written against - **corrected in §3.1**, that bound missed about 1 run in 10 |
 | 2 | `ShardManager.removeWorkFromShardFor` - `containsKey` then `get`, dereferenced unconditionally (dossier candidate 2) | **FOUND** | stress | ~1.6s | 3/3 |
 | 4 | `PartitionState.createOffsetAndMetadata` - the confluentinc#894 two-read of the offset-to-commit | **FOUND** | stress | ~4.7s | 3/3 |
 | 3 | `OffsetMapCodecManager.encodeOffsetsCompressed` - incompletes snapshot filtered on one read of `offsetHighestSucceeded`, a second read as the encoder's range top | **HALF-FOUND, NOT REPRODUCIBLE** - see §1.5 | model checking | 640s, once | 1 of 8 model-checking attempts across five configurations |
@@ -336,13 +336,40 @@ build**, all green, no flakes.
 | `LincheckSuperHashCodeProbeTest` | model checking, both arms | 1 x 10 | ~0.2s |
 | `ShardManagerLincheckTest` | stress | 50 x 5,000 | 1.6-1.7s |
 | `PartitionStateLincheckTest` | stress | 300 x 5,000 | 4.6-4.8s |
-| `WorkManagerLincheckTest` | stress | 200 x 5,000 | 2.1-5.0s |
+| `WorkManagerLincheckTest` | stress | 200 x 5,000 (**raised to 1,000 x 5,000** - see the correction below) | 2.1-5.0s |
 
 **Reproducibility is a tuned property, not a given.** `WorkManagerLincheckTest` found the tear in 2 of
 3 runs at 50 iterations and 3 of 3 at 200 - a rebalance is expensive next to a mailbox handoff, so the
 window is a small fraction of each invocation. Anyone adding a harness here must measure its hit rate
 across several runs before believing it: the failure mode of an under-budgeted stress arm is a flake,
 and a flake fails this build with no retry, by design.
+
+**Correction (2026-08-25, during the astubbs#347 review). Three runs was not enough runs, and the
+200-iteration bound was a latent flake.** A later pass measured 2 misses in 8 single-class runs on
+one machine and 0 in 8 on another, which is the signature of a bound sitting on the edge rather than
+of a difference between machines. The row above and the `WorkManagerLincheckTest` row in the table
+before it both describe that edge, so read both through this correction.
+
+Three runs cannot separate a 10% miss rate from a 0% one, so the follow-up measured the underlying
+per-iteration probability instead of the bound's outcome. **Deliberately under-budgeting is the
+cheap way to do that**: at `iterations(25)` the harness hit 2 times in 8, so the per-iteration
+survival is `0.75^(1/25) = 0.9886` and each iteration finds the tear with probability 1.14%. That
+one number prices every bound, and it took eight two-second runs to obtain:
+
+| `iterations` | Predicted miss rate | Measured |
+|---|--:|---|
+| 25 | 75% | 6 misses in 8 |
+| 200 (as first committed) | 10% | 0 misses in 8 here, 2 in 8 elsewhere |
+| 400 | 1% | - |
+| 1,000 (committed now) | 0.001% | 0 misses in 8 |
+
+**Raising `iterations` is free on the path that matters**, which is why the bound moved to 1,000
+rather than to the smallest sufficient number. Lincheck stops at the first violation, so a run that
+finds the tear never reaches the extra iterations: measured 6.7-19.1s at 1,000 against 5.3-23.8s at
+200, the same distribution. The only path that gets longer is the one where the harness is going to
+fail anyway - either a real flake, which this change is removing, or the designed inversion when the
+fix PR lands, which happens once and wants the extra certainty. The whole-lane wall clock in the
+table above is unchanged for the same reason.
 
 The default unit suite is unaffected: `bin/ci-unit-test.sh` runs green across every module with the
 ASM pin and the `argLine` change in place, and selects no Lincheck class.
