@@ -345,6 +345,8 @@ emit "# Dated plans and investigations"
 # Both extensions: the unified plan contract allows an artifact to be .md OR .html, so a bare
 # -name '*.md' silently hides every HTML plan. Extension stripped then de-duplicated, because a plan
 # converted between formats can leave both files behind and listing it twice reads as two plans.
+# The explicit `-` stdin operand is master's BSD fix (astubbs#341) - a bare `paste -sd,` reads no
+# input on macOS and the list silently comes out empty.
 plans=$(find docs/plans -type f \( -name '*.md' -o -name '*.html' \) 2>/dev/null \
     | sed -E 's#^docs/plans/##; s#\.(md|html)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
 emit "${plans:-(none)}"
@@ -374,7 +376,7 @@ fi
 # Point-in-time audits of tests that do not run, do not assert, or were never written. Easy to miss
 # precisely because nothing goes red to tell you - which is why AGENTS.md says to read the newest
 # before re-enabling, deleting or rewriting a dark test.
-hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, | sed 's/,/, /g')
+hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
 if [ -n "$hardening" ]; then
     emit "# Dated test-hardening audits"
     emit ""

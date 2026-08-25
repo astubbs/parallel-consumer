@@ -799,8 +799,16 @@ is_sweep_excluded() { # <path> - excluded from the COMPLETENESS CHECK. Deliberat
     is_self "$1"
 }
 
-frozen_lines() { # <file> -> line numbers inside a freeze region, markers included
-    awk -v b="$FREEZE_BEGIN_ERE" -v e="$FREEZE_END_ERE" '
+frozen_lines() { # <file> -> line numbers inside a freeze region, markers included, COMMA-separated
+    # Comma, not newline, and it is not cosmetic. Both readers below take this set through `awk -v`,
+    # and a -v assignment containing a newline is rejected outright by BSD awk - "awk: newline in
+    # string" - which is a diagnostic on stderr, not a non-zero exit. So on macOS both filters lost
+    # their frozen set while the run carried on: has_rewritable_match saw no match outside a freeze
+    # region, every file carrying a marker was dropped from the rewrite list, and the script printed
+    # "already applied, nothing to do" over a tree it had not touched. The freeze feature was dead on
+    # the platform, silently, exactly as the FREEZE_ID_ERE comment above predicts for a bracket
+    # expression - same failure, one construct along.
+    awk -v b="$FREEZE_BEGIN_ERE" -v e="$FREEZE_END_ERE" 'BEGIN { ORS = "," }
         $0 ~ b { f = 1; print NR; next }
         $0 ~ e { f = 0; print NR; next }
         f      { print NR }
@@ -811,7 +819,7 @@ frozen_lines() { # <file> -> line numbers inside a freeze region, markers includ
 # copy-pasted into each. They differ only in which field carries the line number, and the thing that
 # must never happen is the rewrite and the completeness check disagreeing about what is frozen - so
 # they read the set from one place.
-AWK_FROZEN_SET='BEGIN { n = split(frozen, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") fz[a[i]] = 1 }'
+AWK_FROZEN_SET='BEGIN { n = split(frozen, a, ","); for (i = 1; i <= n; i++) if (a[i] != "") fz[a[i]] = 1 }'
 
 has_freeze_marker() { # <file> - cheap gate, so the line-set scan runs only where it can matter
     grep -qE "$FREEZE_BEGIN_ERE" "$1" 2>/dev/null
