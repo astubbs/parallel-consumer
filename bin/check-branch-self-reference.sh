@@ -297,7 +297,14 @@ for f in "${candidates[@]}"; do
     # THE PHRASE ARM, on added lines only - see the header for why its scope differs from the three
     # arms above. A separate loop rather than a fourth entry in the union: the two need different
     # advice, and the union carries only `lineno:text`, with nothing to say which arm matched.
+    #
+    # THE CHEAP TEST RUNS FIRST, and the ratio is why: `added_line_numbers` forks a `git diff` per
+    # file, and this loop covers every note in the directory, but only a handful of them contain the
+    # phrase at all. Asking grep before asking git turns ~90 diffs into ~12 on today's tree and
+    # changes nothing about which lines are flagged - same regex, same file, same order.
     [ -n "$merge_base" ] || continue
+    phrase_hits="$(grep -niE "$phrase_re" "$f" || true)"
+    [ -n "$phrase_hits" ] || continue
     added=" $(added_line_numbers "$f" | tr '\n' ' ') "
     [ "$added" = "  " ] && continue
     while IFS=: read -r lineno text; do
@@ -305,7 +312,7 @@ for f in "${candidates[@]}"; do
         case "$added" in *" $lineno "*) ;; *) continue ;; esac
         if line_is_marked "$lineno"; then continue; fi
         note "$f:$lineno says 'this branch'/'this PR', which names nothing - after the merge the branch is gone and no reader can tell which one was meant. Name it, or rewrite it as it will read AFTER this merges, then add 'post-merge: checked'. Line: ${text:0:100}"
-    done < <(grep -niE "$phrase_re" "$f" || true)
+    done <<<"$phrase_hits"
 done
 
 if [ "$problems" -gt 0 ]; then

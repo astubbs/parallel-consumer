@@ -55,7 +55,7 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || exit 0
 
 # THROTTLE. Same branch, same hour, one reminder.
-stamp="${TMPDIR:-/tmp}/pc-push-reminder-$(printf '%s' "$branch" | tr '/' '_')"
+stamp="$(hook_stamp_path pc-push-reminder "$branch")"
 if [ -f "$stamp" ]; then
     # Portable mtime - hook-common.sh owns why this probes the platform instead of chaining `-c`
     # into `-f`. On a branch's first push there is no stamp and this never runs.

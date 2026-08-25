@@ -66,7 +66,7 @@ base_ref="${MASTER_DRIFT_REF:-origin/master}"
 # `master` and a `MASTER_DRIFT_REF` of `origin/master` both match.
 [ "$branch" != "$base_ref" ] && [ "$branch" != "${base_ref##*/}" ] || exit 0
 
-stamp="${TMPDIR:-/tmp}/pc-master-drift-$(printf '%s' "$branch" | tr '/' '_')"
+stamp="$(hook_stamp_path pc-master-drift "$branch")"
 
 # FETCH FLOOR. Reported-SHA throttling cannot bound the network cost, because the SHA is only known
 # after the fetch. This is the only thing the clock is used for.

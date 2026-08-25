@@ -67,11 +67,25 @@ for i, t in enumerate(toks):
 # filesystem prose to stdout, so a blind `-c || -f` chain returns a string rather than a number and
 # the arithmetic that consumes it then aborts the hook under `set -u`. Callers must still treat a
 # non-numeric answer as "no timestamp" - see the shape test in remind-inflight-on-push.sh.
+#
+# `|| true` ON BOTH ARMS, though neither current caller needs it. Two OTHER copies of this probe
+# exist (`_mtime` in .claude/hooks/check-merge-outstanding-work.sh and in bin/check-pr-ready.sh), and
+# collapsing them onto this one is queued in docs/refactoring.md. The merge guard runs under `set -e`,
+# where a failing `stat` without this would abort the script instead of reaching its documented
+# fail-closed branch - so the safe version has to be here BEFORE anything is pointed at it, or the
+# consolidation that removes a duplicate silently introduces a bug.
 hook_file_mtime() { # <path>
     [ -f "$1" ] || return 0
     if stat -c %Y . >/dev/null 2>&1; then
-        stat -c %Y "$1" 2>/dev/null   # GNU coreutils
+        stat -c %Y "$1" 2>/dev/null || true   # GNU coreutils
     else
-        stat -f %m "$1" 2>/dev/null   # BSD / macOS
+        stat -f %m "$1" 2>/dev/null || true   # BSD / macOS
     fi
+}
+
+# Path of a per-branch throttle stamp, given a prefix. Branch names contain `/`, which is the only
+# real content here: the substitution keeps a path from a name, and doing it in one place stops the
+# two hooks from disagreeing about how a branch is spelled on disk.
+hook_stamp_path() { # <prefix> <branch>
+    printf '%s/%s-%s' "${TMPDIR:-/tmp}" "$1" "$(printf '%s' "$2" | tr '/' '_')"
 }
