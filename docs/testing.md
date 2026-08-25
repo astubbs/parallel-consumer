@@ -199,8 +199,18 @@ that the backlog never drained - see `docs/inflight/test-class2-probe-asserts-ti
 
 Lincheck declares a class's operations and explores thread interleavings against a sequential
 specification. It is the only tool class here that finds torn reads **nobody has named yet** - the
-racing-double seam tests can only re-prove seams somebody already found by hand, and SpotBugs and
-ArchUnit cannot see the family at all.
+racing-double seam tests can only re-prove seams somebody already found by hand.
+
+**Static analysis reaches one of the four calibration targets, not none of them.** Stock SpotBugs at
+`effort=Max` and ArchUnit see nothing in the family, and that single configuration is the whole
+measurement the original "nothing static sees this class" framing rested on - one analyser,
+generalised to all of them. astubbs#356 measured fb-contrib's `MUI_CONTAINSKEY_BEFORE_GET` naming
+`ShardManager.removeWorkFromShardFor` - astubbs#345's `containsKey`/`get`/dereference seam -
+statically, in seconds, with no harness and no annotation. The other three stay out of reach:
+astubbs#346's seam is a stale-check rather than `containsKey`-before-`get`, and the two
+value-divergence torn reads are not what a check-then-act detector looks for. The clause above
+survives intact, because the seam fb-contrib names is one somebody had already found by hand, while
+the defect Lincheck turned up was on nobody's list.
 
 Harnesses live in core's `bz.stub.parallelconsumer.state` package next to the classes they model:
 `ShardManagerLincheckTest`, `PartitionStateLincheckTest`, `WorkManagerLincheckTest`, plus two

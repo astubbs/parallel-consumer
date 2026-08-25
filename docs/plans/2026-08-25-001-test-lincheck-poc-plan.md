@@ -12,6 +12,19 @@
 
 The torn-read family (`docs/inflight/bug-torn-read-family.md`, which arrives with astubbs#344) was found by hand, one hunt pass at a time, and it was established empirically that no static analysis this repo runs can see the class.
 <!-- file-refs: N/A - as above, the dossier is not on master yet. -->
+
+> **Flagged after this document was written - the claim above is left standing as the record.**
+> "No static analysis this repo runs" was measured against stock SpotBugs at `effort=Max`, the only
+> static analysis the repo ran that day, and it generalised from that one configuration to the tool
+> class. astubbs#356, which turns fb-contrib on and `depends on` this work, measured fb-contrib's
+> `MUI_CONTAINSKEY_BEFORE_GET` naming `ShardManager.removeWorkFromShardFor` - astubbs#345's seam,
+> and one of the four calibration targets - statically, in seconds, with no harness. Three of the
+> four remain out of static reach. **`docs/testing.md`'s Lincheck-lane section owns the corrected
+> width from here**; this paragraph is only the flag, not the restatement. The error is the same
+> shape as the one this document records against itself under "The number is machine-dependent": a
+> rate measured on one machine is not the rate, and a family one analyser cannot see is not a family
+> no analyser can see.
+
 The open question was whether scheduler-controlled concurrency testing can - and the only honest way
 to ask it is to point the tool at a tree that still has the bugs and see whether it finds them
 **without being told where they are**.
@@ -346,9 +359,13 @@ and a flake fails this build with no retry, by design.
 
 **Correction (2026-08-25, during the astubbs#347 review). Three runs was not enough runs, and the
 200-iteration bound was a latent flake.** A later pass measured 2 misses in 8 single-class runs on
-one machine and 0 in 8 on another, which is the signature of a bound sitting on the edge rather than
-of a difference between machines. The row above and the `WorkManagerLincheckTest` row in the table
-before it both describe that edge, so read both through this correction.
+one machine and 0 in 8 on another. Read on its own that split is ambiguous - a bound sitting on the
+edge and a difference between machines produce the same two numbers - and it was first read here as
+the former alone. The 48-run fit below settles it as **both**: the 200 bound is genuinely marginal,
+*and* the machines genuinely differ, the likelihood-ratio test under "The number is
+machine-dependent" rejecting their equality at p = 0.011. The row above and the
+`WorkManagerLincheckTest` row in the table before it both describe that edge, so read both through
+this correction.
 
 Three runs cannot separate a 10% miss rate from a 0% one, so the follow-up measured the underlying
 per-iteration probability instead of the bound's outcome. **Deliberately under-budgeting is the cheap
