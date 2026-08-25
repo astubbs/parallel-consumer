@@ -36,3 +36,21 @@
 
   Context worth keeping with the measurement: several agent sessions were building against the same
   box concurrently. The load driving it is not only CI's.
+
+- **Re-checked 2026-08-25, with a tighter control arm and a second signature.** The 2026-08-17 entry
+  argues from unrelated branches minutes apart; this one narrows it to **one branch and a docs-only
+  delta**. `Chaos Pain Suite` *passed* on `3c1ff838c`
+  ([run 32797902524](https://github.com/astubbs/parallel-consumer/actions/runs/32797902524), 01:32-01:44)
+  and *failed* on `8a366ec22`
+  ([run 32799585950](https://github.com/astubbs/parallel-consumer/actions/runs/32799585950), 02:02-02:14)
+  30 minutes later. The entire diff between those two commits is **one markdown file under
+  `docs/inflight/`, +55 lines and no code**, on a branch that touches **zero `.java` files** at all.
+  An outcome that flips across a delta which cannot reach the engine is not a regression.
+
+  **The signature differs from the killed-process one above, so grep for both.** This run failed
+  loudly, mid-`ChaosRevokeUnderWorkCooperativeIT` (seed `784617418707025255`), with starvation
+  symptoms rather than a silent death: records queued over 10s (`ProcessingShard#logSlowWork`),
+  repeated `Clean execution pool termination failed - some threads still active despite await and
+  interrupt` across a dozen PC instances, and a `RebalanceInProgressException` storm. Those are the
+  symptoms of a box that cannot schedule the threads the scenario's timing assumes, and they read
+  exactly like a product stall to anyone who has not checked the load first.
