@@ -125,6 +125,13 @@ diagnosing the mirror rather than while reading the file:
 Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
 
+### Relocate TestConventionRules out of core's test-jar (small)
+
+`TestConventionRules` lives in core's test-jar, so the dependency-free proxy client Java API module
+cannot wire it and `EveryModuleWiresUpArchUnitTest` carries a one-module exemption naming that pom's
+constraint. Move the rules to a dependency-neutral test artifact and the exemption list goes back to
+empty.
+
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
 *Mirror: [#142](https://github.com/astubbs/parallel-consumer/issues/142) · orphaned implementation in [confluentinc PR #270](https://github.com/confluentinc/parallel-consumer/pull/270), closed unmerged in the 2023-06-15 sweep.*
 - **confluentinc#200** - "Consider a shared-nothing architecture, to reduce thread

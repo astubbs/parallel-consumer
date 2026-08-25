@@ -36,6 +36,19 @@ class EveryModuleWiresUpArchUnitTest {
 
     private static final String ARCH_TEST = "TestConventionsArchTest.java";
 
+    /**
+     * The one module that CANNOT wire the shared rules: the proxy client Java API module's pom records it as
+     * DEPENDENCY-FREE, deliberately - "nothing here may depend on core, the protocol module, protobuf or gRPC",
+     * and "the test tree is bound by the same rule, because the test-jar lands on the direct module's test
+     * classpath". {@code TestConventionRules} lives in core's test-jar, so a wrapper there would break that
+     * recorded constraint to satisfy this one. Exempted with the pom as the authority; the durable fix -
+     * relocating the rules to a dependency-neutral test artifact so this set can go back to empty - is queued
+     * in docs/refactoring.md.
+     */
+    private static final List<Path> DEPENDENCY_FREE_BY_DESIGN = java.util.Collections.singletonList(
+            Paths.get("parallel-consumer-proxy-clients", "parallel-consumer-proxy-client-java",
+                    "parallel-consumer-proxy-client-java-api", "src", "test", "java"));
+
     @Test
     void everyModuleWithTestSourcesWiresUpArchUnit() throws IOException {
         Path repoRoot = repoRoot();
@@ -48,6 +61,7 @@ class EveryModuleWiresUpArchUnitTest {
                     .filter(EveryModuleWiresUpArchUnitTest::hasJavaSources)
                     .filter(p -> !containsArchTest(p))
                     .map(repoRoot::relativize)
+                    .filter(p -> !DEPENDENCY_FREE_BY_DESIGN.contains(p))
                     .collect(Collectors.toList());
         }
 
