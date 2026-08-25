@@ -35,6 +35,14 @@ the encoder one layer down had the same defect class (now astubbs#344). The accu
 the offset-to-commit read is single-sampled; the payload-contents tear was a separate fix. The
 write-up's "Still open" sentence about the compounding bound (regularity, not proof) is intentional.
 
+## At merge: post the drafted issue responses (operator review first)
+
+`pr-337-issue-response-drafts.md` (this branch) holds drafts for astubbs#121, confluentinc#894 and
+confluentinc#893 - written now because this is when the context exists. Posting requires the
+operator's explicit go-ahead per the never-post-unasked rule; the drafts also carry the
+class-assurance summary (the family hunt, Lincheck calibration, jcstress probes, cross-model
+review) the operator wants the reporters to see.
+
 ## Merge mechanics
 
 - Commits are atomic; rebase-merge as-is is viable. The evidence commit `f4d4dcbf5` carries an
@@ -57,3 +65,4 @@ write-up's "Still open" sentence about the compounding bound (regularity, not pr
 deletion, all independently re-run at review. `bin/lincheck-test.sh` on astubbs#347's branch refinds
 this bug unaided - when this PR merges first, that harness goes red by design; flip it per
 astubbs#347's body.
+<!-- file-refs: N/A - bin/lincheck-test.sh lives on astubbs#347's branch, named deliberately -->
