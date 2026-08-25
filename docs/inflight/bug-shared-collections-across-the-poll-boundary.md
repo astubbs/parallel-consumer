@@ -26,7 +26,7 @@ the bodies carry the whole diagnosis. **It has no PR**, which is the part no com
 
 **The undecided part is sequencing, not the fix.** It touches the files astubbs#57 declares it owns
 (`docs/inflight/pr-57-metrics-leak.md`), and astubbs#57 already has a merge position in the ordering
-recorded in [`pr-323-docs-outstanding.md`](pr-323-docs-outstanding.md). Whoever opens the PR decides
+recorded in [`pr-blockers-and-collisions.md`](pr-blockers-and-collisions.md). Whoever opens the PR decides
 whether it goes before or after, or folds into astubbs#267.
 
 ## Delete when

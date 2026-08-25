@@ -34,7 +34,7 @@ So grep for the signature rather than reading classes hoping to spot something:
 **The counterpart rule - where not to point it.** Lincheck reasons about interleavings of operations,
 not about the memory model, so a plain non-volatile field's *visibility* is outside it however many
 harnesses are added. `offsetHighestSucceeded` and `offsetHighestSeen` are that case. jcstress owns
-that half, still open on `test/jcstress-poc-plain-long-visibility`.
+that half; the `jcstress-poc` probe module is where it is measured.
 
 ### What it costs, and the prerequisite nobody can skip
 
@@ -211,7 +211,7 @@ arm - and it lives on astubbs#344's branch, not on master, so it could not be up
 unaided, with the verdicts and cost tables in
 [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](../plans/2026-08-25-001-test-lincheck-poc-plan.md).
 Whoever lands astubbs#344 records that against the evaluation note and leaves the jcstress arm open;
-`test/jcstress-poc-plain-long-visibility` is the branch carrying it.
+the `jcstress-poc` probe module carries it.
 
 This paragraph exists because the handoff note that used to carry the obligation was deleted at merge
 prep, as `docs/inflight/AGENTS.md` requires - a "delete this when it merges" marker must never reach
