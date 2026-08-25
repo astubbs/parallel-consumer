@@ -203,10 +203,15 @@ public class ProcessingShard<K, V> {
             scanMeter.onEntryExamined();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
-                if (workContainer.isAvailableToTakeAsWork()) {
+                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
+                // onQueueingForExecution() separately, and the gap between the two is what could let a record be
+                // delivered twice: the check read three terms and the act re-validated none of them, so a decision
+                // made before another worker completed the record could still win. onQueueingForExecution() now
+                // evaluates the whole decision and claims from the state it evaluated. Do not reintroduce a guard
+                // in front of it.
+                if (workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 
-                    workContainer.onQueueingForExecution();
                     workTaken.add(workContainer);
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);
