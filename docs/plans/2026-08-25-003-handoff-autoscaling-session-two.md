@@ -18,10 +18,14 @@ three ways: the PoC is demonstrated, the law is tortured, and the merge path exi
   [`../inflight/branch-engine-concurrency-pr-stack.md`](../inflight/branch-engine-concurrency-pr-stack.md);
   a DIFFERENT Claude session drives the train - coordinate through the ledger, never collide.
   astubbs#333 retargets onto master when astubbs#363 (the integration branch's own PR) lands.
-- **A babysitter subagent may still be running** for astubbs#353 (the pre-commit-hook fix, this
-  session's side product): it owns worktree `.claude/worktrees/hook-commit-guard`, re-requested the
-  automated review, and works the owner's 14:39 review comments. It stops at merge-ready; merge is
-  the owner's.
+- **astubbs#353 (the pre-commit-hook fix, this session's side product) is merge-ready and idle.** Its
+  babysitter subagent finished: head `c73892ea0`, `CLEAN` merge state, every required check green
+  including `claude-review` and the human LGTM, zero open threads, base current with master. **Merge
+  is the owner's call and was deliberately not taken.** Worktree `.claude/worktrees/hook-commit-guard`
+  is now unheld. Two environment notes it surfaced: the automated-review runner's workspace carries a
+  persistent uncommitted edit *reverting* this PR's fix to `.claude/hooks/pre-commit-gate.sh` (our
+  worktree is clean - it is runner residue that could be committed by accident from that checkout),
+  and shellcheck is absent on this box, so the new `check-shell-lint.sh` gate only runs in CI.
 
 ## What landed this session (all pushed; `git log 55a73aeef..` has the bodies)
 
