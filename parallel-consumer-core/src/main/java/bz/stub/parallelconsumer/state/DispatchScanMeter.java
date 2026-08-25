@@ -34,11 +34,12 @@ import java.util.concurrent.atomic.LongAdder;
  * shard turnover.
  * <p>
  * Monotonic and never reset: a caller that wants a delta takes two readings and subtracts, the same way
- * a conservation counter is used. {@link LongAdder} for the same reason - written on every examined
+ * {@link RecordPopulation} is used. {@link LongAdder} for the same reason it does - written on every examined
  * entry, read rarely.
  *
  * @author Antony Stubbs
  * @see ProcessingShard#getWorkIfAvailable
+ * @see RecordPopulation
  */
 public class DispatchScanMeter {
 

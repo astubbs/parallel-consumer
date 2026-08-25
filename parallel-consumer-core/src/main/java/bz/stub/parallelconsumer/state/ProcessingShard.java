@@ -175,8 +175,13 @@ public class ProcessingShard<K, V> {
         retireAlreadyDeducted(entries.remove(wc.offset()));
     }
 
-    public void onFailure() {
-        // increase available cnt first to let retry expired calculated later
+    /**
+     * The work is out of flight and selectable again - whether it failed, or came back with no verdict at all.
+     * Increase the available cnt first, to let retry expiry be calculated later.
+     * <p>
+     * Whether a retry is <em>also</em> scheduled is {@link ShardManager}'s decision, not this shard's.
+     */
+    public void markAvailableAgain() {
         availableWorkContainerCnt.incrementAndGet();
     }
 
@@ -323,12 +328,11 @@ public class ProcessingShard<K, V> {
             scanMeter.onEntryExamined();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
-                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
-                // onQueueingForExecution() separately, and the gap between the two is what could let a record be
-                // delivered twice: the check read three terms and the act re-validated none of them, so a decision
-                // made before another worker completed the record could still win. onQueueingForExecution() now
-                // evaluates the whole decision and claims from the state it evaluated. Do not reintroduce a guard
-                // in front of it.
+                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork() && onQueueingForExecution()`,
+                // and the gap between the two is what let a record be delivered twice: the check read three terms
+                // and the claim re-validated only one of them, so a decision made before another worker completed
+                // the record could still win. onQueueingForExecution() now evaluates the whole decision and claims
+                // from the state it evaluated. Do not reintroduce a guard in front of it.
                 if (workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 

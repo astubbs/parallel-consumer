@@ -22,6 +22,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static java.lang.Boolean.TRUE;
@@ -63,8 +64,14 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     private final DynamicLoadFactor dynamicLoadFactor;
 
-    @Getter
-    private int numberRecordsOutForProcessing = 0;
+    /**
+     * Atomic because the direct-pull engine increments this from every worker thread as it takes its own work, while
+     * the control loop still decrements it on return. It gates the broker poller, so drift in it stalls the consumer
+     * while it still looks alive - see {@link #isSufficientlyLoaded()}. Under the default engine only the control
+     * loop touches it and a plain {@code int} would do.
+     */
+    private final AtomicInteger numberRecordsOutForProcessing = new AtomicInteger();
+
     private PCModule<K, V> module;
     /**
      * Useful for testing
@@ -171,7 +178,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                     getNumberRecordsOutForProcessing(),
                     getNumberOfIncompleteOffsets());
         }
-        numberRecordsOutForProcessing += work.size();
+        numberRecordsOutForProcessing.addAndGet(work.size());
         return work;
     }
 
@@ -190,7 +197,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // notify listeners
         successfulWorkListeners.forEach(c -> c.accept(wc));
 
-        numberRecordsOutForProcessing--;
+        numberRecordsOutForProcessing.decrementAndGet();
     }
 
     /**
@@ -209,7 +216,35 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         wc.endFlight();
         pm.onFailure(wc);
         sm.onFailure(wc);
-        numberRecordsOutForProcessing--;
+        numberRecordsOutForProcessing.decrementAndGet();
+    }
+
+    /**
+     * Work returned with no verdict at all - neither succeeded nor failed. Reached when the process holding a
+     * record goes away before reporting on it: the record has to go back into scheduling without the return
+     * counting as a processing attempt.
+     * <p>
+     * Deliberately not {@link #onFailureResult}: that increments the failure counter, records failure history
+     * against the partition, and queues a retry the record never earned. The only thing shared is the in-flight
+     * bookkeeping, which must net out exactly - {@link #numberRecordsOutForProcessing} gates the broker poller,
+     * and drift in it stalls the consumer silently while it still looks alive.
+     * <p>
+     * Not an entry point. Engines mark the delivery with {@link WorkContainer#markAbandoned(long)} and hand the
+     * container back through {@link #handleFutureResult}, which owns the superseded-delivery and revoked-partition
+     * checks. Calling this directly skips both, and an increment landing on a revoked shard is never swept.
+     */
+    void onAbandonedResult(WorkContainer<K, V> wc) {
+        if (wc.isNotInFlight()) {
+            log.warn("Abandoned work is not in flight, ignoring the return {}", wc);
+            return;
+        }
+
+        log.debug("Work returned without a verdict, returning to scheduling {}", wc);
+
+        recordResidenceTime(wc);
+        wc.endFlight();
+        sm.onAbandoned(wc);
+        numberRecordsOutForProcessing.decrementAndGet();
     }
 
     public long getNumberOfIncompleteOffsets() {
@@ -297,6 +332,20 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return sm.workIsWaitingToBeProcessed();
     }
 
+    /**
+     * @see ShardManager#getUpperBoundOnSelectableWork()
+     */
+    public long getUpperBoundOnSelectableWork() {
+        return sm.getUpperBoundOnSelectableWork();
+    }
+
+    /**
+     * @return the number of records currently handed out for processing and not yet returned
+     */
+    public int getNumberRecordsOutForProcessing() {
+        return numberRecordsOutForProcessing.get();
+    }
+
     public boolean hasWorkInFlight() {
         return getNumberRecordsOutForProcessing() != 0;
     }
@@ -324,7 +373,21 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return sm.getNumberOfWorkQueuedInShardsAwaitingSelection() > 0;
     }
 
+    /**
+     * Control thread only. Results must reach here through the controller's mailbox rather than being applied on
+     * whichever thread finished the work: the decrements here have to be ordered against the partition and shard
+     * state they accompany, which is not thread safe, and {@link #numberRecordsOutForProcessing} gates the broker
+     * poller. The direct-pull engine changes only who *takes* work, never who returns it.
+     */
     public void handleFutureResult(WorkContainer<K, V> wc) {
+        // Must come before the stale-partition branch, which decrements unconditionally. An abandoned record is
+        // immediately re-selectable and the control loop re-selects in the same iteration it drains returns, so
+        // a late duplicate would otherwise end a live delivery's flight and decrement a second time.
+        if (wc.isReturnForSupersededDelivery()) {
+            log.debug("Ignoring a verdict-free return for a delivery that has already ended {}", wc);
+            return;
+        }
+
         // Third of the three staleness checkpoints - see PartitionState#epochIsStale for the scheme.
         // Work that went stale mid-flight never reaches onSuccessResult/onFailureResult, which is what
         // stops a returning stale result removing a FRESH container that replaced it at the same offset.
@@ -332,7 +395,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             // no op, partition has been revoked
             log.debug("Work result received, but from an old generation. Dropping work from revoked partition {}", wc);
             wc.endFlight();
-            this.numberRecordsOutForProcessing--;
+            this.numberRecordsOutForProcessing.decrementAndGet();
         } else {
             Optional<Boolean> userFunctionSucceeded = wc.getMaybeUserFunctionSucceeded();
             if (userFunctionSucceeded.isPresent()) {
@@ -341,6 +404,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 } else {
                     onFailureResult(wc);
                 }
+            } else if (wc.isAbandonedForCurrentDelivery()) {
+                onAbandonedResult(wc);
             } else {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");
             }

@@ -210,19 +210,18 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     /**
      * Where this record is in its execution lifecycle: whether it is out at a worker, and what verdict it carries.
      * <p>
-     * <b>One field, because two were the bug.</b> This used to be a plain {@code boolean inFlight} plus a separate
-     * {@code Optional<Boolean> maybeUserFunctionSucceeded}: selection read both, and then claimed in a separate
-     * step that re-validated neither. Under a single selector the gap is unreachable; give the engine two
-     * concurrent selectors and a claim whose availability decision predated another worker's completion could
-     * still win on an already-succeeded record - and the claim then cleared the verdict, erasing the term that
-     * should have refused it. The record would be delivered, and its offset committed, twice. Diagnosis and the
-     * state machine that closes it: the commit and PR that introduced {@link ExecutionState}, and
-     * {@code docs/inflight/core-a-lost-claim-means-two-different-things.md}.
+     * <b>One field, because two were the bug.</b> This used to be an {@code AtomicBoolean inFlight} plus a separate
+     * {@code Optional<Boolean> maybeUserFunctionSucceeded}, and selection read both but re-validated only the
+     * boolean when it claimed. A puller whose availability decision predated another puller's completion could
+     * therefore win the boolean compare-and-set on an already-succeeded record, and the claim then cleared the
+     * verdict - erasing the term that should have refused it. The record was delivered, and its offset committed,
+     * twice. Diagnosis, reproduction and the refuted predictions:
+     * {@code docs/inflight/bug-direct-pull-claim-is-check-then-act.md}.
      * <p>
-     * Atomic because the direct-pull engine (in development) lets every worker select work straight from the
-     * shards, so the "is it free? then take it" pair has to be one indivisible step. Under the shipped engine only
-     * the control loop selects work and a plain field would do; making it atomic for both keeps one code path, and
-     * the cost is one uncontended compare-and-set per delivery.
+     * Atomic because the direct-pull engine lets every worker select work straight from the shards, so the
+     * "is it free? then take it" pair has to be one indivisible step. Under the default engine only the control
+     * loop selects work and a plain field would do; making it atomic for both keeps one code path, and the cost is
+     * one uncontended compare-and-set per delivery - the same cost the boolean carried.
      *
      * @see ExecutionState
      * @see #onQueueingForExecution()
@@ -257,6 +256,15 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     @Getter
     private long deliveryCount = 0;
+
+    /**
+     * The delivery this record was abandoned on, or {@code -1} if it has never been abandoned. Deliberately
+     * <em>not</em> cleared on redelivery: a late return still has to be recognisable as belonging to a delivery
+     * that has already ended.
+     *
+     * @see #markAbandoned(long)
+     */
+    private long abandonedAtDelivery = -1;
 
     @Getter
     @Setter(AccessLevel.PUBLIC)
@@ -400,17 +408,20 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * The whole decision - not in flight, no success verdict, retry delay passed - is evaluated against a single
      * observed {@link ExecutionState}, and the claim then compares against <em>that exact state</em>. Anything that
      * moved the record in between makes the compare fail, so there is no window in which a decision can outlive the
-     * facts it was made on. That window is what could let an already-completed record be claimed and delivered a
-     * second time, and it is why callers must NOT pre-filter with {@link #isAvailableToTakeAsWork()} and then call
-     * this: the two-step form is the defect, restated.
+     * facts it was made on. That window is what let an already-completed record be claimed and delivered a second
+     * time, and it is why callers must NOT pre-filter with {@link #isAvailableToTakeAsWork()} and then call this:
+     * the two-step form is the defect, restated.
      * <p>
-     * A won claim starts a new delivery, and the new delivery carries no verdict - not because anything is
-     * cleared, but because {@link ExecutionState#IN_FLIGHT} has none.
+     * A won claim starts a new delivery, and the new delivery carries no verdict - not because anything is cleared,
+     * but because {@link ExecutionState#IN_FLIGHT} has none. That matters for a record that failed, was
+     * redelivered and was then abandoned: under the old field pair it would still have been carrying
+     * {@code succeeded == false} from the earlier attempt and would have taken the failure path, earning a retry
+     * delay the abandonment never earned. The abandon marker is deliberately NOT reset - it is keyed by delivery,
+     * so a stale one identifies itself.
      *
      * @return {@code true} if this caller won the claim; {@code false} if the record was not claimable, or another
-     *         caller moved it first, in which case this caller must not process it. Never expected under the
-     *         shipped engine, where the control loop is the only selector; an engine with concurrent selectors
-     *         (the direct-pull engine, in development) loses claims routinely and relies on the refusal.
+     *         caller moved it first, in which case this caller must not process it. Only ever {@code false} under
+     *         the direct-pull engine, where two workers can scan the same shard at the same time.
      */
     public boolean onQueueingForExecution() {
         ExecutionState observed = state.get();
@@ -460,8 +471,38 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         this.shardOccupancy = shardOccupancy;
     }
 
+    /**
+     * Marks the given delivery of this work as returned without a verdict, so
+     * {@link WorkManager#handleFutureResult} returns it to scheduling rather than throwing. Does not touch
+     * {@link #numberOfFailedAttempts} or the retry delay - the record is redelivered as the same attempt it
+     * already was.
+     *
+     * @param delivery the {@link #getDeliveryCount()} value observed when the record was handed out. Callers
+     *                 must capture it at dispatch, not read it at return time: by then the record may already
+     *                 have been redelivered, and passing the current value would make a stale return look live.
+     */
+    public void markAbandoned(long delivery) {
+        log.trace("Abandoning delivery {} without verdict {}", delivery, this);
+        this.abandonedAtDelivery = delivery;
+    }
 
+    /**
+     * @return true when this record was abandoned on the delivery that is currently outstanding
+     */
+    public boolean isAbandonedForCurrentDelivery() {
+        return abandonedAtDelivery == deliveryCount;
+    }
 
+    /**
+     * @return true when a return carries no verdict and its abandon marker belongs to a delivery that has
+     *         already ended - a late duplicate, which must be ignored rather than acted on
+     */
+    public boolean isReturnForSupersededDelivery() {
+        // not isEmpty() - core compiles to Java 8 bytecode, where that Optional method does not exist
+        return !getMaybeUserFunctionSucceeded().isPresent()
+                && abandonedAtDelivery >= 0
+                && abandonedAtDelivery != deliveryCount;
+    }
 
     public TopicPartition getTopicPartition() {
         return toTopicPartition(getCr());

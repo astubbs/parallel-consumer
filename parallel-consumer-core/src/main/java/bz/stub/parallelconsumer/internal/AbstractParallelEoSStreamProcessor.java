@@ -48,6 +48,7 @@ import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUT
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static lombok.AccessLevel.PACKAGE;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
 
@@ -135,6 +136,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private Optional<Future<Boolean>> controlThreadFuture = Optional.empty();
 
+    /**
+     * MEASUREMENT ONLY. Present when {@link ParallelConsumerOptions#isDirectPullEngine()} selects the direct-pull
+     * engine, in which case the control loop stops distributing work altogether: the workers take it themselves.
+     *
+     * @see DirectPullWorkerPool
+     */
+    private Optional<DirectPullWorkerPool<K, V>> directPullPool = Optional.empty();
+
     // todo make package level
     @Getter(AccessLevel.PUBLIC)
     protected WorkManager<K, V> wm;
@@ -143,7 +152,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Collection of work waiting to be
      */
     @Getter(PROTECTED)
-    private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new LinkedBlockingQueue<>(); // Thread safe, highly performant, non blocking
+    // EXPERIMENT: CountedTransferQueue instead of LinkedBlockingQueue.
+    //
+    // Profiling put 17,785 of ~39,000 parks in five seconds right here - workers calling offer() and
+    // taking LinkedBlockingQueue's putLock to report a completed record. It is the largest single park
+    // site and the only one that is PC's own code; the rest are workers idle in getTask, which is the
+    // pool working correctly.
+    //
+    // The shape suits a lock-free queue and, unlike the worker pool's queue, it suits THIS one:
+    // LinkedTransferQueue spins before parking, which was catastrophic where a thousand threads
+    // CONSUME, but here a thousand threads PRODUCE - and offer() on an unbounded transfer queue is a
+    // CAS append that never spins. One consumer, the control loop, does the waiting.
+    //
+    // Counted, so size() stays O(1): the previous experiment changed the structure and its size()
+    // behaviour together and could not be interpreted.
+    private final BlockingQueue<ControllerEventMessage<K, V>> workMailBox = new CountedTransferQueue<>();
 
     private final AtomicBoolean isRebalanceInProgress = new AtomicBoolean(false);
 
@@ -290,6 +313,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private final RateLimiter loadFactorAtCeilingLimiter = new RateLimiter(LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS);
 
+    /**
+     * Limits how often {@link #maybeReportLoadFactorCeiling()} speaks. Matches the interval used for the equivalent
+     * steady-state warning in {@code ProcessingShard}'s slow-work check.
+     */
+    private final RateLimiter loadFactorCeilingLimiter = new RateLimiter(5);
+
     @Getter(PROTECTED)
     PCModule<K, V> module;
 
@@ -298,13 +327,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
      * <p>
-     * {@code volatile} because the setter below widens the write beyond the control thread which owns the field: a
-     * test driving {@link #checkPipelinePressure()} sets it from whichever thread it runs on, and SpotBugs
-     * (AT_STALE_THREAD_WRITE_OF_PRIMITIVE) is right that a plain {@code boolean} gives that write no visibility
-     * guarantee. The field is touched once per control loop pass, so the barrier costs nothing measurable.
+     * Package-private setter so that pipeline-pressure tests can drive {@link #checkPipelinePressure()} directly,
+     * without having to run a whole control loop to get the flag set.
      */
-    @Setter(PROTECTED) // visible for testing - lets a test put the pressure check into its guarded branch
-    private volatile boolean lastWorkRequestWasFulfilled = false;
+    @Setter(PACKAGE)
+    private boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
@@ -412,84 +439,23 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
     }
 
-
     /**
-     * A worker pool must announce a rejection by throwing, so any pool whose {@link RejectedExecutionHandler} is not an
-     * {@link java.util.concurrent.ThreadPoolExecutor.AbortPolicy} is refused here, where it is built.
+     * MEASUREMENT ONLY. Whether this engine can hand work selection over to the workers themselves.
      * <p>
-     * Refused at setup rather than detected later because there is nothing to detect. {@code submit} wraps the task in
-     * a {@code FutureTask}, calls {@code execute}, and hands back that future whatever the handler then does with the
-     * task. {@code DiscardPolicy}'s body is empty, so a discarded batch produces no exception, no log line and a
-     * {@link Future} that simply never completes - at the call site in {@link #submitWorkToPoolInner} that is
-     * indistinguishable from a batch a worker is still running. The pool's configuration is only visible here.
-     * <p>
-     * What each of the JDK's handlers would do to this subsystem:
-     * <ul>
-     *     <li>{@code AbortPolicy} - throws {@link RejectedExecutionException}, which {@code submitWorkToPoolInner}
-     *         catches, hands the batch back for, and either rethrows or logs. Supported.</li>
-     *     <li>{@code CallerRunsPolicy} - loses nothing, but runs the user's function on the caller, which is the
-     *         control thread: polling, committing and work distribution all stop for its duration.</li>
-     *     <li>{@code DiscardPolicy} - the submitted batch is lost, silently.</li>
-     *     <li>{@code DiscardOldestPolicy} - a <em>different</em>, already queued batch is lost, silently.</li>
-     *     <li>a custom handler - unknowable, so not supported.</li>
-     * </ul>
-     * Barring {@code CallerRunsPolicy}, every one of those leaves work that {@link WorkManager#getWorkIfAvailable(int)}
-     * marked in flight and counted with no event that could ever clear it.
-     * <p>
-     * Reachable on this codebase's own default pool, which is why this check is not conditional on the queue.
-     * {@code ThreadPoolExecutor#execute} rejects a task submitted to a **shut down** pool before it ever offers it to
-     * the queue, so an unbounded queue does not make the handler unreachable - it only makes saturation unreachable.
-     * Measured: an unbounded pool with {@code DiscardPolicy}, shut down, accepts {@code submit} without throwing and
-     * returns a {@link Future} that never completes. That is precisely the close-race path
-     * {@link #submitWorkToPoolInner} exists to survive, so narrowing this check to bounded queues would reopen the
-     * hole on the one path that is definitely reached.
-     * <p>
-     * A subclass of {@code AbortPolicy} passes: the requirement is the throw, not the exact class, and a subclass that
-     * logs or counts before calling {@code super} still throws.
-     * <p>
-     * This is a construction-time snapshot, not a lifetime guarantee - {@code setRejectedExecutionHandler} is public,
-     * so a subclass holding the pool can swap the handler afterwards and this would not see it. It narrows
-     * {@code submitWorkToPoolInner}'s catch of {@link RejectedExecutionException} alone from unsound to
-     * unsound-only-under-deliberate-misuse; it does not make it total.
+     * {@link ExternalEngine} cannot: its "worker pool" is a single thread that only starts the asynchronous work,
+     * with the concurrency living in the external runtime, so there are no worker threads to give the shards to.
      *
-     * @return the pool, unaltered - this is a precondition on what {@link #setupWorkerPool} returned, not a chance to
-     *         substitute something else
-     * @throws IllegalArgumentException if the pool would swallow a rejection
+     * @see DirectPullWorkerPool
      */
-    private ExecutorService requireRejectionIsVisible(ExecutorService pool) {
-        if (!(pool instanceof ThreadPoolExecutor)) {
-            // A virtual-thread executor has no rejection handler to inspect and no bounded queue to reject from -
-            // it starts a thread per task. The guard below is a property of ThreadPoolExecutor, so narrow to it
-            // rather than refusing every pool that is not one.
-            return pool;
-        }
-        RejectedExecutionHandler handler = ((ThreadPoolExecutor) pool).getRejectedExecutionHandler();
-        if (!(handler instanceof ThreadPoolExecutor.AbortPolicy)) {
-            throw new IllegalArgumentException(msg(
-                    "Unsupported worker pool returned by {}#setupWorkerPool: its rejected execution handler is {}, " +
-                            "but only {} (or a subclass of it) is supported. Rejection is only visible to this " +
-                            "subsystem as a RejectedExecutionException. A handler that does not throw either drops the " +
-                            "batch silently ({}, {}) - submit() still returns a Future, but that Future never " +
-                            "completes, so those records stay in flight, numberRecordsOutForProcessing stays inflated " +
-                            "for the life of this instance, and their offsets are never committed - or runs the user's " +
-                            "function on the calling thread ({}), which is the control thread, stalling polling and " +
-                            "committing while it runs. Return a pool built with AbortPolicy; if that pool then rejects " +
-                            "work, its queue is too small for the configured maxConcurrency.",
-                    getClass().getName(),
-                    handler.getClass().getName(),
-                    ThreadPoolExecutor.AbortPolicy.class.getName(),
-                    ThreadPoolExecutor.DiscardPolicy.class.getSimpleName(),
-                    ThreadPoolExecutor.DiscardOldestPolicy.class.getSimpleName(),
-                    ThreadPoolExecutor.CallerRunsPolicy.class.getSimpleName()));
-        }
-        return pool;
+    protected boolean supportsDirectPull() {
+        return true;
     }
 
     /**
      * Whether this engine can run the user's function on virtual threads.
      * <p>
-     * False for {@link ExternalEngine}: its worker "pool" is one thread that dispatches into an external runtime,
-     * and the concurrency lives out there. Replacing that one
+     * False for {@link ExternalEngine}, for the same reason {@link #supportsDirectPull()} is: its worker "pool" is
+     * one thread that dispatches into an external runtime, and the concurrency lives out there. Replacing that one
      * thread with an unbounded virtual-thread executor would silently make the dispatch itself concurrent, which is
      * not what any of those engines are built on.
      *
@@ -573,6 +539,82 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             "executor - report a bug.",
                     System.getProperty("java.vm.name"), System.getProperty("java.version")), e);
         }
+    }
+
+    /**
+     * A worker pool must announce a rejection by throwing, so any pool whose {@link RejectedExecutionHandler} is not an
+     * {@link java.util.concurrent.ThreadPoolExecutor.AbortPolicy} is refused here, where it is built.
+     * <p>
+     * Refused at setup rather than detected later because there is nothing to detect. {@code submit} wraps the task in
+     * a {@code FutureTask}, calls {@code execute}, and hands back that future whatever the handler then does with the
+     * task. {@code DiscardPolicy}'s body is empty, so a discarded batch produces no exception, no log line and a
+     * {@link Future} that simply never completes - at the call site in {@link #submitWorkToPoolInner} that is
+     * indistinguishable from a batch a worker is still running. The pool's configuration is only visible here.
+     * <p>
+     * What each of the JDK's handlers would do to this subsystem:
+     * <ul>
+     *     <li>{@code AbortPolicy} - throws {@link RejectedExecutionException}, which {@code submitWorkToPoolInner}
+     *         catches, hands the batch back for, and either rethrows or logs. Supported.</li>
+     *     <li>{@code CallerRunsPolicy} - loses nothing, but runs the user's function on the caller, which is the
+     *         control thread: polling, committing and work distribution all stop for its duration.</li>
+     *     <li>{@code DiscardPolicy} - the submitted batch is lost, silently.</li>
+     *     <li>{@code DiscardOldestPolicy} - a <em>different</em>, already queued batch is lost, silently.</li>
+     *     <li>a custom handler - unknowable, so not supported.</li>
+     * </ul>
+     * Barring {@code CallerRunsPolicy}, every one of those leaves work that {@link WorkManager#getWorkIfAvailable(int)}
+     * marked in flight and counted with no event that could ever clear it.
+     * <p>
+     * Reachable on this codebase's own default pool, which is why this check is not conditional on the queue.
+     * {@code ThreadPoolExecutor#execute} rejects a task submitted to a **shut down** pool before it ever offers it to
+     * the queue, so an unbounded queue does not make the handler unreachable - it only makes saturation unreachable.
+     * Measured: an unbounded pool with {@code DiscardPolicy}, shut down, accepts {@code submit} without throwing and
+     * returns a {@link Future} that never completes. That is precisely the close-race path
+     * {@link #submitWorkToPoolInner} exists to survive, so narrowing this check to bounded queues would reopen the
+     * hole on the one path that is definitely reached.
+     * <p>
+     * A subclass of {@code AbortPolicy} passes: the requirement is the throw, not the exact class, and a subclass that
+     * logs or counts before calling {@code super} still throws.
+     * <p>
+     * This is a construction-time snapshot, not a lifetime guarantee - {@code setRejectedExecutionHandler} is public,
+     * so a subclass holding the pool can swap the handler afterwards and this would not see it. It narrows
+     * {@code submitWorkToPoolInner}'s catch of {@link RejectedExecutionException} alone from unsound to
+     * unsound-only-under-deliberate-misuse; it does not make it total.
+     *
+     * <p>
+     * ONLY A {@link ThreadPoolExecutor} CAN BE CHECKED, and that is not a gap. A rejected-execution handler is a
+     * {@code ThreadPoolExecutor} feature; the virtual-thread executor {@link #setupVirtualThreadWorkerPool} builds has
+     * no handler to misconfigure, and rejects only after shutdown - by throwing, which is the behaviour this method
+     * exists to require. Anything else passes through untouched, the same way {@link #discardQueuedWork()} narrows to
+     * the pool type whose queue it can actually reach.
+     *
+     * @return the pool, unaltered - this is a precondition on what {@link #setupWorkerPool} returned, not a chance to
+     *         substitute something else
+     * @throws IllegalArgumentException if the pool would swallow a rejection
+     */
+    private ExecutorService requireRejectionIsVisible(ExecutorService pool) {
+        if (!(pool instanceof ThreadPoolExecutor)) {
+            return pool;
+        }
+        RejectedExecutionHandler handler = ((ThreadPoolExecutor) pool).getRejectedExecutionHandler();
+        if (!(handler instanceof ThreadPoolExecutor.AbortPolicy)) {
+            throw new IllegalArgumentException(msg(
+                    "Unsupported worker pool returned by {}#setupWorkerPool: its rejected execution handler is {}, " +
+                            "but only {} (or a subclass of it) is supported. Rejection is only visible to this " +
+                            "subsystem as a RejectedExecutionException. A handler that does not throw either drops the " +
+                            "batch silently ({}, {}) - submit() still returns a Future, but that Future never " +
+                            "completes, so those records stay in flight, numberRecordsOutForProcessing stays inflated " +
+                            "for the life of this instance, and their offsets are never committed - or runs the user's " +
+                            "function on the calling thread ({}), which is the control thread, stalling polling and " +
+                            "committing while it runs. Return a pool built with AbortPolicy; if that pool then rejects " +
+                            "work, its queue is too small for the configured maxConcurrency.",
+                    getClass().getName(),
+                    handler.getClass().getName(),
+                    ThreadPoolExecutor.AbortPolicy.class.getName(),
+                    ThreadPoolExecutor.DiscardPolicy.class.getSimpleName(),
+                    ThreadPoolExecutor.DiscardOldestPolicy.class.getSimpleName(),
+                    ThreadPoolExecutor.CallerRunsPolicy.class.getSimpleName()));
+        }
+        return pool;
     }
 
     private void checkNotSubscribed(org.apache.kafka.clients.consumer.Consumer<K, V> consumerToCheck) {
@@ -886,6 +928,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         brokerPollSubsystem.drain();
 
         log.debug("Shutting down execution pool...");
+        // Direct-pull workers occupy their threads in a loop rather than sitting in the pool's queue, so
+        // shutdown() alone would never terminate the pool - it only stops NEW tasks being accepted.
+        directPullPool.ifPresent(DirectPullWorkerPool::stop);
         //Clear scheduled but not started work in execution pool
         discardQueuedWork();
         //request graceful shutdown
@@ -1031,6 +1076,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
+        // MEASUREMENT ONLY: hand the worker pool over to direct pull, so nothing is ever submitted to its queue and
+        // the pressure system that sizes that queue never runs.
+        if (options.isDirectPullEngine() && supportsDirectPull()) {
+            var pool = new DirectPullWorkerPool<K, V>(wm,
+                    options.getBatchSize(),
+                    () -> state == RUNNING || state == State.DRAINING,
+                    batch -> {
+                        addInstanceMDC();
+                        runUserFunction(userFunctionWrapped, callback, batch);
+                    });
+            this.directPullPool = Optional.of(pool);
+            pool.start(workerThreadPool.get(), options.getMaxConcurrency());
+        }
+
         ExecutorService executorService;
         try {
             executorService = InitialContext.doLookup(options.getManagedExecutorService());
@@ -1099,8 +1158,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             commitOffsetsReportingPollerDeath();
         }
 
-        // distribute more work
-        retrieveAndDistributeNewWork(userFunction, callback);
+        // distribute more work - or, under direct pull, tell the workers there may be some and let them take it
+        // themselves. The mailbox drain above is where new records are registered and where returned records become
+        // selectable again, so one announcement per pass covers every way work appears.
+        if (directPullPool.isPresent()) {
+            var pool = directPullPool.get();
+            // The direct-pull replacement for checkPipelinePressure(): a worker that was allowed to work and found
+            // nothing means the buffer feeding the shards is too shallow, which is the same conclusion
+            // isPoolQueueLow() reaches by reading the executor's queue depth. What has gone is the ThreadPoolExecutor
+            // reading, not the load factor - see DirectPullWorkerPool#starvedSinceLastCheck.
+            if (pool.consumeStarvationSignal()) {
+                dynamicExtraLoadFactor.maybeStepUp();
+            }
+            pool.onWorkMaybeAvailable((int) Math.min(Integer.MAX_VALUE, wm.getUpperBoundOnSelectableWork()));
+        } else {
+            retrieveAndDistributeNewWork(userFunction, callback);
+        }
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -1375,7 +1448,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                               final List<WorkContainer<K, V>> batch) {
         // for each record, construct dispatch to the executor and capture a Future
         log.trace("Sending work ({}) to pool", batch);
-
         // Counted BEFORE the submit, not after. A virtual thread can be running the task before submit() has
         // returned, and an increment placed after the call would let the task's own onTaskStarted() land first -
         // making the derived queue depth transiently negative. See UserFunctionTaskAccounting.
@@ -1394,11 +1466,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 }
             });
         } catch (RejectedExecutionException e) {
-            // The task will never run, so nothing downstream will ever account for it - undo the pre-submit
-            // increment before deciding what to do with the rejection.
+            // The submitted task will never run, so nothing downstream will ever account for it.
             userFunctionTaskAccounting.onSubmitRejected();
-            // Narrow on purpose, and safe to be: #requireRejectionIsVisible refuses any pool whose handler is not an
-            // AbortPolicy, so RejectedExecutionException is the only thing a rejection here can throw.
+            // Narrow on purpose, and safe to be: #requireRejectionIsVisible refuses any ThreadPoolExecutor whose
+            // handler is not an AbortPolicy, and the virtual-thread executor has no handler to misconfigure - so
+            // RejectedExecutionException is the only thing a rejection here can throw.
             if (!isWorkerPoolShutDown()) {
                 // A live pool rejected, which means saturation rather than shutdown - #setupWorkerPool's queue is
                 // unbounded, so this takes a subclass that bounds it. Absorbing that would drop work under healthy
@@ -1415,6 +1487,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.warn("Worker pool is shut down, not submitting work ({} record(s), first {}:{}). Records will be redelivered.",
                     batch.size(), first.getTopicPartition(), first.offset(), e);
             return false;
+        } catch (RuntimeException e) {
+            // Everything else that stops the task reaching a worker. Kept alongside the narrow catch above rather
+            // than folded into it: the accounting increment happened before the submit, so ANY throw from here
+            // leaves the derived queue depth permanently inflated if it goes uncounted, and that is a stronger
+            // requirement than the rejection contract the narrow catch relies on.
+            userFunctionTaskAccounting.onSubmitRejected();
+            throw e;
         }
         // for a batch, each message in the batch shares the same result
         for (final WorkContainer<K, V> workContainer : batch) {

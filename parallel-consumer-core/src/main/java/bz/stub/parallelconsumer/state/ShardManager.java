@@ -99,7 +99,10 @@ public class ShardManager<K, V> {
      * Iteration resume point, to ensure fairness (prevent shard starvation) when we can't process messages from every
      * shard.
      */
-    private Optional<ShardKey> iterationResumePoint = Optional.empty();
+    // volatile because the direct-pull engine has every worker running getWorkIfAvailable concurrently. It is a
+    // fairness hint, not state anything depends on, so a lost update is harmless - but a thread reading a stale
+    // reference forever would starve a shard, and volatile costs nothing on a field written once per scan.
+    private volatile Optional<ShardKey> iterationResumePoint = Optional.empty();
 
     private Gauge shardsSizeGauge;
     private Gauge numberOfShardsGauge;
@@ -337,10 +340,22 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().onFailure();
+            shardOptional.get().markAvailableAgain();
             this.retryQueue.add(wc);
         }
 
+    }
+
+    /**
+     * Work returned without a verdict - restores shard availability but, unlike {@link #onFailure}, does
+     * <em>not</em> insert into the retry queue. There is nothing to retry: the record was never attempted to a
+     * conclusion, so it becomes immediately selectable rather than waiting out a retry delay it never earned.
+     */
+    public void onAbandoned(WorkContainer<?, ?> wc) {
+        log.debug("Work ABANDONED without verdict");
+
+        var key = computeShardKey(wc);
+        getShard(key).ifPresent(ProcessingShard::markAvailableAgain);
     }
 
     /**

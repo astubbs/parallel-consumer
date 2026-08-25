@@ -329,6 +329,23 @@ public class ParallelConsumerOptions<K, V> {
     public static final int DEFAULT_MAX_CONCURRENCY = 16;
 
     /**
+     * MEASUREMENT ONLY - selects the direct-pull engine instead of the pre-loaded executor queue.
+     * <p>
+     * Under the default engine the control loop is the only thread that selects work: it reads a target depth off the
+     * {@link java.util.concurrent.ThreadPoolExecutor}'s queue, pulls that many records out of the shards, and pushes
+     * them into that queue for the workers to consume. Under direct pull there is no intermediate queue - every worker
+     * blocks on the shards themselves and takes its own next record, which makes shard access N-way concurrent instead
+     * of single-consumer.
+     * <p>
+     * Defaults from the {@code pc.directPull} system property so that a benchmark harness which cannot change its
+     * source (it compiles one template against every released version) can still select the engine per run. Not a
+     * supported option: it exists to answer "what does N-way concurrent shard access cost?", and the write-up is
+     * {@code docs/inflight/perf-direct-pull-measured.md}.
+     */
+    @Builder.Default
+    private final boolean directPullEngine = Boolean.getBoolean("pc.directPull");
+
+    /**
      * Runs the user's function on virtual threads (JEP 444) instead of a fixed pool of platform threads. Requires a
      * JDK 21 runtime; the published artifact is still Java 8 bytecode, and the JDK 21 API is reached reflectively.
      * <p>
@@ -345,9 +362,9 @@ public class ParallelConsumerOptions<K, V> {
      * that no longer exists in this mode. External engines (Vert.x, Reactor, Mutiny) ignore it - their worker "pool"
      * is a single dispatch thread by design and their concurrency lives in the external runtime.
      * <p>
-     * Defaults from the {@code pc.virtualThreads} system property, so that a benchmark harness which cannot change
-     * its source (it compiles one template against every released version) and CI's execution-mode matrix can both
-     * select the mode without editing a test.
+     * Defaults from the {@code pc.virtualThreads} system property, for the same reason
+     * {@link #isDirectPullEngine()} does: the benchmark harness compiles one source file against every released
+     * version, and CI's execution-mode matrix selects the mode without editing a test.
      *
      * @see #validate()
      */
