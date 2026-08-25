@@ -298,3 +298,17 @@ while - do not let ten-language coverage block a simple win. Consequences for th
   is noise.
 - The crossing-cost ladder keeps every arm (the bar is unchanged), but a GraalWasm result alone
   is now sufficient to green-light a product slice.
+
+### Refinement, 2026-08-25: the seam is one C-ABI contract; WASM is a producer, not the seam
+
+Owner's observation, and it collapses the candidate's shape: define the fast path as a C-signature
+registration contract (a native callable over byte spans), and every route becomes a producer of
+that one seam - Numba `@cfunc` emits it directly (so Python needs no to-WASM toolchain to join),
+wasm2c / Wasmtime-AOT lower a WASM module to it (so WASM is the portable authoring and interchange
+format rather than the calling convention), and a Mojo or Rust function is it already. Sandboxing
+becomes a per-registration POLICY rather than an architecture fork: run the WASM form inside the
+engine's embedded runtime when isolation matters, lower to native and call raw when the last
+microsecond does - same artifact, two execution modes. Side benefit: a host can dlopen and
+unit-test the exact native artifact the engine will call before registering it. The trade to keep
+explicit: a raw pointer carries no sandbox - safety exists only in the in-engine mode. The ladder
+spike's arms are unchanged; what this settles is that they all land on one engine-side surface.
