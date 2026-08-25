@@ -718,3 +718,29 @@ carried no probe verdict, and the check-run annotation was a bare `Process compl
 1`. Every number above came from the uploaded `highcpu-fast-feedback-reports-Chaos Pain Suite-1185`
 artifact. The console is still not a place to look for this.
 <!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**And the very next head drew it again - a prose-only diff between two reds.** Head `bff3927b1` on
+the same branch differs from `d4b6923d0` by **one markdown file** (the entry above, adding itself to
+this ledger). `Chaos Pain Suite` on
+[run 32799691980](https://github.com/astubbs/parallel-consumer/actions/runs/32799691980/job/97657989061)
+fired the same arm with the same signature on a different seed: `ChaosRevokeUnderWorkDrainIT`, **19
+`CLASS2_STALL/LAG_STAGNATION`**, partition `-5` lag=2966 stagnant at offset 164 for **153s** against
+the 150s bound. Every other check on that head was terminal and green.
+
+**Seed `8791285396374198974`:**
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8791285396374198974
+
+**This is the mirror of the twelfth sighting's tightest control, and it says something different.**
+That entry recorded two adjacent commits with a prose-only diff going **red then green**, and read
+it as proof the signature is drawn per seed rather than per tree. This pair is prose-only and goes
+**red then red**, on two different seeds, on the same arm. Both readings survive together: the tree
+still explains nothing, and the drain arm's draw rate on this box tonight was two for two.
+
+**Six drain-arm seeds are now recorded across the twelfth, thirteenth and fourteenth sightings, and
+the `-Dchaos.diagnoseStallRecovery=true` replay has been run on none of them.** Adding a seventh
+would not change that. Whoever picks this up should spend one replay before another sighting is
+written.
+<!-- post-merge: checked-end -->
