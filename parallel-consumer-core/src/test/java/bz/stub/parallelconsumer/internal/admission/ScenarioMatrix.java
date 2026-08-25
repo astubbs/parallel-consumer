@@ -30,18 +30,19 @@ final class ScenarioMatrix {
     private ScenarioMatrix() {
     }
 
-    enum PlantShape { HARD_KNEE, CONGESTION_COLLAPSE, NO_KNEE_BELOW_CEILING, KNEE_AT_FLOOR }
-
-    enum CapacityDynamics { STATIC, STEP, DRIFT, OSCILLATION }
-
-    enum Arrival { SATURATING, BELOW_CAPACITY, BURST }
-
-    enum OutcomeMix { CLEAN, NON_SUCCESS_RIDING, OVERLOAD_DROPS }
-
+    // Dimension vocabularies as STRING constants rather than enums, deliberately: the Truth assertion
+    // generator auto-scans source enums and generates entry-point imports that cannot see a package-private
+    // holder (the same trap that forced AdmissionController.ProbeKind public). The canonical value lists are
+    // what the coverage check derives "every value must appear" from - adding a value here without a
+    // scenario goes red exactly as an enum would.
+    static final List<String> PLANT_SHAPES =
+            java.util.Arrays.asList("HARD_KNEE", "CONGESTION_COLLAPSE", "NO_KNEE_BELOW_CEILING", "KNEE_AT_FLOOR");
+    static final List<String> CAPACITY_DYNAMICS = java.util.Arrays.asList("STATIC", "STEP", "DRIFT", "OSCILLATION");
+    static final List<String> ARRIVALS = java.util.Arrays.asList("SATURATING", "BELOW_CAPACITY", "BURST");
+    static final List<String> OUTCOME_MIXES = java.util.Arrays.asList("CLEAN", "NON_SUCCESS_RIDING", "OVERLOAD_DROPS");
     /** LAW = the band machine alone; CONTROLLER = the real controller with probe/pause/rebalance machinery. */
-    enum Driver { LAW, CONTROLLER }
-
-    enum Scale { FLOOR_HUGGING, MID, WIDE }
+    static final List<String> DRIVERS = java.util.Arrays.asList("LAW", "CONTROLLER");
+    static final List<String> SCALES = java.util.Arrays.asList("FLOOR_HUGGING", "MID", "WIDE");
 
     /**
      * One catalog entry. The dimension tags are what the coverage check reads; {@code plant}/{@code phases}/
@@ -52,12 +53,12 @@ final class ScenarioMatrix {
     @Value
     static class Scenario {
         String name;
-        PlantShape shape;
-        CapacityDynamics dynamics;
-        Arrival arrival;
-        OutcomeMix mix;
-        Driver driver;
-        Scale scale;
+        String shape;
+        String dynamics;
+        String arrival;
+        String mix;
+        String driver;
+        String scale;
         Supplier<DeterministicPlant> plant;
         List<Phase> phases;
         Supplier<AdmissionPolicy> policy;
@@ -78,11 +79,11 @@ final class ScenarioMatrix {
         return new DeterministicPlant(MU, W0, 1);
     }
 
-    private static Scenario scenario(String name, PlantShape shape, CapacityDynamics dynamics, Arrival arrival,
-                                     OutcomeMix mix, Driver driver, Scale scale,
+    private static Scenario scenario(String name, String shape, String dynamics, String arrival,
+                                     String mix, String driver, String scale,
                                      Supplier<DeterministicPlant> plant, List<Phase> phases, int initialTarget,
                                      int ceiling, double knee, boolean settleAssertable) {
-        Supplier<AdmissionPolicy> policy = driver == Driver.LAW
+        Supplier<AdmissionPolicy> policy = driver.equals("LAW")
                 ? () -> new LawAdmissionPolicy(initialTarget, ceiling)
                 : () -> new ControllerAdmissionPolicy(initialTarget, 2);
         return new Scenario(name, shape, dynamics, arrival, mix, driver, scale, plant, phases, policy,
@@ -97,21 +98,21 @@ final class ScenarioMatrix {
         List<Scenario> catalog = new ArrayList<>();
 
         catalog.add(scenario("hardKnee-static-saturating-clean-law",
-                PlantShape.HARD_KNEE, CapacityDynamics.STATIC, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.MID,
+                "HARD_KNEE", "STATIC", "SATURATING", "CLEAN",
+                "LAW", "MID",
                 ScenarioMatrix::standardPlant, CapacitySchedules.constant(200, SATURATING_ARRIVAL),
                 2, CEILING, KNEE, true));
 
         catalog.add(scenario("hardKnee-static-saturating-clean-controller",
-                PlantShape.HARD_KNEE, CapacityDynamics.STATIC, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.CONTROLLER, Scale.MID,
+                "HARD_KNEE", "STATIC", "SATURATING", "CLEAN",
+                "CONTROLLER", "MID",
                 ScenarioMatrix::standardPlant, CapacitySchedules.constant(200, SATURATING_ARRIVAL),
                 2, CEILING, KNEE, true));
 
         // The demo's outage shape, simulated: healthy knee 20 -> degraded knee 5 -> recovered.
         catalog.add(scenario("hardKnee-step-saturating-clean-controller",
-                PlantShape.HARD_KNEE, CapacityDynamics.STEP, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.CONTROLLER, Scale.MID,
+                "HARD_KNEE", "STEP", "SATURATING", "CLEAN",
+                "CONTROLLER", "MID",
                 ScenarioMatrix::standardPlant,
                 CapacitySchedules.step(60, 80, 100, SATURATING_ARRIVAL, MU, MU / 4),
                 2, CEILING, KNEE, false));
@@ -119,8 +120,8 @@ final class ScenarioMatrix {
         // Drift up then hold: capacity ramps 200->400 over 100 windows, then holds 100 - the settled band is
         // asserted against the FINAL knee, a derived form that works for a drift with a static tail.
         catalog.add(scenario("hardKnee-drift-saturating-clean-law",
-                PlantShape.HARD_KNEE, CapacityDynamics.DRIFT, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.MID,
+                "HARD_KNEE", "DRIFT", "SATURATING", "CLEAN",
+                "LAW", "MID",
                 () -> new DeterministicPlant(MU / 2, W0, 1),
                 CapacitySchedules.concat(
                         CapacitySchedules.drift(100, SATURATING_ARRIVAL, MU / 2, MU),
@@ -129,16 +130,16 @@ final class ScenarioMatrix {
 
         // Cadence-adjacent oscillation - the resonance shape at matrix depth (U4 carries the deep version).
         catalog.add(scenario("hardKnee-oscillation-saturating-clean-controller",
-                PlantShape.HARD_KNEE, CapacityDynamics.OSCILLATION, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.CONTROLLER, Scale.MID,
+                "HARD_KNEE", "OSCILLATION", "SATURATING", "CLEAN",
+                "CONTROLLER", "MID",
                 ScenarioMatrix::standardPlant,
                 CapacitySchedules.oscillation(12, 8, SATURATING_ARRIVAL, MU, MU / 2),
                 KNEE, CEILING, KNEE, false));
 
         // The thrash curve: throughput FALLS past the knee, so parking above it is a live failure mode.
         catalog.add(scenario("collapse-static-saturating-clean-law",
-                PlantShape.CONGESTION_COLLAPSE, CapacityDynamics.STATIC, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.MID,
+                "CONGESTION_COLLAPSE", "STATIC", "SATURATING", "CLEAN",
+                "LAW", "MID",
                 () -> {
                     DeterministicPlant plant = standardPlant();
                     plant.enableCongestionCollapse();
@@ -149,8 +150,8 @@ final class ScenarioMatrix {
 
         // No knee below the ceiling: riding to the cap and sitting there IS correct behaviour.
         catalog.add(scenario("noKnee-static-saturating-clean-law",
-                PlantShape.NO_KNEE_BELOW_CEILING, CapacityDynamics.STATIC, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.MID,
+                "NO_KNEE_BELOW_CEILING", "STATIC", "SATURATING", "CLEAN",
+                "LAW", "MID",
                 // knee_slots = mu * W0 = 6000 * 0.05 = 300, three times the 100 ceiling: no knee reachable.
                 () -> new DeterministicPlant(6000, W0, 1),
                 CapacitySchedules.constant(200, 8000),
@@ -158,23 +159,23 @@ final class ScenarioMatrix {
 
         // Knee at the floor: mu * W0 = 1 slot - the escape probe's home turf.
         catalog.add(scenario("kneeAtFloor-static-saturating-clean-controller",
-                PlantShape.KNEE_AT_FLOOR, CapacityDynamics.STATIC, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.CONTROLLER, Scale.FLOOR_HUGGING,
+                "KNEE_AT_FLOOR", "STATIC", "SATURATING", "CLEAN",
+                "CONTROLLER", "FLOOR_HUGGING",
                 () -> new DeterministicPlant(20, W0, 1),
                 CapacitySchedules.constant(200, 40),
                 2, CEILING, 1, false));
 
         // App-limited: arrival below capacity - the target must not be ratcheted by idle headroom.
         catalog.add(scenario("hardKnee-static-belowCapacity-clean-law",
-                PlantShape.HARD_KNEE, CapacityDynamics.STATIC, Arrival.BELOW_CAPACITY, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.MID,
+                "HARD_KNEE", "STATIC", "BELOW_CAPACITY", "CLEAN",
+                "LAW", "MID",
                 ScenarioMatrix::standardPlant, CapacitySchedules.constant(200, MU / 4),
                 KNEE, CEILING, KNEE, false));
 
         // Bursts: alternating saturating and quiet - burst arrival must not be chased upward.
         catalog.add(scenario("hardKnee-burst-clean-law",
-                PlantShape.HARD_KNEE, CapacityDynamics.STATIC, Arrival.BURST, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.MID,
+                "HARD_KNEE", "STATIC", "BURST", "CLEAN",
+                "LAW", "MID",
                 ScenarioMatrix::standardPlant,
                 CapacitySchedules.concat(
                         CapacitySchedules.constant(20, SATURATING_ARRIVAL),
@@ -191,8 +192,8 @@ final class ScenarioMatrix {
             riding.add(Phase.withOutcomes(10, SATURATING_ARRIVAL, 0.22, -1));
         }
         catalog.add(scenario("hardKnee-static-saturating-nonSuccessRiding-law",
-                PlantShape.HARD_KNEE, CapacityDynamics.STATIC, Arrival.SATURATING,
-                OutcomeMix.NON_SUCCESS_RIDING, Driver.LAW, Scale.MID,
+                "HARD_KNEE", "STATIC", "SATURATING",
+                "NON_SUCCESS_RIDING", "LAW", "MID",
                 ScenarioMatrix::standardPlant, riding, 2, CEILING, KNEE, false));
 
         // Overload drops every window: the BACKOFF arm cuts multiplicatively, forever - floor-park expected.
@@ -200,8 +201,8 @@ final class ScenarioMatrix {
         dropping.add(Phase.of(40, SATURATING_ARRIVAL));
         dropping.add(Phase.withOutcomes(160, SATURATING_ARRIVAL, 0.0, 5));
         catalog.add(scenario("hardKnee-static-saturating-overloadDrops-controller",
-                PlantShape.HARD_KNEE, CapacityDynamics.STATIC, Arrival.SATURATING,
-                OutcomeMix.OVERLOAD_DROPS, Driver.CONTROLLER, Scale.MID,
+                "HARD_KNEE", "STATIC", "SATURATING",
+                "OVERLOAD_DROPS", "CONTROLLER", "MID",
                 ScenarioMatrix::standardPlant, dropping, 2, CEILING, KNEE, false));
 
         // Wide scale: knee 200 under a 400 ceiling - the accelerator's sqrt step at real width. This
@@ -211,16 +212,16 @@ final class ScenarioMatrix {
         // the invariant kit's band bound now evaluates the step at knee + step. 600 windows keeps the final
         // third fully post-settle so the assertion reads pure steady state.
         catalog.add(scenario("hardKnee-static-saturating-clean-law-wide",
-                PlantShape.HARD_KNEE, CapacityDynamics.STATIC, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.WIDE,
+                "HARD_KNEE", "STATIC", "SATURATING", "CLEAN",
+                "LAW", "WIDE",
                 () -> new DeterministicPlant(4000, W0, 1),
                 CapacitySchedules.constant(600, 6000),
                 2, 400, 200, true));
 
         // Oscillation under the LAW driver - the driver x dynamics pair the controller arm alone leaves dark.
         catalog.add(scenario("hardKnee-oscillation-saturating-clean-law",
-                PlantShape.HARD_KNEE, CapacityDynamics.OSCILLATION, Arrival.SATURATING, OutcomeMix.CLEAN,
-                Driver.LAW, Scale.MID,
+                "HARD_KNEE", "OSCILLATION", "SATURATING", "CLEAN",
+                "LAW", "MID",
                 ScenarioMatrix::standardPlant,
                 CapacitySchedules.oscillation(12, 8, SATURATING_ARRIVAL, MU, MU / 2),
                 KNEE, CEILING, KNEE, false));
