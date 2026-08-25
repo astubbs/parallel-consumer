@@ -46,21 +46,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# shellcheck source=bin/lib/node-gate.sh
-source "${BASH_SOURCE[0]%/*}/lib/node-gate.sh" 2>/dev/null \
-    || source bin/lib/node-gate.sh 2>/dev/null \
+# Resolve the helper BEFORE sourcing it - a failed `source` under `set -e` is fatal on bash 3.2, so a
+# guard written after one is unreachable. bin/lib/node-gate.sh's header owns that reasoning.
+node_gate="${BASH_SOURCE[0]%/*}/lib/node-gate.sh"
+[ -r "$node_gate" ] || node_gate="bin/lib/node-gate.sh"
+[ -r "$node_gate" ] \
     || { echo "ERROR: cannot load bin/lib/node-gate.sh - the helper that classifies node's exit." >&2
          echo "       This is NOT a finding. Nothing was checked." >&2
          exit 2; }
+# shellcheck source=bin/lib/node-gate.sh
+source "$node_gate"
 
-# NECESSARY BUT NOT SUFFICIENT, which is the whole reason bin/lib/node-gate.sh exists: this answers
-# "is node installed", and a node that is installed can still die at startup. That case is
-# classified after the run, below.
-if ! command -v node >/dev/null 2>&1; then
-    echo "ERROR: node not found - needed to reuse .github/scripts/issue-ref-gate.js." >&2
-    echo "The authoritative gate is the 'PR Checklist' workflow; this is the local mirror of it." >&2
-    exit 2
-fi
+node_gate_require_node ".github/scripts/issue-ref-gate.js" || exit $?
 
 BASE_REF="${1:-}"
 if [ -z "$BASE_REF" ]; then

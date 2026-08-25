@@ -201,6 +201,27 @@ else
     fails=$((fails + 1))
 fi
 
+# --- node genuinely absent, as opposed to present-but-broken --------------------------------------
+# The other node cases all break a node that EXISTS (a poisoned NODE_OPTIONS). Nothing exercised the
+# plain "not installed" branch, and when it moved into bin/lib/node-gate.sh as node_gate_require_node
+# it became shared code with no test at all - so a later edit there could flip this gate's answer for
+# BOTH callers silently. Calling the function directly, rather than the gate, keeps the case
+# deterministic on any host: it needs no external command (`echo` and `source` are builtins), so it
+# does not depend on where node happens to live, or on it being absent from the machine running this.
+out="$(bash -c 'PATH=/nonexistent-dir-for-test; source bin/lib/node-gate.sh; node_gate_require_node ".github/scripts/issue-ref-gate.js"' 2>&1)"
+got=$?
+absent_ok=1
+[ "$got" = 2 ] || absent_ok=0
+case "$out" in *"node not found"*) ;; *) absent_ok=0 ;; esac
+case "$out" in *"issue-ref-gate.js"*) ;; *) absent_ok=0 ;; esac
+if [ "$absent_ok" = 1 ]; then
+    echo "ok:   node absent is 'cannot run' and names the module it needed"
+else
+    echo "FAIL: node-absent branch (expected exit 2 naming the module, got $got)"
+    echo "$out" | sed 's/^/      /'
+    fails=$((fails + 1))
+fi
+
 if [ "$fails" -gt 0 ]; then
     echo "$fails case(s) failed"
     exit 1

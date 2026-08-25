@@ -31,6 +31,29 @@
 # module cannot be loaded or parsed" both land on 2 - "cannot run" - instead of the second
 # masquerading as a finding. A module that loads and then throws at runtime is still reported as a
 # finding; that residue is covered by the modules' own unit tests in the `PR Checklist` workflow.
+#
+# HOW TO LOAD THIS FILE, and why both callers do it the long way. Under `set -e` on bash 3.2 - the
+# system bash on every macOS host - a `source` of a file it cannot read is FATAL to the shell, so a
+# `|| { ...; exit 2; }` guard written after one never runs: the caller dies exit 1 with no output,
+# which is exactly the false accusation this helper exists to prevent. So a caller tests `[ -r ]`
+# first and sources only then. Keep that shape if a third caller is ever added; the callers carry a
+# one-line pointer here rather than a copy of this paragraph.
+
+# node_gate_require_node <gate-module-path-from-repo-root>
+#
+# NECESSARY BUT NOT SUFFICIENT, which is the whole reason this file exists: this answers "is node
+# installed", and a node that is installed can still die at startup. That second case is classified
+# after the run, by node_gate_verdict below. Both callers need the same preflight and the same
+# wording, so it lives here rather than as two copies that drift.
+#
+# Call it as `node_gate_require_node <module> || exit $?`, for the same `set -e` reason as below.
+node_gate_require_node() {
+    command -v node >/dev/null 2>&1 && return 0
+
+    echo "ERROR: node not found - needed to reuse $1." >&2
+    echo "The authoritative gate is the 'PR Checklist' workflow; this is the local mirror of it." >&2
+    return 2
+}
 
 # node_gate_verdict <node-exit-status> <gate-module-path-from-repo-root>
 #
