@@ -224,8 +224,8 @@ class OffsetEncodingBackPressureTest extends ParallelEoSStreamProcessorTestBase 
                 // docs/solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md
                 long settledHighestSucceeded = partitionState.getOffsetHighestSucceeded();
                 assertThat(settledHighestSucceeded)
-                        .as("the extra records advanced the succeeded frontier past the primed batch")
-                        .isGreaterThan((long) numberOfRecordsToPrimeWith - 1);
+                        .as("the succeeded frontier advanced into the extra batch, and no further than it")
+                        .isBetween((long) numberOfRecordsToPrimeWith, lastOffsetSent);
 
                 parallelConsumer.requestCommitAsap();
                 awaitForOneLoopCycle();
