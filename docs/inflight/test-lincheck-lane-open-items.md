@@ -1,14 +1,49 @@
 <!-- post-merge: checked -->
-# astubbs#347 - the Lincheck lane: what the review left open
+# The Lincheck lane: what it does not yet cover, and what it left open
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
 
 <!-- post-merge: checked-begin -->
-Findings from the simplify-and-review pass that shipped with astubbs#347, which that PR deliberately
-does **not** close. The lane's own false-green guard was fixed before it landed; everything below
-outlived it. Delete this note when these items are resolved - not when any PR merges.
+The lane arrived with astubbs#347. What is below is what that PR deliberately did **not** close, plus
+the coverage the lane is worth extending to now that it has been shown to work. Delete this note when
+these items are resolved - not when any PR merges, which is why it is named for the lane rather than
+for a PR number.
 <!-- post-merge: checked-end -->
+
+## Where to point it next
+
+Ranked by what each buys, not by effort. The lane's value is that it finds seams nobody named, so
+prefer widening what an existing harness explores over adding a class with a narrow guess in it.
+
+1. **Close the encoder's range-top leg.** The one verdict in the calibration that is not clean:
+   `OffsetMapCodecManager.encodeOffsetsCompressed` came back HALF-FOUND, because the *snapshot* leg
+   was exhibited and the two-reads-return-different-values leg was not, and is not expressible in
+   the harness as committed. `PartitionStateLincheckTest`'s javadoc already states what widening its
+   generator would need. Turning one half-verdict into a whole one is worth more than a new class.
+2. **The unsynchronised counter maps, which the lane already tripped over unprompted.**
+   `PartitionStateManager.slowWorkCounters`, `WorkManager.succeededRecordsCounters` and
+   `failedRecordsCounters` are plain `HashMap`s mutated from the rebalance callbacks and the
+   completion path, and `RemovedPartitionState.READ_ONLY_EMPTY_SET` is a mutable `TreeSet` shared by
+   every PC instance in the JVM (`bug-shared-collections-across-the-poll-boundary.md`). The PoC hit
+   this class of defect from a scenario aimed at something else. A harness here is cheap, and it
+   becomes the regression detector the moment the sweep on `fix/concurrent-collection-sweep` lands.
+3. **`ProcessingShard` and `RetryQueue` are not modelled at all.** Of the ten classes in
+   `bz.stub.parallelconsumer.state`, the lane covers three. These two are the ones carrying ordering
+   and scheduling state across the same two threads the existing harnesses already prove race.
+4. **Model-checking arms over the product classes, which cost nothing once they are possible.**
+   `ShardManagerLincheckTest` and `WorkManagerLincheckTest` gain one for free - same operations, one
+   different `Options` - the day `LincheckSuperHashCodeProbeTest` starts failing. That tripwire is
+   already in the lane precisely so nobody has to remember to check.
+
+**Not this, and the plan doc says why**: `@Validate` invariants would catch the retry-queue leak in
+§1.1, and they are still the wrong next step, because an invariant naming the retry queue is a hint
+and the value demonstrated here is what the tool finds *unaided*.
+
+**Ground Lincheck structurally cannot cover.** It reasons about interleavings of operations, not
+about the memory model, so the plain non-volatile `long` reads of `offsetHighestSucceeded` and
+`offsetHighestSeen` are outside it however many harnesses are added. That half of the evaluation is
+jcstress's, and it is still open on `test/jcstress-poc-plain-long-visibility`.
 
 ## Nothing runs the lane, so the tripwire it promises cannot fire
 
