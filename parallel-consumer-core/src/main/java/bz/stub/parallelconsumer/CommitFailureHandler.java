@@ -19,8 +19,14 @@ import org.apache.kafka.common.annotation.InterfaceStability;
  * {@link CommitFailurePolicies#shutDown()}. Configure via
  * {@link ParallelConsumerOptions.ParallelConsumerOptionsBuilder#commitFailureHandler}.
  * <p>
- * The handler is invoked from PC's control thread only - one invocation at a time, in failure order - so stateful
- * implementations (like the bounded canned policy) need no synchronisation of their own beyond that guarantee.
+ * The handler is invoked on a dedicated daemon thread ({@code pc-commit-failure-handler}), never on PC's control
+ * thread, so a slow handler cannot stall the control loop. Invocations are still single-threaded - one at a time, in
+ * failure order - so stateful implementations (like the bounded canned policy) need no synchronisation of their own
+ * beyond that guarantee.
+ * <p>
+ * Each invocation is time-bounded (30 seconds, PC's internal {@code commitFailureHandlerTimeBound}). A handler that
+ * has not decided by then - or that throws, or that returns {@code null} - decides nothing, and PC proceeds fail-safe
+ * as {@link CommitFailureDecision#SHUT_DOWN}.
  *
  * @author Antony Stubbs
  * @see CommitFailurePolicies

@@ -35,6 +35,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -238,35 +239,95 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private Instant lastCommitTime;
 
     // --- commit-failure seam accounting (astubbs#317), maintained beside lastCommitTime -------------------------
-    // Written by the control thread's decision loop and by the (serialized) rebalance callbacks; volatile for
-    // visibility. Each field's non-atomic increment has a single writer: the control thread for the consecutive
-    // count, the consumer's callback thread for the epoch.
 
     /**
-     * When a commit last completed without a terminal failure in the current assignment; {@code null} until one has.
-     * Distinct from {@link #lastCommitTime}, which is the commit-cadence clock and is also advanced on a CONTINUE
-     * decision to restore the cadence.
+     * The commit-failure seam's history, held as ONE immutable value swapped atomically rather than as separate
+     * mutable fields (astubbs#317).
+     * <p>
+     * <b>Two threads write it</b>, so there is no single-writer field here to lean on: the control thread (an
+     * exhaustion in {@link #decideCommitFailureOutcome}, and the reset a successful cycle takes in
+     * {@link #commitOffsetsThatAreReady()}) and the broker-poll thread, which runs the consumer's rebalance
+     * callbacks - {@link #onPartitionsAssigned} replaces the whole record, and the revocation-time commit inside
+     * {@link #onPartitionsRevoked} reaches that same success reset.
+     * <p>
+     * Updated one field at a time, that costs correctness twice over. A reset racing the non-atomic increment is
+     * lost, carrying a stale exhaustion streak into a fresh assignment - which graduates a bounded CONTINUE policy
+     * to a premature SHUT_DOWN of an instance that had already healed. And {@code buildCommitFailureContext},
+     * reading the fields one by one, could pair a new {@code assignmentEpoch} with the previous assignment's
+     * streak - exactly what {@link CommitFailureContext}'s epoch scoping promises cannot happen. One atomic swap
+     * gives every reader a single coherent generation instead. (Which generation a racing writer lands on is
+     * ordering, not lost state, and is unchanged from before.)
      */
-    private volatile Instant lastSuccessfulCommitTime;
+    private final AtomicReference<CommitFailureAccounting> commitFailureAccounting =
+            new AtomicReference<>(CommitFailureAccounting.atConstruction(Instant.now()));
 
     /**
-     * The epoch for {@link CommitFailureContext#getTimeSinceLastSuccessfulCommit()} when no commit has ever
-     * succeeded in this assignment - so time-based handler bounds work from the first exhaustion.
+     * One coherent generation of the commit-failure seam's history - see {@link #commitFailureAccounting} for why
+     * these four move together. Every transition returns a new instance, so a reader sees all of a change or none
+     * of it.
      */
-    private volatile Instant assignmentStartTime = Instant.now();
+    @Value
+    @RequiredArgsConstructor(access = PRIVATE)
+    static class CommitFailureAccounting {
 
-    /**
-     * Feeds {@link CommitFailureContext#getAssignmentEpoch()}: bumped on every assignment callback, so a stateful
-     * handler can notice that history predating the current assignment no longer applies. The rest of the
-     * rebalance lane's history scoping happens alongside the bump in {@link #onPartitionsAssigned}.
-     */
-    private volatile long assignmentEpoch;
+        /**
+         * Feeds {@link CommitFailureContext#getAssignmentEpoch()}: bumped on every assignment callback, so a
+         * stateful handler can notice that history predating the current assignment no longer applies. The rest of
+         * the rebalance lane's history scoping happens alongside the bump in
+         * {@link AbstractParallelEoSStreamProcessor#onPartitionsAssigned}.
+         */
+        long assignmentEpoch;
 
-    /**
-     * Feeds {@link CommitFailureContext#getConsecutiveExhaustedBudgets()}: budgets exhausted in a row with no
-     * intervening successful commit. Reset on success and on assignment change.
-     */
-    private volatile int consecutiveExhaustedBudgets;
+        /**
+         * The epoch for {@link CommitFailureContext#getTimeSinceLastSuccessfulCommit()} when no commit has ever
+         * succeeded in this assignment - so time-based handler bounds work from the first exhaustion.
+         */
+        Instant assignmentStartTime;
+
+        /**
+         * When a commit last completed without a terminal failure in the current assignment; {@code null} until one
+         * has. Distinct from {@link AbstractParallelEoSStreamProcessor#lastCommitTime}, which is the commit-cadence
+         * clock and is also advanced on a CONTINUE decision to restore the cadence.
+         */
+        Instant lastSuccessfulCommitTime;
+
+        /**
+         * Feeds {@link CommitFailureContext#getConsecutiveExhaustedBudgets()}: budgets exhausted in a row with no
+         * intervening successful commit. Reset on success and on assignment change.
+         */
+        int consecutiveExhaustedBudgets;
+
+        /**
+         * Before the first assignment the time epoch counts from construction, so there is always an epoch and
+         * never an absent-state sentinel.
+         */
+        static CommitFailureAccounting atConstruction(Instant constructionTime) {
+            return new CommitFailureAccounting(0, constructionTime, null, 0);
+        }
+
+        CommitFailureAccounting nextAssignment(Instant assignedAt) {
+            return new CommitFailureAccounting(assignmentEpoch + 1, assignedAt, null, 0);
+        }
+
+        CommitFailureAccounting budgetExhausted() {
+            return new CommitFailureAccounting(assignmentEpoch, assignmentStartTime, lastSuccessfulCommitTime,
+                    consecutiveExhaustedBudgets + 1);
+        }
+
+        CommitFailureAccounting commitSucceeded(Instant succeededAt) {
+            return new CommitFailureAccounting(assignmentEpoch, assignmentStartTime, succeededAt, 0);
+        }
+
+        /**
+         * The epoch rule (see {@link CommitFailureContext#getTimeSinceLastSuccessfulCommit()}): while no commit has
+         * succeeded in the current assignment, measured from {@link #assignmentStartTime}. Time-based bounds are
+         * therefore reachable from the very first failure.
+         */
+        Duration timeSinceLastSuccessfulCommit(Instant now) {
+            Instant successEpoch = lastSuccessfulCommitTime != null ? lastSuccessfulCommitTime : assignmentStartTime;
+            return Duration.between(successEpoch, now);
+        }
+    }
 
     /**
      * The commit-failure seam's OWN pause axis (astubbs#317): engaged by a CONTINUE decision under
@@ -425,7 +486,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.commitFailureExhaustionsCounter =
                 pcMetrics.getCounterFromMetricDef(PCMetricsDef.COMMIT_FAILURE_EXHAUSTIONS);
         this.commitFailureConsecutiveExhaustionsGauge = pcMetrics.gaugeFromMetricDef(
-                PCMetricsDef.COMMIT_FAILURE_CONSECUTIVE_EXHAUSTIONS, this, pc -> pc.consecutiveExhaustedBudgets);
+                PCMetricsDef.COMMIT_FAILURE_CONSECUTIVE_EXHAUSTIONS, this,
+                pc -> pc.commitFailureAccounting.get().getConsecutiveExhaustedBudgets());
         this.commitTimeSinceLastSuccessGauge = pcMetrics.gaugeFromMetricDef(
                 PCMetricsDef.COMMIT_TIME_SINCE_LAST_SUCCESS, this, pc -> pc.secondsSinceLastSuccessfulCommit());
         this.commitFailureSeamStateGauge = pcMetrics.gaugeFromMetricDef(
@@ -637,11 +699,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
 
         // a new assignment starts a new commit-failure history epoch (astubbs#317): a stateful handler's
-        // bounds must not graduate on failures that belonged to partitions this instance may no longer even hold
-        assignmentEpoch++;
-        assignmentStartTime = Instant.now();
-        lastSuccessfulCommitTime = null;
-        consecutiveExhaustedBudgets = 0;
+        // bounds must not graduate on failures that belonged to partitions this instance may no longer even hold.
+        // One swap, because this runs on the broker-poll thread while the control thread is writing the same
+        // accounting - see the field's javadoc
+        Instant assignedAt = Instant.now();
+        // the new generation is read by whoever next needs it (a failure, or a gauge), not here
+        var ignoredNewGeneration =
+                commitFailureAccounting.updateAndGet(previous -> previous.nextAssignment(assignedAt));
         // the rebalance-deferral streak is scoped to its assignment for the same reason - the committer keeps
         // that accounting (it observes the deferrals), so the epoch change is forwarded to it
         brokerPollSubsystem.onPartitionsAssigned();
@@ -1229,11 +1293,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             throw commitFailure;
         }
 
-        consecutiveExhaustedBudgets++;
         // counted here, the seam's single interception point, so every lane's exhaustion - sync, transactional,
-        // and an escalated rebalance-deferral streak - increments exactly once, whatever the decision below
+        // and an escalated rebalance-deferral streak - increments exactly once, whatever the decision below. The
+        // swap returns the generation this exhaustion produced, and the context is built from that one value: a
+        // rebalance landing between the two can no longer pair its new epoch with this streak
+        CommitFailureAccounting accounting =
+                commitFailureAccounting.updateAndGet(CommitFailureAccounting::budgetExhausted);
         commitFailureExhaustionsCounter.increment();
-        CommitFailureContext context = buildCommitFailureContext(commitFailure);
+        CommitFailureContext context = buildCommitFailureContext(commitFailure, accounting);
 
         // loud regardless of the decision: a continuing-but-failing instance must never be quiet
         log.error("Offset commit failed terminally - retry budget exhausted after {} attempt(s) in {}. Consecutive " +
@@ -1265,36 +1332,31 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
     }
 
-    private CommitFailureContext buildCommitFailureContext(OffsetCommitBudgetExceededException commitFailure) {
+    /**
+     * @param accounting the ONE generation of {@link #commitFailureAccounting} this context describes - taken by
+     *                   the caller rather than re-read here, so every field of the context belongs to the same
+     *                   assignment epoch
+     */
+    private CommitFailureContext buildCommitFailureContext(OffsetCommitBudgetExceededException commitFailure,
+                                                           CommitFailureAccounting accounting) {
         return CommitFailureContext.builder()
                 .failure(commitFailure)
                 .offsets(commitFailure.getOffsets())
                 .attemptsMade((int) Math.min(Integer.MAX_VALUE, commitFailure.getAttemptsMade()))
                 .elapsed(commitFailure.getElapsed())
-                .consecutiveExhaustedBudgets(consecutiveExhaustedBudgets)
-                .timeSinceLastSuccessfulCommit(timeSinceLastSuccessfulCommit())
+                .consecutiveExhaustedBudgets(accounting.getConsecutiveExhaustedBudgets())
+                .timeSinceLastSuccessfulCommit(accounting.timeSinceLastSuccessfulCommit(Instant.now()))
                 .commitMode(options.getCommitMode())
-                .assignmentEpoch(assignmentEpoch)
+                .assignmentEpoch(accounting.getAssignmentEpoch())
                 .build();
     }
 
     /**
-     * The epoch rule (see {@link CommitFailureContext#getTimeSinceLastSuccessfulCommit()}): while no commit has
-     * succeeded in the current assignment, measured from {@link #assignmentStartTime} - which is initialised at
-     * construction, so there is always an epoch and never an absent-state sentinel (before the first assignment it
-     * counts from construction). Time-based bounds are therefore reachable from the very first failure.
-     */
-    private Duration timeSinceLastSuccessfulCommit() {
-        Instant successEpoch = lastSuccessfulCommitTime != null ? lastSuccessfulCommitTime : assignmentStartTime;
-        return Duration.between(successEpoch, Instant.now());
-    }
-
-    /**
      * Seconds since the last successful commit, observed by {@link PCMetricsDef#COMMIT_TIME_SINCE_LAST_SUCCESS} -
-     * {@link #timeSinceLastSuccessfulCommit()} carries the epoch rule.
+     * {@link CommitFailureAccounting#timeSinceLastSuccessfulCommit(Instant)} carries the epoch rule.
      */
     private double secondsSinceLastSuccessfulCommit() {
-        return timeSinceLastSuccessfulCommit().toMillis() / 1_000.0;
+        return commitFailureAccounting.get().timeSinceLastSuccessfulCommit(Instant.now()).toMillis() / 1_000.0;
     }
 
     /**
@@ -1306,7 +1368,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (commitFailurePauseActive) {
             return CommitFailureSeamState.FAILING_PAUSED;
         }
-        if (consecutiveExhaustedBudgets > 0) {
+        if (commitFailureAccounting.get().getConsecutiveExhaustedBudgets() > 0) {
             return CommitFailureSeamState.FAILING_CONTINUING;
         }
         return CommitFailureSeamState.HEALTHY;
@@ -1919,9 +1981,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                         "success accounting deliberately does not");
             } else {
                 // the commit cycle completed without a terminal failure, so the commit-failure seam's history
-                // resets (astubbs#317)
-                this.lastSuccessfulCommitTime = this.lastCommitTime;
-                this.consecutiveExhaustedBudgets = 0;
+                // resets (astubbs#317). One swap: the revocation-time caller of this method is the broker-poll
+                // thread, so this reset races the control thread's exhaustion count - see the field's javadoc
+                Instant succeededAt = this.lastCommitTime;
+                // as in onPartitionsAssigned: the swap is the point, the resulting generation is read elsewhere
+                var ignoredHealedGeneration =
+                        commitFailureAccounting.updateAndGet(previous -> previous.commitSucceeded(succeededAt));
                 releaseCommitFailurePauseIfActive("a commit succeeded");
             }
         }

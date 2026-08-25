@@ -73,7 +73,15 @@ import static pl.tlinkowski.unij.api.UniSets.of;
  * @see bz.stub.parallelconsumer.state.PartitionState
  */
 @Slf4j
-@Timeout(420) // must exceed the sum of the scenario's awaits, which model a genuinely extended outage
+// Must exceed the worst case of the scenario's SEQUENTIAL Awaitility ceilings, and the probe loop
+// dominates it: 60s (first exhaustions await) + 12 x 60s (the plateau probe's per-window ceiling,
+// worst case being windows that each succeed only just inside 60s) + 120s (heal) + 60s (committed)
+// = 960s. The previous 420s claimed to exceed that sum and did not, so a slow-but-correct run was
+// killed by JUnit mid-probe instead of failing its own assertion - which then reads as "stopped for
+// its own reasons" rather than "was cut off" (AbstractRevokeUnderWorkScenario's DIAGNOSTIC_QUIET_CAP
+// note owns that hazard). A passing run freezes within the first windows and finishes in a fraction
+// of this; the annotation only bounds pathological ones.
+@Timeout(1200)
 class CommitOutageKeepProcessingBoundedIT extends BrokerIntegrationTest<String, String> {
 
     private static final int TOTAL_RECORDS = 5_000;

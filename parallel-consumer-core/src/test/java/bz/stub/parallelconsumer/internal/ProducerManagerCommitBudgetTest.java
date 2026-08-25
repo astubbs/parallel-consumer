@@ -123,6 +123,12 @@ class ProducerManagerCommitBudgetTest {
      * state, so the loop's retry branch actually retries. (Reflection cannot answer it for a Mockito mock, and
      * with {@code false} the legacy loop's other branch declares the commit successful without attempting it -
      * the "tx completed between interrupt and retry" assumption.)
+     * <p>
+     * {@code isTransactionReady} is pinned to its consistent counterpart, {@code false} - the two are different
+     * questions about the same three-way state ({@code READY} / committing / neither), and a transaction still
+     * committing is by definition not READY. Both must be stubbed, not merely defaulted: reflection cannot answer
+     * either one for a Mockito mock, so the real method NPEs on its unresolved {@code TransactionManager} method
+     * handle.
      */
     private void build(ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder) {
         producer = mock(Producer.class);
@@ -133,6 +139,7 @@ class ProducerManagerCommitBudgetTest {
                 .build();
         producerWrapper = spy(new ProducerWrapper<>(options, true, producer));
         doReturn(true).when(producerWrapper).isTransactionCompleting();
+        doReturn(false).when(producerWrapper).isTransactionReady();
         producerManager = new ProducerManager<>(producerWrapper, mock(ConsumerManager.class),
                 mock(WorkManager.class), options);
     }
@@ -297,6 +304,105 @@ class ProducerManagerCommitBudgetTest {
         inOrder.verify(producer).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
         inOrder.verify(producer).commitTransaction(); // exactly one: no completion attempt on an unfinishable tx
         verify(producer, times(1)).abortTransaction();
+        verify(producer, times(1)).commitTransaction();
+    }
+
+    /**
+     * The third state. Recovery's choice is over a THREE-way space, not the two-way one a
+     * completing/not-completing branch implies: the abandoned commit can also have landed asynchronously after PC
+     * stopped waiting on it, leaving the producer {@code READY} - no transaction to complete and none to abort.
+     * <p>
+     * Aborting there is not a harmless no-op: {@code abortTransaction} on {@code READY} throws an "Invalid
+     * transition" {@link KafkaException} - modelled by the stub below - which is neither {@link TimeoutException}
+     * nor {@link InterruptException}, so it escapes the recovery loop's catch and fatally closes PC. That turns
+     * the seam's most benign outcome (astubbs#317: the commit actually succeeded, and a CONTINUE decision was
+     * meant to carry PC through) into the crash the seam exists to prevent.
+     * <p>
+     * That READY-after-timeout is a real occurrence and not a theoretical state is established by the commit loop
+     * itself, which greps a caught error for {@code "Invalid transition attempted from state READY to state
+     * COMMITTING_TRANSACTION"}.
+     */
+    @Test
+    void recoveryOfATransactionThatLandedLateAbortsNothingAndStaysNonFatal() throws Exception {
+        buildWithBudget(COMMIT_BUDGET);
+        var completing = new AtomicBoolean(true);
+        doAnswer(invocation -> completing.get()).when(producerWrapper).isTransactionCompleting();
+        var ready = new AtomicBoolean(false);
+        doAnswer(invocation -> ready.get()).when(producerWrapper).isTransactionReady();
+        var failing = new AtomicBoolean(true);
+        commitTransactionFailsRetriablyWhile(failing, new AtomicInteger());
+        // what a real producer answers an abort in the READY state - the fatality this test exists to deny
+        doThrow(new KafkaException(
+                "Invalid transition attempted from state READY to state ABORTING_TRANSACTION (mocking)"))
+                .when(producer).abortTransaction();
+
+        // cycle 1: the budget exhausts mid-commitTransaction, PC stops waiting on the commit
+        producerManager.preAcquireOffsetsToCommit();
+        assertThrows(OffsetCommitBudgetExceededException.class,
+                () -> producerManager.commitOffsets(OFFSETS, GROUP_METADATA));
+        producerManager.postCommit();
+
+        // between cycles the abandoned commit lands: the producer is neither committing nor holding a transaction
+        completing.set(false);
+        ready.set(true);
+        failing.set(false);
+        clearInvocations(producer);
+
+        // cycle 2 must recognise there is nothing left to recover and commit normally - no abort, no fatality
+        producerManager.preAcquireOffsetsToCommit();
+        producerManager.commitOffsets(OFFSETS, GROUP_METADATA);
+        producerManager.postCommit();
+
+        verify(producer, never()).abortTransaction(); // a completed transaction cannot be aborted
+        var inOrder = inOrder(producer);
+        inOrder.verify(producer).beginTransaction(); // recovery found nothing to do, so this cycle just starts fresh
+        inOrder.verify(producer).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
+        inOrder.verify(producer).commitTransaction();
+        // exactly one: recovery must not have re-committed a transaction that had already completed either
+        verify(producer, times(1)).commitTransaction();
+    }
+
+    /**
+     * The same late landing, but arriving as an exception: the commit completes between recovery reading the
+     * transaction state and calling {@code abortTransaction}, so the invalid-transition {@link KafkaException} is
+     * the first PC hears of it. Re-checking the state confirms the benign case and keeps it non-fatal, while a
+     * genuinely fatal abort (fencing - {@link #recoveryAbortFailureStaysFatalAndHandlerFree()}) still propagates.
+     */
+    @Test
+    void recoveryTreatsAnInvalidTransitionAbortAsTheSameLateLanding() throws Exception {
+        buildWithBudget(COMMIT_BUDGET);
+        var completing = new AtomicBoolean(true);
+        doAnswer(invocation -> completing.get()).when(producerWrapper).isTransactionCompleting();
+        var ready = new AtomicBoolean(false);
+        doAnswer(invocation -> ready.get()).when(producerWrapper).isTransactionReady();
+        var failing = new AtomicBoolean(true);
+        commitTransactionFailsRetriablyWhile(failing, new AtomicInteger());
+        doAnswer(invocation -> {
+            ready.set(true); // it landed while recovery was still deciding what to do about it
+            throw new KafkaException(
+                    "Invalid transition attempted from state READY to state ABORTING_TRANSACTION (mocking)");
+        }).when(producer).abortTransaction();
+
+        // cycle 1: exhaust
+        producerManager.preAcquireOffsetsToCommit();
+        assertThrows(OffsetCommitBudgetExceededException.class,
+                () -> producerManager.commitOffsets(OFFSETS, GROUP_METADATA));
+        producerManager.postCommit();
+
+        // the producer reports neither committing nor READY - recovery reaches for abort, and loses the race
+        completing.set(false);
+        failing.set(false);
+        clearInvocations(producer);
+
+        producerManager.preAcquireOffsetsToCommit();
+        producerManager.commitOffsets(OFFSETS, GROUP_METADATA);
+        producerManager.postCommit();
+
+        verify(producer, times(1)).abortTransaction(); // attempted once, and its failure absorbed - not retried
+        var inOrder = inOrder(producer);
+        inOrder.verify(producer).beginTransaction();
+        inOrder.verify(producer).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
+        inOrder.verify(producer).commitTransaction();
         verify(producer, times(1)).commitTransaction();
     }
 

@@ -400,8 +400,18 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * finish the still-committing transaction before recovery decides anything - and at exhaustion time the
      * budget is by definition already spent, so recovery work there would run unbudgeted.
      * <p>
-     * Preference order:
+     * Preference order - the producer's transaction state is three-way, not two-way, so this is
+     * complete-else-abort-unless-already-completed:
      * <ul>
+     * <li><b>Already completed</b>: the producer reports {@code READY}
+     * ({@link ProducerWrapper#isTransactionReady()}) - the exhausted commit landed asynchronously after PC gave
+     * up on it, so there is no transaction left to complete OR abort and recovery is simply done. Checking this
+     * FIRST is load-bearing: {@link #abortTransaction()} on {@code READY} throws an "Invalid transition"
+     * {@link KafkaException} that is neither {@link TimeoutException} nor {@link InterruptException}, so it
+     * escapes this method's catch and fatally closes PC - in the most benign case there is, the commit having
+     * actually succeeded. That READY-after-timeout happens at all is not a guess: the commit loop above already
+     * greps a caught error for {@code "Invalid transition attempted from state READY to state
+     * COMMITTING_TRANSACTION"}.</li>
      * <li><b>Complete</b>: while the producer still reports the transaction as completing, retry
      * {@link #commitTransaction()} - the exhausted commit may simply land late, and completing it loses
      * nothing.</li>
@@ -409,6 +419,10 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * commit's offsets were never marked committed ({@code onOffsetCommitSuccess} only runs on success), so they
      * stay dirty and travel on this cycle's commit.</li>
      * </ul>
+     * The already-completed case is also caught defensively on the way out of the abort branch, for the race
+     * where the commit lands between the state check and the abort call. Either way the offsets stay dirty and
+     * recommit on the normal cadence, so nothing is lost by not knowing which of the two happened.
+     * <p>
      * Retriable failures ({@link TimeoutException}, {@link InterruptException} - the same classification as the
      * commit loop above) are retried within THIS cycle's budget; exhausting it throws
      * {@link OffsetCommitBudgetExceededException} with the recovery still pending, so the seam is re-consulted
@@ -428,12 +442,24 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         while (true) {
             attemptsMade++;
             try {
-                if (producerWrapper.isTransactionCompleting()) {
+                if (transactionAlreadyCompletedItself()) {
+                    recoveredByLateCompletion(attemptsMade);
+                    return;
+                } else if (producerWrapper.isTransactionCompleting()) {
                     commitTransaction();
                     log.warn("Recovered by COMPLETING the previously budget-exhausted transaction (attempt {})",
                             attemptsMade);
                 } else {
-                    abortTransaction();
+                    try {
+                        abortTransaction();
+                    } catch (KafkaException e) {
+                        if (!isAbortOfAnAlreadyCompletedTransaction(e)) {
+                            throw e;
+                        }
+                        // it landed between the state check above and the abort call - the benign race
+                        recoveredByLateCompletion(attemptsMade);
+                        return;
+                    }
                     log.warn("Recovered by ABORTING the previously budget-exhausted transaction (attempt {}) - " +
                             "its offsets stayed dirty, so they recommit with this cycle", attemptsMade);
                 }
@@ -458,6 +484,55 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             }
         }
     }
+
+    /**
+     * The exhausted commit landed asynchronously after PC stopped waiting on it, so the producer is back to
+     * {@code READY} and holds no transaction to recover.
+     * <p>
+     * A {@link MockProducer} is excluded because {@link ProducerWrapper#isTransactionReady()} answers a constant
+     * {@code true} for one whatever its state - uninformative here, where the whole point is telling the states
+     * apart. Mock-backed recovery keeps its existing complete-else-abort behaviour.
+     */
+    private boolean transactionAlreadyCompletedItself() {
+        return !producerWrapper.isMockProducer() && producerWrapper.isTransactionReady();
+    }
+
+    /**
+     * Is this abort failure just {@link #transactionAlreadyCompletedItself()} arriving as an exception - the
+     * commit having landed between the state check and the abort call?
+     * <p>
+     * Retriable failures are excluded explicitly: they are {@link KafkaException}s too, and they belong to the
+     * recovery loop's budget, not here.
+     */
+    private boolean isAbortOfAnAlreadyCompletedTransaction(KafkaException e) {
+        if (e instanceof TimeoutException || e instanceof InterruptException) {
+            return false;
+        }
+        String message = e.getMessage();
+        boolean invalidTransition = message != null && message.contains(INVALID_TRANSITION_FROM_READY);
+        return invalidTransition && transactionAlreadyCompletedItself();
+    }
+
+    /**
+     * Recovery is over because there was nothing left to recover: log it, re-sync the wrapper's tracked
+     * transaction state (nothing else will - the completion was not driven by a call of ours, so
+     * {@link ProducerWrapper#isTransactionOpen()} would stay stale at {@code BEGIN} and this cycle would send
+     * offsets into a transaction that no longer exists), and clear the pending flag.
+     */
+    private void recoveredByLateCompletion(long attemptsMade) {
+        log.warn("The previously budget-exhausted transaction COMPLETED on its own before recovery ran " +
+                "(producer is READY again, attempt {}) - nothing to complete or abort. Its offsets were never " +
+                "marked committed, so they stay dirty and recommit on the normal cadence", attemptsMade);
+        producerWrapper.markTransactionCompletedExternally();
+        exhaustedTransactionAwaitingRecovery = false;
+    }
+
+    /**
+     * Prefix of {@link org.apache.kafka.clients.producer.internals.TransactionManager}'s invalid-transition
+     * message, shared by the abort ({@code ABORTING_TRANSACTION}) and commit ({@code COMMITTING_TRANSACTION})
+     * targets - what a transaction that already completed answers to either request.
+     */
+    private static final String INVALID_TRANSITION_FROM_READY = "Invalid transition attempted from state READY";
 
     private void commitTransaction() {
         producerWrapper.commitTransaction();

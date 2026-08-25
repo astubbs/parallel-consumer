@@ -81,23 +81,60 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     private static final CommitResponse POLLER_DIED = new CommitResponse(new CommitRequest());
 
     // --- rebalance-deferral accounting (astubbs#317) ------------------------------------------------------------
-    // Written by the broker-poll thread, which runs every deferral (both commitDeferringOnRebalance call paths
-    // execute there in production); volatile because the clearing side can run on another thread - the controller's
-    // onPartitionsAssigned callback forwards a completed rebalance here, and in test harnesses the callbacks are
-    // driven by the test thread. Single incrementing writer, so the non-atomic ++ is safe.
 
     /**
-     * When the current streak of consecutive deferrals began - {@code null} while no deferral is outstanding.
-     * This is the escalation's bound clock: once {@code Instant.now() - firstUnclearedDeferral} crosses
-     * {@link #commitTimeout}, the streak stops being silent - see {@link #commitDeferringOnRebalance()}.
+     * The current streak of consecutive deferrals, held as ONE immutable value swapped atomically (astubbs#317).
+     * <p>
+     * Every deferral is recorded by the broker-poll thread (both {@link #commitDeferringOnRebalance()} call paths
+     * execute there in production), but <b>the clearing side is not always that thread</b>: the controller's
+     * {@code onPartitionsAssigned} callback forwards a completed rebalance to {@link #onPartitionsAssigned()}, and
+     * in test harnesses the rebalance callbacks are driven by the test thread. So there is no single writer, and
+     * the streak's start and its count may not be written one at a time - a clear landing between the two leaves a
+     * count belonging to a streak that has been cleared, which is what decides whether the escalation fires and
+     * with what {@link OffsetCommitBudgetExceededException#getAttemptsMade()}.
      */
-    private volatile Instant firstUnclearedDeferral;
+    private final AtomicReference<DeferralStreak> deferralStreak = new AtomicReference<>(DeferralStreak.cleared());
 
     /**
-     * Deferrals in the current streak (since {@link #firstUnclearedDeferral}) - becomes the escalation's
-     * {@link OffsetCommitBudgetExceededException#getAttemptsMade()}.
+     * One coherent generation of {@link #deferralStreak}: when the streak began - {@code null} while no deferral is
+     * outstanding - and how many deferrals it has taken. The start is the escalation's bound clock: once
+     * {@code Instant.now() - firstDeferral} crosses {@link ConsumerOffsetCommitter#commitTimeout}, the streak stops
+     * being silent - see {@link ConsumerOffsetCommitter#commitDeferringOnRebalance()}.
      */
-    private volatile int consecutiveDeferrals;
+    @Value
+    static class DeferralStreak {
+
+        Instant firstDeferral;
+
+        int deferrals;
+
+        static DeferralStreak cleared() {
+            return new DeferralStreak(null, 0);
+        }
+
+        /**
+         * A fresh quantum on the same running streak: the clock restarts, so a CONTINUE decision buys another
+         * whole {@link ConsumerOffsetCommitter#commitTimeout} rather than an escalation every cycle, and the count
+         * starts again from the deferrals that follow.
+         */
+        static DeferralStreak restartedAt(Instant now) {
+            return new DeferralStreak(now, 0);
+        }
+
+        DeferralStreak plusDeferral(Instant now) {
+            return isRunning()
+                    ? new DeferralStreak(firstDeferral, deferrals + 1)
+                    : new DeferralStreak(now, 1);
+        }
+
+        boolean isRunning() {
+            return firstDeferral != null;
+        }
+
+        Duration age(Instant now) {
+            return Duration.between(firstDeferral, now);
+        }
+    }
 
     /**
      * Whether the commit cycle that most recently completed normally was a DEFERRAL rather than a commit - the
@@ -105,7 +142,8 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * success accounting must not treat a deferred cycle as a success. Read by the waiting thread after its typed
      * response arrives (the response queue provides the happens-before edge); commit cycles themselves are
      * serialized by the controller's {@code commitCommand} monitor, so the flag cannot be overwritten by another
-     * cycle between the response and the read.
+     * cycle between the response and the read. {@link #onPartitionsAssigned()} clears it from whichever thread
+     * delivers the rebalance - a whole-value write, so unlike the streak beside it there is nothing here to tear.
      */
     private volatile boolean lastCommitCycleDeferred;
 
@@ -411,9 +449,9 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
      * is not coming. It simply asks again on the next cycle.
      * <p>
      * <b>Deferring is accounted and bounded, not free forever</b> (astubbs#317). Each deferral joins a streak
-     * ({@link #firstUnclearedDeferral}, {@link #consecutiveDeferrals}), cleared by a commit cycle that completes -
-     * commit or nothing-to-commit - and by a completed rebalance ({@link #onPartitionsAssigned()}: after
-     * reassignment the streak belonged to an assignment this consumer may no longer hold). While the streak is
+     * ({@link #deferralStreak}), cleared by a commit cycle that completes - commit or nothing-to-commit - and by a
+     * completed rebalance ({@link #onPartitionsAssigned()}: after reassignment the streak belonged to an assignment
+     * this consumer may no longer hold). While the streak is
      * younger than {@link #commitTimeout} - the same {@code offsetCommitTimeout} quantum the retry budget uses -
      * deferral stays a WARN, so the one-or-two-cycle deferral of a healthy rebalance never escalates. A streak
      * that outlives the quantum has stopped being "not yet": it escalates as an
@@ -454,11 +492,10 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     private void recordDeferralAndMaybeEscalate(RuntimeException deferralCause, String causeDescription) {
         lastCommitCycleDeferred = true;
         Instant now = Instant.now();
-        if (firstUnclearedDeferral == null) {
-            firstUnclearedDeferral = now;
-        }
-        consecutiveDeferrals++;
-        Duration elapsed = Duration.between(firstUnclearedDeferral, now);
+        // one swap, and everything below reads the generation it produced - a clear racing this from another
+        // thread can no longer leave the start and the count disagreeing (see the field's javadoc)
+        DeferralStreak streak = deferralStreak.updateAndGet(previous -> previous.plusDeferral(now));
+        Duration elapsed = streak.age(now);
         if (!isGreaterThan(elapsed, commitTimeout)) {
             // inside the quantum: the healthy-rebalance case, deferral stays a WARN
             return;
@@ -471,9 +508,8 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         }
         // one whole quantum of uninterrupted deferrals: surface it to the decision loop, and restart the clock so
         // a CONTINUE decision buys another full quantum rather than an escalation every cycle
-        int deferralsThisQuantum = consecutiveDeferrals;
-        firstUnclearedDeferral = now;
-        consecutiveDeferrals = 0;
+        int deferralsThisQuantum = streak.getDeferrals();
+        deferralStreak.set(DeferralStreak.restartedAt(now));
         throw new OffsetCommitBudgetExceededException(msg(
                 "Offset commit DEFERRED continuously for {} - longer than the offsetCommitTimeout of {} - across " +
                         "{} consecutive deferral(s), because {}. A deferral is postponement, not failure, and " +
@@ -487,10 +523,11 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
     }
 
     private void clearDeferralAccounting(String reason) {
-        if (firstUnclearedDeferral != null) {
-            log.debug("Rebalance-deferral accounting cleared after {} deferral(s): {}", consecutiveDeferrals, reason);
-            firstUnclearedDeferral = null;
-            consecutiveDeferrals = 0;
+        // clear first, then report what was cleared: the captured generation is the streak that actually ended,
+        // where re-reading the field could report a count another thread has since moved
+        DeferralStreak ended = deferralStreak.getAndSet(DeferralStreak.cleared());
+        if (ended.isRunning()) {
+            log.debug("Rebalance-deferral accounting cleared after {} deferral(s): {}", ended.getDeferrals(), reason);
         }
     }
 

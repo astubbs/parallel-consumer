@@ -90,7 +90,8 @@ of that same check is in [`release-0600-blockers.md`](release-0600-blockers.md).
 ## Public API change landing with astubbs#204: the commit give-up exception
 
 Not a breaking change to a *subclass* surface like the two above - this one is visible to every user
-of `PERIODIC_CONSUMER_SYNC`, so it needs its own line in the notes.
+of `PERIODIC_CONSUMER_SYNC` and, with astubbs#317, of `PERIODIC_TRANSACTIONAL_PRODUCER`, so it needs
+its own line in the notes.
 
 **`ConsumerManager.commitSync` no longer rethrows Kafka's bare `TimeoutException` /
 `SaslAuthenticationException` when a commit exhausts its budget.** It throws
@@ -98,6 +99,15 @@ of `PERIODIC_CONSUMER_SYNC`, so it needs its own line in the notes.
 extending `ParallelConsumerException`) with the broker's exception as the **cause**. Anyone catching
 the Kafka type directly around PC's failure surface - `getFailureCause()`, or a supervisor wrapping
 PC - stops matching, and must catch the PC type or unwrap `getCause()`.
+
+**The transactional path changes its give-up type too, landing with astubbs#317.**
+`ProducerManager#commitOffsets` gave up by throwing `InternalRuntimeException` ("Retired too many
+times") once a fixed 200-attempt cap ran out; it now throws the same
+`OffsetCommitBudgetExceededException` when the whole-operation `offsetCommitTimeout` budget is spent.
+Both the catch and the trigger move: `InternalRuntimeException` extends plain `RuntimeException`, so
+a `catch (ParallelConsumerException)` around transactional commits did not match this failure before
+and does now, while code catching `InternalRuntimeException` stops matching - and the give-up is
+timed rather than counted, so it fires at a different moment.
 
 Why it earns the break on a stability release: the bare Kafka exception can say a commit timed out
 but not *which of PC's options bounded it*, what that option's relationship to the consumer's own

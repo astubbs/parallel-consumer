@@ -69,7 +69,13 @@ import static pl.tlinkowski.unij.api.UniSets.of;
  */
 @Slf4j
 @Tag("transactions")
-@Timeout(300)
+// Must exceed the worst case of the scenario's SEQUENTIAL Awaitility ceilings, which sum to 420s
+// (60 + 60 + 60 + 60 + 120 + 60), plus broker startup, topic setup and the three produce batches.
+// Below that sum, a slow-but-correct run is killed by JUnit mid-scenario instead of failing its own
+// assertion - the failure then reads as "stopped for its own reasons" rather than "was cut off"
+// (AbstractRevokeUnderWorkScenario's DIAGNOSTIC_QUIET_CAP note owns that hazard). A passing run
+// still finishes in a fraction of this; the annotation only bounds pathological ones.
+@Timeout(600)
 class TransactionalCommitOutageContinueIT extends BrokerIntegrationTest<String, String> {
 
     private static final int PHASE_SIZE = 20;
