@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -85,17 +86,30 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     private static final boolean DIAGNOSE_STALL_RECOVERY = Boolean.getBoolean("chaos.diagnoseStallRecovery");
 
     /**
-     * Quiet cap in {@link #DIAGNOSE_STALL_RECOVERY} mode - long enough that "never recovered" means
-     * something. Override with {@code -Dchaos.diagnosticQuietCapMinutes=<n>}.
+     * Requested quiet cap in {@link #DIAGNOSE_STALL_RECOVERY} mode - long enough that "never
+     * recovered" means something. Override with {@code -Dchaos.diagnosticQuietCapMinutes=<n>}.
      * <p>
-     * <b>The scenario class's {@code @Timeout} is the real ceiling, and it wins silently.</b> Those
-     * are 600s today, so a quiet cap above about six minutes cannot be reached - JUnit kills the
-     * test first, mid-observation, and the run then looks like one that stopped for its own reasons
-     * rather than one that was cut off. Raise the annotation if you genuinely need a longer watch;
-     * do not just raise this number and believe the result.
+     * <b>The scenario class's {@code @Timeout} is the real ceiling, and it used to win silently.</b>
+     * Those are 600s, so this 20-minute default could never be reached: JUnit killed the test
+     * mid-observation and the run then looked like one that stopped for its own reasons rather than
+     * one that was cut off. The two outcomes the diagnostic exists to separate are "drained" and "did
+     * not drain", and a JUnit kill is neither - so the default made the experiment's only interesting
+     * result unreachable, which is why the replay this mode prescribes went unrun for five days after
+     * two separate documents called it the cheapest next step.
+     * <p>
+     * {@link #effectiveDiagnosticQuietCap} now clamps this to what the annotation actually allows and
+     * says so at WARN. Raise the {@code @Timeout} if you need a longer watch - the clamp reports the
+     * number to raise it to.
      */
-    private static final Duration DIAGNOSTIC_QUIET_CAP =
+    private static final Duration REQUESTED_DIAGNOSTIC_QUIET_CAP =
             Duration.ofMinutes(Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20));
+    /**
+     * Held back from the scenario's {@code @Timeout} so the quiet wait always ends on its OWN cap,
+     * leaving time for {@code settleRun} (conductor stop, drain joins, fleet settle) and the final
+     * assertions. Without this the clamp would merely move the silent kill from the wait to the
+     * teardown.
+     */
+    private static final Duration DIAGNOSTIC_TEARDOWN_RESERVE = Duration.ofSeconds(90);
     /** Low eviction horizon: a storm-wedged (deadlocked) member stops polling and gets evicted ~30s
      * later, letting pending rebalances resolve and the group re-stabilize for the quiet phase. */
     protected static final int MAX_POLL_INTERVAL_MS = 30_000;
@@ -188,7 +202,57 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         return weights;
     }
 
+    /**
+     * The quiet cap this run can actually reach, clamped to the concrete scenario's {@code @Timeout}.
+     * <p>
+     * A diagnostic that promises a 20-minute watch under a 600s annotation does not deliver a shorter
+     * watch - it delivers an UNINTERPRETABLE one, because JUnit's kill is neither of the two outcomes
+     * the experiment distinguishes ("drained" / "did not drain"), and a killed run reads like one that
+     * ended for its own reasons. Clamping converts that into a real, if shorter, negative result and
+     * names the number to raise for a longer one.
+     * <p>
+     * Read reflectively from {@code getClass()} rather than duplicating the literal per subclass, so
+     * raising a scenario's annotation raises its clamp with no second edit to forget. {@code @Timeout}
+     * is not {@code @Inherited}, but every concrete scenario carries its own - and an absent one means
+     * no ceiling, so the requested cap stands.
+     */
+    private Duration effectiveDiagnosticQuietCap(Instant methodStart) {
+        Timeout timeout = getClass().getAnnotation(Timeout.class);
+        if (timeout == null) {
+            log.warn("=== no @Timeout on {} - diagnostic quiet cap {} stands unclamped ===",
+                    getClass().getSimpleName(), REQUESTED_DIAGNOSTIC_QUIET_CAP);
+            return REQUESTED_DIAGNOSTIC_QUIET_CAP;
+        }
+        Duration ceiling = Duration.ofMillis(timeout.unit().toMillis(timeout.value()));
+        Duration spent = Duration.between(methodStart, Instant.now());
+        Duration available = ceiling.minus(spent).minus(DIAGNOSTIC_TEARDOWN_RESERVE);
+
+        if (available.isNegative() || available.isZero()) {
+            throw new IllegalStateException(String.format(
+                    "chaos.diagnoseStallRecovery cannot observe anything: %s's @Timeout of %s is already "
+                            + "spent (%s elapsed, %s reserved for teardown). Raise the annotation to at "
+                            + "least %s to watch for the requested %s.",
+                    getClass().getSimpleName(), ceiling, spent, DIAGNOSTIC_TEARDOWN_RESERVE,
+                    spent.plus(DIAGNOSTIC_TEARDOWN_RESERVE).plus(REQUESTED_DIAGNOSTIC_QUIET_CAP),
+                    REQUESTED_DIAGNOSTIC_QUIET_CAP));
+        }
+        if (REQUESTED_DIAGNOSTIC_QUIET_CAP.compareTo(available) <= 0) {
+            return REQUESTED_DIAGNOSTIC_QUIET_CAP;
+        }
+        log.warn("=== diagnostic quiet cap CLAMPED {} -> {}: {}'s @Timeout is {}, of which {} is already "
+                        + "spent and {} is reserved for teardown. The wait will now end on its own cap, so "
+                        + "'did not drain' is a real result rather than a JUnit kill. For the full {} "
+                        + "watch, raise the @Timeout to at least {}. ===",
+                REQUESTED_DIAGNOSTIC_QUIET_CAP, available, getClass().getSimpleName(), ceiling, spent,
+                DIAGNOSTIC_TEARDOWN_RESERVE,
+                REQUESTED_DIAGNOSTIC_QUIET_CAP,
+                spent.plus(DIAGNOSTIC_TEARDOWN_RESERVE).plus(REQUESTED_DIAGNOSTIC_QUIET_CAP));
+        return available;
+    }
+
     protected void runRevokeUnderWorkScenario() throws Exception {
+        // The @Timeout clock starts here, so the diagnostic clamp has to measure from here too.
+        Instant methodStart = Instant.now();
         ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ===",
                 scenarioLabel(), useCooperativeAssignor(), seed.getValue(), seed.replayCommand());
@@ -257,10 +321,11 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                     await().alias("backlog drained after the storm settles (quiet phase)")
                             .pollInterval(Duration.ofSeconds(2));
             if (DIAGNOSE_STALL_RECOVERY) {
+                Duration diagnosticCap = effectiveDiagnosticQuietCap(methodStart);
                 // Deliberately no failFast: the whole point is to keep watching AFTER the violation.
                 log.warn("=== chaos.diagnoseStallRecovery ACTIVE - quiet cap {} and no fail-fast. " +
                         "This is a DIAGNOSTIC run: violations are still asserted at the end, so this " +
-                        "cannot make the test pass. ===", DIAGNOSTIC_QUIET_CAP);
+                        "cannot make the test pass. ===", diagnosticCap);
                 // The prior art nobody greps, delivered at the moment it is about to be repeated: the
                 // six prior-art checks in AGENTS.md search docs, PRs and issues, and none of them
                 // reaches a class javadoc. This exact experiment was run once before at the 90s/45s
@@ -273,7 +338,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
                         "reproduced a known result - the NEW question is whether it still recovers " +
                         "at the current shape, and how long it takes against the {} bound. ===",
                         ProgressProbe.LAG_STAGNATION_BOUND);
-                quiet = quiet.atMost(DIAGNOSTIC_QUIET_CAP);
+                quiet = quiet.atMost(diagnosticCap);
             } else {
                 quiet = quiet.atMost(QUIET_CAP).failFast("probe violation", probe::hasViolations);
             }
