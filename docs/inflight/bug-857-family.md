@@ -647,12 +647,42 @@ passed all seven chaos scenarios. Two adjacent commits, a prose-only diff betwee
 green: whatever draws this signature is drawn per seed, and no tree-content explanation survives that
 pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
 
-**Thirteenth sighting, 2026-08-17 - the eager `CLASS2_STALL` again, and a DIFFERENT arm from the
-(Observed before the eighth, and numbered last because it arrived by merge rather than
-in date order - it was recorded on this branch as its seventh, a number master had since
-given to a different sighting.)
-fleet `NO_PROGRESS` pair above, and it reproduces the second sighting
-almost exactly.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed fail-fast by
+**Thirteenth sighting, 2026-08-20 - the first chaos run with the new detectors, and none of them
+fired.** `Chaos Pain Suite` on astubbs/parallel-consumer#325's merged head `283202eb5`
+([run 32334089543](https://github.com/astubbs/parallel-consumer/actions/runs/32334089543)), 8 of 9
+chaos ITs green, `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red at
+173s. **21 violations, all one kind**: `CLASS2_STALL/LAG_STAGNATION`, committed offset stagnant
+~153s against the 150s bound, group STABLE and heartbeats flowing.
+`peaks: rebalanceDwell=9935ms lagStagnation=153984ms`.
+
+**Seed `2801529966526445415`** - recorded because the artifact expires and, by this ledger's own
+argument, the seed is the asset:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2801529966526445415
+
+**What makes this entry worth more than another tally mark: zero `INSTANCE_STALL`, zero
+`LEDGER_KEY_ORDER`, zero `LEDGER_KEY_CONCURRENCY`.** This was the first full chaos storm run against
+the ordering ledger and the stall probe astubbs#325 added, and neither produced a single finding. A
+new detector's most likely failure is crying wolf; on this evidence they do not. The red is entirely
+the pre-existing `CLASS2_STALL` timing bound, whose value and gating that PR deliberately left alone.
+
+**Contention is a hypothesis here, not the finding.** `Performance (optional)` ran 05:02:53-05:05:42
+on the same self-hosted box, overlapping the chaos job's opening minutes, and this ledger already
+records that pairing as a prior cause. But the discriminator is an uncontended replay of *this* seed,
+and per the table in
+[`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
+the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
+Recorded as unresolved.
+
+**Fourteenth sighting, 2026-08-17 - the eager `CLASS2_STALL` again, and a DIFFERENT arm from the
+fleet `NO_PROGRESS` pair above, and it reproduces the second sighting almost exactly.**
+
+(Observed before the eighth, and numbered last because it arrived by merge rather than in date
+order - it was recorded on this branch as its seventh and later its thirteenth, numbers master had
+since given to different sightings.)
+
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed fail-fast by
 `ProgressProbe` on
 [job 95331078881](https://github.com/astubbs/parallel-consumer/actions/runs/32011246250/job/95331078881),
 on astubbs#293 at head `b94e85d64`:

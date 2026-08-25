@@ -81,6 +81,20 @@ jobs:
       - name: Inflight notes carry valid tags
         run: bash bin/check-inflight-tags.sh
 
+      - name: "Self-test the branch self-reference gate"
+        run: bash bin/test-check-branch-self-reference.sh
+
+      # PR_NUMBER is not a convenience here - without it the gate checks HALF of what it claims and
+      # still exits 0. `gh` on a runner is unauthenticated (no GH_TOKEN in this workflow, by design -
+      # nothing else here needs one), so the script's `gh pr list` fallback exits 4, `2>/dev/null ||
+      # true` swallows it, and the `#NNN` / `/pull/NNN` arm is skipped entirely. That arm is the
+      # gate's own motivating incident: a note citing astubbs#1 by number, with no branch name in it.
+      # The event payload already carries the number, so this costs nothing and needs no token.
+      - name: "A doc that mentions this branch must read correctly after the merge"
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash bin/check-branch-self-reference.sh
+
       # Self-test only. check-pr-ready.sh reads a live PR, so running the gate itself in CI would be
       # a network call with an answer that changes by the minute; what must not rot is its refusal to
       # ever conclude "ready".
