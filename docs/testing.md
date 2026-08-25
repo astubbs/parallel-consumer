@@ -163,6 +163,14 @@ so it structurally cannot fire on slow-but-progressing. A run where Class 2 obse
 `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
 it is untagged deliberately, so it gates every default integration build.
 
+**The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
+`INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
+completing fires nothing that gates - and the correctness ledger does not close it either, because it
+counts records processed rather than offsets durably committed. What is uncovered, and the correlated
+gate that would close it (with the red control it must have first), is tracked in
+[`test-per-shard-liveness-has-no-gate.md`](inflight/test-per-shard-liveness-has-no-gate.md). Do not
+read "Class 2 was demoted" as "that case is covered elsewhere".
+
 **Recorded but not yet analysed - reach for this before adding instrumentation.** The ledger is an
 event register: it writes down facts and lets the end-of-run assessment decide what they mean. So
 some questions need only a new *analysis*, not new *recording*. Every `KeyOrderLedger.Delivery`

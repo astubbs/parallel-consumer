@@ -103,8 +103,12 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * three diagnostic replays, two of them of the seeds the sightings ledger itself nominated as its
      * best evidence, all crossed this bound and then drained completely. What the bound measures is
      * how long a watermark stays pinned, which is a speed question; the liveness question it was
-     * standing in for belongs to {@link #INSTANCE_STALL_BOUND}. The peak is still always measured -
-     * a timing regression must stay visible, it just must not turn a correctness suite red. */
+     * standing in for belongs to {@link #INSTANCE_STALL_BOUND} - <b>but only at instance
+     * granularity.</b> Demoting this detector therefore REDUCED per-shard liveness coverage rather
+     * than relocating it: see {@link #INSTANCE_STALL_BOUND}'s own granularity note, and
+     * {@code docs/inflight/test-per-shard-liveness-has-no-gate.md} for what is uncovered and the
+     * correlated gate that would close it. The peak is still always measured - a timing regression
+     * must stay visible, it just must not turn a correctness suite red. */
     public static final Duration LAG_STAGNATION_BOUND = Duration.ofSeconds(150);
     /**
      * Appended to every Class 2 observation so the interpretation arrives WITH the finding, not in a
@@ -124,8 +128,12 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                     + "seed 6825864417772979246 (the sightings ledger's own master-control seed) trips "
                     + "it twice and drains to inFlight=0; seed 4044221734199516240 trips it 46 times on "
                     + "the drain arm and drains. The gating liveness claim is INSTANCE_STALL, which "
-                    + "watches completions and so cannot fire on slow-but-progressing. See "
-                    + "docs/inflight/test-class2-probe-asserts-timing-not-correctness.md";
+                    + "watches completions and so cannot fire on slow-but-progressing - but it is "
+                    + "per-INSTANCE, so a single wedged shard on an instance whose other shards keep "
+                    + "completing is covered by NOTHING that gates. If you are here because a "
+                    + "watermark froze while the fleet stayed busy, that gap is the case to rule out "
+                    + "by hand. See docs/inflight/test-class2-probe-asserts-timing-not-correctness.md "
+                    + "and docs/inflight/test-per-shard-liveness-has-no-gate.md";
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
     public static final long LAG_STAGNATION_MIN_LAG = 50;
     /**
@@ -147,8 +155,11 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * runs - PC's CONTROL thread - so a deadlocked control loop freezes the count even while worker
      * threads finish records and heartbeats keep flowing. What per-instance cannot see is one wedged
      * shard on an instance whose other shards keep completing; that case remains
-     * {@code CLASS2_STALL}'s - which reports it as an observation rather than failing on it,
-     * precisely because it cannot tell that case from a slow one.
+     * {@code CLASS2_STALL}'s - which since 2026-08-25 reports it as an observation rather than
+     * failing on it, precisely because it cannot tell that case from a slow one. <b>So that case has
+     * no gating detector at all today.</b> That is a known, deliberate reduction in coverage, not an
+     * oversight, and it is tracked in {@code docs/inflight/test-per-shard-liveness-has-no-gate.md};
+     * do not read the demotion as evidence the case is covered elsewhere.
      * <p>
      * Bound arithmetic (why 150s cannot fire legitimately): a completion arrives at the end of every
      * user-function execution, so the longest legitimate GAP is one heaviest record - W1's 45s dwell,

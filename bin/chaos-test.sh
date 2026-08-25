@@ -82,6 +82,11 @@ summary() {
             echo "identical to it - three replays cross this bound and drain completely. Read the peak as a"
             echo "SPEED number: worth noticing if it moves, never a defect on its own. The liveness claim is"
             echo "\`INSTANCE_STALL\`, which gates; if that stayed silent, this run was slow, not stalled."
+            echo ""
+            echo "One caveat worth knowing before you close the tab: \`INSTANCE_STALL\` is per-INSTANCE, so a"
+            echo "single wedged shard beside busy siblings gates nothing. If a watermark froze here while the"
+            echo "fleet stayed busy, rule that case out by hand -"
+            echo "docs/inflight/test-per-shard-liveness-has-no-gate.md has the shape to look for."
         fi
     fi
 }

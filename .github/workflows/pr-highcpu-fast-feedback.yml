@@ -162,6 +162,31 @@ jobs:
       - name: ${{ matrix.suite-name }} tests
         run: time ${{ matrix.cmd }}
 
+      # A chaos run is a MEASUREMENT, and the one thing a measurement must never do is be absent
+      # silently. Chaos shares one repo-wide concurrency group (see above), so on a busy day GitHub
+      # discards a superseded pending run and a PR's head commit can get no chaos execution at all -
+      # while every required check stays green. A missing measurement then looks exactly like a
+      # passing one. This step names the commit that WAS measured, so "the chaos result you are
+      # reading belongs to a different commit" is answerable from the summary rather than by
+      # reconstructing the queue. docs/ci.md carries how to read an absent chaos check.
+      - name: Record what was measured
+        if: always() && matrix.box-exclusive == 'true'
+        run: |
+          {
+            echo "## Chaos measurement provenance"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Commit measured | \`${{ github.event.pull_request.head.sha || github.sha }}\` |"
+            echo "| Outcome | ${{ job.status }} |"
+            echo "| Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
+            echo ""
+            echo "If the PR's head commit is not the commit above, this PR's current code has NOT been"
+            echo "through the chaos suite. That is possible by design - chaos serialises repo-wide and a"
+            echo "superseded pending run is discarded - and it is NOT a failure, but it is also not a pass."
+            echo "Re-run on demand with: \`gh workflow run chaos-pain.yml -R astubbs/parallel-consumer\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7

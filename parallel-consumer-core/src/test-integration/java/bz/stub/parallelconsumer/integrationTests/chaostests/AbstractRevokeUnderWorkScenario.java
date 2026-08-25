@@ -355,7 +355,9 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
             // The protocol-invisible signals are the ones that can still fire here. Since 2026-08-25 the
             // Class 2 lag bound is a non-gating OBSERVATION, so what can fail this phase is
             // INSTANCE_STALL - which watches completions and cannot fire on slow-but-progressing - plus
-            // the fleet watermark and the end-of-run ledger.
+            // the fleet watermark and the end-of-run ledger. INSTANCE_STALL is per-instance, so a
+            // single wedged shard beside busy siblings fails nothing here: see
+            // docs/inflight/test-per-shard-liveness-has-no-gate.md.
             org.awaitility.core.ConditionFactory quiet =
                     await().alias("backlog drained after the storm settles (quiet phase)")
                             .pollInterval(Duration.ofSeconds(2));

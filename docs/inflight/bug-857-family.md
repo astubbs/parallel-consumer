@@ -743,6 +743,17 @@ exposure: 21 violations in one storm run, every one of them the Class 2 timing b
 are not yet distinguishable** - the detector is days old. That is an argument for watching it, not
 for keeping a bound that cries constantly.
 
+**A second limit, and it is a correction to the paragraph above rather than a footnote to it.**
+`INSTANCE_STALL` is per-INSTANCE, so it does NOT cover everything the demoted bound was watching. One
+partition's committed offset freezing while the owning instance's other shards keep completing fires
+nothing that gates - `INSTANCE_STALL` is re-armed by any returned work result, and the ledger counts
+records processed rather than offsets durably committed. **So the demotion reduced per-shard liveness
+coverage; it did not relocate it**, and an earlier version of this entry said otherwise. Tracked, with
+the correlated gate that would close it and the red control that gate must have first, in
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md). Raised by the
+cross-model adversarial reviewer on astubbs#354; three in-process reviewers on the same diff missed
+it, which is the clearest argument this file records for keeping that pass.
+
 **A falsifiable prediction, recorded before the fact.** Land astubbs#29 and the rest of the backlog,
 re-run the chaos suite on a loaded box, and the `CLASS2_STALL` findings continue at roughly the same
 rate - because they are the bound meeting the load, and neither the deadlock fix nor the sequencing

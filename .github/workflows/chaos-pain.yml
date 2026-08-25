@@ -36,7 +36,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: chaos-pain-${{ github.ref }}
+  # SAME group as the per-PR chaos job in pr-highcpu-fast-feedback.yml, deliberately. Both run
+  # bin/chaos-test.sh on the same physical box, so serialising the PR lane against itself while
+  # leaving on-demand hunts free would put a seeded hunt alongside a PR's chaos run and contaminate
+  # both - which is the contention this group exists to remove. One group covers every chaos run in
+  # the repository, whatever started it.
+  group: highcpu-chaos-exclusive
   cancel-in-progress: false   # chaos runs are measurements - queue, never kill
 
 jobs:

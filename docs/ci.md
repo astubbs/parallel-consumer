@@ -164,7 +164,33 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
   the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
-  See [`docs/testing.md`](testing.md).
+  See [`docs/testing.md`](testing.md). Shares the per-PR lane's `highcpu-chaos-exclusive` concurrency
+  group, so a dispatched hunt queues behind a PR's chaos run rather than sharing the box with it.
+
+### An ABSENT chaos check is not a passing one
+
+**Every chaos run in the repository - per-PR and on-demand - sits in one `highcpu-chaos-exclusive`
+concurrency group, and queues rather than cancels.** That is deliberate: several runner processes
+serve one physical machine, so a ref-keyed group let six PRs start six chaos suites at once, and four
+of six went red purely from co-residency on 2026-08-25. Serialising removed that.
+
+**The cost is that a PR's head commit can get no chaos run at all.** GitHub keeps one running plus one
+pending per group and discards older pending entries, so on a busy day a superseded run simply never
+executes. Nothing goes red, because `Chaos Pain Suite` is not a required check - and a missing
+measurement then reads exactly like a passing one.
+
+**How to tell which you have.** The chaos job writes a `Chaos measurement provenance` block into its
+job summary naming the commit it measured. If that commit is not the PR's head, the current code has
+not been through the suite. A cancelled or absent chaos check means **not measured** - neither a pass
+nor a failure. Re-run on demand with
+`gh workflow run chaos-pain.yml -R astubbs/parallel-consumer`, ideally when sibling agents are not
+pushing.
+
+The alternative - a dedicated single-slot runner label for chaos, which would serialise by capacity
+and still give every PR a run - is the better shape and is not done: it needs runner-side
+provisioning, and a job pinned to a label nothing serves does not fail, it queues silently until
+GitHub cancels it (see [`self-hosted-runner.md`](self-hosted-runner.md)). Background:
+[`docs/inflight/test-chaos-class2-red-was-runner-contention.md`](inflight/test-chaos-class2-red-was-runner-contention.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
 - **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
