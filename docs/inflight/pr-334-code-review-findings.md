@@ -17,7 +17,9 @@ and describe refusals currently surface as a session-level `Fault` with no call 
 answers-and-continues while the Python client treats any `Fault` as permanently fatal - so one
 refused call bricks a client the engine believes is healthy (findings 7, 21, 25). Either refusals
 become per-call in-band answers (`call_id` + error, as `Get` already does; `Fault` reserved for
-genuinely fatal states) or they become fatal on BOTH ends. Reviewers recommend in-band.
+genuinely fatal states) or they become fatal on BOTH ends. Reviewers recommend in-band. **Owner,
+2026-08-25: decision deferred to merge-prep** - the group stays blocked until then, taken up when
+this queue is worked.
 
 **Fix order recommended at review time:** the error-contract group above; then the
 shutdown-lifecycle group (3, 14, 13 - nothing releases waiters on teardown, both sides + the
