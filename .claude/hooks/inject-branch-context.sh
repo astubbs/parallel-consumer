@@ -393,13 +393,21 @@ def origin_slug(target):
     if not ok:
         return None
     url = url.strip()
-    # A REMOTE, NOT ANY PATH. A clone whose origin is a local directory - `git clone /path/to/repo`,
-    # which is how a scratch or baseline checkout is usually made - otherwise yields a slug built
-    # from the last two path segments (`git/parallel-consumer`), and `gh` is then asked about a
-    # repository that does not exist. It fails, so the block stays honest, but it names a plausible
-    # wrong repo while doing it. Requiring a scheme or an scp-style `host:owner/repo` turns that into
-    # the accurate answer: there is no remote to ask about.
-    if "://" not in url and not re.match(r"^[^/]+@[^/:]+:", url):
+    # A HOSTED REMOTE, NOT ANY PATH AND NOT ANY SCHEME. A clone whose origin is a local directory -
+    # `git clone /path/to/repo`, which is how a scratch or baseline checkout is usually made -
+    # otherwise yields a slug built from the last two path segments (`git/parallel-consumer`), and
+    # `gh` is then asked about a repository that does not exist. It fails, so the block stays honest,
+    # but it names a plausible wrong repo while doing it.
+    #
+    # ALLOWLIST THE SCHEMES; DO NOT MERELY REQUIRE ONE. An earlier version asked only whether the URL
+    # contained `://`, which `file:///home/astubbs/git/parallel-consumer` satisfies - so the very
+    # local clone the guard exists to catch walked straight through it and produced the same
+    # `git/parallel-consumer` slug, reached by a scheme instead of a bare path. `git clone file://...`
+    # is the documented way to force a real transport against a local repo, so this is not a
+    # hypothetical spelling. Naming the four schemes that can carry a hosting slug closes `file://`
+    # and `ftp://` together, and an unknown scheme is the accurate answer either way: there is no
+    # repository to ask about. Found in review of astubbs/parallel-consumer#350.
+    if not re.match(r"^(?:https?|ssh|git)://", url) and not re.match(r"^[^/]+@[^/:]+:", url):
         return None
     m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
     if not m:

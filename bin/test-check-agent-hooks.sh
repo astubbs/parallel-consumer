@@ -1167,6 +1167,19 @@ case "$ctx" in *'is not a remote URL'*) got=accurate ;; *) got=plausible_wrong_r
 assert "a local-path origin is reported as having no repository to ask" accurate "$got"
 case "$ctx" in *'/some/local/path'*|*'#9412'*) got=invented ;; *) got=clean ;; esac
 assert "...and no slug is invented from the path segments" clean "$got"
+
+# A `file://` ORIGIN IS THE SAME LOCAL CLONE, WEARING A SCHEME. The first version of the guard above
+# asked only whether the URL contained `://`, so `git clone file:///path/to/repo` - the documented
+# way to force a real transport against a local repository - walked through it and produced the very
+# `git/parallel-consumer` slug the guard exists to prevent. Found in review of
+# astubbs/parallel-consumer#350; the bare-path case above cannot catch it, which is why it is its own
+# case rather than another spelling of the same one.
+git -C "$local_origin/wt" remote set-url origin "file://$local_origin/some/local/path"
+ctx="$(bctx_context "$(bctx_fire "$lp" "$stub_pr:$PATH")")"
+case "$ctx" in *'is not a remote URL'*) got=accurate ;; *) got=plausible_wrong_repo ;; esac
+assert "a file:// origin is a local clone, not a repository to ask about" accurate "$got"
+case "$ctx" in *'/some/local/path'*|*'#9412'*) got=invented ;; *) got=clean ;; esac
+assert "...and no slug is invented from its path segments either" clean "$got"
 rm -rf "$local_origin"
 
 # --- DISPATCH MODE: the shape of the 2026-08-24 incident -------------------------------------------
