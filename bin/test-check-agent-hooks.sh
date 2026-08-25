@@ -786,6 +786,14 @@ echo "--- remind-master-drift-on-push.sh ---"
 # question), and it reports the OVERLAP (which is the actual decision input).
 DRIFT_HOOK="$HOOKS/remind-master-drift-on-push.sh"
 
+# THE CWD IS INHERITED STATE, AND THE SECTION BELOW DEPENDS ON IT. The push-reminder section leaves
+# the shell inside its scratch repo, on a NAMED branch, and check-history-rewrite.sh needs exactly
+# that: GitHub Actions checks a pull_request out DETACHED, so a case run from the real checkout finds
+# no branch, resolves no PR, and takes the generic-refusal path - green on every developer machine
+# and red only in CI. This section restores what it found rather than cd-ing to $REPO_ROOT, which is
+# how that was discovered.
+drift_entry_dir="$(pwd)"
+
 # A REAL REMOTE, not a hand-written refs/remotes ref. The hook fetches before reading, and a fixture
 # with no fetchable origin would exercise the degraded path on every case while looking like the
 # healthy one - the same shape as a gate that passes having checked nothing.
@@ -951,10 +959,14 @@ out="$(drift_fire 'git push')"
 assert "a branch already level with master is silent" silent "$got"
 git checkout -q feat/drift
 
-cd "$REPO_ROOT" || exit 1
+cd "$drift_entry_dir" || exit 1
 
 echo
 echo "--- check-history-rewrite.sh ---"
+#
+# RUNS FROM THE PUSH FIXTURE'S SCRATCH REPO, inherited via the cwd - see the note at the top of the
+# drift section. The enriched refusal only renders when a PR is found, and finding one needs a named
+# branch; the CI checkout is detached, so running these from the real tree fails only there.
 
 # A force-push re-anchors every inline review comment and destroys the incremental diff a reviewer
 # works from. This guard exists because docs/merge-checklist.md already said "re-cut at the end" and
