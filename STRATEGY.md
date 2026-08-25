@@ -206,6 +206,15 @@ Groups' best case and PC's worst; see
 - **No per-key ordering, and no equivalent of one.** This is the differentiator, and it is a
   capability Share Groups lack rather than a benchmark they lose.
 - **Retry semantics**, which stay broker-side there.
+- **The parallelism decision itself.** Delivery is not processing: a share consumer still hands the
+  application the question of how many records to work at once, and most share-group handlers will
+  touch external systems (were they not, Kafka Streams would be the natural tool) - exactly where a
+  deploy-time concurrency guess is wrong in both directions and goes stale. Adaptive concurrency
+  answers that question from measurement, which makes it **composable with Share Groups rather than
+  in competition with them** - a headline of the prospective share-groups mode
+  ([`docs/inflight/next-parallel-consumer-on-share-groups.md`](docs/inflight/next-parallel-consumer-on-share-groups.md));
+  the argument is owned by
+  [`docs/inflight/next-what-survives-share-groups.md`](docs/inflight/next-what-survives-share-groups.md).
 - Acknowledgement also costs the broker about 48x what a batched encoded commit does per record.
   Noted for completeness rather than as an argument - it is a real difference, but it accrues to the
   cluster and is not the reason to choose either design.

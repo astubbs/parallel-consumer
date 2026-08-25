@@ -23,6 +23,12 @@ Second sighting pair on `throttling-ideation`, 2026-08-25, on the U2 (pool actua
 green on immediate class re-run, and neither can be the change's doing: both run under DISABLED
 mode, where the new actuator is gated inert.
 
+A full core unit run on `throttling-ideation` (2026-08-25 afternoon, the pre-commit gate for the
+law-U12/U13 fixes) failed once: `processInKeyOrder(CommitMode)[3]` at `[sanity check input data]`,
+actual size 0 against expected 9 - the exact symptom this ledger owns below. Class re-run green on
+the same build; the law changes stay non-suspect for the recorded reason (these tests run with the
+adaptive mode `DISABLED`, and the admission paths are mode-gated). One failure in 724.
+
 A full core unit run on `throttling-ideation` (2026-08-25, immediately after merging
 `perf/engine-concurrency` in) failed three times, all in `ParallelEoSStreamProcessorTest`, all
 already on this ledger: `processInKeyOrder(CommitMode)[2]` and `[3]` at `[sanity check input data]`,

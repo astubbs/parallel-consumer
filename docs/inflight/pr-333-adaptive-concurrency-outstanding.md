@@ -17,6 +17,13 @@ Its sibling `AdaptiveConcurrencyClosedLoopIT` closes the next gap - a handler wh
 function of the concurrency the controller chose, so the loop is actually closed - and that is where
 item 2 below came from.
 
+## Merge prep: this PR gets a Codex review (owner directive, 2026-08-25)
+
+Before this PR merges, run a **Codex review** in addition to the usual `@claude review this` gate -
+a cross-model review catches what a same-model review is structurally blind to, and this work (a
+control law with falsifier-backed behaviour claims) is exactly the complexity tier it is reserved
+for. The Codex plan is small, so it is spent strategically, not routinely; this PR qualifies.
+
 ## Status, 2026-08-24: items 0 to 3 are answered by one design, and the split that preceded it was wrong
 
 [`docs/plans/2026-08-24-003-feat-admission-control-law-design.md`](../plans/2026-08-24-003-feat-admission-control-law-design.md)

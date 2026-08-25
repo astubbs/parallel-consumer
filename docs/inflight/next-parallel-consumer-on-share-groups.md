@@ -27,6 +27,14 @@ that, in a client, where it is cheap.
 So the mode's proposition is: **ordered concurrency over a share group** - which neither component
 offers alone.
 
+**And a second headline, added 2026-08-25: auto-sized concurrency over a share group.** Share
+Groups deliver records; how many to process at once remains the application's problem, and it is
+the deploy-time guess adaptive concurrency exists to remove. The argument and the market estimate
+behind it are owned by
+[`next-what-survives-share-groups.md`](next-what-survives-share-groups.md) ("Share Groups still
+hand you the parallelism problem"); what matters here is that it widens the wrapper's audience to
+users who never need ordering.
+
 Plus PC's retry policy in the application's own code, rather than delivery-count archival as the
 broker's policy. `RELEASE` and `REJECT` map onto redelivery and poison-pill routing, and PC's DLQ
 could use `REJECT` as the signal it currently has to invent.

@@ -32,6 +32,38 @@ Three deliverables, distinct jobs:
    `AdaptiveConcurrencyClosedLoopIT` and `AdaptiveConcurrencyComparisonIT` are the raw material -
    what is missing is the packaging and the tuning-for-watchability.
 
+## The provenance story - owner-approved copy for the feature docs (2026-08-25)
+
+Antony's ruling: the lineage below is itself a selling point ("great in many ways") and must appear
+in the user-facing feature documentation in substance - wording may be adapted to the docs' voice:
+
+> The first version was a port of Netflix's open-source concurrency-limits library (the Gradient2
+> algorithm, which watches latency ratios). Our falsifier harness convicted it - on perfectly flat
+> load it ratcheted the target from 20 up to 60 for no benefit - so it was replaced with a
+> clean-sheet design. The replacement is our own code, but the ideas are borrowed with attribution:
+> the "does growth still pay" statistic is standard economics/engineering (elasticity, a log-log
+> regression slope), and the probing discipline - you cannot see capacity you are not using, so
+> periodically spend a little to look - is how Google's BBR congestion control and IETF RFC 7661
+> solved the identical problem for network bandwidth. Envoy's adaptive concurrency and Uber's
+> Cinnamon informed what to measure.
+
+Two supporting facts worth stating alongside it, both verifiable from the code rather than claimed:
+
+- The convicting run is a named, re-runnable test (the old-law arm of the falsifier harness in
+  `AdmissionLawFalsifierTest`) - deliverable 2's real-numbers-not-prose-claims bar applies.
+- The controller's memory is deliberately small and simple: a rolling list of one-line window
+  summaries bounded by a wall-clock horizon (`AdmissionElasticityEstimator`), plus one standing
+  verdict - kilobytes, no persistence, relearns from scratch on restart by design.
+
+Research record with provenance caveats:
+[`../plans/2026-08-24-006-research-controller-prior-art.md`](../plans/2026-08-24-006-research-controller-prior-art.md).
+
+The promotional material must also carry the **Share Groups composability argument** - adaptive
+concurrency is a killer addition *on top of* Share Groups, not a rival to them, because delivery is
+not processing and the how-many-at-once question survives any delivery protocol.
+[`next-what-survives-share-groups.md`](next-what-survives-share-groups.md) owns that argument
+("Share Groups still hand you the parallelism problem").
+
 Related, not duplicated here: [`docs-content-series.md`](docs-content-series.md) (the investigations
 series carries these numbers outward once they exist), [`core-auto-scaling.md`](core-auto-scaling.md)
 (the feature's umbrella), and the graduation ruling - on-by-default when proven - which is what this

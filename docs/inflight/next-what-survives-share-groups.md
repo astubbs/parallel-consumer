@@ -25,6 +25,30 @@ stop reading at the first sentence that dodges it.
 | **Getting ahead of your own batch** | Neither acknowledgement mode permits polling with records unacknowledged, so outstanding work is capped at one batch. PC keeps records from many polls in flight - measured at 5,000 against 2,606 |
 | **Old brokers** | Share Groups need 4.2+. Anyone on 3.x cannot use them at all, and that is most installations for years yet |
 | **Retry and DLQ policy in your own code** | Delivery-count archival is the broker's policy, not yours |
+| **The parallelism decision, auto-sized** | Delivery is not processing: whoever hands you 1,000 records, choosing how many to work at once is still your problem. Share Groups leave it manual; adaptive concurrency answers it from measurement - the section below |
+
+## Share Groups still hand you the parallelism problem - and adaptive concurrency answers it
+
+**Antony, 2026-08-25, for the wrapper's positioning and the promotional material.** Share Groups
+solve *delivery* - per-record acking, consumer count decoupled from partitions. They do not solve
+*processing*: pull a thousand records and you still either work them sequentially (fine when the
+handler is cheap) or build parallel execution yourself. A thread pool is the easy part; **sizing it
+is the part nobody can do at deploy time** - the same runtime-only quantity the strategy doc's
+target problem names, and it goes stale as load and downstream capacity move.
+
+The market shape that makes this matter: **most share-group processing will involve external
+systems** (Antony's estimate: ~80%) - because if your handler touches nothing external, Kafka
+Streams is the natural tool, and you would only be on a share group for raw speed. External systems
+are exactly where a fixed pool size is wrong in both directions and where rate limits and capacity
+shifts arrive at runtime. So the share-group user's first real design question after "how do I ack"
+is "how many at once" - and adaptive concurrency is the only thing on the table that answers it
+from measurement rather than a guess.
+
+**Consequence for the wrapper
+([`next-parallel-consumer-on-share-groups.md`](next-parallel-consumer-on-share-groups.md)): its
+proposition is two headline features, not one.** Ordered concurrency over a share group, and
+auto-sized concurrency over a share group - each something neither component offers alone, and the
+second applies even to users who never need ordering.
 
 ## One slow record: Share Groups have head-of-line blocking too, at BATCH granularity
 
