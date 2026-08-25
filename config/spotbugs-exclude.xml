@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs suppression, BY RULE, deliberately coarse.
+
+  Every <Match> here MUST have a row in docs/inflight/static-spotbugs-rule-registry.md giving the
+  reason it is off and the trigger that turns it back on. A rule excluded without a row there is a
+  bug in this setup, not a decision - that registry is the whole point of suppressing this way
+  rather than through the auto-generated baseline this file replaces.
+
+  The baseline regenerated on every push to master, keyed on class + method + bug type, and recorded
+  nothing about what it swallowed. This file is worse at precision and better at everything that
+  matters: it is visible in a diff, each entry is justified, and the count only goes down.
+
+  Ordered to match the registry's tiers, so the two can be read side by side.
+-->
+<FindBugsFilter>
+
+    <!-- ============ Tier 2: off now, each with a trigger in the registry ============ -->
+
+    <!-- Bulk style. Mechanical sweeps; off so the engine's real findings are visible. -->
+    <Match><Bug pattern="USBR_UNNECESSARY_STORE_BEFORE_RETURN"/></Match>
+    <Match><Bug pattern="UMTP_UNBOUND_METHOD_TEMPLATE_PARAMETER"/></Match>
+    <Match><Bug pattern="NAB_NEEDLESS_BOOLEAN_CONSTANT_CONVERSION"/></Match>
+    <Match><Bug pattern="ENMI_EQUALS_ON_ENUM"/></Match>
+    <Match><Bug pattern="MRC_METHOD_RETURNS_CONSTANT"/></Match>
+    <Match><Bug pattern="LO_APPENDED_STRING_IN_FORMAT_STRING"/></Match>
+    <Match><Bug pattern="STT_TOSTRING_STORED_IN_FIELD"/></Match>
+    <Match><Bug pattern="UP_UNUSED_PARAMETER"/></Match>
+    <Match><Bug pattern="IPU_IMPROPER_PROPERTIES_USE"/></Match>
+    <Match><Bug pattern="IPU_IMPROPER_PROPERTIES_USE_SETPROPERTY"/></Match>
+
+    <!-- READ THESE TWO BEFORE CLEARING THEM. The exception-softening pair may be pointing at a real
+         analysis blind spot rather than at style: docs/solutions/best-practices/
+         sneaky-thrown-checked-exceptions-defeat-spotbugs-dataflow.md records that sneaky-throw
+         already defeats SpotBugs dataflow in this codebase. -->
+    <Match><Bug pattern="EXS_EXCEPTION_SOFTENING_NO_CONSTRAINTS"/></Match>
+    <Match><Bug pattern="LEST_LOST_EXCEPTION_STACK_TRACE"/></Match>
+
+    <!-- Structural, and each waits on work that is already planned. -->
+    <Match><Bug pattern="CT_CONSTRUCTOR_THROW"/></Match>          <!-- after the God-class decomposition -->
+    <Match><Bug pattern="FCCD_FIND_CLASS_CIRCULAR_DEPENDENCY"/></Match> <!-- pairs with the ArchUnit dependency-direction rule -->
+    <Match><Bug pattern="MS_SHOULD_BE_FINAL"/></Match>            <!-- with the codec work -->
+    <Match><Bug pattern="ACEM_ABSTRACT_CLASS_EMPTY_METHODS"/></Match>
+    <!-- 7 calls in 2 main classes (ProducerWrapper, AbstractParallelEoSStreamProcessor), and 5 more in 3
+         test classes. "Check both sites" is what this said before someone counted: two CLASSES, never two
+         calls, and a re-enable attempt sized against the wrong number gives up partway and looks finished. -->
+    <Match><Bug pattern="RFI_SET_ACCESSIBLE"/></Match>
+
+    <!-- 28 instances. A computed format string is how conditional log messages are built here.
+         Turns back on if a placeholder bug is ever traced to one. The two SLF4J placeholder
+         MISMATCH findings stay ON - they are real, and the registry names both. -->
+    <Match><Bug pattern="SLF4J_FORMAT_SHOULD_BE_CONST"/></Match>
+
+    <!-- ============ Tier 3: off, expected to stay off ============ -->
+
+    <!-- Storing and returning collaborators passed in IS how this library composes: PCModule holds
+         the options, BrokerPollSystem holds the ConsumerManager. Defensive copying would break the
+         DI wiring rather than fix anything. Reached independently by
+         docs/inflight/static-spotbugs-latent-findings.md on the same rules. -->
+    <Match><Bug pattern="EI_EXPOSE_REP"/></Match>
+    <Match><Bug pattern="EI_EXPOSE_REP2"/></Match>
+    <Match><Bug pattern="IMC_IMMATURE_CLASS_IDE_GENERATED_PARAMETER_NAMES"/></Match>
+
+    <!-- ============ Test code only, approximated by class name ============ -->
+    <!--
+      SCOPING LIMITATION, MEASURED NOT ASSUMED. A SpotBugs filter cannot express "test source root".
+      The XML records sourcepath as the PACKAGE-relative path - `bz/stub/parallelconsumer/mutiny/
+      MutinyPCTest.java` - so `src/test` never appears in it and a <Source> path regex matches
+      nothing at all. The first version of this file used one; it was inert, and only a sanity check
+      that PREDICTABLE_RANDOM had gone to zero caught it.
+
+      So these are scoped by class name instead, which is the weaker discriminator this repo already
+      knows is weak: it misses a helper called Fixture or Harness. That is a real gap and it is
+      recorded in the registry rather than papered over. The alternative - excluding these rules
+      globally - would drop the one REAL main-code PREDICTABLE_RANDOM finding, which is worse.
+    -->
+
+    <!-- A seeded, reproducible generator is what a test SHOULD use. The rule stays ON for main
+         code, where its one finding is real. -->
+    <Match>
+        <Class name="~.*(Test|Tests|IT|ITCase)(\$.*)?"/>
+        <Bug pattern="PREDICTABLE_RANDOM"/>
+    </Match>
+    <!-- A named local holding an intermediate value is how readable test setup is written. -->
+    <Match>
+        <Class name="~.*(Test|Tests|IT|ITCase)(\$.*)?"/>
+        <Bug pattern="DLS_DEAD_LOCAL_STORE"/>
+    </Match>
+    <Match>
+        <Class name="~.*(Test|Tests|IT|ITCase)(\$.*)?"/>
+        <Bug pattern="LSC_LITERAL_STRING_COMPARISON"/>
+    </Match>
+    <Match>
+        <Class name="~.*(Test|Tests|IT|ITCase)(\$.*)?"/>
+        <Bug pattern="CE_CLASS_ENVY"/>
+    </Match>
+
+
+    <!-- THE RED CONTROL IS SUPPOSED TO BE BROKEN, so the detector finding it is the detector working.
+         LincheckToolchainProbeTest (astubbs#347) is a deliberately torn containsKey/get/dereference on a
+         ConcurrentHashMap, kept broken on purpose: it is the arm that proves Lincheck can see the defect
+         class at all, and "fixing" it would silently turn the Lincheck lane's calibration into a green
+         lamp wired to nothing.
+
+         Scoped to that ONE class, never to the rule. MUI_CONTAINSKEY_BEFORE_GET is the finding that
+         justified adopting fb-contrib in the first place - it names ShardManager.removeWorkFromShardFor,
+         a real defect - so switching it off globally to quieten a deliberate fixture would trade the
+         headline result for silence. Any other class tripping this rule still fails.
+
+         Worth recording rather than just suppressing: the probe's own javadoc says SpotBugs reported
+         NOTHING on this shape. That was measured with STOCK detectors, and it is why the javadoc is
+         corrected in the same change - with fb-contrib the shape is detected in seconds. -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.state.LincheckToolchainProbeTest"/>
+        <Bug pattern="MUI_CONTAINSKEY_BEFORE_GET"/>
+    </Match>
+
+</FindBugsFilter>
