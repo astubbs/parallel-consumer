@@ -7,7 +7,8 @@ Implementation-ready plan for the commit-failure seam -
 `docs/plans/2026-08-24-001-feat-commit-failure-seam-plan.md` (enriched in place from the
 requirements-only version by the planning pass on 2026-08-24). The feature: a commit-failure handler
 returning SHUT_DOWN (default) or CONTINUE when a retriable commit failure exhausts its budget
-(astubbs#317; the request is embedded in upstream confluentinc#833). No PR yet. Planning's one
+(astubbs#317; the request is embedded in upstream confluentinc#833). Draft PR astubbs#352, branch
+`feats/833-commit-failure-seam` (renamed from `docs/833-...` when implementation began). Planning's one
 user-directed scope change: the async consumer commit mode (the shipped default) is excluded this
 delivery with a named follow-up owed at landing - it has no budget, no exhaustion event, and marks
 offsets clean before the broker answers. The feature's
