@@ -1,0 +1,17 @@
+pc_version,client_pin,mode,delay_ms,repeat,msg_per_sec,peak_in_flight
+LOCAL,NATIVE,core,0,1,50505.1,100
+LOCAL,NATIVE,core,0,2,52238.8,100
+LOCAL,NATIVE,core,2,1,22828.1,100
+LOCAL,NATIVE,core,2,2,23564.3,100
+LOCAL,NATIVE,core,20,1,3728.4,100
+LOCAL,NATIVE,core,20,2,3634.9,100
+LOCAL,NATIVE,core,100,1,946.7,100
+LOCAL,NATIVE,core,100,2,928.3,100
+llingr-demux-v0.12.2,franz,llingr,0,1,91145.8,2
+llingr-demux-v0.12.2,franz,llingr,0,2,91360.0,3
+llingr-demux-v0.12.2,franz,llingr,2,1,29308.3,100
+llingr-demux-v0.12.2,franz,llingr,2,2,29274.0,100
+llingr-demux-v0.12.2,franz,llingr,20,1,4402.2,100
+llingr-demux-v0.12.2,franz,llingr,20,2,4413.5,100
+llingr-demux-v0.12.2,franz,llingr,100,1,974.6,100
+llingr-demux-v0.12.2,franz,llingr,100,2,974.4,100

@@ -1,0 +1,20 @@
+<!-- Copyright (C) 2026 Antony Stubbs and contributors -->
+<!--
+  Pins logging for EVERY benchmarked arm.
+
+  Without this, logback finds no configuration and defaults to DEBUG, and Parallel Consumer logs per
+  record. That is not a small tax: the same build measured 2,595 msg/s at default DEBUG and 16,563
+  msg/s with logging quiet - a 6x difference attributable entirely to the logging classpath. It went
+  unnoticed because the local arm happened to resolve parallel-consumer-core's tests jar, which ships
+  a logback-test.xml, while every arm resolved from Central did not. That is a benchmark measuring
+  its own configuration.
+
+  WARN, not OFF: an arm that is failing and retrying should still say so, and silence would hide it.
+-->
+<configuration>
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder><pattern>%-5level %logger{20} - %msg%n</pattern></encoder>
+    </appender>
+    <root level="WARN"><appender-ref ref="STDERR"/></root>
+</configuration>

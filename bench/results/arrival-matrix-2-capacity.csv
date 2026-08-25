@@ -1,0 +1,15 @@
+pc_version,pc_build,client_pin,mode,callee,ordering,key_dist,records,partitions,max_poll_records,buffer,delay_ms,concurrency,repeat,msg_per_sec,peak_in_flight,inflight_p50,load_1m,residence_p50_ms,residence_p99_ms,residence_p999_ms,residence_max_ms,drain_p50_ms,drain_p99_ms,drain_p999_ms,drain_max_ms,e2e_p50_ms,e2e_p99_ms,e2e_p999_ms,e2e_max_ms,arrival_requested,arrival_achieved,feed_lag_p99_ms,backlog_p99,backlog_max,injected_failures
+LOCAL,2266159329,NATIVE,core,timer,KEY,zipf,12000,24,500,20000,10,24,1,414.5,24,2,13.11,2952,24695,25769,25640,6253,27503,28803,28942,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,core-vt,timer,KEY,zipf,12000,24,500,20000,10,24,1,417.7,24,2,8.03,2952,24696,25769,25421,6189,27277,28561,28708,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,core-vt,timer,UNORDERED,zipf,12000,24,500,20000,10,24,1,1277.0,24,24,8.99,3086,6173,6173,6103,6335,9307,9371,9371,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,core-vt,timer,KEY,distinct,12000,24,500,20000,10,24,1,1271.2,24,24,6.96,3221,6173,6173,6168,6386,9367,9428,9428,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,core-dpvt,timer,KEY,zipf,12000,24,500,20000,10,24,1,411.6,24,2,6.22,3086,24696,25769,25798,6380,27693,28994,29137,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,core-dpvt,timer,UNORDERED,zipf,12000,24,500,20000,10,24,1,1275.4,24,24,12.75,3086,6173,6173,6112,6331,9338,9398,9399,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,core-dpvt,timer,KEY,distinct,12000,24,500,20000,10,24,1,1288.5,24,24,8.57,3086,6173,6173,6026,6318,9233,9293,9293,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,pc,async,KEY,zipf,12000,24,500,20000,10,24,1,437.1,24,2,8.58,3083,23618,24692,24169,-,-,-,-,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,pc,async,UNORDERED,zipf,12000,24,500,20000,10,24,1,1305.3,24,23,13.55,3083,5901,6170,5939,-,-,-,-,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,reactor,timer,KEY,zipf,12000,24,500,20000,10,24,1,409.2,24,2,15.79,2816,24694,26841,25992,-,-,-,-,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,reactor,timer,UNORDERED,zipf,12000,24,500,20000,10,24,1,1259.0,24,24,6.31,3219,6440,6440,6261,-,-,-,-,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,mutiny,timer,KEY,zipf,12000,24,500,20000,10,24,1,411.6,24,2,9.65,3220,24695,25769,25872,-,-,-,-,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,mutiny,timer,UNORDERED,zipf,12000,24,500,20000,10,24,1,1322.9,24,24,7.10,3086,5905,5905,5785,-,-,-,-,-,-,-,-,-,-,-,0,0,0
+LOCAL,2266159329,NATIVE,proxy,timer,UNORDERED,zipf,12000,24,500,20000,10,24,1,1158.7,24,20,10.10,3622,6977,6977,6954,-,-,-,-,-,-,-,-,-,-,-,0,0,0
