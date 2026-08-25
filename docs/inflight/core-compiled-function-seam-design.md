@@ -186,3 +186,25 @@ lives on its branch: `spike/242-fastpath-wasm` and `spike/242-fastpath-numba`,
   [`perf-streams-engine-floor.md`](perf-streams-engine-floor.md) once it lands, created by that
   spike).
 <!-- file-refs: N/A - perf-streams-engine-floor.md is created by the engine-floor spike this entry dispatches -->
+
+## Owner direction, 2026-08-25 (second): open question 5 resolved, spike/PoC scope
+
+**WASM for the artifact-producing bindings; Numba interception as Python's special case; one seam
+under both.** The rationale, recorded so it is not re-derived: for compiled languages the artifact
+is a byproduct of their normal build - author once, ship bytes, sandboxed, identity-checked - while
+Python is the one binding that cannot cheaply produce an artifact but uniquely carries a runtime
+JIT that compiles the user's ACTUAL function in place. Python's user base is large enough - and
+central enough to agentic programming - that a special case earns its keep.
+
+**The correctness net for the dual lanes is the cross-binding conformance harness**
+([`test-cross-binding-streams-conformance.md`](test-cross-binding-streams-conformance.md) owns it):
+known topologies replayed against each engine and each lane (wire, Numba, wasm), asserted to match
+the `TopologyTestDriver` oracle recorded from plain Apache Kafka Streams - which is exactly the
+check that makes the transform-written-twice divergence hazard visible instead of silent. The
+harness was already earmarked a product feature; this decision makes it load-bearing for the fast
+path too.
+
+Coupling stated plainly: Numba pointers are in-process only, so Python's fast lane arrives with
+the embedded-engine decision (or, later, a mature Python-to-WASM toolchain compiling the same
+intercepted function to bytes). Scope of all of this: **the spike PoC** - fleshing out remains
+gated on the engine-floor result.
