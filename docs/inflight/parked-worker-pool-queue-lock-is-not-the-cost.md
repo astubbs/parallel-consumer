@@ -1,7 +1,7 @@
 # Not a bug: worker threads park on the pool's queue lock, and it costs nothing
 
-<!-- inflight-type: parked -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-labels: needs-measurement -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21 by profiling, **and immediately falsified by testing it.** Kept as a parked note

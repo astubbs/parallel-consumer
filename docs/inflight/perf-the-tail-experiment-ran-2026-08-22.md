@@ -1,7 +1,7 @@
 # The tail experiment ran, and the workload it had never modelled is what separates the arms
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-decision -->
 
 **Say the headline first.** On a skewed key distribution - the workload people adopt Parallel

@@ -1,5 +1,8 @@
 # `feats/proxy-requirements` - the first verification on a quiet box
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 Every previous green on this branch was measured while seven or more agent JVMs shared one machine,
 so no timing number from those runs is worth anything and several red runs were dismissed as
 contention without a control. This is the run with the box to itself: load average 2.4 and falling at

@@ -1,5 +1,8 @@
 # Build the Swift client without a container
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
+
 Swift is one of only two languages that build in Docker, and the only one where that choice was
 forced rather than chosen. Getting it onto the host toolchain would make its loop as fast as every
 other language's, remove a 3.4 GB image from CI, and leave C++ as the sole container language.

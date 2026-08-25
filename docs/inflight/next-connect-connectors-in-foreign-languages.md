@@ -1,5 +1,7 @@
 # Next: let people write Kafka Connect connectors in a foreign language, on top of PC
 
+<!-- inflight-type: feature -->
+
 Product idea surfaced during the language-proxy ideation (astubbs#242). Recorded so it is not lost;
 deliberately not leaned on while the proxy's own interaction model is still being settled.
 

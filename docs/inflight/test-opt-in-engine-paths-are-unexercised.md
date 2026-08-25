@@ -1,7 +1,7 @@
 # Test: three opt-in execution paths, and nothing in CI runs any of them
 
-<!-- inflight-type: test -->
-<!-- inflight-impact: correctness -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-22. **This is one structural gap, not three separate missing test suites**, and naming

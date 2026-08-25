@@ -1,7 +1,8 @@
 # Parked: the mailbox is the largest park site, and it is the wrong target
 
-<!-- inflight-type: parked -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
+<!-- inflight-state: parked - pending an MPSC-mailbox throughput test to confirm or refute the hypothesis -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21, from a flight recording read **properly** - `jfr print` truncates stacks to five

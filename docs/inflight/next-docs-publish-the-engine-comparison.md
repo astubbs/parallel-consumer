@@ -1,6 +1,6 @@
 # Next: publish the engine comparison, so people actually try the async engines
 
-<!-- inflight-type: next -->
+<!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 <!-- inflight-labels: release-note, needs-measurement -->
 

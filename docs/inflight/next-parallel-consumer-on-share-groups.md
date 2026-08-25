@@ -1,7 +1,7 @@
 # What would a Parallel Consumer share-groups mode look like?
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-impact: process -->
 
 **Antony's idea, 2026-08-22:** a PC mode that runs *on* share groups - PC tracks each record's
 acknowledgement and issues the response, and the engine's ordering and retry machinery sits on top of

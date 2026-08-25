@@ -1,5 +1,8 @@
 # Retire capability negotiation — lockstep versions make it redundant
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: refactor -->
+
 **Owner's call, 2026-08-15:** "We don't need to worry about negotiating capabilities. The version of
 the sidecar and the client library must move in lockstep, and they can do a version check at the
 beginning, and it's a hard failure if the versions don't match. No need for that extra plumbing.

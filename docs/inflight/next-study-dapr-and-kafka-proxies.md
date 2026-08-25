@@ -1,5 +1,7 @@
 # Study Dapr and the Kafka proxies — then decide whether to integrate with them
 
+<!-- inflight-type: register -->
+
 Raised 2026-08-15 while working out what the proxy actually is. Nothing here is decided; the point is
 that **this project now has close architectural neighbours and has never studied any of them**, which
 is a gap while writing an announcement that will invite the comparison.

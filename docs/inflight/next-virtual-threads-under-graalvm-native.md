@@ -1,7 +1,7 @@
 # HIGH PRIORITY: do Java virtual threads work in a GraalVM native image, and do ours?
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement, release-note -->
 
 **The question is one experiment wide and the answer decides how the proxy sidecar is positioned.**

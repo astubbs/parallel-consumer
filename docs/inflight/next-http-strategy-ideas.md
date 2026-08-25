@@ -1,5 +1,7 @@
 # HTTP strategy: dialects, compatibility surfaces, and adapters
 
+<!-- inflight-type: register -->
+
 Captured 2026-08-15 while the thinking was fresh. **Ideas, not decisions** — the point is to get the
 option space down before it evaporates, and to name what would settle each choice. The ideation pass
 this seeded has now run (2026-08-17):

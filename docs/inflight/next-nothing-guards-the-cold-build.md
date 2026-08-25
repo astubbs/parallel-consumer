@@ -1,5 +1,8 @@
 # A cold clone builds fine - but only `validate` as a terminal goal does not, and nothing guards it
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
+
 Investigated 2026-08-17 after `./mvnw validate` failed on `feats/proxy-requirements` with a
 dependency-resolution error that never mentions CVEs. **The first draft of this note assumed cold
 builds were broken. Measurement says otherwise, and the conclusion reversed.**

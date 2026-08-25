@@ -1,5 +1,8 @@
 # The proto freeze gate compares against a moving target, so it cannot mean "v1 never changes"
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
+
 Raised 2026-08-17 (astubbs#242). Not started. The gate works; what it *asserts* is weaker than what
 the freeze claims.
 

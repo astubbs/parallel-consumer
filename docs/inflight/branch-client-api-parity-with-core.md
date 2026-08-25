@@ -1,5 +1,8 @@
 # The clients ask for a return value; core Parallel Consumer does not
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 **The one API-shape divergence worth fixing, and it is not between the clients** (astubbs#242,
 raised by the owner 2026-08-15 while checking the fan-out had not drifted).
 

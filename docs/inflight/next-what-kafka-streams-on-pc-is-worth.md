@@ -1,7 +1,7 @@
 # What Kafka Streams on PC is worth, given the engine numbers of 2026-08-22
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
 
 **Antony's question**: given the engine work, how much impact would getting `pc-engine-KafkaStreams`
 working actually make? Signpost to the workstream itself is

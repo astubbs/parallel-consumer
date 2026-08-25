@@ -1,5 +1,8 @@
 # Next stage: serialization — and two fields the wire is missing first
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 Owner's direction, 2026-08-15: serialization is the next stage after the current one. Recorded with
 the prerequisite that came out of checking the schema for it.
 

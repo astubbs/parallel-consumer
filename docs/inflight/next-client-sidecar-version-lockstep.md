@@ -1,5 +1,8 @@
 # Client and sidecar run in lockstep — and the check is owed
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 **Settled by the owner, 2026-08-15:** a client and the sidecar it talks to are the *same version*.
 Mixing versions is not a supported configuration and not a compatibility matrix to be tested - it is
 a **runtime error that should be detected and refused**. The check itself is deferred to a later

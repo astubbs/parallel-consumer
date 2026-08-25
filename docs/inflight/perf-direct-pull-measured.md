@@ -1,7 +1,7 @@
 # Direct pull, finished and measured: it is 3x FASTER at ten workers and 20x slower at five thousand
 
-<!-- inflight-type: perf -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-22. **The 2022 direct-pull engine, rebuilt on current code with the blocking wait it

@@ -1,5 +1,7 @@
 # Next: a standing comparison of PC against the systems that solved the same problems
 
+<!-- inflight-type: feature -->
+
 A document comparing Parallel Consumer with the projects that have already crossed the same
 boundaries, so this project can check itself against them instead of rediscovering their answers.
 Wanted as a permanent reference, not a one-off: the flow-control / in-flight-accounting seam has

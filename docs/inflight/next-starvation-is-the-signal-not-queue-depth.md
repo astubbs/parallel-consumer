@@ -1,7 +1,7 @@
 # The buffer controller reads queue depth; starvation is the signal that actually generalises
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-impact: refactor -->
 
 **Antony's question, 2026-08-22: "if a virtual-thread executor has no queue to read, why would a
 normal thread need one?"** Following it through says the queue was never the right input.

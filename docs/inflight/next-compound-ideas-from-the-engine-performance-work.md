@@ -1,6 +1,6 @@
 # Compound-engineering ideas from the engine-performance work
 
-<!-- inflight-type: next -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: process -->
 
 **A running ledger, kept as the work happens, to be ranked and selected at the end.** Sibling to

@@ -1,5 +1,8 @@
 # Parked, post-v6: say in the docs that this project is built with agentic compound engineering
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6 -->
+
 The published documentation should carry an entry stating that this fork is developed using agentic
 compound engineering, linking to the practice's own site. Owner's call, 2026-08-14; **post-v6**, so
 it does not compete with release work.

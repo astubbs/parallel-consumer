@@ -1,5 +1,8 @@
 # Pre-v6: the clients must expose core's batching modes
 
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
+
 Owner's call, 2026-08-15, and the reasoning is defensive as much as technical:
 
 > "One of the first things people are gonna say is, well, it'll be slower because it's one record at

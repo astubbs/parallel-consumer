@@ -1,5 +1,7 @@
 # Polyglot demo app — ideation done, direction not yet chosen
 
+<!-- inflight-type: feature -->
+
 The polyglot-demo continuation (ideas 21–27) of
 [`docs/ideation/2026-08-14-language-proxy-interaction-model-ideation.html`](../ideation/2026-08-14-language-proxy-interaction-model-ideation.html)
 rides this branch (astubbs#242):

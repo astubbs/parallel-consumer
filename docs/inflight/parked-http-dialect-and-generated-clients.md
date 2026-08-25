@@ -1,5 +1,7 @@
 # An HTTP dialect of the proxy protocol, and clients generated from its spec
 
+<!-- inflight-type: feature -->
+
 Raised 2026-08-15. Two ideas that turn out to be one: expose the sidecar over plain HTTP as a second
 *dialect* of the same semantics, and generate the per-language clients from its specification the way
 the gRPC ones are generated from the `.proto`.

@@ -1,5 +1,8 @@
 # Parked, post-v6: OpenTelemetry across the client libraries
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6 -->
+
 Owner's idea, 2026-08-15, for after v6. The framework is **OpenTelemetry** — the one with an SDK in
 every language this project targets, which is exactly why it is the right choice here rather than
 one instrumentation approach per ecosystem.

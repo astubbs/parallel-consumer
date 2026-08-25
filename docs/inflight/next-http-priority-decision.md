@@ -1,5 +1,7 @@
 # HTTP strategy: the priority decision the ideation left open (astubbs#242)
 
+<!-- inflight-type: register -->
+
 The HTTP-strategy ideation pass has run - the third continuation (ideas 14-20) of
 [`../ideation/2026-08-14-language-proxy-interaction-model-ideation.html`](../ideation/2026-08-14-language-proxy-interaction-model-ideation.html)
 - and [`next-http-strategy-ideas.md`](next-http-strategy-ideas.md) points at it. Read the doc for the

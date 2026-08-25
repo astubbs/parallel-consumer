@@ -1,5 +1,8 @@
 # Later phase: dependency scanning for the non-JVM clients — try GitHub first
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: security -->
+
 The CVE audit covers the Maven tree only. The five non-JVM clients pull dependencies from npm, PyPI,
 crates.io, RubyGems and NuGet, and **nothing scans any of them** — a gap that only appeared when
 those clients did. It has already cost something real: a **critical** advisory in the Go client's

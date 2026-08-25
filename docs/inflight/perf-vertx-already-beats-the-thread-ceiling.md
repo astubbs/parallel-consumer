@@ -1,7 +1,7 @@
 # PC's async engines already break the platform-thread ceiling - today, on Java 8
 
-<!-- inflight-type: perf -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: release-note, needs-measurement -->
 
 Measured 2026-08-21. **The `ExternalEngine` family - Vert.x, Reactor, Mutiny - is not subject to the

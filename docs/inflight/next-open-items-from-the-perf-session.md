@@ -1,7 +1,6 @@
 # Next: what this performance session left open, ranked
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: correctness -->
+<!-- inflight-type: register -->
 <!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-22. **The open items from the session, in the order they deserve attention**, so the

@@ -1,7 +1,7 @@
 # WorkManager as its own thread: workers ask, it replies, and nothing inside is thread-safe
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-impact: refactor -->
 <!-- inflight-labels: needs-measurement -->
 
 **Antony's proposal, 2026-08-22.** Rather than N workers scanning the shards themselves, give

@@ -1,7 +1,7 @@
 # The engine comparison, measured 2026-08-22
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 **The first cross-engine measurement this project has taken.** Every previous claim about the engine

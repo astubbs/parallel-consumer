@@ -1,7 +1,7 @@
 # What survives Share Groups - and the honest answer to "why bother with PC now"
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
 
 **Antony, 2026-08-22, on seeing the measurement: "I wonder why anyone would bother with pc after v6
 is out?"** Taken seriously rather than defended against, because the measurement is real and the

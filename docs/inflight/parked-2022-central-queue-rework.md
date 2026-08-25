@@ -1,7 +1,8 @@
 # Parked: the 2022 central-queue / direct-pull / per-thread-queue rework
 
-<!-- inflight-type: parked -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: feature -->
+<!-- inflight-impact: throughput -->
+<!-- inflight-state: parked - kept as prior art; pending assessment in astubbs#327 and a docs/refactoring.md correction -->
 <!-- inflight-labels: needs-measurement -->
 
 Recorded 2026-08-21. **This is the most valuable piece of prior art in the performance work, and it

@@ -1,7 +1,7 @@
 # Bug: in-flight plateaus near 2,750 records - and it is the Java Kafka stack, not the engine
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: performance -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 Found 2026-08-21 while building an unordered comparison at high concurrency. **No prior art**:

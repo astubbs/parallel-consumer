@@ -1,7 +1,7 @@
 # Virtual threads, measured against Parallel Consumer itself
 
-<!-- inflight-type: perf -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: register -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: release-note, needs-measurement -->
 
 Measured 2026-08-22, on the branch that implements `useVirtualThreads`. This is the re-take that

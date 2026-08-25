@@ -1,7 +1,7 @@
 # A pre-rendered work-order list, as an alternative to both direct pull and queue pre-filling
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: performance -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: needs-measurement -->
 
 **Antony's proposal, 2026-08-22.** Instead of trying to push the right amount of work into the

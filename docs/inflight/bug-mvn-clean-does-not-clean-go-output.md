@@ -1,5 +1,8 @@
 # `mvn clean` does not remove Go's compiled output
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
+
 Found 2026-08-17 while making clean work for every client language (astubbs#242). **Deliberately not
 fixed** — the impact is small and both routes to a fix are disproportionate. Recorded so the gap is
 known rather than assumed away.

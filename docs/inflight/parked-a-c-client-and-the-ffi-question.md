@@ -1,5 +1,8 @@
 # Parked: a C client, and the FFI question underneath it
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: parked - decided against a C client for now; the FFI reasoning is kept for future "why not language X" questions -->
+
 Asked 2026-08-15: librdkafka is written in C rather than C++, so should there be a C client too?
 Considered and parked, because the reasoning generalises to any future "why not language X" and is
 worth not re-deriving.

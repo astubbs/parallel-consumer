@@ -1,7 +1,7 @@
 # Bug: the "Max loading factor steps reached" warning, and the static-buffer bug beside it
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: correctness -->
+<!-- inflight-impact: misdirection -->
 <!-- inflight-labels: release-note -->
 
 Opened 2026-08-21. **Tracked as astubbs#155**, whose title - *"confluentinc#402: Max loading factor

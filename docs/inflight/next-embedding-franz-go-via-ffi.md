@@ -1,7 +1,6 @@
 # VERDICT 2026-08-22: not worth doing. The control was run and the prize is about 7%.
 
-<!-- inflight-type: next -->
-<!-- inflight-impact: architecture -->
+<!-- inflight-type: feature -->
 <!-- inflight-state: closed - measured, the premise did not survive -->
 
 **Antony's call after seeing the control: "I agree it's not worth even considering rewriting
