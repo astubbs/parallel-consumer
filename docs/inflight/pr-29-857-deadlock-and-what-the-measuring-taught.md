@@ -4,30 +4,46 @@
 <!-- inflight-impact: coordination -->
 <!-- post-merge: exempt-file - this note IS the record of astubbs#29; it exists to describe that PR's in-flight state and is deleted when the PR lands, so every mention of it here is the subject, not a stale tense -->
 
-## START HERE - handoff, 2026-08-20
+## START HERE - handoff, 2026-08-27
 
-**PR astubbs/parallel-consumer#29 is BLOCKED and that is correct.** Six `depends on` lines in its
-body; astubbs#323/#324/#325 merged, **astubbs#57, astubbs#322, astubbs#267 have not**. Nothing to do
-on this branch until they land.
+**The master merge has happened.** It was asked for directly, ahead of the dependencies landing,
+which overrides the 2026-08-19 "one merge at the end" decision recorded in `81e08e100`. That
+decision's reasoning was that merging early resolves the same conflicts repeatedly and resolves them
+differently from how the still-open PRs will - so **the cost is now real and lands on whoever merges
+next**: astubbs#57, astubbs#322 and astubbs#267 will each meet these files again, and their
+resolutions may differ from the ones here. The merge commit `d2cbf33bf` states every resolution and
+why, so a later merge can follow rather than re-derive them.
 
-Worktree `/home/astubbs/git/parallel-consumer/.claude/worktrees/sweep-29`, branch
-`bugs/857-paused-consumption-multi-consumers-bug-rename`, pushed to
-`bugs/857-paused-consumption-multi-consumers-bug`. Tree clean, 0/0 with origin, ~29 behind master
-deliberately.
+**Both findings the aborted trial merge recorded came true, exactly as written.**
+`ConsumerManagerCommitRetryBudgetTest` needed the `ThreadConfinedConsumer` wrap at three sites (no
+conflict marker showed it - only `test-compile` did), and `bug-857-family.md` conflicted
+structurally. The second was NOT resolved by taking master's file: neither side is a superset, so it
+was rebuilt from both. Master's seven dated sections and this branch's six analytical ones are all
+present; taking master's file wholesale would have deleted the commit-mode discriminator table.
 
-**Do not:** merge master early (one merge at the end - a trial merge produced two resolutions later
-PRs would have redone); request review before that merge; keep this branch's `PCMetrics.java` at
-merge - **take master's**, astubbs#57 has the better version.
+**PR astubbs/parallel-consumer#29 is still BLOCKED, and that is still correct.** astubbs#57,
+astubbs#322 and astubbs#267 remain open (checked 2026-08-27). The merge changes nothing about that.
 
-**When astubbs#57, astubbs#322 and astubbs#267 have landed:** merge master once -> expect `ConsumerManagerCommitRetryBudgetTest`
-to need `ThreadConfinedConsumer` wrapping and `bug-857-family.md` to conflict structurally (take
-master's) -> run the deadlock probe, `ShardManagerStaleContainerTest`,
-`OutForProcessingCounterDriftProbeTest`, `InstanceStallProbeIT` -> then request review + human LGTM.
+**`PCMetrics.java` has NOT been switched to master's, and must not be yet.** The instruction in
+`835b593cf` is conditional - *merge master AFTER astubbs#57 lands, then take master's side* - and
+astubbs#57 has not landed, so master's copy does not yet carry its better version. Master's
+`removeMeter` today has no guard at all, so taking it now would delete this branch's teardown fix and
+reintroduce the throwing-registry defect. The file did not conflict, so this branch's version
+survived untouched, which is the right state. **When astubbs#57 lands, merge master again and take
+master's side then** - the reasoning is in `835b593cf` and is unchanged.
 
-**Owed at merge:** merge-strategy recommendation and squash message (90+ commits; `e81ac20fe` is
-mislabelled `docs(inflight)` but carries 584 lines of detector code); a one-line `stage_detail` fix in
-`docs/data/roadmap.yaml` (`known-defects-cleared` still says "drafted on astubbs#29") that no gate
-will ask for.
+**The verification runs this note asks for have NOT been done.** The tree compiles (`./mvnw
+test-compile`, all modules including test-integration) and `bin/check-all.sh` passes 15/15, but the
+deadlock probe, `ShardManagerStaleContainerTest`, `OutForProcessingCounterDriftProbeTest` and
+`InstanceStallProbeIT` have not been run against the merged tree. A compile is not evidence about
+behaviour, and this branch's whole record is about not mistaking one for the other.
+
+Worktrees: `.claude/worktrees/pr29` on the mac; `sweep-29` on the linux box holds the pre-merge state.
+
+**Still owed at merge:** merge-strategy recommendation and squash message (100+ commits; `e81ac20fe`
+is mislabelled `docs(inflight)` but carries 584 lines of detector code); the one-line `stage_detail`
+fix in `docs/data/roadmap.yaml` (`known-defects-cleared` still says "mitigation drafted on
+astubbs#29") that no gate will ask for.
 
 **Unfinished:** one more `/ce-compound` run for the second learning - the four-arm measurement showing
 the eager `CLASS2_STALL` is the detector meeting the workload, not a defect. The skill takes one
