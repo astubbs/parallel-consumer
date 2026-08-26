@@ -44,11 +44,14 @@ What stays here, because it is only true while this PR is open:
    review actually ran on; do not assume the newest one. Codex is rate-limited, so a fresh round
    would be Claude-only, and that is Antony's call rather than automatic.
 
-Master was merged on 2026-08-26. Two things it brought needed real work rather than a
-conflict resolution, and both are recorded in the merge commit and the `fix(merge)` commit after it:
-`ManagedPCInstance` was the last caller of the removed `getSuccessfulWorkListeners()`, and
-`bin/check-branch-self-reference.sh` now requires every mention of this PR in `docs/inflight/` to
-read correctly after it lands.
+**Master moves fast under this branch, and several merges on 2026-08-26 needed real work rather
+than a conflict resolution. Read those merge commits before assuming a merge here is routine.** The
+ones that changed something rather than resolving it: `ManagedPCInstance` was the last caller of the
+removed `getSuccessfulWorkListeners()`; `bin/check-branch-self-reference.sh` now requires every
+mention of this PR in `docs/inflight/` to read correctly after it lands; astubbs#335 replaced the
+field this branch guarded in `onUserFunctionFailure` with a state transition, and that guard was kept
+on top of it rather than dropped - the reasoning is at the call site and in the merge commit, and it
+is the one place a merge here chose between two deliberate designs.
 
 ## Parked, deliberately
 

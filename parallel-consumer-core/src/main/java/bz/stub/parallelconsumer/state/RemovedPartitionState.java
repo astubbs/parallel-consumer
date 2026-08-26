@@ -49,10 +49,10 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
      * <b>Immutable, and that is load-bearing.</b> Shared by every partition and every PC in the JVM, so the name is
      * a promise something has to keep. It was a {@code new TreeSet<>()} - a shared, mutable static behind a name
      * promising the opposite. One caller mutating what it received would have corrupted what every
-     * other caller sees, for the life of the JVM, with the field name saying that could not happen. Every caller of
-     * {@link #getIncompleteOffsetsBelowHighestSucceeded()} reads only, so making it genuinely immutable changes
-     * nothing today and turns that silent corruption into an immediate {@code UnsupportedOperationException} if a
-     * future one does not.
+     * other caller sees, for the life of the JVM, with the field name saying that could not happen. Every caller
+     * that reaches it - through {@link #getIncompleteOffsetsBelow(long)}, or through the unbounded form that
+     * delegates to it - reads only, so making it genuinely immutable changes nothing today and turns that silent
+     * corruption into an immediate {@code UnsupportedOperationException} if a future one does not.
      */
     private static final SortedSet<Long> READ_ONLY_EMPTY_SET = Collections.emptySortedSet();
 
