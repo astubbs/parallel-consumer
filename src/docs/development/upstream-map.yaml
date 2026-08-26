@@ -105,6 +105,12 @@ fork_repo: astubbs/parallel-consumer
 # specific commit was deliberately preserved. Verify without fetching:
 #   git ls-remote --tags origin 'archive/*'
 #
+# ENFORCED by `bin/check-upstream-map.sh` (via `scripts/upstream-map.py validate`): ref present and
+# unique, state in the closed set, a `deleted` entry carries an ISO date, and `tip` is a STRING - an
+# all-digit SHA otherwise parses as an integer and never compares equal to `git rev-parse` output.
+# The tip is required only for `deleted` and `archived`, because for a live branch it is one command
+# away and this section records nothing a command answers.
+#
 # A fork receives branches ONCE, at creation, and never again. This one dates
 # from 2020-11-11, so nothing upstream created afterwards ever arrived. That is
 # why the `upstream/*` mirror below exists rather than being redundant.
