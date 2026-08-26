@@ -129,9 +129,19 @@ existing number by its prefix and check it; write new ones the way this section 
 
   Record what no command knows: why something is parked, what blocks it, which decision is pending,
   what collides.
-- **No committed index.** An index file would be edited by every PR, which is the problem this
-  directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/todo-index.md` is
-  the cautionary case: committed, generated, and stale until a reviewer caught it on astubbs#110.)
+- **No committed index OF THESE NOTES.** An index of the notes would be edited by every PR, which is
+  the problem this directory exists to solve. `ls docs/inflight/` and `grep -r` are the index.
+  (`docs/todo-index.md` is the cautionary case: committed, generated, and stale until a reviewer
+  caught it on astubbs#110.)
+
+  **[`issue-index.md`](issue-index.md) is not that**, and is here on purpose - do not delete it
+  citing the rule above. It indexes GITHUB ISSUES, not notes, so no PR edits it except one that
+  regenerates it deliberately, and the churn the rule guards against cannot arise. It exists because
+  `gh issue list --state all` is the most-skipped of the root `AGENTS.md` prior-art checks - an agent
+  must think of querying GitHub, whereas it greps by reflex. It is dated, it says twice that it goes
+  stale silently, and it sends the reader to `gh issue view` before acting, which is what keeps it a
+  discovery aid rather than the second tracker "never write down what a command can answer" forbids.
+  Regenerate with `bin/issue-index.sh`; the script's header records why it has no `--check` gate.
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 
