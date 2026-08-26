@@ -1,4 +1,10 @@
-# RacerD known findings - the ratchet's identity set, not a count.
+# Infer known findings - the ratchet's identity set, not a count.
+#
+# COVERS EVERY CHECKER, not just RacerD. The lane used to run `--racerd-only`, which disabled two
+# checkers that are on by default and support Java - pulse (null dereferences) and starvation
+# (deadlock via lock-order inversion) - so a null deref introduced tomorrow was invisible. Widening
+# needed no schema change here, because the key is bug type plus Class.method: new checkers simply
+# contribute new bug types.
 #
 # WHY IDENTITIES AND NOT A NUMBER. This lane first gated on a bare count ceiling of 13. An
 # independent cross-model review pointed out the hole in it: fix one race, introduce another, the
@@ -19,6 +25,18 @@
 # did not ratchet, which is how a ceiling quietly stops meaning anything.
 #
 # Format: <count> <bug_type> <Class.method>
+1 INTEGER_OVERFLOW_L2 BackportUtils.readFully
+1 NULLPTR_DEREFERENCE OffsetMapCodecManager.lambda$loadPartitionStateForAssignment$2
+1 NULLPTR_DEREFERENCE PartitionStateManager.couldBeTakenAsWork
+1 NULLPTR_DEREFERENCE PartitionStateManager.getHighestSeenOffset
+1 NULLPTR_DEREFERENCE PartitionStateManager.isAllowedMoreRecords
+1 NULLPTR_DEREFERENCE PartitionStateManager.lambda$onOffsetCommitSuccess$2
+1 NULLPTR_DEREFERENCE PartitionStateManager.maybeRegisterNewRecordAsWork
+1 NULLPTR_DEREFERENCE PartitionStateManager.onFailure
+1 NULLPTR_DEREFERENCE PartitionStateManager.onSuccess
+1 NULLPTR_DEREFERENCE PartitionStateManager.resetOffsetMapAndRemoveWork
+1 NULLPTR_DEREFERENCE ProcessingShard.isWorkContainerStale
+1 NULLPTR_DEREFERENCE WorkManager.checkIfWorkIsStale
 1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.controlLoop
 1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.isTimeToCommitNow
 1 THREAD_SAFETY_VIOLATION PCMetrics.gaugeFromMetricDef
@@ -28,6 +46,3 @@
 1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.close
 1 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.hasNext
 2 THREAD_SAFETY_VIOLATION RetryQueue$RetryQueueIterator.next
-1 THREAD_SAFETY_VIOLATION RetryQueue.isEmpty
-1 THREAD_SAFETY_VIOLATION RetryQueue.removeAll
-1 THREAD_SAFETY_VIOLATION RetryQueue.size

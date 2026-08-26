@@ -345,22 +345,29 @@ jobs:
           compare_with_base: true
           max_increase: 10
 
-  # RacerD (Meta's Infer) - the only detector here that finds races WITHOUT being told where to look.
-  # Error Prone's GuardedBy only fires where somebody wrote the annotation, and this codebase has
-  # none; the racing-double seam tests can only re-prove seams already found by hand. RacerD infers
-  # which locks protect which state from how the code uses them.
+  # Meta's Infer, every Java checker it ships - not just RacerD. RacerD is the only detector here
+  # that finds races WITHOUT being told where to look: Error Prone's GuardedBy only fires where
+  # somebody wrote the annotation, and this codebase has none, so the racing-double seam tests can
+  # only re-prove seams already found by hand. RacerD infers which locks protect which state from
+  # how the code uses them, and it is still why this lane exists. Alongside it, bin/infer-test.sh
+  # also runs pulse (null derefs, resource leaks), starvation (deadlock via lock-order inversion),
+  # and the checkers enabled by --annotation-reachability --bufferoverrun --cost --loop-hoisting
+  # --scope-leakage - `--racerd-only` used to disable everything but RacerD, including two checkers
+  # that are on by default, which is why the flag is gone and the lane was renamed from RacerD to
+  # Infer to match what it actually runs.
   #
-  # AN IDENTITY SET, not a count. config/racerd-known-findings.txt records which races are known, keyed on
-  # bug type plus class.method. A bare count ceiling could not distinguish "one race fixed" from "one
-  # race swapped for a different one" - both leave the total unchanged - which an independent
-  # cross-model review caught, and which is the same reports-green-while-it-changed class this lane
-  # exists to police. Twelve lines, checked in, so both directions are a visible diff.
+  # AN IDENTITY SET, not a count. config/infer-known-findings.txt records which findings are known,
+  # keyed on bug type plus class.method. A bare count ceiling could not distinguish "one finding
+  # fixed" from "one finding swapped for a different one" - both leave the total unchanged - which an
+  # independent cross-model review caught, and which is the same reports-green-while-it-changed class
+  # this lane exists to police. One line per known identity, checked in, so both directions are a
+  # visible diff.
   #
-  # Fails BOTH ways: a new identity is a new race, and a known one that stops firing means somebody
-  # fixed a race without ratcheting the file.
-  racerd:
+  # Fails BOTH ways: a new identity is a new finding, and a known one that stops firing means
+  # somebody fixed it without ratcheting the file.
+  infer:
     if: github.event_name == 'pull_request'
-    name: "static: racerd"
+    name: "static: infer"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: prepare-deps
@@ -420,14 +427,14 @@ jobs:
 
       # Asserts the ceiling in both directions. Analysis itself is ~11s over core's 73 files; the
       # timeout is for the download on a cache miss.
-      # INFER_BIN and RACERD_JDK are set here rather than in an `env:` block on purpose. An earlier
+      # INFER_BIN and INFER_JDK are set here rather than in an `env:` block on purpose. An earlier
       # version set all three in `env:` AND overrode two of them inline, so the env values were dead
       # - and worse, wrong: INFER_BIN pointed at the workspace, while the unpack step above puts the
       # toolchain in $HOME/infer. Deleting the inline prefix, which is exactly what a later tidy-up
       # would do, would have pointed the lane at nothing. `$HOME` and `$JAVA_HOME` are not available
       # to `env:` at all, which is what forced the inline form in the first place.
-      - name: RacerD
-        run: INFER_BIN="$HOME/infer/bin/infer" RACERD_JDK="$JAVA_HOME" bash bin/racerd-test.sh
+      - name: Infer
+        run: INFER_BIN="$HOME/infer/bin/infer" INFER_JDK="$JAVA_HOME" bash bin/infer-test.sh
 
   # SpotBugs static analysis - finds null derefs, concurrency issues, resource leaks.
   # Whole reactor, main AND test code, with fb-contrib and find-sec-bugs detectors loaded.
