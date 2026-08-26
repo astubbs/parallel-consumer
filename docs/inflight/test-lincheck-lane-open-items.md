@@ -131,39 +131,70 @@ and the value demonstrated here is what the tool finds *unaided*.
 
 
 <!-- post-merge: checked-begin -->
-## `ShardManagerLincheckTest` did not invert cleanly, and what it exposed instead
+## The inversion contract assumed one bug per harness, and the harnesses have disproved it
 
-**The inversion contract assumes one bug per harness. This one had two.** astubbs#345 removed the
-torn `containsKey`/`get` pair, and the harness was expected to flip from "Lincheck finds the NPE" to
-assert-no-failure. Measured on the fixed tree, that flip is RED: Lincheck still reports
+astubbs#347 committed the lane with every harness asserting that Lincheck FINDS a race, and named
+the fixes that would invert them: astubbs#337 and astubbs#344 over `PartitionStateLincheckTest`,
+astubbs#345 over `ShardManagerLincheckTest`, astubbs#346 over `WorkManagerLincheckTest`. The
+contract itself is still right about what to do - flip the affected harness to assert-no-failure,
+never revert a fix, never loosen a bound. What it did not anticipate is that a harness pointed at
+one seam also explores the others, so **a harness can stop finding its own bug without becoming
+quiet**, and the two that have been run against a fixed tree failed to invert for two different
+reasons.
+
+**`ShardManagerLincheckTest`: the flip is red, and what it exposed is not the fixed bug.** With
+astubbs#345's torn `containsKey`/`get` pair gone, Lincheck still reports
 `= Invalid execution results =`, with no `NullPointerException` anywhere in it. Controlled both ways
-in one sitting - reverting only the main-code fix puts the NPE counterexample back and the harness
-green, restoring it produces the new one - so the second violation was always there, masked because
-Lincheck stops at the first thing it finds.
+in one sitting - reverting only the main-code fix restores the NPE counterexample and a green
+harness, restoring the fix produces the new report - so the second violation was always present,
+masked because Lincheck stops at the first thing it finds. The counterexample is `revokeSweep(0)` in
+the sequential prefix, then `addWork(0)` against `addWork(0)` in parallel, landing on the
+`entries.get(key)` / `entries.put(key, wc)` + `availableWorkContainerCnt.incrementAndGet()`
+check-then-act in `ProcessingShard#addWorkContainer` - this lane's own "concurrent collection plus a
+derived counter" signature, verbatim.
 
-The counterexample is `revokeSweep(0)` in the sequential prefix, then `addWork(0)` against
-`addWork(0)` in parallel. That pair lands on the `entries.get(key)` / `entries.put(key, wc)` +
-`availableWorkContainerCnt.incrementAndGet()` check-then-act in `ProcessingShard#addWorkContainer` -
-the lane's own "concurrent collection plus a derived counter" signature, verbatim.
-
-**Two reasons not to call it a product defect yet, and they pull in opposite directions.**
-Production registers work from the broker-poll thread alone (`WorkManager#registerWork` is its only
-caller), so two concurrent `addWork` calls are not an interleaving the library can take today - the
-harness declares an operation set wider than the real thread model. Against that: the same is not
+Two reasons not to call that a product defect yet, and they pull in opposite directions. Production
+registers work from the broker-poll thread alone (`WorkManager#registerWork` is its only caller), so
+two concurrent `addWork` calls are not an interleaving the library can take today - the harness
+declares an operation set wider than the real thread model. Against that, the same stops being
 obviously true once every worker selects its own work, which is the change item 1 above calls
-time-sensitive.
+time-sensitive. Settle the thread-model question before writing a harness for it; if the operation
+set is the artefact, the fix is constraining this harness with a non-parallel group over `addWork`,
+not a change to `ProcessingShard`.
 
-**This narrows, rather than overturns, item 1's ruling that `availableWorkContainerCnt` is not a
-Lincheck target.** That ruling rests on astubbs#336 measuring the *drift* as single-threaded
+**That narrows rather than overturns item 1's ruling that `availableWorkContainerCnt` is not a
+Lincheck target.** The ruling rests on astubbs#336 measuring the *drift* as single-threaded
 conditional mismatches, and it stands - nothing here re-opens the clamp question. What is new is a
 machine-produced interleaving over the same field, which is a different claim from "the drift is a
-race", and it arrived unaided from a harness pointed somewhere else. Settle the thread-model
-question before writing a harness for it; if the operation set is the artefact, the fix is
-constraining this harness (a non-parallel group over `addWork`), not a change to `ProcessingShard`.
+race", and it arrived unaided from a harness pointed somewhere else.
 
-Until then `ShardManagerLincheckTest` asserts the strongest thing the evidence supports - that no
-report over these operations mentions `NullPointerException` again - which is a real regression
-detector for astubbs#345 and not the vacuous green an unexamined inversion would have produced.
+So that harness asserts the strongest thing the evidence supports - that no report over these
+operations mentions `NullPointerException` again - a real regression detector for astubbs#345's fix
+rather than the vacuous green an unexamined inversion would have produced.
+
+**`WorkManagerLincheckTest`: it passes, and cannot tell you why.** The checkpoint-3 signature it was
+calibrated on - `PartitionState.onSuccess`'s `assert removedFromIncompletes`, thrown out of
+`completeWork` - is gone, which is independent confirmation that astubbs#346's fix works. Lincheck
+still reports a violation, and it is astubbs#345's `NullPointerException` from
+`ShardManager.removeWorkFromShardFor`, reached through the same `revokeAndReassign` operation. The
+harness's own assertion cannot discriminate: `assertThat(report).contains("completeWork")` matches
+the interleaving table, which names both operations whichever one threw. Tightening it onto the
+checkpoint-3 signature would not be a durable pin either, because Lincheck stops at the first
+violation and which of the two it reaches is not ordered.
+
+**One prescription written here has already been falsified, which is the argument for the rule
+below.** The reading from `WorkManagerLincheckTest` alone was that astubbs#345's fix would let both
+harnesses invert together. Measured on a tree carrying that fix, `ShardManagerLincheckTest` does not
+invert at all - the paragraphs above are that measurement. A harness's next assertion is not
+derivable from its own diff, or from another harness's behaviour.
+
+**So: re-run the lane, never reason about it.** Each of these fixes changes what the OTHER harnesses
+find. `LINCHECK_TEST=<class> bin/lincheck-test.sh` is the check and it is cheap. The two harnesses
+above carry assertions matched to what was measured on a tree holding astubbs#345's and
+astubbs#346's fixes together; `PartitionStateLincheckTest` has never been run against a tree
+carrying astubbs#337's or astubbs#344's fix, so its inversion is unexamined and its javadoc still
+promises one. Whoever lands any of these four re-runs the whole lane and re-checks every harness's
+assertion, not only the one their own PR is named for.
 <!-- post-merge: checked-end -->
 
 ## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
