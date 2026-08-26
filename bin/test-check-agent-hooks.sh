@@ -1466,6 +1466,158 @@ rm -f docs/inflight/pr-90003-selftest.md
 rm -rf "$push_stub" "$PUSH_TMPDIR"
 
 echo
+# ---------------------------------------------------------------------------------------------
+# remind-master-drift-on-push.sh
+#
+# ADDED BY astubbs#339, not by the PR that wrote the hook. The registration check further down
+# reports every hook `settings.json` registers that nothing under `bin/` references, and this hook
+# was the first thing it caught. astubbs#357 tested the SHARED push detection thoroughly - chained
+# git calls, unspaced operators, and a negative control - through the sibling reminder's fixture, but
+# nothing exercised THIS hook's own contract, and master's copy of this suite already cites "the
+# drift section" that was never added. So these cases are the hook's own behaviour: what it reports,
+# when it stays quiet, and the throttle that decides between them.
+#
+# OFFLINE BY CONSTRUCTION. The hook only fetches when `MASTER_DRIFT_REF` contains a slash, so a local
+# branch standing in for `origin/master` skips that branch entirely and no case here touches the
+# network. Every case also pins a private TMPDIR and `MASTER_DRIFT_FETCH_FLOOR_SECONDS=0`: the stamp
+# path is derived from the branch NAME, so concurrent copies of this suite would collide on it -
+# the same shared-state flake the push-reminder section above documents - and the five-minute fetch
+# floor would otherwise silence every case after the first.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- remind-master-drift-on-push.sh ---"
+
+DRIFT_HOOK="$HOOKS/remind-master-drift-on-push.sh"
+drift_repo="$(mktemp -d)"
+DRIFT_TMPDIR="$(mktemp -d)"
+# Identity on the FIXTURE REPO rather than per commit: `git merge` below also writes a commit,
+# and a `-c`-per-commit helper silently does not cover it.
+drift_commit() { git commit -qm "$1"; }
+(
+    cd "$drift_repo" || exit 1
+    git init -q .
+    git symbolic-ref HEAD refs/heads/basefix
+    git config user.email selftest@example.invalid
+    git config user.name selftest
+    printf 'base\n' >shared.txt
+    printf 'x\n' >untouched.txt
+    git add . && drift_commit "fixture root"
+    # The branch touches shared.txt and mine.txt; the stand-in master touches shared.txt and
+    # theirs.txt. So exactly ONE file is changed on both sides, which is what makes the overlap
+    # cases below assertions rather than coincidences.
+    git checkout -q -b feature
+    printf 'mine\n' >>shared.txt
+    printf 'm\n' >mine.txt
+    git add . && drift_commit "branch work"
+    git checkout -q basefix
+    printf 'theirs\n' >>shared.txt
+    printf 't\n' >theirs.txt
+    git add . && drift_commit "MASTER-SUBJECT-ONE"
+    git checkout -q feature
+)
+cd "$drift_repo" || exit 1
+
+drift_fire() { # [VAR=value...] -> stdout of the hook
+    printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' |
+        env TMPDIR="$DRIFT_TMPDIR" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 \
+            "$@" bash "$DRIFT_HOOK" 2>/dev/null
+}
+drift_ctx() { # <hook output> -> the additionalContext string, or empty
+    [ -n "$1" ] || return 0
+    printf '%s' "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
+}
+
+# WHAT IT IS FOR: the subjects. A divergence count is what `git rev-list --left-right --count`
+# already answers; the reason this hook exists is that nobody reads the commit bodies, so naming the
+# commit is the assertion that matters most here.
+drift_first="$(drift_fire)"
+drift_report="$(drift_ctx "$drift_first")"
+case "$drift_report" in *MASTER-SUBJECT-ONE*) got=named_the_commit ;; *) got="did not name it" ;; esac
+assert "reports the subject of a commit the base ref gained" named_the_commit "$got"
+
+# OVERLAP, and its negative half in the same case. `shared.txt` is changed on both sides and must be
+# named; `theirs.txt` is changed only on the base side, so reporting it would turn "master has moved
+# under work this branch is doing" into a list of everything master did.
+case "$drift_report" in
+    *"changed on BOTH sides"*shared.txt*) got=named_overlap ;;
+    *) got="no overlap section" ;;
+esac
+assert "names the file changed on both sides" named_overlap "$got"
+case "${drift_report#*BOTH sides}" in *theirs.txt*) got="claimed a base-only file" ;; *) got=overlap_only ;; esac
+assert "does not report a base-only file as overlap" overlap_only "$got"
+
+# THROTTLED ON THE BASE SHA, not a clock: the same tip must be reported once however often you push.
+drift_second="$(drift_fire)"
+[ -z "$drift_second" ] && got=throttled || got="repeated"
+assert "the same base tip is not reported twice" throttled "$got"
+
+# ...and a base that MOVES reports again immediately, which is the half a clock-based throttle gets
+# wrong. Same push, same branch, one new commit on the stand-in master.
+( cd "$drift_repo" && git checkout -q basefix && printf 'more\n' >>theirs.txt && git add . && drift_commit "MASTER-SUBJECT-TWO" && git checkout -q feature )
+drift_moved="$(drift_ctx "$(drift_fire)")"
+case "$drift_moved" in *MASTER-SUBJECT-TWO*) got=reported_again ;; *) got="stayed quiet" ;; esac
+assert "a base ref that moved is reported again at once" reported_again "$got"
+
+# UNCOMMITTED WORK COUNTS AS THIS BRANCH'S, which the hook states as a deliberate choice: a file you
+# are editing right now is the one you most want to hear about. `untouched.txt` is in neither side's
+# history, so only a working-tree read can put it in the overlap.
+( cd "$drift_repo" && git checkout -q basefix && printf 'base edit\n' >>untouched.txt && git add . && drift_commit "MASTER-TOUCHES-UNTOUCHED" && git checkout -q feature )
+printf 'local edit\n' >>untouched.txt
+drift_dirty="$(drift_ctx "$(drift_fire)")"
+case "$drift_dirty" in *"BOTH sides"*untouched.txt*) got=counted_worktree ;; *) got="ignored the uncommitted edit" ;; esac
+assert "an uncommitted edit counts as this branch's side of the overlap" counted_worktree "$got"
+git checkout -q -- untouched.txt 2>/dev/null || true
+
+# SILENT WHEN THERE IS NOTHING TO INHERIT. Three separate exits, each of which would be a false
+# report: level with the base, pushing the base branch itself, and a command that is not a push.
+#
+# EACH ONE GETS A FRESH TMPDIR, and that is the whole point of these three cases rather than a
+# detail. The stamp already holds the current base SHA by now, so the SHA throttle alone would make
+# the hook silent - and a silence case that passes whether or not the exit it names exists asserts
+# nothing. A fresh stamp directory removes the throttle as an explanation and leaves only the exit
+# under test. Caught by this suite: the first version of the level-with-base case passed while the
+# repo sat in a broken merge state, which is exactly the false pass the fresh stamp rules out.
+#
+# `reset --hard` rather than a merge, because both sides appended to `shared.txt` and the catch-up
+# merge conflicted - leaving a repo whose index could not be read, which is what produced that pass.
+( cd "$drift_repo" && git reset --hard -q basefix )
+[ -z "$(drift_fire TMPDIR="$(mktemp -d)")" ] && got=silent || got=spoke
+assert "a branch level with the base ref stays silent" silent "$got"
+
+# NO OVERLAP takes the other branch of the report, and must not imply a merge is required. It has to
+# come AFTER the catch-up above: while the branch still carried its own edit to `shared.txt`, that
+# file was on both sides by construction, so this arm was unreachable and the case would have been
+# asserting the overlap arm under the wrong name.
+( cd "$drift_repo" && git checkout -q basefix && printf 'unrelated\n' >unrelated.txt && git add . && drift_commit "MASTER-UNRELATED" && git checkout -q feature )
+drift_none="$(drift_ctx "$(drift_fire)")"
+case "$drift_none" in
+    *"None of them touch a file this branch changes"*) got=said_nothing_forces_it ;;
+    *) got="wrong branch of the report" ;;
+esac
+assert "with no overlap it says nothing forces a merge today" said_nothing_forces_it "$got"
+( cd "$drift_repo" && git checkout -q basefix )
+[ -z "$(drift_fire TMPDIR="$(mktemp -d)")" ] && got=silent || got=spoke
+assert "pushing the base branch itself stays silent" silent "$got"
+( cd "$drift_repo" && git checkout -q feature )
+drift_nonpush="$(printf '{"tool_name":"Bash","tool_input":{"command":"git status"}}' |
+    env TMPDIR="$(mktemp -d)" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+[ -z "$drift_nonpush" ] && got=silent || got=spoke
+assert "a non-push git command stays silent" silent "$got"
+
+# IT MUST NEVER TAKE THE CALL AWAY. It emits no `permissionDecision` at all, so the assertion is on
+# the two things that could still do it: a non-zero exit, and a report on a repo it cannot read.
+( cd "$drift_repo" && git checkout -q basefix && printf 'z\n' >>unrelated.txt && git add . && drift_commit "MASTER-EXIT-CHECK" && git checkout -q feature )
+drift_fire >/dev/null 2>&1
+assert "reporting exits 0, so the Bash call survives" 0 "$?"
+drift_broken="$(cd "$DRIFT_TMPDIR" && printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' |
+    env TMPDIR="$DRIFT_TMPDIR" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null; echo "rc=$?")"
+case "$drift_broken" in *rc=0*) got=exited_zero ;; *) got="$drift_broken" ;; esac
+assert "outside a git repo it exits 0 rather than failing the call" exited_zero "$got"
+
+rm -rf "$drift_repo" "$DRIFT_TMPDIR"
+cd "$REPO_ROOT" || exit 1
+
 echo "--- check-history-rewrite.sh ---"
 #
 # RUNS FROM THE PUSH FIXTURE'S SCRATCH REPO, inherited via the cwd - see the note at the top of the
