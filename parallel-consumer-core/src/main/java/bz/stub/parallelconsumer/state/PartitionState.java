@@ -505,9 +505,24 @@ public class PartitionState<K, V> {
      * @return incomplete offsets which are lower than the highest succeeded
      */
     public SortedSet<Long> getIncompleteOffsetsBelowHighestSucceeded() {
-        long highestSucceeded = getOffsetHighestSucceeded();
+        return getIncompleteOffsetsBelow(getOffsetHighestSucceeded());
+    }
+
+    /**
+     * The bounded filter behind {@link #getIncompleteOffsetsBelowHighestSucceeded()}, taking the bound as a parameter
+     * so a caller that also needs the bound itself can sample it <em>once</em> and use the same value for both -
+     * {@code OffsetMapCodecManager#encodeOffsetsCompressed} must, because its encoder marks every offset in
+     * {@code [base, bound]} that is absent from this set as completed, so deriving set and bound from two separate
+     * reads of the moving {@code offsetHighestSucceeded} let a concurrent completion above the mark widen the range
+     * around a stale set (see {@code OffsetEncoderWidenedRangeRaceTest}).
+     *
+     * @param highestSucceededBound the exclusive upper bound - a caller's single sample of
+     *                              {@link #getOffsetHighestSucceeded()}
+     * @return incomplete offsets which are lower than the given bound
+     */
+    public SortedSet<Long> getIncompleteOffsetsBelow(long highestSucceededBound) {
         return incompleteOffsets.keySet().parallelStream()
-                .filter(x -> x < highestSucceeded)
+                .filter(x -> x < highestSucceededBound)
                 .collect(toTreeSet());
     }
 

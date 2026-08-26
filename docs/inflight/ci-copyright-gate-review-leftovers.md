@@ -60,9 +60,11 @@ astubbs#338 fixed one instance. Two more stand:
   .claude/hooks/" - but resolves it with `git ls-files 'bin/*.sh'`, and a git pathspec `*` crosses
   `/`, so it *does* scan `bin/lib/`. Two gates whose headers claim identical scope scan different
   sets, and nothing says so. Whatever closes the gap should make them share one resolution.
-- **`.github/scripts/file-ref-gate.js` reads citations from `.md`/`.adoc`/`.txt`/`.html` only**,
-  which is why a dangling path inside a `.sh` was invisible. It already grew once, for `.html`, so
-  this is the second recurrence and nothing records the class.
+- **`.github/scripts/file-ref-gate.js` still does not read `.sh`**, which is why a dangling path
+  inside a script is invisible. `CITING_FILE` has now grown twice - for `.html`, then for `.java`
+  (astubbs/parallel-consumer#342 found the second) - so shell is the third recurrence of one shape,
+  and the only extension left where prose cites repo paths. Closing it wants a pass over the shell
+  corpus: every `bin/*.sh` header cites paths, and the exclusion has never been measured.
 
-Three instances is enough to be predictive - this wants a `docs/solutions/` entry, not a third
+Four instances is enough to be predictive - this wants a `docs/solutions/` entry, not a fourth
 one-off fix.

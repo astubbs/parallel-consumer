@@ -85,7 +85,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
-| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding, editing or retiring a note in `docs/inflight/` - what may live there, the tag vocabulary, and where a note's content goes when its work lands |
 | [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md) | Changing a field in the engine - the `@GuardedBy` rule, the known shared state and its ledgers, and the shard-map pin |
 
 **A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
@@ -103,7 +103,7 @@ a file in it is touched, rather than waiting to be opened.
 |---|---|---|
 | **`AGENTS.md`** (this file) | Rules that bind every agent, and the map above | Work items of any kind; anything only one topic needs |
 | **`STRATEGY.md`** (repo root) | What the product is and why: target problem, the client-side guiding choice, who it is for, success metrics, tracks under investment | A roadmap or feature list. It is a *claims* document nothing tests - work that falsifies a claim must update it; the branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
-| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
+| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` - the prefix names an AREA, never a status. Rules, the prefix table and the tag vocabulary in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md), which owns them | A backlog. A committed index file, which every PR would edit. **Not a place knowledge goes to die**: when your PR resolves a note, migrate what outlives it to its durable owner first - deleting the file is one of four outcomes, and that doc names them |
 | **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
@@ -215,6 +215,13 @@ settling it: **a fix that works is not evidence of the cause.**
 
 The same rule one step earlier: read the record before you build on it, not before you ship. It has
 **two triggers**, and the second one is the one that gets missed.
+
+**`git fetch --all --prune` before you read any ref, every session.** A remote-tracking ref is a
+cache, and a stale one answers confidently: `origin/<your-branch>` can be weeks behind while every
+`git log` and `rev-list` you run looks healthy, because another session, another machine or a
+sweep across every open branch pushed to it. Claude Code sessions get this done for them by
+`.claude/hooks/check-branch-behind-its-own-remote.sh`, which also refuses a merge or rebase onto a
+branch behind its own published tip; nothing fetches for anyone else, so it is on you.
 
 **Your base moved under you** - cutting a worktree from a master that advanced, merging master in
 mid-flight, rebasing, replaying, or picking a branch back up. Run
