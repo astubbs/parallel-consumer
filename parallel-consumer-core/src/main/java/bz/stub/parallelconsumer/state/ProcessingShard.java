@@ -92,17 +92,18 @@ public class ProcessingShard<K, V> {
                 log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
                         existing.getEpoch(), key, wc.getEpoch());
                 entries.put(key, wc);
-                // availableWorkContainerCnt stays the same since we're replacing, not adding. Two paths
-                // reach here having already spent this offset's decrement, and neither re-increments:
+                // Neither count changes. The population is conserved - one container leaves the map as
+                // another takes its place, so there is nothing to admit and nothing to retire.
+                // availableWorkContainerCnt stays the same since we're replacing, not adding: two paths
+                // reach here having already spent this offset's decrement, and neither re-increments -
                 // the stale entry had been taken as work (getWorkIfAvailable() decremented at take time),
                 // or the poller's removeStaleContainers() sweep removed it between the get and this put.
                 // Either way the shard undercounts its available work, and NOT only "until the next add" -
                 // the next add increments for its own new entry, so the deficit survives it and can
-                // accumulate across replacements. It resyncs only when the shard drains far enough for the
-                // clamp in dcrAvailableWorkContainerCntByDelta() to floor the counter at zero, or when the
-                // shard is removed. That is a backpressure-gauge inaccuracy only, and it errs towards
-                // fetching sooner rather than starving: no record is lost, because getWorkIfAvailable()
-                // scans entries directly rather than gating on the count, and handleFutureResult() drops a
+                // accumulate across replacements. It resyncs only when the shard is removed; there is no
+                // longer a clamp to floor it at zero, and nothing needs one - see the field's javadoc.
+                // That is a gauge inaccuracy only, and no record is lost: getWorkIfAvailable() scans
+                // entries directly rather than gating on the count, and handleFutureResult() drops a
                 // stale in-flight result without touching the shard, so it cannot remove this fresh entry.
             } else {
                 log.debug("Entry for {} already exists in shard queue, dropping record", wc);
@@ -292,7 +293,7 @@ public class ProcessingShard<K, V> {
     }
 
     private void dcrAvailableWorkContainerCntByDelta(int byNum) {
-        availableWorkContainerCnt.getAndAdd(-1L * byNum);
+        availableWorkContainerCnt.getAndAdd(-byNum);
     }
 
     /**
@@ -310,7 +311,7 @@ public class ProcessingShard<K, V> {
      * <p>
      * Whether the available-work counter still holds a unit for it depends on where the record was when it went:
      * one out at a worker was deducted at selection, one sitting in the shard (including one waiting out a retry
-     * delay, which {@link #markAvailableAgain()} counted back in) was not. {@link WorkContainer#isNotInFlight()}
+     * delay, which {@link #onFailure()} counted back in) was not. {@link WorkContainer#isNotInFlight()}
      * is what separates the two.
      * <p>
      * The old test here was {@link WorkContainer#isAvailableToTakeAsWork()}, which additionally requires the retry

@@ -137,9 +137,7 @@ public class ShardManager<K, V> {
         // it is safe though to set it to 0 for negative value of shards size - retry queue size portion.
 
         ParallelConsumer.Tuple<Integer,Long> retryQueueSizeAndNumberReadyToBeRetried = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
-        long diffBetweenShardsAndRetrySize= -retryQueueSizeAndNumberReadyToBeRetried.getLeft() + processingShards.values().stream()
-                .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
-                .sum();
+        long diffBetweenShardsAndRetrySize = -retryQueueSizeAndNumberReadyToBeRetried.getLeft() + sumOfShardAvailableCounters();
         return retryQueueSizeAndNumberReadyToBeRetried.getRight() + (diffBetweenShardsAndRetrySize < 0 ? 0 : diffBetweenShardsAndRetrySize);
     }
 
@@ -177,12 +175,12 @@ public class ShardManager<K, V> {
     }
 
     /**
-     * Ground truth for {@link #getNumberOfRecordsInShards()}: counts the shards' contents by scanning them.
+     * Counts the shards' contents by scanning them - O(n), and deliberately independent of the conservation
+     * counters, so a test can hold {@link #getNumberOfRecordsInShards()} against it.
      * <p>
-     * O(n) and deliberately independent of the conservation counters, so a test can hold the two against each
-     * other. Not for production use - that is the whole reason the conservation figure exists.
+     * Read on the debug-only under-served-retrieval path in {@link #getWorkIfAvailable}; the O(1) conservation
+     * figure is what anything on a hot path should be reading.
      */
-    // visible for testing
     long countRecordsInShardsByScan() {
         return processingShards.values().stream()
                 .mapToLong(ProcessingShard::getCountOfWorkTracked)
@@ -193,10 +191,9 @@ public class ShardManager<K, V> {
      * The raw sum of the per-shard available-work counters, with no flooring applied.
      * <p>
      * {@link #getNumberOfWorkQueuedInShardsAwaitingSelection()} floors its result, which hides both directions of
-     * counter drift from any test that reads it. This exposes the unfloored figure so drift can be asserted on
-     * directly.
+     * counter drift from any test that reads it. This is the unfloored figure that method starts from, exposed
+     * so drift can be asserted on directly.
      */
-    // visible for testing
     long sumOfShardAvailableCounters() {
         return processingShards.values().stream()
                 .mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection)
@@ -350,9 +347,9 @@ public class ShardManager<K, V> {
         // requested even though work is still tracked in the shards. Break down WHY so a stall can be told
         // apart from normal back-pressure. See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled() && workFromAllShards.size() < requestedMaxWorkToRetrieve) {
-            long tracked = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked).sum();
+            long tracked = countRecordsInShardsByScan();
             if (tracked > 0) {
-                long awaitingSelection = processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkAwaitingSelection).sum();
+                long awaitingSelection = sumOfShardAvailableCounters();
                 long inFlight = processingShards.values().stream().mapToLong(ProcessingShard::getCountWorkInFlight).sum();
                 var retry = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
                 // Interpretation guide:

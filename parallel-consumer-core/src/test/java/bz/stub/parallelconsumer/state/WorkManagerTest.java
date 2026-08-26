@@ -105,6 +105,10 @@ public class WorkManagerTest {
         return new TopicPartition(INPUT_TOPIC, partition);
     }
 
+    private void setupUnordered() {
+        setupWorkManager(ParallelConsumerOptions.builder().ordering(UNORDERED).build());
+    }
+
     private void registerSomeWork() {
         registerSomeWork(0);
     }
@@ -172,9 +176,7 @@ public class WorkManagerTest {
 
     @Test
     void testUnorderedAndDelayed() {
-        setupWorkManager(ParallelConsumerOptions.builder()
-                .ordering(UNORDERED)
-                .build());
+        setupUnordered();
         registerSomeWork();
 
         int max = 2;
@@ -371,8 +373,7 @@ public class WorkManagerTest {
 
     @Test
     void insertWrongOrderPreservesOffsetOrdering() {
-        ParallelConsumerOptions<?, ?> build = ParallelConsumerOptions.builder().ordering(UNORDERED).build();
-        setupWorkManager(build);
+        setupUnordered();
 
         assertThat(wm.getOptions().getOrdering()).isEqualTo(UNORDERED);
 
@@ -609,10 +610,7 @@ public class WorkManagerTest {
      */
     @Test
     void workQueuesEmptyWhenAllWorkComplete() {
-        var build = ParallelConsumerOptions.builder()
-                .ordering(UNORDERED)
-                .build();
-        setupWorkManager(build);
+        setupUnordered();
         registerSomeWork();
 
         //
@@ -779,10 +777,6 @@ public class WorkManagerTest {
     // Conservation - the broker-poller load gate reads admitted - retired, so the figure must match what
     // the shards actually hold after every way a record can arrive and every way it can leave.
     // -----------------------------------------------------------------------------------------------------
-
-    private void setupUnordered() {
-        setupWorkManager(ParallelConsumerOptions.builder().ordering(UNORDERED).build());
-    }
 
     @Test
     void revokingARecordParkedInRetryBackoffLeavesNoPhantomAwaitingSelection() {

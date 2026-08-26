@@ -45,7 +45,7 @@ conditions did not match the condition the counter was incremented on**, both re
 
 - **`ProcessingShard.remove(long)`**, reached from the partition-revocation sweep, deducted only when the
   removed record was `isAvailableToTakeAsWork()` - which additionally requires the retry delay to have passed.
-  A record parked in retry back-off had already been counted *in* by `markAvailableAgain()`, so revoking it
+  A record parked in retry back-off had already been counted *in* by `ProcessingShard.onFailure()`, so revoking it
   left the increment behind. The retry-queue entry that normally nets that increment out is removed on the same
   code path, so nothing was left to cancel it. **Permanent, high, uncaught.**
 - **Both stale-container sweeps** deducted unconditionally, so sweeping a record that was out at a worker -
