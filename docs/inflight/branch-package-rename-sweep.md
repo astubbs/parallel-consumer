@@ -237,11 +237,24 @@ needs no sweep.
 | 202 | `refactor/159-longpolling-to-main` | 269 | `feats/connect-on-pc-spike` |
 | 203 | `fix/log-verbosity-batch` | 271 | `feats/ks-on-pc-spike` |
 | 204 | `test/177-commit-response-timeout` | 274 | `ci/review-gate-comment-boundary` |
-| 205 | `feat/mdc-context-propagation` | 275 | `ci/review-gate-rejects-unfinished-review` |
+| | | 275 | `ci/review-gate-rejects-unfinished-review` |
 | 206 | `refactor/40-mockconsumer-test-dedup` | 286 | `ci/claude-yml-script-grant` |
 | 207 | `fix/offset-encoding-policy-bypass` | 290 | `test/apache-kafka-broker-image` |
 | | | 292 | `fix/chaos-harness-double-start-race` |
 | | | 293 | `feats/proxy-requirements` |
+
+<!-- post-merge: checked-begin -->
+**astubbs#205 came across on its own, ahead of this sweep, and needs no Phase B slot.** Its author
+ran the `BRINGING AN OPEN BRANCH ACROSS` procedure on the branch directly — tooling taken from
+master, legacy-token residue cleared, rename applied, master merged. A row promising sweep work
+would send an agent to redo a finished job, so the row is gone from the table above and the blank it
+leaves is deliberate — recorded here rather than left as a silent deletion, which reads as an
+oversight.
+
+It is also the first branch to have met the `TestConventionsArchTest.java` shape in anger: the merge
+raised the rename/rename conflicts the paragraph below predicts, which is the loud outcome rather
+than the silent cross-module one. That shape is now observed, not only rehearsed.
+<!-- post-merge: checked-end -->
 
 **astubbs#266, astubbs#268, astubbs#269 and astubbs#271 touch the five near-identical
 `TestConventionsArchTest.java` files.** Neither rehearsal exercised a branch that genuinely edits them

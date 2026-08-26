@@ -1,5 +1,9 @@
 # MDC (diagnostic context) propagation into the processing threads
 
+<!-- inflight-type: feature -->
+<!-- inflight-impact: blind-spot -->
+<!-- post-merge: exempt-file - this note IS the note for astubbs#205, so it names its own branch and PR throughout; it is deleted when that PR lands, which is what makes the mentions safe rather than stale -->
+
 Branch `feat/mdc-context-propagation`. Raised as a non-blocking finding on astubbs#197, against the
 confluentinc#907 thread (mirrored on this fork as astubbs#195): PC never carried the caller's SLF4J MDC
 across into the worker pool, so a `trace_id` /
