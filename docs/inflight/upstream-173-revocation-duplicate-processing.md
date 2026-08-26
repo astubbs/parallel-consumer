@@ -22,6 +22,7 @@ it were the fix the behaviour would be gone. It is not: `WorkManager.handleFutur
 verbatim the reporter's step 3. confluentinc#909 governs which container wins a *registration* race;
 it is silent about a result arriving after revocation.
 
+<!-- post-merge: checked-begin -->
 confluentinc#893 (carried in astubbs#337, split out of astubbs#57 on 2026-08-24) makes
 `getOffsetToCommit()` accurate so a commit cannot run
 *ahead* of completion. confluentinc#777 is the opposite shape: the offset committed at revocation is
@@ -29,7 +30,10 @@ already correct, the in-flight record is correctly encoded as incomplete, and th
 from that correctness. Nothing is lost.
 
 **So merging the confluentinc#893 cherry-pick must not be read as closing confluentinc#777.**
-Correcting the adoc entry is the one change here with a deadline, because astubbs#337 is open now.
+The adoc entry carrying that correction is already in place - `upstream-pr-analysis.adoc`, grep
+`Do not close confluentinc#777 when the confluentinc#893 cherry-pick merges` - so what remains here
+is the standing rule, not an open task.
+<!-- post-merge: checked-end -->
 
 ## Draft answer - postable as-is once a maintainer agrees with the closing rationale
 
