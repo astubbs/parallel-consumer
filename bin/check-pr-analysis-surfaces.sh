@@ -32,7 +32,7 @@
 #
 # Exit codes: 0 nothing on your files, 1 findings on files you changed, 2 CANNOT RUN.
 # The 2 matters - "gh is not authenticated" must never read as "no findings", the same fail-closed
-# contract bin/ci-mutation-test.sh and bin/racerd-test.sh hold.
+# contract bin/ci-mutation-test.sh and bin/infer-test.sh hold.
 
 set -euo pipefail
 

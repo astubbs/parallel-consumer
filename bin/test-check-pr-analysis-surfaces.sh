@@ -114,7 +114,7 @@ rm -rf "$d3"
 echo
 echo "=== cannot-run must never read as clean ==="
 
-# --- RED CONTROL: no gh at all. The contract bin/racerd-test.sh and ci-mutation-test.sh hold. -----
+# --- RED CONTROL: no gh at all. The contract bin/infer-test.sh and ci-mutation-test.sh hold. -----
 # The PATH keeps /usr/bin:/bin - enough for bash and coreutils - and `gh` is not installed there on
 # macOS or on a hosted Linux runner, so this removes gh WITHOUT removing the shell. An empty PATH
 # made this arm exit 127 on "bash: command not found", which is a pass for entirely the wrong reason
