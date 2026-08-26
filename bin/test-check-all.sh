@@ -141,13 +141,21 @@ rm -rf "$d"
 echo
 echo "=== the self-tests loop actually runs, and runs FIRST ==="
 
-# Every other arm passes --gates-only, so the MODE=all branch - the one CI and the documented
-# pre-push command use - had no coverage at all. The ordering is a claim in both the header and
-# bin/AGENTS.md: a gate's self-test runs before the gate it protects.
+# THE DEFAULT DELIBERATELY EXCLUDES SELF-TESTS, and both halves of that are asserted here. The
+# default answers "is my tree healthy" in seconds; the self-tests answer "do the gates still work",
+# take minutes, and only change when somebody edits a gate. A pre-push sweep slow enough to skip
+# protects nothing. `--with-tests` is the CI form, and the ordering claim in bin/AGENTS.md - a gate's
+# self-test runs before the gate it protects - applies there.
 d="$(make_fixture ok 0)"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/test-fixture.sh"; chmod +x "$d/bin/test-fixture.sh"
 out="$( cd "$d" && bash bin/check-all.sh 2>&1 )"; rc=$?
-assert "green: the default mode runs the self-tests too" 0 "test-fixture.sh" "$out" "$rc"
+if [ "$rc" -eq 0 ] && ! grep -q "test-fixture.sh" <<< "$out"; then
+    printf 'ok:   the default does NOT run self-tests (that is what keeps it fast)\n'; pass=$((pass + 1))
+else
+    printf 'FAIL: the default ran a self-test, or exited %s\n' "$rc"; fail=$((fail + 1))
+fi
+out="$( cd "$d" && bash bin/check-all.sh --with-tests 2>&1 )"; rc=$?
+assert "green: --with-tests runs the self-tests" 0 "test-fixture.sh" "$out" "$rc"
 tests_at="$(grep -n '=== self-tests ===' <<< "$out" | head -1 | cut -d: -f1)"
 gates_at="$(grep -n '=== gates ===' <<< "$out" | head -1 | cut -d: -f1)"
 if [ -n "$tests_at" ] && [ -n "$gates_at" ] && [ "$tests_at" -lt "$gates_at" ]; then
@@ -157,6 +165,96 @@ else
     fail=$((fail + 1))
 fi
 rm -rf "$d"
+
+echo
+echo "=== a capture that never writes .meta must not be silently dropped from the sweep ==="
+
+# Reproduces a gate KILLED MID-RUN - SIGKILL, OOM, a CI step timeout. `run_capture` writes its
+# .meta file only on a normal return, so a killed gate produces nothing for the replay loop's glob
+# to find, and without this fix it is counted in none of pass/fail/cannot/nothing/skipped: the sweep
+# reports full success and exits 0 having lost a gate.
+#
+# EARLIER DRAFTS OF THIS FIXTURE tried to reproduce the kill for real, by walking the live process
+# tree from a leaf gate's PID up to the run_capture subshell and SIGKILLing it. That measured as
+# flaky in exactly the way this repo's test-authoring rules warn about: the hop count from leaf to
+# subshell was NOT constant - it varied with how deeply this test script itself was invoked (3 hops
+# under one invocation style, 4 under another, apparently down to whether bash's "exec the last
+# command in a subshell" optimisation fires, which is context-dependent) - and get the count wrong
+# by one and you SIGKILL check-all.sh's own top-level process instead, which is a different failure
+# than the one under test. `TMPDIR` redirection was tried next, to make CAP_DIR predictable, but
+# macOS's bundled mktemp does not honour `TMPDIR` for a bare `mktemp -d` (verified directly: setting
+# it and reading back the resulting path shows the override was ignored) - Linux's would, so that
+# approach would also have been platform-dependent.
+#
+# WHAT ACTUALLY WORKS, deterministically and on both platforms: shim `mktemp` on PATH for just this
+# invocation. check-all.sh's one and only `mktemp -d` call (for CAP_DIR) resolves the shim first; the
+# shim writes the real mktemp's output to a side-channel file before returning it, so this test
+# learns CAP_DIR's real path the instant it is created - no process-tree archaeology, no signals.
+# From there it is a plain filesystem race, won safely: an extra slow gate (`check-slow-hold.sh`,
+# 3s) keeps `wait` from returning until long after our target's `.meta` would normally have been
+# written, giving comfortable time to find it (by its recorded label, not a guessed filename) and
+# delete it - the exact effect a killed run_capture has on the replay loop's glob, produced without
+# ever sending a signal to anything.
+d="$(make_fixture ok 0)"
+printf '#!/usr/bin/env bash\nsleep 3\nexit 0\n' > "$d/bin/check-slow-hold.sh"
+chmod +x "$d/bin/check-slow-hold.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/check-vanish.sh"
+chmod +x "$d/bin/check-vanish.sh"
+
+shimdir="$(mktemp -d)"
+sidechannel="$(mktemp)"
+real_mktemp="$(command -v mktemp)"   # baked in literally - the shim must not re-resolve "mktemp"
+cat > "$shimdir/mktemp" <<SHIM        # via PATH itself, or it recurses into its own shim forever.
+#!/usr/bin/env bash
+out="\$("$real_mktemp" "\$@")"; rc=\$?
+printf '%s\n' "\$out" >> "$sidechannel"
+printf '%s\n' "\$out"
+exit \$rc
+SHIM
+chmod +x "$shimdir/mktemp"
+
+( cd "$d" && PATH="$shimdir:$PATH" bash bin/check-all.sh --gates-only > "$d/out.log" 2>&1 ) &
+checkall_pid=$!
+
+# Bounded wait (up to 5s) for check-all.sh to create CAP_DIR via the shimmed mktemp.
+capdir=""
+for ((_i = 0; _i < 50; _i++)); do
+    if [ -s "$sidechannel" ]; then capdir="$(head -1 "$sidechannel")"; break; fi
+    sleep 0.1
+done
+
+# Bounded wait (up to 5s, well inside the 3s the slow gate is holding `wait` open for) to find and
+# delete check-vanish.sh's .meta the moment run_capture writes it - identified by its recorded
+# label on the file's third line, not by a guessed sequence number.
+deleted=0
+if [ -n "$capdir" ]; then
+    for ((_i = 0; _i < 50; _i++)); do
+        for m in "$capdir"/*.meta; do
+            [ -f "$m" ] || continue
+            # HERESTRING, not a pipe: `writer | grep -q` under pipefail reports failure BECAUSE it
+            # matched - grep exits on first match, the writer takes EPIPE, pipefail promotes it.
+            # bin/check-shell-sigpipe.sh caught this the moment it was written.
+            if grep -qF "check-vanish.sh" <<<"$(tail -1 "$m" 2>/dev/null)"; then
+                rm -f "$m" "${m%.meta}.out"
+                deleted=1
+                break 2
+            fi
+        done
+        sleep 0.1
+    done
+fi
+
+wait "$checkall_pid"; rc=$?
+out="$(cat "$d/out.log" 2>/dev/null)"
+rm -f "$sidechannel"; rm -rf "$d" "$shimdir"
+
+if [ "$deleted" -eq 0 ]; then
+    printf 'FAIL: never found check-vanish.sh'"'"'s .meta to delete - test setup broken\n'
+    fail=$((fail + 1))
+else
+    assert "red: a vanished capture fails the sweep, not silently dropped" 1 "check-vanish.sh" "$out" "$rc"
+    assert "...and says a gate that did not run is not a pass" 1 "did not run is NOT a pass" "$out" "$rc"
+fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

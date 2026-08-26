@@ -48,10 +48,13 @@ trade costs is in [`docs/ci.md`](../../docs/ci.md).
 
 ## Two conventions that will bite you
 
-- **Job names are an API.** `claude-review`, `review: human LGTM`, `shell: sigpipe`, `workflows: action versions`,
-  `Check PR Dependencies` and the `maven.yml` suites are required status checks matched **by
-  name** in the master ruleset. Rename a job and the ruleset silently stops being satisfied by
-  anything - it does not fail, it just never passes.
+- **Job names are an API.** `claude-review`, `review: human LGTM`, `Check PR Dependencies`,
+  `quarantine: audit`, `Copyright header check` and the `maven.yml` suites are required status
+  checks matched **by name** in the master ruleset. Rename a job and the ruleset silently stops
+  being satisfied by anything - it does not fail, it just never passes. `shell: sigpipe` and
+  `workflows: action versions` were two such names; both jobs were folded into `repo-hygiene.yml`'s
+  single `repo: hygiene` lane, and - as of the last live check of the ruleset - that replacement
+  lane is not itself in the required list. See [`docs/ci.md`](../../docs/ci.md) for the detail.
 - **Most of these run PR-authored code.** A `pull_request` job checks out the PR, so anything it
   executes is whatever the PR says it is. That is why the review jobs hold no write scope, and why
   `actions: write` lives alone in a job that checks nothing out. See "The reviewer runs PR code"
