@@ -34,7 +34,9 @@ file in the PR that posts them, or with this PR at merge prep if posting moves e
 > **What was done beyond this one fix, because one instance of a defect class is rarely alone:**
 > - A systematic hunt for the whole class (multiple reads of moving state combined as one snapshot)
 >   using multiple frontier AI models - it found four sibling defects, all fixed
->   (astubbs/parallel-consumer#344, #345, #346, #349), with ~50 further candidates examined and
+>   (astubbs/parallel-consumer#344, astubbs/parallel-consumer#345,
+>   astubbs/parallel-consumer#346, astubbs/parallel-consumer#349), with ~50 further candidates
+>   examined and
 >   dismissed with recorded reasons.
 > - Every fix was adversarially reviewed by an independent second model, and every reproduction was
 >   mutation-checked - reverting each fix turns its tests red.
