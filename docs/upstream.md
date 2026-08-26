@@ -284,7 +284,7 @@ annotated tags:
 | confluentinc#506 | astubbs | Fix chart links |
 
 Each is tagged `archive/upstream-pr-<n>`. **The tag name, target SHA and check date are deliberately
-not repeated here** - they live only in `sweep-2023-admin-closure.preserved_heads` in
+not repeated here** - they live only in `branch_accounting` in
 [`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), this repo's owner of fork-upstream
 facts. A corrected SHA updated in one copy while the other still read as authoritative is exactly the
 drift this section exists to prevent; the table above carries only what does not change.
@@ -321,11 +321,18 @@ tags: the release-line branches (`0.5.3.x`, `v0.5.2.x-dev`, `v0.6.x`), upstream'
 `docs/back-pressure` (the swept confluentinc#508 head, out of the 2026-08-14 pass's scope),
 `features/batching`, `PL-176/DontDrainIssue` (content unassessed - flagged in
 `docs/inflight/branch-audit-orphans.md`), `python-cd-pipeline`, `correct-failing-license-check`,
-and `DP-12547` (already ruled out as content below; pinned so the ruling stays checkable). The 18
-dependabot/renovate/chore branches were deliberately not preserved - recreatable version bumps, not
-work. Tag names, SHAs and check date live only in `preserved_branch_tips` in
-[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), same contract as
-`preserved_heads`.
+and `DP-12547` (already ruled out as content below; pinned so the ruling stays checkable). The
+dependabot/renovate/chore branches were deliberately not tagged - recreatable version bumps, not
+work - though they are now mirrored with the rest.
+
+**Superseded 2026-08-20 by the branch mirror.** Every upstream branch, bot ones included, is now a
+branch on this fork under `upstream/*`, so tags are no longer the only copy. They are kept because an
+annotated tag is the more durable pin: a branch can be deleted or force-moved, a tag is the record
+that a specific commit was deliberately preserved. Tag names, SHAs, the PR each tip belongs to, and
+the check date now live in ONE place - `branch_accounting` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml). The former
+`preserved_branch_tips` and `sweep-2023-admin-closure.preserved_heads` recorded the same commits
+under two framings and have been folded into it.
 
 **Re-running this is not yet automated.** Branches get deleted, so a head safe today can be orphaned
 tomorrow - but no script checks it: `--audit` covers tracking and mirroring, not reachability, and
