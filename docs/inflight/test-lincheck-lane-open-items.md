@@ -75,15 +75,18 @@ adding a class with a narrow guess in it.
    `PartitionState#maybeRegisterNewPollBatchAsWork` makes a record selectable before its offset is
    registered, latent for the same single-selector reason.
 
+   <!-- post-merge: checked-begin -->
    **`ProcessingShard.availableWorkContainerCnt` is NOT a Lincheck target, and this list said it was.**
    The `AtomicLong`-must-track-`ConcurrentSkipListMap` signature fits, and the clamp in
-   `dcrAvailableWorkContainerCntByDelta` is commented `// in case of possible race condition`, so the
-   drift reads as a race. astubbs#336 measured it and it is not one: both drift paths are conditional
-   mismatches **reproducible on a single thread**, the clamp's comment is wrong, and that PR deletes
-   the clamp. Lincheck finds interleavings; this needs none, and astubbs#336 already has the
-   single-threaded tests. Recorded rather than quietly dropped, because the wrong inference here was
-   made twice - reading a comment claiming a race instead of measuring - which is the same error this
-   lane's own calibration caught in itself.
+   `dcrAvailableWorkContainerCntByDelta` carried the comment `// in case of possible race condition`,
+   so the drift read as a race. astubbs#336 measured it and it was not one: both drift paths were
+   conditional mismatches **reproducible on a single thread**, the comment was wrong, and the clamp
+   is gone. Lincheck finds interleavings; that needed none, and the single-threaded tests shipped with
+   the fix. Recorded rather than quietly dropped, because the wrong inference here was made twice -
+   reading a comment claiming a race instead of measuring - which is the same error this lane's own
+   calibration caught in itself. What *is* a Lincheck-shaped target in the same class is what remains
+   after that fix - see `bug-available-work-counter-is-still-an-approximation.md`.
+   <!-- post-merge: checked-end -->
 2. **`PCMetrics.registeredMeters` - a plain `ArrayList` written from two threads.** Not a concurrent
    collection at all (`private List<Meter.Id> registeredMeters = new ArrayList<>()`, added to from
    four registration paths). **The lane found this unprompted, during calibration, from a scenario

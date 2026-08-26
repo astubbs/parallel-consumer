@@ -27,6 +27,7 @@ blocker is that in-flight is toggled by `WorkContainer.onQueueingForExecution()`
 container does without telling its shard, and `endFlight()` runs *before* shard removal on the success path -
 so no local predicate at a removal site recovers "was this record counted".
 
+<!-- post-merge: checked-begin -->
 `retireAndDeductIfStillCounted` uses `isNotInFlight()`, and **the window it gets wrong is open, contrary to
 what this note said until 2026-08-26**. The old claim was that the one bad case - a stale result handed back
 for a record still counted - cannot occur, because revocation removes the entry before the result returns.
@@ -34,9 +35,10 @@ That holds between *methods* and not between *instructions*: the predicate is re
 has already returned the container, so the controller's `handleFutureResult` -> `endFlight()` for a revoked
 record can land in between and flip `isNotInFlight()` to true for a unit that selection already spent. The
 second deduction is permanent, and `inFlight` is a plain non-volatile `boolean` read across threads, so the
-value is unspecified there in any case. Raised by Codex on astubbs/parallel-consumer#336 and left unfixed
-there deliberately: that PR removed this counter from the load gate, and replacing it is the derive-it work
+value is unspecified there in any case. Found by review on astubbs/parallel-consumer#119's load-gate work,
+and left unfixed: the load gate no longer reads this counter at all, so the remedy is the derive-it work
 below rather than a patch at one removal site.
+<!-- post-merge: checked-end -->
 
 The derive-it fix has a shape: move "does this container hold a unit of its shard's available count" onto the
 container as an ownership flag the shard claims and releases with a CAS, so every site decides from a fact it
