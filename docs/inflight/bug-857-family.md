@@ -953,6 +953,7 @@ astubbs#29 and the backlog land; recorded here so nobody later reads it as one.
 One of those runs took the **cooperative** arm down with an explicit probe verdict, which retires the
 second sighting's "eager-protocol-specific" reading for Class 2 specifically - a small thing now that
 Class 2 is a speed measurement, but it was an open question above.
+<!-- post-merge: checked-end -->
 
 ## 2026-08-25, INTEGRATION lane: the commit-response timeout, on the deadlock's exact preconditions
 
