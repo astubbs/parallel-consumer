@@ -14,7 +14,9 @@ re-derived from scratch:
 - [**`src/docs/development/upstream-map.yaml`**](../src/docs/development/upstream-map.yaml) - the
   **state tracker**, and the **source of truth** for the *facts*: which fork branch/PR maps to
   which upstream issue/PR, its work group, and current status. Its header documents the schema.
-  Validate and render with `scripts/upstream-map.py {validate,table,refs}`. Design follows Debian
+  Validate and render with `scripts/upstream-map.py {validate,table,refs}`;
+  `bin/check-upstream-map.sh` runs that validation as a gate, so a schema error fails a PR rather
+  than waiting for someone to run the script by hand. Design follows Debian
   DEP-3, Yocto `Upstream-Status:` and OpenShift's `UPSTREAM:` fork conventions.
 - [**`src/docs/development/upstream-pr-analysis.adoc`**](../src/docs/development/upstream-pr-analysis.adoc) -
   the **plan**: *editorial* analysis with rankings, verdicts, and the recommended merge order. When
@@ -44,10 +46,12 @@ the mirrors move on.
 **When you start work that maps to an upstream PR, add or update its entry in `upstream-map.yaml`**
 - do not just note it in prose. And **it does not stop at "start work"**.
 
-Nothing automated checks the *fork* side: `upstream-map.py validate` only checks the schema, and
+Nothing automated checks the *fork* side, and the gate above does not change that:
+`upstream-map.py validate` checks the SHAPE of an entry, never whether its claims are true, and
 `upstream-sweep.sh` only watches upstream - so a manifest that says `prs: []` while a fork PR is
 open still passes every check, and the mapping quietly rots (a 2026-08-04 audit found five such
-entries). Update the entry **at every lifecycle transition of your own work, in the same commit that
+entries). Read a green gate as "this file parses and its states are spelled correctly", nothing
+more. Update the entry **at every lifecycle transition of your own work, in the same commit that
 causes it**: opening a PR (`prs:` + `status: pr-open`), finishing on a branch without a PR
 (`status: ready`), merging (`merged`), releasing (`released`), abandoning
 (`superseded`/`wontfix`).
@@ -284,7 +288,7 @@ annotated tags:
 | confluentinc#506 | astubbs | Fix chart links |
 
 Each is tagged `archive/upstream-pr-<n>`. **The tag name, target SHA and check date are deliberately
-not repeated here** - they live only in `sweep-2023-admin-closure.preserved_heads` in
+not repeated here** - they live only in `branch_accounting` in
 [`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), this repo's owner of fork-upstream
 facts. A corrected SHA updated in one copy while the other still read as authoritative is exactly the
 drift this section exists to prevent; the table above carries only what does not change.
@@ -321,11 +325,18 @@ tags: the release-line branches (`0.5.3.x`, `v0.5.2.x-dev`, `v0.6.x`), upstream'
 `docs/back-pressure` (the swept confluentinc#508 head, out of the 2026-08-14 pass's scope),
 `features/batching`, `PL-176/DontDrainIssue` (content unassessed - flagged in
 `docs/inflight/branch-audit-orphans.md`), `python-cd-pipeline`, `correct-failing-license-check`,
-and `DP-12547` (already ruled out as content below; pinned so the ruling stays checkable). The 18
-dependabot/renovate/chore branches were deliberately not preserved - recreatable version bumps, not
-work. Tag names, SHAs and check date live only in `preserved_branch_tips` in
-[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), same contract as
-`preserved_heads`.
+and `DP-12547` (already ruled out as content below; pinned so the ruling stays checkable). The
+dependabot/renovate/chore branches were deliberately not tagged - recreatable version bumps, not
+work - though they are now mirrored with the rest.
+
+**Superseded 2026-08-20 by the branch mirror.** Every upstream branch, bot ones included, is now a
+branch on this fork under `upstream/*`, so tags are no longer the only copy. They are kept because an
+annotated tag is the more durable pin: a branch can be deleted or force-moved, a tag is the record
+that a specific commit was deliberately preserved. Tag names, SHAs, the PR each tip belongs to, and
+the check date now live in ONE place - `branch_accounting` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml). The former
+`preserved_branch_tips` and `sweep-2023-admin-closure.preserved_heads` recorded the same commits
+under two framings and have been folded into it.
 
 **Re-running this is not yet automated.** Branches get deleted, so a head safe today can be orphaned
 tomorrow - but no script checks it: `--audit` covers tracking and mirroring, not reachability, and

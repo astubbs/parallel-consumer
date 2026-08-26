@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Flags a repo file path cited in the docs that does not exist. Whole tree, every PR.
 //
 // House convention (AGENTS.md -> "Cite by anchor, never by line number") tells authors to cite a

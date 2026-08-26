@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 """Validate and render the fork<->upstream tracking cache.
 
 Usage:
@@ -36,6 +38,11 @@ GROUPS = {"rebalance-stability", "metrics-observability", "vertx",
           "java-baseline-kafka4", "features", "deps-security", "deps-major",
           "deps-routine", "build-tooling", "logging-ux", "release", "governance"}
 
+# `branch_accounting` is the ONLY branch record (see the manifest header). It is a different shape
+# from `entries` - keyed by ref, not id - so it needs its own arm rather than reuse.
+BRANCH_STATES = {"mirrored", "ours", "archived", "deleted"}
+ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def load():
     with open(MANIFEST) as fh:
@@ -62,6 +69,58 @@ def validate(d):
         grp = e.get("group")
         if grp not in GROUPS:
             errs.append(f"{eid}: bad group '{grp}' (allowed: {sorted(GROUPS)})")
+    errs.extend(validate_branches(d))
+    return errs
+
+
+def validate_branches(d):
+    """Check `branch_accounting`, which went unvalidated from the day it was added.
+
+    It arrived in astubbs#327 alongside a `validate` that read only `entries`, so a bogus `state`
+    passed silently while the run printed `OK: 39 entries` - a reassuring count of the OTHER
+    section. That is the shape this repo keeps rediscovering: not a gate that fails, a gate that
+    reports success about something it never looked at. The success line now names both sections
+    for the same reason.
+    """
+    errs = []
+    branches = d.get("branch_accounting") or []
+    if not isinstance(branches, list):
+        return [f"branch_accounting: should be a list, found {type(branches).__name__}"]
+    refs_seen = [b.get("ref") for b in branches if isinstance(b, dict)]
+    for dup in [k for k, v in collections.Counter(refs_seen).items() if v > 1]:
+        errs.append(f"branch_accounting: duplicate ref: {dup}")
+    for b in branches:
+        if not isinstance(b, dict):
+            errs.append(f"branch_accounting: entry is not a mapping: {b!r}")
+            continue
+        ref = b.get("ref") or "<no-ref>"
+        if not b.get("ref"):
+            errs.append(f"branch_accounting: entry missing 'ref': {b!r}")
+        st = b.get("state")
+        if st not in BRANCH_STATES:
+            errs.append(f"{ref}: bad state '{st}' (allowed: {sorted(BRANCH_STATES)})")
+        # A tip is REQUIRED only once the entry outlives the branch. For a live branch the SHA is
+        # one `git rev-parse` away, and this section's governing rule is "nothing a command
+        # answers" - so demanding it there would contradict the schema it validates. Once the
+        # branch is deleted or archived nothing can answer it, and an entry recording that we
+        # removed something without saying what is the exact failure the section exists to prevent.
+        tip = b.get("tip")
+        if tip is None:
+            if st in ("deleted", "archived"):
+                errs.append(f"{ref}: state '{st}' requires a 'tip' - nothing else can recover it")
+        elif not isinstance(tip, str):
+            # `tip: 255916684` is all digits, so YAML makes it an int and any string comparison
+            # against `git rev-parse` silently never matches. Already hit once, in review.
+            errs.append(f"{ref}: 'tip' parsed as {type(tip).__name__}, not str - quote it")
+        if st == "deleted":
+            when = b.get("deleted")
+            if when is None:
+                errs.append(f"{ref}: state 'deleted' requires a 'deleted' date")
+            elif not ISO_DATE.match(str(when)):
+                errs.append(f"{ref}: 'deleted' should be an ISO date (YYYY-MM-DD), found '{when}'")
+        see = b.get("see")
+        if see is not None and not isinstance(see, list):
+            errs.append(f"{ref}: 'see' should be a list, found {type(see).__name__}")
     return errs
 
 
@@ -151,7 +210,8 @@ def main():
             for e in errs:
                 print("  " + e)
             sys.exit(1)
-        print(f"OK: {len(d['entries'])} entries, no schema errors")
+        print(f"OK: {len(d['entries'])} entries, "
+              f"{len(d.get('branch_accounting') or [])} branch records, no schema errors")
     elif cmd == "table":
         table(d)
     elif cmd == "refs":

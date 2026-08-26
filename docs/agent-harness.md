@@ -213,7 +213,11 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - five hooks, and the file is **tracked**. `.gitignore` excludes
+**`.claude/settings.json`** - eleven hook scripts across twelve registrations, and the file is
+**tracked**. The entries below are the ones whose design decisions are worth recording here;
+`remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
+The count is stated because it drifted: this said "five" while the file registered seven, which is
+the same silent staleness the rest of this document exists to prevent. `.gitignore` excludes
 `/.claude/*` by contents rather than excluding the directory, with a comment anticipating exactly
 this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
 grants stay in `settings.local.json`, still ignored.
@@ -238,6 +242,37 @@ grants stay in `settings.local.json`, still ignored.
   denied, and the near-miss case that reads like a command-position test passes only because its
   quoting makes `shlex` raise. Erring towards denying is the safe direction for a guard that can
   only refuse a merge, but do not build on the stronger claim. See *Known gaps*.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/warn-low-disk.sh`, which warns when
+  either disk this project fills is running low, and **never blocks**. It exists because a fan-out of
+  eleven per-language demo agents took the host volume to 8.8 GiB free of 926 GiB in about an hour
+  and took the Docker VM's virtual disk with it - one agent's build died outright, two others pruned
+  under each other - and nothing warned, because the session had started with plenty of room.
+  `SessionStart` would therefore have reported all clear; the only instant that can see what the last
+  command left behind is just before the next one. It has no `if` for the same reason the squash
+  guard has none: `Bash(docker *)` would miss `cd demo && docker compose up` and every wrapper
+  script, which is most of how containers actually get built here. It buys the right to run on every
+  call by forking a handful of short-lived commands and no `docker` CLI - the hook's own header owns
+  the measured figure, and states why it is not repeated here - and by saying nothing at all unless a
+  threshold trips, then at most once per ten minutes **per session** unless the band worsens.
+
+  **The throttle is keyed per session, not per user, and that decides who the warning is for.**
+  One stamp per UID meant the first agent to notice silenced every other concurrent session for
+  the window - in the incident above, ten of the eleven could not have been told while they were
+  the ten still filling the disk. So every session is warned, and the message tells each agent to
+  **report the situation and suggest a reclaim, never run one**: the operator is the gate against
+  duplicate effort, which the same incident shows is a real cost and not a hypothetical - two of
+  those agents pruned under each other. Keying is best-effort and degrades to the shared stamp
+  when no `session_id` reaches the hook, because the failure this hook refuses is going silent.
+
+  Two properties are worth keeping in mind if you change it. **It must never exit non-zero**: a disk
+  warner that blocked `Bash` on a full disk would remove the commands needed to clear the disk, which
+  is the outage described under the misplaced-`if` trap above. And **Docker Desktop's disk image is a
+  high-water mark** - a sparse file that grows and never shrinks, so pruning 17 GB does not shrink it
+  by a byte; that is why a cheap always-on trigger is confirmed by a cached `docker system df` before
+  anything is said, and why the correction applies only to the sparse-image reading and not to
+  Linux's live filesystem one. It is a dev-machine tool by design: `.claude/` binds Claude Code
+  sessions only, so it can never run in CI, and CI runners are reaped anyway.
+
 - `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
   `.claude/hooks/check-merge-outstanding-work.sh`, which refuses a `gh pr merge` while this
   session's background tasks are still writing output. A green PR is not a finished PR when a
@@ -246,6 +281,41 @@ grants stay in `settings.local.json`, still ignored.
   (prefix the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) and the stated limits - a
   stalled agent writes nothing and is not detected; `bash -c` wrapping and REST-API merges are not
   seen - are documented in the hook's own header.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/remind-inflight-on-push.sh`, which
+  reminds you at PUSH time what this PR's own inflight note still lists as open. Push, not commit and
+  not merge: commits are too frequent for a note that runs to dozens of lines, and the merge guard
+  above is the backstop that fires when re-opening the work is already expensive. It emits
+  `additionalContext` and never denies. Its own header owns the reasoning.
+- `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
+  `.claude/hooks/remind-master-drift-on-push.sh`, which reports the commits `origin/master` has
+  gained that this branch does not have, and whether any of them touch files the branch is changing.
+  It answers the question "Read the commits you inherit" poses and nothing else was putting in front
+  of anyone: not *how far* the branch has diverged - `docs/inflight/AGENTS.md` rightly says never to
+  write down what `git rev-list --left-right --count` can answer - but *whether anything relevant
+  has landed*, which needs the subjects. It never says to merge: batching several master merges is
+  often right, and the failure it exists to prevent is deciding without looking. Throttled on
+  master's SHA rather than a clock, so the same tip is reported once per branch and a master that
+  moves reports again immediately; the one clock is a floor on how often it fetches, so a push loop
+  cannot become a fetch loop. It **fetches** before reading, because a stale `origin/master`
+  under-reports, which is the exact failure it exists to prevent.
+- The push detection and the portable `stat` both live in `.claude/hooks/lib/hook-common.sh`, shared
+  by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
+  working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides
+  the next such bug until somebody re-runs the same experiment on the same platform.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-history-rewrite.sh`, one of
+  the two guards here that **refuse**: it stops a force-push, rebase, amend or any other ref-moving
+  command while a review is in flight, because a rewrite orphans inline review threads and destroys
+  the incremental diff the reviewer works from. It names what would actually be lost rather than asking
+  "are you sure?", and `REWRITE_HISTORY_CONFIRMED=1` is the documented override. Its own header owns
+  the rest, including the full list of ref-moving shapes it reaches.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-shallow-history.sh`, the other
+  guard that **refuses**: it denies a depth-dependent history query - a range, an ancestry test, a
+  whole-history walk - while the clone is shallow, because such a query does not error, it *answers*,
+  from the truncated graft. `SHALLOW_HISTORY_ACCEPTED=1` is the override. It is per-command rather
+  than per-session because the `shallow` file lives in the shared `--git-common-dir`, so one sibling
+  agent's depth-limited fetch re-shallows every worktree, including one that unshallowed itself a
+  minute earlier. Its own header owns the rest, including why `git status` and `git log -1` are left
+  alone.
 - `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
   `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
   "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to
@@ -275,6 +345,63 @@ The checklist itself is a plain doc, not embedded in the hook, so Codex and anyt
 `AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific - and the
 hook injects the file's bytes with a one-line pointer, not a summary of them, because a summary is a
 second copy in the one place nobody would think to check for drift.
+
+**`.claude/hooks/inject-branch-context.sh`** - the branch's own record, put in front of whoever is
+about to work on it: the commits between the merge base and `HEAD` with each body's non-empty line
+count, the `docs/inflight/` and `docs/plans/` notes only this branch has, the `.worktree-owner`
+marker, and the open PR's number, title, body size, **comment count per author** and review count.
+Names, counts and pointers - never bodies, the same cheapness contract `inject-recorded-knowledge.sh`
+states, and for the same reason: the failure being fixed is not knowing the record exists.
+
+It exists because `AGENTS.md`'s inherit rule had one trigger - *your base moved* - and the other one
+was unwritten: *you were handed a branch.* On 2026-08-24 five agents were dispatched, one per open
+PR, each given that PR's changed-file list and none of its commits, body or comments. Every one of
+the five had a decision in its body that a simplify pass reverses on sight, and in
+astubbs/parallel-consumer#341's case the decisive text was a **PR comment posted after the body** -
+which is why this hook counts comments *by author* rather than merely noting that a body exists.
+
+**Registered at three points, and the third is the one that works.** All three measured against
+2.1.231; the reasoning for each is in *Settled by testing* below:
+
+| Registration | Reaches | When, measured |
+|---|---|---|
+| `SessionStart` | a session opened in the worktree | **before its first tool call** |
+| `PreToolUse`, tool `Agent`/`Task` | the **dispatcher** | alongside the dispatched agent's *result* |
+| `PreToolUse`, payload carries `agent_type` | the **subagent itself** | alongside its first tool result |
+
+The middle row is the honest limitation, and the emitted block says so rather than implying the
+dispatch was vetted: a `PreToolUse` hook **cannot alter the call it fires on**, because the model
+composed that tool call before the hook ran. It reaches the dispatcher in time to judge what came
+back and to compose dispatch N+1 - four further agents, in the incident above - and not in time to
+fix dispatch N.
+
+The third row is what actually closes that incident, and it exists because of a **negative result**:
+`SessionStart` does not fire for an agent spawned via the Task tool, so without this registration a
+subagent could receive branch context by no route at all. It is throttled to once per `agent_id`,
+with the stamp file named after that id verbatim so the shell prologue can test for it without
+hashing - `shasum` differs between GNU and BSD, and the python spawn it skips measures 27ms on every
+tool call the subagent makes, against 6ms for the shell bail.
+
+Both `PreToolUse` rows are **one** registration with `matcher: "*"`, self-filtering on the payload -
+the same shape `check-squash-subject.sh` uses, and for the same reason. A matcher of `Task` alone
+would miss the subagent row entirely.
+
+**A degraded read is LOUD, never short.** A section that cannot be built says `COULD NOT BE BUILT` or
+`UNKNOWN` and names the reason, instead of being omitted - because a shorter block that reads
+complete is indistinguishable from a healthy one, which is this hook's own failure signature. That is
+measured here rather than assumed: `inject-recorded-knowledge.sh` uses GNU-only `xargs -r`, and under
+a BSD `xargs` its Registers section drops from 13 entries to 4 while closed notes get relabelled as
+mis-tagged. That defect belongs to astubbs/parallel-consumer#341's class and is fixed there, not
+here. Distinguishing a *confirmed* absence from a failure matters just as much in the other
+direction: `gh` exits non-zero for "this branch has no PR" exactly as it does for offline, so the
+no-PR case is read off stderr and reported as a fact - otherwise every fresh branch prints an alarm,
+and an alarm that is always on gets scrolled past.
+
+`gh` is the only network call, on a path that fires per dispatch and per subagent: bounded at 5s,
+cached 10 minutes per repo and branch, and the repo slug derived from `git remote get-url origin`
+rather than left to `gh` - a bare `gh` here answers **confluentinc/parallel-consumer**, and the
+damaging case is the command that *succeeds* against the wrong repository. The bound is python's
+`subprocess` timeout, not `timeout(1)`, which is GNU coreutils and absent on macOS.
 
 **`bin/test-check-agent-hooks.sh`** - the negative control for the hooks, feeding each one
 crafted payloads and asserting its verdict. It is what rule 3 below asks for, and the harness
@@ -382,6 +509,37 @@ Until then this is an assumption, and a rule that does not arrive is a rule that
   Put load-bearing rules in the git hook anyway, for the reason in the layer table: it binds every
   process that runs `git`, not just this tool.
 
+- **`SessionStart` does NOT fire for a sub-agent.** The complement of the row above, and the more
+  surprising half. **Verified against 2.1.231**: a `SessionStart` hook logging every payload fired
+  exactly once, `source=startup`, for a `claude -p` that dispatched a sub-agent which then ran two
+  Bash calls - and those Bash calls fired the `PreToolUse` hook carrying the **same `session_id`** as
+  the parent. A sub-agent does not get a session; it borrows the dispatcher's. So any context an
+  agent must have *before it starts* cannot be delivered to a sub-agent by `SessionStart`.
+- **A hook CAN inject into a sub-agent's own context, keyed on `agent_type`.** The route the previous
+  point closes off, reopened. A sub-agent's tool-call payload carries `agent_id`, `agent_type` and
+  `effort` on top of the usual fields; **verified against 2.1.231**, a `PreToolUse` hook that emitted
+  `additionalContext` only when `agent_type` was present had that text quoted back by the sub-agent
+  itself, while the dispatcher in the same run saw nothing of it. It arrives with the sub-agent's
+  *first tool result*, so it is early rather than pre-emptive, and it repeats on every subsequent
+  call unless the hook throttles per `agent_id`.
+- **The Task tool's real `tool_name` is `Agent`, and matchers are regexes.** **Verified against
+  2.1.231**: the payload for a Task dispatch reports `"tool_name": "Agent"`, yet matchers of `Task`,
+  of `Agent`, of `Task|Agent` and of `*` all fired for it, and the injected text is delivered to the
+  model labelled `PreToolUse:Agent hook`. Match on whichever you like; do not assume the payload will
+  say `Task`.
+- **`additionalContext` reaches the CALLER, not the callee, and it arrives with the RESULT.**
+  **Verified against 2.1.231** with markers in both directions: the dispatcher quoted the string back
+  and reported it arriving after the sub-agent's tool call had completed, while the sub-agent asked
+  the same question answered that it had seen nothing. A `PreToolUse` hook on a dispatch therefore
+  cannot pre-empt that dispatch - it can only inform what the caller does next. Choose the event for
+  *when* it fires, and then be honest in the text about what that instant can and cannot promise.
+- **Injected text that reads like an instruction gets flagged as prompt injection.** Not a harness
+  behaviour but a reliable model one, and it shapes how these hooks must be written: probes whose
+  `additionalContext` said "repeat this string verbatim" were quoted back with an unprompted warning
+  that the content looked like an injection attempt and should be treated as untrusted. State the
+  provenance and keep the register factual - `inject-branch-context.sh` opens by naming the script
+  and the settings file it is registered in, and says it is a report rather than an instruction.
+
 ## Worth adding
 
 Open list - add to it, or take from it:
@@ -389,10 +547,29 @@ Open list - add to it, or take from it:
 - A gate asserting every `AGENTS.md` has a sibling `CLAUDE.md` importing it, so a future nested
   convention cannot be invisible to Claude Code the way `docs/inflight/AGENTS.md` was.
 - A `SessionStart` hook surfacing repo state an agent otherwise has to think to ask for: open PRs
-  needing an LGTM, worktrees with uncommitted work, gates currently red on master.
+  needing an LGTM, worktrees with uncommitted work, gates currently red on master. **Partly done** -
+  `inject-branch-context.sh` covers the current branch's own PR and its worktree marker. What is left
+  is the cross-repo view: *other* PRs awaiting an LGTM, *other* worktrees with uncommitted work, and
+  master's gate state. Different query, different cost, so it stays on the list. Picking a branch
+  back up is also the cheapest moment to learn master has moved under it, so
+  `remind-master-drift-on-push.sh` would earn its keep there too - it is on push only because that is
+  where its sibling already had a tested detector, not because session start was ruled out.
 - A `PreToolUse` deny on `git push --force` / `git rebase` against shared branches, which several
   skill definitions already forbid in prose.
 - A `UserPromptSubmit` hook injecting the current PR's review state, so "is this LGTM'd" never has to
-  be asked.
+  be asked. **Superseded for the counting half; the verdict half is still open.**
+  `inject-branch-context.sh` already reports how many reviews a PR carries and who wrote them, at
+  three events. What nobody reports is whether any of them is an *approval* - the question that entry
+  was really about, and the one that matters here, since this repo requires a human LGTM that no
+  review count answers.
 - Pre-push rather than pre-commit for the slower gates, keeping commits fast while still catching
   things before they reach CI.
+
+The disk hook's cases are worth reading before adding a hook of your own, because it has the failure
+mode every warn-only hook shares: **its correct behaviour on a healthy machine is to print nothing,
+which is byte-identical to it being broken, unregistered, or not running at all.** So its silent case
+is pinned to thresholds of zero rather than to a healthy disk, and pairs with forced cases proving the
+same call path can be made to speak. An earlier version left the thresholds at their defaults, which
+made the suite a function of how much free space the machine happened to have - three cases flipped
+to failing mid-session when the host dropped below the default warn line. A self-test for a disk
+warner must not itself depend on the disk.
