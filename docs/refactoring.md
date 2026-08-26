@@ -296,14 +296,6 @@ them, do not copy them back.
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
-### state/ShardKey.java
-
-- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
-  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
-  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
-  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
-  doc fix plus a field rename, not a behaviour change.
-
 ### state/ProcessingShard.java
 
 - **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
