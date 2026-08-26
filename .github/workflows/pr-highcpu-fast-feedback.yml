@@ -77,13 +77,69 @@ jobs:
     runs-on: [self-hosted, highcpu]
     continue-on-error: ${{ matrix.optional != 'false' }}   # optional / FYI - except chaos (see name comment)
     timeout-minutes: 60
-    # Per-suite superseding: a new push cancels only ITS OWN suite's previous run, so fast suites start
-    # within seconds instead of queueing behind the old run's slowest-dying job (see header note).
+    # Two different policies, because the two suites want different things from one physical box.
+    #
+    # Every suite EXCEPT chaos: per-suite, per-ref superseding. A new push cancels only ITS OWN suite's
+    # previous run, so fast suites start within seconds instead of queueing behind the old run's
+    # slowest-dying job (see header note).
+    #
+    # Chaos: ONE group for the whole repository, and it queues rather than cancels. The ref-keyed group
+    # above deduplicates within a branch and does nothing across branches - which is backwards for a
+    # SHARED PHYSICAL RESOURCE. Six runner processes serve one machine, so six PRs pushing at once gave
+    # six concurrent chaos suites, each starting 20+ PC instances against its own broker. Measured
+    # 2026-08-25: four of six chaos jobs RED in each of two windows, on six different seeds, all with
+    # ~154s lagStagnation against a 150s bound - the bound meeting the load, not a defect. A chaos RED
+    # taken while sibling agents were pushing was therefore uninformative by default, which is the worst
+    # possible state for a tripwire.
+    #
+    # `cancel-in-progress: false` matches chaos-pain.yml's existing policy and its reason: chaos runs are
+    # MEASUREMENTS - queue, never kill. GitHub keeps one running plus one pending per group and discards
+    # older pending entries, so a busy day means some PRs get no chaos run rather than a queue that never
+    # drains. That is the intended trade: no measurement beats a measurement taken under six-way
+    # contention, and this lane is advisory and not a required check.
+    #
+    # The alternative considered and NOT taken: a dedicated single-slot runner label for chaos. It is the
+    # better shape, but it needs runner-side provisioning, and docs/self-hosted-runner.md warns that a job
+    # pinned to a label nothing serves does not fail - it queues silently until GitHub cancels it. This
+    # fix is in-repo, reversible, and testable; see docs/inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md.
     concurrency:
-      group: highcpu-${{ matrix.suite-name }}-${{ github.head_ref || github.ref }}
-      cancel-in-progress: true
+      # Switched on the `box-exclusive` matrix KEY, never on `suite-name`. The suite name is a display
+      # label cited across docs, check names and artifact names; if the policy keyed on it, renaming it
+      # would silently return chaos to per-ref cancel-in-progress - the exact behaviour fixed here -
+      # with nothing going red. `optional` would also have worked and is wrong for a different reason:
+      # it couples "gates the merge" to "owns the box", which are unrelated properties.
+      #
+      # EVERY suite that can occupy this host during chaos must carry the key, or the mutex only
+      # excludes chaos-from-chaos while the noisiest possible neighbour still co-resides. The first
+      # version of this fix put only chaos in the group and left Performance on its own per-suite
+      # group, which is exactly that hole: a benchmark saturating the box is the single worst thing
+      # to run beside a suite whose findings are timing bounds. Caught in review on
+      # astubbs/parallel-consumer#354.
+      #
+      # The cost is real and is accepted rather than hidden: sharing one non-cancelling group means
+      # Performance RUNS AFTER chaos rather than beside it, and on a busy day its run can be displaced
+      # by a newer one instead of executing. GitHub cannot express "cancel my own predecessors but
+      # never the other suite's" - one group carries one cancel policy - and letting Performance cancel
+      # in this group would let an advisory benchmark kill a chaos measurement, which is strictly
+      # worse. Performance is advisory and its own comment already accepts noisy timing, so it is the
+      # right one to displace. See `max-parallel` below for the sibling-displacement case, which is a
+      # different problem with a different fix.
+      group: >-
+        ${{ matrix.box-exclusive == 'true'
+            && 'highcpu-box-exclusive'
+            || format('highcpu-{0}-{1}', matrix.suite-name, github.head_ref || github.ref) }}
+      cancel-in-progress: ${{ matrix.box-exclusive != 'true' }}
     strategy:
       fail-fast: false           # each suite is independent
+      # ONE AT A TIME, and this is load-bearing rather than tidiness. Both entries now sit in the
+      # `highcpu-box-exclusive` group, and GitHub holds one job per group running with at most one
+      # pending - so two jobs OF THE SAME RUN entering that group means the second is queued and then
+      # DISCARDED the moment a newer run arrives. Measured on 0a55f5f91: Performance came back
+      # `conclusion=cancelled`, which `gh pr checks` renders as **fail** - an absent measurement
+      # wearing the costume of a failing one, the exact inverse of the absent-chaos-run trap this
+      # branch documents in docs/ci.md. `max-parallel: 1` makes the matrix submit them in sequence, so
+      # the group only ever sees one entrant from this run and neither is displaced by its own sibling.
+      max-parallel: 1
       matrix:
         include:
           # (Unit, Integration and two Mutation entries used to live here - see WHAT WAS REMOVED in the
@@ -94,9 +150,12 @@ jobs:
           # <forkCount>${surefire.forkCount}</forkCount>, so surefire only honours the namespaced
           # property and a bare -DforkCount is silently ignored.)
           #
-          # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
+          # Performance: NOT a correctness gate here (timing is noisy under concurrency - that's fine).
+          # It carries box-exclusive not for its own sake but for chaos's: a benchmark is the worst
+          # possible neighbour for a suite whose findings are timing bounds. See the concurrency block.
           - suite-name: "Performance"
             cmd: "bin/performance-test.sh"
+            box-exclusive: "true"
           # Chaos Pain Suite: the per-PR ambient tripwire (moved here from chaos-pain.yml so all
           # self-hosted per-PR feedback shares one lane and its per-suite superseding concurrency).
           # NOT optional: a chaos RED is a real finding. bin/chaos-test.sh excludes @Quarantined
@@ -105,6 +164,8 @@ jobs:
           - suite-name: "Chaos Pain Suite"
             cmd: "bin/chaos-test.sh"
             optional: "false"
+            # Needs the whole machine, not one runner slot - see the concurrency block above.
+            box-exclusive: "true"
     steps:
       - name: Checkout
         # Shallow is fine: the only suite that needed full history was the scoped Mutation job (it diffs
@@ -128,6 +189,31 @@ jobs:
 
       - name: ${{ matrix.suite-name }} tests
         run: time ${{ matrix.cmd }}
+
+      # A chaos run is a MEASUREMENT, and the one thing a measurement must never do is be absent
+      # silently. Chaos shares one repo-wide concurrency group (see above), so on a busy day GitHub
+      # discards a superseded pending run and a PR's head commit can get no chaos execution at all -
+      # while every required check stays green. A missing measurement then looks exactly like a
+      # passing one. This step names the commit that WAS measured, so "the chaos result you are
+      # reading belongs to a different commit" is answerable from the summary rather than by
+      # reconstructing the queue. docs/ci.md carries how to read an absent chaos check.
+      - name: Record what was measured
+        if: always() && matrix.box-exclusive == 'true'
+        run: |
+          {
+            echo "## Chaos measurement provenance"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Commit measured | \`${{ github.event.pull_request.head.sha || github.sha }}\` |"
+            echo "| Outcome | ${{ job.status }} |"
+            echo "| Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
+            echo ""
+            echo "If the PR's head commit is not the commit above, this PR's current code has NOT been"
+            echo "through the chaos suite. That is possible by design - chaos serialises repo-wide and a"
+            echo "superseded pending run is discarded - and it is NOT a failure, but it is also not a pass."
+            echo "Re-run on demand with: \`gh workflow run chaos-pain.yml -R astubbs/parallel-consumer\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test reports
         if: always()

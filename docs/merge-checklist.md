@@ -90,6 +90,15 @@ Rewriting history someone else may have pulled is not reversible from inside a P
 - **Has a human reviewed it and said LGTM?** Automated review is not approval, and neither is green
   CI.
 - **Do the commit messages explain WHY?** The diff already says what.
+- **Did you write down a number a command could produce?** Grep your own diff for figures - counts
+  of findings, files, tests, notes, commits, branch divergence, and percentages derived from them.
+  Each one is wrong the first time anyone acts on the thing counted, and nothing goes red to say so,
+  so it reads as current state forever. State the shape and name the source instead: "the largest
+  group is null derefs, all from one method" plus a reproduce command beats a table of totals.
+  **This fires hardest while writing up a measurement you just took**, because the number feels like
+  the finding - which is exactly when it is most likely to change next week. Legitimate figures do
+  exist (a configured bound, a seed, a version), so this is a read-and-judge item, not a grep gate;
+  `docs/inflight/AGENTS.md` states the rule in full.
 - **Is any scaffolding left?** Scratch tests, debug logging, commented-out experiments, a stray
   `.class`.
 - **Did a rename or deletion leave a dangling reference?** Grep docs, scripts, workflows and the

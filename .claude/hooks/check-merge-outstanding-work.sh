@@ -157,9 +157,12 @@ now="$(date +%s)"
 # fail-closed branch below, and exiting non-zero, which PreToolUse reads as a non-blocking error and
 # ALLOWS the merge. The fail-closed arm was unreachable until this was here. `_mtime` therefore never
 # fails: it prints the mtime, or nothing.
+# hazard-ok: this IS the platform probe - it asks whether GNU stat exists before anything uses it
 if stat -c %Y . >/dev/null 2>&1; then
+    # hazard-ok: the probe above already established GNU stat is present
     _mtime() { stat -c %Y "$1" 2>/dev/null || true; }      # GNU coreutils
 else
+    # hazard-ok: the probe above rejected GNU stat, so this is the BSD branch
     _mtime() { stat -f %m "$1" 2>/dev/null || true; }      # BSD / macOS
 fi
 

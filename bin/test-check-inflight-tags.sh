@@ -49,6 +49,16 @@ assert "a task with no impact is rejected"    fail '# T\n\n<!-- inflight-type: t
 # the cosmetic ones. The tag exists to make work fall out in priority order.
 assert "a feature WITH an impact passes"       pass '# T\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: crash -->\n'
 assert "a feature with a task impact passes"   pass '# T\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: reliability -->\n'
+
+# LABELS - the third axis. The closed set is the whole value of the field, so the rejecting arms
+# matter more than the accepting one: a label field that silently accepts anything is tag soup with
+# a gate in front of it, which is worse than no field at all.
+assert "a valid label passes"                  pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurrency -->\n'
+assert "no label at all passes"                pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n'
+assert "a misspelt label is rejected"          fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurency -->\n'
+# Per-VALUE validation, not per-field: a good label must not launder a bad one sitting beside it.
+assert "one good and one bad label rejected"   fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurrency bogus -->\n'
+assert "two label markers are rejected"        fail '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\n<!-- inflight-labels: concurrency -->\n<!-- inflight-labels: concurrency -->\n'
 assert "a feature with a BOGUS impact fails"   fail '# T\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: nonsense -->\n'
 # the new impacts, one of each partition, so a typo in the lib is caught here rather than in a note
 assert "bug/crash passes"                      pass '# T\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: crash -->\n'
