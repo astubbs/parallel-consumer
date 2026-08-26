@@ -296,14 +296,6 @@ them, do not copy them back.
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
-### state/ShardKey.java
-
-- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
-  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
-  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
-  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
-  doc fix plus a field rename, not a behaviour change.
-
 ### state/ProcessingShard.java
 
 - **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
@@ -631,6 +623,18 @@ rather than fixed there so the gate's scope stayed one decision.
   defect, copy-pasted four times. Not ours to fix, but the duplication is: fold it into one shared
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
+
+### The offset-decode test helper, copy-pasted x7
+
+- `deserialiseIncompleteOffsetMapFromBase64` is wrapped by a near-identical private `decode` helper in
+  seven test files across two packages: `OffsetEncoderWidenedRangeRaceTest`,
+  `PartitionStateCommitEncodeShift894Test`, `PartitionStateCommitShiftCompounding894Test`,
+  `PartitionStateLincheckTest`, `OffsetEncodingBackPressureTest`,
+  `WorkManagerOffsetMapCodecManagerTest` and `CommitHistory`. Each is a call plus a debug log. Fold
+  into one shared helper. Surfaced by the duplicate-code bot flagging one pair of them; the pair is
+  not the finding, the seven are. Related but distinct from the racing-double unification tracked in
+  `docs/inflight/bug-torn-read-family.md`, which is about the two `Racing*State` doubles rather than
+  this helper.
 
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 

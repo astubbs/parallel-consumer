@@ -19,17 +19,30 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * has finished reading the state it encodes. Shared by the two
  * <a href="https://github.com/confluentinc/parallel-consumer/issues/894">confluentinc#894</a> reproductions.
  * <p>
- * <b>The seam.</b> {@code OffsetMapCodecManager.encodeOffsetsCompressed} calls
- * {@link #getIncompleteOffsetsBelowHighestSucceeded()} exactly once, to snapshot the set it encodes, and that
- * snapshot is a fresh copy. Completing an offset immediately afterwards therefore cannot alter the payload's
- * contents - only a <em>subsequent</em> read of the offset to commit can see it, which is the defect under test.
+ * <b>The seam.</b> {@code OffsetMapCodecManager.encodeOffsetsCompressed} snapshots the set it encodes exactly
+ * once, through the bounded filter {@link #getIncompleteOffsetsBelow(long)}, and that snapshot is a fresh copy.
+ * Completing an offset immediately afterwards therefore cannot alter the payload's contents - only a
+ * <em>subsequent</em> read of the offset to commit can see it, which is the defect under test.
+ * <p>
+ * <b>The override is on the bounded overload, and that is load-bearing.</b> It used to sit on
+ * {@link #getIncompleteOffsetsBelowHighestSucceeded()}, which the encoder no longer calls. Overriding the bounded
+ * method catches both entry points, because the no-arg convenience method delegates through it in the base class -
+ * so this double keeps working whichever one a future caller reaches for. Do not move it back: a seam the encoder
+ * does not call is a dead seam, and these tests would then arm races that never fire.
  * <p>
  * <b>What this does NOT establish.</b> The completion cannot move
  * {@code offsetHighestSucceeded} <em>in these fixtures</em>, because every offset they race is the lowest
  * outstanding one and so already sits below it. That is a property of the fixtures, not a general property of the
- * seam: {@code encodeOffsetsCompressed} takes its own second read of {@code getOffsetHighestSucceeded()} after the
- * snapshot, so a completion ABOVE the current high-water mark would widen the encoder's range against a stale set.
- * These tests do not reach that interleaving, and nothing here should be read as evidence it is safe.
+ * seam.
+ * <!-- post-merge: checked-begin -->
+ * This paragraph used to continue: that {@code encodeOffsetsCompressed} took a <em>second</em> read of
+ * {@code getOffsetHighestSucceeded()} after the snapshot, so a completion above the high-water mark would widen the
+ * encoder's range against a stale set, and that these tests never reach that interleaving. That second read is gone -
+ * astubbs#344 samples the mark once and derives both the snapshot and the range top from it - and the interleaving
+ * it warned about has its own reproduction in {@code OffsetEncoderWidenedRangeRaceTest}. The caveat is kept rather
+ * than deleted because it is what a reader of these fixtures still needs: they establish the base/payload tear, not
+ * the widened-range one.
+ * <!-- post-merge: checked-end -->
  *
  * @author Antony Stubbs
  */
@@ -83,8 +96,8 @@ class RacingCommitCycleState extends PartitionState<String, String> {
     }
 
     @Override
-    public SortedSet<Long> getIncompleteOffsetsBelowHighestSucceeded() {
-        SortedSet<Long> snapshotTheEncoderWillUse = super.getIncompleteOffsetsBelowHighestSucceeded();
+    public SortedSet<Long> getIncompleteOffsetsBelow(long highestSucceededBound) {
+        SortedSet<Long> snapshotTheEncoderWillUse = super.getIncompleteOffsetsBelow(highestSucceededBound);
         if (armedRacingOffset != null) {
             long racing = armedRacingOffset;
             armedRacingOffset = null;

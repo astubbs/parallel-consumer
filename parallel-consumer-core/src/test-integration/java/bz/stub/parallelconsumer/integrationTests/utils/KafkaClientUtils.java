@@ -403,6 +403,48 @@ public class KafkaClientUtils implements AutoCloseable {
         return expectedKeys;
     }
 
+    /**
+     * Produces one record per broker offset in {@code [fromInclusive, toExclusive)}, keyed so the key NAMES the offset
+     * the record lands on: {@code "k-<offset>"}. A test tracking keys can then name the LOST offset from a missing
+     * key, which is what makes a "a record went missing" failure diagnosable instead of merely red.
+     * <p>
+     * Distinct from {@link #produceMessages(String, long, String, long)}, whose key sequence restarts at 0 on every
+     * call - so a second batch reuses the first batch's keys, and no prefix choice restores the offset
+     * correspondence once more than one batch has been produced to the same topic.
+     * <p>
+     * The correspondence is ASSERTED rather than assumed: every send's {@link RecordMetadata#offset()} must equal the
+     * offset its key names. That makes the caller's contract - a SINGLE-partition topic whose end offset is
+     * {@code fromInclusive} - fail here, loudly, rather than downstream as a confusing missing-record assertion.
+     *
+     * @return the keys produced, in offset order
+     */
+    public List<String> produceOffsetKeyedRange(String topicName, long fromInclusive, long toExclusive)
+            throws InterruptedException, ExecutionException {
+        log.info("Producing offsets [{}..{}) to {}", fromInclusive, toExclusive, topicName);
+        final List<String> keys = new ArrayList<>();
+        List<Future<RecordMetadata>> sends = new ArrayList<>();
+        try (Producer<String, String> kafkaProducer = createNewProducer(NOT_TRANSACTIONAL)) {
+            for (long offset = fromInclusive; offset < toExclusive; offset++) {
+                String key = "k-" + offset;
+                keys.add(key);
+                sends.add(kafkaProducer.send(new ProducerRecord<>(topicName, key, "v-" + offset)));
+            }
+            log.debug("Finished sending offset-keyed test data");
+        }
+        // make sure we finish sending before the next stage, and that each record really landed where its key says
+        long expectedOffset = fromInclusive;
+        for (Future<RecordMetadata> send : sends) {
+            RecordMetadata metadata = send.get();
+            assertThat(metadata.offset())
+                    .describedAs("key k-%s must name the offset it landed on - offset-keyed produce needs a "
+                            + "single-partition topic whose end offset is the start of the requested range",
+                            expectedOffset)
+                    .isEqualTo(expectedOffset);
+            expectedOffset++;
+        }
+        return keys;
+    }
+
     public List<String> produceMessagesWithThrowHeader(String topicName, long numberToSend) throws InterruptedException, ExecutionException {
         log.debug("Producing {} messages to {}", numberToSend, topicName);
         final List<String> expectedKeys = new ArrayList<>();
