@@ -154,6 +154,46 @@ hand-written matrix has to re-declare `actions` and `python`, which default setu
 and then be maintained. astubbs#1 was exactly that proposal, opened in 2021 against
 `github/codeql-action@v1`; it was overtaken by default setup and closed by becoming this section.
 
+### Which checks are required, and why several deliberately are not
+
+**The required list is repository settings, not tree state**, so no PR can change it and nothing goes
+red when it drifts. Read it rather than trusting any list written down here:
+
+```bash
+gh api repos/astubbs/parallel-consumer/rulesets --jq '.[] | "\(.id) \(.name)"'
+gh api repos/astubbs/parallel-consumer/rulesets/<id> \
+  --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context'
+```
+
+**A required context that no run produces leaves every PR pending until it merges master**, so a new
+check is only promoted once the job that emits it is already on master. The same ordering governs a
+renamed job: the ruleset keeps the old name, which then blocks nothing visibly and passes never. That
+is how a bare `spotbugs` context outlived the job that became `static: spotbugs` and sat required with
+no producer until 2026-08-26. **A skip does not satisfy a required check either** - it waits - so a
+job that can legitimately have nothing in scope should report success rather than skip before anyone
+requires it.
+
+**These are deliberately NOT required, and each would break something if promoted:**
+
+| Check | Why not |
+|---|---|
+| `Mutation Tests (PIT, PR-scoped)` | **Requiring it would be vacuous.** The job is `continue-on-error: true`, so its check-run *conclusion* is success even when the step fails - the row reddens, and a required check reads the conclusion. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors. Gating that means removing `continue-on-error` first, which is a code change, not a ruleset edit |
+| `Performance (optional)` | The self-hosted lane is dispatch-only, so this context is never produced on a PR. Requiring it would block every PR permanently |
+| `compat: kafka 4.x (experimental)` | Disabled with `if: false` |
+| `full build (master)` | Push-only; never produced on a PR |
+| `Analyze (actions)`, `Analyze (java-kotlin)`, `Analyze (python)` | The `CodeQL` aggregate above is already required and covers all three |
+
+This table is the durable half of a note that has been retired: the three ruleset edits it tracked -
+adding `Chaos Pain Suite` once it reached master, adding `static: infer`, and removing the orphaned
+`spotbugs` - were made on 2026-08-26. The reasoning survives it, because the failure it prevents is
+someone re-proposing one of the rows above and re-deriving why it does not work.
+
+**`Chaos Pain Suite` was promoted without waiting for a bake-in period**, deliberately and against
+the advice recorded at the time: it had been red for much of 2026-08-25 on a timing bound, and the
+detector responsible was demoted to non-gating only the day after. The owner's call was that a red
+chaos check is a real finding and will be fixed as one. Read a red there as a bug to investigate, not
+as the gate misbehaving.
+
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
