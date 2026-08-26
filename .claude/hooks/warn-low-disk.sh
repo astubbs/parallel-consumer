@@ -96,7 +96,8 @@ readonly DOCKER_DF_TTL_SECONDS=120
 #     is the silent-wrong-number failure described in the header.
 #   OS_NAME decides which Docker LAYOUT to look for. Injectable, so the self-test can exercise the
 #     Docker Desktop branch on a Linux CI runner without pretending Linux has BSD stat.
-readonly REAL_UNAME="$(uname -s 2>/dev/null || echo unknown)"
+REAL_UNAME="$(uname -s 2>/dev/null || echo unknown)"
+readonly REAL_UNAME
 readonly OS_NAME="${PC_DISK_UNAME:-$REAL_UNAME}"
 
 # ONE platform table, because two of them drift: this was a pair of functions differing only in the
@@ -105,7 +106,11 @@ readonly OS_NAME="${PC_DISK_UNAME:-$REAL_UNAME}"
 # in the header for what guessing costs here.
 stat_field() { # <bsd-format> <gnu-format> <path> -> the field, or empty
     case "$REAL_UNAME" in
+        # The case has ALREADY dispatched on the platform - that is the whole reason this function
+        # exists - so each arm is only ever reached where its own stat syntax is the correct one.
+        # hazard-ok: guarded by REAL_UNAME, which is the un-injectable reading for exactly this
         Darwin | *BSD | DragonFly) stat -f "$1" "$3" 2>/dev/null ;;
+        # hazard-ok: as above - PC_DISK_UNAME steers OS_NAME only, never which stat syntax is spoken
         Linux | CYGWIN* | MINGW* | MSYS*) stat -c "$2" "$3" 2>/dev/null ;;
     esac
 }

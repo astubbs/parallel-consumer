@@ -213,7 +213,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - eight hooks, and the file is **tracked**. `.gitignore` excludes
+**`.claude/settings.json`** - nine hooks, and the file is **tracked**. `.gitignore` excludes
 `/.claude/*` by contents rather than excluding the directory, with a comment anticipating exactly
 this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
 grants stay in `settings.local.json`, still ignored.
@@ -267,12 +267,20 @@ grants stay in `settings.local.json`, still ignored.
   not merge: commits are too frequent for a note that runs to dozens of lines, and the merge guard
   above is the backstop that fires when re-opening the work is already expensive. It emits
   `additionalContext` and never denies. Its own header owns the reasoning.
-- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-history-rewrite.sh`, the one
-  guard here that **refuses**: it stops a force-push, rebase, amend or any other ref-moving command
-  while a review is in flight, because a rewrite orphans inline review threads and destroys the
-  incremental diff the reviewer works from. It names what would actually be lost rather than asking
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-history-rewrite.sh`, one of
+  the two guards here that **refuse**: it stops a force-push, rebase, amend or any other ref-moving
+  command while a review is in flight, because a rewrite orphans inline review threads and destroys
+  the incremental diff the reviewer works from. It names what would actually be lost rather than asking
   "are you sure?", and `REWRITE_HISTORY_CONFIRMED=1` is the documented override. Its own header owns
   the rest, including the full list of ref-moving shapes it reaches.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-shallow-history.sh`, the other
+  guard that **refuses**: it denies a depth-dependent history query - a range, an ancestry test, a
+  whole-history walk - while the clone is shallow, because such a query does not error, it *answers*,
+  from the truncated graft. `SHALLOW_HISTORY_ACCEPTED=1` is the override. It is per-command rather
+  than per-session because the `shallow` file lives in the shared `--git-common-dir`, so one sibling
+  agent's depth-limited fetch re-shallows every worktree, including one that unshallowed itself a
+  minute earlier. Its own header owns the rest, including why `git status` and `git log -1` are left
+  alone.
 - `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
   `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
   "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to
@@ -367,6 +375,24 @@ one is a case in that file, and the suite goes red against the old parser.
   The mitigation is to move anything local into `.claude/settings.local.json`, which stays ignored,
   before pulling; the `.gitignore` comment says so at the point someone reads it.
   <!-- file-refs: N/A - the file is git-ignored by design, so it is absent from every checkout -->
+
+## NOT settled by testing - the nested cascade
+
+`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md` is placed at a **package
+root**, above the three sub-packages its rules are about - `state`, `metrics`, `internal`. That
+placement assumes a nested `CLAUDE.md` loads for a file in a **subdirectory**, not only for a file
+directly in its own directory. The layer table above says "file in that dir is touched", which does
+not answer it, and the two existing bridges (`bin/`, `docs/inflight/`) both sit directly above their
+files, so neither tests the question.
+
+**Evidence it probably cascades**, short of a test: the root `CLAUDE.md` loads for work anywhere in
+the tree, so ancestors clearly participate. Whether the root is special-cased is the open part.
+
+**How to settle it:** edit a file in `.../parallelconsumer/state/` in a fresh session and check
+whether the package-root rules arrive. If they do not, the fix is three bridges instead of one - the
+content is identical and the cost is duplication, which is why one was tried first.
+
+Until then this is an assumption, and a rule that does not arrive is a rule that does not exist.
 
 ## Settled by testing, so nobody re-opens them
 

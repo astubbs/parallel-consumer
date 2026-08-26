@@ -1,5 +1,5 @@
 <!-- post-merge: checked -->
-# astubbs#339 - the low-disk warner: what the review left open
+# The low-disk warner: what the review left open
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->

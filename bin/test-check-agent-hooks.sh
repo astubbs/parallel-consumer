@@ -744,8 +744,20 @@ root = pathlib.Path(sys.argv[1])
 cfg = json.loads((root / ".claude/settings.json").read_text())
 registered = {h["command"].rsplit("/", 1)[-1].rstrip('"')
               for groups in cfg["hooks"].values() for g in groups for h in g["hooks"]}
+# TWO SELF-TEST SHAPES COUNT, because the repo has two. Most hooks get a section in THIS suite,
+# referenced as `$HOOKS/<name>`. A hook may instead get its own `bin/test-<name>.sh` - the shape
+# master introduced with check-shallow-history.sh - and that is equally real coverage, because
+# `bin/check-all.sh --with-tests` globs `bin/test-*.sh`, so such a file runs in CI with no wiring.
+# Recognising only the first shape reported a genuinely self-tested hook as untested, which would
+# have pushed the next author to satisfy the assertion rather than the property.
+# A LEADING-COMMENT MENTION DOES NOT COUNT: `# Self-test for .claude/hooks/foo.sh` is prose, and
+# accepting it would let a hook buy coverage with a sentence. The path must appear in code.
 covered = set(re.findall(r"\$HOOKS/([a-z0-9-]+\.sh)",
                          (root / "bin/test-check-agent-hooks.sh").read_text()))
+for selftest in sorted((root / "bin").glob("test-*.sh")):
+    code = "\n".join(l for l in selftest.read_text().splitlines()
+                     if not l.lstrip().startswith("#"))
+    covered |= set(re.findall(r"\.claude/hooks/([a-z0-9-]+\.sh)", code))
 disk = [h for g in cfg["hooks"].get("PreToolUse", []) for h in g["hooks"]
         if h["command"].rstrip('"').endswith("warn-low-disk.sh")]
 problems = []
