@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static bz.stub.parallelconsumer.internal.utils.KafkaUtils.toTopicPartition;
@@ -148,6 +150,63 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     /**
+     * One occupancy of an {@link ExecutionState} - the state, plus the attempt it belongs to.
+     * <p>
+     * <b>Why the state alone is not enough to compare-and-set against.</b> {@link ExecutionState} values are enum
+     * singletons, so a record that leaves {@link ExecutionState#FAILED} and comes all the way back to it is
+     * {@code ==} to where it started: an ABA. A selector that read {@code FAILED}, found the retry delay passed,
+     * and stalled would then compare-and-set successfully against a {@code FAILED} that is <em>a different
+     * failure</em> - one whose retry deadline has been pushed out - and redeliver immediately, ignoring the new
+     * delay. Reported by Codex on astubbs#335.
+     * <p>
+     * Every transition mints a new instance, so the {@link AtomicReference} compare - which is reference identity -
+     * cannot match across an intervening cycle. That closes the whole ABA class in one place rather than
+     * re-validating each derived term (the retry deadline today, whatever is added tomorrow) at every claim site.
+     * The deadline is therefore <b>not</b> re-read after the claim: it does not need to be, because the claim
+     * refuses any state the deadline could have been rewritten under.
+     * <p>
+     * {@link #sequence} carries no correctness weight - identity already does the work, so there is nothing to
+     * wrap around - it is there so a log line or a test can say <em>which</em> attempt, not merely which state.
+     */
+    static final class Execution {
+
+        private final ExecutionState state;
+
+        private final long sequence;
+
+        private Execution(ExecutionState state, long sequence) {
+            this.state = state;
+            this.sequence = sequence;
+        }
+
+        static Execution initial() {
+            return new Execution(ExecutionState.AVAILABLE, 0);
+        }
+
+        ExecutionState state() {
+            return state;
+        }
+
+        long sequence() {
+            return sequence;
+        }
+
+        /**
+         * @return a fresh occupancy of {@code to}, one attempt on from this one. Always a new instance, even when
+         *         {@code to} equals the current state, because a same-state transition still publishes writes made
+         *         under the claim (the retry deadline) that a stale observer must not claim across.
+         */
+        Execution transitionTo(ExecutionState to) {
+            return new Execution(to, sequence + 1);
+        }
+
+        @Override
+        public String toString() {
+            return state + "#" + sequence;
+        }
+    }
+
+    /**
      * Instance reference to otherwise static state, for access to the instance type parameters of WorkContainer as
      * static fields cannot access them.
      */
@@ -172,8 +231,20 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     @Getter
     private final ConsumerRecord<K, V> cr;
 
-    @Getter
-    private int numberOfFailedAttempts = 0;
+    /**
+     * How many times the user function has failed on this record.
+     * <p>
+     * Atomic for publication, not for mutual exclusion: only the holder of the claim writes it, but
+     * {@link #getNumberOfFailedAttempts()} is public (through {@code RecordContext}) and
+     * {@link #isDelayPassed()} reads it from any selector thread, so a plain field made the increment a
+     * read-modify-write on shared state - which is what SpotBugs' {@code AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE}
+     * names on astubbs#335.
+     * <p>
+     * <b>This does not make the (attempts, deadline) pair atomic, and it is not what makes reading them safe.</b>
+     * That is {@code isClaimableFrom(Execution)} reading the state first: the state write is the release that
+     * publishes both, so an observer that saw the state saw the pair the holder left behind. See that method.
+     */
+    private final AtomicInteger numberOfFailedAttempts = new AtomicInteger(0);
 
     @Getter
     private Optional<Instant> lastFailedAt = Optional.empty();
@@ -204,15 +275,18 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * @see ExecutionState
      * @see #onQueueingForExecution()
      */
-    private final AtomicReference<ExecutionState> state = new AtomicReference<>(ExecutionState.AVAILABLE);
+    private final AtomicReference<Execution> state = new AtomicReference<>(Execution.initial());
 
     /**
      * How many times this record has been handed to a worker. Incremented only by a WON claim, so a refused
-     * claim leaves it untouched - which is one of the properties {@code WorkClaimStateMachineTest} pins. Written
-     * only by the claim winner, read anywhere: the state field's compare-and-set orders the increment.
+     * claim leaves it untouched - which is one of the properties {@code WorkClaimStateMachineTest} pins.
+     * <p>
+     * Written only by the claim winner, read anywhere - and the increment happens <em>after</em> the claim's
+     * compare-and-set, so that write publishes nothing. An earlier revision of this comment claimed it did; it
+     * did not, which is the {@code AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE} SpotBugs reports here. The counter
+     * carries its own publication instead.
      */
-    @Getter
-    private long deliveryCount = 0;
+    private final AtomicLong deliveryCount = new AtomicLong(0);
 
     @Getter
     @Setter(AccessLevel.PUBLIC)
@@ -250,18 +324,35 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * revoked-partition branch, which does not know how far the delivery got.
      */
     public void endFlight() {
-        while (true) {
-            ExecutionState current = state.get();
-            if (!current.isInFlight()) {
-                log.trace("Flight already ended, nothing to release {}", this);
-                return;
-            }
-            if (state.compareAndSet(current, current.afterFlightEnds())) {
-                log.trace("Ending flight {}", this);
-                return;
-            }
-            // the worker's verdict landed between the read and the write - re-read and end the flight it left
+        Execution before = state.getAndUpdate(WorkContainer::endFlightOf);
+        if (before.state().isInFlight()) {
+            log.trace("Ending flight {}", this);
+        } else {
+            log.trace("Flight already ended, nothing to release {}", this);
         }
+    }
+
+    /**
+     * The transition {@link #endFlight()} applies, as a function of the state it observes - which is what makes
+     * that call <b>terminate</b>.
+     * <p>
+     * {@link AtomicReference#getAndUpdate} retries only when another thread wrote in between, and it re-applies
+     * <em>this</em> function to whatever it now finds. So the terminal condition is a property of the function
+     * rather than of a counter: it is <b>total</b> (defined on all six states) and <b>a fixed point on its own
+     * output</b> - no state it produces is in flight, so the next round would return the argument unchanged.
+     * A caller therefore cannot be made to go round more than once by any transition another thread can perform;
+     * a stall would need an unbounded supply of <em>new</em> flights, and only a won claim starts one, which
+     * cannot happen while the record is in flight.
+     * <p>
+     * That is the whole argument, and it is why this is not a {@code while (true)} loop with the reasoning left
+     * to the reader (astubbs#335 review).
+     */
+    private static Execution endFlightOf(Execution observed) {
+        if (!observed.state().isInFlight()) {
+            // not a transition: leave the identity alone, so a concurrent claim is not invalidated for nothing
+            return observed;
+        }
+        return observed.transitionTo(observed.state().afterFlightEnds());
     }
 
     public boolean isDelayPassed() {
@@ -338,13 +429,23 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     public boolean isInFlight() {
-        return state.get().isInFlight();
+        return state.get().state().isInFlight();
     }
 
     /**
      * @return where this record currently is in its lifecycle
      */
     public ExecutionState getExecutionState() {
+        return state.get().state();
+    }
+
+    /**
+     * @return the current occupancy, state and attempt together - what a selector's claim decision is made over.
+     *         Package-private: {@link Execution} is an implementation detail of the atomic, and the only callers
+     *         that need it are the claim itself and the test that drives the interleaving - see
+     *         {@link #takeClaimOn(Execution)}.
+     */
+    Execution observeExecution() {
         return state.get();
     }
 
@@ -352,11 +453,12 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * Claims this record for execution. <b>One compare-and-set: the check IS the act.</b>
      * <p>
      * The whole decision - not in flight, no success verdict, retry delay passed - is evaluated against a single
-     * observed {@link ExecutionState}, and the claim then compares against <em>that exact state</em>. Anything that
-     * moved the record in between makes the compare fail, so there is no window in which a decision can outlive the
-     * facts it was made on. That window is what could let an already-completed record be claimed and delivered a
-     * second time, and it is why callers must NOT pre-filter with {@link #isAvailableToTakeAsWork()} and then call
-     * this: the two-step form is the defect, restated.
+     * observed {@link Execution}, and the claim then compares against <em>that exact observation</em> - not
+     * against its state, which is an enum singleton a record can return to. Anything that moved the record in
+     * between makes the compare fail, so there is no window in which a decision can outlive the facts it was
+     * made on, and no ABA in which it appears not to have moved at all. That window is what could let an
+     * already-completed record be claimed and delivered a second time, and it is why callers must NOT pre-filter
+     * with {@link #isAvailableToTakeAsWork()} and then call this: the two-step form is the defect, restated.
      * <p>
      * A won claim starts a new delivery, and the new delivery carries no verdict - not because anything is
      * cleared, but because {@link ExecutionState#IN_FLIGHT} has none.
@@ -367,28 +469,69 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      *         (the direct-pull engine, in development) loses claims routinely and relies on the refusal.
      */
     public boolean onQueueingForExecution() {
-        ExecutionState observed = state.get();
+        return claimFrom(state.get());
+    }
+
+    /**
+     * The whole claim - decide over one observation, then act on that same observation.
+     */
+    private boolean claimFrom(Execution observed) {
         if (!isClaimableFrom(observed)) {
             log.trace("Not claimable from {}: {}", observed, this);
             return false;
         }
-        if (!state.compareAndSet(observed, ExecutionState.IN_FLIGHT)) {
+        return takeClaimOn(observed);
+    }
+
+    /**
+     * The act half of the claim, on its own - <b>the seam that makes the interleaving testable without
+     * threads</b> (see {@code WorkClaimStateMachineTest}).
+     * <p>
+     * A caller reaches here having already decided, over {@code observed}, that the record was claimable. At
+     * runtime the gap between that decision and this call is a handful of instructions; a descheduled selector
+     * can widen it to anything, and what happens inside it is the ABA this method exists to refuse - the record
+     * cycling away and back to a state that is {@code ==} to what the caller saw, with the retry deadline the
+     * caller checked rewritten under it (astubbs#335, reported by Codex).
+     * <p>
+     * <b>Splitting the act out is safe here in a way the defect's own two-step form was not</b>, and the
+     * difference is the whole point of {@link Execution}: the caller's observation is a <em>value</em>, and this
+     * compares against that exact value, so a stale caller is refused rather than obeyed. The old form threw its
+     * observation away and re-read nothing, so a stale decision won. The state check is kept as well, so this
+     * cannot be misused to claim a current-but-unclaimable record.
+     *
+     * @param observed the exact occupancy the claim decision was made over
+     */
+    boolean takeClaimOn(Execution observed) {
+        if (!observed.state().isClaimable()) {
+            log.trace("Not claimable from {}: {}", observed, this);
+            return false;
+        }
+        // Compares the exact occupancy, not merely its state, so a record that cycled away and back to the same
+        // state since the decision refuses this claim rather than honouring a decision made against a superseded
+        // attempt - and with it, against a retry deadline that has since been renewed. See Execution.
+        if (!state.compareAndSet(observed, observed.transitionTo(ExecutionState.IN_FLIGHT))) {
             log.trace("Lost the race to claim {}", this);
             return false;
         }
         log.trace("Queueing for execution: {}", this);
-        deliveryCount++;
+        deliveryCount.incrementAndGet();
         timeTakenAsWorkMs = of(System.currentTimeMillis());
         return true;
     }
 
     /**
-     * The claim decision, over one observed state. Read the state FIRST and the delay second: the state read is
-     * the volatile one, so its acquire semantics make the retry deadline written by the previous holder visible.
-     * Doing it the other way round would open a second, independent hole.
+     * The claim decision, over one observed occupancy. Read the state FIRST and the delay second: the state read
+     * is the volatile one, so its acquire semantics make the failure count and retry deadline written by the
+     * previous holder visible together, as the pair that holder left behind. Doing it the other way round would
+     * open a second, independent hole - a half-written pair reads as "never failed, so no delay", which is an
+     * immediate retry.
+     * <p>
+     * The deadline is a derived term, not part of the atomic; what stops a claim from acting on a <em>stale</em>
+     * one is that {@link #onQueueingForExecution()} compares against the exact {@link Execution} this was
+     * evaluated over, and anything that could rewrite the deadline transitions the record. See {@link Execution}.
      */
-    private boolean isClaimableFrom(ExecutionState observed) {
-        return observed.isClaimable() && isDelayPassed();
+    private boolean isClaimableFrom(Execution observed) {
+        return observed.state().isClaimable() && isDelayPassed();
     }
 
     public TopicPartition getTopicPartition() {
@@ -418,17 +561,14 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * edge, observed the retry deadline that goes with it.
      */
     private void recordVerdict(boolean succeeded) {
-        while (true) {
-            ExecutionState current = state.get();
-            ExecutionState next = current.withVerdict(succeeded);
-            if (current == next || state.compareAndSet(current, next)) {
-                return;
-            }
-        }
+        // Terminates for the same reason endFlightOf() does, and the argument is stated there: the update
+        // function is total, and applying it to its own output is idempotent in the state it names, so no
+        // sequence of transitions another thread can perform keeps this caller going round.
+        state.updateAndGet(observed -> observed.transitionTo(observed.state().withVerdict(succeeded)));
     }
 
     private void updateFailureHistory(Throwable cause) {
-        numberOfFailedAttempts++;
+        numberOfFailedAttempts.incrementAndGet();
         lastFailedAt = of(Instant.now(module.clock()));
         lastFailureReason = Optional.ofNullable(cause);
         Duration retryDelay = getRetryDelayConfig();
@@ -442,7 +582,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * made a claim able to contradict it.
      */
     public Optional<Boolean> getMaybeUserFunctionSucceeded() {
-        return state.get().getVerdict();
+        return state.get().state().getVerdict();
     }
 
     public boolean isUserFunctionComplete() {
@@ -473,6 +613,24 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     public boolean hasPreviouslyFailed() {
         return getNumberOfFailedAttempts() > 0;
+    }
+
+    /**
+     * @return how many times the user function has failed on this record. Hand-written rather than a Lombok
+     *         {@code @Getter} because the field is an {@link AtomicInteger} and this is public API, reached from
+     *         a user's retry-delay function through {@code RecordContext}: the accessor's {@code int} is the
+     *         contract, the field's type is not.
+     */
+    public int getNumberOfFailedAttempts() {
+        return numberOfFailedAttempts.get();
+    }
+
+    /**
+     * @return how many times this record has been handed to a worker. Hand-written for the same reason as
+     *         {@link #getNumberOfFailedAttempts()}.
+     */
+    public long getDeliveryCount() {
+        return deliveryCount.get();
     }
 
     /**

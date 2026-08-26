@@ -93,8 +93,8 @@ class WorkClaimStateMachineTest {
         assertWithMessage("the shard for offset %s must exist for this test to prove anything", offset)
                 .that(shard.isPresent()).isTrue();
         var wc = shard.get().getWorkContainerAt(offset);
-        assertWithMessage("the shard must still hold offset %s", offset).that(wc).isNotNull();
-        return wc;
+        assertWithMessage("the shard must still hold offset %s", offset).that(wc.isPresent()).isTrue();
+        return wc.get();
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -345,5 +345,99 @@ class WorkClaimStateMachineTest {
         wm.handleFutureResult(wc);
         assertThat(wc.getExecutionState()).isEqualTo(ExecutionState.SUCCEEDED);
         assertThat(wm.getNumberOfIncompleteOffsets()).isEqualTo(0L);
+    }
+
+    /**
+     * THE ABA, played out by hand: a record leaves FAILED and comes all the way back to FAILED, and the claim
+     * decided against the first one must not win against the second.
+     * <p>
+     * {@link ExecutionState} values are enum singletons, so "still FAILED" is a claim a compare-and-set on the
+     * state alone would accept - even though the failure it is looking at is a <em>different</em> failure, with
+     * its retry deadline pushed out by the attempt that happened in between. The record would be redelivered
+     * immediately, and the backoff this library configures would be silently skipped. Reported by Codex on
+     * astubbs#335; unreachable under the shipped engine's single selector, and routine under the direct-pull
+     * engine where every worker selects.
+     * <p>
+     * The interleaving, with no threads at all - each step is a plain method call in program order:
+     * <ol>
+     *     <li>selector A observes the record: FAILED, and its retry delay has passed. A is now descheduled.</li>
+     *     <li>selector B claims it, the user function fails again, and the controller takes it back - so the
+     *         record is FAILED once more, with a deadline that is now in the future.</li>
+     *     <li>A resumes and claims against what it observed in step 1.</li>
+     * </ol>
+     * Step 3 must be refused. What refuses it is {@link WorkContainer.Execution} identity: every transition mints
+     * a fresh occupancy, so A's is stale even though its state is {@code ==} to the current one.
+     */
+    @Test
+    void aClaimDecidedBeforeARenewedRetryDelayIsRefused() {
+        setup(ParallelConsumerOptions.ProcessingOrder.UNORDERED);
+        register(0, 1);
+
+        var wc = containerInShardAt(0L);
+        var retryDelay = module.options().getDefaultMessageRetryDelay();
+
+        // first failure, then let its retry delay pass - the record is now genuinely claimable
+        assertThat(wm.getWorkIfAvailable(1)).hasSize(1);
+        wc.onUserFunctionFailure(new FakeRuntimeException("deliberate"));
+        wm.handleFutureResult(wc);
+        module.getMutableClock().add(retryDelay.plus(Duration.ofSeconds(1)));
+
+        // 1. A makes its whole claim decision - state AND retry delay - and is descheduled holding the
+        //    occupancy it decided over. takeClaimOn() below is the act half of that same claim.
+        var observedByA = wc.observeExecution();
+        assertWithMessage("A's decision must be a genuine yes, or this test proves nothing")
+                .that(wc.isAvailableToTakeAsWork()).isTrue();
+
+        // 2. B runs the record all the way round, back to FAILED with a renewed deadline
+        assertThat(wm.getWorkIfAvailable(1)).hasSize(1);
+        wc.onUserFunctionFailure(new FakeRuntimeException("deliberate, again"));
+        wm.handleFutureResult(wc);
+
+        assertWithMessage("the ABA is real: the state A observed is the very same enum value as now")
+                .that(observedByA.state()).isSameInstanceAs(wc.getExecutionState());
+        assertThat(wc.getExecutionState()).isEqualTo(ExecutionState.FAILED);
+        assertWithMessage("B's failure pushed the deadline out, so the record is not due")
+                .that(wc.isAvailableToTakeAsWork()).isFalse();
+
+        // 3. A's stale claim must lose
+        assertWithMessage("a claim decided before the retry delay was renewed must not bypass it")
+                .that(wc.takeClaimOn(observedByA)).isFalse();
+        assertThat(wc.getExecutionState()).isEqualTo(ExecutionState.FAILED);
+        assertWithMessage("a refused claim starts no delivery")
+                .that(wc.getDeliveryCount()).isEqualTo(2L);
+        assertThat(wc.getNumberOfFailedAttempts()).isEqualTo(2);
+
+        // and the record is still claimable on its own terms, once the renewed delay actually passes
+        module.getMutableClock().add(retryDelay.plus(Duration.ofSeconds(1)));
+        assertWithMessage("refusing the stale claim must not strand the record")
+                .that(wc.onQueueingForExecution()).isTrue();
+        assertThat(wc.getDeliveryCount()).isEqualTo(3L);
+    }
+
+    /**
+     * Every transition mints a new occupancy, so no two claims in a record's life can ever be decided over the
+     * same one - which is the property the ABA refusal above rests on, stated directly rather than through one
+     * interleaving.
+     */
+    @Test
+    void everyTransitionMintsAFreshOccupancy() {
+        setup(ParallelConsumerOptions.ProcessingOrder.UNORDERED);
+        register(0, 1);
+
+        var wc = containerInShardAt(0L);
+        var seen = new ArrayList<Long>();
+        seen.add(wc.observeExecution().sequence());
+
+        assertThat(wm.getWorkIfAvailable(1)).hasSize(1);          // AVAILABLE -> IN_FLIGHT
+        seen.add(wc.observeExecution().sequence());
+        wc.onUserFunctionFailure(new FakeRuntimeException("deliberate")); // -> IN_FLIGHT_FAILED
+        seen.add(wc.observeExecution().sequence());
+        wm.handleFutureResult(wc);                                // -> FAILED
+        seen.add(wc.observeExecution().sequence());
+
+        assertWithMessage("each transition is a distinct occupancy: %s", seen)
+                .that(seen).containsNoDuplicates();
+        assertWithMessage("and they only ever move forwards, so a stale observation stays stale")
+                .that(seen).isInStrictOrder();
     }
 }

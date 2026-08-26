@@ -89,15 +89,20 @@ public class ProcessingShard<K, V> {
     }
 
     /**
-     * Which container currently occupies an offset, or null.
+     * Which container currently occupies an offset, if any.
+     * <p>
+     * <b>{@link Optional}, not a nullable reference.</b> "No container here" is an ordinary answer - the record
+     * succeeded and left the shard, or was swept as stale - so it is the return type's job to say so rather than
+     * the caller's job to remember (astubbs#335 review). This is the only accessor on the shard that can be
+     * legitimately empty, which is exactly why an implicit null here would not be noticed.
      * <p>
      * Read-only, and package-private for tests that need to assert WHICH container won a contested offset rather
      * than merely how many are tracked. A read cannot break the invariants that keep {@link #entries} private -
      * only a write can, which is why there is no corresponding setter and why {@link #addWorkContainer} remains
      * the only way in.
      */
-    WorkContainer<K, V> getWorkContainerAt(long offset) {
-        return entries.get(offset);
+    Optional<WorkContainer<K, V>> getWorkContainerAt(long offset) {
+        return Optional.ofNullable(entries.get(offset));
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {

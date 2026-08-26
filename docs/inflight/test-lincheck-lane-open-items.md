@@ -71,7 +71,7 @@ adding a class with a narrow guess in it.
    every worker its own. Calibrate against pre-astubbs#335 master, where the defect still lives.
 
    Same trigger, also worth a harness, and deliberately unfixed:
-   `bug-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
+   `bug-370-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
    `PartitionState#maybeRegisterNewPollBatchAsWork` makes a record selectable before its offset is
    registered, latent for the same single-selector reason.
 
