@@ -248,22 +248,42 @@ public class ShardManager<K, V> {
         var wc = new WorkContainer<>(epochOfInboundRecords, aRecord, module);
         ShardKey shardKey = computeShardKey(wc);
 
-        // don't need to synchronise on /adding/ elements, as the iterator would just stop early
-        var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation));
-        shard.addWorkContainer(wc);
+        // Choosing the shard and writing to it have to be ONE step, not two.
+        //
+        // computeIfAbsent followed by shard.addWorkContainer() hands the caller a shard and then lets go of
+        // the map: under KEY ordering removeShardIfEmpty() can garbage-collect that very shard in between,
+        // on the control thread, and the record is then admitted into a shard no scan will ever reach. The
+        // record is lost either way - that part is not new - but the admission is not, and nothing ever
+        // retires it, so getNumberOfRecordsInShards() reads permanently high and eventually holds the
+        // broker poller paused for good. The old gate summed only the shards still IN this map, so an
+        // orphan simply disappeared from it; a conservation figure cannot forget.
+        //
+        // compute() here and computeIfPresent() in removeShardIfEmpty() take the same per-key lock, so a
+        // shard can no longer be dropped between being chosen and being written to.
+        processingShards.compute(shardKey, (ignore, existingShard) -> {
+            var shard = (existingShard == null)
+                    ? new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation)
+                    : existingShard;
+            shard.addWorkContainer(wc);
+            return shard;
+        });
     }
 
     void removeShardIfEmpty(ShardKey key) {
-        Optional<ProcessingShard<K, V>> shardOpt = getShard(key);
-
         // If using KEY ordering, where the shard key is a message key, garbage collect old shard keys (i.e. KEY ordering we may never see a message for this key again)
         // If not, no point to remove the shard, as it will be reused for the next message from the same partition
-        boolean keyOrdering = options.getOrdering().equals(KEY);
-        if (keyOrdering && shardOpt.isPresent() && shardOpt.get().isEmpty()) {
-            log.trace("Removing empty shard (key: {})", key);
-            this.processingShards.remove(key);
+        if (!options.getOrdering().equals(KEY)) {
+            return;
         }
+        // The emptiness test and the removal are one step, against the same per-key lock addWorkContainer()
+        // takes - see there for what a shard dropped mid-insertion costs.
+        processingShards.computeIfPresent(key, (ignore, shard) -> {
+            if (shard.isEmpty()) {
+                log.trace("Removing empty shard (key: {})", key);
+                return null;
+            }
+            return shard;
+        });
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {

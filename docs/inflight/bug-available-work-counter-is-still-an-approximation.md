@@ -25,9 +25,24 @@ in `ShardManager.getWorkIfAvailable`, and `AbstractParallelEoSStreamProcessor.dr
 **The candidate fix is to derive it too**, from the same population minus an authoritative in-flight count. The
 blocker is that in-flight is toggled by `WorkContainer.onQueueingForExecution()` / `endFlight()`, which the
 container does without telling its shard, and `endFlight()` runs *before* shard removal on the success path -
-so no local predicate at a removal site recovers "was this record counted". `retireAndDeductIfStillCounted`
-uses `isNotInFlight()` and is correct only because the one case it gets wrong (a stale result handed back for
-a record still in a shard) cannot occur: revocation removes the entry before the result returns.
+so no local predicate at a removal site recovers "was this record counted".
+
+`retireAndDeductIfStillCounted` uses `isNotInFlight()`, and **the window it gets wrong is open, contrary to
+what this note said until 2026-08-26**. The old claim was that the one bad case - a stale result handed back
+for a record still counted - cannot occur, because revocation removes the entry before the result returns.
+That holds between *methods* and not between *instructions*: the predicate is read after `entries.remove()`
+has already returned the container, so the controller's `handleFutureResult` -> `endFlight()` for a revoked
+record can land in between and flip `isNotInFlight()` to true for a unit that selection already spent. The
+second deduction is permanent, and `inFlight` is a plain non-volatile `boolean` read across threads, so the
+value is unspecified there in any case. Raised by Codex on astubbs/parallel-consumer#336 and left unfixed
+there deliberately: that PR removed this counter from the load gate, and replacing it is the derive-it work
+below rather than a patch at one removal site.
+
+The derive-it fix has a shape: move "does this container hold a unit of its shard's available count" onto the
+container as an ownership flag the shard claims and releases with a CAS, so every site decides from a fact it
+owns rather than from a predicate it infers. That makes the counter conserved the way `RecordPopulation` is,
+and collapses `retireAlreadyDeducted` and `retireAndDeductIfStillCounted` into one method. Measure first, per
+below - replacing state that turns out never to disagree is a refactor.
 
 ## And the second counter in the same calculation is untouched
 

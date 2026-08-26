@@ -84,34 +84,47 @@ public class ProcessingShard<K, V> {
     private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
 
     void addWorkContainer(WorkContainer<K, V> wc) {
-        long key = wc.offset();
-        WorkContainer<K, V> existing = entries.get(key);
-        if (existing != null) {
-            // Check if the existing entry is stale and should be replaced
-            if (isWorkContainerStale(existing)) {
-                log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
-                        existing.getEpoch(), key, wc.getEpoch());
-                entries.put(key, wc);
-                // Neither count changes. The population is conserved - one container leaves the map as
-                // another takes its place, so there is nothing to admit and nothing to retire.
-                // availableWorkContainerCnt stays the same since we're replacing, not adding: two paths
-                // reach here having already spent this offset's decrement, and neither re-increments -
-                // the stale entry had been taken as work (getWorkIfAvailable() decremented at take time),
-                // or the poller's removeStaleContainers() sweep removed it between the get and this put.
-                // Either way the shard undercounts its available work, and NOT only "until the next add" -
-                // the next add increments for its own new entry, so the deficit survives it and can
-                // accumulate across replacements. It resyncs only when the shard is removed; there is no
-                // longer a clamp to floor it at zero, and nothing needs one - see the field's javadoc.
-                // That is a gauge inaccuracy only, and no record is lost: getWorkIfAvailable() scans
-                // entries directly rather than gating on the count, and handleFutureResult() drops a
-                // stale in-flight result without touching the shard, so it cannot remove this fresh entry.
-            } else {
-                log.debug("Entry for {} already exists in shard queue, dropping record", wc);
-            }
-        } else {
-            entries.put(key, wc);
-            population.onAdmitted();
+        long offset = wc.offset();
+        WorkContainer<K, V> resident = entries.get(offset);
+        if (resident != null && !isWorkContainerStale(resident)) {
+            log.debug("Entry for {} already exists in shard queue, dropping record", wc);
+            return;
+        }
+        if (resident != null) {
+            log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
+                    resident.getEpoch(), offset, wc.getEpoch());
+        }
+
+        // ADMIT FIRST, then let the map itself say what happened - never the read above.
+        //
+        // By the time the insertion runs, `resident` is only advice: a stale sweep on the other thread can
+        // have removed it and retired it in between, which turns what looks like a replacement into an
+        // insertion. Deciding from `resident` would then skip the admission for the only container now at
+        // this offset, while its eventual departure still retires - and the population sits permanently
+        // below what the shards hold, with no clamp and nothing to reconcile it. Reading low
+        // under-throttles, so the drift over-fetches from the broker rather than stalling it, but it never
+        // self-corrects in either direction.
+        //
+        // Admitting before the put also preserves RecordPopulation's ordering invariant - a retirement can
+        // never be observed against an admission that has not been committed yet - which is what lets
+        // getInSystem() be non-negative by construction instead of by clamp.
+        population.onAdmitted();
+        WorkContainer<K, V> displaced = entries.put(offset, wc);
+        if (displaced == null) {
             availableWorkContainerCnt.incrementAndGet();
+        } else {
+            // A real replacement after all: one container left the map as this one entered it, so the
+            // speculative admission is balanced by the displaced container's retirement and the shard's
+            // population is unchanged.
+            population.onRetired();
+            // availableWorkContainerCnt is deliberately NOT incremented. If the displaced container was
+            // still selectable it was already holding this offset's unit, and if it had been taken as work
+            // that unit was spent at selection and is not owed back - which leaves the shard reading one
+            // low until it is removed. That is the approximation tracked in
+            // docs/inflight/bug-available-work-counter-is-still-an-approximation.md, not a population
+            // defect: getWorkIfAvailable() scans entries directly rather than gating on this count, and
+            // handleFutureResult() drops a stale in-flight result without touching the shard, so no record
+            // is lost either way.
         }
     }
 
@@ -160,6 +173,26 @@ public class ProcessingShard<K, V> {
      * Removes the record at this offset, if it is still held. Reached from the partition revocation sweep.
      */
     public WorkContainer<K, V> remove(long offset) {
+        return removeAndRetire(offset);
+    }
+
+    /**
+     * Takes whatever is at this offset out of the shard, and retires exactly what the map gave up.
+     * <p>
+     * <b>The retirement has to be driven by the map's own return value, never by the container the caller is
+     * holding.</b> Three removal paths run across two threads - the revocation sweep, the epoch-change stale
+     * sweep, and {@link #getWorkIfAvailable}'s last-resort one - and when two of them collide on the same
+     * offset only one removes anything. Retiring on both retires a single admission twice, and since
+     * {@link RecordPopulation} has no clamp and nothing reconciles it against the shards, the deficit is
+     * permanent: the load gate then believes fewer records are held than really are, and over-fetches for
+     * the life of the consumer.
+     * <p>
+     * A value-conditional {@code entries.remove(offset, container)} would not do instead.
+     * {@link WorkContainer#equals(Object)} is topic, partition and offset only, so a <em>fresh</em> container
+     * that replaced this one at the same offset compares equal to it and would be removed as though it were
+     * the stale one.
+     */
+    private WorkContainer<K, V> removeAndRetire(long offset) {
         WorkContainer<K, V> removed = entries.remove(offset);
         retireAndDeductIfStillCounted(removed);
         return removed;
@@ -172,13 +205,15 @@ public class ProcessingShard<K, V> {
     // 2. will cause the consumer to paused consuming new messages indefinitely
     public List<WorkContainer<K, V>> removeStaleWorkContainersFromShard() {
         List<WorkContainer<K, V>> staleContainers = new ArrayList<>();
-        var iterator = entries.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<Long, WorkContainer<K, V>> entry = iterator.next();
+        for (Map.Entry<Long, WorkContainer<K, V>> entry : entries.entrySet()) {
             if (isWorkContainerStale(entry.getValue())) {
-                iterator.remove();  // Safe even on ConcurrentSkipListMap
-                retireAndDeductIfStillCounted(entry.getValue());
-                staleContainers.add(entry.getValue());
+                // Not iterator.remove(): it discards the map's return value, so it cannot tell "this call
+                // removed the record" from "another thread had already removed it" - and the retirement has
+                // to know which. See removeAndRetire.
+                WorkContainer<K, V> removed = removeAndRetire(entry.getKey());
+                if (removed != null) {
+                    staleContainers.add(removed);
+                }
             }
         }
         return staleContainers;
@@ -191,7 +226,6 @@ public class ProcessingShard<K, V> {
         var workTaken = new ArrayList<WorkContainer<K, V>>();
 
         var iterator = entries.entrySet().iterator();
-        boolean hasStaleWorkContainer = false;
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var workContainer = iterator.next().getValue();
 
@@ -222,10 +256,16 @@ public class ProcessingShard<K, V> {
 
                 if (isWorkContainerStale(workContainer)) {
                     // last-resort sweep, for a container that went stale without either epoch-change sweep
-                    // having reached it - it still has to be retired like every other departure
+                    // having reached it - it still has to be retired like every other departure, and taken
+                    // out of the retry queue like ShardManager.removeStaleContainers() does. Leaving the
+                    // queue entry behind orphans it forever: nothing else removes an entry whose container
+                    // is no longer in any shard, and the workable figure the load gate reads subtracts a
+                    // parked-for-retry count that would then include a record the population no longer does.
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
-                    iterator.remove();
-                    retireAndDeductIfStillCounted(workContainer);
+                    WorkContainer<K, V> removed = removeAndRetire(workContainer.offset());
+                    if (removed != null) {
+                        retryQueue.remove(removed);
+                    }
                 } else {
                     log.trace("Partition for shard {} is blocked for work taking, stopping shard scan", this);
                     break;
@@ -317,6 +357,13 @@ public class ProcessingShard<K, V> {
      * The old test here was {@link WorkContainer#isAvailableToTakeAsWork()}, which additionally requires the retry
      * delay to have passed. That made revoking a record parked in retry back-off leave its increment behind
      * permanently, high, in the direction the clamp never caught.
+     * <p>
+     * <b>It is still an inference, and it has a known open window</b>: the predicate is read after the map has
+     * already given the container up, so a controller-side {@code endFlight()} for a revoked record can land in
+     * between and deduct a unit selection already spent. That is a defect in this counter, not in the
+     * population - {@link RecordPopulation} is retired above on the map's own return value, never on a
+     * predicate - and closing it means giving the container an ownership flag rather than patching a removal
+     * site. Tracked in {@code docs/inflight/bug-available-work-counter-is-still-an-approximation.md}.
      */
     private void retireAndDeductIfStillCounted(WorkContainer<?, ?> removed) {
         if (removed == null) {

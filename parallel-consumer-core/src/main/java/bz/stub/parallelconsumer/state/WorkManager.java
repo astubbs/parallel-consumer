@@ -233,8 +233,15 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        long workable = getNumberOfWorkableRecordsInSystem();
-        long threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
+        // Every operand is read ONCE, and the log line below prints those same values. Re-reading them for
+        // the diagnostic would let it print an equation that never held: the poll and control threads move
+        // all four while this runs, so a re-read can disagree with the numbers the decision was actually
+        // made on - and telling a real stall apart from counter drift is the entire point of the line.
+        long inShards = sm.getNumberOfRecordsInShards();
+        long parkedForRetry = sm.getNumberOfRecordsParkedForRetry();
+        long workable = inShards - parkedForRetry;
+        int loadingFactor = getLoadingFactor();
+        long threshold = (long) options.getTargetAmountOfRecordsInFlight() * loadingFactor;
         boolean loaded = workable > threshold;
         // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while
         // no records are actually flowing, the poller never resumes and the PC stalls. Because the figure below is
@@ -243,8 +250,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled()) {
             log.debug("isSufficientlyLoaded={} (inShards={} - parkedForRetry={} = {} vs target({})*loadingFactor({})={})",
-                    loaded, sm.getNumberOfRecordsInShards(), sm.getNumberOfRecordsParkedForRetry(), workable,
-                    options.getTargetAmountOfRecordsInFlight(), getLoadingFactor(), threshold);
+                    loaded, inShards, parkedForRetry, workable,
+                    options.getTargetAmountOfRecordsInFlight(), loadingFactor, threshold);
         }
         return loaded;
     }
@@ -266,6 +273,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * The one thing this does <em>not</em> count, which the old expression did, is a record whose partition was
      * revoked while it was still out at a worker. That record has been dropped from the shards and its result will
      * be discarded on return, so counting it as loaded only ever delayed a fetch.
+     * <p>
+     * {@link #isSufficientlyLoaded()} deliberately does not call this: it needs the two operands as well as the
+     * difference, and reading them twice is how the diagnostic there ends up printing an equation that never held.
      */
     public long getNumberOfWorkableRecordsInSystem() {
         return sm.getNumberOfRecordsInShards() - sm.getNumberOfRecordsParkedForRetry();
