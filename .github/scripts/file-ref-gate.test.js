@@ -162,6 +162,11 @@ check("a bare filename is not a path", () => {
 check("globs, placeholders and elisions are patterns, not paths", () => {
   assert.deepStrictEqual(citationsIn("the bin/check-*.sh scripts"), []);
   assert.deepStrictEqual(citationsIn("name it bin/check-foo.sh and it is granted"), []);
+  // CASE-INSENSITIVE, and asserted because it stopped being so once. The word list was a `/i`
+  // literal until it was concatenated into a `new RegExp(a + b)` that took no flags, and nothing
+  // went red: no case here used a capitalised placeholder, so `Foo.md` quietly became a citation.
+  assert.deepStrictEqual(citationsIn("name it bin/check-FOO.sh and it is granted"), []);
+  assert.deepStrictEqual(citationsIn("see docs/Bar.md for the shape"), []);
   assert.deepStrictEqual(citationsIn("run bin/<name>.sh"), []);
   assert.deepStrictEqual(citationsIn("parallel-consumer-core/.../chaostests/ChaosConductor.java"), []);
 });

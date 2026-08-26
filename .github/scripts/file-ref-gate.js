@@ -94,12 +94,19 @@ const LINE_OPT_OUT = /file-refs:\s*N\/?A\b\s*-\s*[A-Za-z]/i;
 //
 // LOWERCASE, and that is not cosmetic: a java file is named for its class and classes are
 // capitalised, so `.../internal/A.java` is a plausible real path while `docs/a.md` is not a
-// plausible real document. Anchored at the FILENAME rather than at any segment, so a short
-// DIRECTORY segment - `src/a/b/Thing.java` - is untouched.
-const PLACEHOLDER = new RegExp(
-  String.raw`(?:^|[/\-_.])(?:foo|bar|baz|qux|quux)(?:[/\-_.]|$)` +
-  String.raw`|/[a-z0-9]\.[a-z0-9]+$`,
-);
+// plausible real document. A single DIGIT stem is in for the same reason from the other side - no
+// java class may start with one, so `docs/1.md` is illustrative too. Anchored at the FILENAME
+// rather than at any segment, so a short DIRECTORY segment - `src/a/b/Thing.java` - is untouched.
+//
+// TWO REGEXES RATHER THAN ONE ALTERNATION, because their FLAGS differ and JavaScript has no inline
+// flag syntax to vary case-sensitivity within a pattern. Written as one `new RegExp(a + b)` the
+// word list silently lost the `/i` it had carried since it was a literal, so `Foo.md` in a worked
+// example started being read as a real citation - a regression a concatenated regex makes invisible
+// and no test caught, because no case exercised an uppercase placeholder word. There are now two.
+const PLACEHOLDER_WORD = /(?:^|[/\-_.])(?:foo|bar|baz|qux|quux)(?:[/\-_.]|$)/i;
+const PLACEHOLDER_SHORT_NAME = /\/[a-z0-9]\.[a-z0-9]+$/;
+
+const isPlaceholder = (token) => PLACEHOLDER_WORD.test(token) || PLACEHOLDER_SHORT_NAME.test(token);
 
 // Tokens that are patterns rather than paths: globs, `<placeholders>`, shell/CI interpolation, and
 // the elided `.../` form docs use to shorten a long package path.
@@ -161,6 +168,11 @@ const TAIL_OF_SOMETHING_ELSE = /[/~}$\\]/;
 const REVISION = String.raw`(?:[0-9a-f]{7,40}|HEAD|master|origin/[\w.-]+)(?:[~^]\d*)*`;
 
 const GIT_REVISION = new RegExp(`${REVISION}:$`);
+// Hoisted alongside GIT_REVISION rather than built inside historyPointersIn's per-line loop. It was
+// recompiled once per line, which cost nothing while only prose was scanned and is a per-line
+// allocation across the whole java tree now that .java is a citing file. `matchAll` does not mutate
+// a shared regex's lastIndex, so reuse is safe - the same way TOKEN and MD_LINK_TARGET are reused.
+const HISTORY_POINTER = new RegExp(`${REVISION}:([A-Za-z0-9_.@/-]+)`, "g");
 
 // The PR-wide form. Deliberately looser than LINE_OPT_OUT - any non-blank reason will do - because
 // the `-->` hole that rule guards against needs an HTML comment to open it, and this one must START
@@ -225,7 +237,7 @@ function citationsIn(line) {
   const out = new Set();
   for (const m of clean.matchAll(TOKEN)) {
     const token = m[0];
-    if (NOT_A_PATH.test(token) || PLACEHOLDER.test(token)) continue;
+    if (NOT_A_PATH.test(token) || isPlaceholder(token)) continue;
     if (m.index > 0 && TAIL_OF_SOMETHING_ELSE.test(clean[m.index - 1])) continue;
     if (GIT_REVISION.test(clean.slice(0, m.index))) continue;
     out.add(token);
@@ -237,7 +249,7 @@ function citationsIn(line) {
     const raw = m[1];
     if (NOT_A_LINK_PATH.test(raw)) continue;
     const target = stripFragment(raw);
-    if (!target || NOT_A_PATH.test(target) || PLACEHOLDER.test(target)) continue;
+    if (!target || NOT_A_PATH.test(target) || isPlaceholder(target)) continue;
     if (TAIL_OF_SOMETHING_ELSE.test(target[0])) continue;
     if (!HAS_EXTENSION.test(target)) continue;
     out.add(target);
@@ -313,7 +325,7 @@ function resolves(citation, citingFile, tree) {
 function historyPointersIn(lines) {
   const out = new Set();
   for (const line of lines || []) {
-    for (const m of line.matchAll(new RegExp(`${REVISION}:([A-Za-z0-9_.@/-]+)`, "g"))) {
+    for (const m of line.matchAll(HISTORY_POINTER)) {
       out.add(normalise(m[1]));
     }
   }
