@@ -848,6 +848,45 @@ above. That is a defect in the autopsy rather than in this family, and it has it
 Entries in this ledger that lean on a clean autopsy are worth re-checking against it.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
+**Sixteenth sighting, 2026-08-25 - the drain arm again, and a SECOND same-day timing rule-out of
+contention.** `Chaos Pain Suite` on astubbs/parallel-consumer#353's head `c1f423e4a`
+([run 32807910210](https://github.com/astubbs/parallel-consumer/actions/runs/32807910210/job/97681493424)),
+<!-- post-merge: checked-end -->
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red at 172s. **4
+`CLASS2_STALL/LAG_STAGNATION` in the autopsy** (3 fired live), committed offsets stagnant 154s
+against the 150s bound, group STABLE and heartbeats flowing.
+`peaks: rebalanceDwell=13178ms lagStagnation=154263ms` - the ~154s constant again, inside the 300ms
+band the twelfth sighting measured across four arms (154064-154360ms).
+
+**Seed `6037000644302969438`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=6037000644302969438
+
+Two things this entry adds. **The branch is not a suspect, again**:
+<!-- post-merge: checked-begin -->
+at the observed head `c1f423e4a`, astubbs#353 carried only
+<!-- post-merge: checked-end -->
+`.claude/hooks/pre-commit-gate.sh`, `bin/test-check-agent-hooks.sh` and `docs/agent-harness.md` -
+no Java at all - the same not-PR-introduced control the fourteenth and fifteenth sightings each
+recorded. **And it corroborates the fourteenth sighting's timing rule-out of runner contention**:
+`Performance (optional)` finished at 04:14:18Z and the failing drain arm did not start until
+04:17:05Z, three minutes after the box went quiet - the second drain-arm red in one day where the
+contention pairing provably was not present. The discriminator remains an uncontended replay, and
+nobody has replayed this seed either. Recorded as unresolved.
+
+**The same branch's next run drew TWO arms at once** - not a new numbered sighting, the signature
+is already this entry's, but the seeds are the asset.
+[Run 32863352692](https://github.com/astubbs/parallel-consumer/actions/runs/32863352692/job/97852502402):
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (**eager**, seed
+`5501517460666962649`, `lagStagnation=154115ms`) and
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` (seed
+`7370431147468591204`, `lagStagnation=154524ms`), 47 `CLASS2_STALL/LAG_STAGNATION` violations
+between them, every peak inside the familiar ~154s band. And a THIRD same-day timing rule-out of
+contention: `Performance (optional)` ended 15:06:08Z, the eager arm started 15:08:36Z and the
+drain arm 15:11:28Z. The head under test differs from this entry's by hook-script and markdown
+commits only.
 
 ## 2026-08-25: the discriminator was finally run, and it closes the `CLASS2_STALL` line of this file
 
@@ -1106,6 +1145,12 @@ crossed no longer gates. Kept as seeds only, so the pair is not rediscovered and
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
-timing proxy accumulated fourteen sightings. This file may be retired once astubbs#29 lands and the
+timing proxy accumulated fourteen sightings.
+<!-- post-merge: checked-begin -->
+The sixteenth sighting above was written on
+astubbs/parallel-consumer#353 before this section existed and merged in after it, so it is one more
+of the same crossings rather than an exception to them; the counts here are left as they were
+written rather than silently re-derived.
+<!-- post-merge: checked-end --> This file may be retired once astubbs#29 lands and the
 remaining open item - the original deadlock - has its own solutions write-up.
 
