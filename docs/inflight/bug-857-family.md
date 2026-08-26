@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
+<!-- post-merge: checked-begin - every astubbs#29 mention below states what its fix DOES (the AB-BA pair it replaces, the modes its cycle can close in, what its reproducer cannot settle), not that it is open; the three state claims that were here have been rewritten -->
 
 
 Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom.
@@ -12,13 +13,14 @@ permanently killing the broker-poll thread) and astubbs#80 (a draining consumer 
 `consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
 assignment). Write-ups in `docs/solutions/test-flakiness/`.
 
-**Still open: the original deadlock, in astubbs#29** - `synchronized(commitCommand)` between the poll thread
+**The family's third defect - the original deadlock - is astubbs#29's** - `synchronized(commitCommand)` between the poll thread
 (`onPartitionsRevoked`) and the control thread (`commitOffsetsThatAreReady`), replaced there with
 `ReentrantLock.tryLock()`. A sibling of the two landed fixes, not a duplicate: astubbs#29/#31 were verified
 *not* to fix the drain defect, and the uber-branch experiment showed the astubbs#80 stack composes cleanly
 with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadlockTest` failed once
 under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is explicitly *not* a
-member). astubbs#29 needs a rebase and a retarget first - see `pr-blockers-and-collisions.md`.
+member). astubbs#29 has since been retargeted onto `master`; `pr-blockers-and-collisions.md` carries the
+coordination state.
 
 **READ BEFORE RESUMING astubbs#29, and before reading any `CLASS2_STALL` entry below.** On
 2026-08-25 the discriminating replay this file had been asking for since the twelfth sighting was
@@ -131,6 +133,8 @@ on astubbs#29 merging. astubbs#29 landing resolves at most the two consumer-sync
 only if their replays confirm. (When *this* file may be retired is a separate question, answered
 under `## Delete when` at the end.)
 
+<!-- post-merge: checked-end -->
+
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
 fail-fast by `ProgressProbe` with five simultaneous violations, on
@@ -152,6 +156,7 @@ This is a stronger datapoint than the `RebalanceEoSDeadlockTest` sighting above,
 before assuming the two landed fixes closed the symptom. The probe's own vacuity caveat does not
 apply - 154s against a 150s bound with thousands of records of lag is a detector that genuinely
 fired, not a `probe clean` with nothing to see. The **cooperative** variant passed in the same run
+<!-- post-merge: checked -->
 (`probe violations=[]`), so whatever remains is eager-protocol-specific, which is where astubbs#29's
 `onPartitionsRevoked` / `commitOffsetsThatAreReady` contention lives. Seen on astubbs#224, a
 docs-and-CI-scripts branch that touches no product code, so the branch is not a suspect; the chaos
@@ -184,6 +189,7 @@ the inference should not be made without doing so.
 **What would settle it**, for whoever picks this up: replay the seed above and look for a
 `ProgressProbe` verdict. A `CLASS2_STALL`/`LAG_STAGNATION` violation alongside the termination
 timeout makes it the family; `probe violations=[]` with the timeout still present makes it a
+<!-- post-merge: checked -->
 shutdown-path issue of its own, and a third thing to chase rather than evidence about astubbs#29.
 Check the surefire XML rather than the console log - the console tail here carried no verdict either
 way, which is why this entry cannot resolve it.
@@ -239,7 +245,8 @@ a threshold by accident.
 **Which arm, and what it is not.** This is the `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED` signature - a
 member not answering the rebalance - and not the `CLASS2_STALL`/`LAG_STAGNATION` signature of the
 second sighting. The zombie-member defect is recorded above as **landed** via astubbs#80, and the
-family's original deadlock (astubbs#29) is still open. **Do not read this entry as identifying
+<!-- post-merge: checked -->
+family's original deadlock is astubbs#29's. **Do not read this entry as identifying
 either.** It records a signature and a replayable seed; which defect it belongs to, if any, is what
 the replay is for.
 
@@ -257,6 +264,7 @@ two pool workers, each building its own consumer:
 Both joined `group-1-1929174831`; the probe fired four seconds later. Two PCs for one logical
 instance, one of them orphaned and closed by nobody - a group member that answers no rebalance. That
 is the double-start race astubbs#292 fixed, so this sighting is **retired from the family**: it was
+<!-- post-merge: checked -->
 never evidence about astubbs#29 or astubbs#80. The replay above is no longer worth spending.
 
 **Branch context: astubbs#289 is not a suspect, and here is why rather than an assertion.** It
@@ -302,6 +310,7 @@ identified and removed, at least one remaining - and the check is cheap:
 > ~2s. Present, it is the harness and astubbs#292's guards regressed. **Absent, it is the other
 > cause, and this file is where it belongs.**
 
+<!-- post-merge: checked -->
 astubbs#29 and confluentinc#857 remain open, and none of this attributes anything to either.
 
 **Corroboration that the guards do engage.** The chaos lane on astubbs#296 at head `347ceae90`
@@ -373,6 +382,7 @@ stood alone for two days; it no longer does.
 and `ChaosChurnStormIT` both **passed in this same run** - same runner, same broker image, same
 minute. That is exactly the pattern the second sighting reported (cooperative green while eager
 died), now seen twice, which is the strongest evidence yet that whatever remains is
+<!-- post-merge: checked -->
 eager-protocol-specific - where astubbs#29's `onPartitionsRevoked` / `commitOffsetsThatAreReady`
 contention lives.
 
@@ -409,10 +419,12 @@ XML's captured system-out. The fourth sighting already recorded this; it is repe
 the trap was walked into anyway, one screen after reading the warning. **A zero from the console is
 not a zero.**
 
+<!-- post-merge: checked -->
 **Gated on astubbs#29: proving thread-parallel integration tests are safe again.** astubbs#68 made the integration
 suite reliable by *forking* per broker (`forkCount=4`), which sidesteps the deadlock rather than
 proving it gone - the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure it was hiding is
 the real confluentinc#857 bug. The deferred "Step 2" is to re-run with `-Dparallel-tests=true` on a
+<!-- post-merge: checked -->
 shared broker **after astubbs#29 lands** and see whether it stays green. One probe on the highcpu runner
 hinted it might (forked unit suite green with threads enabled; the integration red was the separate
 `PartitionStateCommittedOffsetIT` flake, since fixed by astubbs#80), but one green run is not proof. Forking
@@ -998,7 +1010,9 @@ and the scenario fail-fasts on the first violation, so the peak is always bound 
 and can carry no severity information at all. The note above already said "~154s is a signature, not a
 diagnosis"; this is the same point, now with the mechanism rather than the caution.
 
+<!-- post-merge: checked -->
 **What this does NOT close.** The confluentinc#857 wedge is real and `bugs/857-paused-consumption-multi-consumers-bug`
+<!-- post-merge: checked -->
 (astubbs#29) still fixes a real deadlock. What is now established is narrower and more useful: **the
 chaos suite has never reproduced it.** That agrees with
 [`test-chaos-phase2.md`](test-chaos-phase2.md)'s own long-standing assessment - *"a 9-seed sweep found
@@ -1027,6 +1041,7 @@ three in-process reviewers on that same diff missed it, which is the clearest ar
 records for keeping a cross-model pass.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked -->
 **A falsifiable prediction, recorded before the fact.** Land astubbs#29 and the rest of the backlog,
 re-run the chaos suite on a loaded box, and the `CLASS2_STALL` findings continue at roughly the same
 rate - because they are the bound meeting the load, and neither the deadlock fix nor the sequencing
@@ -1273,6 +1288,7 @@ Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.jav
              ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
 ```
 
+<!-- post-merge: checked -->
 **The frames resolve, at the head under test, to the exact AB-BA pair astubbs#29 replaces.** Frame
 `:1585` is not merely inside `commitOffsetsThatAreReady` - it *is* that method's
 `synchronized (commitCommand)` line, so the poll thread was stopped on the monitor acquisition
@@ -1307,10 +1323,12 @@ window completed green, and the non-successes among them were `cancelled` by the
 queue rather than failed, so this red is not master-state.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked -->
 **What is wanted next is no longer a discriminator but a verification.** astubbs#29 replaces this
 `synchronized` with `ReentrantLock.tryLock()`; until now it had a unit reproduction
 (`RebalanceEoSDeadlockTest`) and no fleet-level one. Replaying this seed with that stack applied, and
 reading whether the poll thread is still found `BLOCKED` on the same monitor, is the experiment that
+<!-- post-merge: checked -->
 would let astubbs#29 land on evidence rather than on argument. **Recorded as one observation, not a
 rate:** the seed has not been replayed, and nothing here says how often the cycle closes.
 
@@ -1429,3 +1447,5 @@ written rather than silently re-derived.
 <!-- post-merge: checked-end --> This file may be retired once astubbs#29 lands and the
 remaining open item - the original deadlock - has its own solutions write-up.
 
+
+<!-- post-merge: checked-end -->

@@ -45,4 +45,4 @@ internal number before it was visible in behaviour.
 Background:
 `docs/solutions/workflow-issues/prove-the-problem-exists-before-writing-the-fix.md`,
 `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
-<!-- file-refs: N/A - both write-ups arrive with astubbs/parallel-consumer#29, which this branch was split out of; they resolve once it merges -->
+<!-- file-refs: N/A - both write-ups belong to the astubbs/parallel-consumer#29 line of work and resolve wherever that work is present --> <!-- post-merge: checked -->

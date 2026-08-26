@@ -6,6 +6,7 @@
 Both of these were attributed to a landed fix by reading the reporter's evidence, and neither was
 verified against the environment that produced it. They are recorded here because "very likely fixed"
 is a hypothesis wearing a conclusion's clothes, and because the 2026-08-18 work showed exactly how
+<!-- post-merge: checked -->
 that goes wrong - astubbs/parallel-consumer#44 sat attributed to astubbs/parallel-consumer#29 for
 months, in a commit mode where that fix cannot run.
 

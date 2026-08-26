@@ -1,4 +1,4 @@
-# `ChaosRevokeUnderWork*` sightings - the two that are mode-compatible with astubbs#29
+# `ChaosRevokeUnderWork*` sightings - the two that are mode-compatible with astubbs#29 <!-- post-merge: checked -->
 
 <!-- inflight-type: register -->
 
@@ -6,12 +6,14 @@
 both the eager (`ChaosRevokeUnderWorkIT`) and cooperative
 (`ChaosRevokeUnderWorkCooperativeIT`) variants extend. Verified in source.
 
+<!-- post-merge: checked -->
 That makes these **the only sightings in the family whose mode permits astubbs#29's AB-BA cycle to
 close** - the cycle's second edge lives in `ConsumerOffsetCommitter`, constructed only for the
 consumer-commit modes, and among those only the *sync* arm blocks. The scenario's own javadoc says
 the mode was chosen to maximise revoke-path vs commit-path lock contention.
 
 Mode-compatible is not the same as attributed. **Two seeds have now been replayed, and the result
+<!-- post-merge: checked -->
 is bad for astubbs#29: the fix does not close this stall** - see "The first replays" below. Of five
 sightings four carry a reproducer; two of those four have been run. The third sighting has no probe
 verdict at all; the fourth's seed was recorded as lost and then recovered, see its own correction. Compare `test-857-churn-storm-async-stalls.md`, whose
@@ -61,6 +63,7 @@ that is the move the repo forbids for good reason, and the honest next step is s
 uncontended repeat, measuring the legit recovery time rather than adjusting until green.
 
 What is established: on this workload the stall is **bounded**, so "unbounded" can no longer be
+<!-- post-merge: checked -->
 assumed, and the astubbs#29 fix is not implicated by these sightings at all.
 
 ## The assignor x stop-mode matrix, complete, 2026-08-19
@@ -113,6 +116,7 @@ records the same diagnosis at the 90s storm / 45s dwell shape, and the response 
 restart. The measurements above are what several restarts cost, and 281s is not close to 100s.
 
 **What follows, and what does not.** The eager sightings in this file should no longer be read as
+<!-- post-merge: checked -->
 confluentinc#857 evidence, and astubbs#29 is not implicated by any of them - it was never implicated
 by more than mode-compatibility, and the replay spent that. What is NOT established is that the
 bound should simply be raised: the honest options are to raise it with the measured multi-restart
@@ -149,11 +153,13 @@ against a scenario that already exists.
 
 ## The first replays, 2026-08-18 - both seeds reproduce on BOTH arms
 
+<!-- post-merge: checked -->
 **Headline: the astubbs#29 deadlock fix does not close this failure.** 16 local runs of
 `ChaosRevokeUnderWorkIT` (eager, `PERIODIC_CONSUMER_SYNC`), arms interleaved, chaos test sources
 byte-identical across arms so only main code differs:
 
-- DEFECT = `origin/master` @ `438b09d9b`; FIXED = this branch @ `b8a335b05`.
+<!-- post-merge: checked -->
+- DEFECT = `origin/master` @ `438b09d9b`; FIXED = astubbs#29's branch @ `b8a335b05`.
 
 | Cell | Attempts | Reproduced | Violations per run |
 |---|---|---|---|
@@ -179,6 +185,7 @@ the box simply being unable to run the scenario. But the one control failure is 
 **fresh** seed drew the same stall on the FIXED arm, confirming the fixed code still reaches
 `CLASS2_STALL` with no replay machinery involved at all.
 
+<!-- post-merge: checked -->
 **What this does NOT establish.** That the residual stall is astubbs#29's AB-BA cycle. It
 establishes only that the fix does not remove the stall. The cleanest failing run (FIXED, seed B,
 one violation) is the one to attribute from: the storm ended at 51:38.997 and the probe fired at
@@ -232,6 +239,7 @@ This is a stronger datapoint than the `RebalanceEoSDeadlockTest` sighting above,
 before assuming the two landed fixes closed the symptom. The probe's own vacuity caveat does not
 apply - 154s against a 150s bound with thousands of records of lag is a detector that genuinely
 fired, not a `probe clean` with nothing to see. The **cooperative** variant passed in the same run
+<!-- post-merge: checked -->
 (`probe violations=[]`), so whatever remains is eager-protocol-specific, which is where astubbs#29's
 `onPartitionsRevoked` / `commitOffsetsThatAreReady` contention lives. Seen on astubbs#224, a
 docs-and-CI-scripts branch that touches no product code, so the branch is not a suspect; the chaos
@@ -264,6 +272,7 @@ the inference should not be made without doing so.
 **What would settle it**, for whoever picks this up: replay the seed above and look for a
 `ProgressProbe` verdict. A `CLASS2_STALL`/`LAG_STAGNATION` violation alongside the termination
 timeout makes it the family; `probe violations=[]` with the timeout still present makes it a
+<!-- post-merge: checked -->
 shutdown-path issue of its own, and a third thing to chase rather than evidence about astubbs#29.
 Check the surefire XML rather than the console log - the console tail here carried no verdict either
 way, which is why this entry cannot resolve it.
@@ -312,6 +321,7 @@ Three further frozen partitions (stagnant 20s, 25s, 119s); peaks `rebalanceDwell
 
 **This is the second live confirmation's signature, not merely its family.** Same test, same eager
 arm, same `CLASS2_STALL/LAG_STAGNATION`, and the same 154s against a 150s bound. Two independent
+<!-- post-merge: checked -->
 occurrences seven weeks apart, in the only mode where astubbs#29's cycle can close, is the strongest
 evidence this file holds that the second sighting was not a one-off interleaving.
 
@@ -319,6 +329,7 @@ evidence this file holds that the second sighting was not a one-off interleaving
 > fingerprint - it is the 150s bound plus the probe's poll cadence, so every stall of this class
 > reports ~154s and the agreement is the detector's, not the defect's. What still holds is the
 > weaker and sufficient claim: same test, same eager arm, same violation class, plus that
+<!-- post-merge: checked -->
 > arithmetic control arm. And "the only mode where astubbs#29's cycle can close" is a statement
 > about *possibility* that the replay has now cashed out - the stall reproduces six times out of
 > six **with the fix applied**, so mode-compatibility must no longer be read as attribution.

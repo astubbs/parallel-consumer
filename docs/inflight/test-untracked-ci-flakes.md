@@ -137,6 +137,7 @@ than waiting for a sweep.
 
 ### `ParallelEoSStreamProcessorTest.processInKeyOrder` - fails its own INPUT sanity check, undiagnosed
 
+<!-- post-merge: checked -->
 Seen once, 2026-08-18, on astubbs/parallel-consumer#29's branch, in a full unit-suite run - two
 parameterised cases at once (`[2]` and `[3]`, ~1.87s each), while `[1]` passed:
 

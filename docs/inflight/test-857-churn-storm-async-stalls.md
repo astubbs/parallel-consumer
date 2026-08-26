@@ -6,6 +6,7 @@
 **Commit mode: `PERIODIC_CONSUMER_ASYNCHRONOUS`** (`ChaosChurnStormIT`, verified in source). This is
 why the file exists separately, and it is the most important fact in it:
 
+<!-- post-merge: checked -->
 - The **astubbs#29 AB-BA cycle cannot close here.** In `PERIODIC_CONSUMER_ASYNCHRONOUS`,
   `ConsumerOffsetCommitter.commit()` falls through to `requestCommitInternal()` and never blocks, so
   there is no second edge.
@@ -62,7 +63,8 @@ a threshold by accident.
 **Which arm, and what it is not.** This is the `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED` signature - a
 member not answering the rebalance - and not the `CLASS2_STALL`/`LAG_STAGNATION` signature of the
 second sighting. The zombie-member defect is recorded above as **landed** via astubbs#80, and the
-family's original deadlock (astubbs#29) is still open. **Do not read this entry as identifying
+<!-- post-merge: checked -->
+family's original deadlock is astubbs#29's. **Do not read this entry as identifying
 either.** It records a signature and a replayable seed; which defect it belongs to, if any, is what
 the replay is for.
 

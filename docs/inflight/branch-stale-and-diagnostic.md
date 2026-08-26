@@ -26,8 +26,12 @@ should not simply be cherry-picked: those same diagnostics show it OOMs as writt
 it properly is in [`docs/refactoring.md`](../refactoring.md). Take that commit before deleting the
 branch.
 
-**Do not delete `master-confluent`** (pinned at pre-rebrand `7f290122`): it is ruleset-protected and
-is the base of astubbs#29 and astubbs#31 - retarget those first. `dev-cc` is pinned at the same commit.
+<!-- post-merge: checked -->
+**Do not delete `master-confluent`** (pinned at pre-rebrand `7f290122`): it is ruleset-protected.
+<!-- post-merge: checked -->
+It was the base of astubbs#29 and astubbs#31; both have since been retargeted onto `master`, so the
+retarget-first caveat no longer applies to them - check for any newer PR still based on it before
+deleting. `dev-cc` is pinned at the same commit.
 
 **Salvage or abandon: `astubbs/orca`** - CI/tooling (Claude review + PR-assistant workflows,
 PR-dependency check, CI matrix tweaks) from before master grew its own versions of most of it. Badly

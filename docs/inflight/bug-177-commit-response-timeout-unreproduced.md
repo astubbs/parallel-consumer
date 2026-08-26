@@ -31,6 +31,7 @@ outside**, and astubbs#100 only fixed the dead one.
 
 ## A THIRD candidate arrived 2026-08-19 - and it is not a fix for these reports
 
+<!-- post-merge: checked -->
 astubbs#29 hardened metrics teardown, which had been able to kill the broker-poll thread: meter
 de-registration runs inside `onPartitionsRevoked`, on the poll thread inside `poll()`, and the meter
 registry is usually the USER'S, so an exception from third-party code escaped the rebalance callback
@@ -42,12 +43,14 @@ user-supplied `MeterRegistry` that throws on `remove`; PC's default when none is
 empty `CompositeMeterRegistry`, a no-op that cannot throw. Nothing in either report says the reporter
 configured metrics at all, let alone a registry that failed. Attributing on "the mechanism fits"
 is precisely the error corrected on astubbs/parallel-consumer#44, which sat attributed to
+<!-- post-merge: checked -->
 astubbs/parallel-consumer#29 for months in a commit mode where that fix cannot run.
 
 So the candidate list is now three, all producing one trace:
 
 1. **Poller died** from an unhandled `RebalanceInProgressException` - astubbs#100, landed.
 2. **Poller wedged but alive** - uncharacterised, and still nobody's.
+<!-- post-merge: checked -->
 3. **Poller died from a throwing metrics registry** - found on astubbs#29 and landing on
    astubbs#57, which owns `PCMetrics`; **neither has merged**, so master still carries the exposure.
    Only reachable by a

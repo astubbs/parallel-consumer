@@ -4,11 +4,13 @@
 <!-- inflight-impact: stall -->
 
 **Commit mode: `PERIODIC_TRANSACTIONAL_PRODUCER` only.** This is the discriminator - the defect below
+<!-- post-merge: checked -->
 and the AB-BA deadlock in astubbs#29 are in mutually exclusive modes and cannot be the same bug.
 
 ## The defect
 
 `AbstractParallelEoSStreamProcessor.onPartitionsRevoked` waits with **no deadline** for an in-flight
+<!-- post-merge: checked -->
 transaction, on master, predating astubbs#29:
 
 ```java
@@ -25,12 +27,13 @@ is the *common* case, not a rare race: the control thread takes the producer wri
 The callback runs on the poll thread inside `poll()`, so it is bounded by `max.poll.interval.ms`.
 Overrunning it evicts the member.
 
-## Why this is not astubbs#29's deadlock
+## Why this is not astubbs#29's deadlock <!-- post-merge: checked -->
 
 The AB-BA cycle's second edge lives in `ConsumerOffsetCommitter`, which `BrokerPollSystem` constructs
 **only** for the consumer-commit modes (`switch (options.getCommitMode())`, the
 `PERIODIC_CONSUMER_SYNC, PERIODIC_CONSUMER_ASYNCHRONOUS` arm). In transactional mode there is no
 request queue, no response queue and no `commitAndWait()` - **the cycle cannot occur here**.
+<!-- post-merge: checked -->
 astubbs#29's `tryLock()` change does not touch `:418-419` and cannot fix this.
 
 Two different locks are both called "commit lock", which is part of why this was conflated: the
@@ -47,11 +50,13 @@ ledger as *"Live confirmation the deadlock is still present"* - see
 **That attribution was wrong, and the correction is the point of this file.**
 `RebalanceEoSDeadlockTest` runs `PERIODIC_TRANSACTIONAL_PRODUCER`
 (`.commitMode(ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)`), the mode in
+<!-- post-merge: checked -->
 which the AB-BA cycle cannot close. So the failure is **not** evidence for astubbs#29.
 
 It is, however, a **real** failure and it is evidence for the block above. The run was on
 master-family code, where the test's latch was still reachable - the latch-unreachable defect
 (the revoke path calling the private `tryCommitOffsetsOnRevoke()` instead of the overridden
+<!-- post-merge: checked -->
 `commitOffsetsThatAreReady()`) only voids runs on **astubbs#29's branch**. So this sighting survives
 the correction; only its attribution moves.
 
@@ -65,6 +70,7 @@ fires, poll thread spins here, `max.poll.interval.ms` is breached, the group rep
 already rebalancing"*, and the run ends on `commitLockAcquisitionTimeout`.
 
 It is the **only** issue on the upstream tracker ever labelled *verified bug*. It was re-triaged off
+<!-- post-merge: checked -->
 astubbs#29 and onto this block on 2026-08-18; its `pr-available` label was removed, because no open
 PR addresses it.
 

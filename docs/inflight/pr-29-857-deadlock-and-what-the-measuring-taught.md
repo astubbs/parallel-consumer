@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- post-merge: exempt-file - this note IS the record of astubbs#29; it exists to describe that PR's in-flight state and is deleted when the PR lands, so every mention of it here is the subject, not a stale tense -->
 
 ## START HERE - handoff, 2026-08-20
 
@@ -291,7 +292,7 @@ came from an INSTRUMENT being wrong rather than the product, which is why they g
 durable home in `docs/investigating.md` ("Designing a liveness check") - do not promote them again
 at merge; the remaining items below keep their existing owners or await promotion.
 
-- **Truth probes for internal state, made routine** (`next-truth-probes-for-internal-state.md` owns
+- **Truth probes for internal state, made routine** (`test-truth-probes-for-internal-state.md` owns
   this) - the chaos suite judged PC from outside, via committed offsets read by an admin client,
   while `WorkManager` and `ShardManager` expose the real answer publicly
   (`getNumberOfWorkQueuedInShardsAwaitingSelection`, `isRecordsAwaitingProcessing`,
@@ -314,7 +315,7 @@ at merge; the remaining items below keep their existing owners or await promotio
 - **A scale knob turns a stress test into an experiment.** `-Dperf.scale` on the capacity profiles
   exists because a measurement welded to one size can only answer the question that size happens to
   ask. The same applies to any workload constant that was chosen for one machine.
-- **The harness cannot model a crash** (`parked-chaos-crash-fidelity-variant.md`) - every stop is an
+- **The harness cannot model a crash** (`test-chaos-crash-fidelity-variant.md`) - every stop is an
   orderly close, so the most-reported confluentinc#857 shape is the one no scenario produces.
 - **Run-mode experiments belong in the demo app** (`branch-polyglot-demo-ideation.md`) - the
   assignor x stop-mode matrix is a user-facing result, and the harness that produced it is a
@@ -329,4 +330,4 @@ at merge; the remaining items below keep their existing owners or await promotio
   `git show 77beb4f31:docs/inflight/test-class2-probe-asserts-timing-not-correctness.md`;
   the settled knowledge is in
   [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
-- `docs/inflight/parked-chaos-crash-fidelity-variant.md` - why no scenario can model a crash
+- `docs/inflight/test-chaos-crash-fidelity-variant.md` - why no scenario can model a crash
