@@ -197,3 +197,10 @@ command did**, or it proves something about a different command.
   - includes a tool whose *probe* was the broken thing while it reported this project as the problem.
 - astubbs/parallel-consumer#278 (merged) - the `gh` default-repo write-up in `AGENTS.md`: the one-time
   `set-default`, and the habits that survive it being local and uncommitted.
+
+## Related
+
+[`an-inert-analysis-config-reads-as-a-clean-codebase.md`](an-inert-analysis-config-reads-as-a-clean-codebase.md) is the build-configuration case of the same family: the instrument was pointed
+correctly and ran, but the configuration under test was not the one written, so the negative was real
+and about the wrong thing. Its remedy is the count assertion this doc calls reporting a denominator,
+applied to an effective pom.
