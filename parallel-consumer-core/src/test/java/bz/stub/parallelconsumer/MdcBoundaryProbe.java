@@ -7,8 +7,8 @@ package bz.stub.parallelconsumer;
 import lombok.Value;
 import org.slf4j.MDC;
 
-import java.util.Collection;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -83,7 +83,7 @@ public class MdcBoundaryProbe {
      * @return one entry per invocation observed. Awaiting this bounds <em>everything</em> the assertions below read, so
      *         a test that awaits it is not racing a still-arriving invocation.
      */
-    public Collection<Observation> observations() {
+    public Queue<Observation> observations() {
         return observations;
     }
 

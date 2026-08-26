@@ -14,6 +14,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.util.Map;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * Unit tests for the {@link MdcPropagation} primitive itself - capture, install, restore, and the disabled mode.
@@ -58,10 +59,10 @@ class MdcPropagationTest {
         Map<String, String> captured = UniMaps.of("trace_id", "abc");
 
         try (var scope = enabled.enter(captured)) {
-            assertThat(MDC.get("trace_id")).isEqualTo("abc");
+            assertMdc("trace_id", "abc");
         }
 
-        assertThat(MDC.get("trace_id")).isNull();
+        assertMdc("trace_id", null);
         assertThat(enabled.capture()).isNull();
     }
 
@@ -75,8 +76,8 @@ class MdcPropagationTest {
             MDC.put("order_id", "put-by-the-user-function");
         }
 
-        assertThat(MDC.get("order_id")).isNull();
-        assertThat(MDC.get("trace_id")).isNull();
+        assertMdc("order_id", null);
+        assertMdc("trace_id", null);
     }
 
     /**
@@ -87,10 +88,10 @@ class MdcPropagationTest {
     void aNullCapturedContextStillCleansUpAfterTheBody() {
         try (var scope = enabled.enter(null)) {
             MDC.put("order_id", "put-by-the-user-function");
-            assertThat(MDC.get("order_id")).isEqualTo("put-by-the-user-function");
+            assertMdc("order_id", "put-by-the-user-function");
         }
 
-        assertThat(MDC.get("order_id")).isNull();
+        assertMdc("order_id", null);
     }
 
     /**
@@ -102,13 +103,13 @@ class MdcPropagationTest {
         MDC.put("seeded_by_the_pool", "keep-me");
 
         try (var scope = enabled.enter(UniMaps.of("trace_id", "abc"))) {
-            assertThat(MDC.get("trace_id")).isEqualTo("abc");
+            assertMdc("trace_id", "abc");
             // the installed snapshot replaces, rather than merges with, the thread's own context for the duration
-            assertThat(MDC.get("seeded_by_the_pool")).isNull();
+            assertMdc("seeded_by_the_pool", null);
         }
 
-        assertThat(MDC.get("seeded_by_the_pool")).isEqualTo("keep-me");
-        assertThat(MDC.get("trace_id")).isNull();
+        assertMdc("seeded_by_the_pool", "keep-me");
+        assertMdc("trace_id", null);
     }
 
     /**
@@ -124,8 +125,8 @@ class MdcPropagationTest {
         try (var scope = enabled.enter(callerContextThatCollides)) {
             MDC.put(AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID, "pcs-value");
 
-            assertThat(MDC.get(AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID)).isEqualTo("pcs-value");
-            assertThat(MDC.get("trace_id")).isEqualTo("abc");
+            assertMdc(AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID, "pcs-value");
+            assertMdc("trace_id", "abc");
         }
     }
 
@@ -136,14 +137,14 @@ class MdcPropagationTest {
         assertThat(disabled.capture()).isNull();
 
         try (var scope = disabled.enter(UniMaps.of("other", "value"))) {
-            assertThat(MDC.get("other")).isNull();
-            assertThat(MDC.get("trace_id")).isEqualTo("abc");
+            assertMdc("other", null);
+            assertMdc("trace_id", "abc");
             MDC.put("order_id", "leaks-when-disabled");
         }
 
         // disabled means "behave exactly as before this feature existed" - including the leak
-        assertThat(MDC.get("order_id")).isEqualTo("leaks-when-disabled");
-        assertThat(MDC.get("trace_id")).isEqualTo("abc");
+        assertMdc("order_id", "leaks-when-disabled");
+        assertMdc("trace_id", "abc");
     }
 
     @Test
@@ -152,10 +153,28 @@ class MdcPropagationTest {
         assertThat(enabled.capture()).isNull();
 
         enabled.adopt(UniMaps.of("trace_id", "abc"));
-        assertThat(MDC.get("trace_id")).isEqualTo("abc");
+        assertMdc("trace_id", "abc");
 
         disabled.adopt(UniMaps.of("ignored", "value"));
-        assertThat(MDC.get("ignored")).isNull();
+        assertMdc("ignored", null);
+    }
+
+
+    /**
+     * Every MDC read in this class goes through here, for two reasons.
+     *
+     * <p>It names the key in the failure message. {@code assertThat(MDC.get(k)).isEqualTo(v)} fails with
+     * "expected abc, but was null" and leaves you to work out which key it was talking about.
+     *
+     * <p>It is also what stops {@code PRMC_POSSIBLY_REDUNDANT_METHOD_CALLS} reading these tests wrongly.
+     * Several of them read the SAME key twice with the same constant argument - once inside the scope and
+     * once after it - and the detector takes a repeated same-argument call for a cacheable one. Here it is
+     * not: the scope under test is precisely the thing that changes the thread's context between the two
+     * reads, so caching the first answer would delete the assertion. Reading through one place means each
+     * test method calls this with a different expectation instead of calling {@link MDC#get} twice.
+     */
+    private static void assertMdc(String key, String expected) {
+        assertWithMessage("MDC[%s]", key).that(MDC.get(key)).isEqualTo(expected);
     }
 
 }
