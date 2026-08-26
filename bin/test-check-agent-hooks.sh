@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Self-test for the three hooks in `.claude/hooks/`. Feeds each one a crafted hook payload on stdin
+# Self-test for the hooks in `.claude/hooks/`. Feeds each one a crafted hook payload on stdin
 # and asserts its verdict.
 #
 # WHY IT EXISTS. docs/agent-harness.md's own rule 3 is "give it a negative control - make it go red
@@ -839,6 +839,37 @@ for form in 'git -C /some/path push' 'git -c user.name=x push' 'git --git-dir=/d
     assert "reminds on: $form" reminded "$got"
 done
 
+# A GIT CALL BEFORE THE PUSH. `git add -A && git commit -m x && git push` is how an agent actually
+# pushes, and the shared helper's first version answered with the FIRST git invocation's subcommand -
+# so it returned `add`, and this hook silently did nothing on a real push. Found by review on
+# astubbs#357, reproduced before it was believed, and pinned here for both hooks because a helper
+# that reads one subcommand cannot see a chained push.
+for form in 'git add -A && git commit -m x && git push' 'git commit --amend && git push' 'git -C /p status && git push' 'git fetch origin && git push -u origin HEAD'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+    assert "reminds on a push CHAINED after another git call: $form" reminded "$got"
+done
+
+# UNSPACED AND SEMICOLON OPERATORS, which is the same silent-miss one level down. `shlex.split` splits
+# on whitespace and quotes only, so `&&`/`;` stay fused to whatever touches them: `-A&&git` is not
+# `git`, and `push;` is not `push`. The semicolon case is the one that matters most - `git push; echo
+# done` is SPACED and still missed, so this was never only about writing operators tightly. Found by
+# review on astubbs#357 and confirmed by running it, which also found the spaced-semicolon case the
+# report did not have.
+for form in 'git add -A&&git commit -m x&&git push' 'git push;echo done' 'git push; echo done' 'git commit -m x&&git push'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+    assert "reminds with unspaced/semicolon operators: $form" reminded "$got"
+done
+
+# ...and the matching negative control the review asked for: a CHAIN of git calls with no push in it
+# must stay silent. The positive chained cases above cannot show that on their own.
+for form in 'git add -A && git commit -m x' 'git fetch origin&&git status'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=fired ;; *) got=silent ;; esac
+    assert "a chain of git calls with NO push stays silent: $form" silent "$got"
+done
+
 # The negative controls matter as much: a hook that fires on any mention of the word is noise, and
 # noise is how a reminder gets ignored.
 out="$(push_fire 'git commit -m "push later"')"
@@ -869,6 +900,10 @@ rm -rf "$push_stub" "$PUSH_TMPDIR"
 
 echo
 echo "--- check-history-rewrite.sh ---"
+#
+# RUNS FROM THE PUSH FIXTURE'S SCRATCH REPO, inherited via the cwd - see the note at the top of the
+# drift section. The enriched refusal only renders when a PR is found, and finding one needs a named
+# branch; the CI checkout is detached, so running these from the real tree fails only there.
 
 # A force-push re-anchors every inline review comment and destroys the incremental diff a reviewer
 # works from. This guard exists because docs/merge-checklist.md already said "re-cut at the end" and

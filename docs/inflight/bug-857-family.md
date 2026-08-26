@@ -962,6 +962,40 @@ guards the routing), the diagnostic mode's quiet cap no longer silently exceeds 
 `@Timeout` - which is why nobody had run this experiment in the five days since two documents called
 it cheap - and the chaos lane no longer runs several suites at once on one box.
 
+### Correction to the section above: `INSTANCE_STALL` has now fired, once
+
+<!-- post-merge: checked-begin -->
+The section above says the detector that would be a real sighting "has never fired", and states the
+honest limit that never-cried-wolf and never-had-a-wolf are not yet distinguishable. One of those two
+has moved.
+
+**On [run 32812259117](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117),
+`ChaosChurnStormIT` fired `INSTANCE_STALL/NO_WORK_COMPLETED` at `t=+154670ms`** - *instance 70 holds
+work (queued=0, outForProcessing=43) but has returned no work result for 150s (bound 150s) at 27914
+results returned*. Seed `7852140587594987229`. The 23 violations the autopsy then listed were all
+Class 2, so the interesting one is absent from the autopsy list and only in the run log - which is
+worth knowing for whoever reads the next one.
+
+**This does not make it a wedge, and the section above is why.** One firing, on a box also running
+`Performance`, with no replay: `INSTANCE_STALL` is re-armed by any returned work result, so an
+instance that is merely very slow can trip it. What it does change is the evidential position - the
+detector can fire, which was previously untested either way, so "watch it" is now a live instruction
+rather than a hope. The replay that would settle it is the same one this file already prescribes,
+against that seed.
+
+**Corroboration for the prediction, not a test of it.** Three consecutive chaos runs on
+astubbs/parallel-consumer#357 - a branch changing agent hooks, shell gates and documentation and no
+product code - went red on four distinct tests across five distinct seeds, every violation Class 2,
+counts falling 23, 17, 3, 2 (seeds `7852140587594987229`, `567232329738342203`,
+`5843692436386966698`, `4651058060322796970`). Two partitions grazing the bound is what a timing
+proxy meeting load looks like. It is **not** the registered prediction, which asks for a re-run after
+astubbs#29 and the backlog land; recorded here so nobody later reads it as one.
+
+One of those runs took the **cooperative** arm down with an explicit probe verdict, which retires the
+second sighting's "eager-protocol-specific" reading for Class 2 specifically - a small thing now that
+Class 2 is a speed measurement, but it was an open question above.
+<!-- post-merge: checked-end -->
+
 ## 2026-08-25, INTEGRATION lane: the commit-response timeout, on the deadlock's exact preconditions
 
 <!-- post-merge: checked-begin -->
