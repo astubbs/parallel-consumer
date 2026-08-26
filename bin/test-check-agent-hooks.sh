@@ -256,6 +256,68 @@ assert "a non-commit command is not gated" 0 \
     "$(gate_rc "$red" 'ls -la')"
 assert "a read-only command naming the gate is not gated" 0 \
     "$(gate_rc "$red" 'cat .githooks/pre-commit')"
+# The NASTY shape that made the misfire visible: shell keywords and a command substitution, and
+# not a commit anywhere in it. The near-miss for every case below - one `git` away from being
+# gated, and it must stay green.
+assert "a compound non-commit command with if/for/\$() is not gated" 0 \
+    "$(gate_rc "$red" 'for f in $(ls); do if [ -f "$f" ]; then echo "$f"; fi; done')"
+
+# ...and the other half of that pair, which the self-filter above quietly broke. Only OPERATORS
+# reopened command position, so `then`, `do`, `{` and `!` swallowed it and the commit behind them
+# counted as zero - gated by accident while zero meant "run the gate", silently EXEMPT the moment
+# zero meant "skip". A gate that stops firing looks exactly like a gate with nothing to say.
+assert "a commit inside if/then is still gated" 2 \
+    "$(gate_rc "$red" 'if true; then git commit -m x; fi')"
+assert "a commit inside a for loop is still gated" 2 \
+    "$(gate_rc "$red" 'for f in a b; do git commit -m "$f"; done')"
+assert "a commit inside a brace group is still gated" 2 \
+    "$(gate_rc "$red" 'git status && { git commit -m x; }')"
+assert "a commit behind a ! negation is still gated" 2 \
+    "$(gate_rc "$red" '! git commit -m x')"
+# The escape hatch reaches inside those constructs too, or the fix above would have taken it away
+# from exactly the shapes it just started gating.
+assert "--no-verify inside if/then is still a bypass" 0 \
+    "$(gate_rc "$red" 'if true; then git commit --no-verify -m x; fi')"
+# A keyword is only a keyword in COMMAND POSITION. As an argument it is text, so this is an echo.
+assert "a keyword in argument position does not make a commit" 0 \
+    "$(gate_rc "$red" 'echo do git commit -m x')"
+
+# The same defect class one lexer layer down: an unquoted NEWLINE separates statements exactly
+# like `;`, but shlex's default whitespace swallowed it - no token, no reset - so `at_command`
+# carried over from the previous line and a commit on line two was invisible. Every case above
+# passes only because it joins with `;`; multi-line payloads are the natural agent shape.
+assert "a commit on the second line is still gated" 2 \
+    "$(gate_rc "$red" 'git add -A
+git commit -m wip')"
+assert "a commit inside a multiline for loop is still gated" 2 \
+    "$(gate_rc "$red" 'for f in a b
+do
+    git commit -m "$f"
+done')"
+assert "a commit inside a multiline if/then is still gated" 2 \
+    "$(gate_rc "$red" 'if true
+then
+    git commit -m x
+fi')"
+# The escape hatch must reach across lines too, or the fix above would take it away from exactly
+# the shapes it just started gating.
+assert "--no-verify on the second line is still a bypass" 0 \
+    "$(gate_rc "$red" 'git add -A
+git commit --no-verify -m wip')"
+# One commit's extent ends at the newline exactly as it does at `;` - or the second line's flag
+# would have been read as the first commit's, and the first would land ungated.
+assert "a later line's --no-verify does not exempt line one" 2 \
+    "$(gate_rc "$red" 'git commit -m first
+git commit --no-verify -m second')"
+assert "a multiline non-commit command is not gated" 0 \
+    "$(gate_rc "$red" 'git add -A
+git status')"
+
+# The `function` keyword spelling. `foo() { git commit; }` was already caught because the bare
+# `()` are operator tokens that reopen command position; `function foo { git commit; }` has no
+# operator before the brace, so the name consumed the position and the body went unseen.
+assert "a commit inside a function-keyword body is still gated" 2 \
+    "$(gate_rc "$red" 'function deploy { git commit -m x; }; deploy')"
 
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh

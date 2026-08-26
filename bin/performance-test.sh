@@ -7,7 +7,7 @@
 # These are excluded from the regular CI build because they take a long time
 # and need substantial hardware. Called by the "Performance Tests" leg of the
 # `test` matrix in .github/workflows/maven.yml (a required check on every PR),
-# and by pr-highcpu-fast-feedback.yml on the self-hosted highcpu runners.
+# Run by maven.yml as the required "Performance Tests" check.
 #
 # Usage: bin/performance-test.sh [extra-maven-args...]
 
