@@ -34,7 +34,7 @@ by hand appears anywhere in its output - astubbs#345 and astubbs#346 are check-t
 astubbs#337 and astubbs#344 are two-read value divergence. RacerD models *unguarded access to shared
 state*, a different class, so which of the four are still unfixed does not move what it can see: the
 blind spot is the class, not the instances. fb-contrib reaches the first pair; nothing static reaches
-the second.
+the second. The four are named by their fixing PRs, which stay citable after each lands.
 <!-- post-merge: checked-end -->
 
 ## `NULLPTR_DEREFERENCE` - Pulse, and two root causes rather than a long list
