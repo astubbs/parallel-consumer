@@ -1176,6 +1176,68 @@ ran while `Performance (optional)` overlapped the chaos job on the shared box, a
 crossed no longer gates. Kept as seeds only, so the pair is not rediscovered and re-argued.
 <!-- post-merge: checked-end -->
 
+## 2026-08-26: the pre-declared discriminator fired - the poll thread was parked on the `commitCommand` monitor
+
+**The CHAOS-lane section above named the experiment that would decide this family's last open item -
+*"replay with a thread dump of the broker-poll thread at the moment the commit request times out.
+Parked on the `commitCommand` monitor -> the family's original deadlock has a reproduction at last"*.
+That dump now exists, it was taken automatically at the timeout, and it says the poll thread was
+blocked on a monitor.** `Chaos Pain Suite`,
+`ChaosRevokeUnderWorkKeyOrderIT.perKeyOrderSurvivesRevokeUnderWork`, the same correctness SLO both
+earlier lanes tripped - `no instance may end the run with an unclassified failure cause`
+([run 32933049885](https://github.com/astubbs/parallel-consumer/actions/runs/32933049885)):
+
+```
+instance 65: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S ... POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this
+is contention or a lock-ordering defect, NOT a slow broker. Lock:
+java.util.concurrent.atomic.AtomicBoolean@6b27bb8f, held by: pc-control-PC-65.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1585),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:548),
+             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
+```
+
+**The frames resolve, at the head under test, to the exact AB-BA pair astubbs#29 replaces.** Frame
+`:1585` is not merely inside `commitOffsetsThatAreReady` - it *is* that method's
+`synchronized (commitCommand)` line, so the poll thread was stopped on the monitor acquisition
+itself; frame `:548` is the `commitOffsetsThatAreReady()` call inside `onPartitionsRevoked`. And the
+`AtomicBoolean` in `Lock:` has exactly one candidate: every `synchronized` block in
+`AbstractParallelEoSStreamProcessor` takes `commitCommand`, and it is the only `AtomicBoolean` among
+them. The holder, `pc-control-PC-65`, is the control thread, which reaches the same method from the
+control loop and then blocks *inside* `committer.retrieveOffsetsAndCommit()` - the call the monitor
+is held across. The only producer of commit responses is therefore the thread waiting for the
+monitor the waiter holds, and `PT10S` is what breaks the cycle rather than anything resolving it.
+
+**This is the step the two 2026-08-25 sections said they lacked.** Both closed with *"do NOT read
+either as identifying the open deadlock"*, because a poll thread merely slower than
+`offsetCommitTimeout` - the ambiguity
+[`bug-offset-commit-timeout-does-two-jobs.md`](bug-offset-commit-timeout-does-two-jobs.md) owns -
+produces an identical error text. That alternative requires the poll thread to be RUNNABLE, or
+waiting on a socket. It was neither: it was `BLOCKED` on a named monitor with a named holder. For
+this capture the ambiguity is resolved, and the reading is the one those sections pre-declared as
+the deadlock side - which is why it counts for more than a third occurrence of a signature would.
+
+**Seed `7728704565782280867`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=7728704565782280867
+
+<!-- post-merge: checked-begin -->
+**Neither the branch nor the box is a suspect.** At the observed head `b75beb40d` the branch carried
+a `.claude/hooks/` script, `bin/` shell and markdown only - no Java, no pom, no workflow - so it
+could not reach the chaos engine, the same not-PR-introduced control the fourteenth, fifteenth and
+sixteenth sightings each recorded. Nor was it the shared box: other PRs' chaos jobs in the same
+window completed green, and the non-successes among them were `cancelled` by the `box-exclusive`
+queue rather than failed, so this red is not master-state.
+<!-- post-merge: checked-end -->
+
+**What is wanted next is no longer a discriminator but a verification.** astubbs#29 replaces this
+`synchronized` with `ReentrantLock.tryLock()`; until now it had a unit reproduction
+(`RebalanceEoSDeadlockTest`) and no fleet-level one. Replaying this seed with that stack applied, and
+reading whether the poll thread is still found `BLOCKED` on the same monitor, is the experiment that
+would let astubbs#29 land on evidence rather than on argument. **Recorded as one observation, not a
+rate:** the seed has not been replayed, and nothing here says how often the cycle closes.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a

@@ -200,10 +200,6 @@ bootstrap-phase state can only have been dirtied through candidate 3.
   stale register-cached reads) remains. The interesting cross-check would be x86 *with* the C2
   randomisers, which these probes already enable; running the same jar on the self-hosted highcpu
   runner would answer it in under ten minutes.
-  **Added after the fact, and it is why the verdict above now names the box:** astubbs#347
-  measured the same concern for its Lincheck arms and found the detection rate machine-dependent
-  by **3.4x** - 0.69% against 2.33% per iteration, likelihood-ratio 6.42 on 1 df, p = 0.011. A
-  stress rate measured on one machine does not transfer, whatever the architecture.
 - **The probes model the pattern, not the class.** If `PartitionState`'s write order changes, nothing
   goes red. The correspondence blocks are the mitigation, and they are prose.
 - Only the read pairs named above. The probes say nothing about `ShardManager`, `WorkManager`

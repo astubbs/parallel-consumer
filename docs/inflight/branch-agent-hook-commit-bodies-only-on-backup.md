@@ -5,7 +5,7 @@
 
 The **content** of these five commits is on master; their **bodies** are not, and in this repo a
 commit body is where the diagnosis, the rejected alternative and the reasoning live - `AGENTS.md`,
-"Read the commits you inherit", is built on that. They could not be replayed onto master during the
+"Read the record you inherit", is built on that. They could not be replayed onto master during the
 astubbs#322 split (all collided with astubbs#299, `da049f703`), and **the reconciliation commit that
 was said to name them does not exist** - it was lost when the stack was rebuilt, so the claim itself
 was the last thing pointing at them.
