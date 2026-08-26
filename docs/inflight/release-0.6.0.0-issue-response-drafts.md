@@ -1,15 +1,18 @@
-# astubbs#337 - draft issue responses, written now because context peaks at merge, not at release
+# Draft issue responses for the astubbs#337 fix, awaiting the 0.6.0.0 release note
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- inflight-state: deferred - until the 0.6.0.0 release note, or an explicit instruction to post -->
 <!-- post-merge: exempt-file -->
 
 **The rule this file applies (operator, 2026-08-25): an inflight note that maps to a GitHub issue
 carries a DRAFT response to that issue before its PR merges.** The agents who fixed the thing hold
-the best context at merge time; by release time it has to be re-mined from commit logs. Drafts are
-posted (after operator review) when the merge lands or with the release note, whichever the
-operator chooses - **nothing in this file is posted without an explicit instruction.** Delete this
-file in the PR that posts them, or with this PR at merge prep if posting moves elsewhere.
+the best context at merge time; by release time it has to be re-mined from commit logs.
+
+**Status: written, reviewed, unposted.** astubbs#337 has merged; the operator chose the release note
+over the merge as the moment to post, so these carry forward rather than being deleted with that PR.
+**Nothing here is posted without an explicit instruction.** Whoever posts them deletes this file in
+the same change - that is the work landing, and the only thing that retires this note.
 
 ---
 

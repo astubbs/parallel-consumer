@@ -52,6 +52,12 @@ None of these has an issue of its own - they were found by reading code to diagn
   Mechanism, preconditions (it needs all four, so it is uncommon to trigger and persistent once
   triggered) and the evidence:
   [`docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md`](../solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md).
+  **Responses to the three issues this closes are already drafted** - astubbs#121, confluentinc#894
+  and confluentinc#893 - in
+  [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md), written at
+  merge while the context was fresh and deliberately held for this release rather than posted then.
+  Post them with this note, on the operator's explicit instruction, and delete that file in the same
+  change.
 <!-- post-merge: checked-end -->
 
 ## Breaking changes that have already landed
