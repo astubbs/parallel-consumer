@@ -208,9 +208,11 @@ derivable from its own diff, or from another harness's behaviour.
 find. `LINCHECK_TEST=<class> bin/lincheck-test.sh` is the check; it is no longer *cheap*, because
 the inverted `WorkManagerLincheckTest` can never stop early and now pays its whole bound on every
 run - the lane went from well under a minute to about two and a half. `PartitionStateLincheckTest`
-has now been run against a tree carrying astubbs#337's fix (the section below), and it does **not**
-invert; astubbs#344 remains its outstanding trigger. Whoever lands astubbs#344 re-runs the whole
-lane and re-checks every harness's assertion, not only the one their own PR is named for.
+has now been run against a tree carrying both astubbs#337's and astubbs#344's fixes (the section
+below), and it does **not** invert - so every trigger the contract named has now fired, and no
+harness is waiting on a fix. What remains is the open thread-model question two harnesses now share.
+Re-run the whole lane and re-read every harness's assertion whenever anything in `state` moves, not
+only when a named fix lands.
 <!-- post-merge: checked-end -->
 
 ## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
@@ -320,18 +322,40 @@ the Lincheck arm is a search running beside it.
 - `ShardManagerLincheckTest` is **unchanged by astubbs#335 landing**. Same counterexample as the
   section above records - `revokeSweep(0)` sequentially, then `addWork(0)` against `addWork(0)` -
   so nothing in item 1's ranking moves on that evidence.
-- `PartitionStateLincheckTest` **has now been run against a tree carrying astubbs#337's fix, for the
-  first time, and it does NOT invert.** It still reports a violation on `commit()`, so its
-  `assertThat(report).contains("commit()")` still passes - but that assertion cannot say *which*
-  tear it found, and the reports are not stable between runs: most were an ordinary value divergence
-  between `commit()` and `succeed()`, one was an `ArrayIndexOutOfBoundsException` thrown by two
-  concurrent `commit()` calls, which Lincheck printed with no frames at all. That last shape is the
-  plain-collection-from-two-threads signature item 2 records, but attributing it needs a run that
-  prints a stack, so it is written here as a sighting rather than a finding. astubbs#344 is still
-  its outstanding trigger, and whoever lands it inherits the job of telling those apart.
+- `PartitionStateLincheckTest` **has now been run against a tree carrying BOTH astubbs#337's and
+  astubbs#344's fixes - the two the inversion contract named - and it does NOT invert.** It reports
+  a violation on every run and its `assertThat(report).contains("commit()")` still passes, but on
+  reports about neither tear: the interleaving table names `commit()` whatever threw. The reports
+  are not stable between runs, and two shapes recur.
+
+  The first is an `ArrayIndexOutOfBoundsException` out of `ArrayList.add` - **item 2's
+  plain-`ArrayList` defect, now with a frame naming it rather than the frameless sighting an earlier
+  revision of this bullet recorded**, so the lane has re-found it a second time from a harness
+  pointed elsewhere. The second is `PartitionState.onSuccess`'s `assert` reached from two `succeed`
+  operations in parallel - which production cannot perform, since only the control thread completes
+  work.
+
+  **That second shape is the same artefact-or-defect question this note already parks over
+  `ShardManagerLincheckTest`'s `addWork`, arriving in a second harness**: an operation set declared
+  wider than the real thread model, found by a harness aimed at something else. If it is the
+  artefact, the fix is a non-parallel group over `succeed`, not a change to `PartitionState`. That
+  decision is open, it is what this arm's next assertion depends on, and **it should be taken for
+  both harnesses at once** rather than one at a time - which is the argument for settling the thread
+  model before writing any more harnesses.
+
+  Its javadoc has been corrected to say all of this, because until now it told readers the arm would
+  invert when astubbs#344 landed. **The contract's per-PR trigger list is now fully spent and it went
+  0 for 4**: astubbs#345 and astubbs#337/#344 left their harnesses finding something else,
+  astubbs#346's inverted only after both of its two reachable violations were gone. What the
+  contract got right is the instruction; what it got wrong is the assumption of one bug per
+  harness.
 - `RetryQueueLincheckTest`, `LincheckToolchainProbeTest` and `LincheckSuperHashCodeProbeTest` are
   green and unchanged - the model checker is still blocked on the Lombok `callSuper` defect, so
   item 8's free arms are still not free.
+- **The lane is green, and one of those greens is vacuous.** `PartitionStateLincheckTest` passes an
+  assertion that no longer pins what it names. Nothing goes red to say so, which is exactly the
+  failure mode this note exists for, and it is the reason the re-run rule is written as *re-run and
+  re-read every harness's assertion*, not merely *re-run*.
 
 **What the inversion costs, which is now the lane's largest single number.** An inverted arm cannot
 stop at the first violation, so it pays its whole bound on every run. The whole lane used to finish
