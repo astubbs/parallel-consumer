@@ -34,28 +34,86 @@ cd "${QUARANTINE_CHECK_ROOT:-$(dirname "$0")/..}"
 source "${BASH_SOURCE[0]%/*}/lib/quarantine-common.sh" 2>/dev/null || source bin/lib/quarantine-common.sh
 
 # this repo is a fork - pin gh to the origin remote's repo, or it resolves PR numbers upstream
-REPO=$(git remote get-url origin | sed -E 's#\.git$##; s#.*[:/]([^/]+/[^/]+)$#\1#')
+ORIGIN_URL=$(git remote get-url origin)
+REPO=$(sed -E 's#\.git$##; s#.*[:/]([^/]+/[^/]+)$#\1#' <<<"$ORIGIN_URL")
 fail=0
+
+# REF PREVIEWS ARE FETCHED INTO A THROWAWAY GIT DIR, NEVER INTO THIS CLONE.
+#
+# The preview check below needs two remote refs - the owner PR's base, and its merge preview - and
+# it used to reach them with `git fetch --depth=1` right here. A depth-limited fetch writes the
+# `shallow` file, and that file lives in the SHARED --git-common-dir, so one run truncated history
+# for every worktree of the clone at once. This gate is swept by bin/check-all.sh, which made the
+# mandated pre-push sweep an instruction to corrupt the clone.
+#
+# The damage lands on OTHER commands and nothing goes red: `git merge-base` returns empty,
+# ahead/behind counts read in the hundreds, and a commit that plainly landed reports "not an
+# ancestor of master" - all of which read as a rewritten history rather than as missing objects.
+# .claude/hooks/check-shallow-history.sh denies those queries while shallow; this is the other half.
+#
+# FETCHING ELSEWHERE RATHER THAN FETCHING DEEPER HERE is what makes that unconditional. Choosing the
+# depth from `git rev-parse --is-shallow-repository` would still SAMPLE shared state a sibling
+# worktree can change between the sample and the fetch. A scratch git dir has no shared state to
+# race on; it deepens nothing when the clone arrived shallow on purpose (CI checks out at depth 1);
+# and if this script is killed mid-fetch the clone is exactly as it was, because it was never the
+# fetch target. Cost of the isolation, measured on this repo: ~1.4s and ~2.3MB for the first fetch,
+# and the dir is reused for the rest of the run.
+#
+# ONE SCRATCH DIR FOR THE WHOLE RUN, created eagerly below and removed by a single trap. Lazily is
+# what it wants to be, and cannot: gh_query runs inside `$(...)`, so a dir it created would be
+# recorded in a subshell and leak on every exit. It also holds gh_query stderr capture, which used
+# to be a per-call `mktemp` that survived an interrupted run.
+scratch_dir=""
+# IDEMPOTENT, AND IT DISARMS FIRST: a second signal arriving during teardown re-enters the handler
+# and abandons the `rm -rf` half-done.
+scratch_cleanup() { trap '' INT TERM; [ -n "$scratch_dir" ] && rm -rf "$scratch_dir"; scratch_dir=""; return 0; }
+trap scratch_cleanup EXIT
+# THE SIGNAL HANDLERS CLEAN UP THEMSELVES rather than relying on `exit` to reach the EXIT trap.
+# `exit` from inside a trap handler is documented to run the EXIT trap and MEASURABLY does not
+# always: instrumented, the TERM handler ran in the main shell and the EXIT trap did not follow, on
+# roughly one run in five of the self-test's interrupt arm. Calling it directly is one word and
+# removes the question. Nothing about the CLONE depends on any of this - it was never the fetch
+# target - so this is tidiness, not correctness.
+trap 'scratch_cleanup; exit 130' INT
+trap 'scratch_cleanup; exit 143' TERM
+
+# Fetch one ref for inspection. The result is FETCH_HEAD *in the scratch repo*, read back by
+# preview_show/preview_has - never by a bare `git show FETCH_HEAD`, which would read this clone's.
+preview_fetch() { # $1 = ref to fetch from origin
+    [ -d "$scratch_dir/preview" ] || git init -q --bare "$scratch_dir/preview" || return 1
+    # --git-dir is the throwaway repo created above, so the `shallow` file this writes is discarded
+    # with it - that is the entire point of the indirection. The marker has to be the line
+    # IMMEDIATELY above the use; the gate reads exactly one line back.
+    # hazard-ok: fetches into the scratch repo above, never into this clone.
+    git --git-dir="$scratch_dir/preview" fetch --quiet --depth=1 --no-tags "$ORIGIN_URL" "$1" 2>/dev/null
+}
+preview_show() { git --git-dir="$scratch_dir/preview" show "FETCH_HEAD:$1" 2>/dev/null; }
+preview_has()  { git --git-dir="$scratch_dir/preview" cat-file -e "FETCH_HEAD:$1" 2>/dev/null; }
 
 # gh with retry + error classification: echoes the value, or MISSING (confirmed not-found), or
 # TRANSIENT (still failing after retries - infra weather, never an ERROR).
 gh_query() { # $1=pr  $2=jq field (e.g. .state)
-    local err out rc attempt
-    err=$(mktemp)
+    # A FIXED PATH IN THE RUN SCRATCH DIR, not a per-call `mktemp`. This function runs inside
+    # `$(...)`, so it cannot register anything for cleanup; every redirect below truncates the file,
+    # and the trap above removes the directory, interrupted run included.
+    local err out attempt
+    err="$scratch_dir/gh-stderr"
     for attempt in 1 2 3; do
         if out=$(gh pr view "$1" -R "$REPO" --json "${2#.}" -q "$2" 2>"$err"); then
-            rm -f "$err"; echo "$out"; return 0
+            echo "$out"; return 0
         fi
         if grep -qiE 'could not resolve|not found|no pull requests' "$err"; then
-            rm -f "$err"; echo MISSING; return 0
+            echo MISSING; return 0
         fi
         sleep "$attempt"
     done
-    rm -f "$err"; echo TRANSIENT
+    echo TRANSIENT
 }
 
 entries=$(registry_entries)
 [ -z "$entries" ] && { echo "Registry has no entries - nothing to verify."; exit 0; }
+
+scratch_dir=$(mktemp -d) || { echo "ERROR: cannot create a scratch directory." >&2; exit 1; }
 
 for t in $entries; do
     cls=${t%%.*}
@@ -111,26 +169,26 @@ for t in $entries; do
                 echo "ADVISORY: $t owner PR #$pr is open; could not resolve its base branch - skipping preview check."
                 continue
             fi
-            if ! git fetch --quiet --depth=1 origin "$base" 2>/dev/null; then
+            if ! preview_fetch "$base"; then
                 echo "ADVISORY: $t owner PR #$pr is open; could not fetch its base '$base' to verify - skipping preview check."
                 continue
             fi
             # Herestring: `git show | grep -q` under pipefail turns a MATCH into a failure once
             # the file exceeds the 64 KiB pipe buffer. The largest source file here is already
             # within a few hundred bytes of that.
-            if ! grep -qE "$QUARANTINE_ANNOTATION_ERE" <<<"$(git show "FETCH_HEAD:$relpath" 2>/dev/null)"; then
+            if ! grep -qE "$QUARANTINE_ANNOTATION_ERE" <<<"$(preview_show "$relpath")"; then
                 echo "ADVISORY: $t owner PR #$pr is open, but the quarantine is not yet on its base '$base' - preview check n/a, re-check after the base updates."
                 continue
             fi
-            if ! git fetch --quiet --depth=1 origin "pull/$pr/merge" 2>/dev/null; then
+            if ! preview_fetch "pull/$pr/merge"; then
                 echo "ADVISORY: $t owner PR #$pr is open but has no merge preview (conflicts?) - cannot verify it removes the quarantine."
                 continue
             fi
-            if ! git cat-file -e "FETCH_HEAD:$relpath" 2>/dev/null; then
+            if ! preview_has "$relpath"; then
                 echo "ADVISORY: $t owner PR #$pr merge preview does not contain $relpath (file renamed/moved?) - cannot verify removal; check manually."
                 continue
             fi
-            if grep -qE "$QUARANTINE_ANNOTATION_ERE" <<<"$(git show "FETCH_HEAD:$relpath" 2>/dev/null)"; then
+            if grep -qE "$QUARANTINE_ANNOTATION_ERE" <<<"$(preview_show "$relpath")"; then
                 echo "ADVISORY: $t owner PR #$pr is open and does NOT yet remove the quarantine - it must delete the @Quarantined annotation + registry entry before merging."
             else
                 echo "OK: $t owner PR #$pr is open and its merge result removes the quarantine - loop closed."
