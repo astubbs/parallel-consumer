@@ -3,8 +3,10 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 
+<!-- post-merge: checked-begin -->
 `dups: clones` found a real clone on astubbs#267, failed the build for it, and **could not post it**.
 The finding existed only in the job log, and nobody opened the job log.
+<!-- post-merge: checked-end -->
 
 ## What happened
 
@@ -57,10 +59,12 @@ distinguishable from the check's tick.
 
 ## The shape worth remembering
 
+<!-- post-merge: checked-begin -->
 The tools were not blind and the thresholds were not too loose - both are the usual suspects and both
 are wrong here. The finding was correct, specific, and lost in delivery. On astubbs#267 the
 duplication was eventually caught by a human reading the code, three review rounds after the check
 first went red for it.
+<!-- post-merge: checked-end -->
 
 Related: [`static-archunit-main-code-rules.md`](static-archunit-main-code-rules.md) covers the other half
 of the same question - what these mechanical checks structurally cannot police, as opposed to what

@@ -49,6 +49,7 @@ Each needs its own judgement about whether it is true today; a rule that fails o
 code fixed or the rule narrowed, not a suppression. Read the granularity limits below before
 costing any of them - one of them is not expressible in ArchUnit at all.
 
+<!-- post-merge: checked-begin -->
 - **Dependency direction** between `internal`, `state`, `offsets` and the public API package - state
   should not reach back into the controller.
 - **No raw `Thread` / executor construction outside the places that own lifecycle**, so the
@@ -72,6 +73,7 @@ costing any of them - one of them is not expressible in ArchUnit at all.
   **one** genuine call site elsewhere (`ProducerManager`, grep `lastErrorSavedForRethrow`) to exempt
   or migrate. `StringUtils` calls it on an SLF4J `FormattingTuple` rather than a `Throwable`, so an
   owner-typed rule excludes it for free.
+<!-- post-merge: checked-end -->
 
 ## What ArchUnit's granularity rules out, measured
 
@@ -97,6 +99,7 @@ ArchUnit is not.**
 What ArchUnit could still pin about the same field is who may replace it, and that is what
 `ShardMapIsNeverReplacedArchTest` does.
 
+<!-- post-merge: checked-begin -->
 **Statement ordering inside a method is out of reach too.** ArchUnit's model is classes, methods,
 calls and dependencies - it cannot see that a log call happens *before* the bookkeeping that must not
 be skipped. That is the shape of the worst defect astubbs#267 fixed (`runUserFunction`, grep
@@ -104,6 +107,7 @@ be skipped. That is the shape of the worst defect astubbs#267 fixed (`runUserFun
 Only a test catches it, which is why that PR added one. Worth stating because "add an ArchUnit rule"
 is a tempting answer to a class of problem it provably cannot address, and the candidate list above
 reads as though the tool is general.
+<!-- post-merge: checked-end -->
 
 ## Pin the names the rules depend on
 

@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- post-merge: exempt-file - this note IS the PR's handoff, and is deleted when it merges -->
 
 Branch `fix/concurrent-listener-registration`; `git worktree list` says which worktree holds it, and
 `gh pr view 267 -R astubbs/parallel-consumer` its head, checks and unresolved threads. Merge master

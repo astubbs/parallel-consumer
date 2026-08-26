@@ -226,7 +226,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - eleven hook scripts across twelve registrations, and the file is
+**`.claude/settings.json`** - twelve hook scripts across thirteen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -336,6 +336,9 @@ grants stay in `settings.local.json`, still ignored.
   and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
   it exists to prevent.
 
+- `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`, the only registration on that
+  event. Why it has to be there rather than any earlier layer is above, under `PostToolUse`; it is
+  listed here so the registry is not silent about an event the rest of the file never uses.
 - `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
   every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
   `docs/plans/`. Titles only, once per session, no bodies - the length tracks the corpus, so no

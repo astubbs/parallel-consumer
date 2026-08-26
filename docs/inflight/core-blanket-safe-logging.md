@@ -2,7 +2,9 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: refactor -->
-<!-- inflight-state: parked - declined for now; the per-site guards astubbs#267 shipped are the decision -->
+<!-- inflight-state: parked - declined for now; the per-site guards already shipped are the decision -->
+
+<!-- post-merge: checked-begin - every mention below cites astubbs#267 in the past tense, as the PR that shipped the guards this note declines to replace; none of them claims anything about a branch that stops existing -->
 
 astubbs#267 established that handing a user-supplied throwable to a logger runs that user's code,
 and that the logging framework does **not** protect you. Measured, not assumed - Logback's
@@ -149,3 +151,5 @@ re-costed.
 Related: [`static-archunit-main-code-rules.md`](static-archunit-main-code-rules.md) lists the
 "no raw Throwable to a Logger" rule as a candidate and points back here for why it is not worth
 writing.
+
+<!-- post-merge: checked-end -->

@@ -940,8 +940,13 @@ registrations = sum(len(g["hooks"]) for groups in cfg["hooks"].values() for g in
 # not failing. A number nobody verifies is a number that rots, so both are verified here rather than
 # trusted to the next editor, and both are needed because one script can be registered against
 # several events.
+# Runs past twenty because a word the map does not know reads as a MISMATCH rather than as an
+# unknown word - "says thirteen registrations; settings.json has 13" is what a missing entry looks
+# like, and it sends the reader to the doc that is already correct.
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
-         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+         "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+         "nineteen": 19, "twenty": 20}
 doc = (root / "docs/agent-harness.md").read_text()
 m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z]+) hook scripts across ([a-z]+) registrations", doc)
 if not m:

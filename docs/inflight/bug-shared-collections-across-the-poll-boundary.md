@@ -18,16 +18,21 @@ exists to guarantee. The consumer is then stuck short of closed and the group wa
 timeout instead of getting a prompt departure. A cleanup failure surfacing as a stall in an
 unrelated subsystem is the kind nobody traces back.
 
+<!-- post-merge: checked-begin -->
 **A fix exists and is not proposed anywhere.** Branch `fix/concurrent-collection-sweep` sweeps six
 such sites as a follow-up to astubbs#267, with a reproduction and a deterministic regression test,
 and then fixes the leak the first fix created - walk-then-clear silently discarded meters registered
 *during* the walk, so `close()` now drains. Read `git log master..fix/concurrent-collection-sweep`;
 the bodies carry the whole diagnosis. **It has no PR**, which is the part no command will tell you.
+<!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
 **The undecided part is sequencing, not the fix.** It touches the files astubbs#57 declares it owns
 (`docs/inflight/pr-57-metrics-leak.md`), and astubbs#57 already has a merge position in the ordering
 recorded in [`pr-blockers-and-collisions.md`](pr-blockers-and-collisions.md). Whoever opens the PR decides
-whether it goes before or after, or folds into astubbs#267.
+whether it goes before or after astubbs#57. It builds on astubbs#267's guards, so it cannot land
+ahead of that one.
+<!-- post-merge: checked-end -->
 
 ## Delete when
 
