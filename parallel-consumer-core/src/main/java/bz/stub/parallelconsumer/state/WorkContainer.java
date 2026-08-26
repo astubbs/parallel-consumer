@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static bz.stub.parallelconsumer.internal.utils.KafkaUtils.toTopicPartition;
 import static java.util.Optional.of;
@@ -77,6 +78,27 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private Optional<Throwable> lastFailureReason;
 
     private boolean inFlight = false;
+
+    /**
+     * Whether this container currently holds a unit of its {@link ProcessingShard}'s available-work count.
+     * <p>
+     * That count has to be adjusted by whichever site takes a container out of - or puts it back into - the
+     * selectable population, and those sites run on both the broker-poll and the controller threads. Deciding
+     * "have I already counted this one?" from the container's observable state cannot work, however carefully the
+     * read is fenced: the state at an instant records what the container <em>is</em>, never who spent its unit. A
+     * revoked record whose stale result has just been dropped, for instance, reads exactly like a record that was
+     * never taken - {@link #isNotInFlight()} is true for both.
+     * <p>
+     * So the answer is held explicitly here and changed only by compare-and-set. The CAS outcome is the ownership
+     * record: exactly one caller can win each transition, and that caller - and only that caller - moves the
+     * shard's counter. No site infers, and no clamp is needed to absorb the sites that got it wrong.
+     * <p>
+     * There is no {@code @GuardedBy} to write for this field: the fix is an atomic rather than a lock, which is the
+     * carve-out stated in this tree's {@code AGENTS.md}.
+     *
+     * @see ProcessingShard
+     */
+    private final AtomicBoolean holdsShardAvailableUnit = new AtomicBoolean(false);
 
     @Getter
     private Optional<Boolean> maybeUserFunctionSucceeded = Optional.empty();
@@ -188,6 +210,34 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     public boolean isInFlight() {
         return inFlight;
+    }
+
+    /**
+     * Take a unit of the owning shard's available-work count for this container.
+     *
+     * @return true if <em>this</em> call took the unit, false if the container already held one
+     * @see #holdsShardAvailableUnit
+     */
+    boolean claimShardAvailableUnit() {
+        return holdsShardAvailableUnit.compareAndSet(false, true);
+    }
+
+    /**
+     * Give back the unit of the owning shard's available-work count that this container holds.
+     *
+     * @return true if <em>this</em> call gave the unit back, false if the container was not holding one
+     * @see #holdsShardAvailableUnit
+     */
+    boolean releaseShardAvailableUnit() {
+        return holdsShardAvailableUnit.compareAndSet(true, false);
+    }
+
+    /**
+     * @return true if this container is currently counted in its shard's available-work count
+     * @see #holdsShardAvailableUnit
+     */
+    boolean holdsShardAvailableUnit() {
+        return holdsShardAvailableUnit.get();
     }
 
     public void onQueueingForExecution() {

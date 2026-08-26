@@ -226,7 +226,7 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().onFailure();
+            shardOptional.get().onFailure(wc);
             this.retryQueue.add(wc);
         }
 
