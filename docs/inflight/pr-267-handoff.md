@@ -18,15 +18,21 @@ workstreams: the original collections fix, `ThrowableUtils` (`describeWithRootCa
 
 ## Do not re-derive these
 
-- **The "records stay in flight forever" premise is UNPROVEN.** Ablated three ways on two engines;
-  records come back regardless of the per-container guards. What *is* proven: the `runUserFunction`
-  reorder (21s vs 2.3s) and the `retryDelayProvider` return-value validation. The loop guards are
-  defence-in-depth - both tests' javadoc says so. Do not "restore" a stronger claim.
-- **Open question nobody has answered:** what recovers an un-mailboxed container? If it is a
-  timeout sweep, these guards are a latency fix, not a stall fix.
+**Extracted, because this file is deleted when the PR merges and these outlive it.** Two documents now
+own what used to be listed here, and they are the ones to read - not this summary:
+
+- [`../solutions/best-practices/a-guard-outlives-the-claim-that-motivated-it.md`](../solutions/best-practices/a-guard-outlives-the-claim-that-motivated-it.md)
+  owns the refuted premise and the instruction not to restore a stronger claim, what *is* measured as
+  against what is not, and why the defect-class sweep must enumerate by shape rather than by module.
+- [`core-unmailboxed-container-recovery.md`](core-unmailboxed-container-recovery.md) owns the open
+  question - what recovers an un-mailboxed container - and the three options the review thread on that
+  line is waiting on.
+
+What stays here, because it is only true while this PR is open:
+
 - **PCMetrics is astubbs#57's**, deliberately not fixed here.
-- **Six review rounds, none clean**, and three found the same class at a sibling site the previous
-  round missed. Assume the sweep is incomplete.
+- **No review round has come back clean**, and more than one found the same defect class at a sibling
+  site the round before it missed. Assume the sweep is incomplete.
 
 ## Outstanding
 
