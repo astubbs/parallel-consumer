@@ -258,8 +258,9 @@ only.
 
 The lane re-run astubbs#345 owed - the obligation the "re-run the lane, never reason about it" rule
 above puts on whoever lands one of these four - produced **2 misses in 4 runs** of
-`WorkManagerLincheckTest.stressRediscoversTheCheckpointThreeTear`, on a third machine, at the
-committed `iterations(1_000)`. The runs are bimodal rather than merely slow: the two hits landed the
+`WorkManagerLincheckTest.stressRediscoversTheCheckpointThreeTear` (renamed to
+`stressMustNotRediscoverTheCheckpointThreeTear` by the inversion in the section below), on a third
+machine, at the committed `iterations(1_000)`. The runs are bimodal rather than merely slow: the two hits landed the
 violation in 9.1s and 13.4s, the two misses exhausted the full thousand iterations at 121.7s and
 123.9s.
 
