@@ -181,15 +181,22 @@ So that harness asserts the strongest thing the evidence supports - that no repo
 operations mentions `NullPointerException` again - a real regression detector for astubbs#345's fix
 rather than the vacuous green an unexamined inversion would have produced.
 
-**`WorkManagerLincheckTest`: it passes, and cannot tell you why.** The checkpoint-3 signature it was
-calibrated on - `PartitionState.onSuccess`'s `assert removedFromIncompletes`, thrown out of
-`completeWork` - is gone, which is independent confirmation that astubbs#346's fix works. Lincheck
-still reports a violation, and it is astubbs#345's `NullPointerException` from
-`ShardManager.removeWorkFromShardFor`, reached through the same `revokeAndReassign` operation. The
-harness's own assertion cannot discriminate: `assertThat(report).contains("completeWork")` matches
-the interleaving table, which names both operations whichever one threw. Tightening it onto the
-checkpoint-3 signature would not be a durable pin either, because Lincheck stops at the first
-violation and which of the two it reaches is not ordered.
+**`WorkManagerLincheckTest`: inverted, and the inversion is the one that went as the contract said it
+would.** The paragraph that used to sit here described a tree carrying astubbs#346's fix but not
+astubbs#345's, where the harness passed because Lincheck reached astubbs#345's
+`NullPointerException` out of `ShardManager.removeWorkFromShardFor` through the same
+`revokeAndReassign` operation, and `assertThat(report).contains("completeWork")` could not tell that
+from the checkpoint-3 tear. With both fixes in the same tree neither violation is reachable, the
+harness fails every run, and the only move left is the one astubbs#347 named. It is now
+`stressMustNotRediscoverTheCheckpointThreeTear`, asserting Lincheck's own linearizability check over
+the two operations, in the shape `RetryQueueLincheckTest` already uses.
+
+**What that inversion is worth, measured rather than assumed - and it is worth less than a green
+suggests.** The re-run below is the evidence for the flip, but on its own it is *weak* evidence of
+absence, because the control that re-introduces the defect misses most runs too. The proof the tear
+is gone is `WorkManagerStaleCheckDoubleLookupTest`, which forces the interleaving deterministically;
+this arm is a search. Whoever reads a pass here as a proof has mis-read it, which is why the
+harness's own javadoc now says so.
 
 **One prescription written here has already been falsified, which is the argument for the rule
 below.** The reading from `WorkManagerLincheckTest` alone was that astubbs#345's fix would let both
@@ -198,12 +205,12 @@ invert at all - the paragraphs above are that measurement. A harness's next asse
 derivable from its own diff, or from another harness's behaviour.
 
 **So: re-run the lane, never reason about it.** Each of these fixes changes what the OTHER harnesses
-find. `LINCHECK_TEST=<class> bin/lincheck-test.sh` is the check and it is cheap. The two harnesses
-above carry assertions matched to what was measured on a tree holding astubbs#345's and
-astubbs#346's fixes together; `PartitionStateLincheckTest` has never been run against a tree
-carrying astubbs#337's or astubbs#344's fix, so its inversion is unexamined and its javadoc still
-promises one. Whoever lands any of these four re-runs the whole lane and re-checks every harness's
-assertion, not only the one their own PR is named for.
+find. `LINCHECK_TEST=<class> bin/lincheck-test.sh` is the check; it is no longer *cheap*, because
+the inverted `WorkManagerLincheckTest` can never stop early and now pays its whole bound on every
+run - the lane went from well under a minute to about two and a half. `PartitionStateLincheckTest`
+has now been run against a tree carrying astubbs#337's fix (the section below), and it does **not**
+invert; astubbs#344 remains its outstanding trigger. Whoever lands astubbs#344 re-runs the whole
+lane and re-checks every harness's assertion, not only the one their own PR is named for.
 <!-- post-merge: checked-end -->
 
 ## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
@@ -273,6 +280,63 @@ settles it.
 fix landed as well, both violations this harness can reach are gone, and it should fail every run -
 at which point it needs inverting, not re-bounding. Nothing here establishes that; no tree carrying
 both fixes has been run since astubbs#345's fix was measured this way.
+
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+
+### Measured when astubbs#346 landed: the prediction held, and the control says why that is thin evidence
+
+The re-run astubbs#346 owed, on a tree carrying both fixes. The prediction above is **confirmed**:
+every valid run of `WorkManagerLincheckTest` exhausted the whole committed bound without a
+violation, none of them anywhere near the 9-13s a hit used to take, so the designed-red arm could
+not stay. It is inverted, and the class javadoc carries the numbers.
+
+**The part that is not confirmed is the inference everyone will draw from it.** The same sitting ran
+a control - the compiling mutant that re-resolves the partition state at `handleFutureResult`'s
+action sites, i.e. the checkpoint-3 tear put back and nothing else - and that control **misses most
+of its runs too**, hitting once in six at the same bound. So the misses on the fixed tree are not,
+by themselves, a measurement that the tear is gone: a control that finds a *present* defect one run
+in six cannot make a handful of clean runs mean much. What makes the flip safe is that
+`WorkManagerStaleCheckDoubleLookupTest` forces the interleaving deterministically and pins the fix;
+the Lincheck arm is a search running beside it.
+
+**Two things this settles that reasoning had got wrong.**
+
+- The one hit the control did produce is *exactly* the checkpoint-3 signature -
+  `AssertionError` at `PartitionState.onSuccess`, through `PartitionStateManager.onSuccess` and
+  `WorkManager.onSuccessResult` out of `handleFutureResult`, with `completeWork` racing
+  `revokeAndReassign` - and **no `NullPointerException` anywhere**, because astubbs#345 has landed.
+  So the harness still reaches the seam it was built for; it has not gone quiet, it is simply a poor
+  detector at this bound.
+- The section above put this arm's hit rate at a coin flip on 4 runs. Six more runs of a control
+  carrying the same defect put it lower. Neither sample is big enough to name a number, which is the
+  same conclusion as before: the starve-and-count procedure is still what settles it, and nothing
+  here licenses re-bounding in either direction.
+
+**The other harnesses, re-checked in the same sitting as the rule above requires.**
+
+- `ShardManagerLincheckTest` is **unchanged by astubbs#335 landing**. Same counterexample as the
+  section above records - `revokeSweep(0)` sequentially, then `addWork(0)` against `addWork(0)` -
+  so nothing in item 1's ranking moves on that evidence.
+- `PartitionStateLincheckTest` **has now been run against a tree carrying astubbs#337's fix, for the
+  first time, and it does NOT invert.** It still reports a violation on `commit()`, so its
+  `assertThat(report).contains("commit()")` still passes - but that assertion cannot say *which*
+  tear it found, and the reports are not stable between runs: most were an ordinary value divergence
+  between `commit()` and `succeed()`, one was an `ArrayIndexOutOfBoundsException` thrown by two
+  concurrent `commit()` calls, which Lincheck printed with no frames at all. That last shape is the
+  plain-collection-from-two-threads signature item 2 records, but attributing it needs a run that
+  prints a stack, so it is written here as a sighting rather than a finding. astubbs#344 is still
+  its outstanding trigger, and whoever lands it inherits the job of telling those apart.
+- `RetryQueueLincheckTest`, `LincheckToolchainProbeTest` and `LincheckSuperHashCodeProbeTest` are
+  green and unchanged - the model checker is still blocked on the Lombok `callSuper` defect, so
+  item 8's free arms are still not free.
+
+**What the inversion costs, which is now the lane's largest single number.** An inverted arm cannot
+stop at the first violation, so it pays its whole bound on every run. The whole lane used to finish
+well under a minute; it is now about two and a half, essentially all of it this one arm. That is a
+real trade against item 8 and against ever gating the lane, and it is the price of keeping the bound
+where it was measured rather than re-pricing it on thin evidence.
 
 <!-- post-merge: checked-end -->
 
