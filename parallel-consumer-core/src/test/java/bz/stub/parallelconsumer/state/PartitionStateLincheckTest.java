@@ -48,8 +48,9 @@ import static com.google.common.truth.Truth.assertThat;
  * javadoc that used to sit here - "master carries both defects unfixed", invert when they land - is spent. Run
  * against a tree carrying both, Lincheck still reports a violation on every run, and the reports are not
  * stable: an {@code ArrayIndexOutOfBoundsException} out of {@code ArrayList.add} (the plain-{@code ArrayList}
- * defect astubbs#57 fixes, which this lane found unprompted - see
- * {@code docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md}), or
+ * defect astubbs#57 fixes, which this lane found unprompted - its reproduction is now the class
+ * javadoc of {@code PCMetrics859Test}, stated as why {@code metersLock} exists, and the half
+ * astubbs#57 does not fix is {@code docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md}), or
  * {@code PartitionState.onSuccess}'s {@code assert} from two {@link #succeed} operations in parallel, which
  * production cannot reach because only the control thread completes work.
  * <p>

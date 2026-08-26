@@ -93,8 +93,15 @@ adding a class with a narrow guess in it.
    four registration paths). **The lane found this unprompted, during calibration, from a scenario
    aimed at something else** - which is the strongest single piece of evidence that the technique
    generalises beyond the seams it was pointed at, and the best answer available to "is this worth
-   expanding". astubbs#57 fixes it, so a harness here becomes a regression detector the moment that
-   lands. See `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md`.
+   expanding".
+   <!-- post-merge: checked-begin -->
+   astubbs#57 fixed it - `registeredMeters` is a `LinkedHashSet` and every mutation of it is behind
+   a `metersLock` monitor - so a harness here is a regression detector against that fix rather than
+   a hunt for an open defect. The reproduction it produced is carried in `PCMetrics859Test`'s class
+   javadoc; the sibling defect the same harness found, the plain `HashMap` counter maps in
+   `WorkManager` and `PartitionStateManager`, is still open in
+   [`bug-metrics-counter-maps-are-plain-hashmaps.md`](bug-metrics-counter-maps-are-plain-hashmaps.md).
+   <!-- post-merge: checked-end -->
 3. **`ProducerManager`'s produce/commit lock pair - a known defect in a *named* protocol.** The pair
    is project vocabulary (`CONCEPTS.md`), which means the invariant is already written down in
    prose - the ideal case for a sequential specification. `producerTransactionLock` is a

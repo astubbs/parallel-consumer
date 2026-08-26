@@ -172,6 +172,15 @@ encode - on a path that runs on the control thread or the broker-poll thread dep
 mode. Written up in `docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md`, with a
 second sighting from the rebalance path.
 
+> **Citation repair, 2026-08-26.** That note was deleted when astubbs#57 landed the fix it was holding
+> evidence for. Read it as this plan read it with
+> `git show fa701e876:docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md` - the
+> last commit that still contains it, named directly because the deleting commit is the one carrying
+> this repair. What
+> survived it: the `ArrayList` reproduction moved into `PCMetrics859Test`'s class javadoc, and the
+> second sighting - the plain `HashMap` counter maps, which astubbs#57 does not touch - into
+> `docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md`.
+
 This is the answer to "can it find what we have not already found", which the calibration proper
 cannot address by construction. One proof of concept, one new defect, on a hot path, unprompted.
 
