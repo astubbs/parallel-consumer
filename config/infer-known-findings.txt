@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # Infer known findings - the ratchet's identity set, not a count.
 #
 # COVERS EVERY CHECKER, not just RacerD. The lane used to run `--racerd-only`, which disabled two
