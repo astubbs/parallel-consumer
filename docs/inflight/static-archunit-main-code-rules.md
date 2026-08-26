@@ -53,9 +53,10 @@ costing any of them - one of the four is not expressible in ArchUnit at all.
   should not reach back into the controller.
 - **No raw `Thread` / executor construction outside the places that own lifecycle**, so the
   thread-model rework has a boundary to hold.
-- **Non-volatile shared-state guard** for fields written by one thread and read by another - the
-  SpotBugs findings in `docs/refactoring.md` (`lastWorkRequestWasFulfilled`,
-  `ConsumerManager.commitRequested`, `RetryQueue.closed`) name the current offenders, and `state` in
+- **Non-volatile shared-state guard** for fields written by one thread and read by another.
+  **`docs/refactoring.md` owns the offender list** - its `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` entry
+  names them and carries the fix; do not copy the names here, because a fix removes one there and
+  leaves the copy asserting it. `state` in
   `AbstractParallelEoSStreamProcessor` is the one that makes the astubbs#209 race window
   unpredictable. ArchUnit can see a field's modifiers, so "these named fields must be volatile" is
   writable; **which thread reads a field is not in the model**, so the general form is not, and

@@ -20,7 +20,7 @@ grant, and why a grant must land before the pull request that needs it - is in
 
 ## Run them all with `bin/check-all.sh`, not from memory
 
-**Before you push: `bin/check-all.sh`.** It globs `bin/test-*.sh` then `bin/check-*.sh`, so a gate
+**Before you push: `bin/check-all.sh`.** By default it globs `bin/check-*.sh` and runs them concurrently - seconds, not minutes, because a sweep slow enough to skip protects nothing. `--with-tests` adds `bin/test-*.sh`, the self-tests, which answer a different question ("do the gates still work") and are CI's job. Either way it globs, so a gate
 added tomorrow is swept with no edit anywhere - nobody has to remember to register it, and nobody
 has to remember it exists.
 

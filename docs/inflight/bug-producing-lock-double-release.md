@@ -1,6 +1,7 @@
 # Open question: two paths release the same `ProducingLock`, and nothing stops the second
 
 <!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
 
 

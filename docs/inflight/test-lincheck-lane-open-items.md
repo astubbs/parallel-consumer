@@ -2,6 +2,7 @@
 # The Lincheck lane: what it does not yet cover, and what it left open
 
 <!-- inflight-type: task -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: test-debt -->
 
 <!-- post-merge: checked-begin -->

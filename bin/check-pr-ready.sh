@@ -114,10 +114,11 @@ if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
     # `|| true` for the same reason it is there: this script has no `set -e` today, so it is not
     # load-bearing HERE, but it makes the two copies identical and stops adding `-e` later from
     # silently restoring the fail-open the sibling hook had.
+    # hazard-ok: this IS the platform probe - it asks whether GNU stat is present before using it.
     if stat -c %Y . >/dev/null 2>&1; then
-        _mtime() { stat -c %Y "$1" 2>/dev/null || true; }      # GNU coreutils
+        _mtime() { stat -c %Y "$1" 2>/dev/null || true; }      # GNU coreutils  hazard-ok: probe above chose this branch
     else
-        _mtime() { stat -f %m "$1" 2>/dev/null || true; }      # BSD / macOS
+        _mtime() { stat -f %m "$1" 2>/dev/null || true; }      # BSD / macOS  hazard-ok: probe above rejected GNU
     fi
     now=$(date +%s); live=0
     while IFS= read -r f; do
