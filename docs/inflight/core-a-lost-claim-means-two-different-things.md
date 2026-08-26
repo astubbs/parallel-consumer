@@ -23,6 +23,7 @@ case should be loud (log at `warn`) rather than merely countable.
 
 ## Is it a skip bug? No - the record is not lost, only the signal is
 
+<!-- post-merge: checked -->
 Asked on the astubbs#335 review, and worth answering in the note rather than re-deriving. A refused
 claim leaves the record exactly where it was: `ProcessingShard#getWorkIfAvailable` takes the `else`
 branch, the container stays in `entries`, and

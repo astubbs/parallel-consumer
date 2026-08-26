@@ -56,19 +56,23 @@ Not free coverage, and it should not be sold as such:
 Ranked by what each buys, not by effort. Prefer widening what an existing harness explores over
 adding a class with a narrow guess in it.
 
+<!-- post-merge: checked-begin -->
 1. **The work claim in `ProcessingShard#getWorkIfAvailable` - a check-then-act on two fields that
-   must move together.** Selection asked three terms via `isAvailableToTakeAsWork()` and acted via
-   `onQueueingForExecution()`, re-validating none of them. astubbs#335 replaces the plain
-   `boolean inFlight` and `Optional<Boolean> maybeUserFunctionSucceeded` with a single
-   `AtomicReference<ExecutionState>` so the check IS the act - a six-state CAS machine, which is the
-   shape bounded model checking is best at.
+   had to move together.** Selection asked three terms via `isAvailableToTakeAsWork()` and acted via
+   `onQueueingForExecution()`, re-validating none of them. astubbs#335 replaced the plain
+   `boolean inFlight` and `Optional<Boolean> maybeUserFunctionSucceeded` with a single atomic
+   holding one `ExecutionState` and the attempt it belongs to, so the check IS the act - a six-state
+   CAS machine, which is the shape bounded model checking is best at.
 
-   **Why this one first:** astubbs#335's own verification says the losing interleaving had to be
-   "played out by hand with no threads - the concurrent reproduction needed millions of completions
-   per occurrence" (4 in 14,400,000). That is the exact gap between *one bad schedule exists* and
-   *every schedule is safe*, and only a model checker closes it. It is also **time-sensitive**: the
-   gap is unreachable here only because the control loop is the sole selector, and astubbs#361 gives
-   every worker its own. Calibrate against pre-astubbs#335 master, where the defect still lives.
+   **Why this one first:** the verification that landed with astubbs#335 says the losing interleaving
+   had to be "played out by hand with no threads - the concurrent reproduction needed millions of
+   completions per occurrence" (4 in 14,400,000), and the same is true of the ABA that review found
+   on top of it. That is the exact gap between *one bad schedule exists* and *every schedule is
+   safe*, and only a model checker closes it. It is also **time-sensitive**: the gap is unreachable
+   on the shipped engine only because the control loop is the sole selector, and astubbs#361 gives
+   every worker its own. Calibrate against the merge base of astubbs#335, where the defect still
+   lives.
+<!-- post-merge: checked-end -->
 
    Same trigger, also worth a harness, and deliberately unfixed:
    `bug-370-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in

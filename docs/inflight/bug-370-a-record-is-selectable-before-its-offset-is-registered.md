@@ -12,10 +12,12 @@ what a session needs in order to know the issue exists.
 shard scanners before its offset is in `incompleteOffsets`. Harmless while registration is
 control-thread-only, which nothing states and nothing tests.
 
+<!-- post-merge: checked-begin -->
 **Why it is in front of you at all:** it is the one shape that fires `PartitionState#onSuccess`'s
 `assert (removedFromIncompletes)` with **no double delivery**. Anyone meeting that assert again,
 having correctly ruled out the claim (one atomic transition since astubbs#335, pinned by
 `WorkClaimStateMachineTest`), needs this on the list rather than in front of them for the first
 time.
+<!-- post-merge: checked-end -->
 The 2026-08-22 sightings were double deliveries - `deliveryCount == 2` said so - but it was that
 evidence, not the assert, that made the inference correct.
