@@ -1330,6 +1330,12 @@ drift, and it does not close this arm.
 Consistent with every earlier sighting, the branch is not otherwise a suspect: the autopsy reports
 `violations (0)`, no ambient bound was crossed, and the other six scenarios in the same run passed.
 
+**And the same branch went green three heads later** (`b5feb36b0`), on a fresh seed, with no change
+to the accounting between the two - which is the seed-dependence this file has been arguing for, seen
+within one branch instead of across several. It is also why the paragraph above says the fix does not
+CLOSE the arm rather than that the arm disproves the fix: one red and one green on the same code is
+evidence about the arm, not about the counter.
+
     ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
       -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8746139315096023802
 
