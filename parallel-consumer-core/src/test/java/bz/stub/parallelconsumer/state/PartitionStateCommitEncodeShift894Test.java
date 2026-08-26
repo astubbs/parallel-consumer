@@ -13,11 +13,6 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.SortedSet;
-import java.util.concurrent.atomic.AtomicBoolean;
-
 import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
@@ -153,8 +148,7 @@ class PartitionStateCommitEncodeShift894Test {
 
         // it resumes where that state tells it to, and successfully processes everything the broker returns
         for (long offset = afterRebalance.getOffsetToCommit(); offset < LOG_END_OFFSET_AFTER_REBALANCE; offset++) {
-            afterRebalance.addNewIncompleteRecord(
-                    new ConsumerRecord<>(tp.topic(), tp.partition(), offset, "key", "value"));
+            afterRebalance.addNewIncompleteRecord(record(offset));
             afterRebalance.onSuccess(offset);
         }
 
@@ -176,7 +170,7 @@ class PartitionStateCommitEncodeShift894Test {
     private RacingCommitCycleState newStateWithRacingCompletion() {
         RacingCommitCycleState state = new RacingCommitCycleState(mu.getModule(), tp, HighestOffsetAndIncompletes.of());
         for (long offset = 0; offset <= HIGHEST_OFFSET_SEEN_AT_COMMIT; offset++) {
-            state.addNewIncompleteRecord(new ConsumerRecord<>(tp.topic(), tp.partition(), offset, "key", "value"));
+            state.addNewIncompleteRecord(record(offset));
         }
         for (long offset = 0; offset <= HIGHEST_OFFSET_SEEN_AT_COMMIT; offset++) {
             if (offset != RACING_OFFSET) {
@@ -186,6 +180,10 @@ class PartitionStateCommitEncodeShift894Test {
         // Arm it last, so the fixture's own completions above do not consume the one shot.
         state.armRaceOn(RACING_OFFSET);
         return state;
+    }
+
+    private ConsumerRecord<String, String> record(long offset) {
+        return new ConsumerRecord<>(tp.topic(), tp.partition(), offset, "key", "value");
     }
 
     private HighestOffsetAndIncompletes decode(OffsetAndMetadata committed) throws OffsetDecodingError {

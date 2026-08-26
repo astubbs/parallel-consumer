@@ -3,7 +3,6 @@ package bz.stub.parallelconsumer.state;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import bz.stub.parallelconsumer.offsets.OffsetDecodingError;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
@@ -19,7 +18,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
-import java.util.SortedSet;
 import java.util.TreeSet;
 
 import static com.google.common.truth.Truth.assertWithMessage;
