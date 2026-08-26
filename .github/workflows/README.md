@@ -30,7 +30,6 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, dependency scanning. |
 | `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep, on demand - too slow for a PR. Self-hosted high-CPU lane. |
 | `pr-checklist.yml` | Makes the PR template binding: the checklist must be present and every box resolved. |
-| `pr-highcpu-fast-feedback.yml` | Fast PR feedback on the self-hosted high-CPU runners, including the per-PR chaos tripwire. |
 | `publish.yml` | Publishes to Maven Central on every push to `master`; the pom version decides snapshot or release. |
 | `quarantine-lane.yml` | Runs the quarantined tests separately, so known-flaky tests neither block nor disappear. |
 | `release.yml` | Cuts a release. `workflow_dispatch`, and deliberately the most dangerous button here. |
