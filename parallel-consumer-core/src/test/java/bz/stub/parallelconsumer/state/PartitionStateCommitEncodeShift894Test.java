@@ -80,11 +80,7 @@ class PartitionStateCommitEncodeShift894Test {
 
         OffsetAndMetadata committed = state.createOffsetAndMetadata();
 
-        assertWithMessage("precondition: the injected race must actually have fired - without this the test "
-                + "passes on the fixed code for the trivial reason that both numbers come from one sample, and "
-                + "would keep passing if the seam silently stopped being called")
-                .that(state.raceHasFired())
-                .isTrue();
+        assertRaceFired(state);
 
         assertWithMessage("precondition: this commit cycle must take the encoding path, not the empty early-return")
                 .that(committed.metadata())
@@ -116,6 +112,7 @@ class PartitionStateCommitEncodeShift894Test {
         RacingCommitCycleState state = newStateWithRacingCompletion();
 
         OffsetAndMetadata committed = state.createOffsetAndMetadata();
+        assertRaceFired(state);
         HighestOffsetAndIncompletes restored = decode(committed);
 
         assertWithMessage("confluentinc#894: restored highest-seen %s, but the highest offset ever polled was %s",
@@ -141,6 +138,7 @@ class PartitionStateCommitEncodeShift894Test {
     void theShiftedCommitDrivesTheNextCommitPastTheEndOfThePartition() throws OffsetDecodingError {
         RacingCommitCycleState state = newStateWithRacingCompletion();
         OffsetAndMetadata committed = state.createOffsetAndMetadata();
+        assertRaceFired(state);
 
         // the rebalance: a new owner rebuilds partition state from what was committed
         PartitionState<String, String> afterRebalance =
@@ -180,6 +178,21 @@ class PartitionStateCommitEncodeShift894Test {
         // Arm it last, so the fixture's own completions above do not consume the one shot.
         state.armRaceOn(RACING_OFFSET);
         return state;
+    }
+
+    /**
+     * The seam guard, asserted by every test here rather than only the first.
+     * <p>
+     * Without it a test passes on the fixed code for the trivial reason that both numbers come from one sample,
+     * and would keep passing if the seam silently stopped being called - which astubbs#344 makes it do, by
+     * moving the encoder onto the bounded {@code getIncompleteOffsetsBelow(long)} overload.
+     */
+    private static void assertRaceFired(RacingCommitCycleState state) {
+        assertWithMessage("precondition: the injected race must actually have fired. If the encoder stopped "
+                + "calling getIncompleteOffsetsBelowHighestSucceeded (astubbs#344), re-hook the double to the "
+                + "bounded getIncompleteOffsetsBelow(long) overload rather than deleting this guard.")
+                .that(state.raceHasFired())
+                .isTrue();
     }
 
     private ConsumerRecord<String, String> record(long offset) {
