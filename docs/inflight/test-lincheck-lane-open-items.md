@@ -344,9 +344,12 @@ the Lincheck arm is a search running beside it.
   model before writing any more harnesses.
 
   Its javadoc has been corrected to say all of this, because until now it told readers the arm would
-  invert when astubbs#344 landed. **The contract's per-PR trigger list is now fully spent and it went
-  0 for 4**: astubbs#345 and astubbs#337/#344 left their harnesses finding something else,
-  astubbs#346's inverted only after both of its two reachable violations were gone. What the
+  invert when astubbs#344 landed. **The contract's per-PR trigger list is now fully spent, and it
+  went 1 for 4** - which is worth stating precisely, because the one that held did so for a reason
+  the contract did not name. astubbs#345 and astubbs#337/#344 left their harnesses finding
+  something else entirely. `WorkManagerLincheckTest` did invert when astubbs#346 landed, but only
+  because astubbs#345 had removed the OTHER violation reachable through the same operation first -
+  had the two landed in the other order, that prediction would have failed too. What the
   contract got right is the instruction; what it got wrong is the assumption of one bug per
   harness.
 - `RetryQueueLincheckTest`, `LincheckToolchainProbeTest` and `LincheckSuperHashCodeProbeTest` are
