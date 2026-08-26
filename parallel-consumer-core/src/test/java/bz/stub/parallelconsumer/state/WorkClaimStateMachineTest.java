@@ -382,26 +382,29 @@ class WorkClaimStateMachineTest {
         wm.handleFutureResult(wc);
         module.getMutableClock().add(retryDelay.plus(Duration.ofSeconds(1)));
 
-        // 1. A makes its whole claim decision - state AND retry delay - and is descheduled holding the
-        //    occupancy it decided over. takeClaimOn() below is the act half of that same claim.
-        var observedByA = wc.observeExecution();
+        // 1. A makes its whole claim decision - state AND retry delay - and is descheduled holding it.
+        //    A Claim can only be minted by decideClaim(), so holding one IS the proof that the delay was
+        //    checked; actOnClaim() below is the act half of that same claim.
+        var claimByA = wc.decideClaim();
         assertWithMessage("A's decision must be a genuine yes, or this test proves nothing")
-                .that(wc.isAvailableToTakeAsWork()).isTrue();
+                .that(claimByA.isPresent()).isTrue();
+        // nothing else runs in this single-threaded test, so this IS the state A decided over
+        var stateAtDecision = wc.getExecutionState();
 
         // 2. B runs the record all the way round, back to FAILED with a renewed deadline
         assertThat(wm.getWorkIfAvailable(1)).hasSize(1);
         wc.onUserFunctionFailure(new FakeRuntimeException("deliberate, again"));
         wm.handleFutureResult(wc);
 
-        assertWithMessage("the ABA is real: the state A observed is the very same enum value as now")
-                .that(observedByA.state()).isSameInstanceAs(wc.getExecutionState());
+        assertWithMessage("the ABA is real: the state A decided over is the very same enum value as now")
+                .that(stateAtDecision).isSameInstanceAs(wc.getExecutionState());
         assertThat(wc.getExecutionState()).isEqualTo(ExecutionState.FAILED);
         assertWithMessage("B's failure pushed the deadline out, so the record is not due")
                 .that(wc.isAvailableToTakeAsWork()).isFalse();
 
         // 3. A's stale claim must lose
         assertWithMessage("a claim decided before the retry delay was renewed must not bypass it")
-                .that(wc.takeClaimOn(observedByA)).isFalse();
+                .that(wc.actOnClaim(claimByA.get())).isFalse();
         assertThat(wc.getExecutionState()).isEqualTo(ExecutionState.FAILED);
         assertWithMessage("a refused claim starts no delivery")
                 .that(wc.getDeliveryCount()).isEqualTo(2L);

@@ -207,6 +207,34 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     /**
+     * A decision that this record was claimable, carrying the exact occupancy it was decided over.
+     * <p>
+     * <b>This type exists to make the claim's ordering unforgeable rather than conventional.</b> The claim has two
+     * halves - a state half, which the compare-and-set re-validates, and a retry-delay half, which it cannot,
+     * because the deadline is deliberately not part of the atomic. So the delay is checked exactly once, at
+     * decision time, and {@link #actOnClaim(Claim)} has no way to check it again. Reaching the act without having
+     * made the decision would therefore hand out a record whose backoff has not expired.
+     * <p>
+     * The constructor is private to {@link WorkContainer}, so the only way to obtain one is
+     * {@link #decideClaim()}, which always evaluates the whole predicate. There is no caller discipline to
+     * remember and none to get wrong - raised on the astubbs#335 review, where the seam was safe only because
+     * the two call sites happened to be well behaved.
+     */
+    static final class Claim {
+
+        private final Execution decidedOver;
+
+        private Claim(Execution decidedOver) {
+            this.decidedOver = decidedOver;
+        }
+
+        @Override
+        public String toString() {
+            return "Claim(" + decidedOver + ")";
+        }
+    }
+
+    /**
      * Instance reference to otherwise static state, for access to the instance type parameters of WorkContainer as
      * static fields cannot access them.
      */
@@ -442,8 +470,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     /**
      * @return the current occupancy, state and attempt together - what a selector's claim decision is made over.
      *         Package-private: {@link Execution} is an implementation detail of the atomic, and the only callers
-     *         that need it are the claim itself and the test that drives the interleaving - see
-     *         {@link #takeClaimOn(Execution)}.
+     *         that need it are {@link #decideClaim()} and the test that pins the mint-a-fresh-one property.
      */
     Execution observeExecution() {
         return state.get();
@@ -469,47 +496,46 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      *         (the direct-pull engine, in development) loses claims routinely and relies on the refusal.
      */
     public boolean onQueueingForExecution() {
-        return claimFrom(state.get());
+        return decideClaim().map(this::actOnClaim).orElse(false);
     }
 
     /**
-     * The whole claim - decide over one observation, then act on that same observation.
+     * The decision half of the claim: evaluate the whole predicate - state and retry delay - over one observed
+     * occupancy, and hand back a {@link Claim} that is the only key to {@link #actOnClaim(Claim)}.
+     *
+     * @return the decision, or empty when the record was not claimable at the moment of asking
      */
-    private boolean claimFrom(Execution observed) {
+    Optional<Claim> decideClaim() {
+        Execution observed = state.get();
         if (!isClaimableFrom(observed)) {
             log.trace("Not claimable from {}: {}", observed, this);
-            return false;
+            return Optional.empty();
         }
-        return takeClaimOn(observed);
+        return of(new Claim(observed));
     }
 
     /**
-     * The act half of the claim, on its own - <b>the seam that makes the interleaving testable without
-     * threads</b> (see {@code WorkClaimStateMachineTest}).
+     * The act half of the claim - <b>the seam that makes the interleaving testable without threads</b> (see
+     * {@code WorkClaimStateMachineTest}).
      * <p>
-     * A caller reaches here having already decided, over {@code observed}, that the record was claimable. At
-     * runtime the gap between that decision and this call is a handful of instructions; a descheduled selector
+     * At runtime the gap between the decision and this call is a handful of instructions; a descheduled selector
      * can widen it to anything, and what happens inside it is the ABA this method exists to refuse - the record
-     * cycling away and back to a state that is {@code ==} to what the caller saw, with the retry deadline the
-     * caller checked rewritten under it (astubbs#335, reported by Codex).
+     * cycling away and back to a state that is {@code ==} to what the decision saw, with the retry deadline the
+     * decision checked rewritten under it (astubbs#335, reported by Codex).
      * <p>
      * <b>Splitting the act out is safe here in a way the defect's own two-step form was not</b>, and the
-     * difference is the whole point of {@link Execution}: the caller's observation is a <em>value</em>, and this
-     * compares against that exact value, so a stale caller is refused rather than obeyed. The old form threw its
-     * observation away and re-read nothing, so a stale decision won. The state check is kept as well, so this
-     * cannot be misused to claim a current-but-unclaimable record.
+     * difference is the whole point of {@link Execution}: the decision is a <em>value</em>, and this compares
+     * against that exact value, so a stale decision is refused rather than obeyed. The old form threw its
+     * observation away and re-read nothing, so a stale decision won.
      *
-     * @param observed the exact occupancy the claim decision was made over
+     * @param decision a claim decision, which only {@link #decideClaim()} can mint
      */
-    boolean takeClaimOn(Execution observed) {
-        if (!observed.state().isClaimable()) {
-            log.trace("Not claimable from {}: {}", observed, this);
-            return false;
-        }
+    boolean actOnClaim(Claim decision) {
+        Execution decidedOver = decision.decidedOver;
         // Compares the exact occupancy, not merely its state, so a record that cycled away and back to the same
         // state since the decision refuses this claim rather than honouring a decision made against a superseded
         // attempt - and with it, against a retry deadline that has since been renewed. See Execution.
-        if (!state.compareAndSet(observed, observed.transitionTo(ExecutionState.IN_FLIGHT))) {
+        if (!state.compareAndSet(decidedOver, decidedOver.transitionTo(ExecutionState.IN_FLIGHT))) {
             log.trace("Lost the race to claim {}", this);
             return false;
         }
@@ -561,9 +587,13 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * edge, observed the retry deadline that goes with it.
      */
     private void recordVerdict(boolean succeeded) {
-        // Terminates for the same reason endFlightOf() does, and the argument is stated there: the update
-        // function is total, and applying it to its own output is idempotent in the state it names, so no
-        // sequence of transitions another thread can perform keeps this caller going round.
+        // TERMINATION, and it is NOT endFlightOf()'s argument - that one rests on a literal no-op return, and
+        // this function has none: transitionTo() always mints a fresh occupancy, even where withVerdict() maps a
+        // state to itself. What bounds this loop instead is the supply of competing writers. Only two threads can
+        // write while a record is in flight - the worker recording its one verdict, and the controller ending the
+        // flight - and neither can be made to repeat, because a third write would need a new claim and no claim
+        // can be won from an in-flight state. So a caller is retried at most once per competitor. Raised on the
+        // astubbs#335 review, where this comment claimed endFlightOf()'s argument and the two are not the same.
         state.updateAndGet(observed -> observed.transitionTo(observed.state().withVerdict(succeeded)));
     }
 
