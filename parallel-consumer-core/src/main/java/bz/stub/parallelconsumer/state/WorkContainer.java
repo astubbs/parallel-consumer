@@ -307,11 +307,11 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private final AtomicReference<Execution> state = new AtomicReference<>(Execution.initial());
 
     /**
-     * Whether this container currently holds the {@link ProcessingShard}'s claim to count it as selectable - i.e.
-     * whether it is one of the containers currently included in the shard's available-work count.
+     * Whether this container currently holds the {@link ProcessingShard}'s claim on selection - i.e. whether it is
+     * one of the containers currently counted in the shard's {@code workAwaitingSelectionCount}.
      * <p>
      * That count has to be adjusted by whichever site takes a container out of - or puts it back into - the
-     * selectable population, and those sites run on both the broker-poll and the controller threads. Deciding
+     * selection population, and those sites run on both the broker-poll and the controller threads. Deciding
      * "have I already counted this one?" from the container's observable state cannot work, however carefully the
      * read is fenced: the state at an instant records what the container <em>is</em>, never who took its claim. A
      * revoked record whose stale result has just been dropped, for instance, reads exactly like a record that was
@@ -325,13 +325,13 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * this fix is a compare-and-set rather than a lock, so there is no lock to name. That is the same reason this
      * tree's {@code AGENTS.md} gives for {@code volatile} - and what it asks for instead is met here: "the rule is
      * 'record the invariant you just established'", which this javadoc and {@link ProcessingShard}'s
-     * {@code availableWorkContainerCount} do.
+     * {@code workAwaitingSelectionCount} do.
      *
      * @see ProcessingShard
-     * @see ProcessingShard#countAsSelectable
-     * @see ProcessingShard#uncountAsSelectable
+     * @see ProcessingShard#includeInSelection
+     * @see ProcessingShard#excludeFromSelection
      */
-    private final AtomicBoolean claimedAsSelectable = new AtomicBoolean(false);
+    private final AtomicBoolean selectionClaimed = new AtomicBoolean(false);
 
     /**
      * How many times this record has been handed to a worker. Incremented only by a WON claim, so a refused
@@ -489,31 +489,32 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     /**
-     * Take the owning shard's claim to count this container as selectable.
+     * Take the owning shard's claim on selection.
      *
      * @return true if <em>this</em> call took the claim, false if the container already held it
-     * @see #claimedAsSelectable
+     * @see #selectionClaimed
      */
-    boolean claimAsSelectable() {
-        return claimedAsSelectable.compareAndSet(false, true);
+    boolean claimSelection() {
+        return selectionClaimed.compareAndSet(false, true);
     }
 
     /**
-     * Give back the owning shard's claim to count this container as selectable.
+     * Give back the owning shard's claim on selection.
      *
      * @return true if <em>this</em> call gave the claim back, false if the container was not holding it
-     * @see #claimedAsSelectable
+     * @see #selectionClaimed
      */
-    boolean releaseAsSelectable() {
-        return claimedAsSelectable.compareAndSet(true, false);
+    boolean releaseSelection() {
+        return selectionClaimed.compareAndSet(true, false);
     }
 
     /**
-     * @return true if this container is currently counted in its shard's available-work count
-     * @see #claimedAsSelectable
+     * @return true if this container currently holds a claim on selection - i.e. is counted in its shard's
+     *         work-awaiting-selection count
+     * @see #selectionClaimed
      */
-    boolean isClaimedAsSelectable() {
-        return claimedAsSelectable.get();
+    boolean isSelectionClaimed() {
+        return selectionClaimed.get();
     }
 
     /**

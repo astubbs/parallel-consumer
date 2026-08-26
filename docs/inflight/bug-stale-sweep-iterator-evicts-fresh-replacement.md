@@ -38,7 +38,7 @@ stays true, so `AbstractParallelEoSStreamProcessor.drain()` never reaches `trans
 **Why it was not fixed there.** There is no identity-keyed removal on the map to reach for.
 `entries.remove(key, value)` and `entrySet().remove(entry)` both compare with `equals`, and
 `WorkContainer.equals` is topic/partition/offset only - so the fresh container compares *equal* to
-the stale one it replaced, which is the same reason `ProcessingShard.countAsSelectable` compares
+the stale one it replaced, which is the same reason `ProcessingShard.includeInSelection` compares
 with `!=`. A get-then-remove guarded by reference identity is still a check-then-act. Closing this
 properly means deciding how the sweep and the replacement branch coordinate at all, which is a
 <!-- post-merge: checked -->

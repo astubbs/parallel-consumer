@@ -35,7 +35,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *
  * @author Antony Stubbs
  * @see ProcessingShard
- * @see WorkContainer#claimAsSelectable()
+ * @see WorkContainer#claimSelection()
  */
 @Slf4j
 class ShardAvailableCountOwnershipTest {
@@ -150,7 +150,7 @@ class ShardAvailableCountOwnershipTest {
     }
 
     /**
-     * The claim's <b>residency recheck</b> - the half of {@code ProcessingShard.countAsSelectable} that makes the
+     * The claim's <b>residency recheck</b> - the half of {@code ProcessingShard.includeInSelection} that makes the
      * claim-then-confirm order safe, and the only line in the design that defends against the two threads actually
      * interleaving rather than merely running in the damaging order.
      * <p>
@@ -280,7 +280,7 @@ class ShardAvailableCountOwnershipTest {
         assertWithMessage(why)
                 .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(expected);
         assertWithMessage("the counter must equal the claims the shard's resident containers hold (" + why + ")")
-                .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countClaimedAsSelectableByScan());
+                .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countSelectionClaimedByScan());
         assertWithMessage("the counter must never go negative, and must not rely on a clamp to stay non-negative "
                 + "(" + why + ")")
                 .that(shard.getCountOfWorkAwaitingSelection()).isAtLeast(0L);
