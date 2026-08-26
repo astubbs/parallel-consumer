@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Flags a repo file path cited in the docs that does not exist. Whole tree, every PR.
 //
 // House convention (AGENTS.md -> "Cite by anchor, never by line number") tells authors to cite a
@@ -89,6 +91,40 @@ const PLACEHOLDER = /(?:^|[/\-_.])(?:foo|bar|baz|qux|quux)(?:[/\-_.]|$)/i;
 // the elided `.../` form docs use to shorten a long package path.
 const NOT_A_PATH = /[*?<>${}|]|\.\.\./;
 
+// A markdown link's TARGET - the text inside `](...)` - is unambiguously a path, never prose, so a
+// single-segment target like `](sibling.md)` is read as a citation even though the identical bare
+// token in running prose ("the README.md says otherwise") is not. The two-segment rule on TOKEN
+// exists to keep prose containing a dot - `Set.removeAll`, `check-all.sh: message` - from being
+// misread as a path; none of that prose sits inside `](...)`, so relaxing the rule there carries
+// none of the risk it guards against. This is the ONLY place it is relaxed - a bare one-segment
+// token outside a link is still not a citation.
+//
+// The gap this closes: this branch shipped a same-directory link in docs/inflight/ to a file that
+// has never existed, and the gate passed - `foo.md` and `./foo.md` both have exactly one path
+// segment, so TOKEN never fired on either. GitHub resolves such a link relative to the citing
+// file's directory, which is exactly resolves()'s second route; this only has to hand it the
+// target.
+const MD_LINK_TARGET = /]\(([^)\s]+)\)/g;
+
+// A URI scheme (`mailto:`, `tel:`, ...) or an in-page anchor (`#section`) is not a repo path.
+// `https?://`, `ftp://`, `www.` and `mailto:` are already gone by the time this runs - URLS strips
+// them from the whole line first - so this only has to catch what is left: a bare anchor, or a
+// scheme URLS does not happen to list.
+const NOT_A_LINK_PATH = /^#|^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+// A link may point at `file.md#section` - the repo path plus an in-document anchor. The anchor is
+// not part of what GitHub resolves as a file, so it is stripped before the target is checked for
+// an extension or handed to resolves().
+function stripFragment(target) {
+  const i = target.indexOf("#");
+  return i === -1 ? target : target.slice(0, i);
+}
+
+// The same rule TOKEN enforces at its own tail - a citation must carry a real file extension - is
+// reapplied here once the anchor is gone, so a link to a directory (`](docs/inflight)`) is left
+// alone for the same reason bare directory prose is.
+const HAS_EXTENSION = new RegExp(String.raw`\.(?:${EXTENSIONS.join("|")})$`);
+
 // A token is only a repo path if it STARTS one. These characters immediately before it mean it is
 // the tail of something longer that this repo does not own: an absolute host path
 // (`/usr/local/bin/reboot-into-windows.sh` in the runner docs), an interpolated one
@@ -164,6 +200,18 @@ function citationsIn(line) {
     if (m.index > 0 && TAIL_OF_SOMETHING_ELSE.test(clean[m.index - 1])) continue;
     if (GIT_REVISION.test(clean.slice(0, m.index))) continue;
     out.add(token);
+  }
+  // The single-segment case TOKEN cannot see at all: `](sibling.md)`. Everything TOKEN already
+  // caught (multi-segment link targets like `../ci.md`) is re-derived here too and simply dedupes
+  // via the Set - this loop does not need to know which targets are "new".
+  for (const m of clean.matchAll(MD_LINK_TARGET)) {
+    const raw = m[1];
+    if (NOT_A_LINK_PATH.test(raw)) continue;
+    const target = stripFragment(raw);
+    if (!target || NOT_A_PATH.test(target) || PLACEHOLDER.test(target)) continue;
+    if (TAIL_OF_SOMETHING_ELSE.test(target[0])) continue;
+    if (!HAS_EXTENSION.test(target)) continue;
+    out.add(target);
   }
   return [...out];
 }
