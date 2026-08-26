@@ -2,7 +2,6 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-labels: needs-measurement -->
-<!-- inflight-labels: needs-measurement -->
 
 Opened 2026-08-21 by profiling, **and immediately falsified by testing it.** Kept as a parked note
 rather than deleted, because the negative result is worth more than the note ever was and because the

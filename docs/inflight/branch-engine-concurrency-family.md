@@ -3,7 +3,8 @@
 <!-- inflight-type: register -->
 <!-- inflight-impact: stranded-work -->
 
-`perf/engine-concurrency` is the base that astubbs#333 (adaptive concurrency) targets, and a dozen
+<!-- post-merge: checked -->
+`perf/engine-concurrency` is the base astubbs#333 (adaptive concurrency) was cut from, and a dozen
 branches feed or fed it. **Their merge status is a command away and is deliberately not recorded
 here** - `git merge-base --is-ancestor <branch> origin/perf/engine-concurrency` answers it, and any
 copy of that answer is wrong within a day. What no command answers is *what question each branch was
@@ -46,6 +47,7 @@ deliverable; the branch is just where it happened.
 
 ## Why this matters to the adaptive work
 
+<!-- post-merge: checked -->
 Two of these directly shape astubbs#333:
 
 - **The arrival-controlled harness is on the base already**, not waiting to be built. The adaptive

@@ -2,7 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: throughput -->
-<!-- inflight-labels: release-note, needs-measurement -->
+<!-- inflight-labels: release-note needs-measurement -->
 
 Measured 2026-08-21. **The `ExternalEngine` family - Vert.x, Reactor, Mutiny - is not subject to the
 ceiling that caps the core engine, and needs no virtual threads to escape it.**

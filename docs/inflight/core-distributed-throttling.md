@@ -9,7 +9,7 @@ demand evidence - and it converges with astubbs#227 (mirror of confluentinc#21, 
 concurrency control), the fork's oldest open self-tuning ambition. Ideation ran 2026-08-17,
 extended 2026-08-18; eight ranked, code-verified directions:
 [`docs/ideation/2026-08-17-distributed-throttling-ideation.html`](../ideation/2026-08-17-distributed-throttling-ideation.html)
-(branch `feats/ideate-distributed-throttling` until merged). Read that before restarting - it
+Read that before restarting - it
 holds the bases, the rejection table, and the prior-art autopsies. Related abandoned branches
 (`features/rate-limiting`, `features/dynamic-concurrency-control`, `feature/auto-tuning-pressure`,
 plus upstream draft PR confluentinc#22) are now catalogued in `docs/refactoring.md`'s idea bank.

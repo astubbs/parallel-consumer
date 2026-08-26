@@ -46,4 +46,32 @@ INFLIGHT_REGISTER_IMPACTS="$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS"
 # crash must appear beside the crashes, not after them. Signal integrity first (you cannot judge the
 # code through instruments that lie), then what kills, then what corrupts, then what stops, then what
 # is merely owed.
+# LABELS ARE THE THIRD AXIS, AND IT IS A MECHANISM - deliberately neither of the other two. The
+# filename prefix says the AREA a note is about; the impact says the CONSEQUENCE of not knowing it.
+# Neither can say what a note is about MECHANICALLY, and that is what you search by when you sit down
+# to do a piece of work: "show me the concurrency ones" spans bug-, core-, static-, deps- and
+# release-, and its consequences are already spread across stall, data-loss, crash and reliability.
+#
+# WHY A CLOSED SET. An open free-text field becomes tag soup within a month and then partitions
+# nothing, which is the failure this whole scheme exists to avoid. Add a value the way impacts were
+# added - by reading the corpus and finding a group the existing values cannot express - and describe
+# it in docs/inflight/AGENTS.md in the same commit.
+#
+# WHY IT STARTED AT ONE VALUE. Because one was what the corpus justified when this axis was written:
+# a small minority of notes are concurrency-shaped, which is the band where a label partitions
+# usefully rather than matching nearly everything. A speculative second value would be inventing a
+# group and hoping, which the header above forbids.
+#
+# THE OTHER FIVE ARE NOT SPECULATIVE, AND THEY ARE NOT MECHANISMS EITHER - READ THIS BEFORE "FIXING"
+# THEM. They arrived when the engine-concurrency work merged into this axis: 41 notes were already
+# labelled this way against a documented set in docs/inflight/AGENTS.md, and `release-note` in
+# particular is load-bearing rather than decorative - that file names
+# `grep -rl 'inflight-labels:.*release-note' docs/inflight/` as "the whole mechanism" for finding what
+# a release must mention. So the strict mechanism-only rule above is knowingly relaxed here rather
+# than quietly broken: `needs-measurement`, `needs-decision` and `release-note` name a STATE the note
+# is in, `security` and `breaking-change` a CONSEQUENCE. Deleting them to restore the rule would
+# delete a working index and 41 notes' worth of hand-applied triage; the honest alternative - a fourth
+# axis for state - is worth doing and is not this merge's job.
+INFLIGHT_LABELS="concurrency release-note security breaking-change needs-measurement needs-decision"
+
 INFLIGHT_IMPACT_ORDER="misdirection blind-spot crash data-loss stall security config-lie reliability throughput release-gate coordination stranded-work ci test-debt refactor process deps-debt"

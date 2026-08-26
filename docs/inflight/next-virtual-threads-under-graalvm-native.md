@@ -2,7 +2,7 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: throughput -->
-<!-- inflight-labels: needs-measurement, release-note -->
+<!-- inflight-labels: needs-measurement release-note -->
 
 **The question is one experiment wide and the answer decides how the proxy sidecar is positioned.**
 Build the sidecar as a GraalVM native image, turn on `useVirtualThreads`, and see whether the pool is

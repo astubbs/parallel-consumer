@@ -31,8 +31,9 @@ independent PRs that would conflict in the same files.
    ignore, reflection for new APIs) but an evidential one: its results measure arms that must
    exist on master, and a `core-vt` arm against a master without the option would silently run
    platform threads. Includes the arrival-matrix driver and the claims-decision material.
-5. **astubbs#333 (adaptive concurrency)** retargets from this branch onto the stack tip once its
-   base exists on master.
+<!-- post-merge: checked -->
+5. **astubbs#333 (adaptive concurrency)** is the last wagon: it retargets onto the stack tip once
+   its base exists on master.
 
 Each PR carries its own inflight notes - notes travel with the code they describe, no omnibus docs
 PR. Each stacked PR body carries `depends on astubbs/parallel-consumer#N`, one line per parent.

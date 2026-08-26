@@ -5,10 +5,29 @@
 # Separate from copyright.yml deliberately: these checks are not about copyright and never were,
 # and bolting them there left a job called "Copyright header check" doing two unrelated things.
 #
-# ONE JOB PER CONCERN, named `<area>: <check>` to match the context convention already in the master
-# ruleset (`quarantine: audit`, `dups: clones`, `deps: vulnerabilities`). Each appears as its own
-# required-status-check candidate instead of hiding inside a shared green tick - and a job renamed
-# here silently stops satisfying that ruleset, so treat these names as an API.
+# ONE LANE, DISCOVERED - and this replaced one-job-per-concern deliberately. That shape gave each
+# gate its own required-status-check candidate and its own red tick, which reads well, and cost
+# something that mattered more: every gate and every self-test had to be NAMED here to run at all.
+# A gate added to bin/ ran nowhere until somebody remembered to wire it, and that is not
+# hypothetical - the shallow-clone hook's self-test was added and was the only self-test in bin/
+# that no workflow named. The failure is silent by construction: nothing goes red to tell you a
+# check is not running.
+#
+# `bin/check-all.sh --with-tests` globs `bin/check-*.sh` and `bin/test-*.sh`, so the set cannot drift
+# from what exists. It does not stop at the first failure - every check runs, and the summary names
+# each one that failed with the tail of its output - so a single lane loses no attribution against
+# the previous per-job layout. It runs the gates concurrently and finishes in about a minute, which
+# is why splitting them across runners bought little: the wall-clock was dominated by ten checkouts,
+# not by the checks.
+#
+# WHAT IS INTENTIONALLY NOT HERE: anything needing a broker, Docker or Infer. Those lanes live in
+# maven.yml with their own setup. A JDK IS set up, because one self-test fails rather than skips
+# without it - see the step below. Keep the dependency list short and explicit; the failure mode this
+# guards against is a lane that passes only because of what the runner image happens to ship.
+#
+# THE JOB NAME IS AN API. It is a required status check in the master ruleset, and renaming it
+# silently stops satisfying that ruleset - the same trap the per-job names carried. If you rename it,
+# update the ruleset in the same change.
 
 name: Repo Hygiene
 
@@ -28,237 +47,56 @@ permissions:
   contents: read
 
 jobs:
-  sigpipe:
-    name: "shell: sigpipe"
+  hygiene:
+    name: "repo: hygiene"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Shallow is fine: these checks read the working tree, not history.
-      - uses: actions/checkout@v6
-
-      # The self-test runs BEFORE the guard it protects, the same way copyright.yml sequences
-      # bin/test-check-copyright-headers.sh ahead of the scanner. A guard nobody has proven can
-      # fail is a guard nobody should trust.
-      - name: Self-test the SIGPIPE guard
-        run: bash bin/test-check-shell-sigpipe.sh
-
-      # `writer | grep -q` under `set -o pipefail` reports failure exactly when it MATCHES: grep
-      # exits on the first hit, the writer takes EPIPE, and pipefail promotes 141 to the pipeline's
-      # status. It only bites once the writer has more than one pipe buffer (64 KiB) left, so it
-      # passes every small fixture and surfaces in production. shellcheck does not catch it.
-      - name: No SIGPIPE-prone pipes in bin/
-        run: bash bin/check-shell-sigpipe.sh
-
-  agent-hooks:
-    name: "agents: hook self-tests"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Reads .claude/hooks/* and docs/merge-checklist.md from the working tree; no history needed.
-      - uses: actions/checkout@v6
-
-      # The hooks in .claude/hooks/ enforce repo conventions on every agent session, and they are
-      # the one layer with no CI behind it - a broken hook either blocks work or silently stops
-      # checking, and both look like nothing happening. docs/agent-harness.md rule 3 ("give it a
-      # negative control") applies to the harness itself; this is that control.
-      - name: Self-test the agent hooks
-        run: bash bin/test-check-agent-hooks.sh
-
-  inflight-tags:
-    name: "inflight: tags"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    # PR_NUMBER is not a convenience here - without it bin/check-branch-self-reference.sh checks HALF
+    # of what it claims and still exits 0. `gh` on this runner is unauthenticated (no GH_TOKEN in
+    # this workflow, by design - nothing else here needs one), so the script's `gh pr list` fallback
+    # fails, the failure is swallowed, and the `#NNN` / `/pull/NNN` arm is skipped entirely - the
+    # gate prints "NO PR NUMBER RESOLVED... were NOT checked" and still exits 0. That arm is the
+    # gate's own motivating incident: a note citing astubbs#1 by number, with no branch name in it.
+    # Job-level (not step-level) because this lane collapsed nine per-gate steps into one
+    # bin/check-all.sh invocation - there is no single step to attach it to, and check-all.sh's
+    # run_capture already passes PR_NUMBER through to every gate harmlessly. The event payload
+    # already carries the number, so this costs nothing and needs no token.
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Gates that read history must not see a truncated graft. A shallow clone does not error
+          # on `git log` or `git merge-base` - it answers, wrongly, which is the exact class
+          # .claude/hooks/check-shallow-history.sh exists to stop locally.
+          fetch-depth: 0
 
-      # Same self-test-then-gate sequencing as the sigpipe job: prove the tag checker can fail, then
-      # run it. The session-start index already LISTS a note no group claimed, but only to whoever
-      # starts the next session - which may not be whoever mistyped the tag, and may be days later.
-      # This fails the commit that made the mistake.
-      - name: Self-test the inflight tag checker
-        run: bash bin/test-check-inflight-tags.sh
+      # ubuntu-latest ships shellcheck, but an image change that removed it must fail rather than
+      # silently pass - bin/check-shell-lint.sh exits 2 for "cannot run", and check-all counts an
+      # exit 2 as CANNOT rather than a pass, so this makes the dependency explicit at the point a
+      # reader looks.
+      - name: Confirm shellcheck is present
+        run: shellcheck --version
 
-      - name: Inflight notes carry valid tags
-        run: bash bin/check-inflight-tags.sh
+      # A JDK IS REQUIRED, and the requirement is not obvious from the job name. The self-test
+      # `bin/test-check-infer.sh` FAILS rather than skips when no JDK resolves and `CI` is set - by
+      # design, since on a hosted runner an unresolvable JDK means the fixture is wrong, not that the
+      # check is unnecessary. Without this step the lane passes only because ubuntu-latest happens to
+      # ship a default JDK, which is an undocumented dependency on the runner image and exactly the
+      # kind of thing that breaks on an image bump with no code change to blame.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see the caching strategy note at the top of maven.yml
 
-      - name: "Self-test the branch self-reference gate"
-        run: bash bin/test-check-branch-self-reference.sh
-
-      # PR_NUMBER is not a convenience here - without it the gate checks HALF of what it claims and
-      # still exits 0. `gh` on a runner is unauthenticated (no GH_TOKEN in this workflow, by design -
-      # nothing else here needs one), so the script's `gh pr list` fallback exits 4, `2>/dev/null ||
-      # true` swallows it, and the `#NNN` / `/pull/NNN` arm is skipped entirely. That arm is the
-      # gate's own motivating incident: a note citing astubbs#1 by number, with no branch name in it.
-      # The event payload already carries the number, so this costs nothing and needs no token.
-      - name: "A doc that mentions this branch must read correctly after the merge"
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: bash bin/check-branch-self-reference.sh
-
-      # Self-test only. check-pr-ready.sh reads a live PR, so running the gate itself in CI would be
-      # a network call with an answer that changes by the minute; what must not rot is its refusal to
-      # ever conclude "ready".
-      - name: Self-test the PR-readiness reporter
-        run: bash bin/test-check-pr-ready.sh
-
-  test-log-config:
-    name: "tests: log config"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Same sequencing again. This one guards a default that fails SILENTLY: a logback-test.xml
-      # committed at debug does not go red, it floods the log and slows the run - and the volume alone
-      # broke three tests when measured (see the script header). Nobody attributes a latch timeout to a
-      # logging default, which is why it is a gate and not a note.
-      - name: Self-test the test log config checker
-        run: bash bin/test-check-test-log-config.sh
-
-      - name: Test log config is flag-driven, not edited
-        run: bash bin/check-test-log-config.sh
-
-  rename:
-    name: "tooling: package rename"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Needs to build fixture git repositories and make commits in them, but only in a temp dir -
-      # it never touches this checkout, so shallow is fine.
-      - uses: actions/checkout@v6
-
-      # bin/rename-packages.sh is run by hand, once per branch, on master and on ~29 open PRs. That
-      # is exactly the shape of tool that rots unnoticed: nobody exercises it between the day it is
-      # written and the day the whole rename depends on it, and by then a regression costs a
-      # conflict storm across every open PR. Seconds to run, so it runs on every PR.
-      #
-      # The self-test includes three NEGATIVE CONTROLS (a stale reference, a misspelt one, and the
-      # escaped-regex form the habitual `grep -rn "io\.confluent"` cannot see) plus the paired
-      # commit-shape experiment whose result set the script's default. See its header.
-      - name: Self-test the package-rename tool
-        run: bash bin/test-rename-packages.sh
-
-  actions:
-    name: "workflows: action versions"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Dependabot bumps what is already there; it cannot notice a NEW workflow authored at an old
-      # version, which is how repo-hygiene.yml itself shipped at actions/checkout@v4 while 21 other
-      # uses were on @v6. The rule is "one version everywhere", not "checkout must be vN" - the
-      # latter rots on the next bump, the former survives it, because Dependabot raises every use of
-      # an action in one grouped PR.
-      - name: One version per action
-        run: bash bin/check-action-versions.sh
-
-  deferred-modules:
-    name: "clients: deferred modules"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Reads the working tree and asks git what is in it; no history needed, so shallow is fine.
-      - uses: actions/checkout@v6
-
-      # The check parses clients.yml and the maturity fragments structurally, the same way
-      # bin/check-docs-data.sh and clients.yml's own gate step do. Installed rather than assumed:
-      # the image ships PyYAML today, and a check that silently changed meaning when it stopped
-      # would be the failure this whole job exists to prevent.
-      - name: Install the YAML parser the check needs
+      # PyYAML IS REQUIRED, and it survived the collapse of this workflow's nine enumerated jobs
+      # into one discovered lane. check-deferred-modules.sh and check-client-scanners.sh parse
+      # clients.yml structurally, and the glob that now finds them cannot know that. Installed
+      # rather than assumed: the image ships it today, and a check that silently changed meaning
+      # when it stopped is the failure this lane exists to prevent.
+      - name: Install the YAML parser two of the gates need
         run: python3 -m pip install --quiet pyyaml
 
-      # Self-test first, as everywhere else here. Its two control arms are what make the rest
-      # meaningful: the same source file with the deferral LIFTED passes, and the same source file
-      # in a module that was never deferred passes - so the check is failing on the pairing, not on
-      # the presence of source.
-      - name: Self-test the deferral guard
-        run: bash bin/test-check-deferred-modules.sh
-
-      # clients.yml skips a language row when that module's maturity fragment says `deferred:`,
-      # which is right for a seeded skeleton and has no counterpart in the other direction: a wave
-      # that writes a real client and forgets to lift the deferral gets a row that reports green
-      # while building, testing and linting nothing, indefinitely. `lifted_by:` is a note to a
-      # human. This is the check.
-      - name: A module with real source must not still be deferred
-        run: bash bin/check-deferred-modules.sh
-
-  client-scanners:
-    name: "clients: static analysis coverage"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Reads the workflow and the modules as files; no history needed, so shallow is fine.
-      - uses: actions/checkout@v6
-
-      # Same reasoning as the job above: the check parses clients.yml structurally, and PyYAML is
-      # installed rather than assumed so it cannot quietly stop meaning what it means.
-      - name: Install the YAML parser the check needs
-        run: python3 -m pip install --quiet pyyaml
-
-      # Self-test first, as everywhere else here. Its control arm is what makes the rest
-      # meaningful: an empty scanner-cmd passes on the language that DECLARES it delegates and
-      # fails on every other, so the check is failing on the emptiness being undeclared rather
-      # than on emptiness itself.
-      - name: Self-test the scanner-coverage guard
-        run: bash bin/test-check-client-scanners.sh
-
-      # clients.yml skips the static-analysis step when a row's scanner-cmd is empty - which is
-      # right for the Swift row, whose container already lints on the way to its artifact, and
-      # invisible for everyone else: the row would report green having linted nothing. This is the
-      # check, and for a delegating row it also verifies the file it delegates to still runs the
-      # analyser.
-      - name: Every client row must analyse its module somewhere
-        run: bash bin/check-client-scanners.sh
-
-  cve-exclusions:
-    name: "deps: CVE exclusion expiry"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Self-test first, as everywhere else here. This one has a control arm: two fixtures that
-      # differ only by a single day either side of the limit, so a pass on one and a fail on the
-      # other shows the expiry rule is what decides, and not something incidental.
-      - name: Self-test the exclusion-expiry guard
-        run: bash bin/test-check-cve-exclusions.sh
-
-      # The root pom's `excludeVulnerabilityIds` is what keeps the whole-tree CVE scan from going
-      # permanently red on a finding nobody can act on, and some of those entries are TEMPORARY -
-      # parked only until an upstream release carries a fix that is already merged. Nothing was
-      # going to tell us when it landed: the two ids this was written for are in no advisory
-      # database, so no Dependabot alert can fire, and the retirement condition lived in a pom
-      # comment addressed to whoever happened to read it. After 90 days the entry stops being a note
-      # and becomes a red check that names itself.
-      #
-      # HERE rather than in dependency-audit.yml, which is where the exclusion list is otherwise
-      # read: that job is skipped for fork PRs and dies early on a token expiry or a Sonatype
-      # outage, so the list would rot unwatched for exactly as long as the lane was broken. This
-      # check needs no JDK, no secrets and no network - the charter of this workflow.
-      - name: Temporary CVE exclusions must expire
-        run: bash bin/check-cve-exclusions.sh
-
-  dependabot-coverage:
-    name: "deps: Dependabot coverage"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Reads .github/dependabot.yml and walks the working tree for manifests; no history needed.
-      - uses: actions/checkout@v6
-
-      # Self-test first, as everywhere else here. Its integration arm is the real repository, and
-      # its fixture arms cover both directions the guard checks plus both of its "cannot run" cases.
-      - name: Self-test the Dependabot coverage guard
-        run: bash bin/test-check-dependabot-coverage.sh
-
-      # An ecosystem Dependabot was never told about produces no error, no warning and no PR - it
-      # is indistinguishable from an ecosystem with nothing to update. That is how seven of the
-      # nine ecosystems in this tree went unwatched for the whole of the language-proxy work
-      # (astubbs#242), and it surfaced only when a gRPC CVE was found by a CI scan rather than by a
-      # bot. Adding a manifest for a new language now fails this check until an entry exists, and a
-      # typo'd `directory` fails it too - Dependabot reports that only in a settings page.
-      - name: Every ecosystem in the tree has an update path
-        run: |
-          set -o pipefail
-          bash bin/check-dependabot-coverage.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Every gate and every self-test, discovered rather than listed
+        run: bash bin/check-all.sh --with-tests

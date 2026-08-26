@@ -2,7 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
-<!-- inflight-labels: release-note, needs-measurement -->
+<!-- inflight-labels: release-note needs-measurement -->
 
 Opened 2026-08-21. **The docs present Vert.x, Reactor and Mutiny as integration conveniences - "use
 this if you already use that framework".** The measurements say they are a **concurrency-model

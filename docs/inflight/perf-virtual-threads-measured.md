@@ -2,7 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: throughput -->
-<!-- inflight-labels: release-note, needs-measurement -->
+<!-- inflight-labels: release-note needs-measurement -->
 
 Measured 2026-08-22, on the branch that implements `useVirtualThreads`. This is the re-take that
 [`perf-platform-threads-are-the-ceiling.md`](perf-platform-threads-are-the-ceiling.md) asked for and

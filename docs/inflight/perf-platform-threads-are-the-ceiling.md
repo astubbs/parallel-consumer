@@ -2,7 +2,7 @@
 
 <!-- inflight-type: register -->
 <!-- inflight-impact: throughput -->
-<!-- inflight-labels: release-note, needs-measurement -->
+<!-- inflight-labels: release-note needs-measurement -->
 
 Settled 2026-08-21. **The owner proposed this early, I argued against it, and it is correct.**
 

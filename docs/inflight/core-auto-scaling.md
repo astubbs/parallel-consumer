@@ -4,6 +4,7 @@
 <!-- inflight-impact: throughput -->
 
 > **Status, 2026-08-25: dimension one is built, and the law rewrite landed and verified.** The
+<!-- post-merge: checked -->
 > per-instance controller landed opt-in and off by default on astubbs#333; the control law now
 > steers on **throughput elasticity** - grow while more concurrency still buys more completions,
 > hold at the plateau - with the learned latency baseline deleted outright, and under ENFORCE the

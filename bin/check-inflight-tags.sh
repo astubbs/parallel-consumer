@@ -37,6 +37,7 @@ TYPES="$INFLIGHT_TYPES"
 BUG_IMPACTS="$INFLIGHT_BUG_IMPACTS"
 TASK_IMPACTS="$INFLIGHT_TASK_IMPACTS"
 IMPACTS="$BUG_IMPACTS $TASK_IMPACTS"
+LABELS="$INFLIGHT_LABELS"
 
 problems=0
 # NAME THE NOTE, NOT JUST THE PATH. A filename is an identifier; the title is what a reader
@@ -71,7 +72,7 @@ for f in docs/inflight/*.md docs/inflight/clients/*.md; do
     # valid. Introduced exactly that way - merging a branch whose notes predated a state reword
     # appended the stale block underneath the corrected one rather than replacing it, and the gate
     # said "83 note(s) valid" over a note that was both `deferred - parked` and `parked - deferred`.
-    for tag in type impact state; do
+    for tag in type impact state labels; do
         # No `|| echo 0`: grep -c PRINTS 0 and exits 1 on no match, so the fallback appends a
         # second line and the numeric test below errors on "0\n0".
         n=$(grep -c "<!-- inflight-$tag:" "$f" 2>/dev/null); n=${n:-0}
@@ -122,6 +123,19 @@ for f in docs/inflight/*.md docs/inflight/clients/*.md; do
     fi
     if [ -n "$impact" ] && [ "$type" = "feature" ] && ! in_set "$impact" "$INFLIGHT_FEATURE_IMPACTS"; then
         note "$f \"$(note_title "$f")\": inflight-impact '$impact' is not a known impact. feature takes any of: $INFLIGHT_FEATURE_IMPACTS"
+    fi
+
+    # LABELS: optional, multi-valued, space-separated, validated against a CLOSED set. The closed set
+    # is the point - an open free-text field becomes tag soup and then partitions nothing, which is
+    # the failure the whole scheme exists to avoid. Validated per value so one typo names itself
+    # rather than silently creating a group of one.
+    labels=$(sed -n 's/.*inflight-labels:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
+    if [ -n "$labels" ]; then
+        for label in $labels; do
+            if ! in_set "$label" "$LABELS"; then
+                note "$f \"$(note_title "$f")\": inflight-labels '$label' is not one of: $LABELS. Labels name a MECHANISM, never an area (the filename prefix does that) or a consequence (the impact does). Add a value to bin/lib/inflight-tags.sh AND docs/inflight/AGENTS.md in the same commit, or drop it"
+            fi
+        done
     fi
 
     # A state must say WHY, or a reader cannot tell a decision from an abandonment.

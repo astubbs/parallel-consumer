@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.client;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -27,7 +28,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  */
 class OutcomesAsyncTest {
 
-    private final InboundRecord record = new InboundRecord("orders", 0, 7, null, "v".getBytes(), 1, null, null);
+    private final InboundRecord record = new InboundRecord("orders", 0, 7, null, "v".getBytes(StandardCharsets.UTF_8), 1, null, null);
 
     @Test
     void aCompletedStageIsTheOutcome() {

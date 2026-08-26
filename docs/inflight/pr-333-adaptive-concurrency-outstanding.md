@@ -1,5 +1,7 @@
 # Adaptive concurrency: what astubbs#333 leaves open
 
+<!-- post-merge: exempt-file - this note IS the PR note for astubbs#333; discussing it in-flight is its job -->
+
 <!-- inflight-type: task -->
 <!-- inflight-impact: test-debt -->
 

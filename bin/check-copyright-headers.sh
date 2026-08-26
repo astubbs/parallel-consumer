@@ -200,6 +200,9 @@ go.mod|slash
 *.properties|hash
 *.cmake|hash
 CMakeLists.txt|hash
+# The Infer ratchet's identity set. Authored config with a prose header, not generated data -
+# named rather than a blanket *.txt, which would claim something about every future .txt here.
+infer-known-findings.txt|hash
 Dockerfile|hash
 Dockerfile.*|hash
 Makefile|hash

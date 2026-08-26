@@ -407,13 +407,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.adaptiveConcurrencyActive = resolveAdaptiveConcurrencyActive();
 
         workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
-        // Resolved here, not left to the first dispatch. The supplier is memoized and therefore lazy, but
-        // #requireRejectionIsVisible is a precondition on a subclass's #setupWorkerPool, and a precondition that only
-        // fires when the first batch is submitted is one a subclass can ship without ever meeting. Construction built
-        // the pool anyway - #initMetrics binds meters to it a few lines below - so this changes no startup behaviour,
-        // it only stops the precondition's timing from depending on that, and moves the failure ahead of the poller
-        // and producer manager, so nothing half built has to be unwound.
-        workerThreadPool.get();
+        forceWorkerPoolConstruction();
         sizeWorkerPoolForAdmission();
 
         this.wm = module.workManager();
@@ -578,6 +572,29 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 && options.getAdaptiveConcurrencyMode() == ParallelConsumerOptions.AdaptiveConcurrencyMode.ENFORCE;
     }
 
+    /**
+     * Looks up a container-managed resource by JNDI name, falling back to the Java SE equivalent when there is no
+     * container to ask.
+     * <p>
+     * This method exists to be the smallest possible thing carrying {@code @SuppressWarnings("BanJNDI")}. The
+     * suppression used to sit on the callers, one of which is a fifty-line method - so a JNDI lookup added anywhere
+     * in that body later would have been waved through by a suppression written for an unrelated line. A suppression
+     * is a claim about one call, and its scope should say so.
+     */
+    // BanJNDI: the lookup name is this library's own managedThreadFactory / managedExecutorService option, set by
+    // the embedding application, and the whole point is to use the container's executor when running inside one.
+    // Suppressed here rather than demoted globally, so a new JNDI lookup anywhere else still fails the build.
+    // docs/inflight/static-error-prone-rule-registry.md carries the reasoning and the re-enable trigger.
+    @SuppressWarnings("BanJNDI")
+    private static <T> T lookupManagedResource(String jndiName, Supplier<T> javaSeFallback) {
+        try {
+            return InitialContext.doLookup(jndiName);
+        } catch (NamingException e) {
+            log.debug("Using Java SE Thread", e);
+            return javaSeFallback.get();
+        }
+    }
+
     protected ExecutorService setupWorkerPool(int poolSize) {
         if (options.isUseVirtualThreads()) {
             if (supportsVirtualThreads()) {
@@ -590,16 +607,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     this.getClass().getSimpleName());
         }
 
-        ThreadFactory defaultFactory;
-        try {
-            defaultFactory = InitialContext.doLookup(options.getManagedThreadFactory());
-        } catch (NamingException e) {
-            log.debug("Using Java SE Thread", e);
-            defaultFactory = Executors.defaultThreadFactory();
-        }
-        ThreadFactory finalDefaultFactory = defaultFactory;
+        // Was a non-final local plus a `finalDefaultFactory` copy, because a try/catch cannot assign to a final.
+        // The lookup returning a value rather than assigning one removes the need for both.
+        final ThreadFactory defaultFactory =
+                lookupManagedResource(options.getManagedThreadFactory(), Executors::defaultThreadFactory);
         ThreadFactory namingThreadFactory = r -> {
-            Thread thread = finalDefaultFactory.newThread(r);
+            Thread thread = defaultFactory.newThread(r);
             String name = thread.getName();
             thread.setName("pc-" + name);
             this.getMyId().ifPresent(id -> thread.setName("pc-" + name + "-" + id));
@@ -805,6 +818,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     ThreadPoolExecutor.CallerRunsPolicy.class.getSimpleName()));
         }
         return pool;
+    }
+
+    /**
+     * Forces the memoized {@link #workerThreadPool} supplier at construction rather than leaving it to the first
+     * dispatch. {@link #requireRejectionIsVisible} is a precondition on a subclass's {@link #setupWorkerPool}, and a
+     * precondition that only fires when the first batch is submitted is one a subclass can ship without ever meeting.
+     * Construction built the pool anyway - {@code initMetrics} binds meters to it - so this changes no startup
+     * behaviour. It only stops the precondition's timing from depending on that, and moves the failure ahead of the
+     * poller and producer manager, so nothing half built has to be unwound.
+     * <p>
+     * The pool is discarded on purpose: the supplier keeps it and every later reader goes through
+     * {@link #workerThreadPool}. Extracted into its own method so the suppression covers exactly this one call - a
+     * named local would satisfy Error Prone and then trip SpotBugs' {@code DLS_DEAD_LOCAL_STORE} instead, which is
+     * trading one finding for another rather than saying what is meant.
+     */
+    @SuppressWarnings("ReturnValueIgnored")
+    private void forceWorkerPoolConstruction() {
+        workerThreadPool.get();
     }
 
     private void checkNotSubscribed(org.apache.kafka.clients.consumer.Consumer<K, V> consumerToCheck) {
@@ -1338,13 +1369,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             pool.start(workerThreadPool.get(), options.getMaxConcurrency());
         }
 
-        ExecutorService executorService;
-        try {
-            executorService = InitialContext.doLookup(options.getManagedExecutorService());
-        } catch (NamingException e) {
-            log.debug("Using Java SE Thread", e);
-            executorService = Executors.newSingleThreadExecutor();
-        }
+        ExecutorService executorService =
+                lookupManagedResource(options.getManagedExecutorService(), Executors::newSingleThreadExecutor);
 
 
         // run main pool loop in thread
