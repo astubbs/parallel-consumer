@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.state.ShardManager;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Setter;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -84,6 +85,21 @@ public class PCModule<K, V> {
             workManager = new WorkManager<>(this, dynamicExtraLoadFactor());
         }
         return workManager;
+    }
+
+    private ShardManager<K, V> shardManager;
+
+    /**
+     * Resolved through the module (like every other collaborator here) rather than constructed inline by
+     * {@link WorkManager}, so the DI seam is uniform. Takes the owning {@link WorkManager} as a parameter
+     * because the two are mutually dependent and the {@link WorkManager} constructor is mid-flight when it
+     * resolves this - {@link #workManager()} would recurse.
+     */
+    public ShardManager<K, V> shardManager(WorkManager<K, V> workManagerInstance) {
+        if (shardManager == null) {
+            shardManager = new ShardManager<>(this, workManagerInstance);
+        }
+        return shardManager;
     }
 
     protected AbstractParallelEoSStreamProcessor<K, V> pc() {
