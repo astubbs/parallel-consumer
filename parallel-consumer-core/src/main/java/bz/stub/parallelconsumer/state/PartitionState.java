@@ -123,8 +123,9 @@ public class PartitionState<K, V> {
      * 4.29e9 samples with the outcome declared FORBIDDEN: the release store on the write publishes the
      * preceding plain writes, and the acquire load on the read observes them. The {@code long}s stay
      * plain deliberately - fencing them too buys nothing the flag does not already provide, at extra
-     * cost on every read. Evidence: docs/plans/2026-08-25-002-test-jcstress-poc-plain-long-visibility.md
-     * and the jcstress-poc module on the test/jcstress-poc-plain-long-visibility branch.
+     * cost on every read. Evidence, re-runnable: the {@code jcstress-poc/} module
+     * (astubbs/parallel-consumer#348), whose {@code CommitPathVisibilityProbes} models this exact pair;
+     * measurements in docs/plans/2026-08-25-002-test-jcstress-poc-plain-long-visibility.md.
      */
     @Setter(PRIVATE)
     @Getter(PACKAGE)

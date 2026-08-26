@@ -95,6 +95,18 @@ candidates: the sibling fields `docs/refactoring.md` records under
 the list** - read it there rather than from a copy, which is how a field fixed in one place goes on
 being listed as plain in another.
 
+<!-- post-merge: checked-begin -->
+**The drift is no longer hypothetical - astubbs#349 caused the first instance.** Making
+`PartitionState.dirty` volatile leaves `CommitPathVisibilityProbes` describing a codebase that no
+longer exists: `PlainDirtyPublishesSucceeded` is annotated "Commit path **as shipped**" while the
+shipped path is now fenced, and `FaithfulOnSuccessVersusCommitCollection` models the same plain
+flag. What is now as-shipped is `VolatileDirtyPublishesPlainSucceeded`, still labelled a control
+arm. Nothing went red, which is the point of this section. Deliberately not corrected in
+astubbs#349 - relabelling arms is a change to the instrument and belongs with whoever builds the
+correspondence check, not bolted onto a one-field fix - but the arms must be re-labelled before the
+next reader takes "as shipped" at face value.
+<!-- post-merge: checked-end -->
+
 ## Smaller, still open
 
 - **The near-duplicate arms must never be deduplicated - they are the finding.** The reduced and
@@ -114,5 +126,12 @@ being listed as plain in another.
   on the three sibling fields named above with the same "volatile for the flags" fix, and
   `core-control-thread-contract-debts.md` cautions that fixing piecemeal may conflict with the
   shared-nothing rework.
-- **Priority tension**: the plan defers the fix past the release while astubbs#349 implements it
-  against an unreleased snapshot. Nothing reconciles the two - Antony's call.
+<!-- post-merge: checked-begin -->
+- **Priority tension, and how much of it astubbs#349 settled**: the plan defers this fix past the
+  release; astubbs#349 shipped it anyway, against an unreleased snapshot. The plan doc is a dated
+  record and is not rewritten to match ([`docs/citations.md`](../citations.md) owns that), so this
+  line is where the two reconcile. It settles **one** field - `PartitionState.dirty`. The three
+  sibling plain fields `docs/refactoring.md` names under the same defect class are still deferred,
+  so the tension survives for them, and so does the `core-control-thread-contract-debts.md` caution
+  that fixing piecemeal may conflict with the shared-nothing rework.
+<!-- post-merge: checked-end -->
