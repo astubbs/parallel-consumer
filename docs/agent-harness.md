@@ -213,7 +213,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - eleven hook scripts across twelve registrations, and the file is
+**`.claude/settings.json`** - twelve hook scripts across fourteen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -298,6 +298,22 @@ grants stay in `settings.local.json`, still ignored.
   moves reports again immediately; the one clock is a floor on how often it fetches, so a push loop
   cannot become a fetch loop. It **fetches** before reading, because a stale `origin/master`
   under-reports, which is the exact failure it exists to prevent.
+- `SessionStart` **and** `PreToolUse` on `Bash` - runs
+  `.claude/hooks/check-branch-behind-its-own-remote.sh`, the mirror image of the drift hook above:
+  that one watches the base moving under you, this one watches **your own branch** moving under you.
+  At session start it runs `git fetch --all --prune`, throttled on a stamp file, so every ref the
+  session goes on to read is real; on a `git merge` or `git rebase` it **refuses** while
+  `origin/<branch>` holds commits the checkout does not, and names them.
+  `BRANCH_FRESHNESS_OVERRIDE=1` is the documented override, read from the payload because a hook
+  does not inherit an env prefix the agent puts on its own command.
+  It denies where the other push hooks only report, and the line is the one this document already
+  draws: a situation with no wrong answer gets `additionalContext`, and merging onto a ref you know
+  is behind its published tip is not that - the result cannot be pushed without discarding somebody
+  else's commits, so no outcome was wanted. `git push` is deliberately not an arm, because git
+  refuses that case itself and legibly. Measured cost of not having it, on 2026-08-26: a session
+  fetched `origin/master`, never fetched astubbs#205's own two-week-stale ref, re-did a package
+  rename of 239 files, resolved 43 conflicts on top, and learned at the rejected push that all of it
+  was already published. Its own header owns the incident.
 - The push detection and the portable `stat` both live in `.claude/hooks/lib/hook-common.sh`, shared
   by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
   working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides

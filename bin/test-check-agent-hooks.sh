@@ -907,8 +907,13 @@ registrations = sum(len(g["hooks"]) for groups in cfg["hooks"].values() for g in
 # not failing. A number nobody verifies is a number that rots, so both are verified here rather than
 # trusted to the next editor, and both are needed because one script can be registered against
 # several events.
+# Runs to twenty because a table that stops at the current count turns the next hook into a
+# self-test failure whose message reads like the doc is wrong - which is how this list ended one
+# short of the number the doc had to state.
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
-         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+         "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+         "nineteen": 19, "twenty": 20}
 doc = (root / "docs/agent-harness.md").read_text()
 m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z]+) hook scripts across ([a-z]+) registrations", doc)
 if not m:
@@ -2305,6 +2310,83 @@ assert "...and the heading counts every commit, not just the listed ones" true_t
 
 bctx_clean_stamps
 rm -rf "$bctx_tmp" "$stub_pr" "$stub_nopr" "$stub_broken" "$stub_slow" "$BCTX_TMPDIR"
+
+
+# ---------------------------------------------------------------------------------------------
+# check-branch-behind-its-own-remote.sh
+#
+# The deny arm needs real git state, not just a parsed command line, so each case builds a throwaway
+# origin plus a clone and drives the hook from inside it. The negative control matters more than
+# usual here: a hook that exits 0 on every payload passes an ALLOW-only suite perfectly, and that is
+# precisely the shape this hook would fail into (every guard in it exits silent when it cannot
+# answer).
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- check-branch-behind-its-own-remote.sh ---"
+
+bbr_hook="$HOOKS/check-branch-behind-its-own-remote.sh"
+bbr_tmp="$(mktemp -d)"
+
+# An origin with one commit on a feature branch, and a clone of it.
+bbr_git() { git -c user.email=selftest@example.invalid -c user.name=selftest "$@"; }
+(
+    set -e
+    bbr_git init -q --bare "$bbr_tmp/origin.git"
+    bbr_git clone -q "$bbr_tmp/origin.git" "$bbr_tmp/seed"
+    cd "$bbr_tmp/seed"
+    echo one > f.txt && bbr_git add f.txt && bbr_git commit -qm "chore(fixture): first"
+    bbr_git branch -M feat/thing
+    bbr_git push -q origin feat/thing
+) >/dev/null 2>&1
+
+bbr_git clone -q "$bbr_tmp/origin.git" "$bbr_tmp/work" >/dev/null 2>&1
+(cd "$bbr_tmp/work" && bbr_git checkout -q feat/thing) >/dev/null 2>&1
+
+bbr_verdict() { # <cwd> <command> -> ALLOW | DENY
+    local out tmp
+    tmp=$(mktemp)
+    printf '%s' "$2" | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
+    out=$(cd "$1" && "$bbr_hook" < "$tmp" 2>/dev/null)
+    rm -f "$tmp"
+    case "$out" in *'"deny"'*) echo DENY ;; *) echo ALLOW ;; esac
+}
+
+bbr_expect() { # <expected> <name> <cwd> <command>
+    local got; got=$(bbr_verdict "$3" "$4")
+    assert "$2" "$1" "$got"
+}
+
+# UP TO DATE: nothing to say, whatever the command.
+bbr_expect ALLOW "up to date, merge allowed"        "$bbr_tmp/work" 'git merge origin/master'
+bbr_expect ALLOW "up to date, rebase allowed"       "$bbr_tmp/work" 'git rebase origin/master'
+
+# Now publish a commit the clone has never seen - the incident's exact shape.
+(
+    set -e
+    cd "$bbr_tmp/seed"
+    echo two >> f.txt && bbr_git add f.txt && bbr_git commit -qm "chore(fixture): pushed by somebody else"
+    bbr_git push -q origin feat/thing
+) >/dev/null 2>&1
+
+bbr_expect DENY  "behind its own remote blocks merge"   "$bbr_tmp/work" 'git merge origin/master'
+bbr_expect DENY  "...and blocks rebase"                 "$bbr_tmp/work" 'git rebase origin/master'
+bbr_expect DENY  "...through a compound command"        "$bbr_tmp/work" 'git fetch origin master && git merge origin/master'
+bbr_expect DENY  "...and with a -C repo flag"           "$bbr_tmp/work" 'git -C . merge origin/master'
+
+# THE FLAG WORD IS NOT A SUBCOMMAND. Both of these contain the word and must not fire, or the guard
+# becomes noise on every commit message that mentions a merge.
+bbr_expect ALLOW "the word merge in a commit message"   "$bbr_tmp/work" 'git commit -m "explain the merge"'
+bbr_expect ALLOW "git push is not an arm"               "$bbr_tmp/work" 'git push origin feat/thing'
+
+# The documented escape hatch, and it must be read from the payload - a hook does not inherit an
+# env prefix the agent puts on its own command.
+bbr_expect ALLOW "override lets a deliberate merge through" "$bbr_tmp/work" 'BRANCH_FRESHNESS_OVERRIDE=1 git merge origin/master'
+
+# NOT A REPO AT ALL: fail open, silent.
+bbr_expect ALLOW "outside a git repo, silent"           "$bbr_tmp" 'git merge origin/master'
+
+rm -rf "$bbr_tmp"
 
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
