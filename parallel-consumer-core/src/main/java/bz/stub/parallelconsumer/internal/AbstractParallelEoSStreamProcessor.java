@@ -260,9 +260,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     // transitions are driven from inside this class, and a subclass setting it arbitrarily is the shape of bug this
     // class has spent astubbs#296 hardening against. Reading is protected because a subclass may legitimately want
     // to know whether it is still running. Both are used only by this package's tests today.
+    // volatile because it is no longer read only by the thread that writes it: ExternalEngine's dispatch
+    // thread blocks on the external dispatch ceiling and reads this to learn that a close has begun. That is a
+    // plain flag with no lock to name, so `volatile` is the whole fix and there is no @GuardedBy to write - see
+    // parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md.
     @Setter(AccessLevel.PACKAGE)
     @Getter(PROTECTED)
-    private State state = State.UNUSED;
+    private volatile State state = State.UNUSED;
 
     /**
      * Wrapped {@link ConsumerRebalanceListener} passed in by a user that we can also call on events
