@@ -232,3 +232,23 @@ How the verdict line should read, since the record is what outlives the run:
   — the dated measurements, outcome tables and full environment.
 - astubbs/parallel-consumer#348 — the probe module. astubbs/parallel-consumer#347 — the Lincheck lane
   and the cross-machine rate measurement in section 3.
+
+## A rate is a claim about one machine
+
+The jcstress and Lincheck arms were calibrated on different boxes, and the difference is measurable
+rather than notional: for the Lincheck stress arms the detection rate came out **3.4x apart** -
+0.69% against 2.33% per iteration, likelihood-ratio 6.42 on 1 df, **p = 0.011** - so equality is
+rejected, not merely unproven (astubbs/parallel-consumer#347).
+
+Two consequences worth carrying into any new probe:
+
+- **A bound priced on the machine that wrote the harness is not a bound on the machine that gates
+  it.** A probe tuned until it passes 3 times out of 3 locally can miss on CI at a rate nobody
+  measured, and the failure arrives as a flake rather than as a finding.
+- **Prefer the deterministic model checker over a stress arm where the shape allows it**, because it
+  needs no bound priced at all. Where only stress will do, price the bound by starving the harness
+  deliberately, fit the rate, and then *validate the model by prediction* rather than assuming it -
+  and say which machine the number came from.
+
+This is also the reason the arm64-versus-x86-64 caveat in a probe's own write-up is necessary but not
+sufficient: architecture is one source of variance between boxes, and it is not the only one.
