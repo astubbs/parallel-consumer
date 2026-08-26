@@ -112,10 +112,27 @@ public class PartitionState<K, V> {
     /**
      * Cache view of the state of the partition. Is set dirty when the incomplete state of any offset changes. Is set
      * clean after a successful commit of the state.
+     * <p>
+     * {@code volatile} because it crosses threads with no other fence: written on the control thread
+     * ({@code onSuccess} via the mailbox), read on the broker-poll thread by the commit path's
+     * dirty-partition collection in the default {@code PERIODIC_CONSUMER_ASYNCHRONOUS} mode. As a plain
+     * field, jcstress measured the reader observing {@code dirty} set while {@code offsetHighestSucceeded}
+     * was still stale at ~1.4e-7 per sample even with the real surrounding {@code ConcurrentSkipListMap}
+     * accesses on both sides - a burnt commit cycle, which on a partition that then goes idle holds the
+     * committed offset back until the next rebalance. With only this flag volatile the anomaly was 0 in
+     * 4.29e9 samples with the outcome declared FORBIDDEN: the release store on the write publishes the
+     * preceding plain writes, and the acquire load on the read observes them. The {@code long}s stay
+     * plain deliberately - fencing them too buys nothing the flag does not already provide, at extra
+     * cost on every read. Evidence, re-runnable: the {@code jcstress-poc/} module
+     * (astubbs/parallel-consumer#348), whose {@code CommitPathVisibilityProbes} models this exact pair -
+     * the arm carrying that FORBIDDEN outcome is
+     * {@code CommitPathVisibilityProbes.VolatileDirtyPublishesPlainSucceeded}. What a probe's zero and its
+     * rate are each worth, with these figures in its results table:
+     * docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md.
      */
     @Setter(PRIVATE)
     @Getter(PACKAGE)
-    private boolean dirty;
+    private volatile boolean dirty;
 
     /**
      * The highest seen offset for a partition.

@@ -95,6 +95,28 @@ candidates: the sibling fields `docs/refactoring.md` records under
 the list** - read it there rather than from a copy, which is how a field fixed in one place goes on
 being listed as plain in another.
 
+<!-- post-merge: checked-begin -->
+It is currently incomplete in the other direction too: astubbs#349 found the analyser naming
+`PartitionState` fields that entry does not carry, so re-run the analyser rather than treating the
+entry as the full set.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**The drift is no longer hypothetical - astubbs#349 caused the first instance, and nothing went
+red.** Making `PartitionState.dirty` volatile left `CommitPathVisibilityProbes` describing a
+codebase that no longer existed: `PlainDirtyPublishesSucceeded` was annotated "Commit path **as
+shipped**" while the shipped path is now fenced, and the arm that had silently become as-shipped,
+`VolatileDirtyPublishesPlainSucceeded`, was still labelled a control. The `@Description` prose was
+corrected in that same PR - report text only, declaring a single `String value()` with no `Expect`
+and no outcome semantics, so no verdict could move and no `@Outcome`, `@State`, `@Actor` or class
+name was touched.
+
+**The relabelling closed the instance, not the hole.** A human reading the diff caught it; nothing
+in the build did, which is what this section is about. Prose is the recoverable case - the next
+drift will be a statement order or an access mode, where the arm goes on reporting a confident
+number about code that no longer matches it and no reader can see the difference.
+<!-- post-merge: checked-end -->
+
 ## Smaller, still open
 
 - **The near-duplicate arms must never be deduplicated - they are the finding.** The reduced and
@@ -114,5 +136,17 @@ being listed as plain in another.
   on the three sibling fields named above with the same "volatile for the flags" fix, and
   `core-control-thread-contract-debts.md` cautions that fixing piecemeal may conflict with the
   shared-nothing rework.
-- **Priority tension**: the plan defers the fix past the release while astubbs#349 implements it
-  against an unreleased snapshot. Nothing reconciles the two - Antony's call.
+<!-- post-merge: checked-begin -->
+- **Priority tension, and how much of it astubbs#349 settled**: the plan defers this fix past the
+  release; astubbs#349 shipped it anyway, against an unreleased snapshot. The plan doc is a dated
+  record and is not rewritten to match ([`docs/citations.md`](../citations.md) owns that), so this
+  line is where the two reconcile. It settles exactly one field - `PartitionState.dirty` - and no
+  other. What remains under the same defect class is deliberately not counted here: regenerate it
+  with `./mvnw -o spotbugs:spotbugs -pl :parallel-consumer-core` and read the report.
+  [`docs/refactoring.md`](../refactoring.md)'s `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` entry owns the
+  recorded list - and `bug-allowed-more-records-crosses-threads-unfenced.md` records that the entry
+  is currently missing the `PartitionState` fields, so read the report, not just the entry. The
+  tension survives for whatever that leaves, and so does the
+  `core-control-thread-contract-debts.md` caution that fixing piecemeal may conflict with the
+  shared-nothing rework.
+<!-- post-merge: checked-end -->
