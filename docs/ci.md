@@ -763,13 +763,32 @@ in the lane ahead of it. The scope, the exclusions and the ranked widening list 
 render grey rather than green is an open decision in
 [`docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md`](inflight/ci-mutation-lane-skip-reads-as-a-pass.md).
 
-**There is no scheduled build, deliberately.** Every suite worth re-running is already a required
-check on each PR and runs again on every push to master, so a cron lane would only repeat covered
-work. **Do not add a lane for suites the gate already covers.** The repo's single cron lane,
-`dependency-audit.yml`, is not a counter-example: it runs no *suite*, and what it catches - a new
-advisory published against an unchanged dependency tree - is a function of elapsed time, which no
-PR-triggered check can ever see. That is the test to apply to any future scheduled lane: **does time
-alone change the answer?**
+**There is almost no scheduled build, deliberately.** Every suite worth re-running is already a
+required check on each PR and runs again on every push to master, so a cron lane would usually only
+repeat covered work. **Do not add a lane for suites the gate already covers.** The test to apply to
+any proposed scheduled lane is: **does time alone change the answer?**
+
+Two lanes are scheduled, and they clear that bar in different ways:
+
+- **`dependency-audit.yml`** passes the test outright. It runs no *suite*, and what it catches - a
+  new advisory published against an unchanged dependency tree - is purely a function of elapsed
+  time, which no PR-triggered check can ever see.
+- **`mutation-full-sweep.yml`** (nightly, 2026-08-26) **fails the test on paper and is a deliberate
+  exception.** A mutation score changes when the code changes, not when time passes, so the honest
+  trigger is per-merge - and per-merge is unusable at this repository's merge rate. Measured over the
+  last 60 master commits: up to 32 in a day, a **median gap of 0 minutes** (squash-merges arrive in
+  bursts), and **83% of gaps shorter than the sweep's own 31m27s job-elapsed runtime** (job elapsed
+  is the right clock here: it is how long a push has to arrive within to kill a running sweep; the
+  often-quoted 21m55s is only the PIT phase, and n=1). Per-push therefore either
+  piles dozens of concurrent sweeps onto one box, or - with a cancelling group - has four in five
+  killed before they finish, which is precisely the never-completes failure the lane was rebuilt to
+  escape. Since master moves every day, a nightly is in practice "after today's merges". The accepted
+  cost is that a regression is attributed to a **date** rather than a merge, so `git log` over that
+  day is the first step of triage.
+
+The exception is written here rather than left to contradict the rule silently. Note what makes it
+one: not that a schedule is convenient, but that the correct trigger was measured and found
+unusable. The workflow's `on:` block carries the same reasoning from its side.
 
 **Before pinning a job to a self-hosted label, confirm a runner serves it** -
 `gh api repos/astubbs/parallel-consumer/actions/runners` lists each runner's labels and online

@@ -197,13 +197,15 @@ here too and were removed: they were not actually faster than the GitHub-hosted 
 them, so they only added checks to triage. Mutation (PIT) was removed for a stronger reason - it ran three
 times per PR across the lanes (with a fourth copy configured but dormant), and its full sweep had never
 once completed. One PR-scoped mutation
-lane now lives in `maven.yml`, and the full sweep is manual-only in `mutation-full-sweep.yml` (which does
+lane now lives in `maven.yml`, and the full sweep runs nightly in `mutation-full-sweep.yml` (which does
 target this runner, since it wants every core it can get).
 
-**Trigger:** `pull_request` (same-repo only) plus manual `workflow_dispatch`. The jobs are advisory
-(`continue-on-error`, not required), so when the `[self-hosted, highcpu]` runner is offline the checks
-just sit pending and never block a merge - the required gate stays GitHub-hosted (`maven.yml`). **Manually:**
-`gh workflow run highcpu --ref <branch>`, or fork -> **Actions -> highcpu -> Run workflow**.
+**Triggers:** `schedule` (the nightly sweep) and `workflow_dispatch`. **Nothing here is triggered by a
+pull request any more** - the per-PR lane was deleted on 2026-08-26 once both its suites had hosted
+equivalents. Every job is advisory (`continue-on-error`, not required), and since none of them runs on
+a PR, an offline `[self-hosted, highcpu]` runner cannot leave a check pending on anybody. The required
+gate is entirely GitHub-hosted (`maven.yml`). **Manually:**
+`gh workflow run mutation-full-sweep.yml --ref <branch>`, or fork -> **Actions** -> pick the workflow.
 
 ## Fallback behaviour (important)
 
