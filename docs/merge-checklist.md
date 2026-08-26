@@ -30,10 +30,23 @@ title plus every commit subject concatenated - is a log of how the work happened
 explanation of what changed and why, and the PR discussion is not in `git log`, so the squash message
 is all a future reader gets. **Write a real one.**
 
-**Write it where it is used, not into the conversation.** Put it in the merge when you perform it, or
-in the PR body if the author is merging. Do not print it out in chat unless asked - it is long, the
-author is being asked for a decision rather than a proofread, and pasting it makes them scroll past
-the thing they actually have to answer. Say the strategy and why in a line or two; offer the message.
+**Write it to a scratch file and say where it is.** Put it in the merge when you perform it;
+otherwise write it to a file under the session's scratchpad and give the author the path. Say the
+strategy and why in a line or two.
+
+**Never the PR body.** It is what reviewers read to understand the change, so a squash message there
+is a second description of the same PR and the two drift the moment either is touched. It is also
+not where any merge command reads from, so it buys nothing at the point of use.
+
+**Print it in chat once the strategy is settled** - it is a few KB, and making the author open a file
+to read the thing they asked for is friction with nothing behind it. The one time to withhold it is
+while you are still *asking* which strategy to use: then the author owes you an answer, and a long
+message above the question buries it. Decided, print it; undecided, offer it.
+
+This paragraph previously said "or in the PR body if the author is merging", and it is injected into
+every merge-prep prompt, so it produced the same wrong move repeatedly - the last time on
+astubbs/parallel-consumer#323, whose description carried a squash message until it was removed by
+hand.
 
 That is a delivery rule, not a licence to skip it: the message still gets written, and written
 properly.
@@ -67,9 +80,25 @@ Rewriting history someone else may have pulled is not reversible from inside a P
 
 - **Is the PR description still true?** Long-running branches drift; a description written before
   three rounds of review usually describes a PR that no longer exists.
+- **Is background work from this session still writing?** A subagent mid-task may hold work that
+  belongs IN this PR; merged without it, that work becomes a second PR and whatever the description
+  or the inflight notes said about the gap goes stale on master.
+  `.claude/hooks/check-merge-outstanding-work.sh` refuses the merge while task output is still
+  being written (override by prefixing the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) -
+  but a STALLED agent writes nothing and is not detected, so run `ListAgents` when the answer
+  matters.
 - **Has a human reviewed it and said LGTM?** Automated review is not approval, and neither is green
   CI.
 - **Do the commit messages explain WHY?** The diff already says what.
+- **Did you write down a number a command could produce?** Grep your own diff for figures - counts
+  of findings, files, tests, notes, commits, branch divergence, and percentages derived from them.
+  Each one is wrong the first time anyone acts on the thing counted, and nothing goes red to say so,
+  so it reads as current state forever. State the shape and name the source instead: "the largest
+  group is null derefs, all from one method" plus a reproduce command beats a table of totals.
+  **This fires hardest while writing up a measurement you just took**, because the number feels like
+  the finding - which is exactly when it is most likely to change next week. Legitimate figures do
+  exist (a configured bound, a seed, a version), so this is a read-and-judge item, not a grep gate;
+  `docs/inflight/AGENTS.md` states the rule in full.
 - **Is any scaffolding left?** Scratch tests, debug logging, commented-out experiments, a stray
   `.class`.
 - **Did a rename or deletion leave a dangling reference?** Grep docs, scripts, workflows and the
@@ -77,6 +106,24 @@ Rewriting history someone else may have pulled is not reversible from inside a P
   by name.
 - **Other instances of the same defect** - `AGENTS.md`, "PR Discipline", owns that rule; it belongs
   at merge prep, once the defect class is understood.
+- **Should this PR close an issue - and if only partly, which part?** Ask it explicitly at merge
+  prep, because nothing else will: the tracker is not in the diff, and a PR that finishes an issue
+  without saying so leaves it open for someone to rediscover. `docs/inflight/issue-index.md` is the
+  cheap way to look - grep it for the area the PR touches - but confirm with `gh issue view <n>`
+  before acting on any row, since it goes stale silently.
+
+  **A closing keyword needs the fully qualified form.** `Fixes astubbs#167` closes nothing; only
+  `Fixes astubbs/parallel-consumer#167` does. [`docs/issue-references.md`](issue-references.md)
+  owns that rule.
+
+  **Partly addressing an issue is the common case, and closing it then is the real damage** - the
+  remaining work goes with it. Say which part landed and leave it open. astubbs#41 is the worked
+  example: its reopening comment lists four remaining items, astubbs/parallel-consumer#366 did the
+  first, and closing on that would have taken the other three with it. Where the PR contradicts the
+  issue's own recommendation - as that one did, refuting a stated preference with a measurement -
+  record the disagreement on the issue, since the recommendation lives there and the evidence does
+  not.
+
 - **Does this PR advance a roadmap entry?** Then its `stage`/`stage_delivery` in
   `docs/data/roadmap.yaml` move in the same change - the `stages` block there owns the rule. The
   roadmap-stage gate enforces it when the entry's `pull_request` names this PR; entries carried by

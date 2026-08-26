@@ -1,5 +1,7 @@
 # `ChaosRevokeUnderWork*` sightings - the two that are mode-compatible with astubbs#29
 
+<!-- inflight-type: register -->
+
 **Commit mode: `PERIODIC_CONSUMER_SYNC`** - inherited from `AbstractRevokeUnderWorkScenario`, which
 both the eager (`ChaosRevokeUnderWorkIT`) and cooperative
 (`ChaosRevokeUnderWorkCooperativeIT`) variants extend. Verified in source.

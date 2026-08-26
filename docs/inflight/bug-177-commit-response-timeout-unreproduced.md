@@ -1,5 +1,8 @@
 # astubbs#177 / astubbs#175: `Timeout waiting for commit response` - never reproduced, and nobody owns it
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
 **This file exists because the work had no home.** `bug-857-mirror-attributions-unconfirmed.md`
 correctly says the honest options are "reproduce and diagnose, or close on their own merits" - but it
 owns the *attribution* question, not the investigation, so "reproduce and diagnose" has sat as a

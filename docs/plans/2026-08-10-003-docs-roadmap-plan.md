@@ -63,7 +63,7 @@ natural feed for "this shipped, move it".
 
 Markdown in the repo, so the docs site (astubbs#208, MkDocs + Material, versioned with `mike`) can
 import it and PRs can amend it under review like anything else. Respect the constraint in
-`parked-docs-site.md`: do not build anything that depends on `README_TEMPLATE.adoc` embedding other
+`docs-site.md`: do not build anything that depends on `README_TEMPLATE.adoc` embedding other
 documents.
 
 ## Remaining

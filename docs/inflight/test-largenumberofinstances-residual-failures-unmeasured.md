@@ -1,5 +1,8 @@
 # `largeNumberOfInstances`: the claim that the residual failures are Kafka's has never been measured
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+
 ## The claim
 
 `MultiInstanceRebalanceTest.largeNumberOfInstances` documented its acceptance as *80%+ pass rate

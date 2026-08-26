@@ -1,5 +1,9 @@
 # Release 0.6.0.0
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: release-gate -->
+
+
 **Tracking issue: astubbs#197.** That issue is the linkable handle - from PRs, from mirrors, from upstream
 comments. This file is the detail behind it. Keep them in step: if a blocker is resolved here, tick it
 there.
@@ -35,6 +39,26 @@ None of these has an issue of its own - they were found by reading code to diagn
   and the patch reverts on the next regeneration. This fork inherited that patch and lost it exactly
   that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
   `README.adoc` regenerated.
+
+<!-- post-merge: checked-begin -->
+- **astubbs#337** - fixes astubbs#121 (confluentinc#894), the offset-encode/commit dirty read.
+  **Give this one a release note of its own, and say what it actually is.** The reported symptom is
+  an `auto.offset.reset` under frequent rebalancing, and that is what the issue title says - but the
+  same root cause has a second, quieter mode where the committed offset tracks the log end exactly,
+  nothing goes red anywhere, and real records are dismissed as already-completed and never processed.
+  That is silent record loss, it is present in **every released 0.5.x line**, and no bug report
+  describes it because nobody could have noticed it. A note phrased only as "offset accuracy on
+  assignment" would understate it to exactly the users who need to read it.
+  Mechanism, preconditions (it needs all four, so it is uncommon to trigger and persistent once
+  triggered) and the evidence:
+  [`docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md`](../solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md).
+  **Responses to the three issues this closes are already drafted** - astubbs#121, confluentinc#894
+  and confluentinc#893 - in
+  [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md), written at
+  merge while the context was fresh and deliberately held for this release rather than posted then.
+  Post them with this note, on the operator's explicit instruction, and delete that file in the same
+  change.
+<!-- post-merge: checked-end -->
 
 ## Breaking changes that have already landed
 
@@ -82,6 +106,36 @@ worth.
 At release, when the changelog section is regenerated, check both survived into `=== Breaking`:
 generation reads the commit log, so they are only as findable as those commit bodies. The rename side
 of that same check is in [`release-0600-blockers.md`](release-0600-blockers.md).
+
+## Public API change landing with astubbs#204: the commit give-up exception
+
+Not a breaking change to a *subclass* surface like the two above - this one is visible to every user
+of `PERIODIC_CONSUMER_SYNC`, so it needs its own line in the notes.
+
+**`ConsumerManager.commitSync` no longer rethrows Kafka's bare `TimeoutException` /
+`SaslAuthenticationException` when a commit exhausts its budget.** It throws
+`OffsetCommitBudgetExceededException` (new, in the public `bz.stub.parallelconsumer` package,
+extending `ParallelConsumerException`) with the broker's exception as the **cause**. Anyone catching
+the Kafka type directly around PC's failure surface - `getFailureCause()`, or a supervisor wrapping
+PC - stops matching, and must catch the PC type or unwrap `getCause()`.
+
+Why it earns the break on a stability release: the bare Kafka exception can say a commit timed out
+but not *which of PC's options bounded it*, what that option's relationship to the consumer's own
+timeouts is, or what to do about it. That gap is the whole subject of astubbs#177 /
+confluentinc#833 - two reporters, neither of whom could tell from the message where to look. The new
+message names the budget that ran out, its configured value, the knob to raise, and - when only one
+attempt was made - that `offsetCommitTimeout` is below the consumer's `default.api.timeout.ms`
+(**60000ms** by default, verified in kafka-clients 3.9.2) so no retry was reachable at all.
+
+Two behaviour changes ship alongside it and belong in the same note, because a reader meeting one
+will ask about the others:
+
+- **`offsetCommitTimeout` now bounds the whole commit, not each attempt.** It was captured inside the
+  retry loop, so every attempt reset it and the loop could retry forever. This makes PC give up where
+  it previously hung. Matches Kafka's own two-level model, where `default.api.timeout.ms` bounds a
+  call *including* its retries.
+- **`saslAuthenticationRetryTimeout` is measured from the first SASL failure**, not from the start of
+  the commit call, so a slow commit no longer spends an unrelated option's budget.
 
 ## Release gate: no disabled tests
 

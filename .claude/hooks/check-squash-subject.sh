@@ -47,6 +47,13 @@ payload_file=$(mktemp)
 trap 'rm -f "$payload_file"' EXIT
 cat > "$payload_file"
 
+# CHEAP PRE-FILTER before the interpreter spawn, same rationale as check-merge-outstanding-work.sh:
+# everything below keys off the MERGE regex, whose match necessarily contains the literal substring
+# "merge" (JSON escaping never rewrites letters), so a payload without it can skip the python3
+# startup this hook would otherwise cost EVERY Bash call. It can only skip work, never decide - the
+# token checks below still make every decision.
+grep -q merge "$payload_file" || exit 0
+
 python3 - "$payload_file" <<'PY'
 import json, re, shlex, sys
 
@@ -62,7 +69,15 @@ if tool.get("tool_name") != "Bash":
 cmd = tool.get("tool_input", {}).get("command", "")
 
 SUBJECT_FLAGS = ("--subject", "-t")
-MERGE = re.compile(r"\bgh\s+pr\s+merge\b")
+# gh's global flags may sit BEFORE the subcommand (`gh -R owner/repo pr merge`) AND between the
+# subcommand and the action (`gh pr -R owner/repo merge`) - both merge, live-verified - so a bare
+# three-word pattern sees neither. The leading form is what house style teaches here - AGENTS.md
+# writes every command as `gh issue list -R astubbs/…`, because a bare gh in this fork resolves to
+# confluentinc; the mid-position gap was found by the astubbs#324 review after the leading fix.
+# Only --repo/-R is recognised; any other flag leaves the command unmatched as before.
+# Same gap, same fix, as .claude/hooks/check-merge-outstanding-work.sh.
+_REPO_FLAG = r"(?:(?:-R|--repo)(?:\s+|=)?\S*\s+)*"
+MERGE = re.compile(r"\bgh\s+" + _REPO_FLAG + r"pr\s+" + _REPO_FLAG + r"merge\b")
 
 # One command line can hold more than one `gh pr merge`; each is judged on its own slice so a good
 # merge cannot vouch for a bad one.

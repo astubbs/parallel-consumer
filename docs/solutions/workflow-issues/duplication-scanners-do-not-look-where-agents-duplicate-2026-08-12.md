@@ -97,6 +97,12 @@ Two follow-ups, tracked in [`docs/inflight/ci-review-agent.md`](../../inflight/c
 
 ## See also
 
+- [`a-clone-detector-cannot-see-code-embedded-in-another-language-2026-08-19.md`](a-clone-detector-cannot-see-code-embedded-in-another-language-2026-08-19.md) -
+  the sequel, added a week later. Follow-up (a) above landed and the engines now scan the whole
+  repo; that doc records what they *still* cannot see once scope is no longer the problem - code
+  embedded in another language's file - and the way widening the scan moved a percentage threshold
+  for reasons unrelated to quality. This document's findings are unchanged; that one starts where
+  they end.
 - [`negative-results-need-an-instrument-that-could-have-said-yes.md`](negative-results-need-an-instrument-that-could-have-said-yes.md) -
   the same shape one level up. A green duplication scan is a negative result, and it was worthless
   here because the instrument could never have said yes.

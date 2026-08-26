@@ -1,5 +1,8 @@
 # confluentinc#857 family: two mirrors closed on reasoning, never confirmed
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 Both of these were attributed to a landed fix by reading the reporter's evidence, and neither was
 verified against the environment that produced it. They are recorded here because "very likely fixed"
 is a hypothesis wearing a conclusion's clothes, and because the 2026-08-18 work showed exactly how

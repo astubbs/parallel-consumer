@@ -132,6 +132,7 @@ Poll up") got as far as an `internal/Controller.java`, a `RebalanceHandler` and 
 `SubscriptionHandler` interface. The actor family stalled with **two unreconciled actor bases**
 (`d391398f1`: "split: actor base - needs unifying of the two actor classes"). Why it stopped, the
 record does not say.
+<!-- file-refs: N/A - these are files on an abandoned 2022 branch, described as history, never paths in this tree -->
 
 The canonical tracker is **confluentinc#200 / astubbs/parallel-consumer#142, "Refactor: Consider a
 shared nothing architecture, to reduce thread complexity"** - both still open. *Shared nothing* means

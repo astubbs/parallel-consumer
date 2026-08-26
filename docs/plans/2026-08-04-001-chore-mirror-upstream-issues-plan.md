@@ -78,7 +78,9 @@ numbers. Dropped:
   `#857` will eventually exist and mean something else entirely.
 
 The underlying problem - an unqualified number resolving against the wrong repo - is already solved by
-the reference convention this repo adopted (AGENTS.md "Reference convention"): bare `#NN` is the fork,
+the reference convention this repo adopted (then at docs/inflight/AGENTS.md "Reference convention" -
+heading retired in astubbs#324, readable via `git show e7af9e897^:docs/inflight/AGENTS.md`;
+[`docs/issue-references.md`](../issue-references.md) owns the rule today): bare `#NN` is the fork,
 `upstream #NN` is upstream. Phase 4 extends it rather than replacing it.
 
 ## Label scheme
@@ -199,6 +201,7 @@ the mirror on merge. This removed a whole artefact: `docs/runbooks/pr57-post-mer
 because closing and announcing had to be remembered and done by hand. Phase 2 step 5 ("close the
 already-fixed mirrors") is therefore only needed for issues whose fix has *already* merged; anything
 still in review should be wired with `Fixes` instead.
+<!-- file-refs: N/A - the sentence records that this artefact was removed -->
 
 **"Already fixed" needs three states, not two.** Of the six, only three could honestly be closed.
 [`confluentinc#233`](https://github.com/confluentinc/parallel-consumer/issues/233) is partially addressed, [`confluentinc#857`](https://github.com/confluentinc/parallel-consumer/issues/857) is two-thirds fixed with the original defect
@@ -279,6 +282,7 @@ learn whose words a title is. See `AGENTS.md` → *Mirror format*, which is the 
 `src/docs/development/upstream-backlink-plan.md` are **deleted**. So are `upstream-map.py`'s
 `posted-refs` and `todo` subcommands, which existed only to serve that script, and the `backlink:`,
 `forwarded:` and `todo:` fields it read.
+<!-- file-refs: N/A - the sentence states these are deleted -->
 
 It commented on one upstream issue per manifest entry. After the mirror there are no issue entries -
 the map tracks the upstream **PRs** we may carry, and every upstream issue already has its backlink.
@@ -383,6 +387,7 @@ expensive part and they do not automate - the mechanical rules below still apply
 
 `scripts/upstream-mirror.py` would have followed the conventions of the (now retired)
 `upstream-backlink.sh`:
+<!-- file-refs: N/A - describes a script that was never written -->
 
 - **dry-run by default**, `--post` to execute, confirmation prompt even then
 - `--limit N` / `--only <numbers>` for staged rehearsal
@@ -393,6 +398,7 @@ expensive part and they do not automate - the mechanical rules below still apply
   content-creation limit
 - emits `src/docs/development/mirror-map.tsv` (`upstream# → fork# → title`) as the durable migration record
 - creates labels first, idempotently
+<!-- file-refs: N/A - a planned output of a design that was not built -->
 
 Summaries are editorial, so they are drafted into a curated file the script only renders, and reviewed
 before posting. Unit tests cover the two mechanical rules (no `@`, qualified cross-repo refs).
@@ -433,7 +439,8 @@ table matches.
 
 ### Phase 4 - enforce the reference convention — **DONE**
 
-The convention itself already exists (AGENTS.md "Reference convention", `docs/inflight/AGENTS.md`,
+The convention itself already exists (docs/inflight/AGENTS.md's then "Reference convention" section -
+retired in astubbs#324, `docs/issue-references.md` owns it now -
 `CHANGELOG.adoc`, `docs/refactoring.md`): bare `#NN` is the fork, `upstream #NN` is upstream. What is
 missing is enforcement and the GitHub-rendering carve-out:
 

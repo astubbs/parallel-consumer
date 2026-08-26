@@ -1,5 +1,9 @@
 # Branches that must re-check `STRATEGY.md` before they merge
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
+
 `STRATEGY.md` is a claims document, and unlike the README nothing tests it. The branches below either
 **change what it should say** or **can falsify a claim already in it**. Each one should re-read the
 named section as part of its own merge prep - not afterwards, when nobody is looking.

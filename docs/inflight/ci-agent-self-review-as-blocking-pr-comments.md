@@ -1,0 +1,122 @@
+# Proposal: the agent reviews its own PR, and its must-dos become blocking review comments
+
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
+<!-- inflight-state: deferred - after v6, agent tooling proposal -->
+
+
+**Status: proposed, not built.** Owner's idea, recorded so the design argument is not re-derived.
+Tune once it exists rather than up front.
+
+## The failure it targets
+
+astubbs/parallel-consumer#31 merged roughly ten minutes before a background agent finished the
+broker-level reproduction of confluentinc#909 - the exact gap that PR's own description declared open
+under "Known gap". The result: the fix and the evidence proving it are in two PRs
+(astubbs/parallel-consumer#322), and an inflight note was stale on master the moment it landed.
+
+**The agent was not ignorant.** It knew the agent was running and knew the description declared a
+gap. What it lacked was any artefact that outlived the moment the question "are the commits ready?"
+was asked. Knowledge held only in a conversation does not survive the turn it was formed in.
+
+`docs/merge-checklist.md` was loaded in that very turn, by `inject-merge-checklist.sh`, and did not
+help: a checklist prompts for the things you remember to check against it, not for the thing you
+have forgotten you are waiting on. `.claude/hooks/check-merge-outstanding-work.sh` (astubbs#324)
+catches the narrow live-background-task case. This proposal is the general form.
+<!-- file-refs: N/A - the hook lands with astubbs#324, the tooling half of the astubbs#322 split -->
+
+## The mechanism
+
+The agent posts its own pre-merge must-dos as **review comments on the PR**. GitHub blocks merge on
+unresolved conversations, so each one has to be explicitly resolved - a deliberate act by a human or
+by the agent having actually done the thing. It mirrors how the maintainer already works: he reviews
+his own PRs.
+
+## The admission test - this is the whole design
+
+> **Something I know must happen before this merges, that I am not working on right now.**
+
+Each clause is load-bearing:
+
+- **must happen before this merges** - in scope for THIS PR. Work that belongs in a future PR is not
+  a blocking comment; it is a `docs/inflight/` note or a `docs/refactoring.md` entry. Mixing the two
+  is how a blocking comment becomes unresolvable.
+- **that I am not working on right now** - the point is the gap between knowing and doing. Something
+  actively being done needs no marker; it will be in the diff. An earlier draft of this rule said
+  "not doing in this PR", which is self-contradictory: if it is not in the PR it cannot block the
+  PR.
+- **I know** - not speculation, not "might be nice". A thing the agent can already name.
+
+Applied to astubbs#31 it admits exactly one comment - *load-level evidence is outstanding in a
+background agent; either wait for it or accept the split deliberately* - which is precisely what was
+lost.
+
+## The noise risk, and the guard
+
+A blocking comment is only worth anything while resolving one is a considered act. An agent posting
+every nit trains the maintainer to resolve reflexively, and the mechanism is then worse than nothing
+because it looks present.
+
+So: **the agent proposes its candidate comments in chat and the maintainer approves before any are
+posted.** Never auto-posted. That keeps the human as the filter on volume and keeps the blocking
+power meaningful.
+
+## Simpler variant, found by needing it: DRAFT plus a checklist comment
+
+Owner's refinement, and it removes the mechanism's dependency on a repository setting.
+
+**It does not need to be a review at all.** On 2026-08-20 the attempt to post a genuinely blocking
+review on astubbs/parallel-consumer#325 failed outright:
+
+    failed to create review: GraphQL: Review Can not request changes on your own pull request
+
+That is not a permissions quirk to work around - it is fatal to the mechanism above **for this
+repository specifically**, because the maintainer is the author of nearly every PR and an agent acts
+as him. The one route that carries real blocking weight is the one route unavailable here.
+
+**Draft mode is the block; a comment is the memory.** Two artefacts, each doing the job it is good
+at:
+
+- **Convert the PR to draft.** GitHub refuses to merge a draft, so this is mechanical rather than
+  advisory, and it needs no ruleset, no `required_review_thread_resolution`, and no cooperation from
+  a reviewer. `gh pr ready <n>` reverses it in one command, which keeps the cost of a false positive
+  near zero - the property that makes it safe to use liberally.
+- **Post the must-dos as an ordinary comment with a `- [ ]` checklist**, saying plainly that the
+  draft state is deliberate and naming what has to be true before it goes ready.
+
+**The recovery path is what makes it work, and it is self-documenting.** A future agent reaching for
+the merge finds the PR is a draft. That is an unmissable stop rather than a rule it might not have
+loaded. It then asks *why is this a draft* - a question with an answer sitting in the comments - and
+arrives at the checklist it or a predecessor wrote. Knowledge that did not survive the turn it was
+formed in now survives as repository state.
+
+**What draft actually changes, checked rather than assumed** (2026-08-20, this repo):
+
+- Merge is blocked; auto-merge cannot be enabled.
+- **CI still runs.** No workflow here gates on `draft == false` - verified by grepping every file in
+  `.github/workflows/`. This is the one thing to re-check before relying on the variant, because in a
+  repo that does gate on it, going draft silently costs all CI signal.
+- Reviewers are not auto-requested, and pending requests are dropped; marking ready re-requests them.
+- Agents will not babysit it - `ce-babysit-pr` treats drafts as opt-in and stops rather than watching.
+- It does not dismiss reviews, close threads, touch the branch, or change what depends on the PR.
+
+**The noise guard above still applies, and matters more here**, since draft is cheap enough to reach
+for reflexively. A draft with no checklist comment explaining it is worse than no draft: the next
+agent finds a stop with no reason and either guesses or reverses it.
+
+## Open questions
+
+- **Does unresolved-conversation blocking actually apply here?** It is a repository setting;
+  `astubbs/duplicate-code-cross-check`'s ruleset carries `required_review_thread_resolution: true`.
+  If `astubbs/parallel-consumer` does not, the comments are advisory and the mechanism has no teeth.
+  Check before building.
+- **Where does the prompt come from?** A `UserPromptSubmit` injection on merge-prep-shaped prompts,
+  like `inject-merge-checklist.sh`, is the obvious home - it already fires at the right moment.
+- **What resolves a comment?** The agent doing the thing and saying so in-thread, or the maintainer
+  deciding it does not apply. Both must be explicit.
+
+## Related
+
+`.claude/hooks/check-merge-outstanding-work.sh` (astubbs#324) and `docs/agent-harness.md` (the
+layers and what each can enforce). The incident write-up lives with astubbs/parallel-consumer#322.
+<!-- file-refs: N/A - the hook lands with astubbs#324, the tooling half of the astubbs#322 split -->

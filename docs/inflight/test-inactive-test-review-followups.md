@@ -1,5 +1,10 @@
 # Review follow-ups left open from the inactive-test work
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, follow-ups from work that already landed -->
+
+
 A seven-reviewer pass over astubbs#264 found four P1s, all fixed there (two of them reproduced by *running*
 the tests: a 3-in-10 tick-path flake and a 1-in-10 worker-scheduling race). These are the findings that were
 deliberately **not** folded into that PR, because each is a change to shared machinery rather than a fix to

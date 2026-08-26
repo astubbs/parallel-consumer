@@ -58,14 +58,51 @@ public class ProcessingShard<K, V> {
 
     private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
 
-    public void addWorkContainer(WorkContainer<K, V> wc) {
+    void addWorkContainer(WorkContainer<K, V> wc) {
         long key = wc.offset();
-        if (entries.containsKey(key)) {
-            log.debug("Entry for {} already exists in shard queue, dropping record", wc);
+        WorkContainer<K, V> existing = entries.get(key);
+        if (existing != null) {
+            // Check if the existing entry is stale and should be replaced
+            if (isWorkContainerStale(existing)) {
+                log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
+                        existing.getEpoch(), key, wc.getEpoch());
+                entries.put(key, wc);
+                // availableWorkContainerCnt stays the same since we're replacing, not adding. Two paths
+                // reach here having already spent this offset's decrement, and neither re-increments:
+                // the stale entry had been taken as work (getWorkIfAvailable() decremented at take time),
+                // or the poller's removeStaleContainers() sweep removed it between the get and this put.
+                // Either way the shard undercounts its available work, and NOT only "until the next add" -
+                // the next add increments for its own new entry, so the deficit survives it and can
+                // accumulate across replacements. It resyncs only when the shard drains far enough for the
+                // clamp in dcrAvailableWorkContainerCntByDelta() to floor the counter at zero, or when the
+                // shard is removed. That is a backpressure-gauge inaccuracy only, and it errs towards
+                // fetching sooner rather than starving: no record is lost, because getWorkIfAvailable()
+                // scans entries directly rather than gating on the count, and handleFutureResult() drops a
+                // stale in-flight result without touching the shard, so it cannot remove this fresh entry.
+            } else {
+                log.debug("Entry for {} already exists in shard queue, dropping record", wc);
+            }
         } else {
             entries.put(key, wc);
             availableWorkContainerCnt.incrementAndGet();
         }
+    }
+
+    /**
+     * Which container currently occupies an offset, if any.
+     * <p>
+     * <b>{@link Optional}, not a nullable reference.</b> "No container here" is an ordinary answer - the record
+     * succeeded and left the shard, or was swept as stale - so it is the return type's job to say so rather than
+     * the caller's job to remember (astubbs#335 review). This is the only accessor on the shard that can be
+     * legitimately empty, which is exactly why an implicit null here would not be noticed.
+     * <p>
+     * Read-only, and package-private for tests that need to assert WHICH container won a contested offset rather
+     * than merely how many are tracked. A read cannot break the invariants that keep {@link #entries} private -
+     * only a write can, which is why there is no corresponding setter and why {@link #addWorkContainer} remains
+     * the only way in.
+     */
+    Optional<WorkContainer<K, V>> getWorkContainerAt(long offset) {
+        return Optional.ofNullable(entries.get(offset));
     }
 
     public void onSuccess(WorkContainer<?, ?> wc) {
@@ -137,10 +174,15 @@ public class ProcessingShard<K, V> {
             var workContainer = iterator.next().getValue();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
-                if (workContainer.isAvailableToTakeAsWork()) {
+                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
+                // onQueueingForExecution() separately, and the gap between the two is what could let a record be
+                // delivered twice: the check read three terms and the act re-validated none of them, so a decision
+                // made before another worker completed the record could still win. onQueueingForExecution() now
+                // evaluates the whole decision and claims from the state it evaluated. Do not reintroduce a guard
+                // in front of it.
+                if (workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 
-                    workContainer.onQueueingForExecution();
                     workTaken.add(workContainer);
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);

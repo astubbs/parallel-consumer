@@ -47,7 +47,7 @@ has **shipped**:
 | Section | State |
 |---|---|
 | `== 0.5.x` and below | Hand-written legacy from before the fork, and shipped. **Frozen.** |
-| `== 0.6.0.0` - the release being cut | **Not shipped, so not settled.** Whatever sits under this heading now is working text. It will be **regenerated at release time from `git log <last-tag>..HEAD`**, replacing what is there, and frozen only once 0.6.0.0 ships. |
+| `== 0.6.0.0` - the release being cut | **Not shipped, so not settled.** Whatever sits under this heading now is working text. It will be **generated at release time**, replacing what is there, and frozen only once 0.6.0.0 ships. **How it is generated is not decided** - see below. |
 | Every release after it | Same treatment: generated when that release is cut, frozen once it ships. |
 
 Two readings this rules out. **`0.6.0.0` is not on the hand-written side of the line** - generation
@@ -98,8 +98,13 @@ truth, and a missing label never makes a release wrong - it makes it harder to a
 
 ## At release time
 
-An agent reads `git log <last-tag>..HEAD` - full messages, not just subjects - and drafts the
-release section. The judgement it applies, and that a human should re-apply before freezing:
+**The mechanism is undecided, and this document should not pretend otherwise.** What is settled is
+only that the section is *generated at release time* rather than accumulated per-PR. The likely shape
+is an agent drafting it close to the release from the commit log, but nothing about that is fixed, so
+do not build tooling against it or cite it as the process.
+
+What IS durable is the **judgement** applied when the section is written, whoever or whatever writes
+it - and a human should re-apply it before freezing:
 
 - **The entry test.** Can a *user or operator* observe this without reading our repo - API,
   behaviour, performance, logs and metrics, or the published artifact? If not, it gets no entry.

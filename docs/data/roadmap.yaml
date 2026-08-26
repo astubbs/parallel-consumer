@@ -454,7 +454,7 @@ backlog:
       status: >-
         Demand-gated behind the sidecar landing, and probe-gated before that: whether the Dapr sidecar
         serializes delivery to the app decides whether the benefit survives the extra hop. The probe and
-        positioning are banked in docs/inflight/next-dapr-adapter.md.
+        positioning are banked in docs/inflight/core-dapr-adapter.md.
       tracking: astubbs#242
     - subject: Reviving the actor/IPC family from the 2022 branches
       status: >-

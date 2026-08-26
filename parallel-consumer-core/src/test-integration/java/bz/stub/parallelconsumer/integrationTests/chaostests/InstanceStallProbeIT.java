@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -74,7 +76,7 @@ class InstanceStallProbeIT {
     /** A probe with only the instance-progress detector armed - the ctor's null kcu is legal because
      * the sampler thread is never started. */
     private static ProgressProbe probeWatching(FakeInstance... instances) {
-        List<ProgressProbe.InstanceProgressView> views = new java.util.ArrayList<>(java.util.Arrays.asList(instances));
+        List<ProgressProbe.InstanceProgressView> views = new ArrayList<>(Arrays.asList(instances));
         return new ProgressProbe(null, "test-group", "test-topic", () -> 0L, 0)
                 .withInstanceProgress(() -> views);
     }

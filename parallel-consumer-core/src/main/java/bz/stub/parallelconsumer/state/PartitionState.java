@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -112,10 +113,27 @@ public class PartitionState<K, V> {
     /**
      * Cache view of the state of the partition. Is set dirty when the incomplete state of any offset changes. Is set
      * clean after a successful commit of the state.
+     * <p>
+     * {@code volatile} because it crosses threads with no other fence: written on the control thread
+     * ({@code onSuccess} via the mailbox), read on the broker-poll thread by the commit path's
+     * dirty-partition collection in the default {@code PERIODIC_CONSUMER_ASYNCHRONOUS} mode. As a plain
+     * field, jcstress measured the reader observing {@code dirty} set while {@code offsetHighestSucceeded}
+     * was still stale at ~1.4e-7 per sample even with the real surrounding {@code ConcurrentSkipListMap}
+     * accesses on both sides - a burnt commit cycle, which on a partition that then goes idle holds the
+     * committed offset back until the next rebalance. With only this flag volatile the anomaly was 0 in
+     * 4.29e9 samples with the outcome declared FORBIDDEN: the release store on the write publishes the
+     * preceding plain writes, and the acquire load on the read observes them. The {@code long}s stay
+     * plain deliberately - fencing them too buys nothing the flag does not already provide, at extra
+     * cost on every read. Evidence, re-runnable: the {@code jcstress-poc/} module
+     * (astubbs/parallel-consumer#348), whose {@code CommitPathVisibilityProbes} models this exact pair -
+     * the arm carrying that FORBIDDEN outcome is
+     * {@code CommitPathVisibilityProbes.VolatileDirtyPublishesPlainSucceeded}. What a probe's zero and its
+     * rate are each worth, with these figures in its results table:
+     * docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md.
      */
     @Setter(PRIVATE)
     @Getter(PACKAGE)
-    private boolean dirty;
+    private volatile boolean dirty;
 
     /**
      * The highest seen offset for a partition.
@@ -280,6 +298,44 @@ public class PartitionState<K, V> {
         }
     }
 
+    /**
+     * First of THREE staleness checkpoints. Read this before concluding any one of them is broken -
+     * each is deliberately partial, and they are only sound together.
+     *
+     * <ol>
+     *   <li><b>Here, on register</b> - proactive and best-effort. Checked ONCE per poll batch, which is
+     *       correct rather than a shortcut: {@link EpochAndRecordsMap.RecordsAndEpoch} carries a single
+     *       {@code epochOfPartitionAtPoll} for its whole record list, so a per-record check would return
+     *       the identical answer.</li>
+     *   <li><b>On take</b> - {@link #couldBeTakenAsWork}, per container against LIVE state. This is the
+     *       authoritative one: nothing stale is ever executed, however it got into a shard.</li>
+     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against live
+     *       state, so a result returning from work that went stale mid-flight is dropped.</li>
+     * </ol>
+     *
+     * <b>This checkpoint is knowingly racy, and that is not a defect.</b> The caller
+     * ({@code PartitionStateManager.maybeRegisterNewRecordAsWork}) looks this state up live and calls
+     * straight in, but a rebalance on the broker-poll thread can land between that lookup and the
+     * inserts this method then performs - registration runs on the control thread and nothing
+     * serialises the two. Inside that window the guard can pass wrongly, either because the epoch
+     * bumped after a correct check, or because this state object itself went stale (its
+     * {@code partitionsAssignmentEpoch} is a {@code final long} captured at construction, so a stale
+     * state compares its own old epoch against the batch's old epoch and they match). Either way
+     * old-epoch containers reach live shards. Checkpoint 2 is what makes that safe.
+     *
+     * <b>Do not "fix" this by re-checking per record, or by consulting the live epoch here.</b>
+     * Neither closes the window - both are still check-then-act against a concurrent rebalance - and
+     * the lock that would close it was deliberately removed in {@code 9a966860b} (confluentinc#219),
+     * on the grounds that epoch tracking replaced it. That reasoning holds for the scheme as a whole,
+     * not for this checkpoint alone.
+     *
+     * <b>What was genuinely broken</b> was never the admission of stale containers but what the shard
+     * did on a collision: it preferred a stale RESIDENT over a fresh ARRIVAL at the same offset and
+     * dropped the arrival, which is lost for good since checkpoint 2 only removes the resident.
+     * See {@code ProcessingShard.addWorkContainer} and confluentinc#909.
+     *
+     * @see #couldBeTakenAsWork
+     */
     private boolean epochIsStale(EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         // do epochs still match? do a proactive check, but the epoch will be checked again at work completion as well
         var currentPartitionEpoch = getPartitionsAssignmentEpoch();
@@ -419,8 +475,11 @@ public class PartitionState<K, V> {
 
     // visible for testing
     protected OffsetAndMetadata createOffsetAndMetadata() {
-        Optional<String> payloadOpt = tryToEncodeOffsets();
-        long nextOffset = getOffsetToCommit();
+        // use tuple to make sure getOffsetToCommit is invoked only once to avoid dirty read
+        // and commit the wrong offset
+        ParallelConsumer.Tuple<Optional<String>, Long> tuple = tryToEncodeOffsets();
+        Optional<String> payloadOpt = tuple.getLeft();
+        long nextOffset = tuple.getRight();
         return payloadOpt
                 .map(encodedOffsets -> new OffsetAndMetadata(nextOffset, encodedOffsets))
                 .orElseGet(() -> new OffsetAndMetadata(nextOffset));
@@ -429,7 +488,8 @@ public class PartitionState<K, V> {
     /**
      * Next offset expected to be polled, upon freshly connecting to a broker.
      * <p>
-     * Defined as the offset, one below the highest sequentially succeeded offset.
+     * Defined as the offset one ABOVE the highest sequentially succeeded offset - Kafka commits the next
+     * offset to read, not the last one processed.
      */
     // visible for testing
     protected long getOffsetToCommit() {
@@ -488,31 +548,35 @@ public class PartitionState<K, V> {
      * encodings are possible ({@link NoEncodingPossibleException}. Encoding may not be possible of - see
      * {@link OffsetMapCodecManager#makeOffsetMetadataPayload}.
      *
-     * @return if possible, the String encoded offset map
+     * @return the encoded offset map if one was possible, paired with the offset it was encoded
+     *         against. The two travel together deliberately: committing the payload against a
+     *         later offset than the one it describes is the confluentinc#893 defect, so the caller
+     *         must never re-derive the offset.
      */
-    private Optional<String> tryToEncodeOffsets() {
+    private ParallelConsumer.Tuple<Optional<String>, Long> tryToEncodeOffsets() {
+        long offsetOfNextExpectedMessage = getOffsetToCommit();
+
         if (incompleteOffsets.isEmpty()) {
             setAllowedMoreRecords(true);
-            return empty();
+            return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
         }
 
         try {
             // todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null - confluentinc#233
-            long offsetOfNextExpectedMessage = getOffsetToCommit();
             var offsetRange = getOffsetHighestSucceeded() - offsetOfNextExpectedMessage;
             String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, this);
             ratioPayloadUsedDistributionSummary.record(offsetMapPayload.length() / (double) offsetRange);
             ratioMetadataSpaceUsedDistributionSummary.record(offsetMapPayload.length() / (double) OffsetMapCodecManager.DefaultMaxMetadataSize);
             boolean mustStrip = updateBlockFromEncodingResult(offsetMapPayload);
             if (mustStrip) {
-                return empty();
+                return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
             } else {
-                return of(offsetMapPayload);
+                return ParallelConsumer.Tuple.pairOf(of(offsetMapPayload), offsetOfNextExpectedMessage);
             }
         } catch (NoEncodingPossibleException e) {
             setAllowedMoreRecords(false);
             log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance.", e);
-            return empty();
+            return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
         }
     }
 
@@ -644,6 +708,13 @@ public class PartitionState<K, V> {
      * record is actually blocking our progress.
      *
      * @return true if this record be taken from its partition as work.
+     */
+    /**
+     * Second and AUTHORITATIVE of the three staleness checkpoints - per container, against live state.
+     * Nothing stale is ever executed, however it reached a shard, which is what lets checkpoint 1 be
+     * best-effort. {@link #epochIsStale} documents the scheme; do not duplicate it here.
+     *
+     * @see #epochIsStale
      */
     public boolean couldBeTakenAsWork(WorkContainer<K, V> workContainer) {
         if (checkIfWorkIsStale(workContainer)) {

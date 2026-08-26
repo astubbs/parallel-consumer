@@ -163,6 +163,7 @@ carried across as records.
   branches assertions away while reporting green.
 - The `30_000_00` underscore typo and the other kneecapped volumes carried in from the predecessor.
 - Implementing the tests deleted by `confluentinc#493`.
+<!-- file-refs: N/A - names a generated file this plan decided against building -->
 
 **Outside this work.** Any change to test behaviour, timeouts, assertions or volumes. The
 `AGENTS.md` rule against modifying tests applies with full force: this work does not touch a
@@ -170,13 +171,14 @@ single assertion. No CHANGELOG entry is added - `AGENTS.md` states a PR never co
 
 ### Sources
 
-- `docs/quarantined-tests.md` and `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/Quarantined.java` - the governed alternative to `@Disabled`, and the policy statement that motivates this audit.
+- `docs/quarantined-tests.md` and `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/Quarantined.java` - the governed alternative to `@Disabled`, and the policy statement that motivates this audit.
 - `docs/test-hardening/disabled-and-weakened-tests-audit-2026-04-22.md` on branch `refactor/test-hardening` (commit `c44edbf0`) - the predecessor audit being absorbed.
 - The `origin/refactor/test-hardening` and `origin/refactor/empty-tests` entries in `docs/refactoring.md`, and the Superseded list in `docs/inflight/branch-stale-and-diagnostic.md` - the ledger entries that hid it.
 - `docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` - evidence that a test passing vacuously is a live failure mode here.
 - Upstream `confluentinc#493` (merged, removed the empty tests) and draft `confluentinc#496` / branch `origin/refactor/empty-tests` (never merged, would have implemented them).
 - `AGENTS.md` Testing section - the `@Disabled` prohibition; Changelog section - the no-entries-in-a-PR rule.
 - `bin/todo-index.sh` - the inventory-versus-triage split this audit respects, and the deferred generator's eventual model.
+<!-- file-refs: N/A - the bullet names the branch the audit lives on, not master -->
 
 ---
 
@@ -381,6 +383,7 @@ anything this plan produces - do not cite it as evidence of compliance.
 - Run every command quoted in the audit and compare its output to the number stated beside it.
 - Diff the new audit against `docs/test-hardening/disabled-and-weakened-tests-audit-2026-04-22.md`
   on `refactor/test-hardening` and confirm no finding exists only on the branch.
+<!-- file-refs: N/A - the audit being diffed against lives on refactor/test-hardening, named above -->
 
 ---
 

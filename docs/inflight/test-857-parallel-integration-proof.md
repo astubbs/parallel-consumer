@@ -1,5 +1,9 @@
 # Gated on astubbs#29: proving thread-parallel integration tests are safe again
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+<!-- inflight-state: deferred - cannot start until astubbs#29 lands -->
+
 The deferred "Step 2" experiment. Separated from the confluentinc#857 sighting records because it is
 a *work item with a trigger*, not an observation: it cannot start until astubbs#29 lands.
 

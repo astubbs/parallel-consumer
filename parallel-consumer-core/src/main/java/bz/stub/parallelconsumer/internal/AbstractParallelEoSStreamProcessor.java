@@ -264,9 +264,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     // transitions are driven from inside this class, and a subclass setting it arbitrarily is the shape of bug this
     // class has spent astubbs#296 hardening against. Reading is protected because a subclass may legitimately want
     // to know whether it is still running. Both are used only by this package's tests today.
+    // volatile because it is no longer read only by the thread that writes it: ExternalEngine's dispatch
+    // thread blocks on the external dispatch ceiling and reads this to learn that a close has begun. That is a
+    // plain flag with no lock to name, so `volatile` is the whole fix and there is no @GuardedBy to write - see
+    // parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md.
     @Setter(AccessLevel.PACKAGE)
     @Getter(PROTECTED)
-    private State state = State.UNUSED;
+    private volatile State state = State.UNUSED;
 
     /**
      * Wrapped {@link ConsumerRebalanceListener} passed in by a user that we can also call on events
@@ -337,13 +341,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         this.dynamicExtraLoadFactor = module.dynamicExtraLoadFactor();
 
         workerThreadPool = SupplierUtils.memoize(() -> requireRejectionIsVisible(setupWorkerPool(newOptions.getMaxConcurrency())));
-        // Resolved here, not left to the first dispatch. The supplier is memoized and therefore lazy, but
-        // #requireRejectionIsVisible is a precondition on a subclass's #setupWorkerPool, and a precondition that only
-        // fires when the first batch is submitted is one a subclass can ship without ever meeting. Construction built
-        // the pool anyway - #initMetrics binds meters to it a few lines below - so this changes no startup behaviour,
-        // it only stops the precondition's timing from depending on that, and moves the failure ahead of the poller
-        // and producer manager, so nothing half built has to be unwound.
-        workerThreadPool.get();
+        forceWorkerPoolConstruction();
 
         this.wm = module.workManager();
 
@@ -396,17 +394,36 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
     }
 
-    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
-        ThreadFactory defaultFactory;
+    /**
+     * Looks up a container-managed resource by JNDI name, falling back to the Java SE equivalent when there is no
+     * container to ask.
+     * <p>
+     * This method exists to be the smallest possible thing carrying {@code @SuppressWarnings("BanJNDI")}. The
+     * suppression used to sit on the callers, one of which is a fifty-line method - so a JNDI lookup added anywhere
+     * in that body later would have been waved through by a suppression written for an unrelated line. A suppression
+     * is a claim about one call, and its scope should say so.
+     */
+    // BanJNDI: the lookup name is this library's own managedThreadFactory / managedExecutorService option, set by
+    // the embedding application, and the whole point is to use the container's executor when running inside one.
+    // Suppressed here rather than demoted globally, so a new JNDI lookup anywhere else still fails the build.
+    // docs/inflight/static-error-prone-rule-registry.md carries the reasoning and the re-enable trigger.
+    @SuppressWarnings("BanJNDI")
+    private static <T> T lookupManagedResource(String jndiName, Supplier<T> javaSeFallback) {
         try {
-            defaultFactory = InitialContext.doLookup(options.getManagedThreadFactory());
+            return InitialContext.doLookup(jndiName);
         } catch (NamingException e) {
             log.debug("Using Java SE Thread", e);
-            defaultFactory = Executors.defaultThreadFactory();
+            return javaSeFallback.get();
         }
-        ThreadFactory finalDefaultFactory = defaultFactory;
+    }
+
+    protected ThreadPoolExecutor setupWorkerPool(int poolSize) {
+        // Was a non-final local plus a `finalDefaultFactory` copy, because a try/catch cannot assign to a final.
+        // The lookup returning a value rather than assigning one removes the need for both.
+        final ThreadFactory defaultFactory =
+                lookupManagedResource(options.getManagedThreadFactory(), Executors::defaultThreadFactory);
         ThreadFactory namingThreadFactory = r -> {
-            Thread thread = finalDefaultFactory.newThread(r);
+            Thread thread = defaultFactory.newThread(r);
             String name = thread.getName();
             thread.setName("pc-" + name);
             this.getMyId().ifPresent(id -> thread.setName("pc-" + name + "-" + id));
@@ -461,6 +478,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      *         substitute something else
      * @throws IllegalArgumentException if the pool would swallow a rejection
      */
+
     private ThreadPoolExecutor requireRejectionIsVisible(ThreadPoolExecutor pool) {
         RejectedExecutionHandler handler = pool.getRejectedExecutionHandler();
         if (!(handler instanceof ThreadPoolExecutor.AbortPolicy)) {
@@ -482,6 +500,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     ThreadPoolExecutor.CallerRunsPolicy.class.getSimpleName()));
         }
         return pool;
+    }
+
+    /**
+     * Forces the memoized {@link #workerThreadPool} supplier at construction rather than leaving it to the first
+     * dispatch. {@link #requireRejectionIsVisible} is a precondition on a subclass's {@link #setupWorkerPool}, and a
+     * precondition that only fires when the first batch is submitted is one a subclass can ship without ever meeting.
+     * Construction built the pool anyway - {@code initMetrics} binds meters to it - so this changes no startup
+     * behaviour. It only stops the precondition's timing from depending on that, and moves the failure ahead of the
+     * poller and producer manager, so nothing half built has to be unwound.
+     * <p>
+     * The pool is discarded on purpose: the supplier keeps it and every later reader goes through
+     * {@link #workerThreadPool}. Extracted into its own method so the suppression covers exactly this one call - a
+     * named local would satisfy Error Prone and then trip SpotBugs' {@code DLS_DEAD_LOCAL_STORE} instead, which is
+     * trading one finding for another rather than saying what is meant.
+     */
+    @SuppressWarnings("ReturnValueIgnored")
+    private void forceWorkerPoolConstruction() {
+        workerThreadPool.get();
     }
 
     private void checkNotSubscribed(org.apache.kafka.clients.consumer.Consumer<K, V> consumerToCheck) {
@@ -1071,13 +1107,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
-        ExecutorService executorService;
-        try {
-            executorService = InitialContext.doLookup(options.getManagedExecutorService());
-        } catch (NamingException e) {
-            log.debug("Using Java SE Thread", e);
-            executorService = Executors.newSingleThreadExecutor();
-        }
+        ExecutorService executorService =
+                lookupManagedResource(options.getManagedExecutorService(), Executors::newSingleThreadExecutor);
 
 
         // run main pool loop in thread
@@ -1140,7 +1171,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         //
         if (shouldTryCommitNow) {
             // offsets will be committed when the consumer has its partitions revoked
-            commitOffsetsThatAreReady();
+            commitOffsetsReportingPollerDeath();
         }
 
         // distribute more work
@@ -1187,6 +1218,49 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (log.isTraceEnabled()) {
             log.trace("End of control loop, waiting processing {}, remaining in partition queues: {}, out for processing: {}. In state: {}",
                     wm.getNumberOfWorkQueuedInShardsAwaitingSelection(), wm.getNumberOfIncompleteOffsets(), wm.getNumberRecordsOutForProcessing(), state);
+        }
+    }
+
+    /**
+     * Commit, and when that fails, report why the <em>poller</em> died rather than the symptom the
+     * control thread happens to observe.
+     * <p>
+     * The broker-poll thread is the only producer of commit responses, so any exception that escapes
+     * its control loop turns every later sync commit into
+     * {@code "Timeout waiting for commit response"} - a message that names neither the failing
+     * subsystem nor the failure. That symptom is what users report (astubbs#177, confluentinc#833) and it points
+     * nowhere near the cause.
+     * <p>
+     * {@link BrokerPollSystem#supervise()} holds the real exception, but the ordinary call at the end
+     * of {@link #controlLoop} never reaches it in this scenario: the poller dies <em>while servicing
+     * the commit this thread is already blocked on</em>, so the control thread is inside
+     * {@code commitAndWait()} rather than at the top of the loop. Moving that supervise call earlier
+     * in the loop does not help for the same reason - it was tried and measured. Supervising here, on
+     * the failure path, is what actually reaches it.
+     * <p>
+     * When the poller is healthy the commit failure is the whole story and is rethrown untouched. When
+     * it is not, the poller's exception becomes the cause and the commit failure is retained as
+     * suppressed, so neither is lost.
+     * <p>
+     * This is now the <b>backstop</b>, not the primary path. A poller that dies while servicing a
+     * commit publishes its own exception through
+     * {@link ConsumerOffsetCommitter#notifyPollerDied(Throwable)}, which releases the waiter at that
+     * moment with the right cause already attached. What is left for this to catch is a poller that
+     * died without reaching that call - before the committer existed, or through a route that does not
+     * run the poll thread's own exit path - and any commit failure in a mode that has no
+     * {@code ConsumerOffsetCommitter} at all.
+     */
+    private void commitOffsetsReportingPollerDeath() throws TimeoutException, InterruptedException {
+        try {
+            commitOffsetsThatAreReady();
+        } catch (InternalRuntimeException commitFailure) {
+            try {
+                brokerPollSubsystem.supervise();
+            } catch (RuntimeException pollerFailure) {
+                pollerFailure.addSuppressed(commitFailure);
+                throw pollerFailure;
+            }
+            throw commitFailure;
         }
     }
 

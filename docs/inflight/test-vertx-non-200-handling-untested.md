@@ -1,5 +1,8 @@
 # Vert.x non-200 HTTP handling has no test, and the stub that says so was nearly deleted
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 **Priority: high.** The vertx module ships response-code handling that nothing exercises, and we have
 live vertx defects (astubbs/parallel-consumer#116 / astubbs/parallel-consumer#122), so this is a gap
 that can be hiding real bugs rather than a tidy-up.

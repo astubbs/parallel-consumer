@@ -1,5 +1,9 @@
 # The chaos suite cannot model a CRASH, only a close - and the fleet's shared memory is why
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+<!-- inflight-state: parked - needs a fleet model that can abandon an assignment without closing -->
+
 ## What is missing
 
 Every stop the chaos conductor performs is a `close()` of some kind. `ManagedPCInstance.stop()` and

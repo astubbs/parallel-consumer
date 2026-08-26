@@ -1,5 +1,8 @@
 # Truth probes: tests that can tell internal state from reality
 
+<!-- inflight-type: feature -->
+<!-- inflight-impact: test-debt -->
+
 Candidate work, unowned. Ranked here rather than in `docs/refactoring.md` because it is a testing
 capability rather than a code refactor.
 

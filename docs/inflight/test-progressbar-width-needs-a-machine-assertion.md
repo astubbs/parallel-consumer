@@ -1,5 +1,8 @@
 # `ProgressBarTest.width` is a human eyeball test - give it an assertion without losing the demo
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 Separate stream of work; not urgent, and not blocking anything.
 
 ## What exists

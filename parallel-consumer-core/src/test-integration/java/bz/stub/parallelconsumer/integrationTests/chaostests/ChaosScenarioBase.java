@@ -26,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -278,7 +279,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
     protected void startRun(ProgressProbe probe, ChaosConductor conductor) {
         probe.withInstanceProgress(() -> conductor.getFleet().stream()
                 .map(ProgressProbe.InstanceProgressView::of)
-                .collect(java.util.stream.Collectors.toList()));
+                .collect(Collectors.toList()));
         probe.start();
         conductor.start();
     }
@@ -293,8 +294,11 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
         producerThread.join(10_000);
         settleFleet(conductor);
         pcExecutor.shutdownNow();
-        log.info("Run summary: consumed={} (unique tracking via correctness ledger), probe violations={}",
-                totalConsumed.get(), violations);
+        // Observations are printed alongside violations because they are the ONLY surface they have:
+        // they never fail a run, so a green build says nothing about them unless the summary does.
+        log.info("Run summary: consumed={} (unique tracking via correctness ledger), probe violations={}, "
+                        + "non-gating observations={}",
+                totalConsumed.get(), violations, probe.getObservations());
     }
 
     /** The suite-wide verdict, identical for every scenario by design: probes must be violation-free

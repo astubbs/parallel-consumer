@@ -1,5 +1,8 @@
 # confluentinc#857 family: the unbounded revoke wait in transactional mode
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
 **Commit mode: `PERIODIC_TRANSACTIONAL_PRODUCER` only.** This is the discriminator - the defect below
 and the AB-BA deadlock in astubbs#29 are in mutually exclusive modes and cannot be the same bug.
 

@@ -1,5 +1,8 @@
 # astubbs#29 - the confluentinc#857 deadlock fix, and what measuring it taught
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
 ## START HERE - handoff, 2026-08-20
 
 **PR astubbs/parallel-consumer#29 is BLOCKED and that is correct.** Six `depends on` lines in its
@@ -134,6 +137,7 @@ Ordered by what blocks a merge. **This file should have existed from the branch'
 did not** - the April investigation log (`docs/BUG_857_INVESTIGATION.md`) was retired in `69a670de4`
 into the solutions write-up and the per-mode inflight split, which kept the SETTLED knowledge and
 left the live threads without a home. Append here as you go rather than reconstructing later.
+<!-- file-refs: N/A - the sentence records that this file was retired; naming it is the point -->
 
 **Landed 2026-08-19 (was "in flight" above this line's earlier revision)**
 
@@ -320,5 +324,9 @@ at merge; the remaining items below keep their existing owners or await promotio
 
 - `docs/inflight/bug-857-family.md` - which defects sit behind the one upstream symptom
 - `docs/inflight/test-857-revoke-under-work-sightings.md` - the replays, the four arms, the matrix
-- `docs/inflight/test-class2-probe-asserts-timing-not-correctness.md` - the probe critique
+- the probe critique - deleted once settled, since the Class 2 bound is a non-gating
+  observation as of 2026-08-25. Read it at
+  `git show 77beb4f31:docs/inflight/test-class2-probe-asserts-timing-not-correctness.md`;
+  the settled knowledge is in
+  [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
 - `docs/inflight/parked-chaos-crash-fidelity-variant.md` - why no scenario can model a crash

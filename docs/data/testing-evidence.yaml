@@ -73,7 +73,7 @@ test_layers:
     limitation: It covers changed, decidable offset classes on a PR; a skipped or narrow run is not a project-wide coverage claim.
     inspect:
       - path: bin/ci-mutation-test.sh
-        demonstrates: PR-scoped mutation selection and an explicit warning that a green skip is not evidence.
+        demonstrates: PR-scoped mutation selection, and an exit code that separates a scored run from a skip and from a lane that could not run at all.
   - id: chaos
     proves: Rebalance, revocation and stalled-progress behavior under calibrated disruption.
     command: bin/chaos-test.sh
@@ -236,9 +236,11 @@ quality_system:
     detects: A review that never happened or never finished, rather than claiming a review because a job was green.
     posture: >-
       Split in two: the review is requested on demand, and a cheap always-on gate requires that a finished
-      review already exists on the PR. Deliberately not per-commit - that coverage comes from an auto-reviewer
-      on every push, and enforcing it here cost a contested timestamp comparison and the reviewed-SHA plumbing;
-      trigger to restore it are parked in docs/inflight/parked-strict-review-gate-freshness.md. There is no
+      review already exists on the PR. Deliberately not per-commit: enforcing that here cost a contested
+      timestamp comparison and the reviewed-SHA plumbing, and the coverage it protected came from an
+      auto-reviewer on every push, switched off on 2026-08-19 on cost grounds and now on request only. No
+      check reads the commits after the reviewed one, and that gap is accepted rather than covered; the
+      reasoning is parked in docs/inflight/ci-strict-review-gate-freshness.md. There is no
       skip word, and a fork head is refused outright, so a red gate on an unreviewed PR is the expected state,
       not a fault. Comment metadata only; it cannot judge whether the review was any good, nor tell a review
       from any other answer the bot gave.
