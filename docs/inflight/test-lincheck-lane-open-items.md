@@ -154,9 +154,14 @@ check-then-act in `ProcessingShard#addWorkContainer` - this lane's own "concurre
 derived counter" signature, verbatim.
 
 Two reasons not to call that a product defect yet, and they pull in opposite directions. Production
-registers work from the broker-poll thread alone (`WorkManager#registerWork` is its only caller), so
-two concurrent `addWork` calls are not an interleaving the library can take today - the harness
-declares an operation set wider than the real thread model. Against that, the same stops being
+registers work from the **control** thread alone, so two concurrent `addWork` calls are not an
+interleaving the library can take today - the harness declares an operation set wider than the real
+thread model. The broker poller does not register work itself: `BrokerPollSystem` calls
+`pc.registerWork`, which only enqueues onto `workMailBox`, and the control thread reaches
+`wm.registerWork` after `workMailBox.drainTo` inside `processWorkCompleteMailBox`. (An earlier
+revision of this paragraph named the broker-poll thread here. The conclusion is unchanged - one
+thread registers, so the interleaving is unreachable - but the thread was wrong, and which one it is
+decides what a future harness must model.) Against that, the same stops being
 obviously true once every worker selects its own work, which is the change item 1 above calls
 time-sensitive. Settle the thread-model question before writing a harness for it; if the operation
 set is the artefact, the fix is constraining this harness with a non-parallel group over `addWork`,
