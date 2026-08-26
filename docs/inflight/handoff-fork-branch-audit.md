@@ -96,7 +96,7 @@ and are the natural place for the `upstream` half.
 
 Design question left open deliberately, because it is a judgement call and not a detail: an archive
 tag is one of the four proposed accounting routes, and no tag convention exists yet. The owner has
-separately decided that `origin/presentation` will be archived under an `archive/` tag prefix and
+separately decided that `origin/presentation` would be archived under an `archive/` tag prefix and
 then deleted - see the related work below. Whoever builds the check should settle whether that
 prefix is the convention it recognises.
 
@@ -120,7 +120,9 @@ implying the other ~36 each had a PR. Nobody has confirmed that implication.
 `feats/classic-vertx-demo` (worktree `.claude/worktrees/classic-vertx-demo`, one unpushed commit
 `4babb1414`, off `feats/proxy-requirements`) is where this was found. It carries
 `docs/inflight/branch-classic-comparison-demo.md` - the design ledger for a per-language comparison
-demo, and the plan to rescue `Demo.java` from `origin/presentation` @ `ffda9c6a3`.
+demo, and the plan to rescue `Demo.java` from `ffda9c6a3` - which is now reachable as the annotated
+tag `archive/presentation` rather than a branch, since `origin/presentation` was archived and deleted
+on 2026-08-26. `git show archive/presentation` still resolves it.
 <!-- file-refs: N/A - that path lands on feats/classic-vertx-demo, deliberately not on this branch; the paragraph below records why the split is kept -->
 
 **The split is intentional and should be preserved:** the audit is a repo-wide concern with nothing

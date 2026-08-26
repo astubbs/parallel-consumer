@@ -192,8 +192,8 @@ branch_accounting:
 
   # --- our own branches, where a decision exists that the branch does not -----
 
-  - {ref: presentation, state: ours, see: ["docs/inflight/handoff-fork-branch-audit.md", "docs/inflight/process-fork-branch-archaeology.md"],
-     note: "Carries Demo.java, the code behind the asciinema cast embedded in the README. Unmerged since 2021 and named in no ledger - the branch that triggered the whole audit. DECIDED: archive under an archive/ tag, then delete. Not yet done, so this entry is the only record of the decision."}
+  - {ref: presentation, tip: ffda9c6a3, state: deleted, deleted: 2026-08-26, tag: archive/presentation, see: ["docs/inflight/handoff-fork-branch-audit.md", "docs/inflight/process-fork-branch-archaeology.md"],
+     note: "Carried Demo.java, the code behind the asciinema cast embedded in the README. Unmerged since 2021 and named in no ledger - the branch that triggered the whole audit. Archived and deleted 2026-08-26. Not merged, because the code is demo-grade and its own commits say so - one records an unfixed data race under load. Not dropped either, because the README still embeds the cast it produced, so the source behind a published artefact stays recoverable: git show archive/presentation."}
   - {ref: bugs/prod-tx-manager-retries, state: ours, see: ["docs/inflight/core-241-tx-commit-failure-taxonomy.md", confluentinc#144],
      note: "Attached to sweep-2023-tx-failure-taxonomy, and the prototype to start from rather than the older tx-commit-failure branch. Verified 2026-08-20, closing the open question in branch-audit-orphans.md."}
 
