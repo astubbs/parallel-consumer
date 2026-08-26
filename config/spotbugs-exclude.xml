@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
+  Copyright (C) 2026 Antony Stubbs and contributors
+
   SpotBugs suppression, BY RULE, deliberately coarse.
 
   Every <Match> here MUST have a row in docs/inflight/static-spotbugs-rule-registry.md giving the
