@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
-import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * CALIBRATION, not a regression test: treats {@link ShardManager} as a concurrent data structure, declares its
@@ -30,13 +30,27 @@ import static com.google.common.truth.Truth.assertThat;
  * revoked partition's records out - and the offsets they act on come from Lincheck's own parameter
  * generator. Which pair races, and at which instruction the switch has to happen, is Lincheck's to find.
  * <p>
- * <b>Expected result on this tree.</b> Master carries the unfixed {@code containsKey}-then-{@code get} pair in
- * {@code removeWorkFromShardFor}, whose {@code get} is dereferenced unconditionally; under
- * {@link ParallelConsumerOptions.ProcessingOrder#KEY} a concurrent {@code removeShardIfEmpty} can drop the
- * shard between the two reads. So the assertion here is that Lincheck FINDS a violation. <b>When that bug is
- * fixed - astubbs#345 carries it - this test goes red and must be inverted</b>, at which point it stops
- * being a calibration and becomes a real regression detector for the whole shard API, which is the actual
- * prize.
+ * <b>The calibration target, and what happened to it.</b> Master carried an unfixed
+ * {@code containsKey}-then-{@code get} pair in {@code removeWorkFromShardFor} whose {@code get} was
+ * dereferenced unconditionally; under {@link ParallelConsumerOptions.ProcessingOrder#KEY} a concurrent
+ * {@code removeShardIfEmpty} could drop the shard between the two reads. Lincheck refound it unaided, in
+ * seconds, by a route nobody had written down (the sweep racing <em>itself</em> rather than
+ * {@code onSuccess}). astubbs#345 fixed it with the single-read {@code getShard} idiom, and this harness is
+ * now that fix's regression detector: the assertion is that <b>no Lincheck report over these operations
+ * mentions {@code NullPointerException} again</b>.
+ * <p>
+ * <b>It is NOT yet an assert-no-violation harness, and that is a finding rather than an oversight.</b> The
+ * lane's inversion contract (docs/testing.md, "Every harness currently asserts that a bug EXISTS") says to
+ * flip a harness to assert-no-failure once its fix lands. Measured on the fixed tree, that flip would be
+ * RED: Lincheck still reports {@code = Invalid execution results =}, but for a different, non-NPE
+ * interleaving - {@code revokeSweep(0)} in the prefix, then {@code addWork(0)} against {@code addWork(0)} in
+ * parallel. That pair is the {@code entries.get} / {@code entries.put} + {@code incrementAndGet}
+ * check-then-act in {@link ProcessingShard#addWorkContainer}, i.e. the lane's own
+ * "concurrent collection plus a derived counter" signature - but production registers work from the
+ * broker-poll thread alone, so two concurrent {@code addWork} calls are not an interleaving the library can
+ * take, and nothing here establishes it as a product defect. Diagnosing it is tracked in
+ * {@code docs/inflight/test-lincheck-lane-open-items.md}; until it is diagnosed, asserting the NPE's
+ * absence is the strongest claim the evidence supports.
  * <p>
  * Bounds are stated in the test methods rather than hidden in a base class, because "how long did it take and
  * at what bounds" is half of the adoption question.
@@ -154,7 +168,7 @@ public class ShardManagerLincheckTest {
      * and avoids the blocker.
      */
     @Test
-    void stressRediscoversTheShardTear() {
+    void stressMustNotRediscoverTheShardTear() {
         var options = new StressOptions()
                 .threads(2)
                 .actorsPerThread(2)
@@ -163,6 +177,10 @@ public class ShardManagerLincheckTest {
                 .iterations(50)
                 .invocationsPerIteration(5_000);
         String report = LincheckHarness.runExpectingViolation("ShardManager / stress", options, getClass());
-        assertThat(report).contains("NullPointerException");
+        assertWithMessage("astubbs#345 removed the torn containsKey/get pair, so a revoke sweep must never "
+                + "dereference a shard that left the map - an NPE anywhere in a Lincheck report over these "
+                + "operations is that defect back. Report was:\n%s", report)
+                .that(report)
+                .doesNotContain("NullPointerException");
     }
 }

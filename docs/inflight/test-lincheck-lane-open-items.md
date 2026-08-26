@@ -130,6 +130,42 @@ adding a class with a narrow guess in it.
 and the value demonstrated here is what the tool finds *unaided*.
 
 
+<!-- post-merge: checked-begin -->
+## `ShardManagerLincheckTest` did not invert cleanly, and what it exposed instead
+
+**The inversion contract assumes one bug per harness. This one had two.** astubbs#345 removed the
+torn `containsKey`/`get` pair, and the harness was expected to flip from "Lincheck finds the NPE" to
+assert-no-failure. Measured on the fixed tree, that flip is RED: Lincheck still reports
+`= Invalid execution results =`, with no `NullPointerException` anywhere in it. Controlled both ways
+in one sitting - reverting only the main-code fix puts the NPE counterexample back and the harness
+green, restoring it produces the new one - so the second violation was always there, masked because
+Lincheck stops at the first thing it finds.
+
+The counterexample is `revokeSweep(0)` in the sequential prefix, then `addWork(0)` against
+`addWork(0)` in parallel. That pair lands on the `entries.get(key)` / `entries.put(key, wc)` +
+`availableWorkContainerCnt.incrementAndGet()` check-then-act in `ProcessingShard#addWorkContainer` -
+the lane's own "concurrent collection plus a derived counter" signature, verbatim.
+
+**Two reasons not to call it a product defect yet, and they pull in opposite directions.**
+Production registers work from the broker-poll thread alone (`WorkManager#registerWork` is its only
+caller), so two concurrent `addWork` calls are not an interleaving the library can take today - the
+harness declares an operation set wider than the real thread model. Against that: the same is not
+obviously true once every worker selects its own work, which is the change item 1 above calls
+time-sensitive.
+
+**This narrows, rather than overturns, item 1's ruling that `availableWorkContainerCnt` is not a
+Lincheck target.** That ruling rests on astubbs#336 measuring the *drift* as single-threaded
+conditional mismatches, and it stands - nothing here re-opens the clamp question. What is new is a
+machine-produced interleaving over the same field, which is a different claim from "the drift is a
+race", and it arrived unaided from a harness pointed somewhere else. Settle the thread-model
+question before writing a harness for it; if the operation set is the artefact, the fix is
+constraining this harness (a non-parallel group over `addWork`), not a change to `ProcessingShard`.
+
+Until then `ShardManagerLincheckTest` asserts the strongest thing the evidence supports - that no
+report over these operations mentions `NullPointerException` again - which is a real regression
+detector for astubbs#345 and not the vacuous green an unexamined inversion would have produced.
+<!-- post-merge: checked-end -->
+
 ## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
 
 **The transferable rule from this is now written down and owned elsewhere**:
