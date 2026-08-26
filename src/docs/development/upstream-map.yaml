@@ -334,7 +334,7 @@ entries:
       branches: [cherry-pick/893-offset-reset, upstream-pr-893, fix/121-offset-accuracy-on-assignment]
       prs: [337]
       fork_issue: 121
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [893]

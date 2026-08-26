@@ -179,8 +179,9 @@ takes two further unsynchronised reads of the same moving state - the incomplete
 `getOffsetHighestSucceeded()` as the encoder's range top - and the second can widen the range past
 what the first was filtered against, encoding genuinely-incomplete offsets as complete. That code is
 untouched here, predates the fork (2022), and is on master today. It is being reproduced separately
-before anything is changed there, on the same principle this document argues for: a fix without a
-failing control arm is not evidence.
+before anything is changed there - **that work is astubbs#344**, which owns the fix, its
+reproduction, and the write-up of the wider defect family - on the same principle this document
+argues for: a fix without a failing control arm is not evidence.
 
 So the accurate claim is narrower than "every path is closed". The offset-to-commit read is now
 taken once and cannot disagree with the payload it is filed under. Whether the *payload's own
@@ -249,6 +250,12 @@ construction - but it is the sentence to revisit rather than cite.
   never merged there, shipped with no test.
 - [`astubbs#121`](https://github.com/astubbs/parallel-consumer/issues/121) - this fork's issue,
   carrying the fix and the reproduction.
+- [`astubbs#344`](https://github.com/astubbs/parallel-consumer/pull/344) - **the sibling one layer
+  down**, still open at the time of writing: the encoder's snapshot/range tear described above. Same
+  family - multiple reads of moving state combined as one snapshot - and the reason this write-up's
+  claim stops at the offset-to-commit read. It also owns the re-hook this fix's tests will need: they
+  inject their race by overriding `getIncompleteOffsetsBelowHighestSucceeded()`, which that fix stops
+  the encoder calling.
 - [`stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md`](stale-container-blocks-fresh-work-same-offset-after-rebalance-2026-08-07.md) -
   the nearest neighbour: a different mechanism reached through the same door, a rebalance leaving
   partition state describing something that is not true. Both are silent; that one wedges an offset,
