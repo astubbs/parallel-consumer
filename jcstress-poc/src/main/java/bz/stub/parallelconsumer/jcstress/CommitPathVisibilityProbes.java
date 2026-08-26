@@ -73,10 +73,12 @@ import static org.openjdk.jcstress.annotations.Expect.FORBIDDEN;
 public class CommitPathVisibilityProbes {
 
     /**
-     * As shipped, reduced to the two plain fields: {@code offsetHighestSucceeded} then {@code dirty}.
+     * The commit path <b>before</b> astubbs/parallel-consumer#349, reduced to the two plain fields:
+     * {@code offsetHighestSucceeded} then {@code dirty}. This arm is what shows the anomaly is real;
+     * it stopped modelling shipped code the moment {@code dirty} became volatile.
      */
     @JCStressTest
-    @Description("Commit path as shipped: plain offsetHighestSucceeded published by a plain dirty flag")
+    @Description("Pre-fix commit path: plain offsetHighestSucceeded published by a plain dirty flag")
     @Outcome(id = "1, 0", expect = ACCEPTABLE_INTERESTING,
             desc = "ANOMALY: dirty seen set, offsetHighestSucceeded still stale - commit cycle burnt on stale state")
     @Outcome(id = "0, 0", expect = ACCEPTABLE, desc = "Reader saw neither write - no commit this cycle")
@@ -102,7 +104,11 @@ public class CommitPathVisibilityProbes {
     }
 
     /**
-     * Control arm for the candidate fix: {@code dirty} volatile is enough on its own, because a
+     * The commit path <b>as shipped</b> since astubbs/parallel-consumer#349 - and the arm whose
+     * FORBIDDEN outcome is the evidence that fix is sufficient. It was written as the control arm for
+     * a candidate fix, and became the real one when that candidate shipped; the name is kept because
+     * it describes the memory model this arm uses, which has not changed. {@code dirty} volatile is
+     * enough on its own, because a
      * volatile write releases everything before it and a volatile read acquires everything after it -
      * so {@code offsetHighestSucceeded} can stay plain and still be published safely.
      * <p>
@@ -110,7 +116,7 @@ public class CommitPathVisibilityProbes {
      * need to make the hot {@code long} volatile at all.
      */
     @JCStressTest
-    @Description("Control arm: only the dirty flag volatile - the payload should ride the release/acquire edge")
+    @Description("Commit path as shipped: only the dirty flag volatile - the payload rides the release/acquire edge")
     @Outcome(id = "1, 0", expect = FORBIDDEN,
             desc = "Publication through the volatile flag failed - would invalidate the cheap fix")
     @Outcome(id = {"0, 0", "0, 1", "1, 1"}, expect = ACCEPTABLE, desc = "Orderings the release/acquire edge permits")
@@ -154,7 +160,7 @@ public class CommitPathVisibilityProbes {
      * which is worth knowing and is not something the source can be read for.
      */
     @JCStressTest
-    @Description("Faithful arm: onSuccess and getCommitDataIfDirty with their real map accesses in place")
+    @Description("Pre-fix faithful arm: real map accesses in place, dirty still plain")
     @Outcome(id = "1, 0", expect = ACCEPTABLE_INTERESTING,
             desc = "ANOMALY: reproduced with the real surrounding accesses present")
     @Outcome(id = {"0, 0", "0, 1", "1, 1"}, expect = ACCEPTABLE, desc = "Non-anomalous orderings")

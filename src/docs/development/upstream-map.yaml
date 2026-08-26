@@ -192,8 +192,8 @@ branch_accounting:
 
   # --- our own branches, where a decision exists that the branch does not -----
 
-  - {ref: presentation, state: ours, see: ["docs/inflight/handoff-fork-branch-audit.md", "docs/inflight/process-fork-branch-archaeology.md"],
-     note: "Carries Demo.java, the code behind the asciinema cast embedded in the README. Unmerged since 2021 and named in no ledger - the branch that triggered the whole audit. DECIDED: archive under an archive/ tag, then delete. Not yet done, so this entry is the only record of the decision."}
+  - {ref: presentation, tip: ffda9c6a3, state: deleted, deleted: 2026-08-26, tag: archive/presentation, see: ["docs/inflight/handoff-fork-branch-audit.md", "docs/inflight/process-fork-branch-archaeology.md"],
+     note: "Carried Demo.java, the code behind the asciinema cast embedded in the README. Unmerged since 2021 and named in no ledger - the branch that triggered the whole audit. Archived and deleted 2026-08-26. Not merged, because the code is demo-grade and its own commits say so - one records an unfixed data race under load. Not dropped either, because the README still embeds the cast it produced, so the source behind a published artefact stays recoverable: git show archive/presentation."}
   - {ref: bugs/prod-tx-manager-retries, state: ours, see: ["docs/inflight/core-241-tx-commit-failure-taxonomy.md", confluentinc#144],
      note: "Attached to sweep-2023-tx-failure-taxonomy, and the prototype to start from rather than the older tx-commit-failure branch. Verified 2026-08-20, closing the open question in branch-audit-orphans.md."}
 
@@ -319,8 +319,11 @@ entries:
       and PartitionStateManager caches the OffsetMapCodecManager instead of a
       throwaway per assignment (also closes #233). Touches PCMetrics.java,
       PartitionStateManager.java; regression test PCMetricsTest859.java + P1
-      hardening. PR #57 also bundles cherry-picks #893 (PartitionState offset
-      accuracy) and #905 (max-shard metric) -- those are NOT part of the leak fix.
+      hardening. PR #57 also bundles cherry-pick #905 (max-shard metric), which is
+      NOT part of the leak fix. It bundled #893 (PartitionState offset accuracy)
+      too until 2026-08-24, when that was split out into fork PR #337 so the fix
+      and its reproduction got their own review; see cherry-pick-893-offset-reset,
+      which is the carrier of record.
       Supersedes closed fork PR #45. confluentinc#892 already fixed the per-commit
       OffsetMapCodecManager churn (see reconciliation).
 
@@ -330,18 +333,27 @@ entries:
     fork:
       branches: [cherry-pick/893-offset-reset, upstream-pr-893, fix/121-offset-accuracy-on-assignment]
       prs: [337]
-      status: pr-open
+      fork_issue: 121
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [893]
       status: open
-      last_checked: 2026-07-28
+      last_checked: 2026-08-24
     adoc_anchor: part1-group-a-correctness
     notes: >
-      Cherry-pick of upstream contributor PR #893 (Martyn Ye) -- fixes offset
-      reset / data-loss risk on rebalance. Approved upstream, still OPEN
-      (unmerged). Carried downstream, bundled into fork PR #57.
-      Applied-Upstream: no (this IS the upstream PR, just not merged there).
+      Cherry-pick of upstream contributor PR #893 (sangreal) -- fixes an offset
+      reset on rebalance AND a silent record-loss mode sharing its root cause,
+      the second of which no bug report describes. Approved upstream by
+      rkolesnev 2025-11-17, still OPEN (unmerged there).
+      Applied-Upstream: no (this IS the upstream PR).
+      Carried in fork PR #337. It was in #57 until 2026-08-24, when it was split
+      out so the fix and its reproduction get their own review rather than
+      riding inside a metrics PR.
+      Issue #894 ("Offset reset when frequent rebalancing") is named in #893's
+      own body; this entry recorded issues: [] until 2026-08-04.
+      Reproduction and diagnosis:
+      docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md
 
   - id: cherry-pick-905-max-shard-metric
     group: metrics-observability
