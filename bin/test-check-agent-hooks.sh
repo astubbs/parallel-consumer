@@ -728,10 +728,16 @@ cat > docs/inflight/pr-90003-selftest.md <<'NOTE'
 - PUSH_RESOLVED_ITEM
 NOTE
 
+# ITS OWN STAMP DIRECTORY, not the ambient TMPDIR. The throttle stamps are cleared with a GLOB, and
+# under the shared TMPDIR that glob reaches every concurrent run of this suite - so two sessions
+# testing at once delete each other's stamps and the throttle case fails for neither session's
+# reason. Seen exactly once, mid-merge, on a machine with other agents active; the drift section
+# below was already isolated this way, and this makes the pair consistent.
+push_tmp="$(mktemp -d)"
 push_fire() { # <command> -> stdout of the hook
-    rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+    rm -f "$push_tmp"/pc-push-reminder-* 2>/dev/null
     printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
-        | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null
+        | TMPDIR="$push_tmp" PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null
 }
 
 out="$(push_fire 'git push')"
@@ -779,14 +785,14 @@ out="$(push_fire 'npm push')"
 assert "a non-git binary does not fire" silent "$got"
 
 # THROTTLED, or a push loop repeats the whole note and teaches the reader to skip it.
-printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" >/dev/null 2>&1
-out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null)"
+printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | TMPDIR="$push_tmp" PATH="$push_stub:$PATH" bash "$PUSH_HOOK" >/dev/null 2>&1
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | TMPDIR="$push_tmp" PATH="$push_stub:$PATH" bash "$PUSH_HOOK" 2>/dev/null)"
 [ -z "$out" ] && got=throttled || got=repeated
 assert "an immediate second push is throttled" throttled "$got"
 
 rm -f docs/inflight/pr-90003-selftest.md
 rm -rf "$push_stub"
-rm -f "${TMPDIR:-/tmp}"/pc-push-reminder-* 2>/dev/null
+rm -rf "$push_tmp"
 
 echo
 echo "--- remind-master-drift-on-push.sh ---"

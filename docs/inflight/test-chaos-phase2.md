@@ -5,13 +5,17 @@
 <!-- inflight-state: deferred - after v6, new scenarios rather than repairs -->
 
 
-- **Class 2 RED hunt - stands as a calibrated tripwire.** A true unbounded Class 2 stall has not
-  reproduced on master: a 9-seed sweep found 0 hits (stagnation peaks banded 95-112s, all
-  legit-window), and the cooperative-sticky W4 variant was green on both arms (sticky drops revoke
-  events ~6x, refuting the more-revokes hypothesis; eager-calibrated Class 1 bounds do not transfer to
-  cooperative). GREEN-side validated on both assignors; the RED side awaits a real occurrence or a new
-  trigger idea. Unexplored levers, most promising first: sub-second commit intervals;
-  EoS/transactional mode; `confluentinc#909` stale-container restart patterns.
+- **A REAL Class 2 hunt - unexplored levers.** The old calibrated tripwire is gone: it watched a
+  committed offset, which one incomplete record legitimately pins, so it could not tell a busy fleet
+  from a wedged one, and it now reports instead of gating. What that leaves open is the hunt itself -
+  a true unbounded Class 2 stall has still never reproduced on master, and finding one now needs a
+  trigger rather than a wider bound. Unexplored levers, most promising first: sub-second commit
+  intervals; EoS/transactional mode; `confluentinc#909` stale-container restart patterns. Note the
+  liveness claim now rests on `INSTANCE_STALL`, whose per-shard gap is tracked in
+  [`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) - so a hunt that
+  wedges a single shard beside busy siblings is currently invisible to every gate, which makes it the
+  more interesting target, not the less.
+
 - **KEY-ordered processing: tried as W5, and it did NOT concentrate contention into a stall.**
   `ChaosKeyOrderIT` runs the lever previously ranked first on the list above. Its calibrated shape is
   green with a 22s lag-stagnation peak against the 150s bound, so as a Class 2 trigger this lever is
@@ -29,8 +33,10 @@
   to `ManagedPCInstance`'s rebalance listener and fold `revokeEvents=` into the driver's run summary.
   Then revisit the ledger's `perDisturbanceAllowance` (5000) under cooperative - with measured counts
   the tightening becomes evidence-based instead of a guess.
-- **Unit-test seams (from astubbs#85's review, open).** ProgressProbe's per-scenario toggles
-  (`disableRebalanceDwellViolation` / `withNoProgressWindow`) and the "peak always measured, violation
-  only suppressed" invariant have no fast coverage - the samplers are private, so extract a seam first.
-  Same for `ManagedPCInstance.Config.extraConsumerProps` (null vs present, wins-last ordering). Both
-  become millisecond broker-free tests once the seams exist.
+- **Unit-test seams (from astubbs#85's review, MOSTLY CLOSED 2026-08-25).** The seams exist now, and
+  three of the four named items are covered in milliseconds without a broker:
+  `disableRebalanceDwellViolation` and the "peak always measured, violation only suppressed" invariant
+  through `ProgressProbe.recordRebalanceDwell` (`RebalanceDwellToggleIT`, both directions, with an
+  ARMED control so the disabled case cannot pass vacuously), and the Class 2 classifier through
+  `recordLagStagnation` (`Class2ObservationIT`). **Still open:** `withNoProgressWindow`, and
+  `ManagedPCInstance.Config.extraConsumerProps` (null vs present, wins-last ordering).

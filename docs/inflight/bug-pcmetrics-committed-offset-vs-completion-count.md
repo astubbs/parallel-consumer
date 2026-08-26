@@ -1,6 +1,7 @@
 # `PCMetricsTest.metricsRegisterBinding` asserts something UNORDERED mode cannot guarantee
 
 <!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: misdirection -->
 
 **Not a flake, and not confluentinc#857.** A red here looks like a product defect and is not one -

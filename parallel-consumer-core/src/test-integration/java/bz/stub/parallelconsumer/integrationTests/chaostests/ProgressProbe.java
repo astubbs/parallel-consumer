@@ -132,7 +132,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                     + "per-INSTANCE, so a single wedged shard on an instance whose other shards keep "
                     + "completing is covered by NOTHING that gates. If you are here because a "
                     + "watermark froze while the fleet stayed busy, that gap is the case to rule out "
-                    + "by hand. See docs/inflight/test-class2-probe-asserts-timing-not-correctness.md "
+                    + "by hand. See docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md "
                     + "and docs/inflight/test-per-shard-liveness-has-no-gate.md";
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
     public static final long LAG_STAGNATION_MIN_LAG = 50;
@@ -394,6 +394,22 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         this.mode = mode;
     }
 
+    /**
+     * A chaos-mode probe for a test that drives a sampler seam directly, with no broker.
+     * <p>
+     * The {@code null} {@link KafkaClientUtils} is legal because no sampler thread is started, so
+     * nothing ever reaches a cluster - and that invariant lives here, next to the field it depends on,
+     * rather than being re-explained at each call site. Three tests had grown their own copy of this
+     * constructor call plus their own wording of the same reason, which is the drift
+     * {@code AGENTS.md}'s "reuse test utilities - search before you add" rule exists to stop.
+     *
+     * @param groupId only appears in violation text; no group is joined
+     * @param topic   only appears in violation text; no topic is read
+     */
+    static ProgressProbe forSeamTest(String groupId, String topic) {
+        return new ProgressProbe(null, groupId, topic, () -> 0L, 0);
+    }
+
     /** Observer mode never gates - violations are autopsy material only (ambient flight recorder). */
     public boolean isObserverMode() {
         return mode == Mode.AMBIENT_OBSERVER;
@@ -571,14 +587,42 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             rebalanceDwellStart = Instant.now();
             return;
         }
-        Duration dwell = Duration.between(rebalanceDwellStart, Instant.now());
-        if (dwell.toMillis() > peakRebalanceDwellMs) peakRebalanceDwellMs = dwell.toMillis();
-        if (rebalanceDwellViolationEnabled && dwell.compareTo(REBALANCE_DWELL_BOUND) > 0) {
-            violate("ZOMBIE_MEMBER/REBALANCE_BLOCKED: group '" + groupId + "' dwelling in " + state
-                    + " for " + dwell.getSeconds() + "s (bound " + REBALANCE_DWELL_BOUND.getSeconds()
-                    + "s) - a member is not answering the rebalance (protocol-unresponsive)");
+        if (recordRebalanceDwell(Duration.between(rebalanceDwellStart, Instant.now()), groupId, state)) {
             rebalanceDwellStart = Instant.now(); // re-arm
         }
+    }
+
+    /**
+     * Classify one rebalance-dwell sample: always update the peak, and violate only when this
+     * scenario has the Class 1 detector armed.
+     * <p>
+     * <b>Measuring the peak is unconditional on the toggle, and that is the invariant.</b> A scenario
+     * whose own disturbances legitimately cross this bound suppresses the VIOLATION; it must never
+     * lose the MEASUREMENT, or disabling the detector would quietly delete the evidence that would
+     * later re-calibrate it. Extracted as a broker-free seam so that invariant is asserted rather than
+     * assumed - {@code docs/inflight/test-chaos-phase2.md} records it as having had no fast coverage,
+     * on the grounds that the samplers were private.
+     *
+     * <b>Safe to call from a thread other than the sampler, and that is not an accident.</b> It
+     * touches only safely-published state - the volatile peak, the volatile enable flag, and the
+     * synchronized violations list - and never the sampler-confined clock fields (`rebalanceDwellStart`
+     * and friends), which is why the caller re-arms rather than this method. That is what makes
+     * {@code RebalanceDwellToggleIT} driving it from the test thread legitimate rather than racy.
+     * Keep it that way: reaching for a plain field here would silently make those tests a data race.
+     *
+     * @return whether a violation fired, i.e. whether the caller should re-arm the dwell clock
+     */
+    boolean recordRebalanceDwell(Duration dwell, String groupId, ConsumerGroupState state) {
+        if (dwell.toMillis() > peakRebalanceDwellMs) {
+            peakRebalanceDwellMs = dwell.toMillis();
+        }
+        if (!rebalanceDwellViolationEnabled || dwell.compareTo(REBALANCE_DWELL_BOUND) <= 0) {
+            return false;
+        }
+        violate("ZOMBIE_MEMBER/REBALANCE_BLOCKED: group '" + groupId + "' dwelling in " + state
+                + " for " + dwell.getSeconds() + "s (bound " + REBALANCE_DWELL_BOUND.getSeconds()
+                + "s) - a member is not answering the rebalance (protocol-unresponsive)");
+        return true;
     }
 
     /**
@@ -635,6 +679,10 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * <b>Measuring the peak is unconditional on the bound, deliberately.</b> Suppressing the finding
      * must never lose the measurement - that is the same invariant the per-scenario dwell toggle
      * holds, and it is the whole reason a demoted detector still earns its keep.
+     *
+     * <b>Safe to call off the sampler thread</b>, for the same reason and under the same constraint as
+     * {@link #recordRebalanceDwell}: only the volatile peak and the synchronized observations list are
+     * touched here, never the sampler-confined `lastCommittedMove` bookkeeping the caller owns.
      *
      * @return whether the bound was crossed, i.e. whether the caller should re-arm this partition
      */

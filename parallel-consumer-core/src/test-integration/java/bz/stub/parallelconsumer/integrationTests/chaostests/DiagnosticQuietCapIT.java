@@ -35,24 +35,28 @@ class DiagnosticQuietCapIT {
 
     /** The 600s every real chaos scenario carries. */
     private static final Duration CEILING = Duration.ofSeconds(600);
-    /** Held back for teardown by the production constant; the assertions below only rely on it being non-zero. */
-    private static final Duration TEARDOWN_RESERVE = Duration.ofSeconds(90);
+    /** The production values, not restatements of them: line-for-line literals would redden this test
+     * whenever a constant legitimately changed, and `-Dchaos.diagnosticQuietCapMinutes` - an override
+     * this very class documents - already moves REQUESTED at runtime. */
+    private static final Duration TEARDOWN_RESERVE = DiagnosticQuietCap.TEARDOWN_RESERVE;
+    private static final Duration REQUESTED = DiagnosticQuietCap.REQUESTED;
     private static final String SCENARIO = "FixtureScenario";
 
     @Test
     void aFreshRunIsShortenedToWhatTheTimeoutActuallyAllows() {
-        Duration requested = Duration.ofMinutes(20);
         Duration cap = DiagnosticQuietCap.within(CEILING, Duration.ofSeconds(30), SCENARIO);
 
         assertWithMessage("a 20-minute watch cannot fit under a 600s @Timeout, so it must be cut - "
                 + "returning it whole is the original defect this method exists to prevent")
-                .that(cap).isLessThan(requested);
+                .that(cap).isLessThan(REQUESTED);
         assertWithMessage("the watch plus what was already spent plus the teardown reserve must fit "
                 + "inside the ceiling, or JUnit still kills the run")
                 .that(Duration.ofSeconds(30).plus(cap).plus(TEARDOWN_RESERVE)).isAtMost(CEILING);
+        Duration available = CEILING.minus(Duration.ofSeconds(30)).minus(TEARDOWN_RESERVE);
         assertWithMessage("exactly the remaining budget should be used - a shorter watch than the "
-                + "ceiling allows throws away observation time for nothing")
-                .that(cap).isEqualTo(CEILING.minus(Duration.ofSeconds(30)).minus(TEARDOWN_RESERVE));
+                + "ceiling allows throws away observation time for nothing. Expressed against the "
+                + "production constants so -Dchaos.diagnosticQuietCapMinutes cannot redden this")
+                .that(cap).isEqualTo(REQUESTED.compareTo(available) <= 0 ? REQUESTED : available);
     }
 
     @Test
@@ -89,7 +93,6 @@ class DiagnosticQuietCapIT {
     void withNoTimeoutTheRequestedWatchStandsExactly() {
         Duration cap = DiagnosticQuietCap.within(null, Duration.ofSeconds(30), SCENARIO);
 
-        assertThat(cap).isEqualTo(Duration.ofMinutes(
-                Integer.getInteger("chaos.diagnosticQuietCapMinutes", 20)));
+        assertThat(cap).isEqualTo(REQUESTED);
     }
 }

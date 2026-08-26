@@ -38,12 +38,10 @@ class Class2ObservationIT {
 
     /**
      * Chaos mode is the one that gates, so it is the mode this contract has to hold in - asserting it
-     * in ambient observer mode would prove nothing, since nothing gates there anyway. The null kcu is
-     * legal for the same reason it is in {@link InstanceStallProbeIT}: the sampler thread is never
-     * started, and {@link ProgressProbe#recordLagStagnation} reaches no cluster.
+     * in ambient observer mode would prove nothing, since nothing gates there anyway.
      */
     private static ProgressProbe gatingProbe() {
-        return new ProgressProbe(null, "class2-observation-group", "class2-observation-it", () -> 0L, 0);
+        return ProgressProbe.forSeamTest("class2-observation-group", "class2-observation-it");
     }
 
     @Test

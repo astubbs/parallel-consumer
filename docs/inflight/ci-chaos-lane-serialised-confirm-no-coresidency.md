@@ -34,7 +34,8 @@ repeated here:
 
 - **Why a ~154s `CLASS2_STALL` peak discriminates nothing, and why the bound now reports instead of
   gating** - [`bug-857-family.md`](bug-857-family.md)'s 2026-08-25 entry and
-  [`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md).
+  [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
+  (successor to the critique note, deleted once settled).
 - **Why the group is keyed the way it is, and the queueing trade it accepts** -
   [`pr-highcpu-fast-feedback.yml`](../../.github/workflows/pr-highcpu-fast-feedback.yml)'s own
   concurrency comment, and [`ci.md`](../ci.md) under "An ABSENT chaos check is not a passing one".

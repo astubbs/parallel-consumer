@@ -3,8 +3,9 @@
 <!-- inflight-type: register -->
 <!-- inflight-impact: ci -->
 
-`shell: lint` in `repo-hygiene.yml` gates on **errors only**. This note says what the other
-severities contain and what would turn each on. Same contract as
+`bin/check-shell-lint.sh`, run as part of the single `repo: hygiene` job in `repo-hygiene.yml` (there
+is no separate `shell: lint` job any more - see [`docs/ci.md`](../ci.md)), gates on **errors only**.
+This note says what the other severities contain and what would turn each on. Same contract as
 [`docs/inflight/static-spotbugs-rule-registry.md`](static-spotbugs-rule-registry.md): a severity that
 is off carries a reason and a trigger, and the off-set only shrinks.
 

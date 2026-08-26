@@ -6,8 +6,9 @@
 
 `CLASS2_STALL/LAG_STAGNATION` became a non-gating observation on 2026-08-25, on evidence that it
 measures elapsed time and fires on runs that complete
-([`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md)
-owns that reasoning; [`bug-857-family.md`](bug-857-family.md)'s 2026-08-25 entry owns the replays).
+([`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
+owns that reasoning, having succeeded the critique note that was deleted once it was settled;
+[`bug-857-family.md`](bug-857-family.md)'s 2026-08-25 entry owns the replays).
 That is not in dispute here. What this note records is the **cost** of it, which the change's own
 write-up initially understated.
 
@@ -54,6 +55,14 @@ argued for, and was wrong for three months. Before this gates anything:
   applies to its replacement.
 - **Then re-run the two replay seeds** (`6825864417772979246`, `4044221734199516240`) and show they
   stay green. A gate that fires on those is the old false positive wearing a new name.
+- **A Lincheck harness may reach this far more cheaply than a chaos scenario.**
+  astubbs/parallel-consumer#347 adds a Lincheck lane calibrated by refinding four real races
+  unaided - including one nobody had listed. The bar above asks for a red control that fires on an
+  injected commit-freeze; building that as a chaos scenario means arranging a fleet, a broker and a
+  fault injector, while the same property may be expressible as a concurrency harness over the
+  commit path in seconds. Try that route first. Note that PR also records replay non-determinism on
+  the commit path (micrometer, and `parallelStream()` in two `PartitionState` accessors), which is
+  the obstacle a model-checking approach would hit here.
 - Prefer a `ShardManager`-level signal if one becomes reachable without adding main-code accessors
   for a probe - the per-instance granularity is a reachability compromise, recorded as such in
   `INSTANCE_STALL_BOUND`'s javadoc, not the ideal.

@@ -98,9 +98,12 @@ EOF
 # consolidation that removes a duplicate silently introduces a bug.
 hook_file_mtime() { # <path>
     [ -f "$1" ] || return 0
+    # hazard-ok: this IS the platform probe - it asks whether GNU stat exists before anything uses it
     if stat -c %Y . >/dev/null 2>&1; then
+        # hazard-ok: the probe above already established GNU stat is present
         stat -c %Y "$1" 2>/dev/null || true   # GNU coreutils
     else
+        # hazard-ok: the probe above rejected GNU stat, so this is the BSD branch
         stat -f %m "$1" 2>/dev/null || true   # BSD / macOS
     fi
 }

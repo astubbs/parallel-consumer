@@ -31,7 +31,7 @@ summary() {
     echo ""
     printf 'Total chaos wall-clock: **%dm %02ds** (build included)\n\n' $((total / 60)) $((total % 60))
     local tests
-    tests=$(find . -path '*/failsafe-reports/TEST-*.xml' | wc -l | tr -d ' ')
+    tests=$(find . -path '*failsafe-reports/TEST-*.xml' | wc -l | tr -d ' ')
     if [ "$tests" -eq 0 ]; then
         echo "### ZERO chaos tests selected - this run measured NOTHING"
         echo ""
@@ -40,7 +40,8 @@ summary() {
         echo "returns when the W4 variants or the quarantine owner fix (astubbs#80) land."
     else
         # Class 2 lag stagnation REPORTS rather than gates (see ProgressProbe.getObservations and
-        # docs/inflight/test-class2-probe-asserts-timing-not-correctness.md), so a green run is the
+        # docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md),
+        # so a green run is the
         # only place its findings can ever appear. Printing them here is what stops "does not gate"
         # from meaning "nobody reads it" - the peak is the number a timing regression moves.
         # Every read here uses a whole-file `grep` with no early-exiting reader downstream: `| head`
@@ -72,7 +73,7 @@ summary() {
             # observed whatever it observed.
             if [ "$obs" -gt 0 ]; then any_observations=$((any_observations + 1)); fi
             if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak_ms:-n/a}${peak_ms:+ms} | ${obs} |"; fi
-        done < <(find . -path '*/failsafe-reports/TEST-*.xml' -print0)
+        done < <(find . -path '*failsafe-reports/TEST-*.xml' -print0)
         if [ "$any_observations" -gt 0 ]; then
             echo ""
             echo "### Class 2 observations fired in ${any_observations} scenario(s) - this did NOT fail the run"
@@ -108,7 +109,31 @@ emit_summaries() {
 }
 trap emit_summaries EXIT
 
+# With CHAOS_REPS > 1 every rep writes the SAME TEST-<class>.xml filenames, so the end-of-run scan
+# would describe only the LAST rep: an observation or a higher peak seen in rep 1 vanishes if the
+# final rep happens to be quiet, and the summary then under-reports a hunt that did find something.
+# That is the exact silent-under-reporting shape this summary exists to prevent, so archive each
+# finished rep before the next overwrites it. Caught in review on astubbs/parallel-consumer#354.
+#
+# `rep<N>-failsafe-reports`, beside the live directory, is chosen so BOTH readers still see it: this
+# script's own `*failsafe-reports/TEST-*.xml` scans (note: no leading slash, so the prefixed name
+# matches), and the workflow's artifact glob `**/target/*-reports/*.xml`, which requires the
+# directory to sit directly under `target/` and to end in `-reports`. Nesting it deeper would keep
+# the first reader and silently lose the artifacts.
+archive_finished_rep() {
+    local n="$1" f dir dest
+    while IFS= read -r -d '' f; do
+        dir=$(dirname "$f")
+        dest="${dir%/failsafe-reports}/rep${n}-failsafe-reports"
+        mkdir -p "$dest"
+        mv "$f" "$dest/"
+    # Scoped to the LIVE directory, never `*failsafe-reports`, or each rep would re-archive every
+    # earlier rep's files and renumber them under the newest rep.
+    done < <(find . -path '*/failsafe-reports/TEST-*.xml' -print0)
+}
+
 for i in $(seq 1 "$REPS"); do
+    if [ "$i" -gt 1 ]; then archive_finished_rep "$((i - 1))"; fi
     echo "=== chaos rep $i/$REPS ==="
     time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
         -DskipUTs=true \

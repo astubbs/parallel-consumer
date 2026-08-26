@@ -1,6 +1,7 @@
 # `PCMetrics.registeredMeters` is a plain `ArrayList`, written from both threads
 
 <!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: crash -->
 
 ## Already known, already being fixed - astubbs/parallel-consumer#57

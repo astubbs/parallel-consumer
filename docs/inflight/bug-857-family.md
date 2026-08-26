@@ -1,6 +1,7 @@
 # The confluentinc#857 family - what is still open
 
 <!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
 
 
@@ -34,6 +35,20 @@ full evidence is the last section of this file; three consequences bind anyone p
   box, and the Class 2 findings **continue at roughly the same rate**, because they are the bound
   meeting the load and no deadlock fix touches that. **If they instead drop off, this reading is
   wrong** - say so loudly here, because the whole 2026-08-25 section then needs revisiting.
+- **The reproducer named for this deadlock runs in the one mode the deadlock cannot reach.**
+  `RebalanceEoSDeadlockTest` configures `PERIODIC_TRANSACTIONAL_PRODUCER`, while
+  [`revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
+  states the AB-BA cycle is *"Only reachable in PERIODIC_CONSUMER_SYNC - the reproducer test runs a
+  transactional mode where this cycle cannot occur"*. That sentence is in the solutions doc and the
+  test still has the name, so the two disagree in the open. **Whichever is right matters to
+  astubbs#29:** if the doc is right, the test's name promises coverage it does not have, and this
+  file's "live confirmation the deadlock is still present: `RebalanceEoSDeadlockTest` failed once
+  under the 20-run stress hunt" was a *different* failure being read as this one. If the doc is too
+  narrow, the mode restriction it rests on needs revising. The cheap resolution is a sibling test at
+  `PERIODIC_CONSUMER_SYNC` with the same rebalance shape - deliberately not added here, because on a
+  branch with no fix it would land as a knowingly-red test and that is
+  [`docs/quarantined-tests.md`](../quarantined-tests.md)'s decision to make, not a side effect of a
+  chaos-suite change.
 - **The sequencing advice in [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
   - "land the backlog, then re-run" - was sound when written and no longer applies to `CLASS2_STALL`
   specifically.** It still applies to any signature this file records that is *not* the lag bound.
@@ -608,9 +623,11 @@ green), then red three times tonight on three different seeds (01:05, 01:21 and 
 below). One green and three reds is a rate worth noticing, not a calibration.
 More importantly, a fail-fast red proves the *bound* was crossed, not that the backlog never drained
 - which is exactly the critique in
-[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md),
-where seed `4734674029169027864` trips this bound 53 times on the eager arm and still drains
-completely. Until one of tonight's drain seeds is replayed with
+`test-class2-probe-asserts-timing-not-correctness.md` - deleted once its critique was settled, so
+read it as this entry read it with
+`git show 77beb4f31:docs/inflight/test-class2-probe-asserts-timing-not-correctness.md` and grep
+`What the proxy costs, measured` - where seed `4734674029169027864` trips this bound 53 times on the
+eager arm and still drains completely. Until one of tonight's drain seeds is replayed with
 `-Dchaos.diagnoseStallRecovery=true`, "the drain arm is also red" and "the drain arm is also slow"
 are the same observation.
 
@@ -733,8 +750,9 @@ exiting 126 (it never started), and passed on a straight re-run.
 
 **Still unresolved, and by the same missing step as every prior entry: nobody has replayed the
 seeds.** Recorded rather than diagnosed. The `CLASS2_STALL` arm is the one
-[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md)
-argues is asserting the wrong property - the probe's own message says the bound "is a TIMING
+`test-class2-probe-asserts-timing-not-correctness.md` argues is asserting the wrong property (that
+note was deleted once its critique was settled - read it as this entry read it with
+`git show 77beb4f31:docs/inflight/test-class2-probe-asserts-timing-not-correctness.md`) - the probe's own message says the bound "is a TIMING
 measurement, not a correctness verdict" - and a `-Dchaos.diagnoseStallRecovery=true` replay of
 `3334891073975887762` is what would say whether the backlog drains. `Chaos Pain Suite` is **not** in
 master's required-checks ruleset, so neither red blocked the PR.
@@ -771,12 +789,15 @@ unresolved either way.** `Performance (optional)` did share the self-hosted box 
 the chaos job's `highcpu-1`) but ran 23:38:46-23:41:49, while the failing scenario started at
 23:41:20 and its 153s stagnation window opened around 23:41:28 - so the overlap covers only the
 window's first ~20 seconds, not the storm phase the way
-[`test-chaos-class2-red-was-runner-contention.md`](test-chaos-class2-red-was-runner-contention.md)
+[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
 records it. As there, the discriminator is an uncontended replay of this seed, and **nobody has
 replayed it**.
 
 **Counted as a tally mark, not as evidence of the stall.** By
-[`test-class2-probe-asserts-timing-not-correctness.md`](test-class2-probe-asserts-timing-not-correctness.md)
+`test-class2-probe-asserts-timing-not-correctness.md` (deleted once settled; read it at
+`git show 77beb4f31:docs/inflight/test-class2-probe-asserts-timing-not-correctness.md`, and its
+conclusions now live in
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md))
 this bound is a timing measurement inside a correctness suite, and the probe's own message now says
 so; one violation at 153s against 150s, on a run that consumed 241403 records, is the marginal case
 that critique predicts rather than a protocol-invisible wedge.
@@ -824,6 +845,7 @@ above. That is a defect in the autopsy rather than in this family, and it has it
 [`test-chaos-autopsy-omits-fleet-violations.md`](test-chaos-autopsy-omits-fleet-violations.md).
 Entries in this ledger that lean on a clean autopsy are worth re-checking against it.
 <!-- post-merge: checked-end -->
+
 
 ## 2026-08-25: the discriminator was finally run, and it closes the `CLASS2_STALL` line of this file
 
@@ -931,6 +953,127 @@ astubbs#29 and the backlog land; recorded here so nobody later reads it as one.
 One of those runs took the **cooperative** arm down with an explicit probe verdict, which retires the
 second sighting's "eager-protocol-specific" reading for Class 2 specifically - a small thing now that
 Class 2 is a speed measurement, but it was an open question above.
+
+## 2026-08-25, INTEGRATION lane: the commit-response timeout, on the deadlock's exact preconditions
+
+<!-- post-merge: checked-begin -->
+
+**A sighting from the ordinary `Integration Tests` lane rather than the chaos suite**, on
+astubbs#354's head `d1184338b`
+([run 32824349833, job 97729240493](https://github.com/astubbs/parallel-consumer/actions/runs/32824349833/job/97729240493),
+08:03-08:04Z). One error in 155 tests - not a cascade, and not the infrastructure failure that killed
+the previous run on the same PR (recorded at the end of this entry so the two are not conflated).
+
+    MultiInstanceRebalanceTest.consumeWithMultipleInstancesPeriodicConsumerSync(ProcessingOrder)[1]
+    expected: 1000  commit: PERIODIC_CONSUMER_SYNC  order: UNORDERED  max poll: 500
+
+    Terminal failure in one or more of the PCs:
+    Error from poll control thread: Timeout waiting for commit response PT10S to request
+    ConsumerOffsetCommitter.CommitRequest(id=e7c10671-c1cb-4ab8-a57b-905070e7b5b4,
+    requestedAtMs=1787644975926) - the broker poll thread is the only producer of commit
+    responses, and it has not died with an exception, so it is not answering: it is blocked
+    or slower than the configured offsetCommitTimeout.
+
+**Why this earns an entry rather than a retry.** It lands on all three preconditions
+[`revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
+states for the AB-BA cycle - **multiple consumers**, **a rebalance**, and **`PERIODIC_CONSUMER_SYNC`**,
+which that document says is the only mode where the cycle is reachable at all. The exception's own
+text supplies the other half: the poll thread *has not died*, so it is blocked - which is the poll
+thread parked in `onPartitionsRevoked` on `synchronized (commitCommand)` while the control thread
+waits on the `commitAndWait()` only that thread can service.
+
+**Not proven, and the missing evidence is nameable.** There is no thread dump, so "parked on the
+commitCommand monitor" is inferred from the preconditions plus the exception's own reasoning, not
+observed. The honest alternative is a broker slow enough to miss a 10s commit deadline under CI load,
+which produces the identical message - [`bug-offset-commit-timeout-does-two-jobs.md`](bug-offset-commit-timeout-does-two-jobs.md)
+is about exactly that ambiguity. **The discriminator is a thread dump at the moment of the timeout**,
+and nothing in this lane captures one; that is the cheapest thing to add before the next occurrence.
+
+**astubbs#354 is not a suspect.** Its diff is chaos-suite test infrastructure, CI workflow and
+documentation. `MultiInstanceRebalanceTest` is not a chaos scenario, never constructs a
+`ProgressProbe` in chaos mode, and none of the classes on the failing path
+(`ConsumerOffsetCommitter`, `BrokerPollSystem`, the poll thread) are touched by that branch. The
+eight most recent `CI` runs on master were all green, which fits the probabilistic behaviour this
+file already attributes to the root-cause stall rather than a regression.
+
+**What it adds, stated carefully.** Every prior entry here is a chaos-suite finding, and the
+2026-08-25 discriminator entry concluded those were overwhelmingly the Class 2 *timing* proxy. This
+is the other shape: a hard commit-response timeout, a terminal PC failure, consumption stopped - from
+a suite with no calibrated bounds to cross. It is a **candidate** occurrence of the product deadlock
+astubbs#29 fixes, arriving from the lane nobody was watching for it. If it holds up, that is a better
+argument for landing astubbs#29 than any chaos seed in this file. Treat it as one datum: the
+preconditions match and the message fits; a thread dump would settle it.
+
+**The previous run on the same PR, so it is not mistaken for a recurrence of this.** Head `e668d8ca`
+failed the same lane for an unrelated INFRASTRUCTURE reason: the Kafka container exited with code 126
+and timed out waiting for `[KafkaServer id=N] started` on `confluentinc/cp-kafka:7.9.0`, after which
+every remaining class failed instantly with `NoClassDefFoundError: Could not initialize class
+BrokerIntegrationTest` - one dead static initialiser cascading through the fork. Different signature,
+different cause: two consecutive reds on one PR that are not the same failure.
+
+This sighting was observed on astubbs#354, a chaos-suite change, and is recorded here because the
+evidence for a CI failure dies with its logs. That PR is not its cause - it reads the same after the
+merge, when astubbs#354 is a landed commit rather than an open PR.
+<!-- post-merge: checked-end -->
+
+## 2026-08-25, the first chaos RED under the demotion - and it is NOT Class 2
+
+<!-- post-merge: checked-begin -->
+`Chaos Pain Suite` on astubbs#354's head `f7d0ad0e4`
+([job 97734555500](https://github.com/astubbs/parallel-consumer/actions/runs/32826167590/job/97734555500)),
+the first full run with `CLASS2_STALL` demoted to a non-gating observation. **Seed
+`1838980910098175839`.**
+
+    ChaosKeyOrderIT
+    ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-275607478' dwelling in
+    PreparingRebalance for 15s (bound 15s) - a member is not answering the rebalance
+
+**Six of the seven scenarios logged `probe violations=[], non-gating observations=[]`** - not merely
+no violations, but **no Class 2 observations either**, on a run of 250k records per scenario. The
+demotion is therefore not hiding a flood on this seed; there was nothing to hide.
+
+**The one failure is a different detector, and it still gates.** `ZOMBIE_MEMBER/REBALANCE_BLOCKED` is
+the Class 1 rebalance-dwell probe, which this branch does not touch: a member not answering the
+rebalance is protocol-VISIBLE, bounded at 15s against a measured healthy peak of ~6.7s, and it is a
+correctness claim rather than a timing proxy. This is the suite behaving as the demotion intended -
+quiet about speed, still red about a member that will not answer.
+
+**Why it belongs in this file.** `ZOMBIE_MEMBER` is one of the family's own signatures (the fourth,
+fifth and twelfth sightings all carry it). Recorded with its seed because the seed is the asset and
+the artifact expires.
+
+**DIAGNOSED, and it is calibration - the same defect class as the Class 2 finding, one detector
+over.** The seed replays RED deterministically, including on plain master:
+
+| Arm | Head | Verdict | `rebalanceDwell` peak |
+|---|---|---|---|
+| CI | `f7d0ad0e4` (astubbs#354) | RED | 15411ms |
+| Local replay | `f7d0ad0e4` (astubbs#354) | RED | same violation |
+| **Local control** | **`cf0007df1` (plain master)** | **RED** | **15658ms** |
+
+So it is **master-state, not PR-state**, and astubbs#354 is excluded three ways: the control arm
+above, `ChaosKeyOrderIT` being untouched by that branch, and that scenario extending
+`ChaosScenarioBase` rather than the scenario class the branch modified.
+
+**The mechanism, from the run's own log.** The suite's user function dwells NON-interruptibly by
+design (`ChaosScenarioBase#newInstance`, "sleep-until-deadline"; its javadoc explains that letting
+PC's close interrupt it would cap every drain and stall at seconds and shrink the windows the probes
+discriminate on). So when a chaos action closes an instance mid-dwell, the close cannot complete -
+`Thread execution pool termination await timeout (PT10S)!` then `is user function swallowing
+interrupted exception?`, 25 seconds before the probe fired. A member stuck in that close is not
+answering the rebalance, and the group dwells past the 15s bound.
+
+**The calibration gap is one line wide.** `AbstractRevokeUnderWorkScenario` calls
+`disableRebalanceDwellViolation()` precisely because its disturbances legitimately block rebalances
+(there, blocked rebalances self-resolve by eviction). `ChaosKeyOrderIT` runs the same disturbance
+shapes - stop and restart against an uninterruptible heavy tail, under KEY ordering where dwells
+chain - and leaves that violation ARMED. All three crossings measured 15.4-15.7s against a 15000ms
+bound: **2.7-4.4% over**, which is the bound meeting the load, not a member that is wedged.
+
+**Not a quarantine candidate.** Quarantine is for a known-red test whose fix is pending; here the
+diagnosis is complete and the fix is a choice between disabling the dwell violation for this scenario
+(matching W4) or widening its bound for the disturbance shape it actually runs. Recorded rather than
+applied, because it is a scenario calibration change and astubbs#354 is a different change.
 <!-- post-merge: checked-end -->
 
 ## Delete when
@@ -938,3 +1081,4 @@ Class 2 is a speed measurement, but it was an open question above.
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
 timing proxy accumulated fourteen sightings. This file may be retired once astubbs#29 lands and the
 remaining open item - the original deadlock - has its own solutions write-up.
+

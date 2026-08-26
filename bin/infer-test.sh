@@ -35,22 +35,27 @@
 set -euo pipefail
 
 INFER_BIN="${INFER_BIN:-infer}"
-JDK="${RACERD_JDK:-$HOME/.sdkman/candidates/java/17.0.18-tem}"
+# RACERD_JDK is a deprecated alias, kept as a fallback for whoever already has it exported - the
+# checker set widened past RacerD alone (see the header), so the knob got the name that describes
+# what it actually configures.
+JDK="${INFER_JDK:-${RACERD_JDK:-$HOME/.sdkman/candidates/java/17.0.18-tem}}"
 
 # DRY RUN: read a canned report instead of running Infer, so the ratchet below can be tested without
 # a 220 MB toolchain and a real analysis. Mirrors PIT_DRY_RUN_LOG in bin/ci-mutation-test.sh, which
 # exists for the same reason - the interesting logic is the comparison, not the tool that feeds it.
 #
-# This is not a convenience. Before it existed the ratchet arms in bin/test-check-racerd.sh could not
+# This is not a convenience. Before it existed the ratchet arms in bin/test-check-infer.sh could not
 # run anywhere without an Infer run, so they did not run at all: the self-test printed a `skip` in CI
 # and, when a report WAS supplied, an `ok:` that incremented the pass counter while asserting
 # nothing, under a comment claiming four arms were exercised. The decisive arm - the same-count swap
 # that a count ceiling waves through - has never been machine-checked until now.
-RACERD_DRY_RUN_REPORT="${RACERD_DRY_RUN_REPORT:-}"
+#
+# RACERD_DRY_RUN_REPORT is a deprecated alias, kept as a fallback - same reasoning as RACERD_JDK above.
+INFER_DRY_RUN_REPORT="${INFER_DRY_RUN_REPORT:-${RACERD_DRY_RUN_REPORT:-}}"
 
-if [ -z "$RACERD_DRY_RUN_REPORT" ] && ! command -v "$INFER_BIN" > /dev/null 2>&1 && [ ! -x "$INFER_BIN" ]; then
+if [ -z "$INFER_DRY_RUN_REPORT" ] && ! command -v "$INFER_BIN" > /dev/null 2>&1 && [ ! -x "$INFER_BIN" ]; then
     cat >&2 <<'MISSING'
-racerd-test: Infer is not installed - CANNOT RUN (this is not a pass).
+infer-test: Infer is not installed - CANNOT RUN (this is not a pass).
 
   Download v1.3.0 from https://github.com/facebook/infer/releases, unpack it, and either put its
   bin/ on PATH or set INFER_BIN to the infer executable.
@@ -68,8 +73,8 @@ MISSING
     exit 2
 fi
 
-if [ -z "$RACERD_DRY_RUN_REPORT" ] && [ ! -x "$JDK/bin/javac" ]; then
-    echo "racerd-test: no JDK 17 javac at $JDK - CANNOT RUN. Set RACERD_JDK." >&2
+if [ -z "$INFER_DRY_RUN_REPORT" ] && [ ! -x "$JDK/bin/javac" ]; then
+    echo "infer-test: no JDK 17 javac at $JDK - CANNOT RUN. Set INFER_JDK." >&2
     exit 2
 fi
 
@@ -79,18 +84,18 @@ cd "$repo_root"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-if [ -n "$RACERD_DRY_RUN_REPORT" ]; then
-    if [ ! -f "$RACERD_DRY_RUN_REPORT" ]; then
-        echo "racerd-test: RACERD_DRY_RUN_REPORT=$RACERD_DRY_RUN_REPORT does not exist - CANNOT RUN." >&2
+if [ -n "$INFER_DRY_RUN_REPORT" ]; then
+    if [ ! -f "$INFER_DRY_RUN_REPORT" ]; then
+        echo "infer-test: INFER_DRY_RUN_REPORT=$INFER_DRY_RUN_REPORT does not exist - CANNOT RUN." >&2
         exit 2
     fi
-    echo "racerd-test: DRY RUN - reading a canned report from $RACERD_DRY_RUN_REPORT instead of running Infer."
+    echo "infer-test: DRY RUN - reading a canned report from $INFER_DRY_RUN_REPORT instead of running Infer."
     mkdir -p "$work/infer-out"
-    cp "$RACERD_DRY_RUN_REPORT" "$work/infer-out/report.json"
+    cp "$INFER_DRY_RUN_REPORT" "$work/infer-out/report.json"
     rc=0
 else
 
-echo "racerd-test: resolving the compile classpath"
+echo "infer-test: resolving the compile classpath"
 # SCOPED TO CORE, and `-am` is load-bearing twice over. Without `-pl` the goal runs for every module
 # and each one OVERWRITES the single -Dmdep.outputFile, so the file left behind is the LAST module's
 # classpath - which is how this lane first shipped: it analysed core's sources against the example
@@ -100,23 +105,31 @@ echo "racerd-test: resolving the compile classpath"
 JAVA_HOME="$JDK" ./mvnw --batch-mode -Pci dependency:build-classpath \
     -pl parallel-consumer-core -am \
     -Dmdep.outputFile="$work/cp.txt" -q > "$work/cp.log" 2>&1 || {
-    echo "racerd-test: could not resolve the classpath - see $work/cp.log" >&2
+    echo "infer-test: could not resolve the classpath - see $work/cp.log" >&2
     exit 2
 }
 
 find parallel-consumer-core/src/main/java -name '*.java' > "$work/srcs.txt"
 count="$(wc -l < "$work/srcs.txt" | tr -d ' ')"
 if [ "$count" -eq 0 ]; then
-    echo "racerd-test: NO SOURCES MATCHED - refusing to report success over an empty set" >&2
+    echo "infer-test: NO SOURCES MATCHED - refusing to report success over an empty set" >&2
     exit 2
 fi
-echo "racerd-test: analysing $count source file(s)"
+echo "infer-test: analysing $count source file(s)"
 
 mkdir -p "$work/classes"
 set +e
-"$INFER_BIN" run --racerd-only --results-dir "$work/infer-out" -- \
+# EVERY Java checker, not just RacerD. `--racerd-only` disabled two that are ON BY DEFAULT and
+# support Java - pulse (null derefs, resource leaks) and starvation (deadlock via lock-order
+# inversion) - plus every off-by-default one. The identity ratchet already keys on bug type, so
+# widening the checker set needs no schema change: new bug types simply arrive as new identities,
+# and anything already known stays known. What this buys is that a null deref introduced tomorrow
+# fails the lane, where before it was invisible.
+"$INFER_BIN" run --results-dir "$work/infer-out" \
+    --annotation-reachability --bufferoverrun --cost --loop-hoisting --scope-leakage \
+    -- \
     "$JDK/bin/javac" -cp "$(cat "$work/cp.txt")" -d "$work/classes" -proc:full "@$work/srcs.txt" \
-    > "$work/racerd.log" 2>&1
+    > "$work/infer.log" 2>&1
 rc=$?
 set -e
 
@@ -125,10 +138,10 @@ set -e
 # which against a ceiling reads as "fewer races than before" rather than "the analysis did not
 # finish". Healthy runs exit 0 here; `infer run` does not use a nonzero code to signal findings.
 if [ "$rc" -ne 0 ]; then
-    echo "racerd-test: infer exited $rc - CANNOT RUN, the analysis did not complete." >&2
+    echo "infer-test: infer exited $rc - CANNOT RUN, the analysis did not complete." >&2
     echo "  Any report it left is partial, and a partial report undercounts against the ceiling." >&2
-    echo "  Log: $work/racerd.log" >&2
-    cp "$work/racerd.log" "${TMPDIR:-/tmp}/racerd-failure.log" 2>/dev/null || true
+    echo "  Log: $work/infer.log" >&2
+    cp "$work/infer.log" "${TMPDIR:-/tmp}/infer-failure.log" 2>/dev/null || true
     exit 2
 fi
 
@@ -136,15 +149,15 @@ fi
 
 report="$work/infer-out/report.json"
 if [ ! -f "$report" ]; then
-    echo "racerd-test: Infer produced no report - CANNOT RUN. Log: $work/racerd.log" >&2
-    cp "$work/racerd.log" "${TMPDIR:-/tmp}/racerd-failure.log" 2>/dev/null || true
+    echo "infer-test: Infer produced no report - CANNOT RUN. Log: $work/infer.log" >&2
+    cp "$work/infer.log" "${TMPDIR:-/tmp}/infer-failure.log" 2>/dev/null || true
     exit 2
 fi
 
 found="$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$report")"
-echo "racerd-test: $found thread-safety finding(s) (infer exit $rc)"
-cp "$report" "${TMPDIR:-/tmp}/racerd-report.json"
-echo "racerd-test: full report copied to ${TMPDIR:-/tmp}/racerd-report.json"
+echo "infer-test: $found finding(s) across all enabled checkers (infer exit $rc)"
+cp "$report" "${TMPDIR:-/tmp}/infer-report.json"
+echo "infer-test: full report copied to ${TMPDIR:-/tmp}/infer-report.json"
 
 python3 -c "
 import json,sys
@@ -152,16 +165,16 @@ for i in json.load(open(sys.argv[1])):
     print('  %s:%s  %s' % (i.get('file','?').split('/')[-1], i.get('line','?'), ' '.join(i.get('qualifier','').split())[:120]))
 " "$report"
 
-# AN IDENTITY SET, not a count. config/racerd-known-findings.txt records which races are known, keyed on
+# AN IDENTITY SET, not a count. config/infer-known-findings.txt records which races are known, keyed on
 # bug type plus class.method. A bare ceiling could not tell "one race fixed" from "one race swapped
-# for a different one" - the count is 13 either way - which an independent review caught and which is
-# the same reports-green-while-it-changed class this lane exists to police. The file is 12 lines.
+# for a different one" - the total is unchanged either way - which an independent review caught and
+# which is the same reports-green-while-it-changed class this lane exists to police.
 #
 # Fails BOTH ways on purpose: an identity that is new means a race was introduced, and one that no
 # longer fires means somebody fixed a race and did not ratchet, which is how a set quietly stops
-# meaning anything. Unset RACERD_KNOWN to get report-only, which is what a local exploratory run
+# meaning anything. Unset INFER_KNOWN to get report-only, which is what a local exploratory run
 # wants.
-known="${RACERD_KNOWN:-$repo_root/config/racerd-known-findings.txt}"
+known="${INFER_KNOWN:-$repo_root/config/infer-known-findings.txt}"
 if [ -f "$known" ]; then
     current="$work/current.txt"
     python3 -c "
@@ -183,18 +196,18 @@ for (bt,sig),n in sorted(c.items()): print(n, bt, sig)
     gone="$(comm -23 "$expected" "$current" || true)"
 
     if [ -n "$added" ]; then
-        echo "racerd-test: NEW race(s) - not in config/racerd-known-findings.txt:" >&2
+        echo "infer-test: NEW race(s) - not in config/infer-known-findings.txt:" >&2
         echo "$added" | sed 's/^/    /' >&2
         exit 1
     fi
     if [ -n "$gone" ]; then
-        echo "racerd-test: these known races no longer fire:" >&2
+        echo "infer-test: these known races no longer fire:" >&2
         echo "$gone" | sed 's/^/    /' >&2
-        echo "  If you fixed them, delete those lines from config/racerd-known-findings.txt in the same" >&2
+        echo "  If you fixed them, delete those lines from config/infer-known-findings.txt in the same" >&2
         echo "  change. A set nobody shrinks stops meaning anything." >&2
         exit 1
     fi
-    echo "racerd-test: all $found finding(s) are known, none new"
+    echo "infer-test: all $found finding(s) are known, none new"
     exit 0
 fi
 

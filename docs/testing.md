@@ -198,8 +198,13 @@ a revoke while the new owner takes the same key) lands in two windows and is not
 **not** unanswerable, though: every delivery records its epoch and incarnation and the full history is
 kept, so the check is a function nobody has written rather than data nobody has. What it would need is
 a calibrated bound on how long a revoked owner may legitimately still be finishing - see the class
-javadoc. That shape is a real defect this repo has already fixed once (astubbs#80). And `CLASS2_STALL` gates on a timing bound, so a red proves the bound was crossed, not
-that the backlog never drained - see `docs/inflight/test-class2-probe-asserts-timing-not-correctness.md`.
+javadoc. That shape is a real defect this repo has already fixed once (astubbs#80). The second limit used to
+be that `CLASS2_STALL` **gated** on a timing bound - it no longer does, and the reason is the limit:
+it measures how long a committed offset stayed pinned, which one incomplete record does
+legitimately, so a crossing only ever proved the bound was met and never that the backlog failed to
+drain. Replays crossed it and drained completely. It now records a non-gating **observation**, which
+is why the chaos job summary prints the peak rather than a verdict - read it as a speed number. See
+`docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`.
 
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups=`

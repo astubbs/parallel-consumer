@@ -277,7 +277,13 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         startRun(probe, conductor);
 
         try {
-            // Phase 1 - storm: revocations under heavy in-flight work; bail early on any violation
+            // Phase 1 - storm: revocations under heavy in-flight work; bail early on any VIOLATION.
+            // Since the Class 2 lag bound became a non-gating observation (2026-08-25) it no longer
+            // trips hasViolations(), so a storm that crosses that bound now runs its full
+            // STORM_DURATION where it used to cut short. That is intended - the bound measures speed,
+            // and ending the disturbance early because the fleet was slow removed exactly the load the
+            // storm exists to apply - but it does lengthen those particular runs, so a wall-clock
+            // comparison against a pre-demotion run is not like-for-like.
             Instant stormEnd = Instant.now().plus(STORM_DURATION);
             while (Instant.now().isBefore(stormEnd) && !probe.hasViolations()) {
                 Thread.sleep(1_000);

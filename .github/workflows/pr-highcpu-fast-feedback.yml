@@ -108,13 +108,38 @@ jobs:
       # would silently return chaos to per-ref cancel-in-progress - the exact behaviour fixed here -
       # with nothing going red. `optional` would also have worked and is wrong for a different reason:
       # it couples "gates the merge" to "owns the box", which are unrelated properties.
+      #
+      # EVERY suite that can occupy this host during chaos must carry the key, or the mutex only
+      # excludes chaos-from-chaos while the noisiest possible neighbour still co-resides. The first
+      # version of this fix put only chaos in the group and left Performance on its own per-suite
+      # group, which is exactly that hole: a benchmark saturating the box is the single worst thing
+      # to run beside a suite whose findings are timing bounds. Caught in review on
+      # astubbs/parallel-consumer#354.
+      #
+      # The cost is real and is accepted rather than hidden: sharing one non-cancelling group means
+      # Performance RUNS AFTER chaos rather than beside it, and on a busy day its run can be displaced
+      # by a newer one instead of executing. GitHub cannot express "cancel my own predecessors but
+      # never the other suite's" - one group carries one cancel policy - and letting Performance cancel
+      # in this group would let an advisory benchmark kill a chaos measurement, which is strictly
+      # worse. Performance is advisory and its own comment already accepts noisy timing, so it is the
+      # right one to displace. See `max-parallel` below for the sibling-displacement case, which is a
+      # different problem with a different fix.
       group: >-
         ${{ matrix.box-exclusive == 'true'
-            && 'highcpu-chaos-exclusive'
+            && 'highcpu-box-exclusive'
             || format('highcpu-{0}-{1}', matrix.suite-name, github.head_ref || github.ref) }}
       cancel-in-progress: ${{ matrix.box-exclusive != 'true' }}
     strategy:
       fail-fast: false           # each suite is independent
+      # ONE AT A TIME, and this is load-bearing rather than tidiness. Both entries now sit in the
+      # `highcpu-box-exclusive` group, and GitHub holds one job per group running with at most one
+      # pending - so two jobs OF THE SAME RUN entering that group means the second is queued and then
+      # DISCARDED the moment a newer run arrives. Measured on 0a55f5f91: Performance came back
+      # `conclusion=cancelled`, which `gh pr checks` renders as **fail** - an absent measurement
+      # wearing the costume of a failing one, the exact inverse of the absent-chaos-run trap this
+      # branch documents in docs/ci.md. `max-parallel: 1` makes the matrix submit them in sequence, so
+      # the group only ever sees one entrant from this run and neither is displaced by its own sibling.
+      max-parallel: 1
       matrix:
         include:
           # (Unit, Integration and two Mutation entries used to live here - see WHAT WAS REMOVED in the
@@ -125,9 +150,12 @@ jobs:
           # <forkCount>${surefire.forkCount}</forkCount>, so surefire only honours the namespaced
           # property and a bare -DforkCount is silently ignored.)
           #
-          # Performance: a correctness gate here (timing is noisy under concurrency - that's fine).
+          # Performance: NOT a correctness gate here (timing is noisy under concurrency - that's fine).
+          # It carries box-exclusive not for its own sake but for chaos's: a benchmark is the worst
+          # possible neighbour for a suite whose findings are timing bounds. See the concurrency block.
           - suite-name: "Performance"
             cmd: "bin/performance-test.sh"
+            box-exclusive: "true"
           # Chaos Pain Suite: the per-PR ambient tripwire (moved here from chaos-pain.yml so all
           # self-hosted per-PR feedback shares one lane and its per-suite superseding concurrency).
           # NOT optional: a chaos RED is a real finding. bin/chaos-test.sh excludes @Quarantined
