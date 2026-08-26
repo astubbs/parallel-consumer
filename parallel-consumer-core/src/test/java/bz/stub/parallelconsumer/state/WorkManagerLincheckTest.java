@@ -118,7 +118,7 @@ public class WorkManagerLincheckTest {
      * cannot reach. Left parallel, the harness reports a real but different defect first - two concurrent
      * rebalances throw {@code ArrayIndexOutOfBoundsException} out of the unsynchronised per-partition counter
      * maps - and Lincheck stops at the first violation, so the checkpoint-3 tear is never reached. That
-     * defect is recorded in {@code docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md}
+     * defect is recorded in {@code docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md}
      * rather than deleted along with the scenario that found it.
      */
     @Operation(nonParallelGroup = "rebalance")
