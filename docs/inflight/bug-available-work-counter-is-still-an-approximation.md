@@ -2,7 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
-<!-- inflight-labels: needs-measurement -->
+<!-- inflight-labels: concurrency -->
 
 What is left of `bug-available-work-counter-needs-a-clamp.md` after the load gate stopped depending on
 `ProcessingShard.availableWorkContainerCnt`. **The clamp is gone and the gate is now conservation-derived**
@@ -12,7 +12,7 @@ the drift were fixed at the same time. What follows is what that change delibera
 ## The counter still describes a predicate it does not own
 
 `availableWorkContainerCnt` still claims to be "how many of this shard's entries are selectable", and it still
-is not, by design: `markAvailableAgain()` counts a failed record back in *before* its retry delay has passed,
+is not, by design: `ProcessingShard.onFailure()` counts a failed record back in *before* its retry delay has passed,
 and `ShardManager.getNumberOfWorkQueuedInShardsAwaitingSelection()` nets that out against the retry queue
 rather than the shard doing so. So the shard's own number is only meaningful in that aggregate.
 
