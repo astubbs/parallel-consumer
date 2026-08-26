@@ -343,6 +343,14 @@ the Lincheck arm is a search running beside it.
   both harnesses at once** rather than one at a time - which is the argument for settling the thread
   model before writing any more harnesses.
 
+  **Take it AFTER astubbs#57 lands, and the ordering is not arbitrary.** Two shapes recur in this
+  arm's reports, and astubbs#57 removes one of them: the `ArrayIndexOutOfBoundsException` out of
+  `ArrayList.add` is the plain-`ArrayList` defect that PR fixes. Deciding while both shapes are live
+  means reasoning against a moving target - once astubbs#57 is in, only the parallel-`succeed` shape
+  remains, which is the question actually being asked. Nothing is gated on this: astubbs#346 does not
+  re-point the assertion, so it needs no dependency on astubbs#57; the ordering binds whoever takes
+  the decision, not the PRs.
+
   Its javadoc has been corrected to say all of this, because until now it told readers the arm would
   invert when astubbs#344 landed. **The contract's per-PR trigger list is now fully spent, and it
   went 1 for 4** - which is worth stating precisely, because the one that held did so for a reason
