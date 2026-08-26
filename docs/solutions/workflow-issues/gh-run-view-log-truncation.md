@@ -45,6 +45,19 @@ command, same failure mode, same class of wrong claim, two days after this file 
 prevent exactly it. **Prior-art checks are the fix, not more documentation** - the entry was written
 without running the greps `AGENTS.md` requires before investigating anything.
 
+**A third instance, 2026-08-25, and this one indicts the remedy rather than the reader.** Diagnosing
+a `Chaos Pain Suite` red on astubbs#357, the job-log route returned 990 lines of a ~5000-line log -
+cutting inside a passing test and then appending the post-job steps, so the file *ended with a
+cleanup step* and passed the completeness check this document prescribes. Zero `Tests run:` and zero
+`BUILD FAILURE` in it read as a killed process, and a runner-load kill was written into
+`docs/inflight/ci-disabled-jobs-and-runner-load.md` before the artifact contradicted it: eight chaos
+ITs green, `ChaosChurnStormIT` red on probe violations, seed recoverable. Two things follow. The
+terminal-marker check needs the marker to belong to **the step you care about**, not merely to the
+job. And the fix this document's *Related* section named - `docs/ci.md` still recommending the
+job-level route with no completeness warning - had sat undone since 2026-08-18, so the reader who
+followed the topic doc was routed straight into the trap. That has now been fixed; the fourteenth
+sighting in `bug-857-family.md` carries the corrected diagnosis.
+
 This is a sibling of an earlier trap in the same file's fourth sighting: there, GitHub truncated the
 log **stream** itself server-side, so neither `--log` nor `--log-failed` contained the
 `AMBIENT PROBE AUTOPSY`  block at all, and the autopsy had to be recovered from the uploaded
@@ -171,6 +184,7 @@ implicated.
 - [`docs/testing.md`](../../testing.md) - ambient-probe section (`AMBIENT PROBE AUTOPSY`), which
   now carries the corrected "emits" wording and points here for the retrieval routes rather than
   restating them.
-- [`docs/ci.md`](../../ci.md) - "Reading a failed job's log", the topic doc for CI log retrieval;
-  currently documents the job-level `actions/jobs/$jid/logs` API route only, not the run-level
-  archive-zip endpoints or the terminal-marker completeness check this incident established.
+- [`docs/ci.md`](../../ci.md) - "Reading a failed job's log", the topic doc for CI log retrieval. It
+  now leads with the artifact and archive routes, names both failure modes of the job-level API call,
+  and carries the terminal-marker completeness check; it defers to this document for the incidents.
+  Keep the two consistent if either moves.

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Unit tests for changelog-ref-gate.js, run by the PR Checklist job before the gate itself.
 // Plain node, no dependencies, no runner: `node .github/scripts/changelog-ref-gate.test.js`.
 // Exits non-zero on the first sign of trouble, so a broken gate fails CI loudly.

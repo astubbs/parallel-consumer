@@ -962,6 +962,40 @@ guards the routing), the diagnostic mode's quiet cap no longer silently exceeds 
 `@Timeout` - which is why nobody had run this experiment in the five days since two documents called
 it cheap - and the chaos lane no longer runs several suites at once on one box.
 
+### Correction to the section above: `INSTANCE_STALL` has now fired, once
+
+<!-- post-merge: checked-begin -->
+The section above says the detector that would be a real sighting "has never fired", and states the
+honest limit that never-cried-wolf and never-had-a-wolf are not yet distinguishable. One of those two
+has moved.
+
+**On [run 32812259117](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117),
+`ChaosChurnStormIT` fired `INSTANCE_STALL/NO_WORK_COMPLETED` at `t=+154670ms`** - *instance 70 holds
+work (queued=0, outForProcessing=43) but has returned no work result for 150s (bound 150s) at 27914
+results returned*. Seed `7852140587594987229`. The 23 violations the autopsy then listed were all
+Class 2, so the interesting one is absent from the autopsy list and only in the run log - which is
+worth knowing for whoever reads the next one.
+
+**This does not make it a wedge, and the section above is why.** One firing, on a box also running
+`Performance`, with no replay: `INSTANCE_STALL` is re-armed by any returned work result, so an
+instance that is merely very slow can trip it. What it does change is the evidential position - the
+detector can fire, which was previously untested either way, so "watch it" is now a live instruction
+rather than a hope. The replay that would settle it is the same one this file already prescribes,
+against that seed.
+
+**Corroboration for the prediction, not a test of it.** Three consecutive chaos runs on
+astubbs/parallel-consumer#357 - a branch changing agent hooks, shell gates and documentation and no
+product code - went red on four distinct tests across five distinct seeds, every violation Class 2,
+counts falling 23, 17, 3, 2 (seeds `7852140587594987229`, `567232329738342203`,
+`5843692436386966698`, `4651058060322796970`). Two partitions grazing the bound is what a timing
+proxy meeting load looks like. It is **not** the registered prediction, which asks for a re-run after
+astubbs#29 and the backlog land; recorded here so nobody later reads it as one.
+
+One of those runs took the **cooperative** arm down with an explicit probe verdict, which retires the
+second sighting's "eager-protocol-specific" reading for Class 2 specifically - a small thing now that
+Class 2 is a speed measurement, but it was an open question above.
+<!-- post-merge: checked-end -->
+
 ## 2026-08-25, INTEGRATION lane: the commit-response timeout, on the deadlock's exact preconditions
 
 <!-- post-merge: checked-begin -->
@@ -1141,6 +1175,137 @@ before the discriminator ran; they are not. Both are the arithmetic the section 
 ran while `Performance (optional)` overlapped the chaos job on the shared box, and the bound they
 crossed no longer gates. Kept as seeds only, so the pair is not rediscovered and re-argued.
 <!-- post-merge: checked-end -->
+
+## 2026-08-26: the pre-declared discriminator fired - the poll thread was parked on the `commitCommand` monitor
+
+**The CHAOS-lane section above named the experiment that would decide this family's last open item -
+*"replay with a thread dump of the broker-poll thread at the moment the commit request times out.
+Parked on the `commitCommand` monitor -> the family's original deadlock has a reproduction at last"*.
+That dump now exists, it was taken automatically at the timeout, and it says the poll thread was
+blocked on a monitor.** `Chaos Pain Suite`,
+`ChaosRevokeUnderWorkKeyOrderIT.perKeyOrderSurvivesRevokeUnderWork`, the same correctness SLO both
+earlier lanes tripped - `no instance may end the run with an unclassified failure cause`
+([run 32933049885](https://github.com/astubbs/parallel-consumer/actions/runs/32933049885)):
+
+```
+instance 65: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S ... POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this
+is contention or a lock-ordering defect, NOT a slow broker. Lock:
+java.util.concurrent.atomic.AtomicBoolean@6b27bb8f, held by: pc-control-PC-65.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1585),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:548),
+             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
+```
+
+**The frames resolve, at the head under test, to the exact AB-BA pair astubbs#29 replaces.** Frame
+`:1585` is not merely inside `commitOffsetsThatAreReady` - it *is* that method's
+`synchronized (commitCommand)` line, so the poll thread was stopped on the monitor acquisition
+itself; frame `:548` is the `commitOffsetsThatAreReady()` call inside `onPartitionsRevoked`. And the
+`AtomicBoolean` in `Lock:` has exactly one candidate: every `synchronized` block in
+`AbstractParallelEoSStreamProcessor` takes `commitCommand`, and it is the only `AtomicBoolean` among
+them. The holder, `pc-control-PC-65`, is the control thread, which reaches the same method from the
+control loop and then blocks *inside* `committer.retrieveOffsetsAndCommit()` - the call the monitor
+is held across. The only producer of commit responses is therefore the thread waiting for the
+monitor the waiter holds, and `PT10S` is what breaks the cycle rather than anything resolving it.
+
+**This is the step the two 2026-08-25 sections said they lacked.** Both closed with *"do NOT read
+either as identifying the open deadlock"*, because a poll thread merely slower than
+`offsetCommitTimeout` - the ambiguity
+[`bug-offset-commit-timeout-does-two-jobs.md`](bug-offset-commit-timeout-does-two-jobs.md) owns -
+produces an identical error text. That alternative requires the poll thread to be RUNNABLE, or
+waiting on a socket. It was neither: it was `BLOCKED` on a named monitor with a named holder. For
+this capture the ambiguity is resolved, and the reading is the one those sections pre-declared as
+the deadlock side - which is why it counts for more than a third occurrence of a signature would.
+
+**Seed `7728704565782280867`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=7728704565782280867
+
+<!-- post-merge: checked-begin -->
+**Neither the branch nor the box is a suspect.** At the observed head `b75beb40d` the branch carried
+a `.claude/hooks/` script, `bin/` shell and markdown only - no Java, no pom, no workflow - so it
+could not reach the chaos engine, the same not-PR-introduced control the fourteenth, fifteenth and
+sixteenth sightings each recorded. Nor was it the shared box: other PRs' chaos jobs in the same
+window completed green, and the non-successes among them were `cancelled` by the `box-exclusive`
+queue rather than failed, so this red is not master-state.
+<!-- post-merge: checked-end -->
+
+**What is wanted next is no longer a discriminator but a verification.** astubbs#29 replaces this
+`synchronized` with `ReentrantLock.tryLock()`; until now it had a unit reproduction
+(`RebalanceEoSDeadlockTest`) and no fleet-level one. Replaying this seed with that stack applied, and
+reading whether the poll thread is still found `BLOCKED` on the same monitor, is the experiment that
+would let astubbs#29 land on evidence rather than on argument. **Recorded as one observation, not a
+rate:** the seed has not been replayed, and nothing here says how often the cycle closes.
+
+## 2026-08-26, second capture: the same BLOCKED-on-monitor discriminator, on the COOPERATIVE arm
+
+**The section above closed with "Recorded as one observation, not a rate". This is a second
+independent capture of the same discriminator, and the value of it is that almost nothing is shared
+with the first: different scenario, different assignor arm, different seed, different PR, hours
+apart.** `Chaos Pain Suite`,
+`ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor`, the
+same correctness SLO - `no instance may end the run with an unclassified failure cause`
+([run 32948482633](https://github.com/astubbs/parallel-consumer/actions/runs/32948482633)):
+
+```
+instance 14: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S ... POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this
+is contention or a lock-ordering defect, NOT a slow broker. Lock:
+java.util.concurrent.atomic.AtomicBoolean@215bf355, held by: pc-control-PC-14.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1585),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:548),
+             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
+```
+
+**Frame for frame, monitor type for monitor type, holder for holder, it is the capture above.** Same
+`:1585` (`commitOffsetsThatAreReady`, the `synchronized (commitCommand)` acquisition itself), same
+`:548` (the call inside `onPartitionsRevoked`), same `AtomicBoolean` monitor, and the holder is again
+the control thread for the same instance (`pc-control-PC-14` against `instance 14`). The reasoning
+that identified the AB-BA pair there applies here unchanged and is not repeated.
+
+**What this adds is that the cycle is not a property of the key-order arm.** The first capture was
+`ChaosRevokeUnderWorkKeyOrderIT` under the eager assignor; this one is the **cooperative** assignor
+in the plain revoke-under-work scenario. Both reach the deadlock through
+`onPartitionsRevoked`, which is the part that matters: the revocation callback is the entry point
+regardless of which assignor scheduled the revocation, so the pair is reachable across the arm split
+rather than by one scenario's particular interleaving.
+
+**Two captures is still not a rate, and this does not claim one.** Neither seed has been replayed.
+What it does do is remove "seen once" as a reason to wait before running the verification the
+section above asks for.
+
+**The same-run control arm is unusually good here, so it is worth stating.** Every sibling scenario
+in the same JVM, on the same runner, against the same broker image, passed: `ChaosChurnStormIT`,
+`ChaosKeyOrderIT`, `ChaosRevokeUnderWorkIT`, `ChaosRevokeUnderWorkDrainIT`,
+`ChaosRevokeUnderWorkKeyOrderIT`, and - the sharpest of them - `ChaosRevokeUnderWorkCooperativeDrainIT`,
+which is the *same* cooperative assignor differing only in stop-mode. So the failure is not an
+ambient property of that machine in that hour, and not the cooperative assignor by itself either.
+
+Also present, and non-gating: one `CLASS2_STALL/LAG_STAGNATION` observation, which since 2026-08-25
+does not fail the run. It is noted only so nobody re-reads this capture as a Class 2 sighting.
+Peaks were `rebalanceDwell=15445ms`, `lagStagnation=154189ms`, and two
+`ZOMBIE_MEMBER/REBALANCE_BLOCKED` violations fired on the 15s rebalance-dwell bound.
+
+**Seed `2867310537409227917`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2867310537409227917
+
+<!-- post-merge: checked-begin -->
+**Neither the PR nor the box is a suspect.** astubbs/parallel-consumer#364 changed
+`.claude/hooks/` shell, `bin/` shell and markdown only - no Java, no pom, no workflow - so it cannot
+reach the chaos engine, the same not-PR-introduced control the earlier sightings each recorded. Nor
+was it the shared box: three other chaos jobs completed green inside the same half hour, and the
+non-successes among the rest were `cancelled` by the `box-exclusive` queue rather than failed.
+<!-- post-merge: checked-end -->
+
+**One retrieval note, because it nearly produced a wrong reading.** The run-logs archive downloaded
+short the first time - a `.zip` with no central directory - and `gh api` exited **0** both times, so
+the only thing separating the truncated download from the complete one was `unzip -t`. This is the
+`gh run view` truncation class arriving by a different route, so the remedy in
+[`docs/ci.md`](../ci.md) needs its own completeness check: test the archive before believing a grep
+that came back quiet.
 
 ## Delete when
 

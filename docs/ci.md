@@ -6,20 +6,52 @@ agent regardless of CI live in AGENTS.md; this is the reference behind them.
 
 ## Reading a failed job's log
 
-The `--log` flag on `gh run view` refuses while *any* job in the run is still going ("logs will be
-available when it is complete"), and `--log-failed` is often empty for a Maven job, because the
-failure text is ordinary stdout rather than an `::error::` annotation. Neither means the log is
-unavailable. Fetch the job directly - this works as soon as **that job** finishes, regardless of the
-rest of the run:
+**Every route here can hand you an incomplete log that looks complete, so the retrieval order is part
+of the diagnosis, not a detail.**
+[`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
+**owns the routes and the incidents**; what follows is the part you need before your first command.
+
+**For a chaos or broker integration-test failure, go to the uploaded test-report artifact first.**
+The counts are XML attributes and the `AMBIENT PROBE AUTOPSY` is captured inside `system-out`, so
+neither depends on the console stream surviving:
 
 ```bash
-jid=$(gh run view <run-id> -R astubbs/parallel-consumer --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
-gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
+gh run download <run-id> -R astubbs/parallel-consumer -n "highcpu-fast-feedback-reports-Chaos Pain Suite-<n>" -D /tmp/reports
+# then parse /tmp/reports/**/failsafe-reports/TEST-*.xml - `errors`/`failures` are attributes
 ```
 
-Then grep it: `Tests run:`, `<<< FAILURE`, and for broker integration tests the
+**For anything else, the run-logs archive**, which cannot truncate:
+
+```bash
+gh api repos/astubbs/parallel-consumer/actions/runs/<run-id>/logs > /tmp/logs.zip   # add /attempts/<n> for a re-run
+unzip -p /tmp/logs.zip '*<job name>*.txt' > /tmp/job.log
+```
+
+Two routes that read as authoritative and are not:
+
+- **`gh run view --job <id> --log` silently truncates.** It returned 990 lines of a ~5000-line chaos
+  job on astubbs#357, cutting inside a *passing* test and then appending the post-job steps - so the
+  file ends with cleanup and looks whole. Three separate sessions have filed a wrong diagnosis from
+  it. Convenience only.
+- **`gh api .../actions/jobs/<id>/logs` can exit 1 having written nothing**, with
+  `the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway`
+  on **stderr** - the one stream a `>` redirect does not capture, so you get an empty file and a job
+  that appears to have no log. With the flag it still dies mid-stream on a large log
+  (`read: operation timed out`), leaving a partial file with no marker.
+
+**Check completeness before you diagnose, whichever route you used**: the log must end with a real
+terminal marker - `Tests run:`, `BUILD SUCCESS`/`BUILD FAILURE`, or the post-job cleanup *of the step
+you care about*. **A grep for a failure signature returning zero on a truncated log is a false
+negative that reads exactly like a clean run**, and the more systematically you grep, the more
+confident the wrong answer becomes.
+
+Then grep: `Tests run:`, `<<< FAILURE`, and for broker integration tests the
 `AMBIENT PROBE AUTOPSY` block, which classifies contention-vs-bug before you start reading
 stack traces (see [`docs/testing.md`](testing.md)).
+
+`gh run view --log` also refuses while *any* job in the run is still going ("logs will be available
+when it is complete"), and `--log-failed` is often empty for a Maven job, because the failure text is
+ordinary stdout rather than an `::error::` annotation. Neither means the log is unavailable.
 
 ## Workflows
 

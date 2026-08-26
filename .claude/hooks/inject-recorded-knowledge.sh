@@ -58,7 +58,14 @@ emit() {
     return 0
 }
 
-solutions=$(find docs/solutions -name '*.md' -type f 2>/dev/null | sort)
+# A directory's own AGENTS.md/CLAUDE.md/README is not one of the documents these blocks list, and
+# every scan over docs/ needs the same guard - the eight docs/inflight scans below already carry it.
+# Without it the rules doc lists as a solution, a plan, an ideation document or an audit, under a
+# heading telling you to read it as one. Nothing goes red; the index just quietly says something
+# false. Anchored on `/` so a real document named e.g. `writing-agents.md` is not swallowed.
+DIRECTORY_DOCS_RE='/(AGENTS|CLAUDE|README)\.'
+
+solutions=$(find docs/solutions -name '*.md' -type f 2>/dev/null | grep -vE "$DIRECTORY_DOCS_RE" | sort)
 [ -n "$solutions" ] || exit 0
 
 emit "# Already solved here - read before you diagnose"
@@ -342,14 +349,44 @@ emit_deferred
 emit "# Dated plans and investigations"
     emit ""
     emit "\`docs/plans/\` - the method that settled a question of this shape before:"
-plans=$(find docs/plans -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/plans/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
+# Both extensions: the unified plan contract allows an artifact to be .md OR .html, so a bare
+# -name '*.md' silently hides every HTML plan. Extension stripped then de-duplicated, because a plan
+# converted between formats can leave both files behind and listing it twice reads as two plans.
+# The explicit `-` stdin operand is master's BSD fix (astubbs#341) - a bare `paste -sd,` reads no
+# input on macOS and the list silently comes out empty.
+plans=$(find docs/plans -type f \( -name '*.md' -o -name '*.html' \) 2>/dev/null \
+    | grep -vE "$DIRECTORY_DOCS_RE" \
+    | sed -E 's#^docs/plans/##; s#\.(md|html)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
 emit "${plans:-(none)}"
 emit ""
+
+# Ideation documents - the ranked directions, the REJECTION TABLE and the prior-art autopsies behind
+# a piece of work. They were invisible here until 2026-08-24 on two counts at once: this directory
+# was never scanned, and every artifact in it is .html while the scans above matched only .md. The
+# cost was not hypothetical - the adaptive-concurrency design was drafted, committed and offered for
+# review having cited this directory's throttling document without opening it, and the document
+# already held three API constraints that design violated and one decision it contradicted.
+#
+# The rejection table is the specific reason this block exists. Ideas rejected WITH REASONS are the
+# cheapest prior art in the repo and the least likely to be found, because nothing links to a
+# rejected idea and no symptom search returns one - you rediscover it by proposing it again.
+ideation=$(find docs/ideation -type f \( -name '*.html' -o -name '*.md' \) 2>/dev/null \
+    | grep -vE "$DIRECTORY_DOCS_RE" \
+    | sed -E 's#^docs/ideation/##; s#\.(html|md)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
+if [ -n "$ideation" ]; then
+    emit "# Ideation: ranked directions, and what was already REJECTED and why"
+    emit ""
+    emit "\`docs/ideation/\` - read the one covering your area BEFORE designing, not after. These are"
+    emit "\`.html\`; open the file, do not infer its contents from a note that summarises it:"
+    emit "${ideation}"
+    emit ""
+fi
 
 # Point-in-time audits of tests that do not run, do not assert, or were never written. Easy to miss
 # precisely because nothing goes red to tell you - which is why AGENTS.md says to read the newest
 # before re-enabling, deleting or rewriting a dark test.
-hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
+hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | grep -vE "$DIRECTORY_DOCS_RE" \
+    | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
 if [ -n "$hardening" ]; then
     emit "# Dated test-hardening audits"
     emit ""
