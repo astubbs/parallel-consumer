@@ -382,6 +382,7 @@ to put a number on the rate. Until someone does that, treat the test as un-quara
 of astubbs#265's fix and one contrary observation, rather than as proven stable.
 
 **SUPERSEDED 2026-08-19 - this sighting is a test defect, and does not belong to the family.**
+<!-- post-merge: checked-begin -->
 The entry above asks for "a full-suite run on a CI runner, repeated enough times to put a number on
 the rate". A mechanism settles it instead:
 [`bug-pcmetrics-committed-offset-vs-completion-count.md`](bug-pcmetrics-committed-offset-vs-completion-count.md)
@@ -389,7 +390,9 @@ the rate". A mechanism settles it instead:
 completion counter under `UNORDERED`, and the gap is permanent, not slow. That explains every
 observation here without invoking a stall: failing only under load (concurrency is what produces
 out-of-order completion), passing in isolation, and both observed gaps - the 2 records here
-(`205.0` vs `203.0`) and the 7 seen later on astubbs/parallel-consumer#322.
+(`205.0` vs `203.0`) and the 7 seen later on astubbs/parallel-consumer#322. That citation records
+where a gap was OBSERVED, so it reads the same once that PR has landed.
+<!-- post-merge: checked-end -->
 
 **Do not count this as a family sighting.** It was recorded as "the family's signature" on the
 strength of a shortfall under load, which the family shares with any test that races. Leaving it here
@@ -1341,61 +1344,67 @@ over `commitCommand`. Neither seed here nor in the two captures above has been r
 
 <!-- post-merge: checked-end -->
 
-## 2026-08-26, fourth capture: the DRAIN stop-mode under the eager assignor, with both nearest neighbours green
+## 2026-08-26, fourth capture: the discriminator fires on TWO PRs' chaos jobs minutes apart
 
-**The three captures above cover the key-order arm under the eager assignor and the plain revoke
-scenario under the cooperative one. This is the drain stop-mode under the eager assignor, which is
-neither.** `Chaos Pain Suite`,
-`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest`, the same correctness SLO -
-`no instance may end the run with an unclassified failure cause` -
-([run 32975169315](https://github.com/astubbs/parallel-consumer/actions/runs/32975169315)):
+**Every section above closed on "not a rate", and each argued the box was not a suspect because
+sibling chaos jobs in the window were green. That argument does not hold this time: two
+different PRs' chaos jobs went red on the same BLOCKED-on-monitor discriminator within two minutes
+of each other, on different scenario arms and different seeds.**
 
-```
-instance 56: RuntimeException: Error from poll control thread: Timeout waiting for commit response
-PT10S ... POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this
-is contention or a lock-ordering defect, NOT a slow broker. Lock:
-java.util.concurrent.atomic.AtomicBoolean@6ae6802a, held by: pc-control-PC-56.
-Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1621),
-             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:555),
-             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
-```
-
-**The frame numbers differ from the captures above because master moved, so they were re-resolved
-rather than assumed.** At the observed head, `git show <head>:.../AbstractParallelEoSStreamProcessor.java`
-puts `synchronized (commitCommand)` - the acquisition itself, not merely a line inside the method -
-at `:1621`, and the `commitOffsetsThatAreReady()` call inside `onPartitionsRevoked` at `:555`. Every
-`synchronized` block in that class still takes `commitCommand`, and it is still the only
-`AtomicBoolean` among them, so `Lock:` names it unambiguously; the holder is again the instance's own
-control thread. The identification argument in the first capture therefore applies unchanged.
-
-**The same-run control arm is the sharpest this file has recorded, because both nearest neighbours
-passed.** Every sibling scenario in the same JVM, on the same runner, against the same broker, was
-green: `ChaosChurnStormIT`, `ChaosKeyOrderIT`, `ChaosRevokeUnderWorkIT`,
-`ChaosRevokeUnderWorkKeyOrderIT`, `ChaosRevokeUnderWorkCooperativeIT` and
-`ChaosRevokeUnderWorkCooperativeDrainIT`. The last two matter most: `ChaosRevokeUnderWorkIT` is the
-same assignor differing only in stop-mode, and `ChaosRevokeUnderWorkCooperativeDrainIT` is the same
-stop-mode differing only in assignor. Both neighbours on both axes passed in the same run, so this is
-neither the box in that hour nor a property of either arm on its own.
-
-**Taken with the three above, the cycle has now been captured across both assignors and both
-stop-modes**, always entered through `onPartitionsRevoked`. That is the same conclusion the second
-capture drew about the assignor split, extended to the stop-mode split. **Still not a rate**: no seed
-here or above has been replayed, and nothing in this section says how often the cycle closes.
-
+**The clean capture** is `Chaos Pain Suite`,
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` - the **eager** assignor, plain
+revoke-under-work - on the same correctness SLO,
 <!-- post-merge: checked-begin -->
-**Not the branch it was seen on.** The observed head was on astubbs#267, whose diff against its merge
-base changes `controlLoopHooks` to a `CopyOnWriteArrayList`, wraps several log calls in
-`logWithoutEscaping`, and reorders `failureReason` ahead of `doClose` in the control loop's catch. It
-adds, removes and moves no `synchronized` block, and does not touch `commitCommand`,
-`commitOffsetsThatAreReady` or the call to it inside `onPartitionsRevoked` - the whole of the cycle.
-Recorded there before that PR merged, for the reason the third capture gives: the red belongs to a
-head that stops being the tip, and nothing on the PR preserves it.
+[run 32975256292](https://github.com/astubbs/parallel-consumer/actions/runs/32975256292), from
+astubbs/parallel-consumer#374 at head `cdfb05456`:
 <!-- post-merge: checked-end -->
 
-**Seed `3135248854766953145`** - recorded before the log expires:
+```
+instance 72: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S ... POLL THREAD AT TIMEOUT: BLOCKED ... Lock:
+java.util.concurrent.atomic.AtomicBoolean@47a58040, held by: pc-control-PC-72.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1585),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:548), ...]
+```
+
+Frame for frame it is the first two captures - same `:1585` (the `synchronized (commitCommand)`
+acquisition itself), same `:548`, same `AtomicBoolean`, holder again the control thread of the same
+instance. The reasoning that identified the AB-BA pair there applies unchanged and is not repeated.
+<!-- post-merge: checked-begin -->
+**The branch was not a suspect**: astubbs#374 changed the file-ref gate script, its test and two
+markdown files, plus one comment line in a test class - no main Java, no pom, no workflow, so it
+could not reach the chaos engine. Every other scenario in that same JVM passed.
+<!-- post-merge: checked-end -->
+
+**Seed `1355976854716465757`**:
 
     ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=3135248854766953145
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1355976854716465757
+
+<!-- post-merge: checked-begin -->
+**The corroborating capture, and why it is weaker.** `ChaosRevokeUnderWorkDrainIT` on
+[run 32975169315](https://github.com/astubbs/parallel-consumer/actions/runs/32975169315)
+(astubbs/parallel-consumer#267, `fix/concurrent-listener-registration`, seed
+`3135248854766953145`, instance 56, monitor held by `pc-control-PC-56`) is the same monitor reached
+through the same two methods - but its frames read `:1621` and `:555`, because that branch edits
+`AbstractParallelEoSStreamProcessor` and shifts the line numbers. It is worth one line for its ARM
+rather than its evidential weight: the drain stop-mode under the eager assignor, which no capture
+above covers, so between them the cycle has now been seen under both assignors and both stop-modes,
+always entered through `onPartitionsRevoked`. So it corroborates the pair, and it
+is **not** a second not-PR-introduced control arm. Take the astubbs#374 capture as the clean one.
+<!-- post-merge: checked-end -->
+
+**What the pairing removes is the last ambient explanation.** `Chaos Pain Suite` moved off the shared
+`highcpu` box to `ubuntu-latest` earlier the same day - grep `maven.yml` for `the per-PR ambient
+tripwire` - so each chaos job now gets its own VM and co-residency between these two runs is
+structurally impossible. Two isolated VMs, two seeds, two scenario arms, the same monitor and the
+same holder, inside two minutes. Contention on one loaded machine cannot be what produced both.
+
+**Still not a rate, and still no replay.** Neither seed here has been replayed either, and there is
+no denominator - other chaos jobs in the same window were green. What this adds is that the cycle is
+not rare enough to need a hunt to see, and that the verification the first 2026-08-26 section asks
+for (replay a captured seed with astubbs#29's `tryLock()` applied, and read whether the poll thread
+is still found `BLOCKED` on the same monitor) now has four seeds to choose from.
 
 ## Delete when
 
