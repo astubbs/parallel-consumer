@@ -47,10 +47,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private final ParallelConsumerOptions<K, V> options;
 
     // todo make private
+    // TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
     @Getter(PUBLIC)
     final PartitionStateManager<K, V> pm;
 
     // todo make private
+    // TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
     @Getter(PUBLIC)
     private final ShardManager<K, V> sm;
 
