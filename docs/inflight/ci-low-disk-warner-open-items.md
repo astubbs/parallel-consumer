@@ -10,19 +10,6 @@ the PR that added it, did **not** close. The P0s and P1s that pass found *were* 
 landed; what is below remains. Delete this note when these are resolved.
 <!-- post-merge: checked-end -->
 
-## The warner does not reach the agents its own incident describes
-
-The throttle stamp is keyed per-UID, so it is shared across every concurrent session. In the
-motivating incident - eleven per-language demo agents taking the host volume from ample to 8.8 GiB
-free in about an hour - **only the first agent would see the warning**; the other ten are inside the
-ten-minute window somebody else opened. Two reviewers flagged it independently. **Still open, and
-blocked on Antony**: the fix means keying the stamp on `session_id` rather than the UID, and that is
-a product call about how far a per-session warner should isolate itself, not something a review pass
-should decide on its own.
-
-Related, smaller: the stamp is written *before* the message is emitted, so a kill between the two
-loses that warning for ten minutes.
-
 ## `bin/test-check-agent-hooks.sh` failure counts are only meaningful measured serially
 
 <!-- post-merge: checked-begin -->
@@ -81,8 +68,6 @@ change, and each is a shared file another branch may be editing. Doing it needs 
 - `df` on the fast path has no timeout, so a hung NFS mount freezes the session. Portable bounding
   is awkward - `timeout` is GNU coreutils.
 - Linux `docker_root` is hardcoded to `/var/lib/docker`, ignoring `daemon.json`'s `data-root`.
-- The critical-band advice tells the agent to look for named volumes and never says what to do on
-  finding one.
 - Silencing is only possible through the `PC_DISK_*` variables, whose own comment frames them as
   test-only. There is no supported way for a user to turn the warner down.
 

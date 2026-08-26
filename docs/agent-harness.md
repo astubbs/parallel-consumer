@@ -249,7 +249,16 @@ grants stay in `settings.local.json`, still ignored.
   script, which is most of how containers actually get built here. It buys the right to run on every
   call by forking a handful of short-lived commands and no `docker` CLI - the hook's own header owns
   the measured figure, and states why it is not repeated here - and by saying nothing at all unless a
-  threshold trips, then at most once per ten minutes unless the band worsens.
+  threshold trips, then at most once per ten minutes **per session** unless the band worsens.
+
+  **The throttle is keyed per session, not per user, and that decides who the warning is for.**
+  One stamp per UID meant the first agent to notice silenced every other concurrent session for
+  the window - in the incident above, ten of the eleven could not have been told while they were
+  the ten still filling the disk. So every session is warned, and the message tells each agent to
+  **report the situation and suggest a reclaim, never run one**: the operator is the gate against
+  duplicate effort, which the same incident shows is a real cost and not a hypothetical - two of
+  those agents pruned under each other. Keying is best-effort and degrades to the shared stamp
+  when no `session_id` reaches the hook, because the failure this hook refuses is going silent.
 
   Two properties are worth keeping in mind if you change it. **It must never exit non-zero**: a disk
   warner that blocked `Bash` on a full disk would remove the commands needed to clear the disk, which

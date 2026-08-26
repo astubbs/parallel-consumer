@@ -376,7 +376,31 @@ fi
 #
 # That is one condition. It was two `if`s testing the same window twice, which read as two rules and
 # invited a change to one that contradicted the other.
-stamp="$state_dir/last-warning"
+# WHO the throttle is FOR decides how it is keyed, and this hook's answer is the model: the message
+# leaves by `additionalContext`, the only channel that reaches it. Keyed per-UID the stamp is shared
+# by every concurrent session, so the first agent to notice silences all the others for ten minutes -
+# measured in the incident this hook was written for, where eleven agents took the host volume from
+# ample to 8.8 GiB in about an hour and only one of them could have been told. Per-session every one
+# of them is told, and the OPERATOR - not the throttle - is the gate against eleven duplicate
+# cleanups. That gate only works because the message below asks for a suggestion, not an action.
+#
+# BEST-EFFORT, AND IT DEGRADES RATHER THAN GOING SILENT. `session_id` arrives in the PreToolUse
+# payload, so it costs one `cat` - taken here, past every fast-path exit, rather than at the top of
+# the file. A payload that is absent, unparseable or session-less leaves the key empty and the stamp
+# is the shared one, which is exactly the per-UID behaviour this replaces. The failure this file
+# refuses is "warned" -> "silent"; a coarser throttle is not that.
+payload=""
+[ -t 0 ] || payload="$(cat 2>/dev/null || true)"
+# No python3 on this path, deliberately - the header explains why an interpreter must not become a
+# precondition of the message. And `tr -cd` is what makes this safe, not the `sed`: the value reaches
+# a FILE PATH, so anything outside the allowed set - a slash, a `..`, a NUL, a newline - is DELETED
+# rather than escaped, and the length is capped. A hostile `session_id` therefore cannot escape
+# `$state_dir`, which `[ -O ]` above has already established we own.
+session_key="$(printf '%s' "$payload" | tr -d '\n' |
+    sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+    tr -cd 'A-Za-z0-9_-' | cut -c1-64)"
+
+stamp="$state_dir/last-warning${session_key:+.$session_key}"
 if [ -f "$stamp" ]; then
     read -r last_at last_band <"$stamp" 2>/dev/null || { last_at=0; last_band="none"; }
     # THIS FILE IS INPUT, NOT OUR OWN DATA - it lives at a predictable path in a shared /tmp and is
@@ -399,7 +423,6 @@ if [ -f "$stamp" ]; then
         exit 0
     fi
 fi
-echo "$now $band" >"$stamp" 2>/dev/null || :
 
 # --- say it --------------------------------------------------------------------------------------
 # Raw stdout is discarded by the harness; the JSON envelope with `additionalContext` is the only
@@ -427,16 +450,22 @@ fi
 
 if [ "$band" = "critical" ]; then
     lead="DISK CRITICAL."
-    advice="Stop before starting any container build. Reclaim first: \`docker image prune -f\` and \`docker volume prune -f\` are safe (dangling images, unused anonymous volumes only) - check \`docker volume ls -f dangling=true\` for NAMED volumes first, as those may hold real data. \`docker builder prune -f\` frees more but slows the next build."
+    advice="Do NOT run any reclaim command yourself. Stop before starting any container build, tell the operator now, and suggest: \`docker image prune -f\` and \`docker volume prune -f\` are the safe wins (dangling images, unused anonymous volumes only), \`docker volume ls -f dangling=true\` should be checked for NAMED volumes first as those may hold real data, and \`docker builder prune -f\` frees more but slows the next build."
 else
     lead="Disk running low."
-    advice="Consider reclaiming before a large container build. \`docker system df\` shows what is held; dangling images and unused anonymous volumes are the safe wins."
+    advice="Do NOT reclaim anything yourself. Tell the operator before any large container build and suggest \`docker system df\` to see what is held; dangling images and unused anonymous volumes are the safe wins."
 fi
 
-reason="$lead Host volume: ${host_free_gib} GiB free.${vm_clause} $advice Tell the user - this is their machine, and pruning named volumes or tagged images is their call, not yours."
+reason="$lead Host volume: ${host_free_gib} GiB free.${vm_clause} $advice Every concurrent session is warned separately, so other agents may be reporting this too - report and suggest, never act: the operator is the only one who can tell duplicate cleanups apart, and this is their machine."
 
 # Escape for JSON: backslashes first, then quotes, then any stray control characters.
 escaped="$(printf '%s' "$reason" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037')"
 
 printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":"%s"}}\n' "$escaped"
+
+# STAMPED AFTER SPEAKING, and the order is the whole point. Stamping first means a kill
+# between the write and the `printf` - likeliest while the disk is full, which is this
+# hook's entire subject - swallows that warning for the full window. Speaking first can at
+# worst repeat a warning, and this file treats silence as the only expensive failure.
+echo "$now $band" >"$stamp" 2>/dev/null || :
 exit 0

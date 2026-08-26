@@ -578,6 +578,66 @@ fourth="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC
 [ -z "$fourth" ] && got=stayed_quiet || got="downgraded aloud: $fourth"
 assert "a downgrade from critical to warn stays quiet inside the window" stayed_quiet "$got"
 
+# PER-SESSION THROTTLE. The stamp was one file per UID, so every concurrent session shared it and the
+# first agent to notice silenced all the others for the whole window. In the incident this hook was
+# written for - eleven agents taking the host volume from ample to 8.8 GiB in about an hour - ten of
+# them could not have been told, while they were the ten still filling the disk. Two reviewers
+# flagged it independently, and the keying was settled as a product call: warn every session, and let
+# the OPERATOR be the gate against duplicate cleanups rather than the throttle. That only holds
+# because the message tells each agent to report and suggest - asserted below, because a regression
+# there is silent: the hook would still warn, and eleven agents would each start pruning.
+#
+# The session-less fallback is not re-asserted here; the cases above pipe `{}` and prove it, since an
+# absent `session_id` is what makes them share one stamp at all.
+state_sessions="$(mktemp -d "$TMP/disk.XXXXXX")"
+disk_session() { # <session-id> [VAR=value...] -> one invocation sharing $state_sessions
+    local sid="$1"; shift
+    printf '{"session_id":"%s","tool_input":{"command":"echo hi"}}' "$sid" |
+        env PC_DISK_STATE_DIR="$state_sessions" $DISK_ALL_QUIET "$@" "$DISK_HOOK" 2>/dev/null
+}
+a_first="$(disk_session sess-aaa PC_DISK_HOST_WARN_GIB=99999999)"
+b_first="$(disk_session sess-bbb PC_DISK_HOST_WARN_GIB=99999999)"
+a_again="$(disk_session sess-aaa PC_DISK_HOST_WARN_GIB=99999999)"
+[ -n "$a_first" ] && [ -n "$b_first" ] && [ -z "$a_again" ] &&
+    got=per-session || got="a1=${#a_first} b1=${#b_first} a2=${#a_again}"
+assert "a second session is warned while the first stays throttled" per-session "$got"
+
+# The id reaches a FILE PATH, so it is FILTERED rather than escaped or rejected - `tr -cd` deletes
+# the traversal and leaves a usable key. So this asserts both halves: the hook still speaks, and
+# nothing landed outside the state directory it has established it owns.
+esc_dir="$(mktemp -d "$TMP/disk.XXXXXX")"
+esc_out="$(printf '{"session_id":"../../pwned-%s","tool_input":{"command":"echo hi"}}' "$$" |
+    env PC_DISK_STATE_DIR="$esc_dir" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+stray="$(find "$esc_dir/.." -maxdepth 1 -name 'pwned-*' 2>/dev/null | head -1)"
+[ -n "$esc_out" ] && [ -z "$stray" ] && got=contained || got="spoke=${#esc_out} stray=$stray"
+assert "a traversal in session_id cannot write outside the state dir" contained "$got"
+
+disk_ctx() { # <hook output> -> the additionalContext string
+    printf '%s' "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
+}
+case "$(disk_ctx "$(disk_session sess-msg PC_DISK_HOST_WARN_GIB=99999999)")" in
+    *"Do NOT reclaim anything yourself"*"report and suggest, never act"*) got=defers_to_operator ;;
+    *) got="did not defer" ;;
+esac
+assert "the warn message tells the agent to report, not reclaim" defers_to_operator "$got"
+
+case "$(disk_ctx "$(disk_session sess-crit PC_DISK_HOST_CRIT_GIB=99999999)")" in
+    *"Do NOT run any reclaim command yourself"*"report and suggest, never act"*) got=defers_to_operator ;;
+    *) got="did not defer" ;;
+esac
+assert "the critical message tells the agent to report, not reclaim" defers_to_operator "$got"
+
+# SPEAK, THEN STAMP. Stamping first means a kill between the write and the message swallows that
+# warning for the whole window - likeliest exactly when the disk is full, which is this hook's entire
+# subject. No test can kill the hook mid-flight, so this asserts the ORDER IN THE SOURCE, which is
+# the thing that was actually wrong. Structural, like the settings.json cases further down, and for
+# the same reason: what it protects has no observable difference until the moment it matters.
+emit_line="$(grep -n '^printf' "$DISK_HOOK" | tail -1 | cut -d: -f1)"
+stamp_line="$(grep -n '^echo "\$now \$band"' "$DISK_HOOK" | tail -1 | cut -d: -f1)"
+[ -n "$emit_line" ] && [ -n "$stamp_line" ] && [ "$stamp_line" -gt "$emit_line" ] &&
+    got=stamps_after_speaking || got="emit=${emit_line:-none} stamp=${stamp_line:-none}"
+assert "the throttle stamp is written after the message, not before" stamps_after_speaking "$got"
+
 # CROSS-PLATFORM. A platform whose Docker layout is unknown still reports the host volume, and must
 # not invent or imply a Docker figure it never read.
 ctx_unknown="$(disk_context PC_DISK_UNAME=Plan9 PC_DISK_HOST_WARN_GIB=99999999)"
