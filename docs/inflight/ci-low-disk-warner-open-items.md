@@ -48,6 +48,19 @@ only in a session scratchpad that no longer exists, so a macOS run starts from s
 bare `mktemp` with no template appears in `bin/test-check-agent-hooks.sh` and fails on BSD `mktemp`;
 that is pre-existing and belongs to astubbs#341.
 
+<!-- post-merge: checked-begin -->
+**Master has since given this one a mechanism, and it is now the only coverage that exists.** The
+`shell: macos` job in `.github/workflows/repo-hygiene.yml` runs every `bin/test-*.sh` on
+`macos-latest` under BSD userland and a pinned bash 3.2, by glob rather than a list - so
+`bin/test-check-agent-hooks.sh` is in it without anyone wiring it up, and with it the warner's real
+`stat -f` arm and its `df -Pk` column read. `REAL_UNAME` is the un-injectable reading, so on that
+runner those are genuinely the BSD spellings and not the Linux ones wearing a `PC_DISK_UNAME`
+costume. What it still does NOT reach is the Docker Desktop sparse-image path: a hosted macOS runner
+has no `Docker.raw`, so `file_blocks` is called over a path that does not exist and the
+high-water-mark correction stays unexercised. Treat a green macOS lane as evidence for the syntax
+and the column layout, not for the sparse-image branch.
+<!-- post-merge: checked-end -->
+
 ## Smaller, still open
 
 - `df` on the fast path has no timeout, so a hung NFS mount freezes the session. Portable bounding
