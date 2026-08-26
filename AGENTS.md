@@ -216,6 +216,13 @@ settling it: **a fix that works is not evidence of the cause.**
 The same rule one step earlier: read the record before you build on it, not before you ship. It has
 **two triggers**, and the second one is the one that gets missed.
 
+**`git fetch --all --prune` before you read any ref, every session.** A remote-tracking ref is a
+cache, and a stale one answers confidently: `origin/<your-branch>` can be weeks behind while every
+`git log` and `rev-list` you run looks healthy, because another session, another machine or a
+sweep across every open branch pushed to it. Claude Code sessions get this done for them by
+`.claude/hooks/check-branch-behind-its-own-remote.sh`, which also refuses a merge or rebase onto a
+branch behind its own published tip; nothing fetches for anyone else, so it is on you.
+
 **Your base moved under you** - cutting a worktree from a master that advanced, merging master in
 mid-flight, rebasing, replaying, or picking a branch back up. Run
 `git log --oneline <old-base>..<new-base>` and read the **bodies** of anything touching your area.

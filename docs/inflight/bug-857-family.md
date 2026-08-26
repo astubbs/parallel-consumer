@@ -1333,6 +1333,40 @@ Consistent with every earlier sighting, the branch is not otherwise a suspect: t
     ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
       -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8746139315096023802
 
+<!-- post-merge: checked-begin -->
+## 2026-08-26, third capture: the same arm again, and the first intermittency datum
+
+**The section above ends "Two captures is still not a rate", and this does not make one either -
+but it is the first repeat of the SAME scenario on the SAME arm, which the two before it were not.**
+`Chaos Pain Suite`,
+`ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor`,
+`chaos.seed=3649400609451361367`
+([run 32965577251](https://github.com/astubbs/parallel-consumer/actions/runs/32965577251)), on
+astubbs/parallel-consumer#345's head `fa49683c0`. Same `Timeout waiting for commit response PT10S`,
+same ambient-probe verdict that the poll thread is BLOCKED on a monitor rather than waiting on a
+broker, same `AtomicBoolean` `commitCommand` held by the instance's own `pc-control` thread, reached
+through `onPartitionsRevoked`. The frame-for-frame identity argument in the capture above applies
+unchanged and is not repeated here.
+
+**What is new is the pair of adjacent heads.** The next head on that branch, `bc177988a` - a merge
+of master carrying no main-code change of its own - ran the same suite and **passed**. So the two
+outcomes sit one commit apart on one branch, which is the closest thing this file has to a direct
+intermittency observation: previous captures were each on a different branch, so none of them could
+separate "this tree provokes it" from "this run happened to hit it". This pair says the trigger is
+the schedule, not the tree.
+
+**It also says the sighting is easy to lose.** Nothing on astubbs/parallel-consumer#345 records the
+failure any more - the branch is green, the red belongs to a head no longer at the tip, and the PR
+merges without anyone meeting it. That is the argument for writing captures down here as they
+happen rather than when somebody decides the rate matters.
+
+**Not this PR's defect, and not fixed by it.** astubbs/parallel-consumer#345 changes
+`ShardManager.removeWorkFromShardFor` and touches no locking and no
+`AbstractParallelEoSStreamProcessor` line; the cycle is between the poll thread and `pc-control`
+over `commitCommand`. Neither seed here nor in the two captures above has been replayed.
+
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
