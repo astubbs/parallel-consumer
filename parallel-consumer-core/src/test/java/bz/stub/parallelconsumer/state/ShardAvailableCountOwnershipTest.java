@@ -181,6 +181,37 @@ class ShardAvailableCountOwnershipTest {
     }
 
     /**
+     * The same unsound inference at the <b>poller's sweep</b>, which is the second site that deducted a unit on the
+     * strength of a container's observable state rather than on whether it held one.
+     * <p>
+     * A container taken as work and then gone stale across a rebalance has already spent its unit, so the sweep
+     * that evicts it must deduct nothing. The old code deducted unconditionally here, which is the same double
+     * deduction as the reported defect reached by a different path - and the clamp is what stopped it showing.
+     */
+    @Test
+    void thePollersStaleSweepMustNotDeductForAnEntryThatAlreadySpentItsUnit() {
+        var takenThenStale = registerAndTake(100);
+        assertCount("taken as work, so its unit is spent", 0);
+
+        wm.onPartitionsRevoked(UniLists.of(tp));
+        wm.onPartitionsAssigned(UniLists.of(tp));
+
+        // Same white-box plant as the stale-replacement case, and for the same reason: a stale resident is
+        // normally removed by this very sweep, so a test that lets it run first never reaches the branch.
+        register(101);
+        shard().getEntries().put(100L, takenThenStale);
+        assertCount("only offset 101 is counted - the planted resident spent its unit when it was taken", 1);
+
+        long swept = sm.removeStaleContainers();
+
+        assertWithMessage("PRECONDITION: the sweep must actually have removed the planted stale resident, or this "
+                + "test exercises nothing")
+                .that(swept).isAtLeast(1L);
+        assertCount("the swept entry held no unit, so the sweep must deduct nothing - offset 101 is still queued "
+                + "and selectable, and deducting for offset 100 would hide it", 1);
+    }
+
+    /**
      * The invariant the design rests on, exercised over a sequence that mixes every accounting path. It is not
      * documentation: a counter that can disagree with the units actually held, or go negative, fails here.
      */
