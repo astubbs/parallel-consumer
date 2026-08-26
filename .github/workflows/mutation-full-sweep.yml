@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # Full mutation sweep (PIT). Runs NIGHTLY, plus manual dispatch. Deliberately no `pull_request` -
 # the PR-scoped lane in maven.yml covers that. Why nightly rather than per-merge, including the
 # measurement that decided it against this file's own earlier advice, is in the `on:` block.
