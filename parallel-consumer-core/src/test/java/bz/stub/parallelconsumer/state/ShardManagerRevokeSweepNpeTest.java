@@ -135,14 +135,15 @@ class ShardManagerRevokeSweepNpeTest {
         // the right answer. Declared rather than inherited because subclassing a collection and adding
         // fields otherwise reads as a forgotten equals - which is exactly what SpotBugs
         // EQ_DOESNT_OVERRIDE_EQUALS is for, and it cannot tell scaffolding from state.
+        //
+        // hashCode is deliberately NOT declared alongside it. The usual "override both together" rule guards
+        // against an equals paired with Object's identity hashCode; here both come from AbstractMap and are
+        // already consistent with each other, so redeclaring hashCode would change nothing and SpotBugs
+        // rightly flags the no-op (COM_PARENT_DELEGATED_CALL). equals earns its declaration by answering a
+        // real question; hashCode would only be echoing its parent.
         @Override
         public boolean equals(Object other) {
             return super.equals(other);
-        }
-
-        @Override
-        public int hashCode() {
-            return super.hashCode();
         }
     }
 
