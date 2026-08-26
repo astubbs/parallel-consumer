@@ -49,9 +49,11 @@ full evidence is the last section of this file; three consequences bind anyone p
   branch with no fix it would land as a knowingly-red test and that is
   [`docs/quarantined-tests.md`](../quarantined-tests.md)'s decision to make, not a side effect of a
   chaos-suite change.
-- **The sequencing advice in [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
-  - "land the backlog, then re-run" - was sound when written and no longer applies to `CLASS2_STALL`
-  specifically.** It still applies to any signature this file records that is *not* the lag bound.
+- **The old sequencing advice - "land the backlog, then re-run" - was sound when written and no
+  longer applies to `CLASS2_STALL` specifically.** It still applies to any signature this file
+  records that is *not* the lag bound. (It lived in a chaos-lane note since deleted; the reasoning
+  that superseded it for the lag bound is
+  [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md).)
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
@@ -537,7 +539,7 @@ clean". This one does not:
 | **Local control** | **`5c377ec04` (master)** | **RED** | **10** | **154387ms** |
 
 **A RED here does NOT mean every `CLASS2_STALL` is a family occurrence.**
-[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
 records one with this same ~154s signature whose seed replays **green** on an uncontended box,
 peaking at 121.3s - self-hosted runner contention, from `Performance` and `Chaos Pain Suite` sharing
 the box. That note owns the discriminator; the short version is that ~154s is what a crossed 150s
@@ -707,7 +709,7 @@ the pre-existing `CLASS2_STALL` timing bound, whose value and gating that PR del
 on the same self-hosted box, overlapping the chaos job's opening minutes, and this ledger already
 records that pairing as a prior cause. But the discriminator is an uncontended replay of *this* seed,
 and per the table in
-[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
 
@@ -789,7 +791,7 @@ unresolved either way.** `Performance (optional)` did share the self-hosted box 
 the chaos job's `highcpu-1`) but ran 23:38:46-23:41:49, while the failing scenario started at
 23:41:20 and its 153s stagnation window opened around 23:41:28 - so the overlap covers only the
 window's first ~20 seconds, not the storm phase the way
-[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
 records it. As there, the discriminator is an uncontended replay of this seed, and **nobody has
 replayed it**.
 
@@ -901,7 +903,7 @@ the answer is the one that entry called the timing-proxy side.
 
 **Both ran on a CONTENDED developer box, which biases toward "did not drain".** They drained anyway.
 That asymmetry is what makes a local run worth the minutes here, and it is the reverse of the usual
-caution in [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md):
+caution in [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md):
 that note's "a GREEN replay needs two or three" rule governs an *absent* violation, where contention
 and a quiet schedule are indistinguishable. These runs are not absences - the bound was crossed, 2 and
 46 times, and the run finished anyway. A fired-and-drained replay is positive evidence, and one is

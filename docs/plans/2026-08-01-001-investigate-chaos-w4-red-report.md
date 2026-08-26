@@ -221,6 +221,7 @@ It sweeps `conductor.getFleet()`, reads each `ParallelConsumer.getFailureCause()
 ## 4. Evidence: five red runs, five different branches
 
 All on workflow `highcpu` (`.github/workflows/pr-highcpu-fast-feedback.yml`), job "Chaos Pain Suite".
+<!-- file-refs: N/A - that workflow was deleted on 2026-08-26 when chaos moved to the hosted gate; this is a dated record and is left as it read. Recover it with git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml -->
 
 | time (UTC 2026-07-31) | run id | branch | result |
 |---|---|---|---|
@@ -332,6 +333,7 @@ worse as W-scenarios are added, since each new arm lands in the same job.
 
 ### H1 (pure form): the highcpu lane starves its own chaos SLOs
 
+<!-- file-refs: N/A - that workflow was deleted on 2026-08-26; dated record, left as it read. git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml -->
 `.github/workflows/pr-highcpu-fast-feedback.yml` sets concurrency **per suite and per ref**:
 
 ```yaml
