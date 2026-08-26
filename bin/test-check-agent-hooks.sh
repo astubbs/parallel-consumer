@@ -939,7 +939,7 @@ print(json.dumps(d))
 BCTX_TMPDIR="$(mktemp -d)"
 
 bctx_fire() { # <payload-json> [PATH-override] -> the hook's stdout
-    # Templated, not bare: BSD/macOS `mktemp` requires a template operand, and this suite has to run
+    # Templated, not bare: it costs nothing and gives the file a recognisable name. No portability
     # on the platform its portability cases are about.
     local payload="$1" pathover="${2:-$PATH}" tmp out
     tmp=$(mktemp "$BCTX_TMPDIR/payload.XXXXXX")
@@ -1217,31 +1217,15 @@ assert "an ftp:// origin is not a transport git clones from, and is rejected" re
 git -C "$bctx_tmp/wt" remote set-url origin https://github.com/selftest-owner/selftest-repo.git
 rm -rf "$local_origin"
 
-# BSD `mktemp` NEEDS A TEMPLATE, AND A HOOK THAT CANNOT MAKE ITS TEMP FILE SAYS NOTHING AT ALL.
-# GNU `mktemp` invents a template when given none; BSD/macOS exits 1 with a usage error. The hook
-# writes its payload to a temp file before anything else - by design, because the payload arrives on
-# stdin and can exceed MAX_ARG_STRLEN - so a bare call made the whole hook emit ZERO BYTES on macOS,
-# fail open, and be indistinguishable from a branch with nothing to say. Silence is this hook's
-# correct output on a boring branch, which is exactly why total inertness cannot be left untested.
-#
-# MODELLED, not borrowed, for the same reason the BSD `stat` stub above is: on macOS the host mktemp
-# IS BSD mktemp, and a delegating stub would inherit the behaviour under test.
-bctx_clean_stamps
-bsd_mktemp_bin="$bctx_tmp/stub-bsd-mktemp"; mkdir -p "$bsd_mktemp_bin"
-cat > "$bsd_mktemp_bin/mktemp" <<'STUB'
-#!/usr/bin/env bash
-# BSD/macOS mktemp: a template operand (or -t prefix) is REQUIRED; none is a usage error.
-for a in "$@"; do case "$a" in -*) ;; *) exec /usr/bin/mktemp "$@" ;; esac; done
-case " $* " in *" -t "*) exec /usr/bin/mktemp "$@" ;; esac
-echo "usage: mktemp [-d] [-q] [-t prefix] [-u] template ..." >&2
-exit 1
-STUB
-chmod +x "$bsd_mktemp_bin/mktemp"
-out="$(bctx_fire "$(bctx_payload "$bctx_tmp/wt" SessionStart)" "$bsd_mktemp_bin:$stub_pr:$PATH")"
-[ -z "$out" ] && got=silent || got=spoke
-assert "under a BSD mktemp the hook still speaks, rather than going quietly inert" spoke "$got"
-case "$(bctx_context "$out")" in *'feats/bctx-fixture'*) got=complete ;; *) got=truncated ;; esac
-assert "...and the section it would have dropped is all there" complete "$got"
+# NO BSD `mktemp` ARM HERE, DELIBERATELY. A previous revision stubbed `mktemp` to reject a bare
+# invocation, modelling BSD, and asserted the hook still spoke under it. The premise was false:
+# running the sweep on a real Mac showed bare `mktemp` works
+# (docs/solutions/workflow-issues/gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md records it
+# as one of two carefully-argued findings that were both wrong, alongside `xargs -r`). The cases
+# passed, against a fiction. Removed rather than left green, because a test that models a platform
+# incorrectly asserts that fiction indefinitely and will be read later as evidence about macOS.
+# The hook still passes a template to `mktemp` - that costs nothing and names the file recognisably -
+# but no claim rests on it.
 
 # --- DISPATCH MODE: the shape of the 2026-08-24 incident -------------------------------------------
 # The dispatcher's own cwd is the WRONG branch to describe when it is handing work to another

@@ -94,11 +94,11 @@ set -uo pipefail
 # Linux caps a single argv string at ~128 KiB (MAX_ARG_STRLEN) and a hook payload carries the whole
 # tool input; a dispatch prompt clears that easily. Passing it as an argument fails with "Argument
 # list too long" BEFORE python starts, and since these hooks fail open the failure is silent.
-# A TEMPLATE, NOT A BARE `mktemp`. BSD/macOS `mktemp` requires a template operand (or `-t prefix`)
-# and exits 1 on none, where GNU defaults one - so a bare call made this hook exit 0 having emitted
-# ZERO BYTES on macOS. That is the exact failure this file's DEGRADED READS ARE LOUD rule exists to
-# forbid, and it is worse here than anywhere else: an injection hook is silent when it is working,
-# so total inertness is indistinguishable from a boring branch. Six X's satisfies both userlands.
+# A TEMPLATE, NOT A BARE `mktemp` - but not for the reason first written here. That claimed BSD
+# requires a template operand and GNU defaults one; running the sweep on a real Mac showed bare
+# `mktemp` works, and docs/solutions/workflow-issues/gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md
+# records it as one of two findings argued carefully and both wrong. The template stays because it
+# costs nothing and names the file recognisably; no portability claim rests on it.
 payload_file=$(mktemp "${TMPDIR:-/tmp}/pc-branch-context-payload.XXXXXX" 2>/dev/null) || exit 0
 trap 'rm -f "$payload_file"' EXIT
 cat > "$payload_file" 2>/dev/null || exit 0
