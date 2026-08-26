@@ -27,7 +27,13 @@
 shell_corpus_init() { # [<explicit-scan-dir>]
     if [ -z "${1:-}" ]; then
         cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || return 1
-        SHELL_CORPUS_DIRS="bin .claude/hooks"
+        # THE `lib/` DIRECTORIES COUNT TOO, and this file is the proof of why they are easy to miss:
+        # `shell_corpus_files` globs `"$d"/*.sh`, which does not recurse, so `bin/lib/` and
+        # `.claude/hooks/lib/` were scanned by neither gate - including this very file. A shared
+        # helper is the worst place for a silent-failure bug, because every caller inherits it.
+        # Named explicitly rather than made recursive: the corpus is a list of directories whose
+        # contents are shell, and a `find` would start reading fixtures.
+        SHELL_CORPUS_DIRS="bin bin/lib .claude/hooks .claude/hooks/lib"
     else
         SHELL_CORPUS_DIRS="$1"
     fi

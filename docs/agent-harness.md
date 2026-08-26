@@ -213,7 +213,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - nine hook scripts across ten registrations, and the file is
+**`.claude/settings.json`** - ten hook scripts across eleven registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -250,6 +250,22 @@ grants stay in `settings.local.json`, still ignored.
   (prefix the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) and the stated limits - a
   stalled agent writes nothing and is not detected; `bash -c` wrapping and REST-API merges are not
   seen - are documented in the hook's own header.
+- `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
+  `.claude/hooks/remind-master-drift-on-push.sh`, which reports the commits `origin/master` has
+  gained that this branch does not have, and whether any of them touch files the branch is changing.
+  It answers the question "Read the commits you inherit" poses and nothing else was putting in front
+  of anyone: not *how far* the branch has diverged - `docs/inflight/AGENTS.md` rightly says never to
+  write down what `git rev-list --left-right --count` can answer - but *whether anything relevant
+  has landed*, which needs the subjects. It never says to merge: batching several master merges is
+  often right, and the failure it exists to prevent is deciding without looking. Throttled on
+  master's SHA rather than a clock, so the same tip is reported once per branch and a master that
+  moves reports again immediately; the one clock is a floor on how often it fetches, so a push loop
+  cannot become a fetch loop. It **fetches** before reading, because a stale `origin/master`
+  under-reports, which is the exact failure it exists to prevent.
+- The push detection and the portable `stat` both live in `.claude/hooks/lib/hook-common.sh`, shared
+  by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
+  working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides
+  the next such bug until somebody re-runs the same experiment on the same platform.
 - `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
   `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
   "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to
@@ -484,7 +500,10 @@ Open list - add to it, or take from it:
   needing an LGTM, worktrees with uncommitted work, gates currently red on master. **Partly done** -
   `inject-branch-context.sh` covers the current branch's own PR and its worktree marker. What is left
   is the cross-repo view: *other* PRs awaiting an LGTM, *other* worktrees with uncommitted work, and
-  master's gate state. Different query, different cost, so it stays on the list.
+  master's gate state. Different query, different cost, so it stays on the list. Picking a branch
+  back up is also the cheapest moment to learn master has moved under it, so
+  `remind-master-drift-on-push.sh` would earn its keep there too - it is on push only because that is
+  where its sibling already had a tested detector, not because session start was ruled out.
 - A `PreToolUse` deny on `git push --force` / `git rebase` against shared branches, which several
   skill definitions already forbid in prose.
 - A `UserPromptSubmit` hook injecting the current PR's review state, so "is this LGTM'd" never has to
