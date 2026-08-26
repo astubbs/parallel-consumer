@@ -24,7 +24,14 @@ import static com.google.common.truth.Truth.assertThat;
  * <p>
  * The shape is deliberately the same textbook probe SpotBugs was given in the torn-read dossier and reported
  * NOTHING on, at {@code effort=Max, threshold=Medium}, including from its nominally-relevant
- * {@code AT_OPERATION_SEQUENCE_ON_CONCURRENT_ABSTRACTION} detector: a {@code containsKey} followed by a
+ * {@code AT_OPERATION_SEQUENCE_ON_CONCURRENT_ABSTRACTION} detector. <b>That held for SpotBugs' STOCK
+ * detectors and no longer holds generally:</b> with fb-contrib added, {@code MUI_CONTAINSKEY_BEFORE_GET}
+ * names this very probe in seconds, and names the real {@code ShardManager} seam too. The probe is still
+ * the right red control for <em>Lincheck</em> - a static detector cannot exhibit an interleaving, and the
+ * two torn-read value-divergence cases remain outside what any check-then-act detector looks at - but
+ * "no static analysis can see this" is now "no stock detector could". The finding on this class is
+ * suppressed by name in {@code config/spotbugs-exclude.xml}, because the tear here is deliberate.
+ * The shape: a {@code containsKey} followed by a
  * {@code get} on a {@code ConcurrentHashMap}, with the result dereferenced unconditionally. That is
  * {@code ShardManager.removeWorkFromShardFor}'s bug reduced to nine lines and nothing else. If Lincheck cannot
  * see it here, no result it gives on the real classes means anything.

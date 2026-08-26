@@ -109,6 +109,32 @@ Distinct from a load-tightness flake and an unforceable trigger: no deadline is 
 awaited event is missing. The awaited condition is one of several legitimate outcomes, and once a
 different one has occurred it can never become true, so the wait always expires in full.
 
+**Timing proxy**
+A bound on elapsed time asserted as though it established a correctness property it cannot actually
+reach — "nothing has progressed for N seconds" standing in for "it is wedged". Because a busy system
+and a stuck one both stop advancing the watched value, the bound cannot separate them, and every
+crossing needs a second experiment before it means anything.
+
+Distinct from a load-tightness flake, and the distinction decides the fix. A load-tightness flake has
+the right property and too small a margin, so more margin repairs it. A timing proxy has the wrong
+property, so widening only postpones the next false crossing and blinds the bound to the defect it was
+sized against.
+
+Two of its behaviours mislead readers rather than tests. Its recorded peak is fixed by the instrument
+— bound plus detection latency — so repeated near-identical measurements read as a signature while
+discriminating nothing. And because any one crossing fails the whole run, its false-positive rate
+compounds with the number of independent scenarios, so a suite gets redder as it gets more thorough.
+
+**Observation (as against a violation)**
+A probe finding that is measured and reported but never fails the run, as distinct from a violation,
+which gates. The split exists so a detector aimed at a timing property can keep producing its number
+without asserting a verdict it cannot support.
+
+Demotion suppresses the finding, never the measurement: the peak a demoted detector records is what a
+future re-calibration reads, so a detector that stopped measuring would delete that evidence with
+nothing going red to say so. An observation's only reader is a passing run's own output, which is why
+where it is printed matters as much as that it is recorded.
+
 **Ambient probe**
 The always-on recorder attached to broker integration tests, which annotates a failure with
 consumer-group progress evidence so the contention-versus-product-bug question is answered before
@@ -140,7 +166,20 @@ rate recovered from starved runs prices every candidate budget at once.
 
 The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
 both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
-first evidence against the method, not for the code.
+first evidence against the method, not for the code. The same demand applied to an analyser rather
+than a test is what catches inert configuration.
+
+**Inert configuration**
+Analysis or build settings that are present in the source, syntactically valid, and never reach the
+run they were written for - so the tool executes correctly against a configuration that is not the
+one you wrote. Distinct from a broken tool: nothing errors, nothing is skipped, and the report is
+truthful about a scope nobody intended.
+
+It is invisible to every signal except a count, because the absence of findings it produces is
+indistinguishable from a clean codebase. Suppressions are the mirror case: one matching nothing looks
+exactly like one that works. The verification is therefore to assert the number - that a disabled
+rule reports zero, that an enabled one reports more than zero - never to observe that the build
+passed.
 
 **Positive control**
 An arm of a measurement whose only job is to register a hit, proving the instrument could have detected
@@ -167,6 +206,23 @@ must control declarations the real code does not expose, and bound to its subjec
 whoever copied it. Its distinguishing property is that it decays silently: when the modelled code
 moves, the probe keeps passing, so it needs a correspondence check that fails on divergence or it is
 only as current as its last manual review.
+
+## Ratchet
+
+A gate that can only turn one way: the recorded set of accepted findings may **shrink**, never
+silently grow. Fix one, delete its entry; introduce one, the build fails.
+
+The word is used here for an **identity set**, not a threshold - the distinction is the whole point.
+A ceiling of "at most N findings" is satisfied just as well by fixing one defect and introducing
+another, so it cannot tell a codebase that improved from one that swapped a problem for a different
+problem. Keying on the identity of each finding closes that: an unfamiliar identity is a new defect,
+and a missing one means somebody fixed something without recording it, which is how a set quietly
+stops meaning anything. Both directions fail on purpose.
+
+A ratchet is therefore a way to adopt a strict check against code that cannot pass it yet: accept
+today's findings as known, and every new one is blocked from that moment. It is not a suppression
+list - a suppression says "never report this", where a ratchet says "this one is already on the
+books, and here is the list you are expected to shorten".
 
 ## Flagged ambiguities
 

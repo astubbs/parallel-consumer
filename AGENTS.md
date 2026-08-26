@@ -86,6 +86,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 | [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+| [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md) | Changing a field in the engine - the `@GuardedBy` rule, the known shared state and its ledgers, and the shard-map pin |
 
 **A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
 there, not after review catches you.** The table above routes the ones that exist today; `find . -name
@@ -267,9 +268,11 @@ section does.
 - **Assert the renames git RECORDED *and* their pairing - a bare R-count reads a mis-paired rename
   as healthy.** `bin/rename-packages.sh` asserts both; if you moved anything by hand, do both by
   hand.
-- **Confirm the mutation lane scored mutants rather than trusting its tick.**
-  `bin/ci-mutation-test.sh` exits **0** printing "nothing to mutate, skipping" when its package
-  regex is stale, which is indistinguishable from a pass in the job summary.
+- **Confirm the mutation lane scored mutants rather than trusting its tick.** A stale package regex
+  used to exit **0** printing "nothing to mutate, skipping", indistinguishable from a pass;
+  `bin/ci-mutation-test.sh` now exits 2 for it, and 3 for a genuine skip.
+  [`docs/ci.md`](docs/ci.md) owns the lane and its exit codes, so this bullet goes with the rest of
+  this section.
 
 ## Overview
 
@@ -426,6 +429,22 @@ Nothing lints commit messages, so all of this is on you.
   [`docs/upstream.md`](docs/upstream.md).
 
 ## PR Discipline
+
+- **Before you push, run `bin/check-all.sh`** - it globs every gate in `bin/` and runs them
+  concurrently, so the set cannot drift from whatever you remembered and it finishes in seconds.
+  `--with-tests` adds the self-tests, which take far longer and answer a different question ("do the
+  gates still work"), so they are CI's job and not part of the routine sweep. `bin/AGENTS.md` owns
+  the detail, including why a skip is never counted as a pass. This exists because a hand-picked
+  sweep of seven gates missed one and CI caught it.
+
+- **Read the analysis output on your own PR before asking for review:
+  `bin/check-pr-analysis-surfaces.sh [PR]`.** The tools report to five places that are not each
+  other, so checking by hand is a scavenger hunt nobody performs - and a finding nobody read is
+  indistinguishable from one that does not exist. The script splits findings **on a line your diff
+  wrote** (yours, and the only thing that sets its exit code) from those merely **in a file you
+  touched** (inherited - leave those to the registries). Its header owns the detail and the worked
+  incident: astubbs#356 turned `-Xlint:all` and SpotBugs-over-tests on, both fired on files it was
+  editing - one on a line it had just rewritten for a different detector - and nobody looked.
 
 - **Before merging a fix, look for other instances of the same defect - and say what you found,
   including "none".** A fix that removes today's instance invites tomorrow's. Once you can name the

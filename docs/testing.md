@@ -142,8 +142,34 @@ code:
 | Loss and bounded duplication | `ProgressProbe`'s ledger | a record never arrives, or arrives more often than a disturbance explains |
 | **Per-key ORDERING and concurrency** | `KeyOrderLedger` | a key's offsets going backwards, or two deliveries of one key in flight at once |
 | **A stalled instance** | `InstanceStallProbeIT`, `ProgressProbe` | a member present and heartbeating while making no progress |
-| Lag stagnation (Class 2) | `ProgressProbe` | a committed offset frozen while lag grows, group STABLE |
+| Lag stagnation (Class 2) - **reports, never gates** | `ProgressProbe` observations | a committed offset frozen while lag grows, group STABLE. **A timing measurement: crossing the bound does not fail the run** - see below |
 | **Watching a stall instead of killing it** | `-Dchaos.diagnoseStallRecovery=true` | keeps a stalled run alive so its state can be read |
+
+**Class 2 lag stagnation reports, and only reports - read its findings as speed, never as a verdict.**
+`CLASS2_STALL/LAG_STAGNATION` lands in `ProgressProbe`'s `observations`, not its `violations`: it is
+printed in the run summary and the ambient autopsy, and it fails nothing. The detector watches a
+partition's COMMITTED offset, which one incomplete record legitimately pins while the shard behind it
+completes work normally - so a busy fleet and a wedged one are indistinguishable to it. Three replays
+say so: seeds `4734674029169027864`, `6825864417772979246` and `4044221734199516240` all cross the
+bound and then drain completely, the latter two being the seeds
+[`bug-857-family.md`](inflight/bug-857-family.md) nominated as its strongest evidence.
+
+**Two consequences worth carrying.** A `lagStagnation` peak in the 151-155s band is what a crossed
+150s bound looks like *whatever crossed it* - the probe samples every 5s, so the number is bound plus
+detection latency and encodes no severity; do not read a tight cluster of them across runs as
+corroboration. And the liveness claim the bound was standing in for now belongs to
+`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS - any returned work result re-arms it -
+so it structurally cannot fire on slow-but-progressing. A run where Class 2 observes and
+`INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
+it is untagged deliberately, so it gates every default integration build.
+
+**The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
+`INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
+completing fires nothing that gates - and the correctness ledger does not close it either, because it
+counts records processed rather than offsets durably committed. What is uncovered, and the correlated
+gate that would close it (with the red control it must have first), is tracked in
+[`test-per-shard-liveness-has-no-gate.md`](inflight/test-per-shard-liveness-has-no-gate.md). Do not
+read "Class 2 was demoted" as "that case is covered elsewhere".
 
 **Recorded but not yet analysed - reach for this before adding instrumentation.** The ledger is an
 event register: it writes down facts and lets the end-of-run assessment decide what they mean. So
@@ -172,8 +198,13 @@ a revoke while the new owner takes the same key) lands in two windows and is not
 **not** unanswerable, though: every delivery records its epoch and incarnation and the full history is
 kept, so the check is a function nobody has written rather than data nobody has. What it would need is
 a calibrated bound on how long a revoked owner may legitimately still be finishing - see the class
-javadoc. That shape is a real defect this repo has already fixed once (astubbs#80). And `CLASS2_STALL` gates on a timing bound, so a red proves the bound was crossed, not
-that the backlog never drained - see `docs/inflight/test-class2-probe-asserts-timing-not-correctness.md`.
+javadoc. That shape is a real defect this repo has already fixed once (astubbs#80). The second limit used to
+be that `CLASS2_STALL` **gated** on a timing bound - it no longer does, and the reason is the limit:
+it measures how long a committed offset stayed pinned, which one incomplete record does
+legitimately, so a crossing only ever proved the bound was met and never that the backlog failed to
+drain. Replays crossed it and drained completely. It now records a non-gating **observation**, which
+is why the chaos job summary prints the peak rather than a verdict - read it as a speed number. See
+`docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`.
 
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups=`

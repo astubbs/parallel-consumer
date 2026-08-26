@@ -2,6 +2,7 @@
 # The jcstress probe module: what is still open
 
 <!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: misdirection -->
 
 `jcstress-poc/` landed in astubbs#348. A review pass over it raised the findings below and that PR
@@ -50,14 +51,18 @@ Three second-order effects follow anyway:
   CVE scan will ever see it.
 - The workflows' `hashFiles('**/pom.xml')` cache key includes this pom, busting the Maven cache once
   per edit.
-- **The exclusion costs static analysis too, and astubbs#356 is about to make that the module's own
-  distinction.** SpotBugs runs `-pl parallel-consumer-core -am` today, so this module is one of
-  several unanalysed - unremarkable. astubbs#356 widens it to the whole reactor and turns on
-  `includeTests`; a module reached through neither `<parent>` nor the root `<modules>` is outside
-  that sweep as well, which would leave the probe classes the only Java in the tree nothing
-  analyses. They are concurrency code. Recorded so a later reader sees the cost was priced rather
-  than overlooked - the containment argument still wins, and the same shape as the dependency-lane
-  bullet above.
+<!-- post-merge: checked-begin -->
+- **The exclusion costs static analysis too, and this is now the module's own distinction.** It was
+  written here while astubbs#356 was still open; that PR has since landed, so the future tense is
+  spent. SpotBugs no longer runs `-pl parallel-consumer-core -am` - it covers the whole reactor with
+  `includeTests` - and a module reached through neither `<parent>` nor the root `<modules>` is
+  outside that sweep, which leaves the probe classes **the only Java in the tree nothing analyses**.
+  They are concurrency code. The containment argument still wins and nothing here is a request to
+  change it; it is recorded so a later reader sees the cost was priced rather than overlooked, and
+  it is the same shape as the dependency-lane bullet above. If the probes ever want analysis, the
+  cheapest route is a separate SpotBugs invocation scoped at this module rather than pulling it into
+  the reactor, since joining the reactor is what the containment exists to prevent.
+<!-- post-merge: checked-end -->
 
 ## Nothing enforces reading the positive control
 
@@ -66,11 +71,13 @@ raced prints `[OK]` everywhere. The warning is durable - `jcstress-poc/pom.xml` 
 THE CALIBRATION BEFORE BELIEVING ANY ZERO` - but it is prose, and no check makes a vacuous run
 distinguishable from a clean one.
 
+<!-- post-merge: checked-begin -->
 **The mechanical closure is to assert a count, not to instruct a reader**: have the run fail unless
 the calibration arm's observation count is non-zero, which is the same standing instruction
 astubbs#356 arrived at from three unrelated instances of the class (an exclude filter matching
 nothing, a compiler flag in a profile CI never activates, a mutation control whose arms both failed
 for an unrelated reason). Until that exists, this is prose asking for discipline.
+<!-- post-merge: checked-end -->
 
 ## Nothing detects correspondence drift, or even compiles the module
 
@@ -83,10 +90,10 @@ hand-written probe per suspected field pair, which does not scale and rots silen
 before the check exists multiplies the exposure. A tree-wide check in the style of
 `bin/check-file-refs.sh` could assert the modelled fields are still non-volatile and each quoted
 snippet still greps in `PartitionState.java`, costing the main build nothing. Named unprobed
-candidates: the **three** sibling fields `docs/refactoring.md` records under
-`AT_STALE_THREAD_WRITE_OF_PRIMITIVE` with the same "volatile for the flags" fix -
-`AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`, `ConsumerManager.commitRequested`
-and `RetryQueue.closed`, all three still plain in the current tree.
+candidates: the sibling fields `docs/refactoring.md` records under
+`AT_STALE_THREAD_WRITE_OF_PRIMITIVE` with the same "volatile for the flags" fix. **That entry owns
+the list** - read it there rather than from a copy, which is how a field fixed in one place goes on
+being listed as plain in another.
 
 ## Smaller, still open
 
