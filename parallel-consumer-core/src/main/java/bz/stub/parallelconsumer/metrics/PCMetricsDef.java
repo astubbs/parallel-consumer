@@ -12,6 +12,7 @@ import io.micrometer.core.instrument.Tags;
 import lombok.Getter;
 
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.metrics.PCMetricsDef.MeterType.*;
@@ -116,13 +117,13 @@ public enum PCMetricsDef {
     }
 
     private static String toCamelCase(String s) {
-        return Arrays.stream(s.replace("_", " ").split(" ")).map(string -> string.substring(0, 1).toUpperCase() + string.substring(1).toLowerCase()).collect(Collectors.joining(" "));
+        return Arrays.stream(s.replace('_', ' ').split(" ")).map(string -> string.substring(0, 1).toUpperCase(Locale.ROOT) + string.substring(1).toLowerCase(Locale.ROOT)).collect(Collectors.joining(" "));
     }
 
     private static String formatMetricDef(PCMetricsDef metricsDef) {
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("**%s**%n%n", toCamelCase(metricsDef.name())));
-        sb.append(String.format("%s `%s%s`%n%n", toCamelCase(metricsDef.type.name()), metricsDef.name, formatTagsAndSubsystem(metricsDef)));
+        sb.append(String.format(Locale.ROOT, "**%s**%n%n", toCamelCase(metricsDef.name())));
+        sb.append(String.format(Locale.ROOT, "%s `%s%s`%n%n", toCamelCase(metricsDef.type.name()), metricsDef.name, formatTagsAndSubsystem(metricsDef)));
         sb.append(metricsDef.description);
         sb.append("\n\n");
         return sb.toString();
@@ -131,7 +132,7 @@ public enum PCMetricsDef {
     private static String formatTagsAndSubsystem(PCMetricsDef metricsDef) {
         String res = "";
         if (metricsDef.subsystem != null) {
-            res += String.format("%s=%s", metricsDef.subsystem.getKey(), metricsDef.subsystem.getValue());
+            res += String.format(Locale.ROOT, "%s=%s", metricsDef.subsystem.getKey(), metricsDef.subsystem.getValue());
         }
         if (metricsDef.tags != null && metricsDef.tags.length > 0) {
             if (res.length() > 0) {
@@ -161,7 +162,7 @@ public enum PCMetricsDef {
     }
 
     private static String formatSubsystem(PCMetricsSubsystem sub) {
-        return String.format("==== %s%n%n", toCamelCase(sub.name()));
+        return String.format(Locale.ROOT, "==== %s%n%n", toCamelCase(sub.name()));
     }
 
     private static String joinTagsForRendering(ParallelConsumer.Tuple<String, String>[] tags) {

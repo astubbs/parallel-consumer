@@ -46,4 +46,21 @@ INFLIGHT_REGISTER_IMPACTS="$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS"
 # crash must appear beside the crashes, not after them. Signal integrity first (you cannot judge the
 # code through instruments that lie), then what kills, then what corrupts, then what stops, then what
 # is merely owed.
+# LABELS ARE THE THIRD AXIS, AND IT IS A MECHANISM - deliberately neither of the other two. The
+# filename prefix says the AREA a note is about; the impact says the CONSEQUENCE of not knowing it.
+# Neither can say what a note is about MECHANICALLY, and that is what you search by when you sit down
+# to do a piece of work: "show me the concurrency ones" spans bug-, core-, static-, deps- and
+# release-, and its consequences are already spread across stall, data-loss, crash and reliability.
+#
+# WHY A CLOSED SET. An open free-text field becomes tag soup within a month and then partitions
+# nothing, which is the failure this whole scheme exists to avoid. Add a value the way impacts were
+# added - by reading the corpus and finding a group the existing values cannot express - and describe
+# it in docs/inflight/AGENTS.md in the same commit.
+#
+# WHY IT STARTS AT ONE VALUE. Because one is what the corpus currently justifies: a small minority of
+# notes are concurrency-shaped, which is the band where a label partitions usefully rather than
+# matching nearly everything. A speculative second value would be inventing a group and hoping, which
+# the header above forbids.
+INFLIGHT_LABELS="concurrency"
+
 INFLIGHT_IMPACT_ORDER="misdirection blind-spot crash data-loss stall security config-lie reliability throughput release-gate coordination stranded-work ci test-debt refactor process deps-debt"

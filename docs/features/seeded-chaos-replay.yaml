@@ -56,4 +56,4 @@ references:
   - label: Chaos Pain Suite - how to run, replay and probe a fix
     path: docs/testing.md
   - label: What the probes check, and the Class 2 bound's open calibration question
-    path: docs/inflight/test-class2-probe-asserts-timing-not-correctness.md
+    path: docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md

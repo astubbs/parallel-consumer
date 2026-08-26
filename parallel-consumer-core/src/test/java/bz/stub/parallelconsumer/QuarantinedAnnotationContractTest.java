@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.List;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -31,6 +32,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
 class QuarantinedAnnotationContractTest {
 
     private static final Path REPO_ROOT = RepoRoot.find();
+
+    /**
+     * The wrappers that GATE a merge. Each hardcodes its own group exclusions rather than inheriting the pom
+     * default, so each has to be read separately - see {@link #hardcodedExcludedGroups(String)}.
+     */
+    private static final List<String> GATING_SCRIPTS =
+            Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh");
 
     @Test
     void annotationIsMetaTaggedWithTheQuarantinedTag() {
@@ -50,12 +58,21 @@ class QuarantinedAnnotationContractTest {
         assertThat(Arrays.asList(target.value())).containsAtLeast(ElementType.TYPE, ElementType.METHOD);
     }
 
+    /**
+     * Asserts MEMBERSHIP of the quarantine tag in the default exclusion list, not the list's exact contents.
+     * <p>
+     * It used to pin the whole literal, `performance,chaos,quarantined`. That made every unrelated lane added
+     * to the list - the Lincheck one was the first - fail this test with a message about quarantined tests
+     * gating, which is not what had happened. Worse, the obvious repair is to paste the new literal in, and
+     * then the test is pinning a list nobody reasoned about. Membership is the actual contract, and it still
+     * goes red the moment the tag is dropped, which is the failure this test exists for.
+     */
     @Test
     void pomExcludesTheQuarantinedGroupFromDefaultSuites() throws IOException {
-        String pom = read(REPO_ROOT.resolve("pom.xml"));
+        String excluded = pomDefaultExcludedGroups();
         assertWithMessage("root pom's default excluded.groups must contain the quarantine tag - " +
-                "otherwise quarantined tests run (and fail) in the gating suites")
-                .that(pom).contains("<excluded.groups>performance,chaos," + Quarantined.TAG + "</excluded.groups>");
+                "otherwise quarantined tests run (and fail) in the gating suites. Found: " + excluded)
+                .that(groups(excluded)).contains(Quarantined.TAG);
     }
 
     /**
@@ -83,14 +100,69 @@ class QuarantinedAnnotationContractTest {
         return count;
     }
 
+    /**
+     * Membership again, for the same reason as the pom check above: these lists grow as lanes are added,
+     * and pinning the whole literal makes an unrelated lane fail a quarantine test.
+     */
     @Test
     void gatingCiScriptsExcludeTheQuarantinedGroup() throws IOException {
-        for (String script : Arrays.asList("bin/ci-unit-test.sh", "bin/ci-integration-test.sh", "bin/ci-build.sh")) {
+        for (String script : GATING_SCRIPTS) {
+            String value = hardcodedExcludedGroups(script);
             assertWithMessage(script + " hardcodes its group exclusions (it does not inherit the pom " +
-                    "default) and must exclude the quarantine tag")
-                    .that(read(REPO_ROOT.resolve(script)))
-                    .contains("-Dexcluded.groups=performance,chaos," + Quarantined.TAG);
+                    "default) and must exclude the quarantine tag. Found: " + value)
+                    .that(groups(value)).contains(Quarantined.TAG);
         }
+    }
+
+    /**
+     * The two lists are maintained by hand in two places, and drift is silent in the direction that
+     * matters: a tag the pom excludes but a gating wrapper does not RUNS in the gating suite. Nothing else
+     * checks this - the wrappers deliberately do not inherit the pom default, precisely so that a pom edit
+     * cannot quietly change what gates.
+     */
+    @Test
+    void gatingCiScriptsExcludeEveryGroupThePomDefaultExcludes() throws IOException {
+        List<String> pomGroups = groups(pomDefaultExcludedGroups());
+
+        for (String script : GATING_SCRIPTS) {
+            String value = hardcodedExcludedGroups(script);
+            assertWithMessage(script + " must exclude every group the pom default excludes, or that group " +
+                    "runs in the GATING suite. Pom: " + pomGroups + " script: " + value)
+                    .that(groups(value)).containsAtLeastElementsIn(pomGroups);
+        }
+    }
+
+    /**
+     * The root pom's default {@code excluded.groups} value, verbatim.
+     * <p>
+     * Extracted rather than inlined at each of the two call sites because {@code indexOf} returns -1 on a
+     * miss and the slice arithmetic around it still lands in bounds: a copy that forgets the found-it
+     * assertion mis-parses silently instead of failing with a message. One copy, one guard.
+     */
+    private static String pomDefaultExcludedGroups() throws IOException {
+        String pom = read(REPO_ROOT.resolve("pom.xml"));
+        String open = "<excluded.groups>";
+        int start = pom.indexOf(open);
+        assertWithMessage("root pom must declare a default excluded.groups").that(start).isAtLeast(0);
+        int end = pom.indexOf("</excluded.groups>", start);
+        assertWithMessage("root pom's excluded.groups element must be closed").that(end).isAtLeast(start);
+        return pom.substring(start + open.length(), end);
+    }
+
+    /**
+     * The {@code -Dexcluded.groups=} value one gating wrapper passes on its own command line - see
+     * {@link #pomDefaultExcludedGroups()} for why this is a shared helper and not an inlined slice.
+     */
+    private static String hardcodedExcludedGroups(String script) throws IOException {
+        String body = read(REPO_ROOT.resolve(script));
+        String flag = "-Dexcluded.groups=";
+        int start = body.indexOf(flag);
+        assertWithMessage(script + " must pass an explicit -Dexcluded.groups").that(start).isAtLeast(0);
+        return body.substring(start + flag.length()).split("\\s")[0];
+    }
+
+    private static List<String> groups(String commaSeparated) {
+        return Arrays.asList(commaSeparated.split(","));
     }
 
     @Test
