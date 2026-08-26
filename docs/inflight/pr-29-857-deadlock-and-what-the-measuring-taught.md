@@ -40,6 +40,25 @@ behaviour, and this branch's whole record is about not mistaking one for the oth
 
 Worktrees: `.claude/worktrees/pr29` on the mac; `sweep-29` on the linux box holds the pre-merge state.
 
+**Two pieces have been cut out into their own PRs, and this branch now depends on both.**
+astubbs/parallel-consumer#375 carries the three probes and the brokerless harness they share -
+lifted unmodified, green on master, and it is where `OutForProcessingCounterDriftProbeTest` now
+lives, so the deleted revoke-time counter adjustment cannot be re-proposed without meeting the
+evidence that killed it. astubbs/parallel-consumer#376 carries the back-pressure pause derived from
+Kafka rather than mirrored in a field, with its write-up.
+
+When each lands, **take its version rather than keeping this branch's copy** - the same rule already
+recorded for `PCMetrics.java` and astubbs#57, and for the same reason: the extracted copy is the one
+that got reviewed on its own merits. astubbs/parallel-consumer#376's cooperative-pause test passes on
+master as well as here, so do not read it as a control arm for anything; it guards against
+reintroducing the reset-on-assignment this branch once had.
+
+The decomposition those came from is `docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`,
+which is a dated record and is deliberately NOT being rewritten as pieces leave - it says what was
+true on 2026-08-18, and two of its four clusters have moved since (cluster 3 deleted outright,
+cluster 4 resolved by deleting the mirror rather than gating it). Read it with this paragraph beside
+it.
+
 **Still owed at merge:** merge-strategy recommendation and squash message (100+ commits; `e81ac20fe`
 is mislabelled `docs(inflight)` but carries 584 lines of detector code); the one-line `stage_detail`
 fix in `docs/data/roadmap.yaml` (`known-defects-cleared` still says "mitigation drafted on
