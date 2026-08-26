@@ -417,6 +417,16 @@ Nothing lints commit messages, so all of this is on you.
   `cherry-pick/893-...`, `upstream-pr-905`. It keeps the mapping greppable.
 - Upstream-related commits carry DEP-3 provenance trailers -
   [`docs/upstream.md`](docs/upstream.md).
+- **Write prose to a FILE and pass `-F`/`--body-file`. Never put a commit message, PR body or issue
+  comment in a shell string** - not with `-m`, not with a heredoc, however carefully quoted. Prose
+  contains apostrophes and backticks, and both are shell metacharacters. Observed: an apostrophe
+  silently truncated a commit message mid-sentence (the commit still succeeded, exit 0), and
+  backticks in a PR body were *executed* as commands.
+  **Quoting the heredoc delimiter does not save you, and believing it does is why this keeps
+  recurring.** The interactive shell here is fish, so an agent's `bash -c '...'` is first a *fish*
+  single-quoted string; fish escapes only `\` and `'` inside those, so the first apostrophe in your
+  prose ends the string and fish parses the rest - backticks included. The bash-level quoting never
+  gets a say. Applies equally to `gh pr comment`, `gh pr edit` and `gh issue comment`.
 
 ## PR Discipline
 

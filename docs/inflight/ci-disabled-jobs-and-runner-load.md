@@ -55,11 +55,17 @@
   symptoms of a box that cannot schedule the threads the scenario's timing assumes, and they read
   exactly like a product stall to anyone who has not checked the load first.
 
-  **The mechanism behind both re-checks was fixed later the same day** - `2ccd3c799` re-keyed the
-  concurrency group off the ref and onto the `box-exclusive` matrix key, and put every job that can
-  occupy the host into it, so co-residency is meant to be impossible now. **A chaos red taken after
-  that commit is therefore a new fact, not another instance of this entry.** Confirming the fix
-  actually holds is
-  [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md),
-  which owns the story from here; what stays above is the evidence from before it landed, which is
-  what makes the before/after comparison possible at all.
+  **The mechanism behind both re-checks was addressed later the same day, and then the whole premise
+  was removed** - `2ccd3c799` re-keyed the concurrency group off the ref and onto the `box-exclusive`
+  matrix key, and `025d0b7ea` then took **everything per-PR off the self-hosted box outright**, after
+  measuring that the re-keyed group had a fresh failure of its own (26 of 32 box jobs never ran a
+  single step, evicted while pending on a repo-wide queue) and that the box bought only 14% of
+  wall-clock over a hosted runner. Nothing triggered by a pull request reaches that host now.
+
+  **So a chaos red on a PR is a new fact, not another instance of this entry - and co-residency is
+  no longer even available as the explanation.** The note that owned the confirmation question,
+  `ci-chaos-lane-serialised-confirm-no-coresidency.md`, was deleted by `025d0b7ea` as answered; read
+  that commit's body for the counts. What stays above is the evidence from before any of it landed,
+  which is what makes the before/after comparison possible at all.
+  <!-- file-refs: N/A - names the inflight note 025d0b7ea deleted, deliberately, as the record of
+       where that question was answered -->

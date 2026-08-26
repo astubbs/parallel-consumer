@@ -90,7 +90,7 @@ the statistics live only in a job log, which ages out and which a re-run silentl
 | No coverage | 19 |
 | Line coverage (mutated classes) | 481/597 (81%) |
 | Tests run | 1392 (7.52 per mutation) |
-| **Wall clock** | **21m55s** - of which **311s** is the instrumented coverage pass |
+| **PIT/maven phase** | **21m55s** (1315s) - of which **311s** is the instrumented coverage pass. NOT wall clock and NOT job elapsed: it is only what `time ./mvnw` wrapped. The same run's JOB ELAPSED was **31m27s** and its run wall, including ~9m22s queueing, was **40m50s**. Quote the clock whenever you quote the number |
 | Run | `mutation-full-sweep`, first run, against master at `58991506` |
 
 Two things follow from the runtime. It is schedulable, so the `push: branches: [master]` decision below
@@ -178,7 +178,7 @@ package that is off is off for new code too, permanently, until its trigger fire
 ## The rest of the re-widening list
 
 - ~~Run the sweep once and record the runtime~~ **DONE** - see the baseline above.
-- **Then give it a trigger** - now unblocked, at a known 22 minutes per run. Prefer
+- **Then give it a trigger** - now unblocked, at roughly 31m27s of job-elapsed per run (21m55s of that is the PIT phase; n=1). Prefer
   `push: branches: [master]` over a cron: the score changes only when the code does, so a nightly
   recomputes an identical answer whenever master did not move, and blames a date rather than a merge.
   Add a `concurrency` group with `cancel-in-progress` - only the latest master state is worth scoring.

@@ -6,7 +6,7 @@
 # mostly harmless on hosted runners, but this repo's heavy suites run on a small self-hosted pool
 # (see docs/self-hosted-runner.md), where an abandoned run holds an executor that a live PR needs.
 #
-# The existing per-suite `concurrency` in pr-highcpu-fast-feedback.yml only supersedes THE SAME SUITE
+# A per-suite `concurrency` group only supersedes THE SAME SUITE
 # ON THE SAME BRANCH, so it cannot help here: nothing about a merge looks like a new push. Observed
 # on 2026-08-03 - five branches' runs queued against five online runners, three of those branches
 # already merged.
@@ -16,7 +16,7 @@
 # Known limit: GitHub issues a READ-ONLY GITHUB_TOKEN for pull_request runs originating from a fork,
 # whatever the permissions block says - so closing a fork PR gets a 403 here (swallowed by the
 # catch-and-log below) and its runs are left alone. That does not undercut the point of this
-# workflow: pr-highcpu-fast-feedback.yml already restricts the self-hosted heavy jobs - the actually
+# workflow: the self-hosted heavy jobs are dispatch-only and PR-triggered nowhere - the actually
 # scarce resource - to same-repo PRs. Worth knowing if that ever changes.
 
 name: Cancel closed-PR runs
