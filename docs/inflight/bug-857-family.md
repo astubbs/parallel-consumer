@@ -1341,6 +1341,62 @@ over `commitCommand`. Neither seed here nor in the two captures above has been r
 
 <!-- post-merge: checked-end -->
 
+## 2026-08-26, fourth capture: the DRAIN stop-mode under the eager assignor, with both nearest neighbours green
+
+**The three captures above cover the key-order arm under the eager assignor and the plain revoke
+scenario under the cooperative one. This is the drain stop-mode under the eager assignor, which is
+neither.** `Chaos Pain Suite`,
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest`, the same correctness SLO -
+`no instance may end the run with an unclassified failure cause` -
+([run 32975169315](https://github.com/astubbs/parallel-consumer/actions/runs/32975169315)):
+
+```
+instance 56: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S ... POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this
+is contention or a lock-ordering defect, NOT a slow broker. Lock:
+java.util.concurrent.atomic.AtomicBoolean@6ae6802a, held by: pc-control-PC-56.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1621),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:555),
+             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
+```
+
+**The frame numbers differ from the captures above because master moved, so they were re-resolved
+rather than assumed.** At the observed head, `git show <head>:.../AbstractParallelEoSStreamProcessor.java`
+puts `synchronized (commitCommand)` - the acquisition itself, not merely a line inside the method -
+at `:1621`, and the `commitOffsetsThatAreReady()` call inside `onPartitionsRevoked` at `:555`. Every
+`synchronized` block in that class still takes `commitCommand`, and it is still the only
+`AtomicBoolean` among them, so `Lock:` names it unambiguously; the holder is again the instance's own
+control thread. The identification argument in the first capture therefore applies unchanged.
+
+**The same-run control arm is the sharpest this file has recorded, because both nearest neighbours
+passed.** Every sibling scenario in the same JVM, on the same runner, against the same broker, was
+green: `ChaosChurnStormIT`, `ChaosKeyOrderIT`, `ChaosRevokeUnderWorkIT`,
+`ChaosRevokeUnderWorkKeyOrderIT`, `ChaosRevokeUnderWorkCooperativeIT` and
+`ChaosRevokeUnderWorkCooperativeDrainIT`. The last two matter most: `ChaosRevokeUnderWorkIT` is the
+same assignor differing only in stop-mode, and `ChaosRevokeUnderWorkCooperativeDrainIT` is the same
+stop-mode differing only in assignor. Both neighbours on both axes passed in the same run, so this is
+neither the box in that hour nor a property of either arm on its own.
+
+**Taken with the three above, the cycle has now been captured across both assignors and both
+stop-modes**, always entered through `onPartitionsRevoked`. That is the same conclusion the second
+capture drew about the assignor split, extended to the stop-mode split. **Still not a rate**: no seed
+here or above has been replayed, and nothing in this section says how often the cycle closes.
+
+<!-- post-merge: checked-begin -->
+**Not the branch it was seen on.** The observed head was on astubbs#267, whose diff against its merge
+base changes `controlLoopHooks` to a `CopyOnWriteArrayList`, wraps several log calls in
+`logWithoutEscaping`, and reorders `failureReason` ahead of `doClose` in the control loop's catch. It
+adds, removes and moves no `synchronized` block, and does not touch `commitCommand`,
+`commitOffsetsThatAreReady` or the call to it inside `onPartitionsRevoked` - the whole of the cycle.
+Recorded there before that PR merged, for the reason the third capture gives: the red belongs to a
+head that stops being the tip, and nothing on the PR preserves it.
+<!-- post-merge: checked-end -->
+
+**Seed `3135248854766953145`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=3135248854766953145
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
