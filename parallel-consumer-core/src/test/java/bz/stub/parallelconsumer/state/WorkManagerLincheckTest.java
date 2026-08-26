@@ -42,8 +42,18 @@ import static com.google.common.truth.Truth.assertThat;
  * {@link MockConsumer} rather than a Mockito mock, as {@code WorkManagerTest} does - which also keeps
  * Mockito's generated classes out of the instrumented object graph.
  * <p>
- * <b>Expected on this tree</b>: a violation, because master carries the defect unfixed. astubbs#346 carries
- * the fix, and when it lands this test goes red and must be inverted - see {@link ShardManagerLincheckTest}.
+ * <b>Expected on this tree</b>: NO violation - this harness is INVERTED, and the inversion is a measurement
+ * rather than an inference. Both violations it could reach are gone: astubbs#346 removed the checkpoint-3 tear
+ * and astubbs#345 removed the {@code NullPointerException} out of {@code ShardManager.removeWorkFromShardFor}
+ * that was reached through the same {@code revokeAndReassign} operation and used to mask it.
+ * <p>
+ * <b>Green here is weak evidence, and saying so is the point.</b> What proves the tear is gone is
+ * {@link WorkManagerStaleCheckDoubleLookupTest}, which forces the interleaving deterministically. This arm is a
+ * search, and a search that misses most of the time: re-introducing the defect (re-resolving the state at
+ * {@code handleFutureResult}'s action sites) turned it red in only ONE of six runs at the bound below - so a
+ * regression here would go unnoticed on most runs. Do not read a pass as a proof, and do not delete the
+ * deterministic test on the strength of it. Measurements, both sittings:
+ * {@code docs/inflight/test-lincheck-lane-open-items.md}.
  * <p>
  * STRESS only: {@code ShardKey} is unavoidable here (registering work goes through the shard manager), and
  * Lincheck 3.7 cannot model-check a Lombok {@code callSuper = true} value type - see
@@ -108,7 +118,7 @@ public class WorkManagerLincheckTest {
      * cannot reach. Left parallel, the harness reports a real but different defect first - two concurrent
      * rebalances throw {@code ArrayIndexOutOfBoundsException} out of the unsynchronised per-partition counter
      * maps - and Lincheck stops at the first violation, so the checkpoint-3 tear is never reached. That
-     * defect is recorded in {@code docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md}
+     * defect is recorded in {@code docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md}
      * rather than deleted along with the scenario that found it.
      */
     @Operation(nonParallelGroup = "rebalance")
@@ -118,7 +128,7 @@ public class WorkManagerLincheckTest {
     }
 
     @Test
-    void stressRediscoversTheCheckpointThreeTear() {
+    void stressMustNotRediscoverTheCheckpointThreeTear() {
         // 1,000 iterations, and the number is measured rather than chosen. A rebalance is expensive next
         // to a mailbox handoff, so the tear's window is a small fraction of each invocation, and 200 - the
         // first bound committed here, chosen on three green runs - missed 2 runs in 8 on the reviewer's
@@ -144,17 +154,25 @@ public class WorkManagerLincheckTest {
         // going to fail gets longer, at a measured ~0.14s per iteration, so an exhaust costs ~2.4min here
         // against ~33s at 200. That run is either the flake this removes, or the designed inversion below.
         //
-        // Do NOT tune this by lowering it back, by adding a retry, or by weakening the assertion: this
-        // harness asserting that a violation EXISTS is the calibration itself.
-        var options = new StressOptions()
+        // EVERYTHING ABOVE PRICED THE DESIGNED-RED ARM, AND THAT ARM IS GONE. Inverted, the run can no longer
+        // stop early, so the bound is a straight cost paid on every run (~2 minutes here) rather than a cost
+        // paid only by a failure. The number is left exactly where it was measured: re-pricing it needs the
+        // starve-and-count procedure docs/inflight/test-lincheck-lane-open-items.md prescribes, and neither
+        // raising nor lowering it on the handful of runs that produced this inversion would be better founded
+        // than the estimate it replaced.
+        //
+        // WHAT THE ASSERTION IS NOW. Lincheck's own: check() throws the moment these two operations return a
+        // result no sequential order of them could produce. Do not add a retry and do not lower the bound to
+        // buy lane time - the bound IS this arm's sensitivity, and it is already low (one hit in six control
+        // runs, see the class javadoc).
+        new StressOptions()
                 .threads(2)
                 .actorsPerThread(1)
                 .actorsBefore(0)
                 .actorsAfter(0)
                 .iterations(1_000)
-                .invocationsPerIteration(5_000);
-        String report = LincheckHarness.runExpectingViolation("WorkManager / stress", options, getClass());
-        assertThat(report).contains("completeWork");
+                .invocationsPerIteration(5_000)
+                .check(getClass());
     }
 
     /**

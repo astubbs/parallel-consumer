@@ -15,7 +15,7 @@ confluentinc#843, unverified since it was written. It is wrong on both terms:
 
 - **Wrong consequence.** The confluentinc#909 defect *drops* the fresh container and wedges the
   offset - anchor `already exists in shard queue, dropping record` in `ProcessingShard.java`. Loss and
-  stall, not duplication. astubbs#322's reproduction counts lost records, never a duplicate.
+  stall, not duplication. astubbs#322's reproduction counts lost records, never a duplicate. <!-- post-merge: checked - names the reproduction by the PR that added it, so it holds once that PR is on master -->
 - **Wrong precondition.** It needs a rebalance inside the registration loop. The reporter states there
   was none, no retry and no load peak.
 

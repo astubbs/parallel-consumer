@@ -4,19 +4,14 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
-import pl.tlinkowski.unij.api.UniMaps;
 
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -151,17 +146,9 @@ class ShardManagerRevokeSweepNpeTest {
 
     /** Registers one record through the production path, so shard and incomplete tracking are both real. */
     private WorkContainer<String, String> registerOneRecordAndTakeIt() {
+        // the racing map must be in place BEFORE the assignment that creates the shard
         sm.setProcessingShards(racingShardMap);
-        wm.onPartitionsAssigned(UniLists.of(tp));
-
-        var record = new ConsumerRecord<>(TOPIC, tp.partition(), 0, "key-0", "value");
-        var records = new ConsumerRecords<>(UniMaps.of(tp, UniLists.of(record)));
-        wm.registerWork(new EpochAndRecordsMap<>(records, wm.getPm()));
-
-        List<WorkContainer<String, String>> taken = wm.getWorkIfAvailable();
-        assertWithMessage("fixture: exactly the one registered container must be selectable")
-                .that(taken).hasSize(1);
-        return taken.get(0);
+        return ModelUtils.registerOneRecordAndTakeIt(wm, tp);
     }
 
     /**

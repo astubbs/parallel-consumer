@@ -7,16 +7,14 @@ Every entry in the first list is grounded in a failure observed in this repo in 
 a tool catalogue. The recurring shape behind almost all of them: **a check that dies or is blind
 reports the same green as a check that passed.** Rank order is proven-value first.
 
-**This register was written on astubbs#344's branch, which is an encoder-race fix and not a CI
-change.** It moved here so the CI work can proceed without waiting on that PR, and so that the
-register is not reviewed as part of a diff nobody opened it for.
-
-**astubbs#344 is not being edited to remove its copy, deliberately.** Both branches add this path
-with no common ancestor version, so whichever lands second hits an add/add conflict when it next
-takes master. That is the reconciliation working, not a problem to pre-empt: the conflict is
-blocking and visible, and the resolution is to take master's version, which is a superset of what
-astubbs#344 carries. Reaching onto another open PR's branch to smooth it over would be reshaping work
-to dodge a conflict, which this project does not do.
+<!-- post-merge: checked-begin -->
+**This register was written on astubbs#344, an encoder-race fix rather than a CI change, and moved
+here so the CI work did not wait on it.** Both sides then held the path with no common ancestor, so
+astubbs#344 hit the add/add conflict this file predicted and resolved it by taking the version here -
+the superset, which is what the prediction said to do. The reconciliation is complete; it is recorded
+because the deliberate choice not to reach onto another open PR's branch to pre-empt the conflict is
+the part a reader would otherwise mistake for an oversight.
+<!-- post-merge: checked-end -->
 
 ## What this register was, and where its work went
 

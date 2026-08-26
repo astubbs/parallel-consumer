@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.util.Optional.empty;
@@ -84,6 +85,7 @@ public class ShardManager<K, V> {
     private Optional<ShardKey> iterationResumePoint = Optional.empty();
 
     private Gauge shardsSizeGauge;
+    private Gauge shardsMaxSizeGauge;
     private Gauge numberOfShardsGauge;
 
     private final PCMetrics pcMetrics;
@@ -335,11 +337,24 @@ public class ShardManager<K, V> {
         }
     }
 
+    /** Per-shard queue depths, as a fresh stream. One expression, so the two gauges below cannot drift apart. */
+    private LongStream shardEntryCounts() {
+        return processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked);
+    }
+
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
-                this, shardManager -> shardManager.processingShards.values().stream()
-                        .mapToInt(processingShard -> processingShard.getWorkMap().size()).sum());
+                this, shardManager -> shardManager.shardEntryCounts().sum());
+        // TODO(refactor): walks every shard queue, as SHARDS_SIZE above does, and
+        // ConcurrentSkipListMap.size() is O(n) - so each scrape is O(total queued records), twice.
+        // Triaged as negligible; docs/refactoring.md owns the assessment and the fix under
+        // "state/ShardManager.java", with the upstream shard-count-caching design under "Performance".
+        // Do not restate the fix here - two copies of it had already drifted apart once.
+        shardsMaxSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_MAX_SIZE,
+                this, shardManager -> shardManager.shardEntryCounts().max().orElse(0));
+
+
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
-                this, shardManager -> shardManager.processingShards.keySet().size());
+                this, shardManager -> shardManager.processingShards.size());
     }
 }

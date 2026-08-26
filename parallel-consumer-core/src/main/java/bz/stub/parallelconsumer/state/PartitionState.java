@@ -309,8 +309,13 @@ public class PartitionState<K, V> {
      *       the identical answer.</li>
      *   <li><b>On take</b> - {@link #couldBeTakenAsWork}, per container against LIVE state. This is the
      *       authoritative one: nothing stale is ever executed, however it got into a shard.</li>
-     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against live
-     *       state, so a result returning from work that went stale mid-flight is dropped.</li>
+     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against state
+     *       resolved ONCE: the staleness answer and the acting reads share a single lookup, and the
+     *       success action mutates exactly the state object that was validated (two lookups were a torn
+     *       read - a rebalance in the gap meant validating the old state and acting on its replacement).
+     *       The failure path additionally re-validates against the live map immediately before its retry
+     *       re-queue, whose target structures the revoke sweep cleans. A result returning from work that
+     *       went stale mid-flight is dropped.</li>
      * </ol>
      *
      * <b>This checkpoint is knowingly racy, and that is not a defect.</b> The caller
@@ -500,9 +505,24 @@ public class PartitionState<K, V> {
      * @return incomplete offsets which are lower than the highest succeeded
      */
     public SortedSet<Long> getIncompleteOffsetsBelowHighestSucceeded() {
-        long highestSucceeded = getOffsetHighestSucceeded();
+        return getIncompleteOffsetsBelow(getOffsetHighestSucceeded());
+    }
+
+    /**
+     * The bounded filter behind {@link #getIncompleteOffsetsBelowHighestSucceeded()}, taking the bound as a parameter
+     * so a caller that also needs the bound itself can sample it <em>once</em> and use the same value for both -
+     * {@code OffsetMapCodecManager#encodeOffsetsCompressed} must, because its encoder marks every offset in
+     * {@code [base, bound]} that is absent from this set as completed, so deriving set and bound from two separate
+     * reads of the moving {@code offsetHighestSucceeded} let a concurrent completion above the mark widen the range
+     * around a stale set (see {@code OffsetEncoderWidenedRangeRaceTest}).
+     *
+     * @param highestSucceededBound the exclusive upper bound - a caller's single sample of
+     *                              {@link #getOffsetHighestSucceeded()}
+     * @return incomplete offsets which are lower than the given bound
+     */
+    public SortedSet<Long> getIncompleteOffsetsBelow(long highestSucceededBound) {
         return incompleteOffsets.keySet().parallelStream()
-                .filter(x -> x < highestSucceeded)
+                .filter(x -> x < highestSucceededBound)
                 .collect(toTreeSet());
     }
 

@@ -85,7 +85,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
-| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
+| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding, editing or retiring a note in `docs/inflight/` - what may live there, the tag vocabulary, and where a note's content goes when its work lands |
 | [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md) | Changing a field in the engine - the `@GuardedBy` rule, the known shared state and its ledgers, and the shard-map pin |
 
 **A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
@@ -103,8 +103,8 @@ a file in it is touched, rather than waiting to be opened.
 |---|---|---|
 | **`AGENTS.md`** (this file) | Rules that bind every agent, and the map above | Work items of any kind; anything only one topic needs |
 | **`STRATEGY.md`** (repo root) | What the product is and why: target problem, the client-side guiding choice, who it is for, success metrics, tracks under investment | A roadmap or feature list. It is a *claims* document nothing tests - work that falsifies a claim must update it; the branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
-| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
-| **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
+| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` - the prefix names an AREA, never a status. Rules, the prefix table and the tag vocabulary in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md), which owns them | A backlog. A committed index file, which every PR would edit. **Not a place knowledge goes to die**: when your PR resolves a note, migrate what outlives it to its durable owner first - deleting the file is one of four outcomes, and that doc names them |
+| **`docs/refactoring.md`** | Refactors **too small to deserve their own note** - a line or two each, grouped by file, no owner or tags - plus **breaking changes queued for the next major** (release-gated section) and the **triage of `TODO`/`FIXME`/`XXX` markers** | Anything carrying a decision, evidence or tracking - that is a `docs/inflight/` note; promote the line and delete it in the same commit |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
 | **`docs/test-hardening/`** | Dated audits of tests that do not run, do not assert, or were never written - per-test evidence and the commit that disabled each one | A live or generated registry - each audit is point-in-time; triage goes in `refactoring.md` |
@@ -135,8 +135,10 @@ may state it twice. The stale-arrival guard is the worked example: a one-line ti
 `docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`.
 
 This wording replaces "happening now → inflight; should happen later → refactoring.md", which stopped
-being true the moment `docs/inflight/` gained deferred notes: 34 of them are "later" work and none of
-them belong in `refactoring.md`.
+being true the moment `docs/inflight/` gained deferred notes - they are "later" work and none of them
+belong in `refactoring.md`. The count is deliberately not written here; it was 34 when this paragraph
+landed and drifted within days. `grep -l 'inflight-state:.*deferred' docs/inflight/*.md` answers it,
+which is the rule [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) states about this very file.
 
 ### Cite by anchor, never by line number
 
@@ -478,6 +480,16 @@ Nothing lints commit messages, so all of this is on you.
   [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
   generated release notes, the three strategies and when each applies, and the reset-to-merge-base
   trap that silently reverts master.
+- **`--theirs`/`--ours` take the whole file; a conflict is one hunk.** Both flags discard
+  everything else the branch did in that file, and a merge that takes the other side renders as
+  *nothing at all* - there is no removal for diff-vs-base review to show. Prove the branch changed
+  nothing else before using either; afterwards read every removal in
+  `git diff <pre-merge-tip>..HEAD -- <files>`, and audit **every file the merge's conflict list
+  names** rather than stopping when the suite goes green - green only proves the *tested* losses
+  came back. Across a package rename the plain diff reports every file as wholly rewritten, so
+  normalise the namespace on both sides first. Worked incident, including the losses that survived
+  a dozen review rounds because nothing fails when prose vanishes:
+  [`docs/solutions/workflow-issues/theirs-took-the-whole-file-and-the-repair-stopped-at-the-tests-2026-08-18.md`](docs/solutions/workflow-issues/theirs-took-the-whole-file-and-the-repair-stopped-at-the-tests-2026-08-18.md).
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they know about, and a one-way link strands the other half. If the successor does
@@ -559,11 +571,13 @@ branch, and never pipe a git command whose failure must stop an `&&` chain (or t
 
 ## Refactoring backlog
 
-Deferred internal refactors live in [`docs/refactoring.md`](docs/refactoring.md) - see the table
+Small internal refactors live in [`docs/refactoring.md`](docs/refactoring.md) - see the table
 above for what it owns, including `TODO`/`FIXME`/`XXX` triage and the release-gated breaking-change
 queue. When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot
-(`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry
-to the doc - **do not start a parallel list**. Promote an item to a branch or PR only when you
+(`grep -rn "TODO(refactor)" --include=*.java` lists them) and add a line or two to the doc - **do not
+start a parallel list**. **The moment it needs more than that** - a decision, a blocker, evidence
+worth keeping - **it is a `docs/inflight/` note instead**, and a line already there is promoted and
+deleted in the same commit; [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) owns that call. Promote an item to a branch or PR only when you
 actually start it; if it maps to an upstream issue, link it rather than duplicate it.
 
 ## Upstream tracking

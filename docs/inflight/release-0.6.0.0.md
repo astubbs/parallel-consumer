@@ -224,6 +224,27 @@ All four now exist as data. Each keeps its planning note, which holds the reason
 
 What does not exist yet is the rendered documentation an agent generates from all of it.
 
+**Fifth item, added 2026-08-25: the correctness campaign as a story.** In one week the torn-read
+hunt (`bug-torn-read-family.md`) found five concurrency defects sharing one root shape - two of them
+silent record loss present in every released 0.5.x line, invisible to users and to every static
+analyser tried - reproduced each one deterministically with control arms, and fixed them. That
+narrative is announcement material in its own right: it says, more credibly than any feature list,
+that the fork's priority is correctness, and it speaks directly to the users who reported
+confluentinc#894 and confluentinc#857. Tell it plainly and without alarm - the same register as the
+release-note guidance recorded for astubbs#337 (its entry in this file arrives on that PR's branch):
+what was found, the narrow preconditions, that every release since 0.5.0.0 carried it, and that it
+is fixed and regression-guarded.
+
+**And the detectors are a testing FEATURE for the announcement, not just process.** The
+racing-double seam tests are a reusable deterministic technique for race reproduction, and the
+Lincheck / jcstress evaluation resolved to adopt both arms:
+the Lincheck lane (astubbs#347) and the jcstress probe module (astubbs#348) both merged 2026-08-25,
+the calibration having held - Lincheck refound four real races unaided. That gives the fork
+scheduler-controlled concurrency testing as a standing lane, something upstream never had, and it is
+shipped rather than roadmap material. **Owed before the release: an entry in
+`docs/data/testing-evidence.yaml`** alongside the suite-as-evidence material, which is where this
+paragraph always said landed PoCs belong.
+
 ## 0.5.3.3 was never released, by anyone
 
 Worth knowing before writing release copy or triaging a mirror: **`0.5.3.3` exists as a changelog
