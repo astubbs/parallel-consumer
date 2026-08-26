@@ -1488,6 +1488,13 @@ echo
 echo
 echo "--- remind-master-drift-on-push.sh ---"
 
+# THE CWD IS INHERITED BY THE SECTION AFTER THIS ONE, so this section restores whatever it found.
+# `check-history-rewrite.sh` below documents that it runs from the push fixture's scratch repo,
+# reached only by inheriting the cwd, and that its enriched-refusal cases fail from the real tree
+# because the CI checkout is detached. A `cd "$REPO_ROOT"` here therefore turned that section red
+# on every runner while passing locally, where the checkout is on a branch - caught by CI, not by
+# this suite, which is the reason it is written down rather than just fixed.
+drift_prev_cwd="$PWD"
 DRIFT_HOOK="$HOOKS/remind-master-drift-on-push.sh"
 drift_repo="$(mktemp -d)"
 DRIFT_TMPDIR="$(mktemp -d)"
@@ -1616,7 +1623,7 @@ case "$drift_broken" in *rc=0*) got=exited_zero ;; *) got="$drift_broken" ;; esa
 assert "outside a git repo it exits 0 rather than failing the call" exited_zero "$got"
 
 rm -rf "$drift_repo" "$DRIFT_TMPDIR"
-cd "$REPO_ROOT" || exit 1
+cd "$drift_prev_cwd" || exit 1
 
 echo "--- check-history-rewrite.sh ---"
 #
