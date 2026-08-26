@@ -1043,6 +1043,64 @@ diagnosis is complete and the fix is a choice between disabling the dwell violat
 applied, because it is a scenario calibration change and astubbs#354 is a different change.
 <!-- post-merge: checked-end -->
 
+## 2026-08-25, CHAOS lane: the same commit-response timeout, from a second lane
+
+<!-- post-merge: checked-begin -->
+**The section above records the commit-response timeout arriving from `Integration Tests`. It also
+arrived, the same day, from the chaos suite** - `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest`
+on astubbs#351's head `ec2c54181`
+([run 32801846128](https://github.com/astubbs/parallel-consumer/actions/runs/32801846128)). Two lanes,
+two suites, one signature, neither of them the Class 2 timing proxy.
+
+**The assertion that failed is a correctness one**, not `CLASS2_STALL`:
+
+```
+AssertionErrorWithFacts: no instance may end the run with an unclassified failure cause
+expected to be empty
+but was: [instance 42: java.lang.RuntimeException: Error from poll control thread:
+  Timeout waiting for commit response PT10S to request ConsumerOffsetCommitter.CommitRequest(...)
+  - the broker poll thread is the only producer of commit responses, and it has not died with an
+  exception, so it is not answering: it is blocked or slower than the configured offsetCommitTimeout]
+```
+
+Alongside it, **1 `ZOMBIE_MEMBER/REBALANCE_BLOCKED`**: group `group-1-604121656` dwelling in
+`PreparingRebalance` for 15s against the 15s bound - the arm the section below diagnoses as
+calibration on `ChaosKeyOrderIT`, here on a different scenario.
+
+**Seed `8584935079849032188`:**
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8584935079849032188
+
+**Why a second lane matters more than a second seed.** The discriminator section above closes the
+`CLASS2_STALL` line precisely because that bound is a timing measurement that a loaded box crosses on
+its own. This failure is not that bound and has no calibrated threshold behind it: a commit request
+that times out after 10s, from a broker-poll thread the runtime has positively established is *alive
+and not throwing*, is a thread that is blocked - and the error text reaches that conclusion by
+elimination rather than inferring it from a watermark. The Integration-lane sighting landed on all
+three preconditions for the AB-BA cycle; this one arrives from a suite that deliberately disturbs
+rebalances, which is the same cycle's entry condition reached by a different route.
+
+**Do NOT read either as identifying the open deadlock.** The alternative reading is identical in both
+lanes - a poll thread merely slower than `offsetCommitTimeout`, the ambiguity
+[`bug-offset-commit-timeout-does-two-jobs.md`](bug-offset-commit-timeout-does-two-jobs.md) owns - and
+nothing in either capture separates them. The fifth sighting's rule applies: do not promote a
+signature to a mechanism without the step that distinguishes them.
+
+**The discriminator is the same one, and it is now wanted twice over**: replay with a thread dump of
+the broker-poll thread at the moment the commit request times out. Parked on the `commitCommand`
+monitor -> the family's original deadlock has a reproduction at last, from two independent lanes.
+Running, or waiting on the broker -> it is a timeout to tune, and belongs with the timing-proxy
+critique rather than here.
+
+**Two `CLASS2_STALL` seeds from the same branch are recorded here and nowhere else, closed on
+arrival.** Heads `d4b6923d0` and `bff3927b1` drew the drain arm at 154s and 153s against the 150s
+bound - seeds `2445946824654755330` and `8791285396374198974`. They were written up as sightings
+before the discriminator ran; they are not. Both are the arithmetic the section above explains, both
+ran while `Performance (optional)` overlapped the chaos job on the shared box, and the bound they
+crossed no longer gates. Kept as seeds only, so the pair is not rediscovered and re-argued.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
