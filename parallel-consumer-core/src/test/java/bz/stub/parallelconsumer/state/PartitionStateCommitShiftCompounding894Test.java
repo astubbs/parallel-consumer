@@ -414,19 +414,20 @@ class PartitionStateCommitShiftCompounding894Test {
      * loses records - and those arms are the ones the write-up calls the stronger argument for the fix.
      */
     private static void assertBothRegimes(long worstOvershoot, int worstDropped, String report) {
-        assertWithMessage("confluentinc#894: a committed offset above the partition's log end offset is out of range "
-                + "on the next poll, and fires auto.offset.reset. Worst overshoot across the sweep was %s. "
-                + "Per-cycle ledger:\n  %s", worstOvershoot, report)
-                .that(worstOvershoot)
-                .isAtMost(0L);
-
-        assertWithMessage("confluentinc#894, the quiet regime: no record may be dismissed as already-processed "
-                + "unless some cycle actually ran it. %s record(s) were dropped without ever running, against a "
-                + "fabricated offsetHighestSucceeded - with the commit tracking the log end exactly, so the "
-                + "overshoot assertion above stays green while records are lost. Per-cycle ledger:\n  %s",
-                worstDropped, report)
-                .that(worstDropped)
-                .isEqualTo(0);
+        // Asserted as ONE pair rather than two statements, so neither regime can hide behind the other. Two
+        // sequential assertions short-circuit: the unfixed code overshoots in the K < L arms, so the loud
+        // assertion fails first and the quiet one is never evaluated - leaving it unproven, which is the exact
+        // shape of the gap this method was added to close. Overshoot is clamped because a commit BELOW the log
+        // end is ordinary, while any drop at all is not.
+        assertWithMessage("confluentinc#894, both regimes of the defect, neither of which may occur.\n"
+                + "  LOUD  - worst overshoot %s: a committed offset above the partition's log end offset is out "
+                + "of range on the next poll, and fires auto.offset.reset.\n"
+                + "  QUIET - %s record(s) dropped without ever running: dismissed as already-processed against a "
+                + "fabricated offsetHighestSucceeded, while the commit tracks the log end exactly so nothing "
+                + "overshoots and no error surfaces.\n"
+                + "Per-cycle ledger:\n  %s", worstOvershoot, worstDropped, report)
+                .that(Arrays.asList(Math.max(worstOvershoot, 0L), (long) worstDropped))
+                .isEqualTo(Arrays.asList(0L, 0L));
     }
 
     /**
