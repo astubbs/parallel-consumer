@@ -24,7 +24,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * snapshot is a fresh copy. Completing an offset immediately afterwards therefore cannot alter the payload's
  * contents - only a <em>subsequent</em> read of the offset to commit can see it, which is the defect under test.
  * <p>
- * <b>What this does NOT establish, stated because an earlier draft claimed it did.</b> The completion cannot move
+ * <b>What this does NOT establish.</b> The completion cannot move
  * {@code offsetHighestSucceeded} <em>in these fixtures</em>, because every offset they race is the lowest
  * outstanding one and so already sits below it. That is a property of the fixtures, not a general property of the
  * seam: {@code encodeOffsetsCompressed} takes its own second read of {@code getOffsetHighestSucceeded()} after the
