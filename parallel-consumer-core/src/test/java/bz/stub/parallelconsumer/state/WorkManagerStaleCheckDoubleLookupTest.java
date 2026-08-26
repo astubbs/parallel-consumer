@@ -5,20 +5,15 @@ package bz.stub.parallelconsumer.state;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
-import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
-import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
-import java.util.List;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
@@ -116,16 +111,7 @@ class WorkManagerStaleCheckDoubleLookupTest {
     }
 
     private WorkContainer<String, String> registerOneRecordAndTakeIt() {
-        wm.onPartitionsAssigned(UniLists.of(tp));
-
-        var record = new ConsumerRecord<>(TOPIC, tp.partition(), 0, "key-0", "value");
-        var records = new ConsumerRecords<>(UniMaps.of(tp, UniLists.of(record)));
-        wm.registerWork(new EpochAndRecordsMap<>(records, wm.getPm()));
-
-        List<WorkContainer<String, String>> taken = wm.getWorkIfAvailable();
-        assertWithMessage("fixture: exactly the one registered container must be selectable")
-                .that(taken).hasSize(1);
-        return taken.get(0);
+        return ModelUtils.registerOneRecordAndTakeIt(wm, tp);
     }
 
     /**
