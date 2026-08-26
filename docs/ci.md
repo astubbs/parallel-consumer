@@ -180,50 +180,62 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
   the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
-  See [`docs/testing.md`](testing.md). Shares the per-PR lane's `highcpu-box-exclusive` concurrency
-  group, so a dispatched hunt queues behind a PR's chaos run rather than sharing the box with it.
+  See [`docs/testing.md`](testing.md). It declares no `concurrency` and queues on a runner like any
+  other job - see ["The box decides its own concurrency"](#the-box-decides-its-own-concurrency).
 
-### An ABSENT chaos check is not a passing one
+### The box decides its own concurrency
 
-**Every job that can occupy the highcpu box - every chaos run per-PR and on-demand, the Performance
-suite, and the manual full mutation sweep - sits in one `highcpu-box-exclusive` concurrency group,
-and queues rather than cancels.** Those three workflows are the complete set: they are the only ones
-in the repository with `runs-on: [self-hosted, highcpu]`, which is the check to re-run when adding a
-workflow. That is deliberate: several runner processes serve one physical machine, so a ref-keyed
-group let six PRs start six chaos suites at once, and four of six went red purely from co-residency
-on 2026-08-25. Serialising removed that.
+**No workflow caps how many jobs run on the highcpu box. How many run at once is the box's own
+decision, made by how many runner processes it runs** - six today. Nothing in this repository asserts
+a limit, and nothing should: a workflow file cannot know the machine's capacity, and the moment it
+claims to, the claim rots silently the next time a runner is added or removed. The lever is on the
+box, and it needs no change here.
 
-**A CANCELLED check is rendered as a FAILING one, which is the absent-chaos trap inverted.** A job
-displaced from the box mutex completes with `conclusion=cancelled`, and `gh pr checks` prints that as
-`fail`. So on this lane a red `Performance (optional)` may mean *it never ran*, not that a benchmark
-regressed - check `conclusion` before believing it. The two traps are mirror images and both live
-here: an absent **chaos** run reads as a pass because a discarded pending run leaves the required
-checks green, while an absent **Performance** run reads as a failure because a cancelled check is
-rendered red.
+**The only thing that cancels a highcpu job is a new push to the same PR**, which supersedes that
+PR's previous run and spawns fresh jobs - exactly what every other workflow in the repository does.
+The per-PR lane keys its group per-suite as well as per-ref, which behaves identically from the
+outside while avoiding a head-of-line stall: one workflow-wide group makes a new push wait out the
+slowest-dying maven JVM of the old run before anything starts.
 
-**Performance is in the group for chaos's sake, not its own.** A mutex holding only chaos excludes
-chaos-from-chaos while leaving a benchmark saturating the same host - the worst possible neighbour
-for a suite whose findings are timing bounds. The trade it accepts is that Performance queues rather
-than superseding its own older runs: one group carries one cancel policy, and letting an advisory
-benchmark cancel in this group would let it kill a chaos measurement.
+#### Why a `concurrency` group is not a mutex
 
-**The cost is that a PR's head commit can get no chaos run at all.** GitHub keeps one running plus one
-pending per group and discards older pending entries, so on a busy day a superseded run simply never
-executes. Nothing goes red, because `Chaos Pain Suite` is not a required check - and a missing
-measurement then reads exactly like a passing one.
+Worth stating because the repository tried it and the failure was expensive. Between 2026-08-25 and
+2026-08-26 every job that could occupy the box - both per-PR suites, on-demand chaos, and the full
+mutation sweep - shared one repo-wide `highcpu-box-exclusive` group with `cancel-in-progress: false`,
+intended as a box mutex.
 
-**How to tell which you have.** The chaos job writes a `Chaos measurement provenance` block into its
-job summary naming the commit it measured. If that commit is not the PR's head, the current code has
-not been through the suite. A cancelled or absent chaos check means **not measured** - neither a pass
-nor a failure. Re-run on demand with
-`gh workflow run chaos-pain.yml -R astubbs/parallel-consumer`, ideally when sibling agents are not
-pushing.
+**A concurrency group deduplicates; it does not queue.** GitHub keeps one run in progress and **at
+most one pending** per group, and DISCARDS anything that arrives behind that. With several branches
+active, each new push therefore evicted whichever run was already waiting. Measured over the 50
+minutes after it landed (2026-08-26, 01:03Z-01:53Z, 16 runs across 9 branches): **26 of 32 jobs never
+executed a single step** - chaos 12 of 16 evicted while pending, Performance 14 of 16 - while five of
+the six runners sat idle. A tripwire that runs on a quarter of pushes, chosen by whoever pushed last,
+is worth less than one that occasionally shares a box.
 
-The alternative - a dedicated single-slot runner label for chaos, which would serialise by capacity
-and still give every PR a run - is the better shape and is not done: it needs runner-side
-provisioning, and a job pinned to a label nothing serves does not fail, it queues silently until
-GitHub cancels it (see [`self-hosted-runner.md`](self-hosted-runner.md)). Background:
-[`docs/inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md`](inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md).
+The co-residency reds that motivated the mutex were `~154s lagStagnation` against a 150s bound - the
+bound meeting the load rather than a defect - and that detector was demoted to non-gating in the same
+pull request (`ProgressProbe.recordLagStagnation` now calls `observe` rather than recording a
+violation). The problem was fixed in the instrument, where it belonged; see
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md).
+
+**So: never reach for a `concurrency` group to protect a shared physical resource.** Express capacity
+where capacity lives - the number of runners serving the label.
+
+#### Reading a cancelled or absent chaos check
+
+**A CANCELLED check is rendered as a FAILING one.** `gh pr checks` prints `conclusion=cancelled` as
+`fail`, so a red `Performance (optional)` or `Chaos Pain Suite` may mean *it never ran* rather than
+that something regressed - check `conclusion` before believing it. A cancelled chaos check means
+**not measured**: neither a pass nor a failure.
+
+The chaos job writes a `Chaos measurement provenance` block into its job summary naming the commit it
+measured. If that commit is not the PR's head, the current code has not been through the suite -
+normally because a newer push superseded the run, in which case that push has a run of its own.
+Re-run on demand with `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer`.
+
+Whether six concurrent chaos suites is in fact too many for the box is now an open question about
+runner count rather than about this workflow:
+[`docs/inflight/ci-highcpu-box-concurrency-is-runner-count.md`](inflight/ci-highcpu-box-concurrency-is-runner-count.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
 - **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
