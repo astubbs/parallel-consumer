@@ -90,11 +90,13 @@ requiring the accessor is therefore red on arrival, and the only way to green it
 the methods already there - a frozen baseline under a different name, which the trap below rules
 out.
 
-The check-then-get seam that motivated the idiom (astubbs#345) is caught instead by fb-contrib's
-`MUI_CONTAINSKEY_BEFORE_GET`, which names the method statically - see
-[`static-spotbugs-rule-registry.md`](static-spotbugs-rule-registry.md). **When a candidate rule is
-about what happens to a value rather than about who may touch a member, SpotBugs is the tool and
+<!-- post-merge: checked-begin -->
+The check-then-get seam that motivated the idiom was caught instead by fb-contrib's
+`MUI_CONTAINSKEY_BEFORE_GET`, which named the method statically until astubbs#345 removed the seam -
+see [`static-spotbugs-rule-registry.md`](static-spotbugs-rule-registry.md). **When a candidate rule
+is about what happens to a value rather than about who may touch a member, SpotBugs is the tool and
 ArchUnit is not.**
+<!-- post-merge: checked-end -->
 
 What ArchUnit could still pin about the same field is who may replace it, and that is what
 `ShardMapIsNeverReplacedArchTest` does.
