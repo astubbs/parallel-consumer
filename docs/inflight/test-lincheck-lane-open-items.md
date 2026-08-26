@@ -311,15 +311,18 @@ The claim that core's `<argLine>@{argLine} ${lincheck.jvm.args}</argLine>` feeds
 `SurefireConfigConverter` logs `Replacing properties in argLine` and resolves it. No
 `-DparseSurefireArgLine=false` is warranted.
 
-## Cross-branch obligation this note now owns
+## Cross-branch obligation this note used to own - discharged
 
-`test-lincheck-jcstress-evaluation.md` scopes a two-tool evaluation - a Lincheck arm and a jcstress
-arm - and it lives on astubbs#344's branch, not on master, so it could not be updated from here. Its
-**Lincheck arm is executed**: the calibration ran against a pre-fix tree and refound four real races
-unaided, with the verdicts and cost tables in
-[`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](../plans/2026-08-25-001-test-lincheck-poc-plan.md).
-Whoever lands astubbs#344 records that against the evaluation note and leaves the jcstress arm open;
-the `jcstress-poc` probe module carries it.
+<!-- post-merge: checked-begin -->
+The two-tool evaluation that scoped this lane and the jcstress probe was never updatable from here,
+because it lived only on astubbs#344. That PR settled it: both arms executed and were adopted - the
+Lincheck calibration ran against a pre-fix tree and refound four real races unaided, with the verdicts
+and cost tables in
+[`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](../plans/2026-08-25-001-test-lincheck-poc-plan.md)
+- so the evaluation note was deleted rather than kept as a record of finished work. This note and
+[`test-jcstress-probe-module-open-items.md`](test-jcstress-probe-module-open-items.md) are its
+successors, and each names its own deletion condition.
+<!-- post-merge: checked-end -->
 
 This paragraph exists because the handoff note that used to carry the obligation was deleted at merge
 prep, as `docs/inflight/AGENTS.md` requires - a "delete this when it merges" marker must never reach

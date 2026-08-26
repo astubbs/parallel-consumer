@@ -81,8 +81,12 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
         return true;
     }
 
+    /**
+     * Guards both entry points: {@link #getIncompleteOffsetsBelowHighestSucceeded()} delegates through this bounded
+     * overload in the base class, so overriding here keeps the no-op contract whichever one a caller reaches for.
+     */
     @Override
-    public SortedSet<Long> getIncompleteOffsetsBelowHighestSucceeded() {
+    public SortedSet<Long> getIncompleteOffsetsBelow(long highestSucceededBound) {
         log.debug(NO_OP);
         return READ_ONLY_EMPTY_SET;
     }

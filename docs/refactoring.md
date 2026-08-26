@@ -689,6 +689,18 @@ rather than fixed there so the gate's scope stayed one decision.
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
 
+### The offset-decode test helper, copy-pasted x7
+
+- `deserialiseIncompleteOffsetMapFromBase64` is wrapped by a near-identical private `decode` helper in
+  seven test files across two packages: `OffsetEncoderWidenedRangeRaceTest`,
+  `PartitionStateCommitEncodeShift894Test`, `PartitionStateCommitShiftCompounding894Test`,
+  `PartitionStateLincheckTest`, `OffsetEncodingBackPressureTest`,
+  `WorkManagerOffsetMapCodecManagerTest` and `CommitHistory`. Each is a call plus a debug log. Fold
+  into one shared helper. Surfaced by the duplicate-code bot flagging one pair of them; the pair is
+  not the finding, the seven are. Related but distinct from the racing-double unification tracked in
+  `docs/inflight/bug-torn-read-family.md`, which is about the two `Racing*State` doubles rather than
+  this helper.
+
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 
 Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the

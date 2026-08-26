@@ -4,7 +4,11 @@
 `test/lincheck-poc-torn-read-calibration`, not merged.
 **Written:** 2026-08-25
 **Executes:** `docs/inflight/test-lincheck-jcstress-evaluation.md`, items 1 and 3 (the Lincheck half). The jcstress half is a sibling piece of work and is not covered here.
-<!-- file-refs: N/A - the evaluation note and the dossier arrive on master with astubbs#344; until it merges they exist only on fix/encoder-reads-highest-succeeded-after-the-snapshot, so their paths are named deliberately rather than broken. -->
+<!-- file-refs: N/A - the dossier arrives on master with astubbs#344. The evaluation note cited above never
+     reached master: it was deleted on that same PR once both its arms had executed, so no commit on master
+     holds it and there is no history pointer to give. Its scope survives in the successor notes it handed
+     its open items to - test-lincheck-lane-open-items.md and test-jcstress-probe-module-open-items.md - and
+     the note's own text is on astubbs/parallel-consumer#344. -->
 
 ---
 
