@@ -229,11 +229,11 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                     wc.onUserFunctionFailure(h);
                 } catch (Throwable bookkeepingThrew) {
                     // Logged, not fatal, and bounded: what threw is USER code - the retryDelayProvider, reached via
-                    // updateFailureHistory - and onUserFunctionFailure sets maybeUserFunctionSucceeded in a finally,
-                    // so the container's state transition completes even on this path. What is lost is retry
-                    // METADATA for this one record (attempt count, retryDueAt), not the record: it is still mailboxed
-                    // on the next lines. Making it fatal would let a user callback stop the consumer, which is the
-                    // whole defect class this handler exists to close.
+                    // updateFailureHistory - and onUserFunctionFailure records the verdict in a finally, so the
+                    // container leaves its in-flight state even on this path. What is lost is retry METADATA for
+                    // this one record (attempt count, retryDueAt), not the record: it is still mailboxed on the
+                    // next lines. Making it fatal would let a user callback stop the consumer, which is the whole
+                    // defect class this handler exists to close.
                     log.error("Failed to record the send failure against {} - the record is still returned to the " +
                             "mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
                 }
