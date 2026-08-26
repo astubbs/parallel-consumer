@@ -2,6 +2,8 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- post-merge: exempt-file -->
+
 
 <!-- post-merge: checked-begin -->
 Written 2026-08-25 for whoever finishes this PR. **Delete this file in this PR at merge prep.**

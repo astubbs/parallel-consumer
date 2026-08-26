@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -141,7 +140,7 @@ class PartitionStateCommitShiftCompounding894Test {
     @Test
     void repeatingTheRaceAcrossRebalances() throws OffsetDecodingError {
         List<String> ledger = new ArrayList<>();
-        AtomicLong worstDecodedHighestSeen = new AtomicLong(Long.MIN_VALUE);
+        long worstDecodedHighestSeen = Long.MIN_VALUE;
 
         HighestOffsetAndIncompletes carriedOverRebalance = null;
 
@@ -168,8 +167,8 @@ class PartitionStateCommitShiftCompounding894Test {
             long encodeBase = state.firstOffsetToCommitRead();
             carriedOverRebalance = decode(committed);
 
-            worstDecodedHighestSeen.set(Math.max(worstDecodedHighestSeen.get(),
-                    carriedOverRebalance.getHighestSeenOffset().orElse(Long.MIN_VALUE)));
+            worstDecodedHighestSeen = Math.max(worstDecodedHighestSeen,
+                    carriedOverRebalance.getHighestSeenOffset().orElse(Long.MIN_VALUE));
             ledger.add(String.format("cycle %d: raced %d, encoded at base %d, committed %d (shift %+d), decodes to "
                             + "highest-seen %s incompletes %s",
                     cycle, lowestOutstanding, encodeBase, committed.offset(), committed.offset() - encodeBase,
@@ -184,7 +183,7 @@ class PartitionStateCommitShiftCompounding894Test {
         assertWithMessage("confluentinc#894: state restored from a commit must never name an offset the partition "
                 + "never produced. Highest offset ever produced is %s. Per-cycle ledger:\n  %s",
                 HIGHEST_OFFSET_EVER_PRODUCED, report)
-                .that(worstDecodedHighestSeen.get())
+                .that(worstDecodedHighestSeen)
                 .isAtMost(HIGHEST_OFFSET_EVER_PRODUCED);
     }
 
