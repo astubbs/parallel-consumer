@@ -213,7 +213,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - ten hook scripts across eleven registrations, and the file is
+**`.claude/settings.json`** - eleven hook scripts across twelve registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -242,6 +242,37 @@ grants stay in `settings.local.json`, still ignored.
   denied, and the near-miss case that reads like a command-position test passes only because its
   quoting makes `shlex` raise. Erring towards denying is the safe direction for a guard that can
   only refuse a merge, but do not build on the stronger claim. See *Known gaps*.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/warn-low-disk.sh`, which warns when
+  either disk this project fills is running low, and **never blocks**. It exists because a fan-out of
+  eleven per-language demo agents took the host volume to 8.8 GiB free of 926 GiB in about an hour
+  and took the Docker VM's virtual disk with it - one agent's build died outright, two others pruned
+  under each other - and nothing warned, because the session had started with plenty of room.
+  `SessionStart` would therefore have reported all clear; the only instant that can see what the last
+  command left behind is just before the next one. It has no `if` for the same reason the squash
+  guard has none: `Bash(docker *)` would miss `cd demo && docker compose up` and every wrapper
+  script, which is most of how containers actually get built here. It buys the right to run on every
+  call by forking a handful of short-lived commands and no `docker` CLI - the hook's own header owns
+  the measured figure, and states why it is not repeated here - and by saying nothing at all unless a
+  threshold trips, then at most once per ten minutes **per session** unless the band worsens.
+
+  **The throttle is keyed per session, not per user, and that decides who the warning is for.**
+  One stamp per UID meant the first agent to notice silenced every other concurrent session for
+  the window - in the incident above, ten of the eleven could not have been told while they were
+  the ten still filling the disk. So every session is warned, and the message tells each agent to
+  **report the situation and suggest a reclaim, never run one**: the operator is the gate against
+  duplicate effort, which the same incident shows is a real cost and not a hypothetical - two of
+  those agents pruned under each other. Keying is best-effort and degrades to the shared stamp
+  when no `session_id` reaches the hook, because the failure this hook refuses is going silent.
+
+  Two properties are worth keeping in mind if you change it. **It must never exit non-zero**: a disk
+  warner that blocked `Bash` on a full disk would remove the commands needed to clear the disk, which
+  is the outage described under the misplaced-`if` trap above. And **Docker Desktop's disk image is a
+  high-water mark** - a sparse file that grows and never shrinks, so pruning 17 GB does not shrink it
+  by a byte; that is why a cheap always-on trigger is confirmed by a cached `docker system df` before
+  anything is said, and why the correction applies only to the sparse-image reading and not to
+  Linux's live filesystem one. It is a dev-machine tool by design: `.claude/` binds Claude Code
+  sessions only, so it can never run in CI, and CI runners are reaped anyway.
+
 - `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
   `.claude/hooks/check-merge-outstanding-work.sh`, which refuses a `gh pr merge` while this
   session's background tasks are still writing output. A green PR is not a finished PR when a
@@ -250,6 +281,11 @@ grants stay in `settings.local.json`, still ignored.
   (prefix the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) and the stated limits - a
   stalled agent writes nothing and is not detected; `bash -c` wrapping and REST-API merges are not
   seen - are documented in the hook's own header.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/remind-inflight-on-push.sh`, which
+  reminds you at PUSH time what this PR's own inflight note still lists as open. Push, not commit and
+  not merge: commits are too frequent for a note that runs to dozens of lines, and the merge guard
+  above is the backstop that fires when re-opening the work is already expensive. It emits
+  `additionalContext` and never denies. Its own header owns the reasoning.
 - `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
   `.claude/hooks/remind-master-drift-on-push.sh`, which reports the commits `origin/master` has
   gained that this branch does not have, and whether any of them touch files the branch is changing.
@@ -266,6 +302,20 @@ grants stay in `settings.local.json`, still ignored.
   by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
   working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides
   the next such bug until somebody re-runs the same experiment on the same platform.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-history-rewrite.sh`, one of
+  the two guards here that **refuse**: it stops a force-push, rebase, amend or any other ref-moving
+  command while a review is in flight, because a rewrite orphans inline review threads and destroys
+  the incremental diff the reviewer works from. It names what would actually be lost rather than asking
+  "are you sure?", and `REWRITE_HISTORY_CONFIRMED=1` is the documented override. Its own header owns
+  the rest, including the full list of ref-moving shapes it reaches.
+- `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-shallow-history.sh`, the other
+  guard that **refuses**: it denies a depth-dependent history query - a range, an ancestry test, a
+  whole-history walk - while the clone is shallow, because such a query does not error, it *answers*,
+  from the truncated graft. `SHALLOW_HISTORY_ACCEPTED=1` is the override. It is per-command rather
+  than per-session because the `shallow` file lives in the shared `--git-common-dir`, so one sibling
+  agent's depth-limited fetch re-shallows every worktree, including one that unshallowed itself a
+  minute earlier. Its own header owns the rest, including why `git status` and `git log -1` are left
+  alone.
 - `UserPromptSubmit` runs `.claude/hooks/inject-merge-checklist.sh`, which puts
   `docs/merge-checklist.md` in front of the agent when a prompt looks like merge prep - "squash",
   "rebase", "ready to merge", "tidy up the commits" and friends. It never blocks; the point is to
@@ -514,3 +564,12 @@ Open list - add to it, or take from it:
   review count answers.
 - Pre-push rather than pre-commit for the slower gates, keeping commits fast while still catching
   things before they reach CI.
+
+The disk hook's cases are worth reading before adding a hook of your own, because it has the failure
+mode every warn-only hook shares: **its correct behaviour on a healthy machine is to print nothing,
+which is byte-identical to it being broken, unregistered, or not running at all.** So its silent case
+is pinned to thresholds of zero rather than to a healthy disk, and pairs with forced cases proving the
+same call path can be made to speak. An earlier version left the thresholds at their defaults, which
+made the suite a function of how much free space the machine happened to have - three cases flipped
+to failing mid-session when the host dropped below the default warn line. A self-test for a disk
+warner must not itself depend on the disk.
