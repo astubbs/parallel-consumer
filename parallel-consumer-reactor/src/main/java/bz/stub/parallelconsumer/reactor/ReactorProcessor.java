@@ -100,7 +100,16 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
                     .flatMapMany(it -> it)
                     .doOnNext(signal -> log.trace("doOnNext {}", signal))
                     .subscribeOn(getScheduler())
-                    .subscribe(ignore -> onComplete(pollContext), throwable -> onError(pollContext, throwable));
+                    // Three arguments, not two, and that is load-bearing. The two-argument overload has no
+                    // completion callback, so onComplete was wired as the ON NEXT consumer: a Publisher emitting
+                    // several elements retired its records once per element, and one completing EMPTY - Mono.empty(),
+                    // or a user function returning null - retired them never, leaving the record uncommitted, its
+                    // in-flight accounting leaked, and (since the dispatch ceiling landed) its dispatch permit gone
+                    // for the life of the process. Retiring on the terminal signal is once per flight in every case.
+                    // MutinyProcessor's subscribe().with(onItem, onFailure, onCompletion) already had this shape.
+                    .subscribe(signal -> log.trace("Reactor element {}", signal),
+                            throwable -> onError(pollContext, throwable),
+                            () -> onComplete(pollContext));
 
             log.trace("asyncPoll - user function finished ok.");
             return UniLists.of(flux);
