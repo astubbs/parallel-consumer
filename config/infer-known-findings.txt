@@ -19,6 +19,16 @@
 # rename; a line number is worse still, invalidated by any edit above it. Class and method survive
 # reformatting and unrelated edits, and change when the code genuinely moves.
 #
+# A LAMBDA KEY IS THE EXCEPTION, AND IT DOES NOT SURVIVE AN UNRELATED EDIT. `lambda$method$N` is a
+# name javac invents, and N is the lambda's position in the source file - so inserting ANY lambda
+# above one renumbers it, and the ratchet reads the same finding at the same line as both a NEW
+# identity and a known one that stopped firing. Observed on astubbs#267: replacing a
+# `containsKey`/`put` pair with `computeIfAbsent` in `initPartitionCounters` added one lambda and
+# turned `lambda$onOffsetCommitSuccess$2` into `$3`, forty lines and one unrelated method away.
+# The gate exits on the NEW direction first, so the report names only half of it and reads as a
+# fresh null deref. When a lambda entry appears to be both new and gone, check the ordinal before
+# believing either half: the fix is usually to renumber this line, not to chase a defect.
+#
 # THE COUNT COLUMN MATTERS. Two findings can share one class.method, so a bare identity set would
 # not notice a third appearing in the same place.
 #
@@ -32,7 +42,7 @@
 1 NULLPTR_DEREFERENCE PartitionStateManager.couldBeTakenAsWork
 1 NULLPTR_DEREFERENCE PartitionStateManager.getHighestSeenOffset
 1 NULLPTR_DEREFERENCE PartitionStateManager.isAllowedMoreRecords
-1 NULLPTR_DEREFERENCE PartitionStateManager.lambda$onOffsetCommitSuccess$2
+1 NULLPTR_DEREFERENCE PartitionStateManager.lambda$onOffsetCommitSuccess$3
 1 NULLPTR_DEREFERENCE PartitionStateManager.maybeRegisterNewRecordAsWork
 1 NULLPTR_DEREFERENCE PartitionStateManager.onFailure
 1 NULLPTR_DEREFERENCE PartitionStateManager.onSuccess
