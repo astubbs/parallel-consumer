@@ -79,8 +79,18 @@ for i, t in enumerate(toks):
             # cannot: the flag it needs was consumed by the loop above, and the ref it needs was
             # never emitted. Re-tokenising in the caller is what this file exists to prevent, so the
             # ONE tokeniser emits both and the two views below differ only in what they cut.
+            #
+            # STOP AT ANY OPERATOR TOKEN, not a hand-listed few. `punctuation_chars=True` makes shlex
+            # emit `> >> < << ( ) ; ;; | || & &&` as tokens of their own, and an earlier version
+            # named only the command SEPARATORS. That left redirections inside the argument list, so
+            # `git merge origin/master > out.log` walked args as ["origin/master", ">", "out.log"] -
+            # and a redirect target named like a control flag or a remedy ref could then spoof the
+            # exemption test in the consumer. Testing that every character is punctuation catches the
+            # whole family, including operators nobody has thought of, and cannot catch a real
+            # argument: refs, paths and flags all contain at least one non-operator character.
+            OPERATORS = set("();<>|&")
             k, args = j + 1, []
-            while k < len(toks) and toks[k] not in ("&&", "||", ";", "|", "&"):
+            while k < len(toks) and not (toks[k] and all(c in OPERATORS for c in toks[k])):
                 args.append(toks[k]); k += 1
             print("\t".join([rest[0]] + args))
 ' 2>/dev/null || true

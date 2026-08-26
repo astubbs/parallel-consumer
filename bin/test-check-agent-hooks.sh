@@ -2415,6 +2415,15 @@ bbr_expect ALLOW "git push alone is not an arm"         "$bbr_tmp/work" 'git pus
 bbr_expect DENY  "a merge chained with a push still denies" \
     "$bbr_tmp/work" 'git merge origin/master && git push origin feat/thing'
 
+# A REDIRECTION IS AN OPERATOR, NOT AN ARGUMENT. `punctuation_chars=True` emits `>` as its own
+# token, and the arg walk once stopped only at command separators - so a redirect target could sit
+# in the argument list and spoof an exemption. Both cases below name a redirect target that is
+# EXACTLY a control flag / a remedy ref, which is the only way the confusion is observable.
+bbr_expect DENY  "a redirect target cannot spoof a control flag" \
+    "$bbr_tmp/work" 'git merge origin/master > --abort'
+bbr_expect DENY  "a redirect target cannot spoof the remedy ref" \
+    "$bbr_tmp/work" 'git merge origin/master > origin/feat/thing'
+
 # THE OVERRIDE IS A TOKEN. The first version matched the raw payload, so any prose mentioning the
 # variable let a merge straight through - and the deny message teaches the agent that exact string.
 bbr_expect ALLOW "override token lets a deliberate merge through" \

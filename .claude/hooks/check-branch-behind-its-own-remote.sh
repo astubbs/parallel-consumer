@@ -55,6 +55,13 @@
 #   - A DELETED REMOTE BRANCH KEEPS DENYING until something prunes. The per-merge fetch of a ref
 #     origin no longer has fails into silence, and this arm does not prune. The SessionStart arm
 #     does, and the deny message names `git fetch --all --prune`, so it self-heals within a session.
+#   - `-s ours` DEFEATS THE REMEDY EXEMPTION. `git merge -s ours origin/master origin/<branch>`
+#     carries the exemption token, so it is allowed - and `-s ours` then discards the content of
+#     both parents. It does not reproduce the incident (the merge still records `origin/<branch>` as
+#     an ancestor, so the push is a fast-forward and nothing is silently lost at the remote), but
+#     the branch's CONTENT drops the very commits the exemption existed to let in. Documented
+#     rather than fixed: an agent does not reach for `-s ours` unprompted, and a strategy-aware
+#     check would be more machinery than the case earns.
 #   - A BRANCH THIS CHECKOUT HAS NEVER FETCHED IS INVISIBLE. With no `origin/<branch>` locally the
 #     hook exits silent - which is the state where the cache is MOST stale. That is the SessionStart
 #     arm's job, and it is why the stamp key below is a correctness matter rather than a tidy-up.
@@ -191,7 +198,7 @@ for line in sys.stdin:
         continue
     guarded = True
 print("guarded" if guarded else "exempt")
-' 2>/dev/null || true)"
+' || true)"
 [ "$exempt" = "guarded" ] || exit 0
 
 bounded_fetch --quiet origin "$branch"
