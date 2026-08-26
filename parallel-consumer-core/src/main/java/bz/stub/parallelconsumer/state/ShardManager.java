@@ -174,7 +174,8 @@ public class ShardManager<K, V> {
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
         } else {
-            // covers both already-removed (confluentinc#757) and removed-while-sweeping
+            // covers both already-removed-before-the-sweep and removed-against-this-read; the third null
+            // on this path, after the shard's own long-standing guard and confluentinc#757's retryQueue one
             log.trace("Shard referenced by WC: {} with shard key: {} already removed", consumerRecord, shardKey);
         }
 

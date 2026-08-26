@@ -36,9 +36,16 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
  * {@code consumer.poll} - the poller-death family.
  * <p>
  * Every other access in the file already uses the single-read {@code getShard(key)} Optional idiom; this is the
- * one remaining check-then-get pair - and it sits inside the guard that was itself added for confluentinc#757
- * ({@code ShardManagerTest.testAssignedQuickRevokeNPE}), which closed the shard-already-gone case but left the
- * window between its own two reads.
+ * one remaining check-then-get pair.
+ * <p>
+ * <b>Which guard belongs to which NPE, because the method now carries three.</b> The {@code containsKey} test
+ * has been in {@code removeWorkFromShardFor} since upstream's 2022 batching work, long predating
+ * confluentinc#757. What confluentinc#757 - "NullPointerException on partitions revoked", closed by upstream's
+ * PR 758 - actually added is the {@code Objects.nonNull(removedWC)} check one line further down, against a
+ * {@code retryQueue.remove(null)}, with {@code ShardManagerTest.testAssignedQuickRevokeNPE} for it. So the
+ * already-removed-<em>work</em> case is guarded and the already-removed-<em>shard</em> case is guarded, and
+ * this is the third null on the same revoke path: the shard the {@code containsKey} test just saw, gone by
+ * the time {@code get} runs.
  * <p>
  * <b>The forced race.</b> The shard map is replaced (production package setter, as
  * {@code ShardManagerTest.testAssignedQuickRevokeNPE} already does) with a double that fires the interfering
@@ -179,7 +186,7 @@ class ShardManagerRevokeSweepNpeTest {
                 .isFalse();
 
         assertDoesNotThrow(() -> wm.onPartitionsRevoked(UniLists.of(tp)),
-                "the already-removed-shard branch is guarded (confluentinc#757) and must stay graceful");
+                "the already-removed-shard branch has been guarded since 2022 and must stay graceful");
 
         assertWithMessage("control arm must not have armed the race")
                 .that(racingShardMap.raceHasFired())
