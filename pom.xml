@@ -1215,8 +1215,10 @@
                     <excludeFilterFile>${maven.multiModuleProjectDirectory}/config/spotbugs-exclude.xml</excludeFilterFile>
                     <plugins>
                         <!-- fb-contrib earns its place on measurement, not reputation: its
-                             MUI_CONTAINSKEY_BEFORE_GET names ShardManager.removeWorkFromShardFor,
-                             which is astubbs#345's check-then-get seam, with no harness. -->
+                             MUI_CONTAINSKEY_BEFORE_GET named ShardManager.removeWorkFromShardFor's
+                             check-then-get seam with no harness at all - the defect astubbs#345
+                             then fixed. It reports zero there now, which is the expected state, not
+                             the rule going quiet: docs/inflight/static-spotbugs-rule-registry.md. -->
                         <plugin>
                             <groupId>com.mebigfatguy.fb-contrib</groupId>
                             <artifactId>fb-contrib</artifactId>
