@@ -142,6 +142,12 @@ existing number by its prefix and check it; write new ones the way this section 
   stale silently, and it sends the reader to `gh issue view` before acting, which is what keeps it a
   discovery aid rather than the second tracker "never write down what a command can answer" forbids.
   Regenerate with `bin/issue-index.sh`; the script's header records why it has no `--check` gate.
+- **A note that maps to a GitHub issue carries a DRAFT response to that issue before its PR merges**
+  (operator ruling, 2026-08-25). The agents who did the work hold the best context at merge time; by
+  release time it has to be re-mined from commit logs. Draft in the branch (a `pr-NN-issue-response-`
+  file, or a section of the PR's note), post only on explicit instruction - the never-post-unasked
+  rule is untouched - and delete the drafts with the note. The aspiration behind it: every GitHub
+  issue should have a mapped inflight note, so no issue's resolution moment passes uncaptured.
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 
