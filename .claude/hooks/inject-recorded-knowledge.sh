@@ -58,7 +58,14 @@ emit() {
     return 0
 }
 
-solutions=$(find docs/solutions -name '*.md' -type f 2>/dev/null | sort)
+# A directory's own AGENTS.md/CLAUDE.md/README is not one of the documents these blocks list, and
+# every scan over docs/ needs the same guard - the eight docs/inflight scans below already carry it.
+# Without it the rules doc lists as a solution, a plan, an ideation document or an audit, under a
+# heading telling you to read it as one. Nothing goes red; the index just quietly says something
+# false. Anchored on `/` so a real document named e.g. `writing-agents.md` is not swallowed.
+DIRECTORY_DOCS_RE='/(AGENTS|CLAUDE|README)\.'
+
+solutions=$(find docs/solutions -name '*.md' -type f 2>/dev/null | grep -vE "$DIRECTORY_DOCS_RE" | sort)
 [ -n "$solutions" ] || exit 0
 
 emit "# Already solved here - read before you diagnose"
@@ -348,6 +355,7 @@ emit "# Dated plans and investigations"
 # The explicit `-` stdin operand is master's BSD fix (astubbs#341) - a bare `paste -sd,` reads no
 # input on macOS and the list silently comes out empty.
 plans=$(find docs/plans -type f \( -name '*.md' -o -name '*.html' \) 2>/dev/null \
+    | grep -vE "$DIRECTORY_DOCS_RE" \
     | sed -E 's#^docs/plans/##; s#\.(md|html)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
 emit "${plans:-(none)}"
 emit ""
@@ -363,6 +371,7 @@ emit ""
 # cheapest prior art in the repo and the least likely to be found, because nothing links to a
 # rejected idea and no symptom search returns one - you rediscover it by proposing it again.
 ideation=$(find docs/ideation -type f \( -name '*.html' -o -name '*.md' \) 2>/dev/null \
+    | grep -vE "$DIRECTORY_DOCS_RE" \
     | sed -E 's#^docs/ideation/##; s#\.(html|md)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
 if [ -n "$ideation" ]; then
     emit "# Ideation: ranked directions, and what was already REJECTED and why"
@@ -376,7 +385,8 @@ fi
 # Point-in-time audits of tests that do not run, do not assert, or were never written. Easy to miss
 # precisely because nothing goes red to tell you - which is why AGENTS.md says to read the newest
 # before re-enabling, deleting or rewriting a dark test.
-hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
+hardening=$(find docs/test-hardening -name '*.md' -type f 2>/dev/null | grep -vE "$DIRECTORY_DOCS_RE" \
+    | sort | sed 's|docs/test-hardening/||;s|\.md$||' | paste -sd, - | sed 's/,/, /g')
 if [ -n "$hardening" ]; then
     emit "# Dated test-hardening audits"
     emit ""
