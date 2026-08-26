@@ -52,14 +52,19 @@ the command there and every following line became a separate command. The lane t
 and thread count - then exited 127 from the orphaned argument, whose `tee` also overwrote the PIT log
 the script parses for its verdict.
 
-ShellCheck names this exactly - *"This flag is used as a command name. Bad line break?"* - and
-`shellcheck --severity=error` does not report it. Reproduce the gap:
+ShellCheck names this exactly - *"This flag is used as a command name. Bad line break or missing
+[ .. ]?"* - and `shellcheck --severity=error` does not report it. Reproduce the gap:
 
 ```bash
-printf 'foo --a \\\n  --b \\\n  # comment\n  --c\n' > /tmp/probe.sh
+printf '#!/usr/bin/env bash\nfoo --a \\\n  --b \\\n  # comment\n  --c\n' > /tmp/probe.sh
 shellcheck /tmp/probe.sh                    # SC2215, exit 1
 shellcheck --severity=error /tmp/probe.sh   # silent, exit 0
 ```
+
+**The shebang in that probe is load-bearing, not boilerplate.** Without it the file also trips
+`SC2148` (*"Tips depend on target shell and yours is unknown"*), which IS an error - so the second
+command reports a finding and exits 1, and the snippet appears to disprove the gap it is
+demonstrating.
 
 **This did not become a per-code promotion, deliberately.** The one-knob rule above is the reason:
 the moment `--include=SC2215` is added, the next incident adds another code, and the list is the
@@ -67,13 +72,19 @@ shape this repo has already removed from SpotBugs once. The floor is the knob. W
 changes is the *argument* for raising it - the warning tier is no longer a tidiness backlog, it is a
 tier with a shipped defect in it.
 
-A whole-tree class sweep found **one** other instance of this exact shape: none. `SC2215` matched
-only the one site, across all 82 scripts in `bin/`, `.claude/hooks/` and `.github/`.
+**A whole-tree sweep for the class found no other instance** - `SC2215` matched the one site and
+nothing else. Re-run it over every script in `bin/`, `.claude/hooks/` and `.github/`:
+
+```bash
+find bin .claude/hooks .github -type f -name '*.sh' -print0 \
+  | xargs -0 shellcheck -f gcc --severity=warning 2>/dev/null | grep SC2215
+```
 
 The gap is covered behaviourally in the meantime: `bin/test-ci-mutation-test.sh` gained argv arms
 that run the real invocation branch against a stub `mvnw` and assert the flags arrive. They are
-proven red against the pre-fix script - 5 of them flip, the other 20 arms stay green either way,
-which is what shows the existing arms could never have caught it.
+**proven red against the pre-fix script** - restore master's `bin/ci-mutation-test.sh` over the
+fixed one and re-run the self-test: every argv arm flips and every other arm stays green either
+way, which is what shows the pre-existing arms could never have caught it.
 
 ## Top 5 to turn back on whole-tree, ranked
 

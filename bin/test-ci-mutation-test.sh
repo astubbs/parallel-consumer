@@ -71,6 +71,20 @@ make_fixture() {
     printf '%s' "$tmp"
 }
 
+# Commits an edit to one file inside a fixture, which is how a case becomes "a PR that changed X".
+# Written out four times before this existed, exactly like the verdict block below it - and the same
+# drift had started, so it is one helper for the same reason.
+# $1 fixture root, $2 path to edit, relative to that root.
+commit_edit() {
+    local root="$1" path="$2"
+    (
+        cd "$root" || exit 1
+        printf '// edited\n' >> "$path"
+        git add -A
+        git -c user.email=t@t -c user.name=t commit -q -m change
+    ) > /dev/null 2>&1
+}
+
 # Runs the subject inside a fixture and asserts the exit code.
 # $1 name, $2 expected exit code, $3 path a modification is written to (empty = no change),
 # $4 extra env assignments as a string, $5 optional substring the output must contain.
@@ -101,12 +115,7 @@ assert_exit() {
     local tmp out rc
     tmp="$(make_fixture)"
     if [ -n "$touch_path" ]; then
-        (
-            cd "$tmp" || exit 1
-            printf '// edited\n' >> "$touch_path"
-            git add -A
-            git -c user.email=t@t -c user.name=t commit -q -m change
-        ) > /dev/null 2>&1
+        commit_edit "$tmp" "$touch_path"
     fi
     # `env` rather than an exported assignment: each case must start from a clean environment, or a
     # variable set by an earlier case silently changes a later one's scope.
@@ -218,12 +227,7 @@ widened_scope_case() {
     log="$tmp/pit.log"
     write_pit_log "$log" 7
     write_pit_report "$tmp" 7
-    (
-        cd "$tmp" || exit 1
-        printf '// edited\n' >> parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java
-        git add -A
-        git -c user.email=t@t -c user.name=t commit -q -m change
-    ) > /dev/null 2>&1
+    commit_edit "$tmp" parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java
     set +e
     out="$(cd "$tmp" && env PIT_BASE_REF=master \
         PIT_DECIDABLE_PACKAGES='^bz\.stub\.parallelconsumer\.(offsets|state)\.' \
@@ -297,12 +301,7 @@ assert_verdict() {
     if [ -n "$generated" ] && [ "$status" != "none" ]; then
         write_pit_report "$tmp" "$generated" "$status"
     fi
-    (
-        cd "$tmp" || exit 1
-        printf '// edited\n' >> parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
-        git add -A
-        git -c user.email=t@t -c user.name=t commit -q -m change
-    ) > /dev/null 2>&1
+    commit_edit "$tmp" parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
     set +e
     # shellcheck disable=SC2086  # $envs is a deliberate word-split list of KEY=VALUE assignments
     out="$(cd "$tmp" && env PIT_BASE_REF=master PIT_DRY_RUN_LOG="$log" $envs bin/ci-mutation-test.sh 2>&1)"
@@ -387,14 +386,12 @@ echo "=== Argv arms: the lane is only PR-scoped if the flags survive the invocat
 # $1 name, $2 the flag the recorded argv must contain, $3 optional following argv word.
 assert_mvn_argv() {
     local name="$1" want="$2" want_next="${3:-}"
-    local tmp argv out rc
+    local tmp argv out
     tmp="$(make_fixture)"
     argv="$tmp/argv.txt"
+    commit_edit "$tmp" parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
     (
         cd "$tmp" || exit 1
-        printf '// edited\n' >> parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
-        git add -A
-        git -c user.email=t@t -c user.name=t commit -q -m change
         cat > mvnw <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$PIT_STUB_ARGV"
@@ -402,14 +399,18 @@ printf -- '- Statistics\n'
 printf '>> Generated 42 mutations Killed 42 (100%%)\n'
 STUB
         chmod +x mvnw
-        mkdir -p parallel-consumer-core/target/pit-reports
-        printf '<mutations><mutation status="KILLED"/></mutations>\n' \
-            > parallel-consumer-core/target/pit-reports/mutations.xml
     ) > /dev/null 2>&1
+    # The report must AGREE with the count the stub's log claims, and must be written by
+    # write_pit_report rather than by hand: the subject only recognises the single-quoted
+    # `status='...'` that helper emits. A hand-rolled `status="KILLED"` parses as zero evaluated
+    # mutants, which ends the run on the "scored NOTHING" verdict instead of the clean one this
+    # helper's comment describes - invisibly, because these arms judge the argv and not the exit code.
+    write_pit_report "$tmp" 42 KILLED
 
+    # The exit code is deliberately NOT asserted here: these arms answer "did the flags arrive",
+    # which the verdict arms above cannot, and the verdict itself is already their subject.
     set +e
     out="$(cd "$tmp" && env PIT_BASE_REF=master PIT_STUB_ARGV="$argv" bin/ci-mutation-test.sh 2>&1)"
-    rc=$?
     set -e
 
     if [ ! -s "$argv" ]; then
