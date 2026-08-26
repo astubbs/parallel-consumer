@@ -44,6 +44,30 @@ arm "base64 -w0 (attached) is caught" fire  'base64 -w0 < f'
 # Flags bunched before the hazardous one must still be seen.
 arm "a preceding flag does not hide it" fire 'grep -n -P "x" f'
 
+# SHARED GIT STATE - portable on every platform, and still a silent wrong answer everywhere else in
+# the clone. Two of these shipped in bin/check-quarantine-owners.sh and re-shallowed the whole
+# repository on every sweep of bin/check-all.sh.
+arm "git fetch --depth= is caught"    fire  'git fetch --quiet --depth=1 origin master'
+arm "git fetch --depth 1 is caught"   fire  'git fetch --depth 1 origin master'
+arm "--shallow-since is caught"       fire  'git fetch --shallow-since=2026-01-01 origin master'
+# `pull` is `fetch` plus a merge, and writes the same file. Matching only `fetch` would have left the
+# obvious next spelling uncovered.
+arm "git pull --depth is caught"      fire  'git pull --depth=1 origin master'
+# A GLOBAL OPTION BEFORE THE SUBCOMMAND is the exact walk-past that let `git -C DIR rev-list` through
+# .claude/hooks/check-shallow-history.sh, and `git --git-dir=... fetch` is the spelling the FIX uses.
+arm "git --git-dir=X fetch --depth caught" fire 'git --git-dir=/tmp/x fetch --depth=1 https://h/r ref'
+# A global option whose VALUE does not start with `-`: the element has to step over BOTH tokens, or
+# the pattern is looking for `fetch` and finding `core.pager=cat`. This arm was written because the
+# first version of the row missed exactly this - the hook's own header documents the same walk-past.
+arm "git -c k=v fetch --depth caught" fire 'git -c core.pager=cat fetch --depth=1 origin master'
+arm "git -C dir fetch --depth caught" fire 'git -C /tmp/x fetch --depth=1 origin master'
+# NOT THE HAZARD. A clone creates its own repository, so its depth is nobody else's; and an
+# unrestricted fetch never writes the `shallow` file.
+arm "git clone --depth=1 is fine"     clean 'git clone -q --depth=1 "file://$o" "$d"'
+arm "an undepthed git fetch is fine"  clean 'git fetch --no-tags origin master'
+arm "hazard-ok allows a scratch fetch" clean '# hazard-ok: fetches into a throwaway git dir
+git --git-dir="$scratch" fetch --depth=1 "$url" "$ref"'
+
 # NOT A USE - this repo is full of prose about exactly these flags.
 arm "a comment about sed -i is fine"  clean '# Not sed -i: GNU takes the suffix attached, BSD as the next arg'
 arm "an indented comment is fine"     clean '    # stat -c is GNU and BSD rejects it'

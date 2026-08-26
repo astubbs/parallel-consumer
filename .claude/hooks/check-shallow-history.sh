@@ -24,6 +24,29 @@
 # SCOPED TO COMMANDS WHOSE ANSWER ACTUALLY DEPENDS ON DEPTH. `git status`, `git diff` of the working
 # tree, `git show HEAD` and `git log -1` are all correct in a shallow clone, and blocking them would
 # make this noise - which gets hooks disabled. Only ranges, ancestry and whole-history walks qualify.
+#
+# IT ALSO GUARDS THE OTHER DIRECTION: the command that MAKES the clone shallow. `git fetch --depth`
+# and `git pull --depth` write that shared `shallow` file, and the shallowing is silent - the fetch
+# succeeds, and the bill arrives later in some other worktree's merge-base. The script that did this
+# on every gate sweep was bin/check-quarantine-owners.sh, fixed by fetching into a throwaway git dir;
+# a hand-typed `--depth=1` is the same defect with no script to fix, which is what this arm is for.
+# bin/check-shell-hazards.sh enforces the same rule on scripts in bin/ and .claude/hooks/.
+#
+# `--git-dir=` AND A `GIT_DIR=` PREFIX EXEMPT IT, because both name a repository other than this
+# clone - the sanctioned idiom for fetching a ref you only want to read. `git clone --depth` is not
+# the hazard either: a clone owns its own depth.
+#
+# TWO KNOWN, DELIBERATE IMPRECISIONS, both erring towards denial:
+#
+#   - `-C <dir>` is NOT read as a redirect, so `git -C /some/other/repo fetch --depth=1` is denied
+#     even though it is harmless. Treating it as one would be a bypass, since `-C .` names THIS
+#     repository; over-blocking costs a prefixed re-run, under-blocking costs the incident above.
+#   - Once the clone is already shallow this arm stands down entirely, so a fetch that CHANGES the
+#     depth (`--depth=5` over a depth-1 clone, a different `--shallow-since`) still rewrites the
+#     shared graft. That is accepted rather than missed: the residual is bounded, because in a clone
+#     that is already shallow the QUERY arm above is armed, so no truncated answer reaches anyone
+#     silently - and denying depth changes in an intentionally shallow CI clone is the noise that
+#     gets hooks switched off.
 set -uo pipefail
 
 payload="$(cat 2>/dev/null || true)"
@@ -59,6 +82,10 @@ verdict="$(printf '%s' "$payload" | python3 -c '
 import json, re, shlex, sys
 
 DEPTH_DEPENDENT = {"rev-list", "merge-base", "blame", "describe", "bisect", "shortlog", "cherry"}
+
+# The other direction: these do not READ a truncated history, they CREATE one, for every worktree.
+SHALLOWING = {"fetch", "pull"}
+DEPTH_FLAGS = ("--depth", "--shallow-since", "--shallow-exclude")
 
 # git own options that sit BEFORE the subcommand. The two that take a separate value must consume it,
 # or the value is mistaken for the subcommand - which is how `git -C DIR rev-list` read as subcommand
@@ -121,34 +148,74 @@ for i, t in enumerate(toks):
     # a pathspec after `--` is a FILE PATH: `git diff -- ../docs` is not a commit range
     if "--" in args:
         args = args[:args.index("--")]
+    # `--git-dir=` names a repository that is NOT this clone, which is how a ref gets fetched for
+    # inspection without touching anyone: `git --git-dir="$(mktemp -d)" fetch --depth=1 ...`.
+    # `GIT_DIR=... git fetch` is the same redirect written as an assignment prefix, and is the
+    # spelling bin/check-quarantine-owners.sh uses - so both have to count, or the hook denies the
+    # very alternative its own message recommends.
+    k = i - 1
+    redirected = any(g.startswith("--git-dir") for g in rest[:j])
+    while k >= 0 and re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", toks[k]):
+        if toks[k].startswith("GIT_DIR="):
+            redirected = True
+        k -= 1
+    if sub in SHALLOWING and not redirected:
+        depth_flag = next((a for a in args if a.startswith(DEPTH_FLAGS)), None)
+        if depth_flag:
+            report("SHALLOWING:git " + sub + " " + depth_flag)
     if sub in DEPTH_DEPENDENT:
-        report("git " + sub)
+        report("QUERY:git " + sub)
     if sub in ("log", "diff") and any(".." in a and not a.startswith("-") for a in args):
-        report("git " + sub + " over a commit range")
+        report("QUERY:git " + sub + " over a commit range")
 sys.exit(0)
 ')"
 
 [ -n "$verdict" ] || exit 0
 
-# Now, and only now, ask git. Cheap, but not free enough to run on every Bash call.
-[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] || exit 0
+kind="${verdict%%:*}"
+export VERDICT="${verdict#*:}"
 
-export VERDICT="$verdict"
+# Now, and only now, ask git. Cheap, but not free enough to run on every Bash call. THE TWO KINDS
+# WANT OPPOSITE ANSWERS: a query is wrong only when the clone is ALREADY shallow, while a shallowing
+# fetch is only worth stopping while it is not - once the clone is shallow, that fetch changes
+# nothing, and denying it would block the CI-shaped case for no gain.
+shallow="$(git rev-parse --is-shallow-repository 2>/dev/null)"
+if [ "$kind" = "SHALLOWING" ]; then
+    [ "$shallow" = "true" ] && exit 0
+else
+    [ "$shallow" = "true" ] || exit 0
+fi
+
+export KIND="$kind"
 python3 -c '
 import json, os
+query_reason = (
+    "THE CLONE IS SHALLOW, and `" + os.environ["VERDICT"] + "` will answer anyway - from the "
+    "truncated graft, without erroring. Measured here: a branch reported 836 commits against a "
+    "true 29, and merge-base returned a commit that was not the merge base.\n\n"
+    "Run `git fetch --unshallow` first, then re-run. If you are mid-merge-prep this is not "
+    "optional: `git reset --mixed $(git merge-base ...)` against a wrong base silently reverts "
+    "whatever master gained.\n\n"
+    "It re-shallows because the `shallow` file lives in the shared --git-common-dir, so any "
+    "sibling worktree doing a depth-limited fetch re-shallows this one too. Expect to need it "
+    "more than once in a session.\n\n"
+    "If the truncated answer genuinely does not matter, re-run prefixed with "
+    "SHALLOW_HISTORY_ACCEPTED=1.")
+shallowing_reason = (
+    "`" + os.environ["VERDICT"] + "` WOULD TRUNCATE THIS CLONE, and not just for you. The `shallow` "
+    "file lives in the shared --git-common-dir, so one depth-limited fetch re-shallows EVERY "
+    "worktree of this clone at once - including sessions that unshallowed a minute ago.\n\n"
+    "Nothing goes red afterwards. `git merge-base` starts returning empty, ahead/behind counts read "
+    "in the hundreds, and commits that plainly landed report as not ancestors of master - all of "
+    "which read as a rewritten history rather than as missing objects.\n\n"
+    "Drop `--depth` (an ordinary fetch is incremental and cheap here), or fetch into a throwaway "
+    # hazard-ok: the guidance text this hook prints, naming the safe alternative - not a command.
+    "repository if you only want to read a ref: `git --git-dir=\"$(mktemp -d)\" fetch --depth=1 "
+    "<url> <ref>`, then read it back with `git --git-dir=... show FETCH_HEAD:<path>`.\n\n"
+    "If you really do want this clone shallow, re-run prefixed with SHALLOW_HISTORY_ACCEPTED=1.")
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
     "permissionDecision": "deny",
     "permissionDecisionReason": (
-        "THE CLONE IS SHALLOW, and `" + os.environ["VERDICT"] + "` will answer anyway - from the "
-        "truncated graft, without erroring. Measured here: a branch reported 836 commits against a "
-        "true 29, and merge-base returned a commit that was not the merge base.\n\n"
-        "Run `git fetch --unshallow` first, then re-run. If you are mid-merge-prep this is not "
-        "optional: `git reset --mixed $(git merge-base ...)` against a wrong base silently reverts "
-        "whatever master gained.\n\n"
-        "It re-shallows because the `shallow` file lives in the shared --git-common-dir, so any "
-        "sibling worktree doing a depth-limited fetch re-shallows this one too. Expect to need it "
-        "more than once in a session.\n\n"
-        "If the truncated answer genuinely does not matter, re-run prefixed with "
-        "SHALLOW_HISTORY_ACCEPTED=1.")}}))
+        shallowing_reason if os.environ["KIND"] == "SHALLOWING" else query_reason)}}))
 '
 exit 0
