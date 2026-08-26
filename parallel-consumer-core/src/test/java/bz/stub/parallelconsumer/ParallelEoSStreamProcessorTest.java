@@ -50,6 +50,7 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
@@ -174,10 +175,21 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     public void executorThreadsInterruptedOnShutdownTimeout(CommitMode commitMode) {
         AtomicBoolean interrupted = new AtomicBoolean(false);
         CountDownLatch latch = new CountDownLatch(1);
+        // THE PRECONDITION THIS TEST USED TO ASSUME. `interrupted` can only become true if a worker is
+        // actually parked inside the user function when close() runs - so if the record has not been
+        // dispatched yet, the assertion at the end fails while nothing is wrong with shutdown at all.
+        // Two full-suite failures on 2026-08-26 looked exactly like a shutdown regression for that
+        // reason, and the class passed in isolation every time. Awaiting entry makes the two outcomes
+        // distinguishable: a timeout here says the record never reached a worker (a dispatch question),
+        // and a failure at the end now means the interrupt genuinely did not arrive (a shutdown one).
+        // The shape is the one docs/inflight/test-untracked-ci-flakes.md names for this file - a point
+        // check taken after an await on something else.
+        CountDownLatch entered = new CountDownLatch(1);
         setupParallelConsumerInstance(getBaseOptionsKeyOrdered(commitMode, Duration.ofSeconds(1)));
         primeFirstRecord();
 
         parallelConsumer.poll((ignore) -> {
+            entered.countDown();
             try {
                 latch.await();
             } catch (InterruptedException interruptedException) {
@@ -187,8 +199,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
             }
         });
 
-        // let it process
-        awaitForSomeLoopCycles(2);
+        assertThat(entered.await(defaultTimeoutSeconds, SECONDS))
+                .as("the user function must be running before close(), or there is no blocked thread for "
+                        + "shutdown to interrupt and this test measures dispatch rather than shutdown")
+                .isTrue();
 
         parallelConsumer.close();
 
