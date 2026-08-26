@@ -9,7 +9,9 @@ which is why this is `misdirection` rather than a test-infra nit.
 
 ## The failing assertion
 
-Seen on `fix/909-load-reproduction` CI, run 32244188439 (2026-08-19, Unit Tests):
+<!-- post-merge: checked -->
+Seen on `fix/909-load-reproduction` CI, run 32244188439 (2026-08-19, Unit Tests) - a dated sighting,
+and the run id resolves after that branch is deleted:
 
 ```
 expected: 1214.0 but was: 1207.0 within 2 minutes

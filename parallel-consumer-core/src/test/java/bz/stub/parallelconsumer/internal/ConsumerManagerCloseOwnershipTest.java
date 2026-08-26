@@ -31,7 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * <p>
  * The case is not hypothetical. It is reached whenever {@code brokerPollSubsystem.closeAndWait()}
  * times out or throws and the close sequence proceeds anyway - the exposure recorded in
- * {@code docs/inflight/bug-shutdown-teardown-race.md}, where teardown runs in a {@code finally} that
+ * {@code docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md},
+ * where teardown runs in a {@code finally} that
  * executes even though the poll thread was never joined.
  * <p>
  * <b>What must hold, and why each matters:</b>
