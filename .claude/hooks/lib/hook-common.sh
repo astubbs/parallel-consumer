@@ -43,7 +43,15 @@ import json, shlex, sys
 try:
     data = json.load(sys.stdin)
     cmd = data.get("tool_input", {}).get("command", "")
-    toks = shlex.split(cmd)
+    # OPERATOR-AWARE, because plain shlex.split() splits on whitespace and quotes ONLY. It leaves
+    # `&&` and `;` fused to whatever touches them, so `git add -A&&git push` tokenised as
+    # [git, add, -A&&git, commit, ...] - the later `git` never matched, and the hook went silent on a
+    # real push. `git push; echo done` was worse and commoner: the token is `push;`, so even the
+    # SPACED form missed. punctuation_chars makes the operators their own tokens, which is exactly
+    # what the git-token scan below assumes it is walking.
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    toks = list(lex)
 except Exception:
     sys.exit(0)
 for i, t in enumerate(toks):

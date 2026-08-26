@@ -765,6 +765,26 @@ for form in 'git add -A && git commit -m x && git push' 'git commit --amend && g
     assert "reminds on a push CHAINED after another git call: $form" reminded "$got"
 done
 
+# UNSPACED AND SEMICOLON OPERATORS, which is the same silent-miss one level down. `shlex.split` splits
+# on whitespace and quotes only, so `&&`/`;` stay fused to whatever touches them: `-A&&git` is not
+# `git`, and `push;` is not `push`. The semicolon case is the one that matters most - `git push; echo
+# done` is SPACED and still missed, so this was never only about writing operators tightly. Found by
+# review on astubbs#357 and confirmed by running it, which also found the spaced-semicolon case the
+# report did not have.
+for form in 'git add -A&&git commit -m x&&git push' 'git push;echo done' 'git push; echo done' 'git commit -m x&&git push'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+    assert "reminds with unspaced/semicolon operators: $form" reminded "$got"
+done
+
+# ...and the matching negative control the review asked for: a CHAIN of git calls with no push in it
+# must stay silent. The positive chained cases above cannot show that on their own.
+for form in 'git add -A && git commit -m x' 'git fetch origin&&git status'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=fired ;; *) got=silent ;; esac
+    assert "a chain of git calls with NO push stays silent: $form" silent "$got"
+done
+
 # The negative controls matter as much: a hook that fires on any mention of the word is noise, and
 # noise is how a reminder gets ignored.
 out="$(push_fire 'git commit -m "push later"')"
@@ -948,6 +968,15 @@ for form in 'git add -A && git commit -m x && git push' 'git fetch origin && git
     out="$(drift_fire "$form")"
     case "$out" in *MASTER_TOUCHED_SHARED*) got=reported ;; *) got=silent ;; esac
     assert "reports on a push CHAINED after another git call: $form" reported "$got"
+done
+
+# The same two shapes for the drift hook - one shared helper, so both callers need the case or a
+# fix to one silently leaves the other broken.
+for form in 'git add -A&&git commit -m x&&git push' 'git push; echo done'; do
+    drift_clear
+    out="$(drift_fire "$form")"
+    case "$out" in *MASTER_TOUCHED_SHARED*) got=reported ;; *) got=silent ;; esac
+    assert "reports with unspaced/semicolon operators: $form" reported "$got"
 done
 
 # THE `## IN FLIGHT:` ECHO IS DERIVED, NOT COPIED. AGENTS.md carries such a section when something
