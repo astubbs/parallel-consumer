@@ -174,7 +174,7 @@ public class ShardManager<K, V> {
         Optional<ProcessingShard<K, V>> shardOpt = getShard(shardKey);
         if (shardOpt.isPresent()) {
             // remove the work
-            WorkContainer<K, V> removedWC = shardOpt.get().remove(consumerRecord.offset());
+            WorkContainer<K, V> removedWC = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
 
             // remove if in retry queue
             // check null to avoid race condition
@@ -338,7 +338,7 @@ public class ShardManager<K, V> {
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
                 this, shardManager -> shardManager.processingShards.values().stream()
-                        .mapToInt(processingShard -> processingShard.getEntries().size()).sum());
+                        .mapToInt(processingShard -> processingShard.getWorkMap().size()).sum());
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
                 this, shardManager -> shardManager.processingShards.keySet().size());
     }

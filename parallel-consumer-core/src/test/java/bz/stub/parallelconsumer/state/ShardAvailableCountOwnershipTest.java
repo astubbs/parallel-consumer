@@ -21,7 +21,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * site that infers "was this already counted?" from the container's observable state.
  * <p>
  * Extracted from a review finding on astubbs/parallel-consumer#336 (thread 3862087445).
- * {@link ProcessingShard#remove(long)} used to deduct a unit when
+ * {@link ProcessingShard#removeWorkAtOffset(long)} used to deduct a claim when
  * {@link WorkContainer#isAvailableToTakeAsWork()} was true at removal time. That predicate cannot answer the
  * question being asked of it: it describes what the container <em>is</em> at an instant, and two containers with
  * opposite accounting histories - one never taken as work, one taken and then released by
@@ -35,7 +35,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *
  * @author Antony Stubbs
  * @see ProcessingShard
- * @see WorkContainer#claimShardAvailableUnit()
+ * @see WorkContainer#claimAsSelectable()
  */
 @Slf4j
 class ShardAvailableCountOwnershipTest {
@@ -61,10 +61,10 @@ class ShardAvailableCountOwnershipTest {
     }
 
     /**
-     * The finding itself. A record is out at a worker, so selection has already spent its unit. Its partition is
+     * The finding itself. A record is out at a worker, so selection has already taken its claim. Its partition is
      * revoked; the controller drops the now-stale result, which calls {@link WorkContainer#endFlight()} and tells
      * the shard nothing. The poller's revocation sweep then removes the entry - and used to deduct a <b>second</b>
-     * unit, because the container now reads as available again.
+     * claim, because the container now reads as available again.
      * <p>
      * A second record is queued behind it purely so the deficit is visible: with one record the counter is already
      * at zero and the old clamp swallowed the second deduction, which is precisely how this survived.
@@ -89,7 +89,7 @@ class ShardAvailableCountOwnershipTest {
                 .that(outAtWorker.isAvailableToTakeAsWork()).isTrue();
 
         // Poller thread: the revocation sweep now removes the entry.
-        shard().remove(100);
+        shard().removeWorkAtOffset(100);
 
         assertCount("offset 101 is still queued and selectable, so it must still be counted. A second deduction "
                 + "for offset 100 hides it from WAITING_RECORDS and from drain()'s check", 1);
@@ -98,13 +98,13 @@ class ShardAvailableCountOwnershipTest {
     /**
      * The same unsound inference with the sign reversed, and reachable without any stale result at all.
      * <p>
-     * A failed record holds a unit again ({@link ProcessingShard#onFailure}) but is <em>not</em>
+     * A failed record holds a claim again ({@link ProcessingShard#onFailure}) but is <em>not</em>
      * {@link WorkContainer#isAvailableToTakeAsWork()} until its retry delay passes. Revoking it inside that window
      * used to deduct nothing, leaving the count permanently one too high - which inflates the poller's load gate
      * and can leave {@code drain()} believing work is still waiting forever.
      */
     @Test
-    void revokingAFailedRecordInsideItsRetryDelayMustGiveItsUnitBack() {
+    void revokingAFailedRecordInsideItsRetryDelayMustGiveItsClaimBack() {
         var failed = registerAndTake(100);
         assertCount("taken as work", 0);
 
@@ -116,7 +116,7 @@ class ShardAvailableCountOwnershipTest {
         assertWithMessage("PRECONDITION: the retry delay must NOT have passed, or this test exercises nothing")
                 .that(failed.isDelayPassed()).isFalse();
 
-        shard().remove(100);
+        shard().removeWorkAtOffset(100);
 
         assertCount("the shard is empty, so nothing can be awaiting selection", 0);
     }
@@ -125,12 +125,12 @@ class ShardAvailableCountOwnershipTest {
      * The accumulating deficit recorded in {@code docs/inflight/bug-processing-shard-available-work-undercount.md}
      * - the same defect at the stale-replacement site, where the old code deducted nothing on the grounds that a
      * replacement is not an addition. That is true of {@code entries} and false of the counter: the replaced entry
-     * had already spent its unit when it was taken as work, so the fresh entry arrived uncounted.
+     * had already taken its claim when it was taken as work, so the fresh entry arrived uncounted.
      */
     @Test
     void replacingAStaleEntryThatWasAlreadyTakenAsWorkMustLeaveTheFreshEntryCounted() {
         var takenThenStale = registerAndTake(100);
-        assertCount("taken as work, so its unit is spent", 0);
+        assertCount("taken as work, so its claim is taken", 0);
 
         // Rebalance: the container's epoch is now old, so it is stale.
         wm.onPartitionsRevoked(UniLists.of(tp));
@@ -140,8 +140,8 @@ class ShardAvailableCountOwnershipTest {
         // ProcessingShardStaleReplacement909Test uses, and for the same reason: the poller's sweep is what
         // normally removes a stale resident, so a test that lets the sweep run never reaches this branch.
         register(101);
-        shard().getEntries().put(100L, takenThenStale);
-        assertCount("only offset 101 is counted - the planted resident spent its unit when it was taken", 1);
+        shard().getWorkMap().put(100L, takenThenStale);
+        assertCount("only offset 101 is counted - the planted resident took its claim when it was taken", 1);
 
         register(100);
 
@@ -161,13 +161,13 @@ class ShardAvailableCountOwnershipTest {
      * add, which is the same permanent drift with the opposite sign to the reported defect.
      */
     @Test
-    void countingBackInARecordThatHasAlreadyLeftTheShardMustHandTheUnitStraightBack() {
+    void countingBackInARecordThatHasAlreadyLeftTheShardMustHandTheClaimStraightBack() {
         var revokedThenFailed = registerAndTake(100);
         register(101);
         assertCount("one taken, one still queued", 1);
 
         // Poller thread: the revocation sweep removes the entry while the record is still out at a worker.
-        shard().remove(100);
+        shard().removeWorkAtOffset(100);
         assertCount("offset 100 has left the shard; offset 101 is untouched", 1);
 
         revokedThenFailed.onUserFunctionFailure(new RuntimeException("failed at the worker"));
@@ -181,17 +181,17 @@ class ShardAvailableCountOwnershipTest {
     }
 
     /**
-     * The same unsound inference at the <b>poller's sweep</b>, which is the second site that deducted a unit on the
-     * strength of a container's observable state rather than on whether it held one.
+     * The same unsound inference at the <b>poller's sweep</b>, which is the second site that deducted a claim on
+     * the strength of a container's observable state rather than on whether it held one.
      * <p>
-     * A container taken as work and then gone stale across a rebalance has already spent its unit, so the sweep
+     * A container taken as work and then gone stale across a rebalance has already taken its claim, so the sweep
      * that evicts it must deduct nothing. The old code deducted unconditionally here, which is the same double
      * deduction as the reported defect reached by a different path - and the clamp is what stopped it showing.
      */
     @Test
-    void thePollersStaleSweepMustNotDeductForAnEntryThatAlreadySpentItsUnit() {
+    void thePollersStaleSweepMustNotDeductForAnEntryThatAlreadyTookItsClaim() {
         var takenThenStale = registerAndTake(100);
-        assertCount("taken as work, so its unit is spent", 0);
+        assertCount("taken as work, so its claim is taken", 0);
 
         wm.onPartitionsRevoked(UniLists.of(tp));
         wm.onPartitionsAssigned(UniLists.of(tp));
@@ -199,24 +199,24 @@ class ShardAvailableCountOwnershipTest {
         // Same white-box plant as the stale-replacement case, and for the same reason: a stale resident is
         // normally removed by this very sweep, so a test that lets it run first never reaches the branch.
         register(101);
-        shard().getEntries().put(100L, takenThenStale);
-        assertCount("only offset 101 is counted - the planted resident spent its unit when it was taken", 1);
+        shard().getWorkMap().put(100L, takenThenStale);
+        assertCount("only offset 101 is counted - the planted resident took its claim when it was taken", 1);
 
         long swept = sm.removeStaleContainers();
 
         assertWithMessage("PRECONDITION: the sweep must actually have removed the planted stale resident, or this "
                 + "test exercises nothing")
                 .that(swept).isAtLeast(1L);
-        assertCount("the swept entry held no unit, so the sweep must deduct nothing - offset 101 is still queued "
+        assertCount("the swept entry held no claim, so the sweep must deduct nothing - offset 101 is still queued "
                 + "and selectable, and deducting for offset 100 would hide it", 1);
     }
 
     /**
      * The invariant the design rests on, exercised over a sequence that mixes every accounting path. It is not
-     * documentation: a counter that can disagree with the units actually held, or go negative, fails here.
+     * documentation: a counter that can disagree with the claims actually held, or go negative, fails here.
      */
     @Test
-    void theCounterAgreesWithTheUnitsActuallyHeldAcrossEveryPath() {
+    void theCounterAgreesWithTheClaimsActuallyHeldAcrossEveryPath() {
         register(100);
         register(101);
         register(102);
@@ -241,10 +241,10 @@ class ShardAvailableCountOwnershipTest {
         sm.onSuccess(new WorkContainer<>(0, recordAt(101), mu.getModule()));
         assertCount("one succeeded and left the shard", 2);
 
-        shard().remove(102);
+        shard().removeWorkAtOffset(102);
         assertCount("one revoked", 1);
 
-        shard().remove(102);
+        shard().removeWorkAtOffset(102);
         assertCount("removing an absent offset changes nothing", 1);
     }
 
@@ -271,7 +271,7 @@ class ShardAvailableCountOwnershipTest {
     }
 
     /**
-     * Asserts the counter against the expectation AND against ground truth - the units the resident containers
+     * Asserts the counter against the expectation AND against ground truth - the claims the resident containers
      * actually hold. Asserting only the number would let a counter that happens to be right for the wrong reason
      * through, which is the failure mode this whole class is about.
      */
@@ -279,8 +279,8 @@ class ShardAvailableCountOwnershipTest {
         var shard = shard();
         assertWithMessage(why)
                 .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(expected);
-        assertWithMessage("the counter must equal the units the shard's resident containers hold (" + why + ")")
-                .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countHeldUnitsByScan());
+        assertWithMessage("the counter must equal the claims the shard's resident containers hold (" + why + ")")
+                .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(shard.countClaimedAsSelectableByScan());
         assertWithMessage("the counter must never go negative, and must not rely on a clamp to stay non-negative "
                 + "(" + why + ")")
                 .that(shard.getCountOfWorkAwaitingSelection()).isAtLeast(0L);

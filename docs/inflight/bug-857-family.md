@@ -1320,7 +1320,8 @@ several times. **Seed `8746139315096023802`.**
 
 **Why this one is worth its own entry rather than a row.** astubbs#373 fixed an accounting defect in
 `ProcessingShard` whose sign-reversed instance produces a permanent OVERcount of
-`availableWorkContainerCnt` - which keeps the poller's load gate closed, the shape this file has
+`availableWorkContainerCount` (renamed from `availableWorkContainerCnt`) - which keeps the poller's
+load gate closed, the shape this file has
 described as the 857 silent-stall signature. If that defect were what the `NO_PROGRESS` arm has been
 catching, this is the branch on which the arm should have stopped firing. **It fired anyway, on the
 branch's own head.** So the fix is necessary-not-sufficient: it closes a real way for the counter to
