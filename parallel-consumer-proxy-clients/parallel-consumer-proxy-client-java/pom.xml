@@ -80,9 +80,20 @@
                 <artifactId>spotbugs-maven-plugin</artifactId>
                 <!-- version and configuration come from the root pom's pluginManagement -->
                 <executions>
+                    <!-- process-TEST-classes, and the phase is the whole point. `includeTests` is on
+                         in the root pom because test code is main code for a concurrency library - but
+                         `process-classes` runs BEFORE `test-compile`, so on a CLEAN build target/test-classes
+                         does not exist yet and the gate analysed main code only, reporting
+                         "BugInstance size is 0" for test code it had never read. Every CI build is clean, so
+                         that is every CI build. Incrementally it was worse than useless: the directory held
+                         the PREVIOUS compilation, so the verdict described the source as it was one edit ago
+                         - a fixed finding kept being reported, at its old line number.
+                         Measured both ways before this moved: with an ignored CountDownLatch.await(timeout)
+                         restored in SessionEndTest, a clean build at process-classes reported 0 findings; at
+                         process-test-classes it reports the finding. -->
                     <execution>
                         <id>spotbugs-gate</id>
-                        <phase>process-classes</phase>
+                        <phase>process-test-classes</phase>
                         <goals>
                             <goal>check</goal>
                         </goals>

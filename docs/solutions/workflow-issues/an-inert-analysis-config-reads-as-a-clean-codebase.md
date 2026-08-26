@@ -8,7 +8,7 @@ component: development_workflow
 severity: high
 root_cause: config_error
 resolution_type: workflow_improvement
-status: "SOLVED for the five instances found. Each is now verified by an asserted count. No mechanical guard enforces the effective-pom check - it is a habit, not a gate."
+status: "SOLVED for the six instances found. Each is now verified by an asserted count. The effective-pom check is still a habit rather than a gate, EXCEPT for instance 6's narrow shape - a test-including analysis bound too early - which bin/check-analysis-phase.sh now enforces."
 applies_when:
   - Adding or changing any static-analysis tool, exclude filter, or compiler flag in a pom
   - A tool reports zero findings, or few, and you are about to read that as a clean codebase
@@ -144,6 +144,32 @@ taxonomy.
 - Any time you are about to write down what a command exited with.
 
 ## Examples
+
+**Instance 6: `includeTests` was on, and the analysis ran before the test classes existed.**
+Found 2026-08-26 on astubbs/parallel-consumer#333, and it is the sharpest example in this file
+because the configuration is not merely present but *deliberate*: the root pom turns SpotBugs'
+`includeTests` on with a comment arguing that test code is main code for a concurrency library. The
+`spotbugs:check` execution that consumes it was bound to `process-classes` - which Maven runs
+**before** `test-compile`. On a clean build `target/test-classes` does not exist yet, so the gate
+analysed main code only and printed `BugInstance size is 0` for test code it had never read. Every
+CI build here is clean, so that was every CI build.
+
+Incrementally it was worse than useless rather than merely blind: the directory still held the
+*previous* compilation, so the verdict described the source as it was one edit ago. That is how it
+surfaced - a finding stayed red at its old line number after the code was fixed, which reads as a
+stubborn tool rather than a stale one.
+
+**The measurement, both ways.** With an ignored `CountDownLatch.await(timeout)` restored in
+`SessionEndTest`, a clean build with the gate at `process-classes` reported 0 findings and BUILD
+SUCCESS; the same source with the gate at `process-test-classes` reported the finding and failed.
+The red-before arm is the load-bearing half: without it, moving the phase and seeing green would
+have proved nothing, since green was what the broken state produced too.
+
+**This one is now a gate.** `bin/check-analysis-phase.sh` refuses a test-including analysis
+execution bound to a phase earlier than `test-compile`, and refuses one with no phase written down
+at all; `bin/test-check-analysis-phase.sh` carries the shipped shape as its negative control. It is
+the narrowest mechanical version of this file's habit - a phase is one greppable token, where "did
+the config actually reach the code" in general is not.
 
 **The SpotBugs filter that could never match.** `spotbugs-exclude.xml` originally scoped its
 test-only entries with a `<Source>` path regex. SpotBugs writes `sourcepath` package-relative -
