@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Unit tests for file-ref-gate.js. Run by the PR Checklist job before the gate itself, so a broken
 // rule fails loudly rather than silently passing - or failing - every PR.
 //
@@ -53,6 +55,69 @@ check("an unbackticked path in an HTML comment is still a citation", () => {
 check("a markdown link to a missing neighbour is flagged", () => {
   const hits = danglingRefs(file("docs/inflight/x.md", "see [the gate](../gate-that-left.md)"), TREE);
   assert.deepStrictEqual(hits.map((h) => h.ref), ["../gate-that-left.md"]);
+});
+
+// ------------------------------------------- rule 1: single-segment markdown link targets
+//
+// This is the exact bug that shipped on this branch: docs/inflight/core-stale-arrival-guard-needs-
+// a-null-safety-decision.md linked to a sibling note that has never existed, and the gate passed,
+// because `foo.md` and `./foo.md` both have exactly one path segment and TOKEN requires two. A
+// same-directory markdown link is the house style for docs/inflight/'s dense cross-linking, so this
+// was the single most likely place for the defect to bite - and precisely where the gate was blind.
+
+check("a same-directory markdown link to a file that exists is not flagged", () => {
+  const tree = treeOf("docs/inflight/sibling.md");
+  assert.deepStrictEqual(
+    danglingRefs(file("docs/inflight/x.md", "see [it](sibling.md) and [it again](./sibling.md)"), tree),
+    []);
+});
+
+check("a same-directory markdown link to a file that does not exist IS flagged - the whole point", () => {
+  // The regression case: without the fix this was silently unreadable as a citation at all, so it
+  // never resolved OR failed - it simply never existed as far as the gate was concerned.
+  const tree = treeOf("docs/inflight/x.md");
+  const hits = danglingRefs(file("docs/inflight/x.md", "see [it](gone-sibling.md)"), tree);
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["gone-sibling.md"]);
+});
+
+// A single-segment target that exists ANYWHERE in the tree, not just beside the citing file, is
+// deliberately not a failing case here: resolves()'s third route - the path-tail shorthand - would
+// legitimately catch `sibling.md` against `some/other/dir/sibling.md` too. That is pre-existing,
+// intentional behaviour (see "resolves as a path tail" above), not something this change should
+// try to make stricter - a multi-segment relative target is the case that actually isolates the
+// directory-relative route, since ".." never survives as a real tree suffix.
+check("a `../other-dir/` markdown link resolves relative to the citing file, one dir up", () => {
+  const tree = treeOf("docs/other-dir/thing.md");
+  assert.deepStrictEqual(
+    danglingRefs(file("docs/inflight/x.md", "see [it](../other-dir/thing.md)"), tree), []);
+});
+
+check("an anchor-only link target is not a path", () => {
+  assert.deepStrictEqual(citationsIn("see [the section below](#anchor)"), []);
+});
+
+check("a URL or mailto link target is somebody else's resource, not a repo path", () => {
+  assert.deepStrictEqual(citationsIn("see [ci.md](https://github.com/astubbs/pc/blob/master/x.md)"), []);
+  assert.deepStrictEqual(citationsIn("mail [me](mailto:a@b.com)"), []);
+});
+
+check("a link target's #anchor fragment is stripped before resolution", () => {
+  const tree = treeOf("docs/inflight/file.md");
+  assert.deepStrictEqual(
+    danglingRefs(file("docs/inflight/x.md", "see [it](file.md#section)"), tree), [],
+    "the file exists once the fragment is stripped");
+  // And the negative arm, which is the one that actually proves the fragment was stripped: if it
+  // were left on, `gone.md#section` would never match HAS_EXTENSION at all and would silently be
+  // read as not-a-citation - passing for the wrong reason, the same way the bug shipped.
+  const hits = danglingRefs(file("docs/inflight/x.md", "see [it](gone.md#section)"), treeOf());
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["gone.md"]);
+});
+
+check("prose outside a markdown link still needs two segments - the guard this rule must not weaken", () => {
+  // Both are real lines this repo writes. Neither sits inside `](...)`, so the relaxation above
+  // must not reach them - this is the regression the two-segment rule exists to prevent.
+  assert.deepStrictEqual(citationsIn("Set.removeAll is called here, not add()"), []);
+  assert.deepStrictEqual(citationsIn("check-all.sh: no gate failed"), []);
 });
 
 check("every line counts, not only the ones a change touched", () => {

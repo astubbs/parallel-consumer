@@ -46,8 +46,9 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
    master-state flaky - it simply has no root cause yet. Demanding one before quarantine leaves an
    undiagnosed red blocking every unrelated PR, which trains everyone to read red as normal; this
    repo already deleted surefire retries for hiding flakes, and a permanently-red gate destroys the
-   same signal more thoroughly. The tell that the old default was miscalibrated: its escape hatch was
-   an owner-granted exception, and the exception had become the routine path.
+   same signal more thoroughly. The tell that the old default was miscalibrated: its only escape
+   hatch was an owner-granted exception, so every undiagnosed red had to be escalated to the owner
+   or left blocking - the rule had no path a contributor could take on the evidence they had.
 
    The bar it does NOT lower: quarantine still defers rather than forgives. The lane keeps running
    the test, the registry keeps it loud, and rule 5 still blocks a release while the list is
@@ -101,13 +102,3 @@ were hidden by the surefire retry until astubbs#224 removed it.
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
   Owner: PR astubbs#262, which anchors the measurement to a nanos stamp taken just before
   `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
-
-- [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  **UNDIAGNOSED, quarantined on its sighting ledger (rule 1)**: at 4/45 it is the
-  most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
-  `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
-  `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier
-  quarantine attributed it to the retry-delay sleep and was reverted: that code runs *after* the
-  failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
-  unverified hypothesis and its falsification path are in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
