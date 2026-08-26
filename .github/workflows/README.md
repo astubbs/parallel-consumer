@@ -33,7 +33,7 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `publish.yml` | Publishes to Maven Central on every push to `master`; the pom version decides snapshot or release. |
 | `quarantine-lane.yml` | Runs the quarantined tests separately, so known-flaky tests neither block nor disappear. |
 | `release.yml` | Cuts a release. `workflow_dispatch`, and deliberately the most dangerous button here. |
-| `repo-hygiene.yml` | Small always-on repo checks - shell sigpipe traps, one pinned version per GitHub Action, and expiring the pom's temporary CVE exclusions. |
+| `repo-hygiene.yml` | Always-on repo checks - shell sigpipe traps, one pinned version per GitHub Action, and expiring the pom's temporary CVE exclusions - plus `shell: macos`, the one lane not on `ubuntu-latest`: it runs the shell self-tests and a `bash -n` sweep against Apple's bash 3.2, where GNU-only constructs fail silently. |
 
 ## One required check is not in this directory
 
