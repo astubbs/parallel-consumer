@@ -62,7 +62,10 @@ document. This section is the detail behind it.
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
-  (`bin/ci-build.sh`). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
+  (`bin/ci-build.sh`). It also carries **`Chaos Pain Suite`**, the per-PR ambient tripwire,
+  which moved here from the self-hosted box on 2026-08-26 - see
+  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box). It is
+  **gating**, like the suite it replaced: a chaos RED is a real finding. Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
   detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
@@ -183,6 +186,46 @@ hand-written matrix has to re-declare `actions` and `python`, which default setu
 and then be maintained. astubbs#1 was exactly that proposal, opened in 2021 against
 `github/codeql-action@v1`; it was overtaken by default setup and closed by becoming this section.
 
+### Which checks are required, and why several deliberately are not
+
+**The required list is repository settings, not tree state**, so no PR can change it and nothing goes
+red when it drifts. Read it rather than trusting any list written down here:
+
+```bash
+gh api repos/astubbs/parallel-consumer/rulesets --jq '.[] | "\(.id) \(.name)"'
+gh api repos/astubbs/parallel-consumer/rulesets/<id> \
+  --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context'
+```
+
+**A required context that no run produces leaves every PR pending until it merges master**, so a new
+check is only promoted once the job that emits it is already on master. The same ordering governs a
+renamed job: the ruleset keeps the old name, which then blocks nothing visibly and passes never. That
+is how a bare `spotbugs` context outlived the job that became `static: spotbugs` and sat required with
+no producer until 2026-08-26. **A skip does not satisfy a required check either** - it waits - so a
+job that can legitimately have nothing in scope should report success rather than skip before anyone
+requires it.
+
+**These are deliberately NOT required, and each would break something if promoted:**
+
+| Check | Why not |
+|---|---|
+| `Mutation Tests (PIT, PR-scoped)` | **Requiring it would be vacuous.** The job is `continue-on-error: true`, so its check-run *conclusion* is success even when the step fails - the row reddens, and a required check reads the conclusion. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors. Gating that means removing `continue-on-error` first, which is a code change, not a ruleset edit |
+| `Performance (optional)` | The self-hosted lane is dispatch-only, so this context is never produced on a PR. Requiring it would block every PR permanently |
+| `compat: kafka 4.x (experimental)` | Disabled with `if: false` |
+| `full build (master)` | Push-only; never produced on a PR |
+| `Analyze (actions)`, `Analyze (java-kotlin)`, `Analyze (python)` | The `CodeQL` aggregate above is already required and covers all three |
+
+This table is the durable half of a note that has been retired: the three ruleset edits it tracked -
+adding `Chaos Pain Suite` once it reached master, adding `static: infer`, and removing the orphaned
+`spotbugs` - were made on 2026-08-26. The reasoning survives it, because the failure it prevents is
+someone re-proposing one of the rows above and re-deriving why it does not work.
+
+**`Chaos Pain Suite` was promoted without waiting for a bake-in period**, deliberately and against
+the advice recorded at the time: it had been red for much of 2026-08-25 on a timing bound, and the
+detector responsible was demoted to non-gating only the day after. The owner's call was that a red
+chaos check is a real finding and will be fixed as one. Read a red there as a bug to investigate, not
+as the gate misbehaving.
+
 ### The three `claude*` workflows, and which is which
 
 Their filenames do not distinguish them well - `claude-code-review.yml` is the one file that does
@@ -212,50 +255,86 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
   the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
-  See [`docs/testing.md`](testing.md). Shares the per-PR lane's `highcpu-box-exclusive` concurrency
-  group, so a dispatched hunt queues behind a PR's chaos run rather than sharing the box with it.
+  See [`docs/testing.md`](testing.md). It declares no `concurrency` and queues on a runner like any
+  other job - see ["The box decides its own concurrency"](#the-box-decides-its-own-concurrency).
 
-### An ABSENT chaos check is not a passing one
+### Chaos does not need the self-hosted box
 
-**Every job that can occupy the highcpu box - every chaos run per-PR and on-demand, the Performance
-suite, and the manual full mutation sweep - sits in one `highcpu-box-exclusive` concurrency group,
-and queues rather than cancels.** Those three workflows are the complete set: they are the only ones
-in the repository with `runs-on: [self-hosted, highcpu]`, which is the check to re-run when adding a
-workflow. That is deliberate: several runner processes serve one physical machine, so a ref-keyed
-group let six PRs start six chaos suites at once, and four of six went red purely from co-residency
-on 2026-08-25. Serialising removed that.
+**Measured head-to-head on the same commit (`d8beb162f`, 2026-08-26): hosted `ubuntu-latest`
+13m59s, self-hosted `highcpu` 12m16s, both green.** The Chaos Pain Suite ran on the box on the
+premise that it needed many real cores to provoke anything; 14% of wall-clock does not buy a shared
+physical machine, and the sharing is what produced every scheduling problem the `highcpu` lane has
+had. A hosted runner gives each job **its own VM**, so co-residency cannot occur there at all.
 
-**A CANCELLED check is rendered as a FAILING one, which is the absent-chaos trap inverted.** A job
-displaced from the box mutex completes with `conclusion=cancelled`, and `gh pr checks` prints that as
-`fail`. So on this lane a red `Performance (optional)` may mean *it never ran*, not that a benchmark
-regressed - check `conclusion` before believing it. The two traps are mirror images and both live
-here: an absent **chaos** run reads as a pass because a discarded pending run leaves the required
-checks green, while an absent **Performance** run reads as a failure because a cancelled check is
-rendered red.
+`bin/chaos-test.sh` needed no change to move, which is the tell that the premise was never
+load-bearing: it passes no `forkCount` and no `-Dparallel-tests`, so the suite was never configured
+to exploit the cores it was placed there for.
 
-**Performance is in the group for chaos's sake, not its own.** A mutex holding only chaos excludes
-chaos-from-chaos while leaving a benchmark saturating the same host - the worst possible neighbour
-for a suite whose findings are timing bounds. The trade it accepts is that Performance queues rather
-than superseding its own older runs: one group carries one cancel policy, and letting an advisory
-benchmark cancel in this group would let it kill a chaos measurement.
+It now runs as `Chaos Pain Suite` in `maven.yml`, and it is **gating** - a chaos RED is a
+real finding. Do not re-add it to the self-hosted lane: chaos would then run twice per PR, and the
+second copy is the one that has to be scheduled against a finite box. On-demand seeded hunts stay in
+`chaos-pain.yml`.
 
-**The cost is that a PR's head commit can get no chaos run at all.** GitHub keeps one running plus one
-pending per group and discards older pending entries, so on a busy day a superseded run simply never
-executes. Nothing goes red, because `Chaos Pain Suite` is not a required check - and a missing
-measurement then reads exactly like a passing one.
+**Caveat carried forward, deliberately:** the move was settled on one head-to-head run, and the
+hosted job's per-scenario test counts were not read (the job-log endpoint returned empty). Duration
+rules out a zero-scenario run - that is build-only, ~2 minutes - but the standing rule still applies:
+read the job's own `Chaos suite timing` summary and its zero-tests-selected warning before trusting a
+green.
 
-**How to tell which you have.** The chaos job writes a `Chaos measurement provenance` block into its
-job summary naming the commit it measured. If that commit is not the PR's head, the current code has
-not been through the suite. A cancelled or absent chaos check means **not measured** - neither a pass
-nor a failure. Re-run on demand with
-`gh workflow run chaos-pain.yml -R astubbs/parallel-consumer`, ideally when sibling agents are not
-pushing.
+### The box decides its own concurrency
 
-The alternative - a dedicated single-slot runner label for chaos, which would serialise by capacity
-and still give every PR a run - is the better shape and is not done: it needs runner-side
-provisioning, and a job pinned to a label nothing serves does not fail, it queues silently until
-GitHub cancels it (see [`self-hosted-runner.md`](self-hosted-runner.md)). Background:
-[`docs/inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md`](inflight/ci-chaos-lane-serialised-confirm-no-coresidency.md).
+**No workflow caps how many jobs run on the highcpu box. How many run at once is the box's own
+decision, made by how many runner processes it runs** - six today. Nothing in this repository asserts
+a limit, and nothing should: a workflow file cannot know the machine's capacity, and the moment it
+claims to, the claim rots silently the next time a runner is added or removed. The lever is on the
+box, and it needs no change here.
+
+**Nothing on the box is triggered by a pull request any more** - all three workflows that target
+`highcpu` are `workflow_dispatch` only - so the scheduling question is now much smaller than it was.
+What cancellation remains is the ordinary kind: a group keyed per-suite and per-ref supersedes an
+older run of the same suite on the same ref. It is keyed per-suite rather than workflow-wide to avoid
+a head-of-line stall, because one workflow-wide group makes a new run wait out the slowest-dying
+maven JVM of the old one before anything starts.
+
+#### Why a `concurrency` group is not a mutex
+
+Worth stating because the repository tried it and the failure was expensive. Between 2026-08-25 and
+2026-08-26 every job that could occupy the box - both per-PR suites, on-demand chaos, and the full
+mutation sweep - shared one repo-wide `highcpu-box-exclusive` group with `cancel-in-progress: false`,
+intended as a box mutex.
+
+**A concurrency group deduplicates; it does not queue.** GitHub keeps one run in progress and **at
+most one pending** per group, and DISCARDS anything that arrives behind that. With several branches
+active, each new push therefore evicted whichever run was already waiting. Measured over the 50
+minutes after it landed (2026-08-26, 01:03Z-01:53Z, 16 runs across 9 branches): **26 of 32 jobs never
+executed a single step** - chaos 12 of 16 evicted while pending, Performance 14 of 16 - while five of
+the six runners sat idle. A tripwire that runs on a quarter of pushes, chosen by whoever pushed last,
+is worth less than one that occasionally shares a box.
+
+The co-residency reds that motivated the mutex were `~154s lagStagnation` against a 150s bound - the
+bound meeting the load rather than a defect - and that detector was demoted to non-gating in the same
+pull request (`ProgressProbe.recordLagStagnation` now calls `observe` rather than recording a
+violation). The problem was fixed in the instrument, where it belonged; see
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md).
+
+**So: never reach for a `concurrency` group to protect a shared physical resource.** Express capacity
+where capacity lives - the number of runners serving the label.
+
+#### Reading a cancelled or absent chaos check
+
+**A CANCELLED check is rendered as a FAILING one.** `gh pr checks` prints `conclusion=cancelled` as
+`fail`, so a red `Performance (optional)` or `Chaos Pain Suite` may mean *it never ran* rather than
+that something regressed - check `conclusion` before believing it. A cancelled chaos check means
+**not measured**: neither a pass nor a failure.
+
+The chaos job writes a `Chaos measurement provenance` block into its job summary naming the commit it
+measured. If that commit is not the PR's head, the current code has not been through the suite -
+normally because a newer push superseded the run, in which case that push has a run of its own.
+Re-run on demand with `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer`.
+
+Whether six concurrent chaos suites is in fact too many for the box is now an open question about
+runner count rather than about this workflow:
+[`docs/inflight/ci-highcpu-box-concurrency-is-runner-count.md`](inflight/ci-highcpu-box-concurrency-is-runner-count.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
 - **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
@@ -732,9 +811,15 @@ never run on our own hardware.
 **`highcpu` is the only self-hosted label.** Declare labels in
 [`.github/actionlint.yaml`](../.github/actionlint.yaml) or actionlint flags them.
 
-- `pr-highcpu-fast-feedback.yml` ("highcpu") - on every in-repo PR plus dispatch. The lane that
-  earns the hardware; it carries the Chaos Pain Suite check.
-- `mutation-full-sweep.yml` - dispatch only: the whole-project PIT sweep
+- `pr-highcpu-fast-feedback.yml` **was deleted on 2026-08-26**, and is named here because a lane
+  that used to exist is exactly what someone greps for. Both suites it carried had hosted
+  equivalents: chaos moved to the hosted gate (see
+  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box)), and its
+  `Performance (optional)` check ran the *same* `bin/performance-test.sh` as `maven.yml`'s
+  **required** `Performance Tests` - a non-gating duplicate of a gating check. What remained was an
+  on-demand benchmark nobody dispatched, so it was not worth a file. Read it at
+  `git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml`.
+- `mutation-full-sweep.yml` - **nightly plus dispatch**: the whole-project PIT sweep
   (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation job in `maven.yml`
   only covers classes changed against the base; this is its exhaustive counterpart.
 
@@ -750,13 +835,32 @@ in the lane ahead of it. The scope, the exclusions and the ranked widening list 
 render grey rather than green is an open decision in
 [`docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md`](inflight/ci-mutation-lane-skip-reads-as-a-pass.md).
 
-**There is no scheduled build, deliberately.** Every suite worth re-running is already a required
-check on each PR and runs again on every push to master, so a cron lane would only repeat covered
-work. **Do not add a lane for suites the gate already covers.** The repo's single cron lane,
-`dependency-audit.yml`, is not a counter-example: it runs no *suite*, and what it catches - a new
-advisory published against an unchanged dependency tree - is a function of elapsed time, which no
-PR-triggered check can ever see. That is the test to apply to any future scheduled lane: **does time
-alone change the answer?**
+**There is almost no scheduled build, deliberately.** Every suite worth re-running is already a
+required check on each PR and runs again on every push to master, so a cron lane would usually only
+repeat covered work. **Do not add a lane for suites the gate already covers.** The test to apply to
+any proposed scheduled lane is: **does time alone change the answer?**
+
+Two lanes are scheduled, and they clear that bar in different ways:
+
+- **`dependency-audit.yml`** passes the test outright. It runs no *suite*, and what it catches - a
+  new advisory published against an unchanged dependency tree - is purely a function of elapsed
+  time, which no PR-triggered check can ever see.
+- **`mutation-full-sweep.yml`** (nightly, 2026-08-26) **fails the test on paper and is a deliberate
+  exception.** A mutation score changes when the code changes, not when time passes, so the honest
+  trigger is per-merge - and per-merge is unusable at this repository's merge rate. Measured over the
+  last 60 master commits: up to 32 in a day, a **median gap of 0 minutes** (squash-merges arrive in
+  bursts), and **83% of gaps shorter than the sweep's own 31m27s job-elapsed runtime** (job elapsed
+  is the right clock here: it is how long a push has to arrive within to kill a running sweep; the
+  often-quoted 21m55s is only the PIT phase, and n=1). Per-push therefore either
+  piles dozens of concurrent sweeps onto one box, or - with a cancelling group - has four in five
+  killed before they finish, which is precisely the never-completes failure the lane was rebuilt to
+  escape. Since master moves every day, a nightly is in practice "after today's merges". The accepted
+  cost is that a regression is attributed to a **date** rather than a merge, so `git log` over that
+  day is the first step of triage.
+
+The exception is written here rather than left to contradict the rule silently. Note what makes it
+one: not that a schedule is convenient, but that the correct trigger was measured and found
+unusable. The workflow's `on:` block carries the same reasoning from its side.
 
 **Before pinning a job to a self-hosted label, confirm a runner serves it** -
 `gh api repos/astubbs/parallel-consumer/actions/runners` lists each runner's labels and online

@@ -49,9 +49,11 @@ full evidence is the last section of this file; three consequences bind anyone p
   branch with no fix it would land as a knowingly-red test and that is
   [`docs/quarantined-tests.md`](../quarantined-tests.md)'s decision to make, not a side effect of a
   chaos-suite change.
-- **The sequencing advice in [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
-  - "land the backlog, then re-run" - was sound when written and no longer applies to `CLASS2_STALL`
-  specifically.** It still applies to any signature this file records that is *not* the lag bound.
+- **The old sequencing advice - "land the backlog, then re-run" - was sound when written and no
+  longer applies to `CLASS2_STALL` specifically.** It still applies to any signature this file
+  records that is *not* the lag bound. (It lived in a chaos-lane note since deleted; the reasoning
+  that superseded it for the lag bound is
+  [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md).)
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
@@ -537,7 +539,7 @@ clean". This one does not:
 | **Local control** | **`5c377ec04` (master)** | **RED** | **10** | **154387ms** |
 
 **A RED here does NOT mean every `CLASS2_STALL` is a family occurrence.**
-[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
 records one with this same ~154s signature whose seed replays **green** on an uncontended box,
 peaking at 121.3s - self-hosted runner contention, from `Performance` and `Chaos Pain Suite` sharing
 the box. That note owns the discriminator; the short version is that ~154s is what a crossed 150s
@@ -707,7 +709,7 @@ the pre-existing `CLASS2_STALL` timing bound, whose value and gating that PR del
 on the same self-hosted box, overlapping the chaos job's opening minutes, and this ledger already
 records that pairing as a prior cause. But the discriminator is an uncontended replay of *this* seed,
 and per the table in
-[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
 
@@ -789,7 +791,7 @@ unresolved either way.** `Performance (optional)` did share the self-hosted box 
 the chaos job's `highcpu-1`) but ran 23:38:46-23:41:49, while the failing scenario started at
 23:41:20 and its 153s stagnation window opened around 23:41:28 - so the overlap covers only the
 window's first ~20 seconds, not the storm phase the way
-[`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md)
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md)
 records it. As there, the discriminator is an uncontended replay of this seed, and **nobody has
 replayed it**.
 
@@ -846,6 +848,45 @@ above. That is a defect in the autopsy rather than in this family, and it has it
 Entries in this ledger that lean on a clean autopsy are worth re-checking against it.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
+**Sixteenth sighting, 2026-08-25 - the drain arm again, and a SECOND same-day timing rule-out of
+contention.** `Chaos Pain Suite` on astubbs/parallel-consumer#353's head `c1f423e4a`
+([run 32807910210](https://github.com/astubbs/parallel-consumer/actions/runs/32807910210/job/97681493424)),
+<!-- post-merge: checked-end -->
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red at 172s. **4
+`CLASS2_STALL/LAG_STAGNATION` in the autopsy** (3 fired live), committed offsets stagnant 154s
+against the 150s bound, group STABLE and heartbeats flowing.
+`peaks: rebalanceDwell=13178ms lagStagnation=154263ms` - the ~154s constant again, inside the 300ms
+band the twelfth sighting measured across four arms (154064-154360ms).
+
+**Seed `6037000644302969438`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=6037000644302969438
+
+Two things this entry adds. **The branch is not a suspect, again**:
+<!-- post-merge: checked-begin -->
+at the observed head `c1f423e4a`, astubbs#353 carried only
+<!-- post-merge: checked-end -->
+`.claude/hooks/pre-commit-gate.sh`, `bin/test-check-agent-hooks.sh` and `docs/agent-harness.md` -
+no Java at all - the same not-PR-introduced control the fourteenth and fifteenth sightings each
+recorded. **And it corroborates the fourteenth sighting's timing rule-out of runner contention**:
+`Performance (optional)` finished at 04:14:18Z and the failing drain arm did not start until
+04:17:05Z, three minutes after the box went quiet - the second drain-arm red in one day where the
+contention pairing provably was not present. The discriminator remains an uncontended replay, and
+nobody has replayed this seed either. Recorded as unresolved.
+
+**The same branch's next run drew TWO arms at once** - not a new numbered sighting, the signature
+is already this entry's, but the seeds are the asset.
+[Run 32863352692](https://github.com/astubbs/parallel-consumer/actions/runs/32863352692/job/97852502402):
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (**eager**, seed
+`5501517460666962649`, `lagStagnation=154115ms`) and
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` (seed
+`7370431147468591204`, `lagStagnation=154524ms`), 47 `CLASS2_STALL/LAG_STAGNATION` violations
+between them, every peak inside the familiar ~154s band. And a THIRD same-day timing rule-out of
+contention: `Performance (optional)` ended 15:06:08Z, the eager arm started 15:08:36Z and the
+drain arm 15:11:28Z. The head under test differs from this entry's by hook-script and markdown
+commits only.
 
 ## 2026-08-25: the discriminator was finally run, and it closes the `CLASS2_STALL` line of this file
 
@@ -862,7 +903,7 @@ the answer is the one that entry called the timing-proxy side.
 
 **Both ran on a CONTENDED developer box, which biases toward "did not drain".** They drained anyway.
 That asymmetry is what makes a local run worth the minutes here, and it is the reverse of the usual
-caution in [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md):
+caution in [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md):
 that note's "a GREEN replay needs two or three" rule governs an *absent* violation, where contention
 and a quiet schedule are indistinguishable. These runs are not absences - the bound was crossed, 2 and
 46 times, and the run finished anyway. A fired-and-drained replay is positive evidence, and one is
@@ -1077,9 +1118,73 @@ diagnosis is complete and the fix is a choice between disabling the dwell violat
 applied, because it is a scenario calibration change and astubbs#354 is a different change.
 <!-- post-merge: checked-end -->
 
+## 2026-08-25, CHAOS lane: the same commit-response timeout, from a second lane
+
+<!-- post-merge: checked-begin -->
+**The section above records the commit-response timeout arriving from `Integration Tests`. It also
+arrived, the same day, from the chaos suite** - `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest`
+on astubbs#351's head `ec2c54181`
+([run 32801846128](https://github.com/astubbs/parallel-consumer/actions/runs/32801846128)). Two lanes,
+two suites, one signature, neither of them the Class 2 timing proxy.
+
+**The assertion that failed is a correctness one**, not `CLASS2_STALL`:
+
+```
+AssertionErrorWithFacts: no instance may end the run with an unclassified failure cause
+expected to be empty
+but was: [instance 42: java.lang.RuntimeException: Error from poll control thread:
+  Timeout waiting for commit response PT10S to request ConsumerOffsetCommitter.CommitRequest(...)
+  - the broker poll thread is the only producer of commit responses, and it has not died with an
+  exception, so it is not answering: it is blocked or slower than the configured offsetCommitTimeout]
+```
+
+Alongside it, **1 `ZOMBIE_MEMBER/REBALANCE_BLOCKED`**: group `group-1-604121656` dwelling in
+`PreparingRebalance` for 15s against the 15s bound - the arm the section below diagnoses as
+calibration on `ChaosKeyOrderIT`, here on a different scenario.
+
+**Seed `8584935079849032188`:**
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8584935079849032188
+
+**Why a second lane matters more than a second seed.** The discriminator section above closes the
+`CLASS2_STALL` line precisely because that bound is a timing measurement that a loaded box crosses on
+its own. This failure is not that bound and has no calibrated threshold behind it: a commit request
+that times out after 10s, from a broker-poll thread the runtime has positively established is *alive
+and not throwing*, is a thread that is blocked - and the error text reaches that conclusion by
+elimination rather than inferring it from a watermark. The Integration-lane sighting landed on all
+three preconditions for the AB-BA cycle; this one arrives from a suite that deliberately disturbs
+rebalances, which is the same cycle's entry condition reached by a different route.
+
+**Do NOT read either as identifying the open deadlock.** The alternative reading is identical in both
+lanes - a poll thread merely slower than `offsetCommitTimeout`, the ambiguity
+[`bug-offset-commit-timeout-does-two-jobs.md`](bug-offset-commit-timeout-does-two-jobs.md) owns - and
+nothing in either capture separates them. The fifth sighting's rule applies: do not promote a
+signature to a mechanism without the step that distinguishes them.
+
+**The discriminator is the same one, and it is now wanted twice over**: replay with a thread dump of
+the broker-poll thread at the moment the commit request times out. Parked on the `commitCommand`
+monitor -> the family's original deadlock has a reproduction at last, from two independent lanes.
+Running, or waiting on the broker -> it is a timeout to tune, and belongs with the timing-proxy
+critique rather than here.
+
+**Two `CLASS2_STALL` seeds from the same branch are recorded here and nowhere else, closed on
+arrival.** Heads `d4b6923d0` and `bff3927b1` drew the drain arm at 154s and 153s against the 150s
+bound - seeds `2445946824654755330` and `8791285396374198974`. They were written up as sightings
+before the discriminator ran; they are not. Both are the arithmetic the section above explains, both
+ran while `Performance (optional)` overlapped the chaos job on the shared box, and the bound they
+crossed no longer gates. Kept as seeds only, so the pair is not rediscovered and re-argued.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
-timing proxy accumulated fourteen sightings. This file may be retired once astubbs#29 lands and the
+timing proxy accumulated fourteen sightings.
+<!-- post-merge: checked-begin -->
+The sixteenth sighting above was written on
+astubbs/parallel-consumer#353 before this section existed and merged in after it, so it is one more
+of the same crossings rather than an exception to them; the counts here are left as they were
+written rather than silently re-derived.
+<!-- post-merge: checked-end --> This file may be retired once astubbs#29 lands and the
 remaining open item - the original deadlock - has its own solutions write-up.
 
