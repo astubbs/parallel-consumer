@@ -1341,6 +1341,51 @@ over `commitCommand`. Neither seed here nor in the two captures above has been r
 
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
+**Seventeenth sighting, 2026-08-26 - the `ZOMBIE_MEMBER` arm, and the first capture of it since the
+dispatch ceiling landed.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed
+fail-fast by the probe on astubbs/parallel-consumer#205, at a head that had just merged master.
+The autopsy names the same arm as the fourth, fifth and eighth sightings, in the same words:
+
+```
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-1533474291' dwelling in PreparingRebalance for 15s
+(bound 15s) - a member is not answering the rebalance (protocol-unresponsive)
+peaks: rebalanceDwell=15392ms lagStagnation=143274ms
+```
+
+Twenty-three partitions were reported frozen, stagnant for around 140s with lag from 56 up to 1132,
+so this is the whole assignment stopping rather than one shard. Every other chaos test in the same
+run passed, including `ChaosRevokeUnderWorkIT`, both `ChaosRevokeUnderWorkCooperative*` and
+`ChaosKeyOrderIT`.
+
+**Seed `7543483068749855826`, not replayed.** Replay with:
+
+```
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos \
+  -Dexcluded.groups= -Dchaos.seed=7543483068749855826
+```
+
+**What is new here, and it is the reason this one is worth more than another tally mark.** Every
+previous capture of this arm predates the dispatch ceiling. The ceiling landed on master hours
+before this run, and the commit that immediately follows it says in its own body that a leaked
+dispatch permit now takes the engine to a full stop rather than a stuck record - "enough of them and
+the ceiling reaches zero and the engine stops entirely". A member that has stopped answering the
+rebalance protocol is exactly what a wedged engine would look like from the outside. So this
+sighting cannot be assumed to be the old intermittency wearing its usual face: it is equally
+consistent with a new cause that produces the same autopsy, and the two are not distinguishable from
+the probe output alone.
+
+Settling it needs the control the rest of this file keeps asking for and rarely gets: replay the
+seed above at the ceiling commit and at its parent. Same-seed-different-position is the arm that
+separates them, and nobody has run it.
+
+**Not the observing PR's defect.** astubbs/parallel-consumer#205 adds MDC capture and scope entry
+around the worker submit and the engine terminal callbacks; it changes no locking, no rebalance
+path, and no in-flight accounting. What it did bring in is master - including the ceiling above -
+which is why the capture is worth attributing to the merge rather than to the branch.
+
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
