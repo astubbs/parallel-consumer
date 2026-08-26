@@ -241,6 +241,37 @@ The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
 `PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
 only.
 
+<!-- post-merge: checked-begin -->
+
+### Measured when astubbs#345 landed: the bound that held is a coin flip
+
+The lane re-run astubbs#345 owed - the obligation the "re-run the lane, never reason about it" rule
+above puts on whoever lands one of these four - produced **2 misses in 4 runs** of
+`WorkManagerLincheckTest.stressRediscoversTheCheckpointThreeTear`, on a third machine, at the
+committed `iterations(1_000)`. The runs are bimodal rather than merely slow: the two hits landed the
+violation in 9.1s and 13.4s, the two misses exhausted the full thousand iterations at 121.7s and
+123.9s.
+
+**That is not the machine-dependence above, and it is not sampling noise around 1-in-14.** The
+mechanism is astubbs#345's fix. Both prior hit rates - 2.33% and 0.69% per iteration - were measured
+on trees where the checkpoint-3 tear *and* astubbs#345's `NullPointerException` were reachable
+through the same `revokeAndReassign` operation, and Lincheck stops at the first violation it
+reaches. So those numbers were the rate of finding **either**, never the rate of finding
+checkpoint-3. Removing the NPE removed the cheaper of the two, and what is left is the harness's
+true hit rate on its named target.
+
+So `iterations(1_000)` was never calibrated against what this harness now has to find. **Do not
+raise it from this measurement either** - four runs on one more machine is the same unfounded
+precision the section above refuses, and the starve-and-count procedure it prescribes is still what
+settles it.
+
+**The prediction this creates, which must be re-run rather than reasoned about:** with astubbs#346's
+fix landed as well, both violations this harness can reach are gone, and it should fail every run -
+at which point it needs inverting, not re-bounding. Nothing here establishes that; no tree carrying
+both fixes has been run since astubbs#345's fix was measured this way.
+
+<!-- post-merge: checked-end -->
+
 ## Nothing runs the lane, so the tripwire it promises cannot fire
 
 `bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The
