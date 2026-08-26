@@ -87,6 +87,10 @@ class ShardManagerRevokeSweepNpeTest {
      * that forgot to arm.
      */
     static class RacingShardMap extends ConcurrentHashMap<ShardKey, ProcessingShard<String, String>> {
+        // inherited from ConcurrentHashMap, which is Serializable; this double is never serialised, but a
+        // Serializable class without one is a real finding rather than a special case worth arguing
+        private static final long serialVersionUID = 1L;
+
         private transient Runnable interference;
         private transient ShardKey armedKey;
         private boolean raceFired;
@@ -124,6 +128,21 @@ class ShardManagerRevokeSweepNpeTest {
             armedKey = null;
             raceFired = true;
             interference.run();
+        }
+
+        // The three fields above are race scaffolding, not value state: two of these holding the same shards
+        // are equal as maps whatever either has armed, so ConcurrentHashMap's entry-wise equality is already
+        // the right answer. Declared rather than inherited because subclassing a collection and adding
+        // fields otherwise reads as a forgotten equals - which is exactly what SpotBugs
+        // EQ_DOESNT_OVERRIDE_EQUALS is for, and it cannot tell scaffolding from state.
+        @Override
+        public boolean equals(Object other) {
+            return super.equals(other);
+        }
+
+        @Override
+        public int hashCode() {
+            return super.hashCode();
         }
     }
 
