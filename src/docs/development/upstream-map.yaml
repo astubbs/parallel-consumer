@@ -137,14 +137,14 @@ entries:
       branches: [test/177-commit-response-timeout]
       prs: [204]
       fork_issue: 177
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       issues: [833]
       prs: []
       related: [857, 803, 809]
       status: open
-      last_checked: 2026-08-05
+      last_checked: 2026-08-20
     adoc_anchor: part3-cat1-stability
     notes: >
       ON RELEASE, say on the mirror that the reported message itself CHANGES: anyone
@@ -215,8 +215,8 @@ entries:
     group: rebalance-stability
     summary: Accurate committed offset on partition assignment (carried upstream PR)
     fork:
-      branches: [cherry-pick/893-offset-reset, upstream-pr-893]
-      prs: [57]
+      branches: [cherry-pick/893-offset-reset, upstream-pr-893, fix/121-offset-accuracy-on-assignment]
+      prs: [337]
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
@@ -280,7 +280,6 @@ entries:
     fork:
       branches: [feat/java-17-baseline]
       prs: [53]
-      fork_issue: 181
       status: in-progress
     upstream:
       repo: confluentinc/parallel-consumer
@@ -292,7 +291,10 @@ entries:
       0.7.x line. The only reason to move off Java 8 is Kafka 4 (kafka-clients
       4.x require Java 11 -- target baseline Java 11). PR #53 is a DRAFT holding
       a provisional Jabel-removed / release=17 state plus Kafka 4 research docs.
-      Addresses confluentinc#862 (cannot run on Java 24). confluentinc PR #866 bumps
+      Does NOT address confluentinc#862 (cannot run on Java 24) - that is a runtime
+      question about what the shipped Java 8 jar can run on, settled by kafka-clients
+      3.9.1, and it is owned by java-24-security-manager-removal. The two only look
+      alike because both say "Java". confluentinc PR #866 bumps
       Kafka to v4 (NOTE: .adoc previously said v7 -- stale). confluentinc PR #920
       (found by the 2026-07-28 sweep) documents the JDK 17 build requirement +
       Jabel Java 8 bytecode -- overlaps our Java-baseline framing; compare before
@@ -312,9 +314,15 @@ entries:
     group: features
     summary: Support Virtual Threads (JDK 21+); synchronized -> ReentrantLock
     fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [896, 862, 78], prs: [908], related: [299], status: open, last_checked: 2026-07-28}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [896, 78], prs: [908], related: [299, 862], status: open, last_checked: 2026-08-20}
     adoc_anchor: part1-group-b-features
-    notes: Sequence behind the Java baseline branch; ReentrantLock migration may also help #862.
+    notes: >
+      Sequence behind the Java baseline branch. The earlier claim that the ReentrantLock
+      migration may also help confluentinc#862 is REFUTED (2026-08-20): this PR removes
+      virtual-thread pinning on synchronized, JDK 24 removed pinning anyway, and
+      confluentinc#862 was a kafka-clients SASL callback calling a Subject API that the
+      JDK withdrew. Different mechanism entirely. Fork PR astubbs#51 carries this work and
+      neither blocks nor closes astubbs#181. See java-24-security-manager-removal.
 
   - id: upstream-pr-866-kafka-v4
     group: deps-major
@@ -621,18 +629,30 @@ entries:
 
   - id: sweep-2023-tx-failure-taxonomy
     group: rebalance-stability
-    summary: ProducerManager retries every transaction commit failure identically
-    fork: {branches: [tx-commit-failure], prs: [], fork_issues: [241], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [144], prs: [], related: [112], status: closed, last_checked: 2026-08-07}
+    summary: Transaction commit failures are classified, but not by Kafka's own taxonomy and with no budget
+    fork: {branches: [bugs/prod-tx-manager-retries, tx-commit-failure], prs: [], fork_issues: [241], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [144], prs: [355], related: [112], status: closed, last_checked: 2026-08-20}
     adoc_anchor: null
     notes: >
-      commitOffsets still has one generic loop bounded by a constant literally named
-      arbitrarilyChosenLimitForArbitraryErrorSituation. ProducerFencedException is
-      singled out and rethrown; the rest (IllegalState, UnsupportedVersion,
-      Authorization, Kafka, Timeout, Interrupt) are undifferentiated despite having
-      different fatality. Design together with fork issue #225 (fencing should abort
-      and rejoin like Kafka Streams' TaskMigratedException) -- both are about giving
-      transaction failures a taxonomy. Upstream ideas on astubbs:tx-commit-failure.
+      SUPERSEDED PREMISE - both the issue and this entry's earlier note claimed one
+      generic retry loop treating every failure identically. That has been false since
+      confluentinc#355 (2022-09-29) replaced catch(Exception) with
+      catch(TimeoutException | InterruptException) plus a classifying comment block;
+      everything else now fails fast. What is genuinely open: the retry set contradicts
+      Kafka's own marker in both directions (TimeoutException IS a RetriableException,
+      InterruptException is NOT and is retried anyway without honouring the interrupt);
+      arbitrarilyChosenLimitForArbitraryErrorSituation is a count rather than a time
+      budget, and astubbs#204's offsetCommitTimeout covers only the consumer path, so
+      transactional mode has no user-visible commit budget; the retry arm can set
+      committed = true without having committed; and nothing tests any of it in any
+      module. Fencing also reaches the supervisor by two routes with two types - wrapped
+      InternalRuntimeException from sendOffsetsToTransaction but RAW from
+      commitTransaction - and astubbs#225 knows only the first. Start from
+      bugs/prod-tx-manager-retries (RetrySettings/FailureReaction, PCCommitFailedException,
+      PCTimeoutException), NOT tx-commit-failure, which is a 2021 WIP superseded by
+      confluentinc#355. That resolves the verify-before-attaching question in
+      docs/inflight/branch-audit-orphans.md: it attaches. Design with astubbs#225 and
+      astubbs#317. Detail in docs/inflight/core-241-tx-commit-failure-taxonomy.md.
 
   - id: sweep-2023-broker-disconnect-commit
     group: rebalance-stability

@@ -79,6 +79,30 @@ ranking. Where a note sits is `inflight-state`'s job; what it is ranked against 
 New prefixes are fine when something genuinely does not fit **and names an area, not a status**. Do
 not add subdirectories - the prefix is the grouping.
 
+### The number, when a note has one
+
+A note that maps to exactly one issue puts that number between the area and the slug -
+`<area>-<NNN>-<slug>.md`, as in `core-139-public-api-thread-safety-contract.md`. It is optional; the
+slug alone is fine for notes that belong to no single issue, and the population-level and register
+notes carry none.
+
+**The number is always this fork's**, never confluentinc's. Two reasons, and the second is the
+binding one: it is the number `gh issue view` resolves without `-R`, and it is the only one that
+always exists - every upstream issue is mirrored here, but plenty of fork issues have no upstream
+counterpart, so upstream numbering cannot name the whole directory.
+
+This is a rule because a filename cannot be qualified. Prose has
+[`docs/issue-references.md`](../issue-references.md) and a gate behind it, precisely because a bare
+number below the threshold is a coin flip between two repos that both have one. A filename is bare by
+construction, so the convention is the only thing standing between a reader and the wrong issue.
+
+**Older names predate this and disagree** - `bug-857-family.md` and `branch-912-vertx-leak.md` carry
+confluentinc numbers, `perf-192-followups.md` carries a fork one. They are left alone rather than
+swept, because renaming a note breaks every citation of it for no gain in what the note says. Read an
+existing number by its prefix and check it; write new ones the way this section says.
+
+`pr-` is the deliberate exception: its number is a fork **PR**, which is what that prefix is for.
+
 ## Rules
 
 - **Track only what is currently OPEN**, plus cross-branch context a future branch should inherit.
