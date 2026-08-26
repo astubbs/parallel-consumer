@@ -55,8 +55,10 @@
 # legitimate cases - the background work belongs to a different PR, or you have decided to follow
 # up separately - and the point of the guard is that the decision is made rather than skipped.
 #
-# FAILS OPEN otherwise, deliberately: no session id, no scratch dir, no python3, unparseable JSON.
-# A hook that blocks on its own bug jams the tool call shut.
+# FAILS OPEN otherwise, deliberately: no session id, no scratch dir, no python3, unparseable JSON,
+# and a PR lookup that could not answer. A hook that blocks on its own bug jams the tool call shut.
+# Failing open is not the same as failing SILENT, though, and the lookup used to do both: it now
+# says which of its two arms did not run, so the merge is at least an informed one.
 
 set -euo pipefail
 
@@ -207,9 +209,77 @@ pr_num=""
 case "$payload" in
     *"pr merge "*) pr_num="$(sed -n 's/.*pr merge \([0-9][0-9]*\).*/\1/p' <<<"$payload" | head -1)" ;;
 esac
+lookup_problem=""
 if [ -z "$pr_num" ]; then
     branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-    [ -n "$branch" ] && pr_num="$(gh pr list --head "$branch" --json number --jq '.[0].number' 2>/dev/null || true)"
+    # THE REPO IS DERIVED FROM `origin`, and a lookup that FAILED is not a PR that does not exist.
+    # Unqualified, gh answers for `upstream` in this fork - confluentinc/parallel-consumer - and a
+    # number from there would be matched against this repo's `docs/inflight/pr-<n>-*.md`, quoting an
+    # unrelated note or none at all. Discarding gh's status on top of that made an unauthenticated
+    # or rate-limited lookup indistinguishable from "no PR", which silently switches the note arm
+    # off: the merge then proceeds with the guard measuring nothing and saying nothing.
+    # `.claude/hooks/check-history-rewrite.sh` states the full reasoning; the timeout lives in
+    # python3 because `timeout(1)` is GNU-only.
+    if [ -n "$branch" ] && [ "$branch" != "HEAD" ] && command -v python3 >/dev/null 2>&1; then
+        lookup="$(python3 - "$branch" <<'PY' || true
+import re
+import subprocess
+import sys
+
+BRANCH = sys.argv[1] if len(sys.argv) > 1 else ""
+
+
+def run(args, secs):
+    try:
+        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=secs)
+    except FileNotFoundError:
+        return None, "`%s` is not on PATH" % args[0]
+    except subprocess.TimeoutExpired:
+        return None, "`%s` did not answer within %ds" % (args[0], secs)
+    except Exception as exc:
+        return None, "`%s` could not be run (%s)" % (args[0], exc.__class__.__name__)
+    if p.returncode != 0:
+        why = " ".join(p.stderr.decode("utf-8", "replace").split())
+        return None, (why[:200] or "`%s` exited %d without saying why" % (args[0], p.returncode))
+    return p.stdout.decode("utf-8", "replace").strip(), None
+
+
+try:
+    url, problem = run(["git", "remote", "get-url", "origin"], 5)
+    hosted = url and (re.match(r"^(?:https?|ssh|git)://", url) or re.match(r"^[^/]+@[^/:]+:", url))
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url) if hosted else None
+    if m is None:
+        print("failed\tthe repository could not be derived from the `origin` remote (%s), and the "
+              "lookup was not retried without `-R`, which in this fork answers for "
+              "confluentinc/parallel-consumer" % (problem or "it is not a hosted remote URL"))
+        sys.exit(0)
+    slug = "%s/%s" % (m.group(1), m.group(2))
+    number, problem = run(["gh", "pr", "list", "-R", slug, "--head", BRANCH,
+                           "--json", "number", "--jq", ".[0].number"], 10)
+    if number is None:
+        print("failed\tthe PR lookup against %s failed - %s" % (slug, problem))
+    elif number.isdigit():
+        print("found\t%s" % number)
+    else:
+        print("none\t")
+except Exception as exc:
+    print("failed\tthe PR lookup could not be completed (%s)" % exc.__class__.__name__)
+PY
+)"
+        # THE `*)` ARM IS NOT DEFENSIVE PADDING. Every path the block above can reach prints
+        # `found`, `failed` or `none`, so a fourth answer means the interpreter never got to print -
+        # killed for memory, or a BaseException its `except Exception` cannot catch. With no arm for
+        # it, that empty string set neither variable and this guard's note arm switched itself off
+        # in silence, indistinguishable from a PR that genuinely has no note. Treating it as a
+        # failure routes it to the advisory at the foot of this file, which is the whole point:
+        # fail-open, but never fail-silent.
+        case "${lookup%%$'\t'*}" in
+            found)  pr_num="${lookup#*$'\t'}" ;;
+            failed) lookup_problem="${lookup#*$'\t'}" ;;
+            none)   ;;
+            *)      lookup_problem="the lookup returned no recognizable answer - whatever ran it did not print one" ;;
+        esac
+    fi
 fi
 outstanding=""
 if [ -n "$pr_num" ]; then
@@ -250,6 +320,10 @@ if [ -n "$live_tasks" ]; then
     REASON="$REASON Tasks that wrote output in the last ${WINDOW_SECONDS}s: $(printf '%s' "$live_tasks" | tr -d '\n' | sed 's/^  - //; s/  - /, /g')."
     REASON="$REASON Work that belongs in this PR cannot be added after the merge - it becomes a second PR, and whatever the description or the inflight notes claimed about it goes stale on master. Establish what each one is doing first. NOTE a stalled agent writes nothing and is not detected here, so this is not proof of quiescence - run ListAgents if the answer matters. If the outstanding work genuinely does not belong in this PR, re-run the merge command prefixed with MERGE_DESPITE_OUTSTANDING_WORK=1."
 
+    # AND SAY THAT THE NOTE ARM COULD NOT RUN, when it could not. Otherwise this refusal reads as
+    # the complete list of what is outstanding, when one of its two measurements never happened.
+    [ -n "$lookup_problem" ] && REASON="$REASON Separately, this PR's own inflight note could NOT be checked: ${lookup_problem}. Read docs/inflight/pr-<number>-*.md by hand before merging."
+
     # Carry the note here too - see the both-arms comment above.
     [ -n "$outstanding" ] && REASON="$REASON
 
@@ -266,6 +340,24 @@ print(json.dumps({
         "permissionDecisionReason": os.environ["REASON"] + " See docs/merge-checklist.md.",
     }
 }))'
+    exit 0
+fi
+
+# NOTHING TO REFUSE - but say so honestly when half of this guard could not run. A merge that
+# reaches here with a failed lookup has had its inflight-note arm silently switched off, and
+# silence is what this hook's whole design is against. Advisory, never a deny: the documented
+# fail-open posture at the top of this file applies to the hook's own inability, and a merge
+# blocked because gh was rate-limited would train everyone to reach for the override.
+if [ -n "$lookup_problem" ]; then
+    LOOKUP_PROBLEM="$lookup_problem" python3 -c '
+import json, os
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+    "additionalContext": (
+        "The outstanding-work guard could not identify this PR, so it did NOT check whether the PR "
+        "has an inflight note recording what is still open on it: " + os.environ["LOOKUP_PROBLEM"] +
+        ". That is not a finding of nothing outstanding - it is no measurement at all. Check "
+        "docs/inflight/pr-<number>-*.md yourself before merging. See docs/merge-checklist.md.")}}))
+'
     exit 0
 fi
 

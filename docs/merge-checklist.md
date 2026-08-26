@@ -106,6 +106,24 @@ Rewriting history someone else may have pulled is not reversible from inside a P
   by name.
 - **Other instances of the same defect** - `AGENTS.md`, "PR Discipline", owns that rule; it belongs
   at merge prep, once the defect class is understood.
+- **Should this PR close an issue - and if only partly, which part?** Ask it explicitly at merge
+  prep, because nothing else will: the tracker is not in the diff, and a PR that finishes an issue
+  without saying so leaves it open for someone to rediscover. `docs/inflight/issue-index.md` is the
+  cheap way to look - grep it for the area the PR touches - but confirm with `gh issue view <n>`
+  before acting on any row, since it goes stale silently.
+
+  **A closing keyword needs the fully qualified form.** `Fixes astubbs#167` closes nothing; only
+  `Fixes astubbs/parallel-consumer#167` does. [`docs/issue-references.md`](issue-references.md)
+  owns that rule.
+
+  **Partly addressing an issue is the common case, and closing it then is the real damage** - the
+  remaining work goes with it. Say which part landed and leave it open. astubbs#41 is the worked
+  example: its reopening comment lists four remaining items, astubbs/parallel-consumer#366 did the
+  first, and closing on that would have taken the other three with it. Where the PR contradicts the
+  issue's own recommendation - as that one did, refuting a stated preference with a measurement -
+  record the disagreement on the issue, since the recommendation lives there and the evidence does
+  not.
+
 - **Does this PR advance a roadmap entry?** Then its `stage`/`stage_delivery` in
   `docs/data/roadmap.yaml` move in the same change - the `stages` block there owns the rule. The
   roadmap-stage gate enforces it when the entry's `pull_request` names this PR; entries carried by

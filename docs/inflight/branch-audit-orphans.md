@@ -13,7 +13,9 @@ in `sweep-2023-async-produce`, was already known wrong and is fixed alongside th
 
 Upstream-tip preservation is DONE, not open: every non-bot `upstream/*` branch tip is now reachable
 from an origin branch or pinned under `archive/upstream-branch/*` /
-`archive/upstream-pr-*` tags. `preserved_branch_tips` in upstream-map.yaml owns the tag/SHA record;
+`archive/upstream-pr-*` tags - and since 2026-08-20 every upstream branch is also mirrored on this
+fork under `upstream/*`. `branch_accounting` in upstream-map.yaml owns the tag/SHA record, having
+absorbed the former `preserved_branch_tips` and `preserved_heads`;
 docs/upstream.md owns the method, including the trap that the 2026-08-14 containment command
 (`git branch -r --contains`) cannot see tags, so re-running it verbatim reports already-preserved
 heads as lost.
@@ -40,8 +42,9 @@ Defect / correctness cohort:
   against the bug-857 family before any new work there
 - `bugs/issue-184-reproduce-using-cfacade` and `bugs/issue-184-reproduce-w-cf-reverted` -
   reproduction pair for confluentinc#184
-- `bugs/prod-tx-manager-retries` - plausibly belongs to `sweep-2023-tx-failure-taxonomy`
-  (confluentinc#144); verify before attaching
+- `bugs/prod-tx-manager-retries` - **attached.** It belongs to `sweep-2023-tx-failure-taxonomy`
+  (confluentinc#144), and is the prototype to start from rather than the older `tx-commit-failure`
+  branch; see `docs/inflight/core-241-tx-commit-failure-taxonomy.md`
 - `features/partial-batch-failure`
 - `tests/less-keys-than-threads-broker-test`
 
@@ -77,6 +80,6 @@ stayed invisible for three years. Two audit modes wanted:
 
 - branch-audit: origin branches vs manifest `fork.branches` + refactoring.md, with an explicit junk
   allowlist, so untracked work cannot silently regrow
-- containment re-check: every `preserved_heads` / `preserved_branch_tips` SHA still reachable on
-  origin (branch OR tag - see the docs/upstream.md trap above); docs/upstream.md already records
-  this as manual-only, tracked in astubbs#300
+- containment re-check: every `branch_accounting` tip still reachable on origin (branch OR tag - see
+  the docs/upstream.md trap above); docs/upstream.md already records this as manual-only, tracked in
+  astubbs#300

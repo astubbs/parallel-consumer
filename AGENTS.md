@@ -211,16 +211,26 @@ and the traps that voided earlier experiments.
 Once you have a hypothesis, [`docs/investigating.md`](docs/investigating.md) carries the method for
 settling it: **a fix that works is not evidence of the cause.**
 
-## Read the commits you inherit
+## Read the record you inherit - the commits, and the branch's own PR
 
-The same rule one step earlier: read the record before you build on it, not before you ship.
+The same rule one step earlier: read the record before you build on it, not before you ship. It has
+**two triggers**, and the second one is the one that gets missed.
 
-Whenever your base moves under you - cutting a worktree from a master that advanced, merging master
-in mid-flight, rebasing, replaying, or picking a branch back up - run
+**Your base moved under you** - cutting a worktree from a master that advanced, merging master in
+mid-flight, rebasing, replaying, or picking a branch back up. Run
 `git log --oneline <old-base>..<new-base>` and read the **bodies** of anything touching your area.
 You inherit decisions, constraints, and sometimes instructions addressed to your branch. A green
 build proves the code still compiles; it proves nothing about whether the ground under your design
 moved.
+
+**You were handed a branch** - a worktree, a PR to review, a simplify or dedupe pass. Read its own
+commits, its `docs/inflight/` handoff note if it has one, **and its PR body *and* its PR comments**
+before you change anything. A PR body here routinely defends, by name, the decision a simplify pass
+would reverse on sight, and the comments carry scope added after the body was written.
+`.claude/hooks/inject-branch-context.sh` puts all of that in front of Claude Code at session start,
+at every subagent dispatch, and inside the subagent itself - so the failure it leaves is the one
+nothing can catch: **dispatching an agent without that context in its prompt**, which is how five
+agents at once were sent to reverse five deliberate decisions on 2026-08-24.
 
 Three things hide there, and none announce themselves: an instruction to your branch; a decision
 that reshapes your work (a renamed module, a new document naming the project's approach); and an
@@ -455,8 +465,9 @@ Nothing lints commit messages, so all of this is on you.
   widens the investigation.
 - **Before merging, recommend a merge strategy - and say why**, and **offer** to write the squash
   message and to re-cut the commits into atomic units rather than doing either silently. Keep the
-  recommendation to a line or two: write the squash message where it is used, not into the
-  conversation, unless asked for it.
+  recommendation to a line or two, and **never write the squash message into the PR body** - that is
+  the reviewer-facing description of the change, and a merge artefact there becomes a second one that
+  drifts. Where it does go is the checklist's call, not this file's.
   [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
   generated release notes, the three strategies and when each applies, and the reset-to-merge-base
   trap that silently reverts master.
@@ -501,6 +512,16 @@ Nothing lints commit messages, so all of this is on you.
   parent merges. Write the owner/repo form, not the bare `depends on #N` the action also accepts:
   the issue-reference gate reads the body too, and a bare number below the threshold fails it. Both
   forms are equally understood by `dependencies-action` (`partialLinkRegex`), so nothing is lost.
+
+- **A rung in a stack has to earn its PR.** A branch carrying only a document does not need one
+  unless somebody must review that document *separately from the work it describes* - and if the
+  answer is "whoever picks the work up will read it", that is not separately. astubbs#332 was a
+  branch and a draft PR for a single 118-line design note, and the cost was not cosmetic: two PRs
+  of shipped, tested code stacked above it and were gated by the dependency rule behind a draft
+  whose own first paragraph said three decisions were open and not to start. Neither of them
+  referenced its subject; the stacking was chronology, not dependency. Fold the document into the
+  PR whose work it belongs to, and keep the rung for work that a reviewer can actually accept or
+  reject on its own.
 
 ## Worktree ownership
 

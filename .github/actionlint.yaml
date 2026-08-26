@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # Custom labels for self-hosted runners, so actionlint does not flag
 # `runs-on: [self-hosted, <label>]` as an unknown label.
 #
