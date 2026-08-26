@@ -420,10 +420,12 @@ Nothing lints commit messages, so all of this is on you.
 
 ## PR Discipline
 
-- **Before you push, run `bin/check-all.sh`** - it globs every gate and self-test in `bin/`, so the
-  set cannot drift from whatever you remembered. `bin/AGENTS.md` owns the detail, including why a
-  skip is never counted as a pass. This exists because a hand-picked sweep of seven gates missed one
-  and CI caught it.
+- **Before you push, run `bin/check-all.sh`** - it globs every gate in `bin/` and runs them
+  concurrently, so the set cannot drift from whatever you remembered and it finishes in seconds.
+  `--with-tests` adds the self-tests, which take far longer and answer a different question ("do the
+  gates still work"), so they are CI's job and not part of the routine sweep. `bin/AGENTS.md` owns
+  the detail, including why a skip is never counted as a pass. This exists because a hand-picked
+  sweep of seven gates missed one and CI caught it.
 
 - **Read the analysis output on your own PR before asking for review:
   `bin/check-pr-analysis-surfaces.sh [PR]`.** The tools report to five places that are not each

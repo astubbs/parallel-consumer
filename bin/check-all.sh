@@ -4,8 +4,9 @@
 #
 # EVERY GATE IN bin/, DISCOVERED RATHER THAN LISTED. Run this before you push.
 #
-# WHY THIS EXISTS. There are eighteen `check-*.sh` gates and twenty-one self-tests, and an agent
-# preparing a push had to know which ones applied. In practice that means running a subset
+# WHY THIS EXISTS. There are dozens of `check-*.sh` gates and about as many self-tests - `ls bin/`
+# is the count, and writing one here is how it goes stale - and an agent preparing a push had to
+# know which ones applied. In practice that means running a subset
 # remembered from earlier in the session, which is how astubbs#356 pushed a branch that failed
 # `check-branch-self-reference.sh` in CI: the sweep before that push ran seven gates chosen by hand,
 # and that was not one of them. The gate was not new, not subtle, and not broken. It simply was not
@@ -30,23 +31,41 @@
 # Exit codes: 0 everything that could run passed, 1 at least one FAILED, 2 nothing ran at all.
 #
 # Usage:
-#   bin/check-all.sh                 # self-tests, then tree gates - what to run before a push
+#   bin/check-all.sh                 # the tree gates - what to run before a push
 #   bin/check-all.sh --pr            # also the PR-state reporters (merge prep)
-#   bin/check-all.sh --gates-only    # skip the self-tests
+#   bin/check-all.sh --with-tests    # also the self-tests (what CI runs)
 #   bin/check-all.sh --tests-only    # only the self-tests
+#
+# THE DEFAULT IS GATES ONLY, AND THAT IS THE POINT. The gates answer "is my tree healthy" in about
+# 25 seconds. The self-tests answer "do the gates themselves still work", take minutes - two of them
+# build scratch repositories - and their answer changes only when somebody edits a gate. Bundling
+# them made the routine command slow enough to skip, and a pre-push sweep that gets skipped protects
+# nothing, which is the same failure `check-all` was written to fix.
+#
+# NOTHING IS LOST IN CI: .github/workflows/repo-hygiene.yml runs `--with-tests`, so the self-tests
+# run there in one go. It no longer NAMES them - that workflow used to carry a job per self-test, and
+# a self-test added to bin/ ran nowhere until somebody remembered to wire it. So a self-test added
+# tomorrow is swept with no edit there and no edit here, which is the same discovery property the top
+# of this file describes; do not reintroduce a list in either place.
 
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
-MODE=all
+MODE=gates
 WITH_PR=0
 for arg in "$@"; do
     case "$arg" in
         --pr)         WITH_PR=1 ;;
+        --with-tests) MODE=all ;;
+        # Kept because scripts and habits name it; it is now what happens anyway.
         --gates-only) MODE=gates ;;
         --tests-only) MODE=tests ;;
-        -h|--help)    sed -n '5,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # To the end of the header, not to a hardcoded line. `5,35p` silently stopped short the
+        # moment the header grew: it already omitted the `--tests-only` usage line, and the section
+        # explaining that the default now EXCLUDES the self-tests - the biggest behavioural fact
+        # about this script - landed below the cutoff and never reached anyone running `--help`.
+        -h|--help)    sed -n '5,/^set -uo pipefail$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "check-all: unknown argument '$arg'" >&2; exit 2 ;;
     esac
 done
@@ -104,9 +123,47 @@ fi
 pass=0; fail=0; cannot=0; nothing=0; ran=0; skipped=0
 failed_names=""; cannot_names=""
 
-run_one() {
-    local script="$1" label="$2" start end rc out syntax
+# RUN THE SWEEP CONCURRENTLY, ACCOUNT FOR IT IN ORDER. The gates are independent read-only scans of
+# the tree, and run back to back they took about 25 seconds, with the slowest ones bunched within a
+# few seconds of each other - no single dominator to optimise, so there was nothing to fix except the
+# serialisation. Sequential was costing the wall-clock sum of an I/O-bound set for no reason.
+#
+# WHY A CAPTURE/REPLAY SPLIT rather than backgrounding run_one directly: every counter here lives in
+# a shell variable, and a background job is a subshell, so increments would be discarded and the
+# sweep would report zero of everything. Each gate now writes its exit code, timing and output to a
+# file; the accounting and the printing happen afterwards, in the original order, from those files.
+# Output stays deterministic and attributable, which matters more than the seconds saved.
+#
+# NO `wait -n` AND NO ASSOCIATIVE ARRAYS - macOS ships bash 3.2, where both are syntax errors. The
+# set is small enough that launching all of it and waiting once is fine; a job cap would need exactly
+# the bash 4 features that are unavailable on half the machines this runs on.
+run_capture() { # <script>|SKIP:<reason> <label> <outfile-prefix>
+    local script="$1" label="$2" pre="$3" start end rc out syntax
+    case "$script" in
+        SKIP:*)
+            printf '%s\n%s\n%s\n' "SKIP" "0" "$label" > "$pre.meta"
+            printf '%s\n' "${script#SKIP:}" > "$pre.out"
+            return 0 ;;
+    esac
     start=$(date +%s)
+    if ! syntax="$(bash -n "$script" 2>&1)"; then
+        end=$(date +%s)
+        printf '%s\n%s\n%s\n' "PARSE" "$((end - start))" "$label" > "$pre.meta"
+        printf '%s\n' "$syntax" > "$pre.out"
+        return 0
+    fi
+    out="$(PR_NUMBER="${PR_NUMBER:-}" bash "$script" 2>&1)"; rc=$?
+    end=$(date +%s)
+    printf '%s\n%s\n%s\n' "$rc" "$((end - start))" "$label" > "$pre.meta"
+    printf '%s\n' "$out" > "$pre.out"
+    return 0
+}
+
+# Replays ONE captured result. Identical accounting and identical output to running it inline; the
+# only difference is that the work already happened, in parallel, in run_capture.
+run_one() { # <rc> <secs> <label> <capture-prefix>
+    local rc="$1" secs="$2" label="$3" pre="$4" out
+    out="$(cat "$pre.out" 2>/dev/null)"
 
     # A GATE BASH CANNOT PARSE ALSO EXITS 2, colliding with the exit-2 "cannot run" convention this
     # repo uses everywhere - leave an unresolved merge-conflict marker in a check script and `bash
@@ -121,29 +178,82 @@ run_one() {
     # `cannot`, and the sweep reports zero failures - a false green produced by two skips agreeing.
     # The second reason is plain attribution: "does not parse" names the broken gate, where "CANNOT
     # RUN (usually a missing tool or credential)" sends the reader looking for a missing credential.
-    if ! syntax="$(bash -n "$script" 2>&1)"; then
-        end=$(date +%s)
-        ran=$((ran + 1)); fail=$((fail + 1)); failed_names="${failed_names} ${label}"
-        printf '  FAIL    %-42s %ss  (does not parse - this is a broken gate, not a skip)\n' \
-            "$label" "$((end - start))"
-        printf '%s\n' "$syntax" | head -3 | sed 's/^/          | /'
+    # A SKIP IS A RESULT, and it replays through here for one reason: printing it during the scatter
+    # phase would put every skip above every gate, silently reordering a report whose order is
+    # discovery order. It costs one branch to keep the output identical to the sequential sweep.
+    if [ "$rc" = "SKIP" ]; then
+        skipped=$((skipped + 1))
+        printf '  skip    %-42s      (%s)\n' "$label" "$out"
+        return
+    fi
+    ran=$((ran + 1))
+
+    if [ "$rc" = "PARSE" ]; then
+        fail=$((fail + 1)); failed_names="${failed_names} ${label}"
+        printf '  FAIL    %-42s %ss  (does not parse - this is a broken gate, not a skip)\n' "$label" "$secs"
+        printf '%s\n' "$out" | head -3 | sed 's/^/          | /'
         return
     fi
 
-    out="$(PR_NUMBER="${PR_NUMBER:-}" bash "$script" 2>&1)"
-    rc=$?
-    end=$(date +%s)
-    ran=$((ran + 1))
     case "$rc" in
-        0) pass=$((pass + 1));     printf '  ok      %-42s %ss\n' "$label" "$((end - start))" ;;
+        0) pass=$((pass + 1));     printf '  ok      %-42s %ss\n' "$label" "$secs" ;;
         2) cannot=$((cannot + 1)); cannot_names="${cannot_names} ${label}"
-           printf '  CANNOT  %-42s %ss  (exit 2 - not a pass)\n' "$label" "$((end - start))" ;;
+           printf '  CANNOT  %-42s %ss  (exit 2 - not a pass)\n' "$label" "$secs" ;;
         3) nothing=$((nothing + 1))
-           printf '  none    %-42s %ss  (exit 3 - nothing in scope)\n' "$label" "$((end - start))" ;;
+           printf '  none    %-42s %ss  (exit 3 - nothing in scope)\n' "$label" "$secs" ;;
         *) fail=$((fail + 1)); failed_names="${failed_names} ${label}"
-           printf '  FAIL    %-42s %ss  (exit %s)\n' "$label" "$((end - start))" "$rc"
+           printf '  FAIL    %-42s %ss  (exit %s)\n' "$label" "$secs" "$rc"
            printf '%s\n' "$out" | tail -6 | sed 's/^/          | /' ;;
     esac
+}
+
+# Launches every member of a set at once, waits, then replays them in the order given - so the
+# report reads exactly as it did when the sweep was sequential.
+CAP_DIR="$(mktemp -d)"
+trap 'rm -rf "$CAP_DIR"' EXIT
+sweep() { # <script>|<label> pairs, script first
+    local i=0 script label meta rc secs replayed=0 n
+    local labels=()
+    while [ "$#" -gt 0 ]; do
+        script="$1"; label="$2"; shift 2
+        i=$((i + 1))
+        labels[i]="$label"
+        run_capture "$script" "$label" "$CAP_DIR/$(printf '%03d' "$i")" &
+    done
+    wait
+    # The three lines run_capture wrote, read once, in the order it wrote them. `read` rather than
+    # three `sed -n Np` calls so the file is opened once and the field order lives in one place
+    # instead of being split between this loop and run_one.
+    for meta in "$CAP_DIR"/*.meta; do
+        [ -f "$meta" ] || continue
+        replayed=$((replayed + 1))
+        { IFS= read -r rc; IFS= read -r secs; IFS= read -r label; } < "$meta"
+        run_one "$rc" "$secs" "$label" "${meta%.meta}"
+    done
+
+    # A CAPTURE THAT NEVER WRITES ITS .meta IS NOT A SKIP AND NOT A PASS. `run_capture` writes that
+    # file only on a normal return, so a gate killed mid-run - SIGKILL, OOM, a CI step timeout - never
+    # writes one. The glob above silently steps over it, and without this block it is counted in NONE
+    # of pass/fail/cannot/nothing/skipped: a gate that did not run would vanish from the sweep, which
+    # still reports full success and exits 0. Compare launched (i) against replayed and account for
+    # the gap explicitly, by label, using the launch order recorded above the `&`.
+    #
+    # ROUTED INTO fail/failed_names, NOT cannot: exit 2 ("cannot run") never flips the sweep's exit
+    # code, and a vanished gate must, because there is strictly LESS evidence for it than for a gate
+    # that ran to completion and reported "cannot run" for a missing tool or credential. Folding this
+    # into `cannot` would let a killed gate slip out through the one bucket the exit code ignores -
+    # exactly the false-green this fix exists to close. `ran` is also incremented so the printed
+    # total (ran = pass+fail+cannot+nothing) still reconciles.
+    if [ "$replayed" -lt "$i" ]; then
+        for ((n = 1; n <= i; n++)); do
+            [ -f "$CAP_DIR/$(printf '%03d' "$n").meta" ] && continue
+            label="${labels[n]}"
+            ran=$((ran + 1)); fail=$((fail + 1)); failed_names="${failed_names} ${label}"
+            printf '  FAIL    %-42s  ?s  (no result - process vanished mid-run: killed, OOM, or\n' "$label"
+            printf '                                              timed out. A gate that did not run is NOT a pass.)\n'
+        done
+    fi
+    rm -f "$CAP_DIR"/*.meta "$CAP_DIR"/*.out 2>/dev/null || true
 }
 
 # Self-tests first, the order CI uses: bin/AGENTS.md requires a gate's self-test to run BEFORE the
@@ -151,30 +261,32 @@ run_one() {
 # failure in whatever it was checking.
 if [ "$MODE" = "all" ] || [ "$MODE" = "tests" ]; then
     echo "=== self-tests ==="
+    set --
     for t in bin/test-*.sh; do
         [ -f "$t" ] || continue
-        run_one "$t" "$(basename "$t")"
+        set -- "$@" "$t" "$(basename "$t")"
     done
+    [ "$#" -gt 0 ] && sweep "$@"
 fi
 
 if [ "$MODE" = "all" ] || [ "$MODE" = "gates" ]; then
     echo "=== gates ==="
+    set --
     for g in bin/check-*.sh; do
         [ -f "$g" ] || continue
         n="$(basename "$g")"
         [ "$n" = "$SELF" ] && continue                       # never recurse
         if [ "$WITH_PR" -eq 0 ] && [[ " $PR_SCOPED " == *" $n "* ]]; then
-            skipped=$((skipped + 1))
-            printf '  skip    %-42s      (%s - use --pr)\n' "$n" "$(reason_for "$n")"
+            set -- "$@" "SKIP:$(reason_for "$n") - use --pr" "$n"
             continue
         fi
         if [[ " $NEEDS_ARGS " == *" $n "* ]]; then
-            skipped=$((skipped + 1))
-            printf '  skip    %-42s      (%s)\n' "$n" "$(reason_for "$n")"
+            set -- "$@" "SKIP:$(reason_for "$n")" "$n"
             continue
         fi
-        run_one "$g" "$n"
+        set -- "$@" "$g" "$n"
     done
+    [ "$#" -gt 0 ] && sweep "$@"
 fi
 
 echo

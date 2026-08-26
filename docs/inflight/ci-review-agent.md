@@ -154,8 +154,10 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   [`ci-strict-review-gate-freshness.md`](ci-strict-review-gate-freshness.md).
 - **The gate runs from the PR's own checkout.** A `pull_request` job checks out the PR, so both
   the gate script and the workflow file come from the tree they are policing. Pre-existing and
-  repo-wide rather than anything the on-demand split introduced: `copyright`, `shell: sigpipe`,
-  the issue-reference gate and the quarantine audit all execute PR-authored code the same way,
+  repo-wide rather than anything the on-demand split introduced: `copyright`, `repo: hygiene`
+  (which folded the old `shell: sigpipe` job into itself along with the rest of
+  `repo-hygiene.yml`'s per-concern jobs), the issue-reference gate and the quarantine audit all
+  execute PR-authored code the same way,
   and on a `pull_request` trigger the workflow file is inherently PR-supplied, so no change
   confined to one workflow closes it. Checking the gate script out from the base ref would close
   the script-tampering half and leave the workflow-file half open - a half-measure worth doing
