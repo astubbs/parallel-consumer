@@ -79,16 +79,24 @@ trap 'scratch_cleanup; exit 143' TERM
 
 # Fetch one ref for inspection. The result is FETCH_HEAD *in the scratch repo*, read back by
 # preview_show/preview_has - never by a bare `git show FETCH_HEAD`, which would read this clone's.
+#
+# `GIT_DIR=` AS A COMMAND PREFIX, NOT `--git-dir`, THOUGH THEY MEAN THE SAME THING. The global-option
+# spelling pushes the subcommand out of `$1`, and CheckQuarantineOwnersScriptTest stubs `git` on PATH
+# with a `case "$1" in fetch|show|cat-file)` dispatcher - so `git --git-dir=X show` matched nothing,
+# the stub printed nothing, and three of its assertions failed with the script behaving perfectly.
+# The stub is naive, but the property is worth keeping for free: the subcommand stays where every
+# wrapper looks for it. Same walk-past that let `git -C DIR rev-list` through
+# .claude/hooks/check-shallow-history.sh, and `git -c k=v fetch` through the hazard row.
+preview_git() { GIT_DIR="$scratch_dir/preview" git "$@"; }
 preview_fetch() { # $1 = ref to fetch from origin
     [ -d "$scratch_dir/preview" ] || git init -q --bare "$scratch_dir/preview" || return 1
-    # --git-dir is the throwaway repo created above, so the `shallow` file this writes is discarded
-    # with it - that is the entire point of the indirection. The marker has to be the line
-    # IMMEDIATELY above the use; the gate reads exactly one line back.
+    # The scratch repo is thrown away with its `shallow` file, which is the entire point of the
+    # indirection. The marker must be the line IMMEDIATELY above; the gate reads one line back.
     # hazard-ok: fetches into the scratch repo above, never into this clone.
-    git --git-dir="$scratch_dir/preview" fetch --quiet --depth=1 --no-tags "$ORIGIN_URL" "$1" 2>/dev/null
+    preview_git fetch --quiet --depth=1 --no-tags "$ORIGIN_URL" "$1" 2>/dev/null
 }
-preview_show() { git --git-dir="$scratch_dir/preview" show "FETCH_HEAD:$1" 2>/dev/null; }
-preview_has()  { git --git-dir="$scratch_dir/preview" cat-file -e "FETCH_HEAD:$1" 2>/dev/null; }
+preview_show() { preview_git show "FETCH_HEAD:$1" 2>/dev/null; }
+preview_has()  { preview_git cat-file -e "FETCH_HEAD:$1" 2>/dev/null; }
 
 # gh with retry + error classification: echoes the value, or MISSING (confirmed not-found), or
 # TRANSIENT (still failing after retries - infra weather, never an ERROR).

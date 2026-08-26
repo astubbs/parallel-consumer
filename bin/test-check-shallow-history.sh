@@ -104,6 +104,10 @@ fire_full "a global option cannot hide it"     fire   'git -c core.pager=cat fet
 # NOT THE HAZARD. `--git-dir` names another repository - the sanctioned way to fetch a ref you only
 # want to read; a clone owns its own depth; and an unrestricted fetch writes no `shallow` file.
 fire_full "--git-dir elsewhere is allowed"     silent 'git --git-dir=/tmp/x fetch --depth=1 https://h/r ref'
+# The same redirect as an assignment prefix - what bin/check-quarantine-owners.sh actually writes,
+# so denying it would block the alternative this hook's own deny message recommends.
+fire_full "GIT_DIR= prefix is allowed"         silent 'GIT_DIR=/tmp/x git fetch --depth=1 https://h/r ref'
+fire_full "an unrelated env prefix is not"     fire   'FOO=bar git fetch --depth=1 origin master'
 fire_full "git clone --depth=1 is allowed"     silent 'git clone -q --depth=1 https://h/r dir'
 fire_full "an undepthed fetch is allowed"      silent 'git fetch --no-tags origin master'
 fire_full "--unshallow is allowed"             silent 'git fetch --unshallow origin'

@@ -32,9 +32,21 @@
 # a hand-typed `--depth=1` is the same defect with no script to fix, which is what this arm is for.
 # bin/check-shell-hazards.sh enforces the same rule on scripts in bin/ and .claude/hooks/.
 #
-# `--git-dir=` EXEMPTS IT, because that names a repository other than this clone - the sanctioned
-# idiom for fetching a ref you only want to read. `git clone --depth` is not the hazard either: a
-# clone owns its own depth.
+# `--git-dir=` AND A `GIT_DIR=` PREFIX EXEMPT IT, because both name a repository other than this
+# clone - the sanctioned idiom for fetching a ref you only want to read. `git clone --depth` is not
+# the hazard either: a clone owns its own depth.
+#
+# TWO KNOWN, DELIBERATE IMPRECISIONS, both erring towards denial:
+#
+#   - `-C <dir>` is NOT read as a redirect, so `git -C /some/other/repo fetch --depth=1` is denied
+#     even though it is harmless. Treating it as one would be a bypass, since `-C .` names THIS
+#     repository; over-blocking costs a prefixed re-run, under-blocking costs the incident above.
+#   - Once the clone is already shallow this arm stands down entirely, so a fetch that CHANGES the
+#     depth (`--depth=5` over a depth-1 clone, a different `--shallow-since`) still rewrites the
+#     shared graft. That is accepted rather than missed: the residual is bounded, because in a clone
+#     that is already shallow the QUERY arm above is armed, so no truncated answer reaches anyone
+#     silently - and denying depth changes in an intentionally shallow CI clone is the noise that
+#     gets hooks switched off.
 set -uo pipefail
 
 payload="$(cat 2>/dev/null || true)"
@@ -138,7 +150,15 @@ for i, t in enumerate(toks):
         args = args[:args.index("--")]
     # `--git-dir=` names a repository that is NOT this clone, which is how a ref gets fetched for
     # inspection without touching anyone: `git --git-dir="$(mktemp -d)" fetch --depth=1 ...`.
+    # `GIT_DIR=... git fetch` is the same redirect written as an assignment prefix, and is the
+    # spelling bin/check-quarantine-owners.sh uses - so both have to count, or the hook denies the
+    # very alternative its own message recommends.
+    k = i - 1
     redirected = any(g.startswith("--git-dir") for g in rest[:j])
+    while k >= 0 and re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", toks[k]):
+        if toks[k].startswith("GIT_DIR="):
+            redirected = True
+        k -= 1
     if sub in SHALLOWING and not redirected:
         depth_flag = next((a for a in args if a.startswith(DEPTH_FLAGS)), None)
         if depth_flag:
